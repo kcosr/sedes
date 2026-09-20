@@ -1,0 +1,59 @@
+.environment-variable-editor { display: grid; gap: 12px; min-width: 0; }
+.environment-variable-inheritance { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; color: var(--muted-foreground); font-size: 11px; }
+.environment-variable-inheritance > span { display: inline-flex; align-items: center; gap: 8px; }
+.environment-variable-inheritance > span:last-child { color: var(--foreground); font-weight: 600; }
+.environment-variable-table { border: 1px solid var(--border); border-radius: var(--radius-ctl); overflow: hidden; }
+.environment-variable-table-heading, .environment-variable-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(140px, 1.2fr) 125px; align-items: center; gap: 12px; padding: 12px; }
+.environment-variable-table-heading { background: var(--card); color: var(--muted-foreground-2); font-size: 11px; padding-block: 9px; }
+.environment-variable-row { border-top: 1px solid var(--border-soft); }
+.environment-variable-row > div { min-width: 0; }
+.environment-variable-name > button { justify-content: start; width: 100%; height: auto; padding: 3px 0; white-space: normal; text-align: start; }
+.environment-variable-name code, .environment-variable-value code { overflow-wrap: anywhere; font-size: 12px; }
+.environment-variable-name .expanded { transform: rotate(90deg); }
+.environment-variable-name small { display: block; margin: 5px 0 0 18px; }
+.environment-variable-editor small, .environment-variable-help { color: var(--muted-foreground-2); font-size: 11px; line-height: 1.5; }
+.environment-variable-value-editor { display: grid; gap: 6px; }
+.environment-variable-editor input { min-width: 0; height: 32px; font-family: var(--font-mono); font-size: 12px; }
+.environment-variable-editor select { width: 100%; max-width: 100%; min-height: 30px; padding: 5px; border: 1px solid var(--input); border-radius: var(--radius-ctl); color: var(--foreground); background: var(--background); font-size: 11px; }
+.environment-variable-editor select:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.environment-variable-secret { display: flex; gap: 5px; align-items: start; }
+.environment-variable-secret small { display: block; overflow-wrap: anywhere; }
+.environment-variable-source { display: inline-block; padding: 3px 7px; border: 1px solid var(--border); border-radius: var(--radius-inline); font-size: 11px; }
+.environment-variable-history { padding: 8px 12px; background: var(--card); }
+.environment-variable-history p { display: flex; flex-wrap: wrap; gap: 10px; margin: 5px 0; font-size: 11px; overflow-wrap: anywhere; }
+.environment-variable-history strong { font-weight: 500; color: var(--muted-foreground); }
+.environment-variable-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.environment-variable-add { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-ctl); padding: 12px; }
+.environment-variable-add > label { font-size: 12px; }
+.environment-variable-error { color: var(--destructive); font-size: 12px; margin: 0; }
+.environment-variable-help { margin: 0; }
+.environment-variable-empty { color: var(--muted-foreground); font-size: 12px; padding: 14px; margin: 0; }
+.environment-variable-settings { display: grid; gap: 12px; border-top: 1px solid var(--border-soft); padding-top: 16px; }
+.environment-variable-settings h4 { font-size: 14px; }
+.environment-variable-settings > p { color: var(--muted-foreground); font-size: 12px; margin: 0; }
+.environment-variable-tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--border); }
+.environment-variable-tabs button { padding: 8px 0; border-bottom: 2px solid transparent; color: var(--muted-foreground); font-size: 12px; }
+.environment-variable-tabs button[aria-selected="true"] { color: var(--foreground); border-bottom-color: var(--foreground); }
+.environment-variable-tabs button:disabled { opacity: .55; cursor: default; }
+.environment-variable-dialog[data-slot="dialog-content"] { z-index: 101; width: 780px; max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; gap: 0; padding: 0; overflow: hidden; }
+.environment-variable-dialog-overlay[data-slot="dialog-overlay"] { z-index: 100; }
+.environment-variable-dialog-header { padding: 22px 24px 18px; border-bottom: 1px solid var(--border); }
+.environment-variable-dialog-header [data-slot="dialog-description"] { margin-top: 8px; }
+.environment-variable-dialog-body { display: grid; gap: 16px; overflow: auto; padding: 20px 24px; }
+.environment-variable-notice { margin: 0; padding: 12px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-ctl); color: var(--muted-foreground); font-size: 12px; }
+.environment-variable-dialog-footer { display: flex; justify-content: end; gap: 8px; flex-wrap: wrap; padding: 16px 24px; border-top: 1px solid var(--border); }
+.environment-variable-startup-details { border-top: 1px solid var(--border); padding-top: 12px; font-size: 12px; color: var(--muted-foreground); }
+.environment-variable-startup-details summary { cursor: pointer; }
+.environment-variable-startup-details p { margin: 10px 0 0; }
+.environment-variable-creation { display: grid; gap: 8px; padding-top: 14px; margin-top: 8px; border-top: 1px solid var(--border-soft); }
+.environment-variable-creation h3 { font-size: 13px; font-weight: 600; }
+.environment-variable-creation > button { justify-content: start; white-space: normal; height: auto; min-height: 44px; text-align: left; }
+.environment-variable-creation small { color: var(--muted-foreground); font-size: 11px; }
+@media (max-width: 760px) {
+  .environment-variable-table-heading { display: none; }
+  .environment-variable-row { grid-template-columns: minmax(0, 1fr) 125px; }
+  .environment-variable-row .environment-variable-value { grid-column: 1 / -1; grid-row: 2; }
+  .environment-variable-editor input, .environment-variable-editor select, .environment-variable-editor button { min-height: 44px; }
+  .environment-variable-dialog[data-slot="dialog-content"] { width: 100%; max-width: 100%; max-height: 95dvh; }
+  .environment-variable-dialog-body, .environment-variable-dialog-header, .environment-variable-dialog-footer { padding: 16px; }
+}

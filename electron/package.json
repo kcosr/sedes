@@ -1,0 +1,30 @@
+{
+  "name": "sedes-electron",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Electron platform project for Sedes.",
+  "homepage": "https://github.com/kcosr/sedes",
+  "author": {
+    "name": "Kevin",
+    "email": "kcosrdev@gmail.com"
+  },
+  "desktopName": "Sedes",
+  "main": "build/main.js",
+  "scripts": {
+    "postinstall": "install-electron",
+    "build": "tsc",
+    "start": "electron .",
+    "pack": "npm run build && capacitor-electron vendor && electron-builder --config electron-builder.config.js",
+    "pack:dir": "npm run build && capacitor-electron vendor && electron-builder --dir --config electron-builder.config.js"
+  },
+  "devDependencies": {
+    "electron": "44.0.0",
+    "electron-builder": "26.15.3",
+    "typescript": "5.9.3"
+  },
+  "allowScripts": {
+    "electron@44.0.0": true,
+    "electron-winstaller@5.4.0": true
+  }
+}

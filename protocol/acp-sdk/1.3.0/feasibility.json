@@ -1,0 +1,150 @@
+{
+  "evidenceVersion": 1,
+  "package": {
+    "name": "@agentclientprotocol/sdk",
+    "version": "1.3.0",
+    "license": "Apache-2.0",
+    "registryIntegrity": "sha512-i3h/efaeuMUFAO1HSfo97QZQnnvMd7wWBYtBsdL6UMZg3a78sk3Ffya5Xu7C7tYsXomXoDXJBAzQF2PcFKAhIQ==",
+    "packageShasum": "eafd8f1e0d3eb0ac01b964a173a49f866fda6d73",
+    "tarballSha256": "0baf5b6be1842d00bf989c0211b7e44a15f88769d2fffd5036397ba249becc9f",
+    "repository": "git+https://github.com/agentclientprotocol/typescript-sdk.git",
+    "stableRoot": {
+      "types": "./dist/acp.d.ts",
+      "import": "./dist/acp.js",
+      "default": "./dist/acp.js"
+    },
+    "schemaExport": "./schema/schema.json",
+    "dependencies": {},
+    "optionalDependencies": {},
+    "peerDependencies": {
+      "zod": "^3.25.0 || ^4.0.0"
+    },
+    "stableSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+    "packageJsonSha256": "72ac8aa9ab9d334ffc58d08917033225e7be94a39c080c0d6fad3cef85cc1736",
+    "licenseSha256": "6ed4f049cce59e05197d585bdf8a39980b45d546d6ea718ee344555f3a867c3a",
+    "stableSchemaSha256": "f71fbcb7beeae82770e9c33d1e5969999868789cacec509289331a1205816838"
+  },
+  "licenseAudit": {
+    "sdkDisposition": "compatible-permissive; retain Apache-2.0 license in distributions",
+    "noticeFilePresent": false,
+    "runtimeDependencies": {},
+    "optionalDependencies": {},
+    "peerDependency": {
+      "name": "zod",
+      "resolvedVersion": "4.4.3",
+      "license": "MIT",
+      "licenseSha256": "3f1189b28e3866e0d979968d466b78f813f76827cfdca1fbb124cc0a5c8841f8"
+    }
+  },
+  "publicSurface": {
+    "rootExports": [
+      "AGENT_METHODS",
+      "ActiveSession",
+      "AgentApp",
+      "AgentContext",
+      "AgentSideConnection",
+      "CLIENT_METHODS",
+      "ClientApp",
+      "ClientContext",
+      "ClientSideConnection",
+      "CreateElicitationRequest",
+      "CreateElicitationResponse",
+      "ElicitationPropertySchema",
+      "MultiSelectItems",
+      "PROTOCOL_METHODS",
+      "PROTOCOL_VERSION",
+      "RequestError",
+      "SessionBuilder",
+      "TerminalHandle",
+      "agent",
+      "client",
+      "methods",
+      "ndJsonStream"
+    ],
+    "exportsLowLevelConnection": false,
+    "exportsWireStream": false,
+    "exportsStableSchemaFile": true,
+    "sourceHasUnboundedPendingMap": true,
+    "sourceHasUnboundedIncomingMap": true,
+    "requestDeadlineOptionAuthority": "public SendRequestOptions declaration",
+    "exposesRequestDeadlineOption": false
+  },
+  "behavior": {
+    "deliveryClassification": {
+      "writeErrorIdentityPreserved": true,
+      "dispositionPreserved": true,
+      "connectionClosedOnWriteFailure": true
+    },
+    "resultValidation": {
+      "builtInInvalidResultAccepted": true,
+      "route": "initialize"
+    },
+    "outgoingConcurrency": {
+      "attempted": 64,
+      "acceptedWithoutEngineCapacityError": 64
+    },
+    "incomingConcurrencyAndExtension": {
+      "attempted": 64,
+      "maximumActive": 64,
+      "parsedExtensionCalls": 64,
+      "extensionRegistrationWorks": true
+    },
+    "perSessionRouting": {
+      "crossSessionIsolation": true,
+      "queuedWithoutCapacityFailure": 64
+    },
+    "cancellation": {
+      "protocolCancelMethod": "$/cancel_request",
+      "cancelTargetsRequest": true,
+      "requestRemainsPendingAfterAbort": true
+    },
+    "reverseAuthority": {
+      "handlerRanWithoutInitialize": true,
+      "engineEnforcesNegotiatedCapability": false,
+      "method": "fs/read_text_file"
+    },
+    "closeSettlement": {
+      "closeRejectsPending": true,
+      "closeIsIdempotent": true
+    },
+    "diagnostics": {
+      "consoleErrorUsed": true,
+      "rawWireMarkerExposed": true
+    },
+    "stableBatchRejection": {
+      "stableConnectionClosedOnBatch": true,
+      "closeReasonMentionsBatch": true
+    },
+    "idsAndDuplicates": {
+      "fractionalRequestIdAccepted": true,
+      "duplicateResponseLoggedAsUnknown": true,
+      "duplicateResponseTombstoneExposed": false
+    }
+  },
+  "decision": {
+    "correlationOwner": "sedes",
+    "sharedCorrelatedCore": "rejected",
+    "adapterShape": "assured-transport-to-sedes-peer; public SDK object Stream only for official compatibility fixture",
+    "schemaCompiler": "Ajv2020 strict non-mutating named validators plus Sedes refinements",
+    "syntheticNonGrokProfile": "probe/* extension profile",
+    "reverseAuthorityRule": "deny known-but-unadvertised methods before authority resolution",
+    "deadlineRule": "close or quarantine the generation and preserve delivery phase",
+    "idRule": "safe finite integer or bounded string subset; reject duplicates and tombstone late responses",
+    "dependencyPin": "@agentclientprotocol/sdk@1.3.0",
+    "dependencyClass": "runtime-exact",
+    "subsystems": {
+      "stableV1Types": "adopted",
+      "stableV1Schema": "wrapped",
+      "methodAndProtocolConstants": "adopted",
+      "generatedRuntimeValidation": "wrapped",
+      "publicObjectStream": "wrapped",
+      "ndJsonStream": "rejected",
+      "connectionEngine": "rejected",
+      "activeSession": "rejected",
+      "extensionDispatcher": "rejected",
+      "requestError": "wrapped",
+      "experimentalV2": "rejected",
+      "experimentalHttpWebSocketAndServer": "rejected"
+    }
+  }
+}

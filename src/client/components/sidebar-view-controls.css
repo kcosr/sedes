@@ -1,0 +1,158 @@
+/* Header view controls (SidebarViewControls, Lane D of sidebar alternate
+   views). The two 28px ghost icon buttons sit in .sidebar-search-row beside
+   the search box and mirror .sidebar-group-toggle; the popover is the
+   menu-row view-options surface. Uses only custom properties that already
+   exist in styles.css. */
+
+.view-controls-button {
+  position: relative;
+  color: var(--muted-foreground-2);
+}
+
+.view-controls-quick-toggle[aria-pressed="true"] {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+/* Modified-from-defaults indicator on the options trigger. */
+.view-controls-dirty-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--info);
+}
+
+/* Attribute + class beats the popover's single-class utility styles
+   regardless of stylesheet order. */
+[data-slot="popover-content"].view-controls-popover {
+  width: 236px;
+  max-height: min(
+    var(--radix-popover-content-available-height, calc(100dvh - 16px)),
+    calc(100dvh - 16px)
+  );
+  gap: 0;
+  padding: 6px;
+}
+
+.view-controls-section {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+}
+
+.view-controls-section + .view-controls-section {
+  margin-top: 6px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 4px;
+}
+
+/* Matches .shelf-trigger typography (11px / 600 / 0.07em / uppercase). */
+.view-controls-section-label {
+  padding: 6px 8px 3px;
+  color: var(--muted-foreground-2);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.view-controls-row {
+  display: flex;
+  width: 100%;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--foreground);
+  font-size: 13px;
+  text-align: left;
+  transition: background var(--motion-fast);
+}
+
+.view-controls-row:hover:not(:disabled) {
+  background: var(--secondary);
+}
+
+.view-controls-row:disabled {
+  color: var(--muted-foreground-2);
+}
+
+.view-controls-row-icon {
+  display: flex;
+  width: 16px;
+  flex: none;
+  justify-content: center;
+  color: var(--muted-foreground-2);
+}
+
+.view-controls-row[aria-checked="true"] .view-controls-row-icon {
+  color: var(--foreground);
+}
+
+.view-controls-row-label {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.view-controls-hint {
+  color: var(--muted-foreground-2);
+  font-size: 11px;
+}
+
+/* Standalone hint line under a section label (e.g. Density locked in the
+   Projects view). Same horizontal inset as .view-controls-row. */
+.view-controls-section-hint {
+  padding: 0 8px 2px;
+}
+
+.view-controls-row-check {
+  flex: none;
+  color: var(--muted-foreground);
+}
+
+.view-controls-segment {
+  display: flex;
+  gap: 2px;
+  margin: 2px 8px 4px;
+  padding: 2px;
+  border-radius: var(--radius-ctl);
+  background: var(--accent-soft);
+}
+
+.view-controls-segment-option {
+  height: 22px;
+  flex: 1;
+  border-radius: var(--radius-inline);
+  background: transparent;
+  color: var(--muted-foreground-2);
+  font-size: 12px;
+  font-weight: 500;
+  transition:
+    background var(--motion-fast),
+    color var(--motion-fast);
+}
+
+.view-controls-segment-option[aria-checked="true"] {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+/* After the aria-checked rule so a disabled-but-selected option still mutes. */
+.view-controls-segment-option:disabled {
+  color: var(--muted-foreground-2);
+}
+
+/* Same coarse-pointer hit-target bump styles.css gives .sidebar-group-toggle. */
+@media (pointer: coarse) {
+  .view-controls-button {
+    width: 36px;
+    height: 36px;
+  }
+}

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Sedes CLI Progressive Tools"
+  short_description: "Use Sedes through progressive CLI discovery"
+  default_prompt: "Use $sedes-cli-progressive-tools to discover and invoke the appropriate Sedes operation through the generic JSON CLI interface."
+policy:
+  allow_implicit_invocation: false

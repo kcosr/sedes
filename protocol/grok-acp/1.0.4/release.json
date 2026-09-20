@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "profileRelease": "1.0.4",
+  "candidate": {
+    "release": "1.0.4",
+    "build": "d846eb93d9",
+    "observedChannel": "stable",
+    "channelIsAdmissionAuthority": false,
+    "executableSha256": "79f49625f153923db491a5c290e9b04c3444da488b6b9d6aac533ccb5bff2455",
+    "executableBytes": 166196224,
+    "platform": {
+      "nodePlatform": "linux",
+      "nodeArch": "x64"
+    },
+    "selection": "installed stable candidate observed on 2026-08-15"
+  },
+  "sourceEvidence": {
+    "repository": "https://github.com/xai-org/grok-build",
+    "exactBinarySourceMatch": false,
+    "current": {
+      "releaseDeclaration": "1.0.4",
+      "commit": "5163763e703c319e4554c2f455535c5adb6e51e8",
+      "sourceRevision": "84ae1223e57a5048afb570d74d45c051fa604982"
+    },
+    "prior": {
+      "releaseDeclaration": "1.0.4",
+      "commit": "d6a22a1aed70b58d30a0f82a1a2a76ce1301631e",
+      "sourceRevision": "7140ec21cc4ec809131b0fa774f4b81d61667084"
+    },
+    "claim": "reviewed stable-1.x protocol and image-mechanics evidence at the 1.0.4 floor; neither public source revision is asserted to produce the candidate binary"
+  },
+  "runtimeAdmission": {
+    "status": "production-admitted-stable-1.x",
+    "policy": "admit stable 1.x runtimes at or above the reviewed 1.0.4 floor unless an exact release is explicitly excluded after review; build identity remains bounded evidence",
+    "directoryImpliesExactBuildPin": false,
+    "productionAdmissionDecision": "stable-1.x-reviewed-floor",
+    "reviewedAt": "2026-08-16"
+  }
+}

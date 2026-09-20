@@ -1,0 +1,290 @@
+.thread-group-roster-popover {
+  width: min(304px, calc(100vw - 16px));
+  max-height: min(560px, calc(100dvh - 16px));
+  gap: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.thread-group-roster-frame {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.thread-group-roster-header {
+  display: flex;
+  min-height: 42px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.thread-group-roster-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-group-roster-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.thread-stack-header-action {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--muted-foreground);
+}
+
+.thread-stack-header-action:hover:not(:disabled),
+.thread-stack-header-action:focus-visible {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+.thread-stack-header-action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.thread-stack-header-action:disabled {
+  opacity: 0.4;
+}
+
+.thread-stack-blockers {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--destructive) 28%, var(--border));
+  border-radius: var(--radius-ctl);
+  background: color-mix(in srgb, var(--destructive) 7%, transparent);
+  font-size: 13px;
+}
+
+.thread-stack-blockers ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted-foreground);
+}
+
+.thread-group-roster-list {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+}
+
+.thread-group-roster-member {
+  min-width: 0;
+  border-radius: var(--radius-ctl);
+  outline: none;
+}
+
+.thread-group-roster-member:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.thread-group-roster-member[data-selected="true"] {
+  background: var(--secondary);
+}
+
+[data-slot="dialog-overlay"].thread-group-roster-sheet-overlay {
+  z-index: 88;
+}
+
+[data-slot="dialog-content"].thread-group-roster-sheet {
+  top: auto;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 89;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  max-height: min(78dvh, 680px);
+  --tw-translate-x: 0 !important;
+  --tw-translate-y: 0 !important;
+  translate: 0 0 !important;
+  transform: translateY(var(--thread-group-sheet-drag-offset, 0));
+  transition: transform 140ms ease-out;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+  border-radius: 14px 14px 0 0;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: var(--shadow);
+  padding: 0 0 max(8px, env(safe-area-inset-bottom));
+}
+
+[data-slot="dialog-content"].thread-group-roster-sheet.is-dragging {
+  transition: none;
+}
+
+.thread-group-roster-sheet-handle {
+  display: grid;
+  width: 100%;
+  height: 22px;
+  flex: 0 0 22px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  touch-action: none;
+  cursor: grab;
+}
+
+.thread-group-roster-sheet-handle:active {
+  cursor: grabbing;
+}
+
+.thread-group-roster-sheet-handle > span {
+  width: 34px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted-foreground) 48%, transparent);
+}
+
+.thread-group-roster-sheet-handle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
+}
+
+.thread-group-roster-sheet > [data-slot="dialog-close"] {
+  top: 7px;
+  right: 8px;
+}
+
+.thread-group-roster-sheet .thread-group-roster-header {
+  min-height: 46px;
+  padding-top: 2px;
+  padding-right: 44px;
+}
+
+.thread-group-roster-sheet .thread-group-roster-list {
+  padding: 5px 6px;
+}
+
+.thread-group-roster-frame[data-density="card"] .thread-group-roster-list {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-slot="dialog-content"].thread-group-roster-sheet[data-state="open"] {
+    animation: thread-group-roster-sheet-in 170ms ease-out;
+  }
+}
+
+@keyframes thread-group-roster-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+}
+
+/* A collapsed group keeps the complete representative row as its face. Two
+   fixed quiet offset sheets communicate "stack"; they do not represent the
+   group's member count. The rear sheets are complete rounded cards, while the
+   opaque base of the front card hides the portions directly behind it and
+   keeps the environment tint painted on top. */
+.thread-stack-item {
+  --thread-group-stack-front-edge: color-mix(
+    in srgb,
+    var(--muted-foreground) 32%,
+    transparent
+  );
+  --thread-group-stack-middle-edge: color-mix(
+    in srgb,
+    var(--muted-foreground) 24%,
+    transparent
+  );
+  --thread-group-stack-back-edge: color-mix(
+    in srgb,
+    var(--muted-foreground) 17%,
+    transparent
+  );
+  position: relative;
+  isolation: isolate;
+  margin-right: 8px;
+  margin-bottom: 8px;
+}
+
+.thread-stack-item::before,
+.thread-stack-item::after {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  transform: translate(4px, 4px);
+  border-color: var(--thread-group-stack-middle-edge);
+  border-style: solid;
+  border-width: 1px;
+  border-radius: var(--radius-ctl);
+  background: var(--sidebar);
+  content: "";
+  pointer-events: none;
+}
+
+.thread-stack-item::after {
+  z-index: -3;
+  transform: translate(8px, 8px);
+  border-color: var(--thread-group-stack-back-edge);
+}
+
+.thread-stack-item .flat-row {
+  --flat-row-surface: var(--sidebar);
+  z-index: 1;
+  border-color: var(--thread-group-stack-front-edge);
+  border-style: solid;
+  border-width: 1px;
+}
+
+.thread-stack-item .flat-row:hover,
+.thread-stack-item .flat-row:has(:focus-visible),
+.thread-stack-item .flat-row-selected {
+  --flat-row-surface: var(--secondary);
+}
+
+/* Compact stack faces still name their group. Keep the chip in normal flex
+   flow so it yields to the representative title and existing hover actions. */
+.thread-stack-item .flat-row-compact .flat-row-group {
+  position: static;
+  min-width: 0;
+  max-width: 34%;
+  flex: 0 1 auto;
+  margin-right: 5px;
+}
+
+.thread-group-roster-member .flat-list-item {
+  min-width: 0;
+}
+
+/* Bridge the small positioning gap so moving from a stack to its interactive
+   roster does not accidentally dismiss it. */
+.thread-group-roster-popover::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -10px;
+  width: 10px;
+  content: "";
+}

@@ -1,0 +1,161 @@
+{
+  "format": "sedes-e2e-timing-baseline-v1",
+  "jobs": [
+    {
+      "file": "agent-completion-callbacks.spec.ts",
+      "estimatedMilliseconds": 59000
+    },
+    {
+      "file": "agent-tool-policy.spec.ts",
+      "estimatedMilliseconds": 72000
+    },
+    {
+      "file": "blocking-interactions.spec.ts",
+      "estimatedMilliseconds": 78000
+    },
+    {
+      "file": "canned-prompts.spec.ts",
+      "estimatedMilliseconds": 32000
+    },
+    {
+      "file": "claude-journey.spec.ts",
+      "estimatedMilliseconds": 52000
+    },
+    {
+      "file": "codex-tui-journeys.spec.ts",
+      "estimatedMilliseconds": 63000
+    },
+    {
+      "file": "execution-settings.spec.ts",
+      "estimatedMilliseconds": 65000
+    },
+    {
+      "file": "lineage-journeys.spec.ts",
+      "estimatedMilliseconds": 88000
+    },
+    {
+      "file": "mobile-search-pickers.spec.ts",
+      "estimatedMilliseconds": 22000
+    },
+    {
+      "file": "normalized-code-streaming.spec.ts",
+      "estimatedMilliseconds": 27000
+    },
+    {
+      "file": "normalized-codex-creation.spec.ts",
+      "estimatedMilliseconds": 55000
+    },
+    {
+      "file": "normalized-codex-interactive.spec.ts",
+      "estimatedMilliseconds": 28000
+    },
+    {
+      "file": "normalized-codex-thread.spec.ts",
+      "estimatedMilliseconds": 86000
+    },
+    {
+      "file": "normalized-composer-state.spec.ts",
+      "estimatedMilliseconds": 109000
+    },
+    {
+      "file": "normalized-navigation.spec.ts",
+      "estimatedMilliseconds": 86000
+    },
+    {
+      "file": "normalized-streaming-state.spec.ts",
+      "estimatedMilliseconds": 77000
+    },
+    {
+      "file": "notifications.spec.ts",
+      "estimatedMilliseconds": 68000
+    },
+    {
+      "file": "pending-input-strip.spec.ts",
+      "estimatedMilliseconds": 117000
+    },
+    {
+      "file": "production-primary.spec.ts",
+      "estimatedMilliseconds": 33000
+    },
+    {
+      "file": "question-inbox.spec.ts",
+      "estimatedMilliseconds": 45000
+    },
+    {
+      "file": "saved-agents.spec.ts",
+      "estimatedMilliseconds": 65000
+    },
+    {
+      "file": "settings-navigation.spec.ts",
+      "estimatedMilliseconds": 48000
+    },
+    {
+      "file": "sidebar-execution-scope.spec.ts",
+      "estimatedMilliseconds": 46000
+    },
+    {
+      "file": "sidebar-thread-groups.spec.ts",
+      "estimatedMilliseconds": 72000
+    },
+    {
+      "file": "skill-picker-layout.spec.ts",
+      "estimatedMilliseconds": 20000
+    },
+    {
+      "file": "tasks-panel.spec.ts",
+      "estimatedMilliseconds": 53000
+    },
+    {
+      "file": "terminal-panes-mobile.spec.ts",
+      "estimatedMilliseconds": 38000
+    },
+    {
+      "file": "terminal-panes.spec.ts",
+      "estimatedMilliseconds": 61000
+    },
+    {
+      "file": "terminal-reconciliation.spec.ts",
+      "estimatedMilliseconds": 34000
+    },
+    {
+      "file": "thread-history-thumbstick.spec.ts",
+      "estimatedMilliseconds": 65000
+    },
+    {
+      "file": "thread-resume-retention.spec.ts",
+      "estimatedMilliseconds": 42000
+    },
+    {
+      "file": "thread-templates.spec.ts",
+      "estimatedMilliseconds": 44000
+    },
+    {
+      "file": "turn-bookmarks.spec.ts",
+      "estimatedMilliseconds": 55000
+    },
+    {
+      "file": "workpads.spec.ts",
+      "estimatedMilliseconds": 54000
+    },
+    {
+      "file": "workspace-files-compare.spec.ts",
+      "estimatedMilliseconds": 31000
+    },
+    {
+      "file": "workspace-files-mobile-sheet.spec.ts",
+      "estimatedMilliseconds": 49000
+    },
+    {
+      "file": "workspace-files.spec.ts",
+      "estimatedMilliseconds": 81000
+    },
+    {
+      "file": "workspace-panel-lone-dock.spec.ts",
+      "estimatedMilliseconds": 21000
+    },
+    {
+      "file": "workspace-panels.spec.ts",
+      "estimatedMilliseconds": 65000
+    }
+  ]
+}

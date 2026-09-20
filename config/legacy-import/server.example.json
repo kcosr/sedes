@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 10,
+  "packagedClients": [],
+  "webSearch": {
+    "provider": "grok_cli"
+  },
+  "executionEnvironments": [
+    {
+      "id": "019196f7-a0a8-7bc4-a89b-8cf013978405",
+      "kind": "local",
+      "label": "Local",
+      "workspaceIsolation": {
+        "kind": "bubblewrap",
+        "networkProfiles": ["isolated", "execution_host"]
+      }
+    }
+  ],
+  "backends": [
+    {
+      "id": "pi-local",
+      "kind": "pi",
+      "label": "Pi",
+      "enabled": true,
+      "modelPolicy": { "type": "catalog" }
+    }
+  ],
+  "targets": [
+    {
+      "id": "pi-sdk-local",
+      "kind": "pi_sdk",
+      "label": "Pi",
+      "backendInstanceId": "pi-local",
+      "executionEnvironmentId": "019196f7-a0a8-7bc4-a89b-8cf013978405",
+      "enabled": true
+    }
+  ],
+  "defaultTargetId": "pi-sdk-local"
+}

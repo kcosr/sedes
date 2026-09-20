@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 10,
+  "executionEnvironments": [
+    {
+      "id": "019196f7-a0a8-7bc4-a89b-8cf013978405",
+      "kind": "local",
+      "label": "Local"
+    }
+  ],
+  "backends": [
+    {
+      "id": "codex-local",
+      "kind": "codex_app_server",
+      "label": "Codex",
+      "enabled": true,
+      "modelPolicy": { "type": "catalog" },
+      "moduleConfiguration": {
+        "connection": {
+          "ownership": "owned",
+          "channel": {
+            "type": "process_stdio",
+            "workingDirectory": "/absolute/path/to/default/workspace"
+          }
+        },
+        "policy": {
+          "allowedSandboxModes": ["read-only", "workspace-write"],
+          "allowedNetworkAccess": ["disabled", "enabled"],
+          "allowedApprovalPolicies": ["untrusted", "on-request", "never"],
+          "allowedApprovalReviewers": ["user", "auto_review"]
+        }
+      }
+    }
+  ],
+  "targets": [
+    {
+      "id": "codex-default",
+      "kind": "codex_app_server",
+      "label": "Codex",
+      "backendInstanceId": "codex-local",
+      "executionEnvironmentId": "019196f7-a0a8-7bc4-a89b-8cf013978405",
+      "enabled": true,
+      "moduleConfiguration": {
+        "defaults": {
+          "sandboxMode": "read-only",
+          "networkAccess": "disabled",
+          "approvalPolicy": "never",
+          "approvalReviewer": "user",
+          "model": {
+            "type": "catalogDefault"
+          }
+        }
+      }
+    }
+  ],
+  "defaultTargetId": "codex-default"
+}

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Sedes CLI Individual Tools"
+  short_description: "Use Sedes through named typed CLI commands"
+  default_prompt: "Use $sedes-cli-individual-tools to discover and invoke the appropriate named Sedes CLI command through live help."
+policy:
+  allow_implicit_invocation: false

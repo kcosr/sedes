@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "profile": "grok-source-probe-v1",
+  "o2aGate": "review_required",
+  "scenarios": [
+    {
+      "scenarioId": "models_list",
+      "method": "x.ai/models/list",
+      "status": "source_characterization_only",
+      "initializeFirst": true,
+      "schemaId": "empty_object"
+    },
+    {
+      "scenarioId": "session_info",
+      "method": "x.ai/session/info",
+      "status": "source_characterization_only",
+      "initializeFirst": true,
+      "schemaId": "optional_session_id"
+    },
+    {
+      "scenarioId": "session_list",
+      "method": "x.ai/session/list",
+      "status": "source_characterization_only",
+      "initializeFirst": true,
+      "schemaId": "workspace_directory"
+    },
+    {
+      "scenarioId": "sessions_list",
+      "method": "x.ai/sessions/list",
+      "status": "source_characterization_only",
+      "initializeFirst": true,
+      "schemaId": "empty_object"
+    },
+    {
+      "scenarioId": "session_updates",
+      "method": "x.ai/session/updates",
+      "status": "source_characterization_only",
+      "initializeFirst": true,
+      "schemaId": "bounded_session_updates"
+    },
+    {
+      "scenarioId": "session_state",
+      "method": "x.ai/session/state",
+      "status": "source_characterization_only",
+      "initializeFirst": true,
+      "schemaId": "session_id_and_cwd"
+    },
+    {
+      "scenarioId": "session_usage",
+      "method": "x.ai/session/usage",
+      "status": "source_characterization_only",
+      "initializeFirst": true,
+      "schemaId": "session_id"
+    }
+  ]
+}

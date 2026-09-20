@@ -1,0 +1,20 @@
+{
+  "accountId": "<account-id-1>",
+  "createdAt": "<timestamp>",
+  "durationMs": 0,
+  "error": "[REDACTED:provider-message]",
+  "homePath": "<home>/<path-1>",
+  "host": "<host-1>",
+  "id": -1,
+  "nested": {
+    "authorization": "[REDACTED:secret]",
+    "filename": "[REDACTED:secret]-artifact.txt",
+    "sessionId": "<session-id-1>"
+  },
+  "requestId": -1,
+  "sessionId": "<session-id-1>",
+  "text": "[REDACTED:provider-message]",
+  "toolCallId": "<tool-id-1>",
+  "uuid": "<uuid-1>",
+  "workspacePath": "<workspace>/<path-2>"
+}

@@ -1,0 +1,12 @@
+{
+  "appId": "dev.sedes.local",
+  "appName": "Sedes",
+  "webDir": "dist/client",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  },
+  "android": {
+    "loggingBehavior": "none"
+  }
+}

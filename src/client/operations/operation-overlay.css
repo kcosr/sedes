@@ -1,0 +1,73 @@
+.dialog-overlay.operation-overlay-backdrop {
+  z-index: 110;
+  animation: none;
+}
+.operation-overlay-content {
+  position: fixed;
+  z-index: 111;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(420px, calc(100vw - 30px));
+  outline: none;
+}
+.operation-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  color: var(--foreground);
+}
+/* Keep fast archive checks to a backdrop-to-dialog transition. This delay is
+   intentional even with reduced motion; it does not animate the content. */
+.operation-progress.deferred {
+  visibility: hidden;
+  animation: operation-progress-reveal 0s 400ms forwards;
+}
+@keyframes operation-progress-reveal {
+  to {
+    visibility: visible;
+  }
+}
+.operation-progress-message {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--secondary);
+  box-shadow: var(--shadow);
+}
+.operation-spinner {
+  width: 20px;
+  height: 20px;
+  animation: operation-spin 900ms linear infinite;
+}
+.dialog-card.operation-error {
+  z-index: 111;
+  animation: none;
+}
+.dialog-card.operation-confirmation {
+  z-index: 111;
+  animation: none;
+}
+.operation-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+@keyframes operation-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .operation-spinner {
+    animation: none;
+  }
+}
+

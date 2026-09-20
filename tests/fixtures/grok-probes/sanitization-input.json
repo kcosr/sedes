@@ -1,0 +1,22 @@
+{
+  "sessionId": "session-native-a",
+  "requestId": 42,
+  "id": 42,
+  "toolCallId": "tool-native-a",
+  "accountId": "account-native-a",
+  "host": "builder.internal.example",
+  "createdAt": "2026-08-15T21:17:04.123Z",
+  "durationMs": 918,
+  "workspacePath": "/private/workspace/project/file.txt",
+  "homePath": "/private/home/.grok/config.json",
+  "uuid": "123e4567-e89b-42d3-a456-426614174000",
+  "text": "provider supplied text must never be retained",
+  "error": {
+    "message": "provider supplied error must never be retained"
+  },
+  "nested": {
+    "sessionId": "session-native-a",
+    "authorization": "Bearer GROK_TEST_SECRET_CANARY_6f22c9a1",
+    "filename": "GROK_TEST_SECRET_CANARY_6f22c9a1-artifact.txt"
+  }
+}

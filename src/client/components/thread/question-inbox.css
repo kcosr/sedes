@@ -1,0 +1,193 @@
+.thread-questions-trigger {
+  flex-shrink: 0;
+  gap: 0.35rem;
+}
+.thread-questions-trigger svg {
+  color: var(--warning);
+}
+.thread-questions-count,
+.question-inbox-total {
+  font-variant-numeric: tabular-nums;
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+  background: var(--muted);
+  font-size: 0.75rem;
+}
+.question-inbox-panel {
+  width: 100%;
+  max-height: min(52dvh, 560px);
+  overflow-y: auto;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--popover);
+  color: var(--foreground);
+}
+.question-inbox-navigation,
+.question-inbox-navigation nav {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.question-inbox-navigation {
+  justify-content: space-between;
+  margin-bottom: 0.6rem;
+}
+.question-inbox-navigation strong {
+  font-size: 0.85rem;
+}
+.question-inbox-navigation nav {
+  font-size: 0.75rem;
+}
+.composer-prompt-rail:empty {
+  display: none;
+}
+.question-response-answers {
+  margin: 0;
+  display: grid;
+  gap: 12px;
+}
+.question-response-answers dt,
+.question-response-answers dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.question-response-answers dt {
+  font-weight: 600;
+}
+.question-response-answers dd {
+  margin-top: 4px;
+}
+.question-inbox-description,
+.question-inbox-empty,
+.question-inbox-hint {
+  color: var(--muted-foreground);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.question-inbox-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.question-inbox-card {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.question-inbox-card[data-selected] {
+  border-color: var(--primary);
+}
+.question-inbox-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--muted-foreground);
+  font-size: 0.7rem;
+}
+.question-inbox-question {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.question-inbox-question legend {
+  width: 100%;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.question-inbox-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.question-inbox-options button {
+  white-space: normal;
+  height: auto;
+  min-height: 2rem;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.question-inbox-options [aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--muted);
+}
+.question-inbox-question textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 4rem;
+  resize: vertical;
+  padding: 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--muted);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.85rem;
+}
+.question-inbox-question textarea:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.question-inbox-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+.question-inbox-error {
+  font-size: 0.8rem;
+  color: var(--destructive);
+}
+.question-inbox-hint {
+  margin: 0;
+}
+.question-transcript-disclosure ol {
+  padding-left: 1.2rem;
+}
+.agent-input-disclosure.question-transcript-disclosure {
+  --question-status-color: var(--muted-foreground);
+  border-left-color: var(--question-status-color);
+  background: color-mix(in oklch, var(--question-status-color) 8%, transparent);
+}
+.question-transcript-disclosure[data-question-status="pending"] {
+  --question-status-color: var(--warning);
+}
+.question-transcript-disclosure[data-question-status="answered"],
+.question-transcript-disclosure[data-question-status="dismissed"],
+.question-transcript-disclosure[data-question-status="resolved"] {
+  --question-status-color: var(--info);
+}
+.question-transcript-disclosure .agent-input-disclosure-label,
+.question-transcript-disclosure .question-disclosure-icon {
+  color: var(--question-status-color);
+}
+.question-disclosure-icon,
+.question-disclosure-count {
+  flex: 0 0 auto;
+}
+.question-disclosure-count {
+  font-variant-numeric: tabular-nums;
+}
+.question-transcript-disclosure .question-disclosure-preview,
+.question-transcript-disclosure[open] .question-disclosure-preview {
+  display: block;
+}
+@media (max-width: 819px) {
+  .question-inbox-question textarea {
+    font-size: 16px;
+  }
+  .question-inbox-card-actions button,
+  .question-inbox-options button {
+    min-height: 44px;
+  }
+}

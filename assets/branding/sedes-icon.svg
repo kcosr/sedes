@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Sedes</title>
+  <defs>
+    <radialGradient id="sedes-icon-background" cx="50%" cy="42%" r="72%">
+      <stop offset="0" stop-color="#1d2128"/>
+      <stop offset="0.62" stop-color="#171a20"/>
+      <stop offset="1" stop-color="#111419"/>
+    </radialGradient>
+    <linearGradient id="sedes-icon-glyph" x1="0" y1="0" x2="0.82" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f2f2ef"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="16" y="16" width="480" height="480" rx="92" fill="url(#sedes-icon-background)"/>
+  <!-- The path geometry is bottom-heavy, so this optical correction gives
+       the visible mark equal top and bottom breathing room. -->
+  <g fill="url(#sedes-icon-glyph)" transform="translate(0 -22)">
+    <path d="M143 112c7-3 14-1 20 5l48 49c6 6 8 14 6 22l-24 83c-3 10-13 17-23 14l-67-23c-10-3-14-13-10-23l42-115c2-6 4-10 8-12Z"/>
+    <path d="M369 112c-7-3-14-1-20 5l-48 49c-6 6-8 14-6 22l24 83c3 10 13 17 23 14l67-23c10-3 14-13 10-23l-42-115c-2-6-4-10-8-12Z"/>
+    <path d="M96 279c-6 1-10 6-10 13v67c0 11 10 19 20 15l57-22c7-3 11-9 12-16l3-27c1-8-4-15-12-18l-61-12c-3-1-6-1-9 0Z"/>
+    <path d="M416 279c6 1 10 6 10 13v67c0 11-10 19-20 15l-57-22c-7-3-11-9-12-16l-3-27c-1-8 4-15 12-18l61-12c3-1 6-1 9 0Z"/>
+    <path fill-rule="evenodd" d="M232 200c-17 0-30 11-34 27l-30 119c-1 5 0 10 4 14l9 9-70 36c-12 6-18 17-15 27 2 8 10 13 20 13h280c10 0 18-5 20-13 3-10-3-21-15-27l-70-36 9-9c4-4 5-9 4-14l-30-119c-4-16-17-27-34-27h-48Zm7 23c-10 0-18 7-20 17l-23 96c-2 7 1 13 6 18l13 11-17 25c-4 6 0 10 7 10h102c7 0 11-4 7-10l-17-25 13-11c5-5 8-11 6-18l-23-96c-2-10-10-17-20-17h-34Z"/>
+  </g>
+  <g fill="none" stroke="#171a1f" stroke-width="4" stroke-linejoin="round" transform="translate(0 -22)">
+    <path d="M151 130c4-2 8-1 12 3l36 38c4 4 5 9 4 14l-20 72c-2 7-7 10-13 8l-55-19c-6-2-8-7-6-13l35-95c2-4 4-7 7-8Z"/>
+    <path d="M361 130c-4-2-8-1-12 3l-36 38c-4 4-5 9-4 14l20 72c2 7 7 10 13 8l55-19c6-2 8-7 6-13l-35-95c-2-4-4-7-7-8Z"/>
+    <path d="M103 294c-3 1-5 3-5 7v51c0 5 5 8 10 6l46-18c4-2 6-5 7-9l2-18c1-5-2-8-7-10l-49-9h-4Z"/>
+    <path d="M409 294c3 1 5 3 5 7v51c0 5-5 8-10 6l-46-18c-4-2-6-5-7-9l-2-18c-1-5 2-8 7-10l49-9h4Z"/>
+  </g>
+</svg>

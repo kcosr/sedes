@@ -1,0 +1,14 @@
+dist/
+!packages/electron-workspace-file-download/electron/dist/
+!packages/electron-workspace-file-download/electron/dist/plugin.mjs
+node_modules/
+playwright-report/
+test-results/
+.agent-tool-cli-test-build-*/
+coverage/
+.pi-subagents/
+.pi/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store

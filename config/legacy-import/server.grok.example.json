@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 10,
+  "executionEnvironments": [
+    {
+      "id": "019196f7-a0a8-7bc4-a89b-8cf013978405",
+      "kind": "local",
+      "label": "Local"
+    }
+  ],
+  "backends": [
+    {
+      "id": "grok-local",
+      "kind": "grok_build",
+      "label": "Grok",
+      "enabled": true,
+      "modelPolicy": { "type": "catalog" },
+      "moduleConfiguration": {
+        "connection": {
+          "ownership": "owned",
+          "channel": {
+            "type": "process_stdio",
+            "workingDirectoryPolicy": "workspace"
+          }
+        },
+        "authentication": { "type": "native" },
+        "security": {
+          "profile": "unrestricted_v1",
+          "sandboxProfile": "off",
+          "networkAccess": "enabled",
+          "approvalMode": "full_access"
+        }
+      }
+    }
+  ],
+  "targets": [
+    {
+      "id": "grok-local-default",
+      "kind": "grok_acp",
+      "label": "Grok",
+      "backendInstanceId": "grok-local",
+      "executionEnvironmentId": "019196f7-a0a8-7bc4-a89b-8cf013978405",
+      "enabled": true,
+      "moduleConfiguration": {
+        "defaults": {
+          "model": { "type": "catalogDefault" },
+          "reasoningEffort": { "type": "modelDefault" }
+        }
+      }
+    }
+  ],
+  "defaultTargetId": "grok-local-default"
+}

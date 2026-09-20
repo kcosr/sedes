@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 10,
+  "executionEnvironments": [
+    {
+      "id": "019196f7-a0a8-7bc4-a89b-8cf013978405",
+      "kind": "local",
+      "label": "Local"
+    }
+  ],
+  "backends": [
+    {
+      "id": "claude-local",
+      "kind": "claude_agent_sdk",
+      "label": "Claude",
+      "enabled": true,
+      "modelPolicy": { "type": "catalog" },
+      "moduleConfiguration": {
+        "configDirectory": "/home/operator/.claude",
+        "permissionPolicy": {
+          "allowedModes": [
+            "default",
+            "acceptEdits",
+            "dontAsk",
+            "auto",
+            "bypassPermissions"
+          ]
+        }
+      }
+    }
+  ],
+  "targets": [
+    {
+      "id": "claude-local-default",
+      "kind": "claude_agent_sdk",
+      "label": "Claude",
+      "backendInstanceId": "claude-local",
+      "executionEnvironmentId": "019196f7-a0a8-7bc4-a89b-8cf013978405",
+      "enabled": true,
+      "moduleConfiguration": {
+        "defaults": {
+          "permissionMode": "default"
+        }
+      }
+    }
+  ],
+  "defaultTargetId": "claude-local-default"
+}

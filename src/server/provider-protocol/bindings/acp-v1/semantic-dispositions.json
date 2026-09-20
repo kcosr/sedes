@@ -1,0 +1,738 @@
+{
+  "artifactVersion": 2,
+  "sdk": "@agentclientprotocol/sdk@1.3.0",
+  "ignoredFormatPointers": [
+    {
+      "pointer": "/$defs/Annotations/properties/priority",
+      "format": "double",
+      "disposition": "binding_refinement",
+      "refinement": "bounded JSON finite safe-number subset at every consumed content annotation",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/Cost/properties/amount",
+      "format": "double",
+      "disposition": "binding_refinement",
+      "refinement": "finite nonnegative display/accounting hint",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/CreateTerminalRequest/properties/outputByteLimit",
+      "format": "uint64",
+      "disposition": "binding_refinement",
+      "refinement": "safe nonnegative integer capped at 256 KiB before authority",
+      "test": "acp-v1-generated-bindings: filesystem/terminal semantics"
+    },
+    {
+      "pointer": "/$defs/NesEditHistoryCapabilities/properties/maxCount",
+      "format": "uint32",
+      "disposition": "binding_refinement",
+      "refinement": "safe uint32 in initialize response",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/NesRecentFilesCapabilities/properties/maxCount",
+      "format": "uint32",
+      "disposition": "binding_refinement",
+      "refinement": "safe uint32 in initialize response",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/NesUserActionsCapabilities/properties/maxCount",
+      "format": "uint32",
+      "disposition": "binding_refinement",
+      "refinement": "safe uint32 in initialize response",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/ProtocolVersion",
+      "format": "uint16",
+      "disposition": "binding_refinement",
+      "refinement": "safe uint16 schema response plus exact V1 negotiation",
+      "test": "acp-v1-binding: protocol mismatch classification"
+    },
+    {
+      "pointer": "/$defs/ReadTextFileRequest/properties/limit",
+      "format": "uint32",
+      "disposition": "binding_refinement",
+      "refinement": "safe uint32 capped at 10000 lines",
+      "test": "acp-v1-generated-bindings: filesystem/terminal semantics"
+    },
+    {
+      "pointer": "/$defs/ReadTextFileRequest/properties/line",
+      "format": "uint32",
+      "disposition": "binding_refinement",
+      "refinement": "one-based safe uint32",
+      "test": "acp-v1-generated-bindings: filesystem/terminal semantics"
+    },
+    {
+      "pointer": "/$defs/RequestId/anyOf/1",
+      "format": "int64",
+      "disposition": "binding_refinement",
+      "refinement": "non-null JSON safe integer or bounded nonempty string at envelope boundary",
+      "test": "acp-v1-binding: hostile envelopes"
+    },
+    {
+      "pointer": "/$defs/ResourceLink/properties/size",
+      "format": "int64",
+      "disposition": "binding_refinement",
+      "refinement": "nonnegative JSON safe integer on consumed content subtrees",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/TerminalExitStatus/properties/exitCode",
+      "format": "uint32",
+      "disposition": "binding_refinement",
+      "refinement": "safe uint32 and exactly one of exit code or bounded signal",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/ToolCallLocation/properties/line",
+      "format": "uint32",
+      "disposition": "binding_refinement",
+      "refinement": "safe uint32 on permission and session-update tool locations",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/Usage/properties/cachedReadTokens",
+      "format": "uint64",
+      "disposition": "binding_refinement",
+      "refinement": "nonnegative JSON safe integer telemetry",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/Usage/properties/cachedWriteTokens",
+      "format": "uint64",
+      "disposition": "binding_refinement",
+      "refinement": "nonnegative JSON safe integer telemetry",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/Usage/properties/inputTokens",
+      "format": "uint64",
+      "disposition": "binding_refinement",
+      "refinement": "nonnegative JSON safe integer telemetry",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/Usage/properties/outputTokens",
+      "format": "uint64",
+      "disposition": "binding_refinement",
+      "refinement": "nonnegative JSON safe integer telemetry",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/Usage/properties/thoughtTokens",
+      "format": "uint64",
+      "disposition": "binding_refinement",
+      "refinement": "nonnegative JSON safe integer telemetry",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/Usage/properties/totalTokens",
+      "format": "uint64",
+      "disposition": "binding_refinement",
+      "refinement": "nonnegative JSON safe integer telemetry",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/UsageUpdate/properties/size",
+      "format": "uint64",
+      "disposition": "binding_refinement",
+      "refinement": "nonnegative JSON safe integer and used <= size",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/UsageUpdate/properties/used",
+      "format": "uint64",
+      "disposition": "binding_refinement",
+      "refinement": "nonnegative JSON safe integer and used <= size",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    },
+    {
+      "pointer": "/$defs/WaitForTerminalExitResponse/properties/exitCode",
+      "format": "uint32",
+      "disposition": "binding_refinement",
+      "refinement": "safe uint32 and exactly one of exit code or bounded signal",
+      "test": "acp-v1-generated-bindings: semantic inventory"
+    }
+  ],
+  "pointerInventories": [
+    {
+      "id": "portable_absolute_paths",
+      "selector": "portable_absolute_paths",
+      "disposition": "binding_refinement",
+      "refinement": "named setup/list/fs/terminal/tool-location/diff path validators; platform canonicalization remains backend authority",
+      "test": "acp-v1-generated-bindings: every adopted path",
+      "pointers": [
+        "/$defs/CreateTerminalRequest/properties/cwd",
+        "/$defs/Diff/properties/path",
+        "/$defs/ForkSessionRequest/properties/additionalDirectories",
+        "/$defs/ForkSessionRequest/properties/cwd",
+        "/$defs/ListSessionsRequest/properties/cwd",
+        "/$defs/LoadSessionRequest/properties/additionalDirectories",
+        "/$defs/LoadSessionRequest/properties/cwd",
+        "/$defs/McpServerStdio/properties/command",
+        "/$defs/NewSessionRequest/properties/additionalDirectories",
+        "/$defs/NewSessionRequest/properties/cwd",
+        "/$defs/ReadTextFileRequest/properties/path",
+        "/$defs/ResumeSessionRequest/properties/additionalDirectories",
+        "/$defs/ResumeSessionRequest/properties/cwd",
+        "/$defs/SessionInfo/properties/additionalDirectories",
+        "/$defs/SessionInfo/properties/cwd",
+        "/$defs/ToolCallLocation/properties/path",
+        "/$defs/WriteTextFileRequest/properties/path"
+      ]
+    },
+    {
+      "id": "validated_mcp_urls",
+      "selector": "uri_link_url_strings",
+      "disposition": "binding_refinement",
+      "refinement": "MCP HTTP and SSE endpoint strings require syntactically valid http or https URLs; destination authority remains backend-owned",
+      "test": "acp-v1-generated-bindings: MCP URL syntax",
+      "pointers": [
+        "/$defs/McpServerHttp/properties/url",
+        "/$defs/McpServerSse/properties/url"
+      ]
+    },
+    {
+      "id": "opaque_uri_and_links",
+      "selector": "uri_link_url_strings",
+      "disposition": "non_evidentiary",
+      "refinement": "bounded opaque URI and link strings are preserved without dereference, destination authority, or correlation semantics",
+      "test": "acp-v1-generated-bindings: opaque URI preservation",
+      "pointers": [
+        "/$defs/AuthMethodEnvVar/properties/link",
+        "/$defs/BlobResourceContents/properties/uri",
+        "/$defs/ImageContent/properties/uri",
+        "/$defs/PlanFile/properties/uri",
+        "/$defs/ResourceLink/properties/uri",
+        "/$defs/TextResourceContents/properties/uri"
+      ]
+    },
+    {
+      "id": "validated_session_timestamps",
+      "selector": "timestamps",
+      "disposition": "binding_refinement",
+      "refinement": "session activity timestamps require bounded calendar-valid RFC3339 syntax but are not lifecycle or freshness evidence",
+      "test": "acp-v1-generated-bindings: timestamps",
+      "pointers": [
+        "/$defs/SessionInfo/properties/updatedAt",
+        "/$defs/SessionInfoUpdate/properties/updatedAt"
+      ]
+    },
+    {
+      "id": "annotation_last_modified",
+      "selector": "timestamps",
+      "disposition": "non_evidentiary",
+      "refinement": "the bounded annotation timestamp is preserved as an opaque display hint and never used as freshness or completion evidence",
+      "test": "acp-v1-generated-bindings: annotation metadata remains non-evidentiary",
+      "pointers": ["/$defs/Annotations/properties/lastModified"]
+    },
+    {
+      "id": "opaque_pagination_cursors",
+      "selector": "cursors",
+      "disposition": "non_evidentiary",
+      "refinement": "bounded cursor strings are preserved without ordering, provenance, or completion semantics",
+      "test": "acp-v1-generated-bindings: cursor preservation",
+      "pointers": [
+        "/$defs/ListSessionsRequest/properties/cursor",
+        "/$defs/ListSessionsResponse/properties/nextCursor"
+      ]
+    },
+    {
+      "id": "identifier_and_reference_fields",
+      "selector": "identifier_references",
+      "disposition": "binding_refinement",
+      "refinement": "every adopted identifier or identifier reference is a bounded nonempty lookup token; existence and scope remain backend authority",
+      "test": "acp-v1-generated-bindings: catalogs and references",
+      "pointers": [
+        "/$defs/AuthMethodAgent/properties/id",
+        "/$defs/AuthMethodEnvVar/properties/id",
+        "/$defs/AuthMethodTerminal/properties/id",
+        "/$defs/AuthenticateRequest/properties/methodId",
+        "/$defs/CancelNotification/properties/sessionId",
+        "/$defs/CancelRequestNotification/properties/requestId",
+        "/$defs/CloseSessionRequest/properties/sessionId",
+        "/$defs/ContentChunk/properties/messageId",
+        "/$defs/CreateTerminalRequest/properties/sessionId",
+        "/$defs/CreateTerminalResponse/properties/terminalId",
+        "/$defs/CurrentModeUpdate/properties/currentModeId",
+        "/$defs/DeleteSessionRequest/properties/sessionId",
+        "/$defs/ForkSessionRequest/properties/sessionId",
+        "/$defs/ForkSessionResponse/properties/sessionId",
+        "/$defs/KillTerminalRequest/properties/sessionId",
+        "/$defs/KillTerminalRequest/properties/terminalId",
+        "/$defs/LoadSessionRequest/properties/sessionId",
+        "/$defs/McpServerAcp/properties/serverId",
+        "/$defs/NewSessionResponse/properties/sessionId",
+        "/$defs/PermissionOption/properties/optionId",
+        "/$defs/PlanFile/properties/planId",
+        "/$defs/PlanItems/properties/planId",
+        "/$defs/PlanMarkdown/properties/planId",
+        "/$defs/PlanRemoved/properties/planId",
+        "/$defs/PromptRequest/properties/sessionId",
+        "/$defs/ReadTextFileRequest/properties/sessionId",
+        "/$defs/ReleaseTerminalRequest/properties/sessionId",
+        "/$defs/ReleaseTerminalRequest/properties/terminalId",
+        "/$defs/RequestPermissionRequest/properties/sessionId",
+        "/$defs/ResumeSessionRequest/properties/sessionId",
+        "/$defs/SelectedPermissionOutcome/properties/optionId",
+        "/$defs/SessionConfigOption/properties/id",
+        "/$defs/SessionConfigSelect/properties/currentValue",
+        "/$defs/SessionConfigSelectGroup/properties/group",
+        "/$defs/SessionConfigSelectOption/properties/value",
+        "/$defs/SessionInfo/properties/sessionId",
+        "/$defs/SessionMode/properties/id",
+        "/$defs/SessionModeState/properties/currentModeId",
+        "/$defs/SessionNotification/properties/sessionId",
+        "/$defs/SetSessionConfigOptionRequest/anyOf/1/properties/value",
+        "/$defs/SetSessionConfigOptionRequest/properties/configId",
+        "/$defs/SetSessionConfigOptionRequest/properties/sessionId",
+        "/$defs/SetSessionModeRequest/properties/modeId",
+        "/$defs/SetSessionModeRequest/properties/sessionId",
+        "/$defs/Terminal/properties/terminalId",
+        "/$defs/TerminalOutputRequest/properties/sessionId",
+        "/$defs/TerminalOutputRequest/properties/terminalId",
+        "/$defs/ToolCall/properties/toolCallId",
+        "/$defs/ToolCallUpdate/properties/toolCallId",
+        "/$defs/WaitForTerminalExitRequest/properties/sessionId",
+        "/$defs/WaitForTerminalExitRequest/properties/terminalId",
+        "/$defs/WriteTextFileRequest/properties/sessionId"
+      ]
+    },
+    {
+      "id": "lookup_key_names",
+      "selector": "lookup_names",
+      "disposition": "binding_refinement",
+      "refinement": "environment and available-command lookup names are bounded and nonempty with catalog-specific uniqueness where required",
+      "test": "acp-v1-generated-bindings: named catalog keys",
+      "pointers": [
+        "/$defs/AuthEnvVar/properties/name",
+        "/$defs/AvailableCommand/properties/name",
+        "/$defs/EnvVariable/properties/name"
+      ]
+    },
+    {
+      "id": "ordered_array_fields",
+      "selector": "ordered_arrays",
+      "disposition": "binding_refinement",
+      "refinement": "the bounded canonical snapshot preserves every adopted array in wire order; typed validators add only documented uniqueness and membership rules",
+      "test": "acp-v1-generated-bindings: ordered arrays",
+      "pointers": [
+        "/$defs/Annotations/properties/audience",
+        "/$defs/AuthMethodEnvVar/properties/vars",
+        "/$defs/AuthMethodTerminal/properties/args",
+        "/$defs/AvailableCommandsUpdate/properties/availableCommands",
+        "/$defs/ClientCapabilities/properties/positionEncodings",
+        "/$defs/ConfigOptionUpdate/properties/configOptions",
+        "/$defs/CreateTerminalRequest/properties/args",
+        "/$defs/CreateTerminalRequest/properties/env",
+        "/$defs/ForkSessionRequest/properties/additionalDirectories",
+        "/$defs/ForkSessionRequest/properties/mcpServers",
+        "/$defs/ForkSessionResponse/properties/configOptions",
+        "/$defs/InitializeResponse/properties/authMethods",
+        "/$defs/ListSessionsResponse/properties/sessions",
+        "/$defs/LoadSessionRequest/properties/additionalDirectories",
+        "/$defs/LoadSessionRequest/properties/mcpServers",
+        "/$defs/LoadSessionResponse/properties/configOptions",
+        "/$defs/McpServerHttp/properties/headers",
+        "/$defs/McpServerSse/properties/headers",
+        "/$defs/McpServerStdio/properties/args",
+        "/$defs/McpServerStdio/properties/env",
+        "/$defs/NewSessionRequest/properties/additionalDirectories",
+        "/$defs/NewSessionRequest/properties/mcpServers",
+        "/$defs/NewSessionResponse/properties/configOptions",
+        "/$defs/Plan/properties/entries",
+        "/$defs/PlanItems/properties/entries",
+        "/$defs/PromptRequest/properties/prompt",
+        "/$defs/RequestPermissionRequest/properties/options",
+        "/$defs/ResumeSessionRequest/properties/additionalDirectories",
+        "/$defs/ResumeSessionRequest/properties/mcpServers",
+        "/$defs/ResumeSessionResponse/properties/configOptions",
+        "/$defs/SessionConfigSelect/properties/options",
+        "/$defs/SessionConfigSelectGroup/properties/options",
+        "/$defs/SessionInfo/properties/additionalDirectories",
+        "/$defs/SessionModeState/properties/availableModes",
+        "/$defs/SetSessionConfigOptionResponse/properties/configOptions",
+        "/$defs/ToolCall/properties/content",
+        "/$defs/ToolCall/properties/locations",
+        "/$defs/ToolCallUpdate/properties/content",
+        "/$defs/ToolCallUpdate/properties/locations"
+      ]
+    }
+  ],
+  "crossFieldObligations": [
+    {
+      "id": "capability_negotiation",
+      "disposition": "binding_refinement",
+      "refinement": "every standard descriptor capability predicate publishes exact schema evidence for immutable auth, provider, session, prompt, filesystem, terminal, config, update, and lifecycle negotiation",
+      "test": "acp-v1-binding: initialization negotiation",
+      "pointers": [
+        "/$defs/AgentAuthCapabilities/properties/logout",
+        "/$defs/AgentCapabilities/properties/auth",
+        "/$defs/AgentCapabilities/properties/loadSession",
+        "/$defs/AgentCapabilities/properties/mcpCapabilities",
+        "/$defs/AgentCapabilities/properties/positionEncoding",
+        "/$defs/AgentCapabilities/properties/promptCapabilities",
+        "/$defs/AgentCapabilities/properties/sessionCapabilities",
+        "/$defs/AuthCapabilities/properties/terminal",
+        "/$defs/AuthMethod/anyOf/1/properties/type",
+        "/$defs/AuthMethodAgent/properties/id",
+        "/$defs/AuthMethodEnvVar/properties/id",
+        "/$defs/AuthMethodTerminal/properties/id",
+        "/$defs/AuthenticateRequest/properties/methodId",
+        "/$defs/ClientCapabilities/properties/auth",
+        "/$defs/ClientCapabilities/properties/elicitation",
+        "/$defs/ClientCapabilities/properties/fs",
+        "/$defs/ClientCapabilities/properties/nes",
+        "/$defs/ClientCapabilities/properties/plan",
+        "/$defs/ClientCapabilities/properties/positionEncodings",
+        "/$defs/ClientCapabilities/properties/session",
+        "/$defs/ClientCapabilities/properties/terminal",
+        "/$defs/ClientSessionCapabilities/properties/configOptions",
+        "/$defs/ConfigOptionUpdate/properties/configOptions",
+        "/$defs/CreateTerminalRequest/properties/command",
+        "/$defs/CreateTerminalRequest/properties/cwd",
+        "/$defs/CreateTerminalRequest/properties/outputByteLimit",
+        "/$defs/FileSystemCapabilities/properties/readTextFile",
+        "/$defs/FileSystemCapabilities/properties/writeTextFile",
+        "/$defs/ForkSessionRequest/properties/additionalDirectories",
+        "/$defs/ForkSessionRequest/properties/mcpServers",
+        "/$defs/ForkSessionResponse/properties/configOptions",
+        "/$defs/InitializeResponse/properties/authMethods",
+        "/$defs/KillTerminalRequest/properties/terminalId",
+        "/$defs/ListSessionsResponse/properties/sessions",
+        "/$defs/LoadSessionRequest/properties/additionalDirectories",
+        "/$defs/LoadSessionRequest/properties/mcpServers",
+        "/$defs/LoadSessionResponse/properties/configOptions",
+        "/$defs/McpCapabilities/properties/acp",
+        "/$defs/McpCapabilities/properties/http",
+        "/$defs/McpCapabilities/properties/sse",
+        "/$defs/NewSessionRequest/properties/additionalDirectories",
+        "/$defs/NewSessionRequest/properties/mcpServers",
+        "/$defs/NewSessionResponse/properties/configOptions",
+        "/$defs/PromptCapabilities/properties/audio",
+        "/$defs/PromptCapabilities/properties/embeddedContext",
+        "/$defs/PromptCapabilities/properties/image",
+        "/$defs/PromptRequest/properties/prompt",
+        "/$defs/ReadTextFileRequest/properties/path",
+        "/$defs/ReleaseTerminalRequest/properties/terminalId",
+        "/$defs/ResumeSessionRequest/properties/additionalDirectories",
+        "/$defs/ResumeSessionRequest/properties/mcpServers",
+        "/$defs/ResumeSessionResponse/properties/configOptions",
+        "/$defs/SessionCapabilities/properties/additionalDirectories",
+        "/$defs/SessionCapabilities/properties/close",
+        "/$defs/SessionCapabilities/properties/delete",
+        "/$defs/SessionCapabilities/properties/fork",
+        "/$defs/SessionCapabilities/properties/list",
+        "/$defs/SessionCapabilities/properties/resume",
+        "/$defs/SessionConfigOptionsCapabilities/properties/boolean",
+        "/$defs/SessionInfo/properties/additionalDirectories",
+        "/$defs/SessionNotification/properties/update",
+        "/$defs/SetSessionConfigOptionRequest/anyOf/0/properties/value",
+        "/$defs/SetSessionConfigOptionRequest/anyOf/1/properties/value",
+        "/$defs/SetSessionConfigOptionResponse/properties/configOptions",
+        "/$defs/TerminalOutputRequest/properties/terminalId",
+        "/$defs/WaitForTerminalExitRequest/properties/terminalId",
+        "/$defs/WriteTextFileRequest/properties/path"
+      ],
+      "routes": {
+        "agent_to_client/notification/session/update": [
+          "/$defs/ClientCapabilities/properties/plan",
+          "/$defs/ClientCapabilities/properties/session",
+          "/$defs/ClientSessionCapabilities/properties/configOptions",
+          "/$defs/ConfigOptionUpdate/properties/configOptions",
+          "/$defs/SessionConfigOptionsCapabilities/properties/boolean",
+          "/$defs/SessionNotification/properties/update"
+        ],
+        "agent_to_client/request/fs/read_text_file": [
+          "/$defs/ClientCapabilities/properties/fs",
+          "/$defs/FileSystemCapabilities/properties/readTextFile",
+          "/$defs/ReadTextFileRequest/properties/path"
+        ],
+        "agent_to_client/request/fs/write_text_file": [
+          "/$defs/ClientCapabilities/properties/fs",
+          "/$defs/FileSystemCapabilities/properties/writeTextFile",
+          "/$defs/WriteTextFileRequest/properties/path"
+        ],
+        "agent_to_client/request/terminal/create": [
+          "/$defs/ClientCapabilities/properties/terminal",
+          "/$defs/CreateTerminalRequest/properties/command",
+          "/$defs/CreateTerminalRequest/properties/cwd",
+          "/$defs/CreateTerminalRequest/properties/outputByteLimit"
+        ],
+        "agent_to_client/request/terminal/kill": [
+          "/$defs/ClientCapabilities/properties/terminal",
+          "/$defs/KillTerminalRequest/properties/terminalId"
+        ],
+        "agent_to_client/request/terminal/output": [
+          "/$defs/ClientCapabilities/properties/terminal",
+          "/$defs/TerminalOutputRequest/properties/terminalId"
+        ],
+        "agent_to_client/request/terminal/release": [
+          "/$defs/ClientCapabilities/properties/terminal",
+          "/$defs/ReleaseTerminalRequest/properties/terminalId"
+        ],
+        "agent_to_client/request/terminal/wait_for_exit": [
+          "/$defs/ClientCapabilities/properties/terminal",
+          "/$defs/WaitForTerminalExitRequest/properties/terminalId"
+        ],
+        "client_to_agent/request/authenticate": [
+          "/$defs/AuthenticateRequest/properties/methodId",
+          "/$defs/AuthMethodAgent/properties/id",
+          "/$defs/AuthMethodEnvVar/properties/id",
+          "/$defs/AuthMethodTerminal/properties/id",
+          "/$defs/InitializeResponse/properties/authMethods"
+        ],
+        "client_to_agent/request/initialize": [
+          "/$defs/AgentCapabilities/properties/positionEncoding",
+          "/$defs/AuthCapabilities/properties/terminal",
+          "/$defs/AuthMethod/anyOf/1/properties/type",
+          "/$defs/ClientCapabilities/properties/auth",
+          "/$defs/ClientCapabilities/properties/elicitation",
+          "/$defs/ClientCapabilities/properties/fs",
+          "/$defs/ClientCapabilities/properties/nes",
+          "/$defs/ClientCapabilities/properties/plan",
+          "/$defs/ClientCapabilities/properties/positionEncodings",
+          "/$defs/ClientCapabilities/properties/terminal",
+          "/$defs/FileSystemCapabilities/properties/readTextFile",
+          "/$defs/FileSystemCapabilities/properties/writeTextFile",
+          "/$defs/InitializeResponse/properties/authMethods"
+        ],
+        "client_to_agent/request/logout": [
+          "/$defs/AgentAuthCapabilities/properties/logout",
+          "/$defs/AgentCapabilities/properties/auth"
+        ],
+        "client_to_agent/request/session/close": [
+          "/$defs/AgentCapabilities/properties/sessionCapabilities",
+          "/$defs/SessionCapabilities/properties/close"
+        ],
+        "client_to_agent/request/session/delete": [
+          "/$defs/AgentCapabilities/properties/sessionCapabilities",
+          "/$defs/SessionCapabilities/properties/delete"
+        ],
+        "client_to_agent/request/session/fork": [
+          "/$defs/AgentCapabilities/properties/mcpCapabilities",
+          "/$defs/AgentCapabilities/properties/sessionCapabilities",
+          "/$defs/ClientCapabilities/properties/session",
+          "/$defs/ClientSessionCapabilities/properties/configOptions",
+          "/$defs/ForkSessionRequest/properties/additionalDirectories",
+          "/$defs/ForkSessionRequest/properties/mcpServers",
+          "/$defs/ForkSessionResponse/properties/configOptions",
+          "/$defs/McpCapabilities/properties/acp",
+          "/$defs/McpCapabilities/properties/http",
+          "/$defs/McpCapabilities/properties/sse",
+          "/$defs/SessionCapabilities/properties/additionalDirectories",
+          "/$defs/SessionCapabilities/properties/fork",
+          "/$defs/SessionConfigOptionsCapabilities/properties/boolean"
+        ],
+        "client_to_agent/request/session/list": [
+          "/$defs/AgentCapabilities/properties/sessionCapabilities",
+          "/$defs/ListSessionsResponse/properties/sessions",
+          "/$defs/SessionCapabilities/properties/additionalDirectories",
+          "/$defs/SessionCapabilities/properties/list",
+          "/$defs/SessionInfo/properties/additionalDirectories"
+        ],
+        "client_to_agent/request/session/load": [
+          "/$defs/AgentCapabilities/properties/loadSession",
+          "/$defs/AgentCapabilities/properties/mcpCapabilities",
+          "/$defs/AgentCapabilities/properties/sessionCapabilities",
+          "/$defs/ClientCapabilities/properties/session",
+          "/$defs/ClientSessionCapabilities/properties/configOptions",
+          "/$defs/LoadSessionRequest/properties/additionalDirectories",
+          "/$defs/LoadSessionRequest/properties/mcpServers",
+          "/$defs/LoadSessionResponse/properties/configOptions",
+          "/$defs/McpCapabilities/properties/acp",
+          "/$defs/McpCapabilities/properties/http",
+          "/$defs/McpCapabilities/properties/sse",
+          "/$defs/SessionCapabilities/properties/additionalDirectories",
+          "/$defs/SessionConfigOptionsCapabilities/properties/boolean"
+        ],
+        "client_to_agent/request/session/new": [
+          "/$defs/AgentCapabilities/properties/mcpCapabilities",
+          "/$defs/AgentCapabilities/properties/sessionCapabilities",
+          "/$defs/ClientCapabilities/properties/session",
+          "/$defs/ClientSessionCapabilities/properties/configOptions",
+          "/$defs/McpCapabilities/properties/acp",
+          "/$defs/McpCapabilities/properties/http",
+          "/$defs/McpCapabilities/properties/sse",
+          "/$defs/NewSessionRequest/properties/additionalDirectories",
+          "/$defs/NewSessionRequest/properties/mcpServers",
+          "/$defs/NewSessionResponse/properties/configOptions",
+          "/$defs/SessionCapabilities/properties/additionalDirectories",
+          "/$defs/SessionConfigOptionsCapabilities/properties/boolean"
+        ],
+        "client_to_agent/request/session/prompt": [
+          "/$defs/AgentCapabilities/properties/promptCapabilities",
+          "/$defs/PromptCapabilities/properties/audio",
+          "/$defs/PromptCapabilities/properties/embeddedContext",
+          "/$defs/PromptCapabilities/properties/image",
+          "/$defs/PromptRequest/properties/prompt"
+        ],
+        "client_to_agent/request/session/resume": [
+          "/$defs/AgentCapabilities/properties/mcpCapabilities",
+          "/$defs/AgentCapabilities/properties/sessionCapabilities",
+          "/$defs/ClientCapabilities/properties/session",
+          "/$defs/ClientSessionCapabilities/properties/configOptions",
+          "/$defs/McpCapabilities/properties/acp",
+          "/$defs/McpCapabilities/properties/http",
+          "/$defs/McpCapabilities/properties/sse",
+          "/$defs/ResumeSessionRequest/properties/additionalDirectories",
+          "/$defs/ResumeSessionRequest/properties/mcpServers",
+          "/$defs/ResumeSessionResponse/properties/configOptions",
+          "/$defs/SessionCapabilities/properties/additionalDirectories",
+          "/$defs/SessionCapabilities/properties/resume",
+          "/$defs/SessionConfigOptionsCapabilities/properties/boolean"
+        ],
+        "client_to_agent/request/session/set_config_option": [
+          "/$defs/ClientCapabilities/properties/session",
+          "/$defs/ClientSessionCapabilities/properties/configOptions",
+          "/$defs/SessionConfigOptionsCapabilities/properties/boolean",
+          "/$defs/SetSessionConfigOptionRequest/anyOf/0/properties/value",
+          "/$defs/SetSessionConfigOptionRequest/anyOf/1/properties/value",
+          "/$defs/SetSessionConfigOptionResponse/properties/configOptions"
+        ]
+      }
+    },
+    {
+      "id": "catalog_uniqueness_and_membership",
+      "disposition": "binding_refinement",
+      "refinement": "named auth, MCP, environment, session, mode, config, command, permission and list-page catalogs enforce local uniqueness and exact current-member references",
+      "test": "acp-v1-generated-bindings: catalogs and references",
+      "pointers": [
+        "/$defs/AuthEnvVar/properties/name",
+        "/$defs/AuthMethodEnvVar/properties/vars",
+        "/$defs/AvailableCommand/properties/name",
+        "/$defs/AvailableCommandsUpdate/properties/availableCommands",
+        "/$defs/ConfigOptionUpdate/properties/configOptions",
+        "/$defs/CreateTerminalRequest/properties/env",
+        "/$defs/CurrentModeUpdate/properties/currentModeId",
+        "/$defs/EnvVariable/properties/name",
+        "/$defs/ForkSessionRequest/properties/mcpServers",
+        "/$defs/ForkSessionResponse/properties/configOptions",
+        "/$defs/ForkSessionResponse/properties/modes",
+        "/$defs/InitializeResponse/properties/authMethods",
+        "/$defs/ListSessionsResponse/properties/sessions",
+        "/$defs/LoadSessionRequest/properties/mcpServers",
+        "/$defs/LoadSessionResponse/properties/configOptions",
+        "/$defs/LoadSessionResponse/properties/modes",
+        "/$defs/McpServerAcp/properties/serverId",
+        "/$defs/McpServerStdio/properties/env",
+        "/$defs/NewSessionRequest/properties/mcpServers",
+        "/$defs/NewSessionResponse/properties/configOptions",
+        "/$defs/NewSessionResponse/properties/modes",
+        "/$defs/PermissionOption/properties/optionId",
+        "/$defs/RequestPermissionRequest/properties/options",
+        "/$defs/ResumeSessionRequest/properties/mcpServers",
+        "/$defs/ResumeSessionResponse/properties/configOptions",
+        "/$defs/ResumeSessionResponse/properties/modes",
+        "/$defs/SessionConfigOption/properties/id",
+        "/$defs/SessionConfigSelect/properties/currentValue",
+        "/$defs/SessionConfigSelect/properties/options",
+        "/$defs/SessionConfigSelectGroup/properties/group",
+        "/$defs/SessionConfigSelectGroup/properties/options",
+        "/$defs/SessionConfigSelectOption/properties/value",
+        "/$defs/SessionInfo/properties/sessionId",
+        "/$defs/SessionMode/properties/id",
+        "/$defs/SessionModeState/properties/availableModes",
+        "/$defs/SessionModeState/properties/currentModeId",
+        "/$defs/SetSessionConfigOptionResponse/properties/configOptions"
+      ]
+    },
+    {
+      "id": "permission_and_mutation_response_correlation",
+      "disposition": "binding_refinement",
+      "refinement": "permission selection, position encoding, set-config current value, and list cwd filters must correlate exactly with the initiating request",
+      "test": "acp-v1-binding: contradictory response fencing",
+      "pointers": [
+        "/$defs/AgentCapabilities/properties/positionEncoding",
+        "/$defs/ClientCapabilities/properties/positionEncodings",
+        "/$defs/ListSessionsRequest/properties/cwd",
+        "/$defs/ListSessionsResponse/properties/sessions",
+        "/$defs/PermissionOption/properties/optionId",
+        "/$defs/RequestPermissionRequest/properties/options",
+        "/$defs/SelectedPermissionOutcome/properties/optionId",
+        "/$defs/SessionInfo/properties/cwd",
+        "/$defs/SetSessionConfigOptionRequest/anyOf/0/properties/value",
+        "/$defs/SetSessionConfigOptionRequest/anyOf/1/properties/value",
+        "/$defs/SetSessionConfigOptionRequest/properties/configId",
+        "/$defs/SetSessionConfigOptionResponse/properties/configOptions"
+      ]
+    },
+    {
+      "id": "numeric_cross_field_invariants",
+      "disposition": "binding_refinement",
+      "refinement": "usage used does not exceed size, terminal completion has exactly one status form, and cost currency and amount are syntactically bounded nonnegative hints",
+      "test": "acp-v1-generated-bindings: numeric cross-field semantics",
+      "pointers": [
+        "/$defs/Cost/properties/amount",
+        "/$defs/Cost/properties/currency",
+        "/$defs/TerminalExitStatus/properties/exitCode",
+        "/$defs/TerminalExitStatus/properties/signal",
+        "/$defs/UsageUpdate/properties/size",
+        "/$defs/UsageUpdate/properties/used",
+        "/$defs/WaitForTerminalExitResponse/properties/exitCode",
+        "/$defs/WaitForTerminalExitResponse/properties/signal"
+      ]
+    },
+    {
+      "id": "ordered_notification_authority",
+      "disposition": "binding_refinement",
+      "refinement": "session update admission and dispatch are bounded and serialized by exact session identifier, with denial or unexpected failure fencing the generation",
+      "test": "acp-v1-binding: ordered notification denial",
+      "pointers": [
+        "/$defs/SessionNotification/properties/sessionId",
+        "/$defs/SessionNotification/properties/update"
+      ]
+    },
+    {
+      "id": "backend_effect_scope_and_lifecycle",
+      "disposition": "backend_authority",
+      "refinement": "canonical roots, symlinks, ownership, active turn, and actual terminal, tool, message, plan and session lifecycle are revalidated by backend authority before effects",
+      "test": "acp-v1-binding: two-stage reverse authority",
+      "pointers": [
+        "/$defs/CreateTerminalRequest/properties/cwd",
+        "/$defs/CreateTerminalRequest/properties/sessionId",
+        "/$defs/ReadTextFileRequest/properties/path",
+        "/$defs/ReadTextFileRequest/properties/sessionId",
+        "/$defs/ReleaseTerminalRequest/properties/terminalId",
+        "/$defs/RequestPermissionRequest/properties/sessionId",
+        "/$defs/SessionNotification/properties/sessionId",
+        "/$defs/TerminalOutputRequest/properties/terminalId",
+        "/$defs/ToolCall/properties/toolCallId",
+        "/$defs/WriteTextFileRequest/properties/path",
+        "/$defs/WriteTextFileRequest/properties/sessionId"
+      ]
+    },
+    {
+      "id": "non_evidentiary_cross_session_state",
+      "disposition": "non_evidentiary",
+      "refinement": "annotation timestamps, opaque URIs, cursor tokens, usage sums or monotonicity, cost accounting, and open extension maps never establish correlation, freshness, completion, ownership, or cross-page state",
+      "test": "acp-v1-generated-bindings: non-evidentiary metadata",
+      "pointers": [
+        "/$defs/Annotations/properties/lastModified",
+        "/$defs/Annotations/properties/priority",
+        "/$defs/BlobResourceContents/properties/uri",
+        "/$defs/Cost/properties/amount",
+        "/$defs/Cost/properties/currency",
+        "/$defs/ImageContent/properties/uri",
+        "/$defs/ListSessionsRequest/properties/cursor",
+        "/$defs/ListSessionsResponse/properties/nextCursor",
+        "/$defs/PlanFile/properties/uri",
+        "/$defs/ResourceLink/properties/uri",
+        "/$defs/SessionInfo/properties/updatedAt",
+        "/$defs/TextResourceContents/properties/uri",
+        "/$defs/Usage/properties/cachedReadTokens",
+        "/$defs/Usage/properties/cachedWriteTokens",
+        "/$defs/Usage/properties/inputTokens",
+        "/$defs/Usage/properties/outputTokens",
+        "/$defs/Usage/properties/thoughtTokens",
+        "/$defs/Usage/properties/totalTokens",
+        "/$defs/UsageUpdate/properties/cost",
+        "/$defs/UsageUpdate/properties/size",
+        "/$defs/UsageUpdate/properties/used"
+      ]
+    }
+  ]
+}

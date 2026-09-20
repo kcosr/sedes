@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 10,
+  "executionEnvironments": [
+    {
+      "id": "019196f7-a0a8-7bc4-a89b-8cf013978405",
+      "kind": "local",
+      "label": "Local"
+    },
+    {
+      "id": "019196f7-a0a8-7bc4-a89b-8cf013978406",
+      "kind": "ssh",
+      "label": "Remote Pi workspace",
+      "hostAlias": "srv",
+      "workspaceRoots": ["/absolute/remote/workspaces"],
+      "operations": {
+        "kind": "sidecar",
+        "deployment": "managed",
+        "carrier": { "kind": "ssh_stdio" },
+        "enabledCapabilities": [
+          "workspace_files",
+          "workspace_tools",
+          "workspace_context",
+          "workspace_skills",
+          "interactive_terminal"
+        ]
+      }
+    }
+  ],
+  "backends": [
+    {
+      "id": "pi-ssh",
+      "kind": "pi",
+      "label": "Pi for remote workspace operations",
+      "enabled": true,
+      "modelPolicy": { "type": "catalog" }
+    }
+  ],
+  "targets": [
+    {
+      "id": "pi-ssh-default",
+      "kind": "pi_sdk",
+      "label": "Pi with remote workspace tools",
+      "backendInstanceId": "pi-ssh",
+      "executionEnvironmentId": "019196f7-a0a8-7bc4-a89b-8cf013978406",
+      "enabled": true
+    }
+  ],
+  "defaultTargetId": "pi-ssh-default"
+}

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/favicon.png" />
+    <!-- The production server's stricter header policy intersects this one.
+         Bundled Capacitor assets receive no Express headers, so their reviewed
+         policy permits only the runtime-configured HTTP(S) API/SSE endpoint
+         (plus Vite's development WebSocket transports). -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' data: http: https: ws: wss:; object-src 'none'; base-uri 'none'; form-action 'self'"
+    />
+    <title>Sedes</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/client/main.tsx"></script>
+  </body>
+</html>

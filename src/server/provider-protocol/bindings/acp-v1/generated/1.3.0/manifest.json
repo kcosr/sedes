@@ -1,0 +1,1290 @@
+{
+  "artifactVersion": 3,
+  "sdk": "@agentclientprotocol/sdk@1.3.0",
+  "schemaSubpath": "@agentclientprotocol/sdk/schema/schema.json",
+  "schemaSha256": "f71fbcb7beeae82770e9c33d1e5969999868789cacec509289331a1205816838",
+  "schemaDraft": "https://json-schema.org/draft/2020-12/schema",
+  "generatedWith": "Ajv2020 standalone ESM over the untouched official schema plus the reviewed closure overlay; no fallback validator",
+  "definitions": [
+    "AgentCapabilities",
+    "AuthenticateRequest",
+    "AuthenticateResponse",
+    "CancelNotification",
+    "CancelRequestNotification",
+    "ClientCapabilities",
+    "CloseSessionRequest",
+    "CloseSessionResponse",
+    "CreateTerminalRequest",
+    "CreateTerminalResponse",
+    "DeleteSessionRequest",
+    "DeleteSessionResponse",
+    "ForkSessionRequest",
+    "ForkSessionResponse",
+    "InitializeRequest",
+    "InitializeResponse",
+    "KillTerminalRequest",
+    "KillTerminalResponse",
+    "ListSessionsRequest",
+    "ListSessionsResponse",
+    "LoadSessionRequest",
+    "LoadSessionResponse",
+    "LogoutRequest",
+    "LogoutResponse",
+    "NewSessionRequest",
+    "NewSessionResponse",
+    "PromptRequest",
+    "PromptResponse",
+    "ReadTextFileRequest",
+    "ReadTextFileResponse",
+    "ReleaseTerminalRequest",
+    "ReleaseTerminalResponse",
+    "RequestPermissionRequest",
+    "RequestPermissionResponse",
+    "ResumeSessionRequest",
+    "ResumeSessionResponse",
+    "SessionNotification",
+    "SetSessionConfigOptionRequest",
+    "SetSessionConfigOptionResponse",
+    "SetSessionModeRequest",
+    "SetSessionModeResponse",
+    "TerminalOutputRequest",
+    "TerminalOutputResponse",
+    "WaitForTerminalExitRequest",
+    "WaitForTerminalExitResponse",
+    "WriteTextFileRequest",
+    "WriteTextFileResponse"
+  ],
+  "semanticDispositions": {
+    "path": "../../semantic-dispositions.json",
+    "sha256": "603de530dd0c1fab7a2e4111607d87abe1ee84bc1c02f42739f781cc1a3b2a0f",
+    "reachableIgnoredFormatPointers": 22,
+    "reviewedPropertyPointers": 119,
+    "selectorCandidates": {
+      "portable_absolute_paths": 17,
+      "uri_link_url_strings": 8,
+      "timestamps": 3,
+      "cursors": 2,
+      "identifier_references": 52,
+      "lookup_names": 3,
+      "ordered_arrays": 39
+    },
+    "driftChecked": true
+  },
+  "closureOverlay": {
+    "path": "closure-overlay.json",
+    "sha256": "58a0f35e4c61a134075f917fd6a305567d2a49c1e71442d039b09b5ca7ea5353",
+    "reachableObjectPointers": 314,
+    "classifications": {
+      "closed_leaf": 109,
+      "closed_composition_owner": 32,
+      "open_mixin": 34,
+      "open_extension_map": 139
+    },
+    "fenceOperations": [
+      {
+        "pointer": "/$defs/AgentAuthCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/AgentCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/Annotations",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/AuthCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/AuthenticateRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/AuthenticateResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/AuthEnvVar",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/AuthMethod/anyOf/0",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/AuthMethod/anyOf/1",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/AuthMethodAgent",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/AvailableCommand",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/BlobResourceContents",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/BooleanConfigOptionCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/CancelNotification",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/CancelRequestNotification",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ClientCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ClientNesCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ClientSessionCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/CloseSessionRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/CloseSessionResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ContentBlock/oneOf/0",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ContentBlock/oneOf/1",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ContentBlock/oneOf/2",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ContentBlock/oneOf/3",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ContentBlock/oneOf/4",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/Cost",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/CreateTerminalRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/CreateTerminalResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/DeleteSessionRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/DeleteSessionResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ElicitationCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ElicitationFormCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ElicitationUrlCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/EnvVariable",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/FileSystemCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ForkSessionRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ForkSessionResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/HttpHeader",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/Implementation",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/InitializeRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/InitializeResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/KillTerminalRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/KillTerminalResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ListSessionsRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ListSessionsResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/LoadSessionRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/LoadSessionResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/LogoutCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/LogoutRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/LogoutResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/McpCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/McpServer/anyOf/0",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/McpServer/anyOf/1",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/McpServer/anyOf/2",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/McpServerStdio",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesContextCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesDiagnosticsCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesDocumentDidChangeCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesDocumentDidCloseCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesDocumentDidFocusCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesDocumentDidOpenCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesDocumentDidSaveCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesDocumentEventCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesEditHistoryCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesEventCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesJumpCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesOpenFilesCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesRecentFilesCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesRelatedSnippetsCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesRenameCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesSearchAndReplaceCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NesUserActionsCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NewSessionRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/NewSessionResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/PermissionOption",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/PlanCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/PlanEntry",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/PlanUpdateContent/oneOf/0",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/PlanUpdateContent/oneOf/1",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/PlanUpdateContent/oneOf/2",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/PromptCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/PromptRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/PromptResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ProvidersCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ReadTextFileRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ReadTextFileResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ReleaseTerminalRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ReleaseTerminalResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/RequestPermissionOutcome/oneOf/0",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/RequestPermissionOutcome/oneOf/1",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/RequestPermissionRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/RequestPermissionResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ResumeSessionRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ResumeSessionResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionAdditionalDirectoriesCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionCloseCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionConfigOption",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionConfigOptionsCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionConfigSelectGroup",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionConfigSelectOption",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionDeleteCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionForkCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionInfo",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionListCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionMode",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionModeState",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionNotification",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionResumeCapabilities",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionUpdate/oneOf/0",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionUpdate/oneOf/1",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionUpdate/oneOf/10",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionUpdate/oneOf/11",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionUpdate/oneOf/12",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionUpdate/oneOf/2",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionUpdate/oneOf/3",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionUpdate/oneOf/4",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionUpdate/oneOf/5",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionUpdate/oneOf/6",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionUpdate/oneOf/7",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionUpdate/oneOf/8",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SessionUpdate/oneOf/9",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SetSessionConfigOptionRequest",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SetSessionConfigOptionResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SetSessionModeRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/SetSessionModeResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/TerminalExitStatus",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/TerminalOutputRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/TerminalOutputResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/TextResourceContents",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ToolCallContent/oneOf/0",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ToolCallContent/oneOf/1",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ToolCallContent/oneOf/2",
+        "keyword": "unevaluatedProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/ToolCallLocation",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/UnstructuredCommandInput",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/Usage",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/WaitForTerminalExitRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/WaitForTerminalExitResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/WriteTextFileRequest",
+        "keyword": "additionalProperties",
+        "value": false
+      },
+      {
+        "pointer": "/$defs/WriteTextFileResponse",
+        "keyword": "additionalProperties",
+        "value": false
+      }
+    ],
+    "proofInventory": {
+      "closedMutationPointers": [
+        "/$defs/AgentAuthCapabilities",
+        "/$defs/AgentCapabilities",
+        "/$defs/Annotations",
+        "/$defs/AuthCapabilities",
+        "/$defs/AuthEnvVar",
+        "/$defs/AuthMethod/anyOf/0",
+        "/$defs/AuthMethod/anyOf/1",
+        "/$defs/AuthMethodAgent",
+        "/$defs/AuthenticateRequest",
+        "/$defs/AuthenticateResponse",
+        "/$defs/AvailableCommand",
+        "/$defs/BlobResourceContents",
+        "/$defs/BooleanConfigOptionCapabilities",
+        "/$defs/CancelNotification",
+        "/$defs/CancelRequestNotification",
+        "/$defs/ClientCapabilities",
+        "/$defs/ClientNesCapabilities",
+        "/$defs/ClientSessionCapabilities",
+        "/$defs/CloseSessionRequest",
+        "/$defs/CloseSessionResponse",
+        "/$defs/ContentBlock/oneOf/0",
+        "/$defs/ContentBlock/oneOf/1",
+        "/$defs/ContentBlock/oneOf/2",
+        "/$defs/ContentBlock/oneOf/3",
+        "/$defs/ContentBlock/oneOf/4",
+        "/$defs/Cost",
+        "/$defs/CreateTerminalRequest",
+        "/$defs/CreateTerminalResponse",
+        "/$defs/DeleteSessionRequest",
+        "/$defs/DeleteSessionResponse",
+        "/$defs/ElicitationCapabilities",
+        "/$defs/ElicitationFormCapabilities",
+        "/$defs/ElicitationUrlCapabilities",
+        "/$defs/EnvVariable",
+        "/$defs/FileSystemCapabilities",
+        "/$defs/ForkSessionRequest",
+        "/$defs/ForkSessionResponse",
+        "/$defs/HttpHeader",
+        "/$defs/Implementation",
+        "/$defs/InitializeRequest",
+        "/$defs/InitializeResponse",
+        "/$defs/KillTerminalRequest",
+        "/$defs/KillTerminalResponse",
+        "/$defs/ListSessionsRequest",
+        "/$defs/ListSessionsResponse",
+        "/$defs/LoadSessionRequest",
+        "/$defs/LoadSessionResponse",
+        "/$defs/LogoutCapabilities",
+        "/$defs/LogoutRequest",
+        "/$defs/LogoutResponse",
+        "/$defs/McpCapabilities",
+        "/$defs/McpServer/anyOf/0",
+        "/$defs/McpServer/anyOf/1",
+        "/$defs/McpServer/anyOf/2",
+        "/$defs/McpServerStdio",
+        "/$defs/NesCapabilities",
+        "/$defs/NesContextCapabilities",
+        "/$defs/NesDiagnosticsCapabilities",
+        "/$defs/NesDocumentDidChangeCapabilities",
+        "/$defs/NesDocumentDidCloseCapabilities",
+        "/$defs/NesDocumentDidFocusCapabilities",
+        "/$defs/NesDocumentDidOpenCapabilities",
+        "/$defs/NesDocumentDidSaveCapabilities",
+        "/$defs/NesDocumentEventCapabilities",
+        "/$defs/NesEditHistoryCapabilities",
+        "/$defs/NesEventCapabilities",
+        "/$defs/NesJumpCapabilities",
+        "/$defs/NesOpenFilesCapabilities",
+        "/$defs/NesRecentFilesCapabilities",
+        "/$defs/NesRelatedSnippetsCapabilities",
+        "/$defs/NesRenameCapabilities",
+        "/$defs/NesSearchAndReplaceCapabilities",
+        "/$defs/NesUserActionsCapabilities",
+        "/$defs/NewSessionRequest",
+        "/$defs/NewSessionResponse",
+        "/$defs/PermissionOption",
+        "/$defs/PlanCapabilities",
+        "/$defs/PlanEntry",
+        "/$defs/PlanUpdateContent/oneOf/0",
+        "/$defs/PlanUpdateContent/oneOf/1",
+        "/$defs/PlanUpdateContent/oneOf/2",
+        "/$defs/PromptCapabilities",
+        "/$defs/PromptRequest",
+        "/$defs/PromptResponse",
+        "/$defs/ProvidersCapabilities",
+        "/$defs/ReadTextFileRequest",
+        "/$defs/ReadTextFileResponse",
+        "/$defs/ReleaseTerminalRequest",
+        "/$defs/ReleaseTerminalResponse",
+        "/$defs/RequestPermissionOutcome/oneOf/0",
+        "/$defs/RequestPermissionOutcome/oneOf/1",
+        "/$defs/RequestPermissionRequest",
+        "/$defs/RequestPermissionResponse",
+        "/$defs/ResumeSessionRequest",
+        "/$defs/ResumeSessionResponse",
+        "/$defs/SessionAdditionalDirectoriesCapabilities",
+        "/$defs/SessionCapabilities",
+        "/$defs/SessionCloseCapabilities",
+        "/$defs/SessionConfigOption",
+        "/$defs/SessionConfigOptionsCapabilities",
+        "/$defs/SessionConfigSelectGroup",
+        "/$defs/SessionConfigSelectOption",
+        "/$defs/SessionDeleteCapabilities",
+        "/$defs/SessionForkCapabilities",
+        "/$defs/SessionInfo",
+        "/$defs/SessionListCapabilities",
+        "/$defs/SessionMode",
+        "/$defs/SessionModeState",
+        "/$defs/SessionNotification",
+        "/$defs/SessionResumeCapabilities",
+        "/$defs/SessionUpdate/oneOf/0",
+        "/$defs/SessionUpdate/oneOf/1",
+        "/$defs/SessionUpdate/oneOf/10",
+        "/$defs/SessionUpdate/oneOf/11",
+        "/$defs/SessionUpdate/oneOf/12",
+        "/$defs/SessionUpdate/oneOf/2",
+        "/$defs/SessionUpdate/oneOf/3",
+        "/$defs/SessionUpdate/oneOf/4",
+        "/$defs/SessionUpdate/oneOf/5",
+        "/$defs/SessionUpdate/oneOf/6",
+        "/$defs/SessionUpdate/oneOf/7",
+        "/$defs/SessionUpdate/oneOf/8",
+        "/$defs/SessionUpdate/oneOf/9",
+        "/$defs/SetSessionConfigOptionRequest",
+        "/$defs/SetSessionConfigOptionResponse",
+        "/$defs/SetSessionModeRequest",
+        "/$defs/SetSessionModeResponse",
+        "/$defs/TerminalExitStatus",
+        "/$defs/TerminalOutputRequest",
+        "/$defs/TerminalOutputResponse",
+        "/$defs/TextResourceContents",
+        "/$defs/ToolCallContent/oneOf/0",
+        "/$defs/ToolCallContent/oneOf/1",
+        "/$defs/ToolCallContent/oneOf/2",
+        "/$defs/ToolCallLocation",
+        "/$defs/UnstructuredCommandInput",
+        "/$defs/Usage",
+        "/$defs/WaitForTerminalExitRequest",
+        "/$defs/WaitForTerminalExitResponse",
+        "/$defs/WriteTextFileRequest",
+        "/$defs/WriteTextFileResponse"
+      ],
+      "openMapMutationPointers": [
+        "/$defs/AgentAuthCapabilities/properties/_meta",
+        "/$defs/AgentCapabilities/properties/_meta",
+        "/$defs/Annotations/properties/_meta",
+        "/$defs/AudioContent/properties/_meta",
+        "/$defs/AuthCapabilities/properties/_meta",
+        "/$defs/AuthEnvVar/properties/_meta",
+        "/$defs/AuthMethodAgent/properties/_meta",
+        "/$defs/AuthMethodEnvVar/properties/_meta",
+        "/$defs/AuthMethodTerminal/properties/_meta",
+        "/$defs/AuthMethodTerminal/properties/env",
+        "/$defs/AuthenticateRequest/properties/_meta",
+        "/$defs/AuthenticateResponse/properties/_meta",
+        "/$defs/AvailableCommand/properties/_meta",
+        "/$defs/AvailableCommandsUpdate/properties/_meta",
+        "/$defs/BlobResourceContents/properties/_meta",
+        "/$defs/BooleanConfigOptionCapabilities/properties/_meta",
+        "/$defs/CancelNotification/properties/_meta",
+        "/$defs/CancelRequestNotification/properties/_meta",
+        "/$defs/ClientCapabilities/properties/_meta",
+        "/$defs/ClientNesCapabilities/properties/_meta",
+        "/$defs/ClientSessionCapabilities/properties/_meta",
+        "/$defs/CloseSessionRequest/properties/_meta",
+        "/$defs/CloseSessionResponse/properties/_meta",
+        "/$defs/ConfigOptionUpdate/properties/_meta",
+        "/$defs/Content/properties/_meta",
+        "/$defs/ContentChunk/properties/_meta",
+        "/$defs/Cost/properties/_meta",
+        "/$defs/CreateTerminalRequest/properties/_meta",
+        "/$defs/CreateTerminalResponse/properties/_meta",
+        "/$defs/CurrentModeUpdate/properties/_meta",
+        "/$defs/DeleteSessionRequest/properties/_meta",
+        "/$defs/DeleteSessionResponse/properties/_meta",
+        "/$defs/Diff/properties/_meta",
+        "/$defs/ElicitationCapabilities/properties/_meta",
+        "/$defs/ElicitationFormCapabilities/properties/_meta",
+        "/$defs/ElicitationUrlCapabilities/properties/_meta",
+        "/$defs/EmbeddedResource/properties/_meta",
+        "/$defs/EnvVariable/properties/_meta",
+        "/$defs/FileSystemCapabilities/properties/_meta",
+        "/$defs/ForkSessionRequest/properties/_meta",
+        "/$defs/ForkSessionResponse/properties/_meta",
+        "/$defs/HttpHeader/properties/_meta",
+        "/$defs/ImageContent/properties/_meta",
+        "/$defs/Implementation/properties/_meta",
+        "/$defs/InitializeRequest/properties/_meta",
+        "/$defs/InitializeResponse/properties/_meta",
+        "/$defs/KillTerminalRequest/properties/_meta",
+        "/$defs/KillTerminalResponse/properties/_meta",
+        "/$defs/ListSessionsRequest/properties/_meta",
+        "/$defs/ListSessionsResponse/properties/_meta",
+        "/$defs/LoadSessionRequest/properties/_meta",
+        "/$defs/LoadSessionResponse/properties/_meta",
+        "/$defs/LogoutCapabilities/properties/_meta",
+        "/$defs/LogoutRequest/properties/_meta",
+        "/$defs/LogoutResponse/properties/_meta",
+        "/$defs/McpCapabilities/properties/_meta",
+        "/$defs/McpServerAcp/properties/_meta",
+        "/$defs/McpServerHttp/properties/_meta",
+        "/$defs/McpServerSse/properties/_meta",
+        "/$defs/McpServerStdio/properties/_meta",
+        "/$defs/NesCapabilities/properties/_meta",
+        "/$defs/NesContextCapabilities/properties/_meta",
+        "/$defs/NesDiagnosticsCapabilities/properties/_meta",
+        "/$defs/NesDocumentDidChangeCapabilities/properties/_meta",
+        "/$defs/NesDocumentDidCloseCapabilities/properties/_meta",
+        "/$defs/NesDocumentDidFocusCapabilities/properties/_meta",
+        "/$defs/NesDocumentDidOpenCapabilities/properties/_meta",
+        "/$defs/NesDocumentDidSaveCapabilities/properties/_meta",
+        "/$defs/NesDocumentEventCapabilities/properties/_meta",
+        "/$defs/NesEditHistoryCapabilities/properties/_meta",
+        "/$defs/NesEventCapabilities/properties/_meta",
+        "/$defs/NesJumpCapabilities/properties/_meta",
+        "/$defs/NesOpenFilesCapabilities/properties/_meta",
+        "/$defs/NesRecentFilesCapabilities/properties/_meta",
+        "/$defs/NesRelatedSnippetsCapabilities/properties/_meta",
+        "/$defs/NesRenameCapabilities/properties/_meta",
+        "/$defs/NesSearchAndReplaceCapabilities/properties/_meta",
+        "/$defs/NesUserActionsCapabilities/properties/_meta",
+        "/$defs/NewSessionRequest/properties/_meta",
+        "/$defs/NewSessionResponse/properties/_meta",
+        "/$defs/PermissionOption/properties/_meta",
+        "/$defs/Plan/properties/_meta",
+        "/$defs/PlanCapabilities/properties/_meta",
+        "/$defs/PlanEntry/properties/_meta",
+        "/$defs/PlanFile/properties/_meta",
+        "/$defs/PlanItems/properties/_meta",
+        "/$defs/PlanMarkdown/properties/_meta",
+        "/$defs/PlanRemoved/properties/_meta",
+        "/$defs/PlanUpdate/properties/_meta",
+        "/$defs/PromptCapabilities/properties/_meta",
+        "/$defs/PromptRequest/properties/_meta",
+        "/$defs/PromptResponse/properties/_meta",
+        "/$defs/ProvidersCapabilities/properties/_meta",
+        "/$defs/ReadTextFileRequest/properties/_meta",
+        "/$defs/ReadTextFileResponse/properties/_meta",
+        "/$defs/ReleaseTerminalRequest/properties/_meta",
+        "/$defs/ReleaseTerminalResponse/properties/_meta",
+        "/$defs/RequestPermissionRequest/properties/_meta",
+        "/$defs/RequestPermissionResponse/properties/_meta",
+        "/$defs/ResourceLink/properties/_meta",
+        "/$defs/ResumeSessionRequest/properties/_meta",
+        "/$defs/ResumeSessionResponse/properties/_meta",
+        "/$defs/SelectedPermissionOutcome/properties/_meta",
+        "/$defs/SessionAdditionalDirectoriesCapabilities/properties/_meta",
+        "/$defs/SessionCapabilities/properties/_meta",
+        "/$defs/SessionCloseCapabilities/properties/_meta",
+        "/$defs/SessionConfigOption/properties/_meta",
+        "/$defs/SessionConfigOptionsCapabilities/properties/_meta",
+        "/$defs/SessionConfigSelectGroup/properties/_meta",
+        "/$defs/SessionConfigSelectOption/properties/_meta",
+        "/$defs/SessionDeleteCapabilities/properties/_meta",
+        "/$defs/SessionForkCapabilities/properties/_meta",
+        "/$defs/SessionInfo/properties/_meta",
+        "/$defs/SessionInfoUpdate/properties/_meta",
+        "/$defs/SessionListCapabilities/properties/_meta",
+        "/$defs/SessionMode/properties/_meta",
+        "/$defs/SessionModeState/properties/_meta",
+        "/$defs/SessionNotification/properties/_meta",
+        "/$defs/SessionResumeCapabilities/properties/_meta",
+        "/$defs/SetSessionConfigOptionRequest/properties/_meta",
+        "/$defs/SetSessionConfigOptionResponse/properties/_meta",
+        "/$defs/SetSessionModeRequest/properties/_meta",
+        "/$defs/SetSessionModeResponse/properties/_meta",
+        "/$defs/Terminal/properties/_meta",
+        "/$defs/TerminalExitStatus/properties/_meta",
+        "/$defs/TerminalOutputRequest/properties/_meta",
+        "/$defs/TerminalOutputResponse/properties/_meta",
+        "/$defs/TextContent/properties/_meta",
+        "/$defs/TextResourceContents/properties/_meta",
+        "/$defs/ToolCall/properties/_meta",
+        "/$defs/ToolCallLocation/properties/_meta",
+        "/$defs/ToolCallUpdate/properties/_meta",
+        "/$defs/UnstructuredCommandInput/properties/_meta",
+        "/$defs/Usage/properties/_meta",
+        "/$defs/UsageUpdate/properties/_meta",
+        "/$defs/WaitForTerminalExitRequest/properties/_meta",
+        "/$defs/WaitForTerminalExitResponse/properties/_meta",
+        "/$defs/WriteTextFileRequest/properties/_meta",
+        "/$defs/WriteTextFileResponse/properties/_meta"
+      ],
+      "unionBranchPointers": [
+        "/$defs/AgentAuthCapabilities/properties/logout/anyOf/0",
+        "/$defs/AgentAuthCapabilities/properties/logout/anyOf/1",
+        "/$defs/AgentCapabilities/properties/nes/anyOf/0",
+        "/$defs/AgentCapabilities/properties/nes/anyOf/1",
+        "/$defs/AgentCapabilities/properties/positionEncoding/anyOf/0",
+        "/$defs/AgentCapabilities/properties/positionEncoding/anyOf/1",
+        "/$defs/AgentCapabilities/properties/providers/anyOf/0",
+        "/$defs/AgentCapabilities/properties/providers/anyOf/1",
+        "/$defs/AudioContent/properties/annotations/anyOf/0",
+        "/$defs/AudioContent/properties/annotations/anyOf/1",
+        "/$defs/AuthMethod/anyOf/0",
+        "/$defs/AuthMethod/anyOf/1",
+        "/$defs/AuthMethod/anyOf/2",
+        "/$defs/AvailableCommand/properties/input/anyOf/0",
+        "/$defs/AvailableCommand/properties/input/anyOf/1",
+        "/$defs/AvailableCommandInput/anyOf/0",
+        "/$defs/ClientCapabilities/properties/elicitation/anyOf/0",
+        "/$defs/ClientCapabilities/properties/elicitation/anyOf/1",
+        "/$defs/ClientCapabilities/properties/nes/anyOf/0",
+        "/$defs/ClientCapabilities/properties/nes/anyOf/1",
+        "/$defs/ClientCapabilities/properties/plan/anyOf/0",
+        "/$defs/ClientCapabilities/properties/plan/anyOf/1",
+        "/$defs/ClientCapabilities/properties/session/anyOf/0",
+        "/$defs/ClientCapabilities/properties/session/anyOf/1",
+        "/$defs/ClientNesCapabilities/properties/jump/anyOf/0",
+        "/$defs/ClientNesCapabilities/properties/jump/anyOf/1",
+        "/$defs/ClientNesCapabilities/properties/rename/anyOf/0",
+        "/$defs/ClientNesCapabilities/properties/rename/anyOf/1",
+        "/$defs/ClientNesCapabilities/properties/searchAndReplace/anyOf/0",
+        "/$defs/ClientNesCapabilities/properties/searchAndReplace/anyOf/1",
+        "/$defs/ClientSessionCapabilities/properties/configOptions/anyOf/0",
+        "/$defs/ClientSessionCapabilities/properties/configOptions/anyOf/1",
+        "/$defs/ContentBlock/oneOf/0",
+        "/$defs/ContentBlock/oneOf/1",
+        "/$defs/ContentBlock/oneOf/2",
+        "/$defs/ContentBlock/oneOf/3",
+        "/$defs/ContentBlock/oneOf/4",
+        "/$defs/ContentChunk/properties/messageId/anyOf/0",
+        "/$defs/ContentChunk/properties/messageId/anyOf/1",
+        "/$defs/ElicitationCapabilities/properties/form/anyOf/0",
+        "/$defs/ElicitationCapabilities/properties/form/anyOf/1",
+        "/$defs/ElicitationCapabilities/properties/url/anyOf/0",
+        "/$defs/ElicitationCapabilities/properties/url/anyOf/1",
+        "/$defs/EmbeddedResource/properties/annotations/anyOf/0",
+        "/$defs/EmbeddedResource/properties/annotations/anyOf/1",
+        "/$defs/EmbeddedResourceResource/anyOf/0",
+        "/$defs/EmbeddedResourceResource/anyOf/1",
+        "/$defs/ForkSessionResponse/properties/modes/anyOf/0",
+        "/$defs/ForkSessionResponse/properties/modes/anyOf/1",
+        "/$defs/ImageContent/properties/annotations/anyOf/0",
+        "/$defs/ImageContent/properties/annotations/anyOf/1",
+        "/$defs/InitializeRequest/properties/clientInfo/anyOf/0",
+        "/$defs/InitializeRequest/properties/clientInfo/anyOf/1",
+        "/$defs/InitializeResponse/properties/agentInfo/anyOf/0",
+        "/$defs/InitializeResponse/properties/agentInfo/anyOf/1",
+        "/$defs/LoadSessionResponse/properties/modes/anyOf/0",
+        "/$defs/LoadSessionResponse/properties/modes/anyOf/1",
+        "/$defs/McpServer/anyOf/0",
+        "/$defs/McpServer/anyOf/1",
+        "/$defs/McpServer/anyOf/2",
+        "/$defs/McpServer/anyOf/3",
+        "/$defs/NesCapabilities/properties/context/anyOf/0",
+        "/$defs/NesCapabilities/properties/context/anyOf/1",
+        "/$defs/NesCapabilities/properties/events/anyOf/0",
+        "/$defs/NesCapabilities/properties/events/anyOf/1",
+        "/$defs/NesContextCapabilities/properties/diagnostics/anyOf/0",
+        "/$defs/NesContextCapabilities/properties/diagnostics/anyOf/1",
+        "/$defs/NesContextCapabilities/properties/editHistory/anyOf/0",
+        "/$defs/NesContextCapabilities/properties/editHistory/anyOf/1",
+        "/$defs/NesContextCapabilities/properties/openFiles/anyOf/0",
+        "/$defs/NesContextCapabilities/properties/openFiles/anyOf/1",
+        "/$defs/NesContextCapabilities/properties/recentFiles/anyOf/0",
+        "/$defs/NesContextCapabilities/properties/recentFiles/anyOf/1",
+        "/$defs/NesContextCapabilities/properties/relatedSnippets/anyOf/0",
+        "/$defs/NesContextCapabilities/properties/relatedSnippets/anyOf/1",
+        "/$defs/NesContextCapabilities/properties/userActions/anyOf/0",
+        "/$defs/NesContextCapabilities/properties/userActions/anyOf/1",
+        "/$defs/NesDocumentEventCapabilities/properties/didChange/anyOf/0",
+        "/$defs/NesDocumentEventCapabilities/properties/didChange/anyOf/1",
+        "/$defs/NesDocumentEventCapabilities/properties/didClose/anyOf/0",
+        "/$defs/NesDocumentEventCapabilities/properties/didClose/anyOf/1",
+        "/$defs/NesDocumentEventCapabilities/properties/didFocus/anyOf/0",
+        "/$defs/NesDocumentEventCapabilities/properties/didFocus/anyOf/1",
+        "/$defs/NesDocumentEventCapabilities/properties/didOpen/anyOf/0",
+        "/$defs/NesDocumentEventCapabilities/properties/didOpen/anyOf/1",
+        "/$defs/NesDocumentEventCapabilities/properties/didSave/anyOf/0",
+        "/$defs/NesDocumentEventCapabilities/properties/didSave/anyOf/1",
+        "/$defs/NesEventCapabilities/properties/document/anyOf/0",
+        "/$defs/NesEventCapabilities/properties/document/anyOf/1",
+        "/$defs/NewSessionResponse/properties/modes/anyOf/0",
+        "/$defs/NewSessionResponse/properties/modes/anyOf/1",
+        "/$defs/PermissionOptionKind/oneOf/0",
+        "/$defs/PermissionOptionKind/oneOf/1",
+        "/$defs/PermissionOptionKind/oneOf/2",
+        "/$defs/PermissionOptionKind/oneOf/3",
+        "/$defs/PlanEntryPriority/oneOf/0",
+        "/$defs/PlanEntryPriority/oneOf/1",
+        "/$defs/PlanEntryPriority/oneOf/2",
+        "/$defs/PlanEntryStatus/oneOf/0",
+        "/$defs/PlanEntryStatus/oneOf/1",
+        "/$defs/PlanEntryStatus/oneOf/2",
+        "/$defs/PlanUpdateContent/oneOf/0",
+        "/$defs/PlanUpdateContent/oneOf/1",
+        "/$defs/PlanUpdateContent/oneOf/2",
+        "/$defs/PositionEncodingKind/oneOf/0",
+        "/$defs/PositionEncodingKind/oneOf/1",
+        "/$defs/PositionEncodingKind/oneOf/2",
+        "/$defs/PromptResponse/properties/usage/anyOf/0",
+        "/$defs/PromptResponse/properties/usage/anyOf/1",
+        "/$defs/RequestId/anyOf/0",
+        "/$defs/RequestId/anyOf/1",
+        "/$defs/RequestId/anyOf/2",
+        "/$defs/RequestPermissionOutcome/oneOf/0",
+        "/$defs/RequestPermissionOutcome/oneOf/1",
+        "/$defs/ResourceLink/properties/annotations/anyOf/0",
+        "/$defs/ResourceLink/properties/annotations/anyOf/1",
+        "/$defs/ResumeSessionResponse/properties/modes/anyOf/0",
+        "/$defs/ResumeSessionResponse/properties/modes/anyOf/1",
+        "/$defs/Role/oneOf/0",
+        "/$defs/Role/oneOf/1",
+        "/$defs/SessionCapabilities/properties/additionalDirectories/anyOf/0",
+        "/$defs/SessionCapabilities/properties/additionalDirectories/anyOf/1",
+        "/$defs/SessionCapabilities/properties/close/anyOf/0",
+        "/$defs/SessionCapabilities/properties/close/anyOf/1",
+        "/$defs/SessionCapabilities/properties/delete/anyOf/0",
+        "/$defs/SessionCapabilities/properties/delete/anyOf/1",
+        "/$defs/SessionCapabilities/properties/fork/anyOf/0",
+        "/$defs/SessionCapabilities/properties/fork/anyOf/1",
+        "/$defs/SessionCapabilities/properties/list/anyOf/0",
+        "/$defs/SessionCapabilities/properties/list/anyOf/1",
+        "/$defs/SessionCapabilities/properties/resume/anyOf/0",
+        "/$defs/SessionCapabilities/properties/resume/anyOf/1",
+        "/$defs/SessionConfigOption/oneOf/0",
+        "/$defs/SessionConfigOption/oneOf/1",
+        "/$defs/SessionConfigOption/properties/category/anyOf/0",
+        "/$defs/SessionConfigOption/properties/category/anyOf/1",
+        "/$defs/SessionConfigOptionCategory/anyOf/0",
+        "/$defs/SessionConfigOptionCategory/anyOf/1",
+        "/$defs/SessionConfigOptionCategory/anyOf/2",
+        "/$defs/SessionConfigOptionCategory/anyOf/3",
+        "/$defs/SessionConfigOptionCategory/anyOf/4",
+        "/$defs/SessionConfigOptionsCapabilities/properties/boolean/anyOf/0",
+        "/$defs/SessionConfigOptionsCapabilities/properties/boolean/anyOf/1",
+        "/$defs/SessionConfigSelectOptions/anyOf/0",
+        "/$defs/SessionConfigSelectOptions/anyOf/1",
+        "/$defs/SessionUpdate/oneOf/0",
+        "/$defs/SessionUpdate/oneOf/1",
+        "/$defs/SessionUpdate/oneOf/10",
+        "/$defs/SessionUpdate/oneOf/11",
+        "/$defs/SessionUpdate/oneOf/12",
+        "/$defs/SessionUpdate/oneOf/2",
+        "/$defs/SessionUpdate/oneOf/3",
+        "/$defs/SessionUpdate/oneOf/4",
+        "/$defs/SessionUpdate/oneOf/5",
+        "/$defs/SessionUpdate/oneOf/6",
+        "/$defs/SessionUpdate/oneOf/7",
+        "/$defs/SessionUpdate/oneOf/8",
+        "/$defs/SessionUpdate/oneOf/9",
+        "/$defs/SetSessionConfigOptionRequest/anyOf/0",
+        "/$defs/SetSessionConfigOptionRequest/anyOf/1",
+        "/$defs/StopReason/oneOf/0",
+        "/$defs/StopReason/oneOf/1",
+        "/$defs/StopReason/oneOf/2",
+        "/$defs/StopReason/oneOf/3",
+        "/$defs/StopReason/oneOf/4",
+        "/$defs/TerminalOutputResponse/properties/exitStatus/anyOf/0",
+        "/$defs/TerminalOutputResponse/properties/exitStatus/anyOf/1",
+        "/$defs/TextContent/properties/annotations/anyOf/0",
+        "/$defs/TextContent/properties/annotations/anyOf/1",
+        "/$defs/TextDocumentSyncKind/oneOf/0",
+        "/$defs/TextDocumentSyncKind/oneOf/1",
+        "/$defs/ToolCallContent/oneOf/0",
+        "/$defs/ToolCallContent/oneOf/1",
+        "/$defs/ToolCallContent/oneOf/2",
+        "/$defs/ToolCallStatus/oneOf/0",
+        "/$defs/ToolCallStatus/oneOf/1",
+        "/$defs/ToolCallStatus/oneOf/2",
+        "/$defs/ToolCallStatus/oneOf/3",
+        "/$defs/ToolCallUpdate/properties/kind/anyOf/0",
+        "/$defs/ToolCallUpdate/properties/kind/anyOf/1",
+        "/$defs/ToolCallUpdate/properties/status/anyOf/0",
+        "/$defs/ToolCallUpdate/properties/status/anyOf/1",
+        "/$defs/ToolKind/oneOf/0",
+        "/$defs/ToolKind/oneOf/1",
+        "/$defs/ToolKind/oneOf/2",
+        "/$defs/ToolKind/oneOf/3",
+        "/$defs/ToolKind/oneOf/4",
+        "/$defs/ToolKind/oneOf/5",
+        "/$defs/ToolKind/oneOf/6",
+        "/$defs/ToolKind/oneOf/7",
+        "/$defs/ToolKind/oneOf/8",
+        "/$defs/ToolKind/oneOf/9",
+        "/$defs/UsageUpdate/properties/cost/anyOf/0",
+        "/$defs/UsageUpdate/properties/cost/anyOf/1"
+      ]
+    }
+  },
+  "closedSchema": {
+    "path": "closed-schema.json",
+    "sha256": "98ced4039794d88773c34a1018f26ce6e27d6be3b1902fb775160005dacc2c14",
+    "onlyAddsReviewedFences": true
+  },
+  "validatorArchitecture": {
+    "exportedValidators": 47,
+    "oneValidatorPerAdoptedDefinition": true,
+    "fallbackValidator": false
+  },
+  "projectorArchitecture": {
+    "exportedDecoders": 47,
+    "oneDecoderPerAdoptedDefinition": true,
+    "schemaSha256": "9cafe05fc4a55c7ccf2b996869c3bd9aa6dd80c6ad26354cd754a264ecf32bbb",
+    "preservesOnlyReviewedOpenMaps": true,
+    "fallbackProjector": false
+  }
+}

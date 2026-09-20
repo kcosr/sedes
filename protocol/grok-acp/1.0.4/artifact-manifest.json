@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "profile": "grok-acp/1.0.4",
+  "generatedBy": "npm run check:grok-profile -- --write-manifest",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 10048,
+      "sha256": "3809c92548d385c4d37bca578e5590ae3c9ab0b0cdb7c8c43fe90fa527dbf175"
+    },
+    {
+      "path": "evidence/l-readonly/capture.json",
+      "bytes": 1843,
+      "sha256": "ea0e21e316189fe9bb288c132e00a17a110db5ba57194931b0e8a9f4ba3a7c2d"
+    },
+    {
+      "path": "evidence/o0/capture.json",
+      "bytes": 19707,
+      "sha256": "8e14522f075b79c7ad85b9c82e5473e184ece6ef81b886fd1da10ec520f4ceff"
+    },
+    {
+      "path": "evidence/o0/help-agent-stdio.txt",
+      "bytes": 324,
+      "sha256": "48125b72a191d4cb7a0cfe7a73bf32577a9990517082a6a81e30894f02f8ee70"
+    },
+    {
+      "path": "evidence/o0/help-agent.txt",
+      "bytes": 1820,
+      "sha256": "a3dc95041521cd0ff70a704561efe8595de190a2a7fea3c245e1f9e381d5585c"
+    },
+    {
+      "path": "evidence/o0/help-root.txt",
+      "bytes": 7051,
+      "sha256": "ffdc908685a81bfa6c14227c6db2a991a87fa75fa7e958b6475700214bc382b6"
+    },
+    {
+      "path": "evidence/o0/version.json",
+      "bytes": 69,
+      "sha256": "319b6839731bde2971666ea96a3b7307a6e6d70cec9bb89b8b362427d4d6fd6e"
+    },
+    {
+      "path": "evidence/o1/capture.json",
+      "bytes": 18322,
+      "sha256": "7d11c6939ddae0cb498bb155032a90f5d6e65f594587f4130b2c7783618b53b4"
+    },
+    {
+      "path": "evidence/o2a/capture.json",
+      "bytes": 21891,
+      "sha256": "7657352425f23f4d1f5dc79ae5543ebae17a906b3efc42e2f84f7283e62809da"
+    },
+    {
+      "path": "profile.json",
+      "bytes": 3087,
+      "sha256": "d45a9d5d60f65db55adfd85fc0f8a45fae5ab0afe9eb5f51441cd4ffcfad9248"
+    },
+    {
+      "path": "release.json",
+      "bytes": 1539,
+      "sha256": "78d9838e28981fb8895c43c88e61f0ccad6c5957d792ceb7ceb9df523d0360c1"
+    },
+    {
+      "path": "source-history-mechanics.json",
+      "bytes": 2052,
+      "sha256": "813d33e510c8ceed1f9f33cbc1cda48fff9e9d310b0d99ed893069855ee30eb6"
+    },
+    {
+      "path": "source-image-mechanics.json",
+      "bytes": 2046,
+      "sha256": "11f336eb1222b21bb37f8bd736c3678cff9d9f0e75e656cde452745b9a2883c9"
+    },
+    {
+      "path": "source-route-candidates.json",
+      "bytes": 292226,
+      "sha256": "82d78262bf990e1e109390d3e74b2430da4983daad5c4f7f0dc7e57519e20723"
+    }
+  ]
+}

@@ -1,0 +1,647 @@
+{
+  "schemaVersion": 2,
+  "tranche": "O0",
+  "status": "contained-captured",
+  "providerCapacity": {
+    "used": false,
+    "enforcement": [
+      "fresh bubblewrap network namespace with no host network",
+      "minimal tmpfs root with no host home, credential store, or host root mount",
+      "four closed static version/help commands; no ACP or authentication input"
+    ]
+  },
+  "candidate": {
+    "release": "1.0.4",
+    "build": "d846eb93d9",
+    "executableSha256": "79f49625f153923db491a5c290e9b04c3444da488b6b9d6aac533ccb5bff2455",
+    "executableBytes": 166196224,
+    "observedChannel": "stable",
+    "nodePlatform": "linux",
+    "nodeArch": "x64",
+    "capturedChannel": "unknown",
+    "channelIsAdmissionAuthority": false,
+    "pathEvidence": {
+      "locator": "PATH:grok",
+      "requestedBasename": "grok",
+      "requestedPathIsSymlink": true,
+      "canonicalBasename": "grok-1.0.4-linux-x86_64",
+      "canonicalPath": "<REDACTED_INSTALL_ROOT>/grok-1.0.4-linux-x86_64",
+      "stat": {
+        "type": "regular-file",
+        "bytes": 166196224,
+        "mode": "755"
+      }
+    },
+    "stagedCopy": {
+      "privateRootMode": "0700",
+      "executableMode": "0500",
+      "boundedStreamingCopyAndHash": true,
+      "retainedReadOnlyFdMount": true,
+      "mountedOnlyAfterVerification": true,
+      "reverifiedAfterEveryInvocation": true,
+      "removedAfterCapture": true
+    }
+  },
+  "commands": [
+    {
+      "id": "version",
+      "command": "version_json",
+      "args": [
+        "version",
+        "--json"
+      ],
+      "bytes": 60,
+      "sha256": "2777924da04a8ee987fbec8753c4e68d3cc0426e244e0ae10b935e3fce2875ea",
+      "observation": {
+        "sandbox": {
+          "bubblewrapVersion": "bubblewrap 0.11.1",
+          "userNamespace": true,
+          "pidNamespace": true,
+          "networkNamespace": true,
+          "hostRootMounted": false,
+          "runtimeMountsReadOnly": true,
+          "hostHomesHidden": true,
+          "environmentNames": [
+            "HOME",
+            "GROK_HOME",
+            "PATH",
+            "TMPDIR",
+            "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "ALL_PROXY",
+            "DO_NOT_TRACK",
+            "DISABLE_TELEMETRY",
+            "GROK_DISABLE_AUTOUPDATER",
+            "GROK_PROMPT_SUGGESTIONS",
+            "GROK_TELEMETRY_ENABLED",
+            "GROK_TURN_SUMMARY",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "NO_PROXY",
+            "NO_COLOR",
+            "OTEL_SDK_DISABLED"
+          ]
+        },
+        "exit": {
+          "code": 0,
+          "signal": null,
+          "timedOut": false
+        },
+        "stderr": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "empty": true
+        },
+        "filesystem": {
+          "before": {
+            "entryCount": 26,
+            "totalBytes": 542
+          },
+          "after": {
+            "entryCount": 54,
+            "totalBytes": 453053
+          },
+          "changes": [
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/active_sessions.json",
+                "type": "file",
+                "mode": 420,
+                "bytes": 2,
+                "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/active_sessions.lock",
+                "type": "file",
+                "mode": 420,
+                "bytes": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs",
+                "type": "directory",
+                "mode": 493
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide",
+                "type": "directory",
+                "mode": 493
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/01-getting-started.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 8940,
+                "sha256": "02a7db91b6672db4e60660df3a9c971ff8cc573fda2f547f12b04bb9bbbb746f"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/02-authentication.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 14999,
+                "sha256": "ecf2234c009e7c89faecaef7e1f51daed902e7343f7d85d774a79ecc525c7b12"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/03-keyboard-shortcuts.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 26264,
+                "sha256": "c996860849f9c8edc5badd37e27066c166b8aa28d3bf964fee3ae11bbe4e31fe"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/04-slash-commands.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 20757,
+                "sha256": "2518ea5d663311c01dc6731dae1fcc2089d82e9082ccbfb51b9d61ed7f992d2a"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/05-configuration.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 44250,
+                "sha256": "d03cea346b2c22096d07c957d612a1607c01993726eeaa510caf69d1a7781d79"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/06-theming.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 15061,
+                "sha256": "9511788e54f557fcf56a9bf905af7240acc600f9be3b1ce913ca6c34d2c97a52"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/07-mcp-servers.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 16086,
+                "sha256": "bc414c46f1f6b8de335db9977dfb550a3bbf1baadab92228a4d29865947eb1ff"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/08-skills.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 12948,
+                "sha256": "e1191a3aa42ebf6272b087b1d5840dcd298b72fae6222593c7601ad4744434d8"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/09-plugins.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 18290,
+                "sha256": "d0e870afaa124b52d0d84bde6c5593e000e55c3ba0946571e26dff81372528a8"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/10-hooks.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 42776,
+                "sha256": "2317095679b51939efeae80c163e5febb98bc236c3cf5046c51e3089984645cf"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/11-custom-models.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 13477,
+                "sha256": "3606cf699982bf702b20d72835cf4d8c955991896c80f05ed4fe9d4fbd26fd87"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/12-project-rules.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 9539,
+                "sha256": "a7a9afb14f52789f8c0b74fb761fa971959a77cabba5c62dfbb27c8dee4dccc2"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/13-memory.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 16539,
+                "sha256": "1c8dfc579256a49bbf1a332fb55bbbb00ccd01519edf495879156ddb0412b745"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/14-headless-mode.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 41051,
+                "sha256": "6b99f5552b9acfa308502823136a5f82bd05d67371dc90d12c1873d55cfb7315"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/15-agent-mode.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 11939,
+                "sha256": "43d8dc7461362aaab8daa897f74ff88cace4e5ec04c0364d12863c95fdedc67a"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/16-subagents.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 15509,
+                "sha256": "600ee137bb91fc82fe12ab5305db3f514fe62373a2bf9f5542baf4baaa87e09f"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/17-sessions.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 16184,
+                "sha256": "b3e02ebeb73ce16c8ab2a554fee5e1be4e22ce796f9acd6edf0494789b3c9d92"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/18-sandbox.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 17741,
+                "sha256": "6456b77c91cea857e6323009e268359e9cf20e98a3fa784c32a4e1dcea86e2fb"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/19-plan-mode.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 9038,
+                "sha256": "7b586678844f5fd8a411c5668610cc50c0021ebc96dab3b987eb94a0028c66f4"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/20-background-tasks.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 10192,
+                "sha256": "2ed75a56aafed5c18fadf193a374622187c0fb472728b8699056ef2e58e8aa6f"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/21-terminal-support.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 11018,
+                "sha256": "20afb346d51288f6e93f79dbbc15cf0b9cca364b59cc51407c9da69f034e57d1"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/22-permissions-and-safety.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 30727,
+                "sha256": "7552ed1c1c4ca5ee39a528922d9c5d17d4931e58f6a17ca2b59b2663fc32b96b"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/23-dashboard.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 13159,
+                "sha256": "46d8940f21aba815750e8256e43ffe417993791aab0e83dc1d5a2afa5f0ddc24"
+              }
+            },
+            {
+              "kind": "created",
+              "entry": {
+                "path": "home/.grok/docs/user-guide/24-monitoring-usage.md",
+                "type": "file",
+                "mode": 420,
+                "bytes": 16025,
+                "sha256": "b5554e14481b025d421b8d949005075e563933ecdc0051631b7c8b49e48ab9b5"
+              }
+            }
+          ]
+        },
+        "cleanup": {
+          "ownedProcessGroupTerminated": true,
+          "invocationTemporaryRootRemoved": true
+        }
+      }
+    },
+    {
+      "id": "root",
+      "command": "root_help",
+      "args": [
+        "--help"
+      ],
+      "bytes": 7051,
+      "sha256": "ffdc908685a81bfa6c14227c6db2a991a87fa75fa7e958b6475700214bc382b6",
+      "observation": {
+        "sandbox": {
+          "bubblewrapVersion": "bubblewrap 0.11.1",
+          "userNamespace": true,
+          "pidNamespace": true,
+          "networkNamespace": true,
+          "hostRootMounted": false,
+          "runtimeMountsReadOnly": true,
+          "hostHomesHidden": true,
+          "environmentNames": [
+            "HOME",
+            "GROK_HOME",
+            "PATH",
+            "TMPDIR",
+            "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "ALL_PROXY",
+            "DO_NOT_TRACK",
+            "DISABLE_TELEMETRY",
+            "GROK_DISABLE_AUTOUPDATER",
+            "GROK_PROMPT_SUGGESTIONS",
+            "GROK_TELEMETRY_ENABLED",
+            "GROK_TURN_SUMMARY",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "NO_PROXY",
+            "NO_COLOR",
+            "OTEL_SDK_DISABLED"
+          ]
+        },
+        "exit": {
+          "code": 0,
+          "signal": null,
+          "timedOut": false
+        },
+        "stderr": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "empty": true
+        },
+        "filesystem": {
+          "before": {
+            "entryCount": 26,
+            "totalBytes": 542
+          },
+          "after": {
+            "entryCount": 26,
+            "totalBytes": 542
+          },
+          "changes": []
+        },
+        "cleanup": {
+          "ownedProcessGroupTerminated": true,
+          "invocationTemporaryRootRemoved": true
+        }
+      }
+    },
+    {
+      "id": "agent",
+      "command": "agent_help",
+      "args": [
+        "agent",
+        "--help"
+      ],
+      "bytes": 1820,
+      "sha256": "a3dc95041521cd0ff70a704561efe8595de190a2a7fea3c245e1f9e381d5585c",
+      "observation": {
+        "sandbox": {
+          "bubblewrapVersion": "bubblewrap 0.11.1",
+          "userNamespace": true,
+          "pidNamespace": true,
+          "networkNamespace": true,
+          "hostRootMounted": false,
+          "runtimeMountsReadOnly": true,
+          "hostHomesHidden": true,
+          "environmentNames": [
+            "HOME",
+            "GROK_HOME",
+            "PATH",
+            "TMPDIR",
+            "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "ALL_PROXY",
+            "DO_NOT_TRACK",
+            "DISABLE_TELEMETRY",
+            "GROK_DISABLE_AUTOUPDATER",
+            "GROK_PROMPT_SUGGESTIONS",
+            "GROK_TELEMETRY_ENABLED",
+            "GROK_TURN_SUMMARY",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "NO_PROXY",
+            "NO_COLOR",
+            "OTEL_SDK_DISABLED"
+          ]
+        },
+        "exit": {
+          "code": 0,
+          "signal": null,
+          "timedOut": false
+        },
+        "stderr": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "empty": true
+        },
+        "filesystem": {
+          "before": {
+            "entryCount": 26,
+            "totalBytes": 542
+          },
+          "after": {
+            "entryCount": 26,
+            "totalBytes": 542
+          },
+          "changes": []
+        },
+        "cleanup": {
+          "ownedProcessGroupTerminated": true,
+          "invocationTemporaryRootRemoved": true
+        }
+      }
+    },
+    {
+      "id": "agent-stdio",
+      "command": "agent_stdio_help",
+      "args": [
+        "agent",
+        "stdio",
+        "--help"
+      ],
+      "bytes": 324,
+      "sha256": "48125b72a191d4cb7a0cfe7a73bf32577a9990517082a6a81e30894f02f8ee70",
+      "observation": {
+        "sandbox": {
+          "bubblewrapVersion": "bubblewrap 0.11.1",
+          "userNamespace": true,
+          "pidNamespace": true,
+          "networkNamespace": true,
+          "hostRootMounted": false,
+          "runtimeMountsReadOnly": true,
+          "hostHomesHidden": true,
+          "environmentNames": [
+            "HOME",
+            "GROK_HOME",
+            "PATH",
+            "TMPDIR",
+            "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "ALL_PROXY",
+            "DO_NOT_TRACK",
+            "DISABLE_TELEMETRY",
+            "GROK_DISABLE_AUTOUPDATER",
+            "GROK_PROMPT_SUGGESTIONS",
+            "GROK_TELEMETRY_ENABLED",
+            "GROK_TURN_SUMMARY",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "NO_PROXY",
+            "NO_COLOR",
+            "OTEL_SDK_DISABLED"
+          ]
+        },
+        "exit": {
+          "code": 0,
+          "signal": null,
+          "timedOut": false
+        },
+        "stderr": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "empty": true
+        },
+        "filesystem": {
+          "before": {
+            "entryCount": 26,
+            "totalBytes": 542
+          },
+          "after": {
+            "entryCount": 26,
+            "totalBytes": 542
+          },
+          "changes": []
+        },
+        "cleanup": {
+          "ownedProcessGroupTerminated": true,
+          "invocationTemporaryRootRemoved": true
+        }
+      }
+    }
+  ],
+  "constraints": {
+    "timeoutMs": 4000,
+    "terminateGraceMs": 300,
+    "killGraceMs": 1000,
+    "maxStdoutBytes": 262144,
+    "maxStderrBytes": 65536,
+    "maxFilesystemEntries": 512,
+    "maxFilesystemBytes": 4194304,
+    "maxManifestFileBytes": 262144,
+    "maxManifestDepth": 12,
+    "stdin": "closed-empty",
+    "commandAllowlist": [
+      {
+        "command": "version_json",
+        "args": [
+          "version",
+          "--json"
+        ]
+      },
+      {
+        "command": "root_help",
+        "args": [
+          "--help"
+        ]
+      },
+      {
+        "command": "agent_help",
+        "args": [
+          "agent",
+          "--help"
+        ]
+      },
+      {
+        "command": "agent_stdio_help",
+        "args": [
+          "agent",
+          "stdio",
+          "--help"
+        ]
+      }
+    ],
+    "noAcpFrames": true,
+    "authenticate": false,
+    "filesystemCapability": false,
+    "terminalCapability": false,
+    "processOwnership": "detached bubblewrap process group with TERM/KILL cleanup proof"
+  },
+  "evidenceHistory": {
+    "priorDraftUnsandboxedCapture": "replaced-not-retained",
+    "currentAuthority": "contained O0 capture only"
+  }
+}

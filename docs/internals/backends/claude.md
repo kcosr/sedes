@@ -1,0 +1,518 @@
+# Claude backend internals
+
+This document defines the backend-private runtime, projection, authority, and
+recovery invariants for Sedes's Claude integration. It is intended for backend
+maintainers and reviewers. For installation, authentication, configuration,
+operator-visible capabilities, and troubleshooting, use the
+[Claude operator guide](../../operator/backends/claude.md).
+
+## On this page
+
+- [Runtime and session ownership](#runtime-and-session-ownership)
+- [Authoritative history and paging](#authoritative-history-and-paging)
+- [Semantic projection and terminal receipts](#semantic-projection-and-terminal-receipts)
+- [Collaboration and authenticated evidence](#collaboration-and-authenticated-evidence)
+- [Creation, binding, and model state](#creation-binding-and-model-state)
+- [Permissions and blocking interactions](#permissions-and-blocking-interactions)
+- [Inputs, images, and skill correlation](#inputs-images-and-skill-correlation)
+- [Agent-tool presentation](#agent-tool-presentation)
+- [Fork lineage](#fork-lineage)
+- [Recovery and unsupported mutations](#recovery-and-unsupported-mutations)
+- [Verification contract](#verification-contract)
+
+The shared backend rules remain normative. Read this page together with
+[Architecture](../architecture.md) and the repository's backend integration
+[contract rules](../backend-integration-contract-rules.md).
+
+## Runtime and session ownership
+
+The exact-pinned `@anthropic-ai/claude-agent-sdk` 0.3.274 package runs in one
+digest-verified local provider worker or a backend-private persistent runtime
+hosted by the SSH or outbound sidecar. The Claude worker requires Node.js
+24.18+ and POSIX process-group supervision; native Windows Claude is
+intentionally unsupported. Windows sidecars omit the Claude runtime capability
+while retaining independently admitted non-Claude operations. Runtime selection follows the admitted execution
+environment; unavailable remote authority never launches a local worker. Disabled
+historical definitions retain IDs and provider bindings until explicitly
+enabled. One
+principal/backend runtime owns the SDK queries admitted by the shared Sedes
+conversation-runtime budget for that execution environment. A live Sedes thread
+has at most one warm query.
+Closing a handle does not delete its Claude session, and attaching the same
+native session twice is denied independently. The worker's fixed maximum of 32
+simultaneous queries is a last-resort execution-environment safety guard, not a
+backend configuration surface.
+
+The persistent service owns remote queries and their bounded retained events;
+SSH stdio or an outbound connection carries the current main-side attachment. Detach does not interrupt
+the provider query. Reattach binds the exact runtime, session, and controller
+epoch, replays retained events, and restores the live stream. Native provider
+history remains authoritative after a service restart; retained transport
+events are recovery evidence, not an alternative transcript store.
+
+Discovery, metadata, history, resume, and model catalogs use the official SDK.
+Sedes does not parse Claude's on-disk transcript format, take a global
+Claude-home writer lock, mirror native history into its database, or maintain a
+second provider-history cache. Provider-native IDs, messages, and binding
+shapes stay inside this backend.
+
+Both executable and config-directory overrides are optional canonical absolute
+POSIX paths in the selected environment. Without an executable override, the
+worker resolves the first `claude` on the execution account's `PATH` and retains
+its canonical path. Provider-home precedence is explicit `configDirectory`,
+then that account's `CLAUDE_CONFIG_DIR`, then `$HOME/.claude`. The worker resolves
+and validates this authority on the execution host before opening the SDK.
+The local worker uses the local service account's environment; the remote worker
+uses the remote account's environment, without copying main-host defaults.
+The SDK library is part of the verified worker artifact, independent of the
+provider home. Provider login and ambient permission rules remain external
+operator authority. Runtime admission,
+subscription-only authentication, worker build/digest admission, and version
+policy are defined in the
+[operator guide](../../operator/backends/claude.md#version-compatibility).
+Local worker semantics remain independent of remote sidecar lifecycle.
+
+The worker protocol is provider-private. It carries SDK query control,
+messages, session discovery/history/rename/fork, version and authentication
+evidence, cancellation, and reverse permission requests. Shared transport owns
+framing, correlation, bounds, generation fencing, and cleanup; it does not own
+Claude methods, identifiers, history meaning, or policy. An exact worker
+protocol/build mismatch fails before SDK authority opens, with no compatibility
+decoder or local fallback.
+
+Worker permission delivery uses an application-level round trip: after the
+worker receives a `can_use_tool` result, it acknowledges the exact query,
+request, and tool-use identity before releasing that result to the Claude SDK.
+An `adopted: true` acknowledgement commits the exact pending interaction.
+When caller cancellation makes the worker generate its own fallback deny,
+`adopted: false` instead fails and removes any matching pending settlement.
+It is a benign no-op when no expectation exists, as is the positive
+acknowledgement for a static no-session deny. A successful write into the worker
+stream is not delivery proof; malformed positive acknowledgements or settlement
+failure fence the worker generation.
+
+The native namespace key binds the execution-environment ID and the configured
+provider-home selector: the explicit directory, or a stable native-default
+marker when omitted. Preparation does not resolve a remote filesystem path.
+The default marker identifies that environment's execution-account defaults;
+the worker resolves the effective home there before SDK use. It never derives
+a remote namespace from main-host environment variables. Multiple enabled
+Claude backends in one environment must all select explicit directories;
+native-default runtime admission also excludes retained sibling workers until
+their cleanup completes. This prevents an unresolved default from aliasing an
+explicit store. Local worker carrier loss retires that worker
+generation, rejects pending permission requests, and fails active handles
+closed. A replacement local generation reconstructs from Claude's authoritative
+store rather than replaying uncertain writes. Persistent remote workers retain
+the separate service-owned lifetime and reattachment contract described above.
+
+## Authoritative history and paging
+
+On attach, Claude first arms the resumed SDK stream, then acquires the SDK's
+complete authoritative history once. It merges any live messages or
+retractions observed during that acquisition. The handle retains the resulting
+provider-private value for its lifetime.
+
+Latest and older browser pages are byte-adaptive whole-turn projections over
+that acquisition. Loading an older page does not reread the provider.
+Live updates are projected from an incrementally maintained provider-private
+eleven-turn tail, while the complete native acquisition remains available for
+older-page reads.
+
+If the newest turn alone exceeds the normalized transfer window, the latest
+snapshot retains its user message and newest items with one deterministic
+omission notice. This presentation bound does not close the SDK session.
+Requesting the same complete oversized turn as a history page fails only that
+page request. More generally, normalized page overflow does not fence an
+attached query.
+
+The SDK owns native transcript loading and folding. Sedes does not infer or
+invent a compaction boundary from folded public history. Provider history is
+the durable transcript authority and is reprojected as bounded whole turns
+after restart or generation replacement.
+
+Targeted turn lookup scans the retained authoritative messages newest first.
+It projects only the matched whole turn together with its durable terminal
+receipt. It never rereads the SDK or walks normalized older-history pages, and
+it distinguishes exhaustive absence from caller-bound exhaustion.
+
+## Semantic projection and terminal receipts
+
+Claude's native interruption sentinels (`[Request interrupted by user]` and
+`[Request interrupted by user for tool use]`) arrive as timestamped user-role
+messages containing one text block, without an origin or synthetic flag. The
+projector recognizes that exact native shape following an existing turn, marks
+that turn interrupted, and omits the sentinel from chat messages and user-input
+ordinals. The original prompt remains the completion correlation target, so the
+following `aborted_streaming` or `aborted_tools` result can persist its receipt.
+History reconstruction recognizes the same shape even when the result receipt
+was never saved; runtime reset therefore cannot recreate a phantom active turn.
+Explicit origin metadata, authenticated Sedes input-operation UUIDs, string
+content, and quoted or mixed content remain ordinary messages. SDK history
+does not distinguish an unannotated external input that exactly copies the
+native sentinel shape; that reserved shape is interpreted as native control
+history. A late interrupt acknowledgment never overwrites a settled run state.
+
+SDK 0.3.274 can emit intermediate results while draining background task
+notifications. Only successful empty zero-turn results carrying native
+`task-notification` provenance are classified as those drain receipts, regardless
+of optional terminal metadata. Explicit singular or plural user-message
+receipt identities must correlate with the pending/current foreground input.
+Unrelated receipts neither accept input nor settle the foreground turn, and
+acknowledging them cannot prune active persistent replay. Ordinary foreground
+zero-turn successes and errors retain terminal semantics.
+
+Claude messages project into normalized user, assistant, reasoning, tool,
+command, file-read, file-change, web-search, MCP, collaboration, status,
+interaction, notice, and usage items. Exact durable `Bash`, `Read`, `Write`,
+`Edit`, `NotebookEdit`, `WebSearch`, `mcp__*`, and `Agent` or legacy `Task`
+shapes select the common semantic renderers. `WebFetch`, unknown tools, and
+malformed or incomplete known shapes remain bounded generic tools. Titles and
+prose are never classifiers.
+
+Tool results settle the same stable item, including failure and interruption.
+Live and reopened projection converge on the provider's durable tool-call
+identity.
+
+Claude can emit one completed assistant wrapper per completed content block.
+Those wrappers share the Anthropic message ID and can use `stop_reason: null`
+while later blocks or tools still follow. Sedes therefore:
+
+- keys partial and durable blocks by that shared message identity;
+- assigns each later live segment the next durable turn order;
+- treats the wrappers as nonterminal; and
+- persists the SDK's single per-turn `result` as the authoritative success,
+  failure, or interruption receipt.
+
+The active run and interrupt target stay latched until that result boundary.
+An intermediate SDK `session_state_changed: idle` frame cannot settle an
+otherwise in-progress normalized turn. These rules prevent duplicate or
+misplaced live text, premature turn footers, and Stop-button flicker between
+blocks, including after reload.
+
+Reviewed retry, rate-limit, and informational events produce bounded notices
+without exposing provider payloads.
+
+## Collaboration and authenticated evidence
+
+An exact `Agent` or legacy `Task` call becomes one stable parent-side
+collaboration item that advances from spawn through result or terminal status.
+Its launch description stays visible after the launch acknowledgement. Exact
+top-level native `task_started` evidence records the session, task, and parent
+tool identity. A matching terminal `task_updated` or `task_notification` appends
+a separate completed, failed, or stopped collaboration item to the parent
+turn. Duplicate terminal notifications are idempotent. Child transcripts remain
+provider-private, and nested or uncorrelated events cannot create parent rows.
+
+Migration 100 stores bounded lifecycle receipts under server-derived tenant,
+principal, application-thread, and native-session authority. SDK history omits
+these system notifications, so receipts preserve observed terminal bookends
+across reload; they contain no child messages, command output, or live-state
+claim. Projection requires the exact parent tool call to remain in native
+history. Replaying a receipt cannot complete the main turn again.
+
+`background_tasks_changed` is the authoritative level inventory for live
+subagents, Bash commands, and other nonambient work. It maps to the shared
+generation-volatile background observation independently of lifecycle rows.
+Inventory can clear before a terminal notification arrives; neither event
+substitutes for the other. Fresh queries start empty, reattached queries await
+their inventory, and query failure invalidates it. Main-turn completion does
+not clear it. Persistent hosts retain the latest inventory across terminal
+replay pruning and include active background work in retirement and upgrade
+checks. A bounded private set of pending task notifications survives an empty
+inventory and persistent reattachment. Retirement waits until the notification
+has been applied and the receipt persisted, without keeping visible counts
+artificially active. Sedes does not expose provider task controls or reconstruct liveness
+from receipts or transcript text.
+
+Authenticated Task and context evidence is checked by exact
+tenant/principal/thread/operation lookup only for signed candidates encountered
+during projection. Sedes does not list every operation snapshot or copy native
+history into its database.
+
+## Creation, binding, and model state
+
+The backend supports creation, import, resume or reattach, streaming submit,
+interrupt, rename, exact user-message reconciliation, durable desired and
+effective model and effort, and provider-complete token and request usage.
+Creation reserves an application UUID before crossing the SDK boundary so a
+retry or recovery attempt cannot create an untracked replacement.
+
+The live model and effort catalog is intersected with installation policy.
+Aliases that resolve to the same exact native model produce one option. An
+explicit row provides its label, while a matching `default` alias marks it as
+the target default. The moving default alias cannot override an explicit row's
+effort metadata, and conflicting explicit rows are omitted fail-closed.
+
+Model and effort are separate selectors; the catalog does not repeat each model
+for each effort. Models without an effort axis remain selectable and persist a
+null effort rather than a fabricated value. `catalog` leaves the provider
+catalog unrestricted by Sedes, allowlist matchers admit only matches, and
+denylist matchers remove matches while admitting future unmatched values.
+
+Existing disallowed selections remain readable and visible as unavailable.
+New provider work is blocked until an admitted model and effort are explicitly
+selected. Sedes neither fabricates configured values nor substitutes another
+selection. See
+[Configuration](../../operator/configuration.md#backend-model-policy).
+
+The desired model, effort, and permission mode are applied as one turn-boundary
+selection and frozen into the durable operation snapshot. Observed effective
+state can temporarily differ after reconnection or policy change. Delivery
+fails closed rather than guessing.
+
+A Saved Agent can capture sparse Claude model, effort, permission-mode, and
+Sedes tool-policy overrides. Thread creation resolves them against the current
+target catalog and operator ceiling and copies the complete result. No live
+link to the Saved Agent remains.
+
+The thread menu's **New** action likewise captures the complete desired model,
+effort, permission mode, and exact Sedes tool policy from an available source.
+It revision-fences and revalidates those values before creating an independent
+empty draft with no Claude session or history.
+
+## Permissions and blocking interactions
+
+SDK 0.3.274 permission callbacks preserve `defaultToNo`,
+`suppressAlwaysAllowRule`, and bounded `mcpServer` provenance through the private
+worker transport and persistent permission replay. Provenance is descriptive,
+not permission authority; invalid provenance labels are omitted at the SDK worker
+boundary without dropping permission-safety hints or disconnecting the worker.
+A default-to-no request becomes a normalized decision
+with Deny first and no primary approval action; keyboard focus starts on Deny.
+Suppressing always-allow rules removes the session-grant action and its server-side
+authority, so a forged session-grant response fails closed. Allow once remains an
+explicit choice. These values belong to the pending thread interaction; they do
+not change installation or principal policy.
+
+The browser uses existing normalized action roles. Its no-primary decision path
+renders each action once. The cross-backend audit preserves Codex's ordinary
+primary decisions and Pi's confirmations; Grok does not advertise provider
+blocking interactions. No provider metadata is added to the browser contract.
+
+Claude permissions use the private versioned `claude.permissions@1` feature.
+The configured `allowedModes` set is a closed backend ceiling. The backend
+keeps the SDK permission callback installed in every admitted mode; it does not
+rewrite Claude's user, project, local, or command-line permission files.
+
+SDK prompts become normalized blocking interactions. Bounded ephemeral session
+grants are available only where the SDK permits them. A decision's authority is
+limited to the exact operation it describes and never silently crosses into
+Sedes environment authority.
+
+Claude permission and Sedes environment decisions are evaluated independently:
+
+- Claude **Allow once** or a Claude session grant does not allow a Sedes
+  application tool to cross execution environments.
+- A Sedes environment approval authorizes one invocation under the
+  thread-wide Sedes rule; it does not broaden Claude's mode or ambient policy.
+
+`bypassPermissions` is admitted only when the operator explicitly allowlists
+it, and it can never become a target default. Plan mode is not exposed because
+the reset-producing `EnterPlanMode` and `ExitPlanMode` lifecycle has no durable
+normalized rebind contract.
+
+The operator-visible modes and their effects are summarized in
+[Permissions and security](../../operator/backends/claude.md#permissions-and-security).
+
+## Inputs, images, and skill correlation
+
+Claude accepts ordinary text, immutable context excerpts, structured Task
+references, and composer attachments through the common immutable delivery
+snapshot. Provider wire projection renders Task metadata and the authenticated
+staged-file path manifest as text. It does not inline ordinary file contents;
+Claude must explicitly read a staged ordinary file.
+
+For recognized PNG, JPEG, GIF, and WebP images, Sedes reads the exact canonical
+bytes through the scope/thread-bound reader. Before enqueueing the input, it
+rechecks descriptor equality, size, digest, media signature, dimensions, and
+Claude request bounds, then adds ordered SDK base64 image blocks. It never
+rereads an execution-environment `agentPath` as a local file. Missing byte
+authority, mismatch, unsupported media, or a bound failure rejects the complete
+input before it enters the SDK queue.
+
+The SDK catalog has no per-model image-modality discriminator. The reviewed
+worker profile therefore advertises image input for every admitted Claude model.
+The authenticated staged-path manifest also retains each image as a read-only
+file for an explicit filesystem request. Its guidance states that native image
+content is already present, so Claude should not invoke a read tool merely to
+inspect the same pixels again.
+
+Exact native session and message correlation maps provider history back to the
+common `deliveryOperationId`. That restores normalized input parts without
+parsing an echoed attachment manifest. Native image echoes correlated to the
+authenticated input are suppressed. Unrelated native image blocks keep the
+truthful omitted-image presentation. Native image input neither enables
+provider-output artifacts nor strengthens attachment fidelity across forks.
+
+Claude initialization mixes model skills with local, terminal, settings, and
+session-lifecycle commands. Sedes exposes a skill only when a primary command:
+
+1. appears in the same stream initialization's skill set;
+2. exists in the official control catalog; and
+3. is absent from the terminal-command set.
+
+These positively classified skills appear in the common picker. A picker
+selection or exact direct invocation is sent as an ordinary model turn. Sedes
+records a scoped immutable association between the skill and the native user
+message UUID, allowing live and reopened history to restore the skill badge
+without provider-visible framing.
+
+A native fork copies the association only through its verified source-to-child
+UUID remap. Aliases, terminal-only commands, unclassified built-ins, stale
+selections, malformed commands, and reset-producing forms fail before provider
+submission.
+
+## Agent-tool presentation
+
+Eligible Claude queries receive the generated `sedes` CLI and exact
+thread-scoped context in Progressive or Individual mode. Progressive uses
+bounded catalog discovery and generic invocation; Individual uses live help
+and named typed commands. The same per-thread exact-ID policy and
+invocation-time authority checks used by other backends apply. Claude does not
+implement Pi's shared `set_tool_access` action; Sedes application tools remain
+independent from Claude permission mode.
+
+The surface is CLI-only, so the UI hides that one-value selector while
+retaining the Progressive/Individual mode selector. Local workers use the
+local HTTP endpoint. Remote Linux/macOS queries use the private sidecar Unix
+socket relay
+when `agent_tools_cli` is independently enabled and admitted. Its calls require
+a current authorized main-server connection; disconnected calls are not queued
+for later execution. Claude has
+no native agent-tool presentation. A missing built CLI
+disables only this optional
+surface, not ordinary Claude conversation capabilities, and never falls back
+to another mode or a Native surface. The injected encrypted
+thread source reference survives a Sedes restart, while every invocation still
+requires the exact current active Claude query and policy. For a service-owned
+remote query, losing the CLI carrier does not close the query. The sidecar validates the exact injected ingress/PATH and
+reattachment rejects changes to that query authority.
+
+Principal Tool clients are separate generic management-HTTP callers, not a
+Claude presentation mode. They are never injected into the Claude query
+environment. Claude worker-environment construction removes ambient
+`SEDES_AGENT_TOOL_CLIENT_TOKEN` and `SEDES_AGENT_TOOL_CLI_MODE` values before
+installing the thread source reference and server-resolved mode hint. That hint
+does not authorize tools; discovery and invocation reload current grants.
+
+Admitted client-driven create, send, and fork operations retain exact client
+provenance. Destination model work remains governed by the destination
+thread's Claude execution settings and Sedes tool policy.
+
+## Fork lineage
+
+An idle Claude thread can fork from an exact successfully completed ordinary
+turn. Sedes reserves the child first, resumes the selected provider prefix, and
+records native lineage without sending a synthetic follow-up prompt.
+
+The generic thread **Fork** action resolves the newest completed turn while the
+source is idle and records `completed_turn_inclusive`. Transcript and agent-tool
+forks continue to select an exact completed turn. Claude does not advertise
+`latest_provider_snapshot`.
+
+Attachment-ended structured-output turns remain unforkable. File-history and
+attachment fidelity across a native fork are not guaranteed. Historical
+authenticated boundary carriers remain hidden when older sessions are read.
+Skill correlation crosses the fork only through the verified native UUID remap
+described above.
+
+## Recovery and unsupported mutations
+
+Provider history is the durable transcript authority. After restart or
+generation replacement, Sedes rebuilds its bounded whole-turn projection and
+reconciles exact native user messages with durable delivery operations. The
+application UUID reserved before creation, immutable operation snapshots,
+provider-private bindings, authoritative terminal result, and exact message
+correlation prevent recovery from inventing replacement sessions or duplicate
+turns.
+
+Persistent send admission returns a typed positive acceptance or a bounded
+pre-native refusal (busy, closed, or retention capacity). Main awaits that
+response within the submission acknowledgment deadline. A known busy refusal
+keeps the attachment alive, marks the foreground active, and uses the shared
+queue's bounded invalid-state handling. Missing, malformed, or post-admission
+failure responses remain uncertain; they never prove the prompt was not sent.
+
+A persistent query's failure code survives event acknowledgment and is included
+in every attachment. Main drains retained output, then fails hydration with
+explicit backend-restart guidance. It must not infer query liveness from an
+unfinished transcript or recreate a native query merely because its failure
+event was acknowledged. Thread reset detaches the presentation; it does not
+replace the remote owner. Use the confirmed backend Stop/Restart flow to review
+and abandon unresolved outcomes when necessary. Ordinary reattachment never
+replays an uncertain input or discards unknown background work.
+
+Sidecar wire v10 fences older attachment/send response shapes and workers that
+cannot carry native steering priority before connecting to a retained runtime. Busy incompatible services require the existing explicit
+upgrade flow; they are not silently replaced. During a deliberate shutdown,
+reattachment can still drain final receipts without classifying the stopped
+query as an unexpected failure or requiring another forced stop.
+
+Claude advertises conversation-targeted Steer using native `priority: "next"`.
+The runtime minimum is 2.1.274. Testing 2.1.241 showed that it can consume
+guidance but omits the second input’s consumption UUID, which cannot establish
+safe delivery tracking. Older runtimes fail the common admission guard; there
+is no separate compatibility path or version-specific Steer capability.
+The target contains no turn ID. Native enqueue stays pending until exact
+user-message UUID evidence confirms incorporation; normalized history associates
+that input with the actual receiving turn. This can be the current turn or the
+next one if current work has completed. Transport loss cannot justify replay or
+an invented receiving turn. Existing assistant output cannot confirm a newly
+enqueued steer. Queue remains application-owned next-turn work. Native `now`
+interruption semantics are not exposed by this feature.
+
+Manual compaction is also unavailable. Public SDK history can erase compact
+boundary and summary classification after an unobserved automatic compact, so
+a command result cannot be recovered as one durable normalized compaction
+operation. Automatic provider folding remains provider-owned history behavior.
+Claude therefore emits neither a normalized compaction boundary nor an
+optional compaction summary.
+
+Terminal-only, unclassified, reset-producing, and plan-mode commands fail
+before submission. Active-source forks, latest-provider-snapshot forks,
+managed terminals, provider-output image artifacts, and shared Pi tool-access
+mutation are absent from capabilities and fail closed at the backend boundary.
+The operator-facing limit list is maintained in
+[Current limits](../../operator/backends/claude.md#current-limits).
+
+For shared creation, queue, recovery, fork, and authority rules, return to
+[Architecture](../architecture.md). For safe runtime diagnosis, use
+[Debug diagnostics](../../developer/diagnostics.md).
+
+## Verification contract
+
+Claude backend changes must preserve the exact SDK/profile boundary and audit
+every compiled backend disposition required by the
+[backend integration rules](../backend-integration-contract-rules.md).
+Verification should cover the changed contract at the narrowest layer and its
+normalized integration surface:
+
+- `tests/unit/claude-release-guard.test.ts` and
+  `tests/unit/claude-sdk-probe.test.ts` cover runtime, subscription, and
+  initialization admission;
+- `tests/unit/claude-conversation-handle.test.ts` and
+  `tests/unit/claude-conversation-driver.test.ts` cover session lifecycle,
+  exact terminal receipts, capabilities, interactions, history, and recovery;
+- `tests/unit/claude-native-images.test.ts`, skill/command tests, and
+  agent-tool environment tests cover input projection and optional surfaces;
+- persistent-runtime tests cover exact-session attachment, event replay,
+  permissions, stale controllers, cleanup, and disconnect without resubmit;
+- `claude-background-activity-native.test.ts` runs the pinned SDK and actual
+  Claude executable against an isolated loopback Messages fixture. Its finite
+  gated Bash and Agent jobs prove the foreground result precedes background
+  completion and qualify inventory/start/notification identity and ordering;
+- persistence, Saved Agent, automation, fork-lineage, and wrong-scope tests
+  must change with their corresponding authority contract; and
+- `tests/real-claude/` is an opt-in, capacity-consuming gate for its narrow
+  reviewed streaming/persistence/usage/reopen profile. Its persistent-runtime
+  case uses real worker stdio over local framed sockets; it does not verify a
+  remote SSH or outbound host or provide blanket evidence for images, tools, permissions,
+  skills, or subagents.
+
+Use the standard typecheck, unit, build, and E2E sequence for backend-facing
+changes. The authorization and safety guidance for the real suite remains in
+the [operator guide](../../operator/backends/claude.md#opt-in-live-verification).
+
+Release-specific native qualification and the distinction between native and
+synthetic evidence are recorded in the [SDK 0.3.274 evidence](../../../protocol/claude-agent-sdk/0.3.274/README.md).

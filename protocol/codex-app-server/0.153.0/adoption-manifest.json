@@ -1,0 +1,3771 @@
+{
+  "schemaVersion": 1,
+  "productionRelease": "0.153.0",
+  "status": "production_parser_authority",
+  "productionRuntimeCompatibility": {
+    "currentPolicy": "stable releases at or above 0.153.0 using exactly the 0.153.0 parser profile",
+    "disposition": "selected_exact_generated_profile",
+    "selectedD3InitialProfile": "exactly 0.153.0",
+    "d3Requirement": "add a later release only through a finite generated-and-conformance-tested allowlist"
+  },
+  "generatedProfiles": {
+    "stable": {
+      "officialTreeSha256": "9602d12e40f603c959851e25e74699c020c0159b71d382ffba64994b8010206d",
+      "canonicalTreeSha256": "8f48d042d9dcae519586d5a954ed19dd3e5412571f3a84b12db7fbbd6a7e381f"
+    },
+    "experimental": {
+      "officialTreeSha256": "9d25f0d21c785fb04df7c061ebb5c474339ce65fba4329d926bf6bdb7cf7ec27",
+      "canonicalTreeSha256": "1fb4698129117f67a54e06c00d8551e24b89372f3ff950c2f5d3f609c8668866"
+    }
+  },
+  "sourceTransformation": {
+    "description": "copy adopted transitive TypeScript closures and append .js to relative NodeNext specifiers",
+    "treeSha256": "20e7178a9c55c56422953568e04bf5a0b9229ac3eae83dd7566af737389f915b",
+    "artifacts": [
+      {
+        "path": "experimental/AbsolutePathBuf.ts",
+        "bytes": 575,
+        "sha256": "a79d31d5e8f24c58c8cce2633e5e4fc5b0bb88d1c44c69e7ce7d0dc7c1252272"
+      },
+      {
+        "path": "experimental/AgentMessageInputContent.ts",
+        "bytes": 295,
+        "sha256": "b1383afc5e1daa28c7c0fa4bdf808d272c79b85291ccdc21afa9502a4ce36688"
+      },
+      {
+        "path": "experimental/AgentPath.ts",
+        "bytes": 185,
+        "sha256": "cabca56f2e5aaba035115f39b9bf021d8896eb544bb128b7f4a5ec8a8314ebbb"
+      },
+      {
+        "path": "experimental/CollaborationMode.ts",
+        "bytes": 371,
+        "sha256": "992b9e993c789a4782db759a2ca30cc53176d9edb1846ac5bb64350e3b755959"
+      },
+      {
+        "path": "experimental/ContentItem.ts",
+        "bytes": 434,
+        "sha256": "961d331e8e8947766c644348f9ed2822769af6137c8cbb7d7f49b87c4c6ae35c"
+      },
+      {
+        "path": "experimental/FunctionCallOutputBody.ts",
+        "bytes": 326,
+        "sha256": "873af82f0a4b81454a934ed7413257b734bf9f907fa4ad6183c0337c0216dfcf"
+      },
+      {
+        "path": "experimental/FunctionCallOutputContentItem.ts",
+        "bytes": 645,
+        "sha256": "bb7b83b66d7a17c839b65914941ec3b0dc33917343155c28bb48781b132370c8"
+      },
+      {
+        "path": "experimental/ImageDetail.ts",
+        "bytes": 217,
+        "sha256": "cf2036b2af8a0e42de8934caec9cebe36169d5e86aeb5504a2ebc859596e4414"
+      },
+      {
+        "path": "experimental/ImageGenerationFailure.ts",
+        "bytes": 267,
+        "sha256": "55c9800942e70ba048a32073a79f56e66723ebe67141f0ab2ecc94f62bb3ab3e"
+      },
+      {
+        "path": "experimental/ImageGenerationItem.ts",
+        "bytes": 504,
+        "sha256": "33e398250ecba5e297ec1141dedf7d4c43450351cfd8095a4322370345745d08"
+      },
+      {
+        "path": "experimental/InternalChatMessageMetadataPassthrough.ts",
+        "bytes": 477,
+        "sha256": "bb121b63a0540198ac6e87221d3f9ed399a0bee1bc5649b00cd870b11737265a"
+      },
+      {
+        "path": "experimental/LegacyAppPathString.ts",
+        "bytes": 1373,
+        "sha256": "74517cf53c55fa2086b7a0c364efcc3a90804ca118d0c679f244bdd682bd6632"
+      },
+      {
+        "path": "experimental/LocalShellAction.ts",
+        "bytes": 298,
+        "sha256": "89b97a83daed13df04c66e1e8cd91cd2509ef2aca760b89b6abd3e1377a3b4d2"
+      },
+      {
+        "path": "experimental/LocalShellExecAction.ts",
+        "bytes": 341,
+        "sha256": "7f579ad71d9ac2ecfc94bea32e05d229b4d653eb0fb5491afc7a53ccaaaf8672"
+      },
+      {
+        "path": "experimental/LocalShellStatus.ts",
+        "bytes": 228,
+        "sha256": "8b302c2b183668ed0f67a753befb4aaa2c998d316cc5ff7be4ca442cd5a4c741"
+      },
+      {
+        "path": "experimental/MessagePhase.ts",
+        "bytes": 447,
+        "sha256": "9b9cac40f1eb1d9c9c387b90fd9f87873727e010f46e478230aff17fd3ec460c"
+      },
+      {
+        "path": "experimental/ModeKind.ts",
+        "bytes": 262,
+        "sha256": "c1ed359d44cf4e71cf2293e18e4ea11a43f833d404d9e643d6f3b3eaac8974f8"
+      },
+      {
+        "path": "experimental/MultiAgentMode.ts",
+        "bytes": 416,
+        "sha256": "08d4263debb8fa07f316cff2edbfafe4c4e995e0d5b4d53e8ffacf4743c4bbc7"
+      },
+      {
+        "path": "experimental/Personality.ts",
+        "bytes": 214,
+        "sha256": "51eee5332b3af52cce2117922688523e90808390eec477434d9a089b36a21163"
+      },
+      {
+        "path": "experimental/ReasoningEffort.ts",
+        "bytes": 302,
+        "sha256": "a29212fd92094fc023f5d8727412325c60b05dfb429a1e6291b60ceba1eb1743"
+      },
+      {
+        "path": "experimental/ReasoningItemContent.ts",
+        "bytes": 269,
+        "sha256": "7bb310c4c20b21d199304e7b64ba673c32288eec39a7390ca0f8a10c3f6aa301"
+      },
+      {
+        "path": "experimental/ReasoningItemReasoningSummary.ts",
+        "bytes": 240,
+        "sha256": "f5f7508ac48eecd43029e87714aa23db8d5f629e0626216aa0ed2239f1aac1ce"
+      },
+      {
+        "path": "experimental/ReasoningSummary.ts",
+        "bytes": 469,
+        "sha256": "1d56c8b72bf6806438e612e1a14a567ceab91be91a4bcb0ca192f898fe0bf9bc"
+      },
+      {
+        "path": "experimental/ResponseItem.ts",
+        "bytes": 4076,
+        "sha256": "c8eddcd3951c3855b24294a8c128c49ef23e0022388c4dbda7e3fc6859b184da"
+      },
+      {
+        "path": "experimental/ResponseItemId.ts",
+        "bytes": 338,
+        "sha256": "f8e24ad21e75539aa220444678f1ce6cd1334b799fd102331717af083b3c4ef2"
+      },
+      {
+        "path": "experimental/Settings.ts",
+        "bytes": 384,
+        "sha256": "30cd2fb6783f437df153911ae23bde8af7c137dfc69dd95f7946d7a5077ef044"
+      },
+      {
+        "path": "experimental/SleepItem.ts",
+        "bytes": 287,
+        "sha256": "a6b65ce2d5cbc15c7c261640deea953f2216198617e828584e85e5ee3c0e223a"
+      },
+      {
+        "path": "experimental/SubAgentSource.ts",
+        "bytes": 504,
+        "sha256": "ccb19145f1364882675026f9a0cd26dc823dab3498c1543ff5f5b54a55ed596f"
+      },
+      {
+        "path": "experimental/ThreadId.ts",
+        "bytes": 304,
+        "sha256": "7ffbbefebc5e49a3215dacf4639d4fdd79c5577f9cebdf46760bdfa7312a1109"
+      },
+      {
+        "path": "experimental/WebSearchAction.ts",
+        "bytes": 372,
+        "sha256": "dd495f13fb38ec0fb4d5746a2b706e7890c60795e3e768cb1f640109fd0e0b07"
+      },
+      {
+        "path": "experimental/WebSearchItem.ts",
+        "bytes": 639,
+        "sha256": "2eb21c6c69865f9778c84a1db8c1d32f038a4ca99ee4218377cc9ffea868e101"
+      },
+      {
+        "path": "experimental/serde_json/JsonValue.ts",
+        "bytes": 264,
+        "sha256": "8697aaaa4cbe8f91492fe36dc545cc53a26e53143371c22c08385969d4e3cc61"
+      },
+      {
+        "path": "experimental/v2/ActivePermissionProfile.ts",
+        "bytes": 500,
+        "sha256": "9d137fa5e3cdbd3392e9a6d373b45e50f2f2643662a735ac90c6f1103e0f97a7"
+      },
+      {
+        "path": "experimental/v2/AdditionalFileSystemPermissions.ts",
+        "bytes": 610,
+        "sha256": "c9b276f5a2d085f3bbed31a35eac49485eb6f63688f1ac0380f51f9ef7cbb62d"
+      },
+      {
+        "path": "experimental/v2/AdditionalNetworkPermissions.ts",
+        "bytes": 226,
+        "sha256": "7b1a37a73699dfea562f7b4cc1b71cffa8f42371b11248dc7ff7582c0f8e3f94"
+      },
+      {
+        "path": "experimental/v2/AdditionalPermissionProfile.ts",
+        "bytes": 547,
+        "sha256": "bbd84b81546605865a13b211f99036f11394286f4e562a811cf67e607b589eeb"
+      },
+      {
+        "path": "experimental/v2/AgentMessageDelivery.ts",
+        "bytes": 197,
+        "sha256": "2fa497987aab791b697c9dee5cdd634ec566bf0b82cd56b5a796f26241a95957"
+      },
+      {
+        "path": "experimental/v2/ApprovalsReviewer.ts",
+        "bytes": 593,
+        "sha256": "0ba0d2403a6987128af58e825fb0d0e05d61891ce5a35e7ba1f94afe51a57630"
+      },
+      {
+        "path": "experimental/v2/AskForApproval.ts",
+        "bytes": 367,
+        "sha256": "81dd17defd9a7fd4785346d3ce54c14243353b43174c7417827210cbd3ef3c52"
+      },
+      {
+        "path": "experimental/v2/AsyncUserInputQuestion.ts",
+        "bytes": 241,
+        "sha256": "5487c76860dfb8aca91c318c1b7da4381dbd10423a4bcec8e8345c21b746bf95"
+      },
+      {
+        "path": "experimental/v2/ByteRange.ts",
+        "bytes": 210,
+        "sha256": "dd61c4b71554053feaecec39f41015a5db3869b28b19b7c9a85ee73f3502a4e4"
+      },
+      {
+        "path": "experimental/v2/CapabilityRootLocation.ts",
+        "bytes": 386,
+        "sha256": "e878b98b335a089fbbb0de774ed6e0f3caf2e9a2a8c1a4aacebbf0c1f335b6a4"
+      },
+      {
+        "path": "experimental/v2/CodexErrorInfo.ts",
+        "bytes": 1152,
+        "sha256": "9b8a616db7c38c96bba5b3ee4717b91570d8159e3b38dbc3094f72803c143b19"
+      },
+      {
+        "path": "experimental/v2/CollabAgentState.ts",
+        "bytes": 305,
+        "sha256": "e7eebb2f64af317a9b2ddab73ea848b69b88a79c82ec388b91230413a9865bed"
+      },
+      {
+        "path": "experimental/v2/CollabAgentStatus.ts",
+        "bytes": 280,
+        "sha256": "0ec81079c0ca4737c448fc415250fc9c93d1385e7aafbc468226cf9ecabe8630"
+      },
+      {
+        "path": "experimental/v2/CollabAgentTool.ts",
+        "bytes": 318,
+        "sha256": "f862671cb8716d09835d7190cb9fabb4f0701ee3b3728503cd38773b0187978b"
+      },
+      {
+        "path": "experimental/v2/CollabAgentToolCallStatus.ts",
+        "bytes": 248,
+        "sha256": "3909932a15d459bc5574f598d272f7b19556c930e4852a09f8b28098b38e7821"
+      },
+      {
+        "path": "experimental/v2/CommandAction.ts",
+        "bytes": 521,
+        "sha256": "4b6ba412a985207fb48ae4fcc79e79b374a4a2f0e80a3934e18b1516bafa604b"
+      },
+      {
+        "path": "experimental/v2/CommandExecutionApprovalDecision.ts",
+        "bytes": 575,
+        "sha256": "0542cc4381533875bb4428f5a96bdb566a44a28a75323d49d251a6a969a7de9d"
+      },
+      {
+        "path": "experimental/v2/CommandExecutionApprovalKind.ts",
+        "bytes": 307,
+        "sha256": "16f398d31bf73bf7ca9e8694701fd9d2f5d745f6cde8032b81d4c1bfb43d12b6"
+      },
+      {
+        "path": "experimental/v2/CommandExecutionRequestApprovalParams.ts",
+        "bytes": 2688,
+        "sha256": "51fb49da1bc2dd44318aa59126c899313c35ed57f43b83fb3acd05647f129129"
+      },
+      {
+        "path": "experimental/v2/CommandExecutionRequestApprovalResponse.ts",
+        "bytes": 351,
+        "sha256": "adeb00ed275078257b4a21798d0fb011319cc85fea26002b179f6f42207ab704"
+      },
+      {
+        "path": "experimental/v2/CommandExecutionSource.ts",
+        "bytes": 263,
+        "sha256": "f915112d4ef81b80d65ab1c5c106fa7e46f24ee2d7969f752abda1c786e53327"
+      },
+      {
+        "path": "experimental/v2/CommandExecutionStatus.ts",
+        "bytes": 242,
+        "sha256": "8e0e8aa0a3f4caeaa32f2ac2aa62d2e9737004f5ab33f5f37e2dfe114d4e3301"
+      },
+      {
+        "path": "experimental/v2/DynamicToolCallOutputContentItem.ts",
+        "bytes": 332,
+        "sha256": "9eebff80cb251a368d772ff75313de20d23dfef0ed6dc7f61630da9040b7e425"
+      },
+      {
+        "path": "experimental/v2/DynamicToolCallStatus.ts",
+        "bytes": 228,
+        "sha256": "b5502e1c25b51fdad7404eed25f9ab40d9eb9b130c61c4da2134cfbdc0c4c0f5"
+      },
+      {
+        "path": "experimental/v2/DynamicToolFunctionSpec.ts",
+        "bytes": 340,
+        "sha256": "00c8f8343e44f497a143d86254cabcdf29c5826d22405fb37ed0fab038c1c795"
+      },
+      {
+        "path": "experimental/v2/DynamicToolNamespaceSpec.ts",
+        "bytes": 351,
+        "sha256": "74f35869fface907e5126bb166c77201c31ea9232e6fb6f94009c76bfc145d74"
+      },
+      {
+        "path": "experimental/v2/DynamicToolNamespaceTool.ts",
+        "bytes": 319,
+        "sha256": "ed2102d70c01aa04eaddc497c25d34804659885641ef199fc259babfc9abc6f2"
+      },
+      {
+        "path": "experimental/v2/DynamicToolSpec.ts",
+        "bytes": 442,
+        "sha256": "443fc38ce5d9c54fbc242cab7adb2015a07e0f68db3abae75c25695e8896d249"
+      },
+      {
+        "path": "experimental/v2/ExecPolicyAmendment.ts",
+        "bytes": 202,
+        "sha256": "eae3c3f9c81a40ffffe5de29e274b322db8200591ba39306daa27794a2deffa0"
+      },
+      {
+        "path": "experimental/v2/FileSystemAccessMode.ts",
+        "bytes": 215,
+        "sha256": "36689572cd7c9e23ec2fa01912b8ca2abd331608dfd89b691b87351b5e520389"
+      },
+      {
+        "path": "experimental/v2/FileSystemPath.ts",
+        "bytes": 475,
+        "sha256": "2af5d9c4b0de4ed7ffc3ca8bb22d418bccc68b46d4c7b1f87adec8eda6fef1e6"
+      },
+      {
+        "path": "experimental/v2/FileSystemSandboxEntry.ts",
+        "bytes": 377,
+        "sha256": "b1c4a6c6c3a588e14af48306c5e8678afd287cbff19647d5c3481d21a37e7f15"
+      },
+      {
+        "path": "experimental/v2/FileSystemSpecialPath.ts",
+        "bytes": 496,
+        "sha256": "a10a4420d463a7222b5670b22149626e38cb8d7e3235f6865517b0412a426da1"
+      },
+      {
+        "path": "experimental/v2/FileUpdateChange.ts",
+        "bytes": 301,
+        "sha256": "44d26d479756b731f76537a7a291f99d9ceba59fae0916d86025990f22279a9d"
+      },
+      {
+        "path": "experimental/v2/GitInfo.ts",
+        "bytes": 249,
+        "sha256": "ae05c1fdc69bba0d6aea22f2f7a8e2f7c5b494330d6827cfac9ec9a9cc290269"
+      },
+      {
+        "path": "experimental/v2/HookPromptFragment.ts",
+        "bytes": 224,
+        "sha256": "391260c67d7fbd0aaf3f641c3764892f655871047085df45048057066db1d0ea"
+      },
+      {
+        "path": "experimental/v2/McpToolCallAppContext.ts",
+        "bytes": 317,
+        "sha256": "5de0ef0ec8a5b74b51421f43012bb0a69dbaebbe7a5604c592336f94ad01c279"
+      },
+      {
+        "path": "experimental/v2/McpToolCallError.ts",
+        "bytes": 206,
+        "sha256": "639a626f2b8932812fd0c94c027b35aea0dd8fad18bcc720d690ef5f824d2c75"
+      },
+      {
+        "path": "experimental/v2/McpToolCallResult.ts",
+        "bytes": 340,
+        "sha256": "763ac90c9aa5cb4fb0245b277bfa2fb8a0d168a05c8105381066dce08cc8dc14"
+      },
+      {
+        "path": "experimental/v2/McpToolCallStatus.ts",
+        "bytes": 224,
+        "sha256": "cd64f4dbfbeccfd1c5a5c5982ccddd803b6ea1a909c8756e0b9274bbf34e515c"
+      },
+      {
+        "path": "experimental/v2/MemoryCitation.ts",
+        "bytes": 319,
+        "sha256": "5577ad2090862aa0ca047aa483f7e8545e316ac319725055b9d3f01b34892a45"
+      },
+      {
+        "path": "experimental/v2/MemoryCitationEntry.ts",
+        "bytes": 256,
+        "sha256": "b0a7a2a637e64c04df5da35880065941f0a3d033ebb220d67b1766e72cb4b18c"
+      },
+      {
+        "path": "experimental/v2/MisalignmentErrorDetails.ts",
+        "bytes": 628,
+        "sha256": "8f4827ad9912091231c0edace4d825ed89e22a1ac7124901fe5e1bb85f142b7c"
+      },
+      {
+        "path": "experimental/v2/MisalignmentSteer.ts",
+        "bytes": 207,
+        "sha256": "4f3eb00040e49c4e7a38d6f6115c1c1d0c00e40dbb6a12430a1dd1dc7ea3bb22"
+      },
+      {
+        "path": "experimental/v2/NetworkAccess.ts",
+        "bytes": 207,
+        "sha256": "3622aa2cccf2a1835cd561d97187db75eba8cc379c03e56b5d1c91ab901da9dc"
+      },
+      {
+        "path": "experimental/v2/NetworkApprovalContext.ts",
+        "bytes": 321,
+        "sha256": "e23801c4971d9804b946800f916e7623bd07c4db84b685e50a25331c01717ce7"
+      },
+      {
+        "path": "experimental/v2/NetworkApprovalProtocol.ts",
+        "bytes": 237,
+        "sha256": "50489d7ee01bb75b2ad453e2f976e8b92a3334a973637c0c36ccd1c547a0d894"
+      },
+      {
+        "path": "experimental/v2/NetworkPolicyAmendment.ts",
+        "bytes": 319,
+        "sha256": "b9a041d58792738cf5862f41cffca8f6098a8adf8f1c4f8c0bc99883b5ec5685"
+      },
+      {
+        "path": "experimental/v2/NetworkPolicyRuleAction.ts",
+        "bytes": 209,
+        "sha256": "8d6d5aa29ce47bdaec03eedc56543629344b9a424a293258116f44a212b507fc"
+      },
+      {
+        "path": "experimental/v2/NonSteerableTurnKind.ts",
+        "bytes": 210,
+        "sha256": "94d47f993e7c00ca78c5c2b28d71fab767ce59ff8da60c4458bffff08755e863"
+      },
+      {
+        "path": "experimental/v2/PatchApplyStatus.ts",
+        "bytes": 236,
+        "sha256": "b2a140e4b5f2de8f051bf5c52ce2cf975987180253b29287d64fd52715bca192"
+      },
+      {
+        "path": "experimental/v2/PatchChangeKind.ts",
+        "bytes": 275,
+        "sha256": "20e95907d698efbef2fa9d9ab00392b10caf127dfc5e0df1ba9878ad6f42531d"
+      },
+      {
+        "path": "experimental/v2/SandboxMode.ts",
+        "bytes": 235,
+        "sha256": "8a59381e04efa84f9001e5c24444ee26fccf8f9e10bcfb02d2f6a24e85898843"
+      },
+      {
+        "path": "experimental/v2/SandboxPolicy.ts",
+        "bytes": 596,
+        "sha256": "98a67b2337f9a579a352ba8e4ae65f3cb6cfe8fae0c4b7fc8bdfd1cb142c0616"
+      },
+      {
+        "path": "experimental/v2/SelectedCapabilityRoot.ts",
+        "bytes": 526,
+        "sha256": "d11d4853deb95439cddfd92f4764f098e8f410327b85fdc1ec717b9bf1ab560c"
+      },
+      {
+        "path": "experimental/v2/SessionSource.ts",
+        "bytes": 350,
+        "sha256": "ff49430ecbf188b2874d124d51d87f7f6c2bdd38dec313cd4620b62dec122a26"
+      },
+      {
+        "path": "experimental/v2/SortDirection.ts",
+        "bytes": 197,
+        "sha256": "9ad2278213c1d99366e0ac2ecf6cbc069f9cf1090aafd4e71462a3945c14638a"
+      },
+      {
+        "path": "experimental/v2/SubAgentActivityKind.ts",
+        "bytes": 244,
+        "sha256": "01aa0e764bdc6fa0e527d16626334ad790bc9b0766241d49af900e3fe681d883"
+      },
+      {
+        "path": "experimental/v2/TextElement.ts",
+        "bytes": 446,
+        "sha256": "22aaef8159d2f09af4d6dc54e58441999a5b3596c0916c698074242d24b12e6b"
+      },
+      {
+        "path": "experimental/v2/Thread.ts",
+        "bytes": 4007,
+        "sha256": "0f7d530d129159da1f2fe0b5d94a8ec83d5fed833f13e15e6c2ae260c66929cc"
+      },
+      {
+        "path": "experimental/v2/ThreadActiveFlag.ts",
+        "bytes": 228,
+        "sha256": "0e17998362c085d594478d3fac2a330e89ab49669f8481e9f4791272932e3cfd"
+      },
+      {
+        "path": "experimental/v2/ThreadExtra.ts",
+        "bytes": 249,
+        "sha256": "a3cc4a191f45ea6edb454339c35b2860c76b92466a4bbe166942fa834fed94a0"
+      },
+      {
+        "path": "experimental/v2/ThreadForkParams.ts",
+        "bytes": 3006,
+        "sha256": "81ff033ff6e9082b3a3c076660bfe03ec29d2570eddd5f485fe48ffa23c23e6f"
+      },
+      {
+        "path": "experimental/v2/ThreadForkResponse.ts",
+        "bytes": 1775,
+        "sha256": "ab87c16eaa27d887be7ff863a78ed3f283df74a345a8de8d49a90cf14a6ef05b"
+      },
+      {
+        "path": "experimental/v2/ThreadHistoryMode.ts",
+        "bytes": 209,
+        "sha256": "d04b0642316299374bf7075f68d1faee8f503bb568983075f955ce939a4b6add"
+      },
+      {
+        "path": "experimental/v2/ThreadItem.ts",
+        "bytes": 6076,
+        "sha256": "96a702bdd1f86f6a9ad688ed3e6a68ba7050b72822400e4be3a63b101b4ce3c0"
+      },
+      {
+        "path": "experimental/v2/ThreadListParams.ts",
+        "bytes": 2456,
+        "sha256": "11e090b2326a4ae9afcf6b775be49e4016faf5e996f6b0845bb2f9f4cc12c040"
+      },
+      {
+        "path": "experimental/v2/ThreadListResponse.ts",
+        "bytes": 745,
+        "sha256": "96da970ec670fe8f25aece32f753923c4c637e2f99fea1cd4534978c7a85c33e"
+      },
+      {
+        "path": "experimental/v2/ThreadReadParams.ts",
+        "bytes": 461,
+        "sha256": "c24743cb5655b4c71a853a2a290412d78e1a27e0278f2a0cde9bd9d9b78118a8"
+      },
+      {
+        "path": "experimental/v2/ThreadReadResponse.ts",
+        "bytes": 250,
+        "sha256": "28abb9f1643172f34156eca039862f485e2530dc2f879bccf80810372ee947c4"
+      },
+      {
+        "path": "experimental/v2/ThreadResumeInitialTurnsPageParams.ts",
+        "bytes": 611,
+        "sha256": "85bb8b5683f57668f0a4be124919b62738a0c67a36477a6f6dcaaa24a5bf5c70"
+      },
+      {
+        "path": "experimental/v2/ThreadResumeParams.ts",
+        "bytes": 3270,
+        "sha256": "265022cef103bcfc10cf79ed9002ae26be163e03e6a5f4008992160e279b57c0"
+      },
+      {
+        "path": "experimental/v2/ThreadResumeResponse.ts",
+        "bytes": 2437,
+        "sha256": "92556d503958c6a749a3ba8163389f8a06810ceaf749022459a61cd6db10bed3"
+      },
+      {
+        "path": "experimental/v2/ThreadSection.ts",
+        "bytes": 594,
+        "sha256": "aac3ccfa2c5420d1b9f8a56d6008b23369ee5790d91bdfecff0c7d52d9bb7f3c"
+      },
+      {
+        "path": "experimental/v2/ThreadSectionAppearance.ts",
+        "bytes": 310,
+        "sha256": "e56160b23e50b1019b41e8d69c55d7a910fecd9a41f60e4657e49ea06a557827"
+      },
+      {
+        "path": "experimental/v2/ThreadSettings.ts",
+        "bytes": 1313,
+        "sha256": "3cb77672d83c02765e98b732b63fa92c2ca040ef762268a2187e9e1362dda9fb"
+      },
+      {
+        "path": "experimental/v2/ThreadSettingsUpdateParams.ts",
+        "bytes": 2179,
+        "sha256": "cfc5dc1d275850b01e57d8c6dc5ce3d3a9dd5f0c67c5e4204e59e0ad3cdacfae"
+      },
+      {
+        "path": "experimental/v2/ThreadSettingsUpdateResponse.ts",
+        "bytes": 219,
+        "sha256": "62d65fc29ec4c4e11ce1a37fa152a8aea4fa69afc1c89f87b8495302d8345c6e"
+      },
+      {
+        "path": "experimental/v2/ThreadSettingsUpdatedNotification.ts",
+        "bytes": 315,
+        "sha256": "c6a46be588e94c51ffa82cddac1ac861636e09def2257bc02d821bbaee0896c8"
+      },
+      {
+        "path": "experimental/v2/ThreadSortKey.ts",
+        "bytes": 246,
+        "sha256": "0b85156c3956d4c86c13c60e72fa7bc160936082a057903d9906e651a050670c"
+      },
+      {
+        "path": "experimental/v2/ThreadSource.ts",
+        "bytes": 188,
+        "sha256": "d850342355769c7de914d16fb2e555056c30d46dd1a407ad1702b210244b58c4"
+      },
+      {
+        "path": "experimental/v2/ThreadSourceKind.ts",
+        "bytes": 331,
+        "sha256": "0ca0f7faf4ebc35bc89967d666a904329b958167c6ca9d9099ce1aa500de4ac9"
+      },
+      {
+        "path": "experimental/v2/ThreadStartParams.ts",
+        "bytes": 3434,
+        "sha256": "406489199daf5e856266591eb7bd0c95691bd3915108db46783feb96904dcc6a"
+      },
+      {
+        "path": "experimental/v2/ThreadStartResponse.ts",
+        "bytes": 1776,
+        "sha256": "a82c99a18c79e41afdf9650421d890dc0a790d5d825f593f6a61782da5f1d57a"
+      },
+      {
+        "path": "experimental/v2/ThreadStartSource.ts",
+        "bytes": 206,
+        "sha256": "7352677b98e02cd1bd82e764582a818f3f59574842444f13e61656261cfa2ea2"
+      },
+      {
+        "path": "experimental/v2/ThreadStartedNotification.ts",
+        "bytes": 257,
+        "sha256": "328262a5a3b06f08312f7378a2d701d92af6275f79577eb77dece9141eb34dc3"
+      },
+      {
+        "path": "experimental/v2/ThreadStatus.ts",
+        "bytes": 379,
+        "sha256": "f47e1a803675acc8f52aa0cce5c3a461c4268f33367fedf1a5c04ac97b30dbd9"
+      },
+      {
+        "path": "experimental/v2/Turn.ts",
+        "bytes": 1053,
+        "sha256": "acaea8712132b044c5c51dc67f779a3a3041ff0cd466b205cd672f97dfca7fe7"
+      },
+      {
+        "path": "experimental/v2/TurnEnvironmentParams.ts",
+        "bytes": 454,
+        "sha256": "f0a1377577c00af50c29928a79493180b08293a11d8018b8736e7a16bfb3e96b"
+      },
+      {
+        "path": "experimental/v2/TurnError.ts",
+        "bytes": 551,
+        "sha256": "0c285797a0fdb9b4533943aec30b39c2163206ea48b20d6994585eb4e606a4ce"
+      },
+      {
+        "path": "experimental/v2/TurnItemsView.ts",
+        "bytes": 215,
+        "sha256": "df5e5fd79e6c28ff89e5e201c761535d7988fbaa9caa5fc6bf71f655f353668c"
+      },
+      {
+        "path": "experimental/v2/TurnStatus.ts",
+        "bytes": 233,
+        "sha256": "c69049363f97e97844e9fc851f0cd4122da057ba1371de003a28c00ab7a6ef1a"
+      },
+      {
+        "path": "experimental/v2/TurnsPage.ts",
+        "bytes": 299,
+        "sha256": "b6286674349388156e6f9ce82602474a7319bb51886a87b3842815650be64993"
+      },
+      {
+        "path": "experimental/v2/UserInput.ts",
+        "bytes": 744,
+        "sha256": "eaaa351ea1c3bb9b34c7c830f41ee4af24f22fa09dfff45ce9c8edf10220212c"
+      },
+      {
+        "path": "experimental/v2/WebSearchAction.ts",
+        "bytes": 399,
+        "sha256": "f1dc1197e35b48fd16134a80353ebb606256126a634b4580406a5bffed1b0395"
+      },
+      {
+        "path": "route-registry.ts",
+        "bytes": 52728,
+        "sha256": "a2b6c1e5fb1222378928751e0dfa4f6c345d28370214ffdc8a44307682a2db6a"
+      },
+      {
+        "path": "stable/AbsolutePathBuf.ts",
+        "bytes": 575,
+        "sha256": "a79d31d5e8f24c58c8cce2633e5e4fc5b0bb88d1c44c69e7ce7d0dc7c1252272"
+      },
+      {
+        "path": "stable/AgentMessageInputContent.ts",
+        "bytes": 295,
+        "sha256": "b1383afc5e1daa28c7c0fa4bdf808d272c79b85291ccdc21afa9502a4ce36688"
+      },
+      {
+        "path": "stable/AgentPath.ts",
+        "bytes": 185,
+        "sha256": "cabca56f2e5aaba035115f39b9bf021d8896eb544bb128b7f4a5ec8a8314ebbb"
+      },
+      {
+        "path": "stable/ApplyPatchApprovalParams.ts",
+        "bytes": 807,
+        "sha256": "0fd7d1d6d50a5ff28d1a9632351dee1be5a0d4e518aff1e0655c358198ebda4f"
+      },
+      {
+        "path": "stable/ApplyPatchApprovalResponse.ts",
+        "bytes": 284,
+        "sha256": "7f00e1d86374184f498190220b8abff62cd1c379615abc905738ef03213da411"
+      },
+      {
+        "path": "stable/AuthMode.ts",
+        "bytes": 374,
+        "sha256": "5fcda8060669f953725deceb720a63ae0bdee4065ae5e18a9c8c08c4b870a94c"
+      },
+      {
+        "path": "stable/ClientInfo.ts",
+        "bytes": 236,
+        "sha256": "c3f38c70ffff810867af87a536d915dadea9e4b547343611c4e14731bcb7c648"
+      },
+      {
+        "path": "stable/ClientNotification.ts",
+        "bytes": 215,
+        "sha256": "96692c191ff9ac32c2688b46a0a04f23d15646937adc352f2adcc8211c6d17a0"
+      },
+      {
+        "path": "stable/CollaborationMode.ts",
+        "bytes": 371,
+        "sha256": "992b9e993c789a4782db759a2ca30cc53176d9edb1846ac5bb64350e3b755959"
+      },
+      {
+        "path": "stable/ContentItem.ts",
+        "bytes": 434,
+        "sha256": "961d331e8e8947766c644348f9ed2822769af6137c8cbb7d7f49b87c4c6ae35c"
+      },
+      {
+        "path": "stable/ExecCommandApprovalParams.ts",
+        "bytes": 667,
+        "sha256": "17245f63598d001d7abc1ff338c6f206036c2c88ac1d9110d3493c7b96b31456"
+      },
+      {
+        "path": "stable/ExecCommandApprovalResponse.ts",
+        "bytes": 285,
+        "sha256": "7a18a2fcc91b89453840475bfe9563849670859e2d4d271d3e28584777091fc7"
+      },
+      {
+        "path": "stable/ExecPolicyAmendment.ts",
+        "bytes": 493,
+        "sha256": "6c03481f0980691f87b10281f1e926c969e567a76c51d426b3d1161cd4f7eb43"
+      },
+      {
+        "path": "stable/FileChange.ts",
+        "bytes": 328,
+        "sha256": "831feada4d69f7049a174ff7abdd49797b4a2a28ba2a2167f44f1aa17b6f3520"
+      },
+      {
+        "path": "stable/FunctionCallOutputBody.ts",
+        "bytes": 326,
+        "sha256": "873af82f0a4b81454a934ed7413257b734bf9f907fa4ad6183c0337c0216dfcf"
+      },
+      {
+        "path": "stable/FunctionCallOutputContentItem.ts",
+        "bytes": 645,
+        "sha256": "bb7b83b66d7a17c839b65914941ec3b0dc33917343155c28bb48781b132370c8"
+      },
+      {
+        "path": "stable/FuzzyFileSearchMatchType.ts",
+        "bytes": 214,
+        "sha256": "804ecff87fb7c1b3bd19398be8ab5e8ac422dff049f461875369fada3d27782f"
+      },
+      {
+        "path": "stable/FuzzyFileSearchResult.ts",
+        "bytes": 460,
+        "sha256": "259ed6886856424adf4481c3f0cf2e7959e6dcf10fc8119e306d1a23f479f20e"
+      },
+      {
+        "path": "stable/FuzzyFileSearchSessionCompletedNotification.ts",
+        "bytes": 235,
+        "sha256": "4670c3dd4046ebb5bc7567c9e78fe577165d538da5cd9342af6ed8caff8364d7"
+      },
+      {
+        "path": "stable/FuzzyFileSearchSessionUpdatedNotification.ts",
+        "bytes": 358,
+        "sha256": "522d36553364e5c5994d82588b50460621178ad4971ad8b049556658e7efacc1"
+      },
+      {
+        "path": "stable/ImageDetail.ts",
+        "bytes": 217,
+        "sha256": "cf2036b2af8a0e42de8934caec9cebe36169d5e86aeb5504a2ebc859596e4414"
+      },
+      {
+        "path": "stable/ImageGenerationFailure.ts",
+        "bytes": 267,
+        "sha256": "55c9800942e70ba048a32073a79f56e66723ebe67141f0ab2ecc94f62bb3ab3e"
+      },
+      {
+        "path": "stable/ImageGenerationItem.ts",
+        "bytes": 504,
+        "sha256": "33e398250ecba5e297ec1141dedf7d4c43450351cfd8095a4322370345745d08"
+      },
+      {
+        "path": "stable/InitializeCapabilities.ts",
+        "bytes": 1005,
+        "sha256": "0364a2a494d26d1aba0d2f8ce8b7ef2f167ef3fc21aa06976eec10137ab9bac3"
+      },
+      {
+        "path": "stable/InitializeParams.ts",
+        "bytes": 384,
+        "sha256": "ca8a88e48daad3563e222fbd14f8dacde34947f1b77d1853ed7dd7d06eae31ad"
+      },
+      {
+        "path": "stable/InitializeResponse.ts",
+        "bytes": 625,
+        "sha256": "86ff3b5c39977e4cf1dec10f0fa379ae100e7ff604159c1b6d493bdba946948d"
+      },
+      {
+        "path": "stable/InputModality.ts",
+        "bytes": 278,
+        "sha256": "549288aebc01097fb6983b41dbdeb53d010e3cd8dfed6e4b1d767e8adb10426a"
+      },
+      {
+        "path": "stable/InternalChatMessageMetadataPassthrough.ts",
+        "bytes": 477,
+        "sha256": "bb121b63a0540198ac6e87221d3f9ed399a0bee1bc5649b00cd870b11737265a"
+      },
+      {
+        "path": "stable/LegacyAppPathString.ts",
+        "bytes": 1373,
+        "sha256": "74517cf53c55fa2086b7a0c364efcc3a90804ca118d0c679f244bdd682bd6632"
+      },
+      {
+        "path": "stable/LocalShellAction.ts",
+        "bytes": 298,
+        "sha256": "89b97a83daed13df04c66e1e8cd91cd2509ef2aca760b89b6abd3e1377a3b4d2"
+      },
+      {
+        "path": "stable/LocalShellExecAction.ts",
+        "bytes": 341,
+        "sha256": "7f579ad71d9ac2ecfc94bea32e05d229b4d653eb0fb5491afc7a53ccaaaf8672"
+      },
+      {
+        "path": "stable/LocalShellStatus.ts",
+        "bytes": 228,
+        "sha256": "8b302c2b183668ed0f67a753befb4aaa2c998d316cc5ff7be4ca442cd5a4c741"
+      },
+      {
+        "path": "stable/MessagePhase.ts",
+        "bytes": 447,
+        "sha256": "9b9cac40f1eb1d9c9c387b90fd9f87873727e010f46e478230aff17fd3ec460c"
+      },
+      {
+        "path": "stable/ModeKind.ts",
+        "bytes": 262,
+        "sha256": "c1ed359d44cf4e71cf2293e18e4ea11a43f833d404d9e643d6f3b3eaac8974f8"
+      },
+      {
+        "path": "stable/NetworkPolicyAmendment.ts",
+        "bytes": 319,
+        "sha256": "b9a041d58792738cf5862f41cffca8f6098a8adf8f1c4f8c0bc99883b5ec5685"
+      },
+      {
+        "path": "stable/NetworkPolicyRuleAction.ts",
+        "bytes": 209,
+        "sha256": "8d6d5aa29ce47bdaec03eedc56543629344b9a424a293258116f44a212b507fc"
+      },
+      {
+        "path": "stable/ParsedCommand.ts",
+        "bytes": 671,
+        "sha256": "50403a9434aebd64915a808ecae82c93195ae1b5bae5432518802e6ad84dee92"
+      },
+      {
+        "path": "stable/Personality.ts",
+        "bytes": 214,
+        "sha256": "51eee5332b3af52cce2117922688523e90808390eec477434d9a089b36a21163"
+      },
+      {
+        "path": "stable/PlanType.ts",
+        "bytes": 441,
+        "sha256": "cc466a3091b69a53c1fdbd1540611ac3629313a806ae975a8b776bfde47480e7"
+      },
+      {
+        "path": "stable/RealtimeConversationVersion.ts",
+        "bytes": 215,
+        "sha256": "e62d85018cc1ff726c17eb5a465b38a755388c4964e85241ece29b43cafa843b"
+      },
+      {
+        "path": "stable/ReasoningEffort.ts",
+        "bytes": 302,
+        "sha256": "a29212fd92094fc023f5d8727412325c60b05dfb429a1e6291b60ceba1eb1743"
+      },
+      {
+        "path": "stable/ReasoningItemContent.ts",
+        "bytes": 269,
+        "sha256": "7bb310c4c20b21d199304e7b64ba673c32288eec39a7390ca0f8a10c3f6aa301"
+      },
+      {
+        "path": "stable/ReasoningItemReasoningSummary.ts",
+        "bytes": 240,
+        "sha256": "f5f7508ac48eecd43029e87714aa23db8d5f629e0626216aa0ed2239f1aac1ce"
+      },
+      {
+        "path": "stable/ReasoningSummary.ts",
+        "bytes": 469,
+        "sha256": "1d56c8b72bf6806438e612e1a14a567ceab91be91a4bcb0ca192f898fe0bf9bc"
+      },
+      {
+        "path": "stable/RequestId.ts",
+        "bytes": 194,
+        "sha256": "beeb38dfd0b050b171141bd66d51663786a50a81cbe904ba9b006289a101fd39"
+      },
+      {
+        "path": "stable/ResponseItem.ts",
+        "bytes": 4076,
+        "sha256": "c8eddcd3951c3855b24294a8c128c49ef23e0022388c4dbda7e3fc6859b184da"
+      },
+      {
+        "path": "stable/ResponseItemId.ts",
+        "bytes": 338,
+        "sha256": "f8e24ad21e75539aa220444678f1ce6cd1334b799fd102331717af083b3c4ef2"
+      },
+      {
+        "path": "stable/ReviewDecision.ts",
+        "bytes": 709,
+        "sha256": "54d2e02f4c3a81fc721aa2d498646f39caac0b8cc5ec05bc4277ea5c1d785d80"
+      },
+      {
+        "path": "stable/ServerNotification.ts",
+        "bytes": 15195,
+        "sha256": "b408febd1c05aaa1d5b3d03c85158de82e9d53de40bbb3ef91e8386df840fa7f"
+      },
+      {
+        "path": "stable/Settings.ts",
+        "bytes": 384,
+        "sha256": "30cd2fb6783f437df153911ae23bde8af7c137dfc69dd95f7946d7a5077ef044"
+      },
+      {
+        "path": "stable/SleepItem.ts",
+        "bytes": 287,
+        "sha256": "a6b65ce2d5cbc15c7c261640deea953f2216198617e828584e85e5ee3c0e223a"
+      },
+      {
+        "path": "stable/SubAgentSource.ts",
+        "bytes": 504,
+        "sha256": "ccb19145f1364882675026f9a0cd26dc823dab3498c1543ff5f5b54a55ed596f"
+      },
+      {
+        "path": "stable/ThreadId.ts",
+        "bytes": 304,
+        "sha256": "7ffbbefebc5e49a3215dacf4639d4fdd79c5577f9cebdf46760bdfa7312a1109"
+      },
+      {
+        "path": "stable/WebSearchAction.ts",
+        "bytes": 372,
+        "sha256": "dd495f13fb38ec0fb4d5746a2b706e7890c60795e3e768cb1f640109fd0e0b07"
+      },
+      {
+        "path": "stable/WebSearchItem.ts",
+        "bytes": 639,
+        "sha256": "2eb21c6c69865f9778c84a1db8c1d32f038a4ca99ee4218377cc9ffea868e101"
+      },
+      {
+        "path": "stable/serde_json/JsonValue.ts",
+        "bytes": 264,
+        "sha256": "8697aaaa4cbe8f91492fe36dc545cc53a26e53143371c22c08385969d4e3cc61"
+      },
+      {
+        "path": "stable/v2/AccountLoginCompletedNotification.ts",
+        "bytes": 413,
+        "sha256": "4b5c7b2784d6353221a839dc24f6e7bb3dec58c69d0c353f5e63cfb0e7a64c38"
+      },
+      {
+        "path": "stable/v2/AccountRateLimitsUpdatedNotification.ts",
+        "bytes": 595,
+        "sha256": "ea7a47306f2b05af6acdd61fc1edef7f4f13ea3fdf321750f7462ade1d7e74f1"
+      },
+      {
+        "path": "stable/v2/AccountUpdatedNotification.ts",
+        "bytes": 349,
+        "sha256": "5b86950f7ffd72d15f21a1f0ec7d6bed2ef1e7c420e03a9d0dffde5046196224"
+      },
+      {
+        "path": "stable/v2/ActivePermissionProfile.ts",
+        "bytes": 500,
+        "sha256": "9d137fa5e3cdbd3392e9a6d373b45e50f2f2643662a735ac90c6f1103e0f97a7"
+      },
+      {
+        "path": "stable/v2/AdditionalFileSystemPermissions.ts",
+        "bytes": 610,
+        "sha256": "c9b276f5a2d085f3bbed31a35eac49485eb6f63688f1ac0380f51f9ef7cbb62d"
+      },
+      {
+        "path": "stable/v2/AdditionalNetworkPermissions.ts",
+        "bytes": 226,
+        "sha256": "7b1a37a73699dfea562f7b4cc1b71cffa8f42371b11248dc7ff7582c0f8e3f94"
+      },
+      {
+        "path": "stable/v2/AgentMessageDelivery.ts",
+        "bytes": 197,
+        "sha256": "2fa497987aab791b697c9dee5cdd634ec566bf0b82cd56b5a796f26241a95957"
+      },
+      {
+        "path": "stable/v2/AgentMessageDeltaNotification.ts",
+        "bytes": 267,
+        "sha256": "bb538862f093bd22278bea3b3343037525a9218fbddef534e37e048347c10805"
+      },
+      {
+        "path": "stable/v2/AppBranding.ts",
+        "bytes": 414,
+        "sha256": "1eb1ff2f491854bfe5cb34299199f3fd83299d923e1eb1e2cb1c7d128ed29877"
+      },
+      {
+        "path": "stable/v2/AppInfo.ts",
+        "bytes": 931,
+        "sha256": "95f301b1698de62c18735910b854ad78d793793132a7e7e2c978d5db05f342f5"
+      },
+      {
+        "path": "stable/v2/AppListUpdatedNotification.ts",
+        "bytes": 340,
+        "sha256": "216c95ffcaafab6a7968552d300753e3d6be2fc90effad7f036539da7e53026e"
+      },
+      {
+        "path": "stable/v2/AppMetadata.ts",
+        "bytes": 652,
+        "sha256": "0b3fd802c477328d2dad62c4496d5328c2be008c978d9699311eff28dfa5868d"
+      },
+      {
+        "path": "stable/v2/AppReview.ts",
+        "bytes": 198,
+        "sha256": "767582bf5790544cff44374246f188074b4eaa02b2e252df6d11efae75d9e7ec"
+      },
+      {
+        "path": "stable/v2/AppScreenshot.ts",
+        "bytes": 249,
+        "sha256": "e0e4dc885793fd98f526ccf9df34cddb4fe6311b899026638c390f2efce21031"
+      },
+      {
+        "path": "stable/v2/ApprovalsReviewer.ts",
+        "bytes": 593,
+        "sha256": "0ba0d2403a6987128af58e825fb0d0e05d61891ce5a35e7ba1f94afe51a57630"
+      },
+      {
+        "path": "stable/v2/AskForApproval.ts",
+        "bytes": 367,
+        "sha256": "81dd17defd9a7fd4785346d3ce54c14243353b43174c7417827210cbd3ef3c52"
+      },
+      {
+        "path": "stable/v2/AsyncUserInputQuestion.ts",
+        "bytes": 241,
+        "sha256": "5487c76860dfb8aca91c318c1b7da4381dbd10423a4bcec8e8345c21b746bf95"
+      },
+      {
+        "path": "stable/v2/AttestationGenerateParams.ts",
+        "bytes": 216,
+        "sha256": "0383fa7e61783c6e93f1efe08dcfd2af961d01284b6c4730ad7d2cc8d30eaff1"
+      },
+      {
+        "path": "stable/v2/AttestationGenerateResponse.ts",
+        "bytes": 259,
+        "sha256": "a2b1c402473a9a2e469fa06d40b444054fe9fa1ca64c072f95e02710a5c34a7e"
+      },
+      {
+        "path": "stable/v2/AuthRecoveryNotification.ts",
+        "bytes": 266,
+        "sha256": "04150162b91aecbeb0248d8dd09ac27a87e5c0441c0aca30058058056592b750"
+      },
+      {
+        "path": "stable/v2/AutoReviewDecisionSource.ts",
+        "bytes": 286,
+        "sha256": "48c550df663534041f46a789478f539b06ffc66bab5ae19ebcada1a402283193"
+      },
+      {
+        "path": "stable/v2/ByteRange.ts",
+        "bytes": 210,
+        "sha256": "dd61c4b71554053feaecec39f41015a5db3869b28b19b7c9a85ee73f3502a4e4"
+      },
+      {
+        "path": "stable/v2/ChatgptAuthTokensRefreshParams.ts",
+        "bytes": 688,
+        "sha256": "84036623dfe6848c8946e8e45ef53bfbf98ef50a2126823bac17f707022f0627"
+      },
+      {
+        "path": "stable/v2/ChatgptAuthTokensRefreshReason.ts",
+        "bytes": 214,
+        "sha256": "52bd0b02848c809f48ba2bd2fb0babaffb4d9ca2e12974792125fc0f6774545f"
+      },
+      {
+        "path": "stable/v2/ChatgptAuthTokensRefreshResponse.ts",
+        "bytes": 284,
+        "sha256": "b7744dfdf2e62755d1153bd4c5217bb62283e9fd32143665317e44206bff6790"
+      },
+      {
+        "path": "stable/v2/CodexErrorInfo.ts",
+        "bytes": 1152,
+        "sha256": "9b8a616db7c38c96bba5b3ee4717b91570d8159e3b38dbc3094f72803c143b19"
+      },
+      {
+        "path": "stable/v2/CollabAgentState.ts",
+        "bytes": 305,
+        "sha256": "e7eebb2f64af317a9b2ddab73ea848b69b88a79c82ec388b91230413a9865bed"
+      },
+      {
+        "path": "stable/v2/CollabAgentStatus.ts",
+        "bytes": 280,
+        "sha256": "0ec81079c0ca4737c448fc415250fc9c93d1385e7aafbc468226cf9ecabe8630"
+      },
+      {
+        "path": "stable/v2/CollabAgentTool.ts",
+        "bytes": 318,
+        "sha256": "f862671cb8716d09835d7190cb9fabb4f0701ee3b3728503cd38773b0187978b"
+      },
+      {
+        "path": "stable/v2/CollabAgentToolCallStatus.ts",
+        "bytes": 248,
+        "sha256": "3909932a15d459bc5574f598d272f7b19556c930e4852a09f8b28098b38e7821"
+      },
+      {
+        "path": "stable/v2/CommandAction.ts",
+        "bytes": 521,
+        "sha256": "4b6ba412a985207fb48ae4fcc79e79b374a4a2f0e80a3934e18b1516bafa604b"
+      },
+      {
+        "path": "stable/v2/CommandExecOutputDeltaNotification.ts",
+        "bytes": 897,
+        "sha256": "9daa31b88311f89fcdb8244e95416a3eb21e5b55e0f72d6751afd7a00c37820a"
+      },
+      {
+        "path": "stable/v2/CommandExecOutputStream.ts",
+        "bytes": 282,
+        "sha256": "562ffe93ffc83651ca4f6e463df43618827040ac2c8572a2a6d6b16fbe972c99"
+      },
+      {
+        "path": "stable/v2/CommandExecutionOutputDeltaNotification.ts",
+        "bytes": 277,
+        "sha256": "20e015b65e534534a846bbe6ec74bdbfff7cde1401728d3f0f81127dd20a9f89"
+      },
+      {
+        "path": "stable/v2/CommandExecutionSource.ts",
+        "bytes": 263,
+        "sha256": "f915112d4ef81b80d65ab1c5c106fa7e46f24ee2d7969f752abda1c786e53327"
+      },
+      {
+        "path": "stable/v2/CommandExecutionStatus.ts",
+        "bytes": 242,
+        "sha256": "8e0e8aa0a3f4caeaa32f2ac2aa62d2e9737004f5ab33f5f37e2dfe114d4e3301"
+      },
+      {
+        "path": "stable/v2/ConfigWarningNotification.ts",
+        "bytes": 563,
+        "sha256": "206646fd5a9cc2f12bef78ed2a26b09390a176db2276a27facd97fa2d19b0a6b"
+      },
+      {
+        "path": "stable/v2/ContextCompactedNotification.ts",
+        "bytes": 301,
+        "sha256": "41b2b4b08e4dcd83a242a154750e54900dbad9755e195b1cc6e96e01d3f36dc2"
+      },
+      {
+        "path": "stable/v2/CreditsSnapshot.ts",
+        "bytes": 253,
+        "sha256": "e56bf82bc93959ed95748dc7363520d4cf477d9c7ac2b8e40e48c91b03c2575a"
+      },
+      {
+        "path": "stable/v2/DeprecationNoticeNotification.ts",
+        "bytes": 367,
+        "sha256": "ed1a7130647f416ff16b10570fb6896b164b38a5ddf337d9c1e44b12497a2610"
+      },
+      {
+        "path": "stable/v2/DesktopOnboardingEntrypoint.ts",
+        "bytes": 212,
+        "sha256": "6e34ad06e8a3a0181dd360650b114de30edd4509e072c8024de7832aaef62dd0"
+      },
+      {
+        "path": "stable/v2/DynamicToolCallOutputContentItem.ts",
+        "bytes": 332,
+        "sha256": "9eebff80cb251a368d772ff75313de20d23dfef0ed6dc7f61630da9040b7e425"
+      },
+      {
+        "path": "stable/v2/DynamicToolCallParams.ts",
+        "bytes": 367,
+        "sha256": "02c6a233480727d693d0d0250558dfe22b5e5efe6229508c75625feca41d493a"
+      },
+      {
+        "path": "stable/v2/DynamicToolCallResponse.ts",
+        "bytes": 364,
+        "sha256": "6eeccb1a70537c996a4a53349edff3cdb74b120678a7b339560c881dd20f19f8"
+      },
+      {
+        "path": "stable/v2/DynamicToolCallStatus.ts",
+        "bytes": 228,
+        "sha256": "b5502e1c25b51fdad7404eed25f9ab40d9eb9b130c61c4da2134cfbdc0c4c0f5"
+      },
+      {
+        "path": "stable/v2/EnvironmentConnectionNotification.ts",
+        "bytes": 247,
+        "sha256": "2e7e40e2cb050e9ab8cfe059046dff093a68bddb68cd421aa8a8c1834b24ebbf"
+      },
+      {
+        "path": "stable/v2/ErrorNotification.ts",
+        "bytes": 311,
+        "sha256": "844a28005d7c06b56fd83cbe1202e8943426654b536040a62e9e22cfb03a5f5f"
+      },
+      {
+        "path": "stable/v2/ExperimentalFeature.ts",
+        "bytes": 1025,
+        "sha256": "ee33447a023047629b3ae89581c0a6c33b3ea8bea1c6b889a7718be81950f01b"
+      },
+      {
+        "path": "stable/v2/ExperimentalFeatureListParams.ts",
+        "bytes": 635,
+        "sha256": "a559812d9b8cf625941c19be35814b9403a20b12bc737a1982fea5870dfbde1e"
+      },
+      {
+        "path": "stable/v2/ExperimentalFeatureListResponse.ts",
+        "bytes": 464,
+        "sha256": "25808188ade4fa2b15628ad2662bed54452a9f51ea1352aa09847ba886a41ebd"
+      },
+      {
+        "path": "stable/v2/ExperimentalFeatureStage.ts",
+        "bytes": 259,
+        "sha256": "70de16db64325f2201f5b10b6492b4a13d6acd1c02f65f8d8af1738d2fb751d8"
+      },
+      {
+        "path": "stable/v2/ExternalAgentConfigImportCompletedNotification.ts",
+        "bytes": 399,
+        "sha256": "c02cff793444e0c935000ad6082c261a74ea71b02087cfce8bf546bd52871ede"
+      },
+      {
+        "path": "stable/v2/ExternalAgentConfigImportItemTypeFailure.ts",
+        "bytes": 501,
+        "sha256": "8b6c71d957d8f899bae95573ec0197e9dcfd6910d770fdfb74d86ff504ed3b9e"
+      },
+      {
+        "path": "stable/v2/ExternalAgentConfigImportItemTypeSuccess.ts",
+        "bytes": 530,
+        "sha256": "00ad945889ed4f63075de270da715f0d5f86c464997808c5a93e483a226fc608"
+      },
+      {
+        "path": "stable/v2/ExternalAgentConfigImportProgressNotification.ts",
+        "bytes": 398,
+        "sha256": "23bcaf326d37678b46a9616e242c50e9f703df8cf37576911d676425bd4b84c3"
+      },
+      {
+        "path": "stable/v2/ExternalAgentConfigImportTypeResult.ts",
+        "bytes": 700,
+        "sha256": "4c17d9432cb9822e5ba80e328c28f0cd113e9513b174e4e854e002339888eea7"
+      },
+      {
+        "path": "stable/v2/ExternalAgentConfigMigrationItemType.ts",
+        "bytes": 334,
+        "sha256": "5fb9fc0b830abcc6026fad70c6f4a44330c8d66315244f84e946f2a894f388e2"
+      },
+      {
+        "path": "stable/v2/FileChangeApprovalDecision.ts",
+        "bytes": 248,
+        "sha256": "8a5aa00ea5e9c7b0856da23daa6e799dc1c5f15d16553ce59390ec73b65c8430"
+      },
+      {
+        "path": "stable/v2/FileChangeOutputDeltaNotification.ts",
+        "bytes": 399,
+        "sha256": "1aafea36ebd0f5299ad6bd9a7c34a5f23a0d3d6d7cc23f15a5ce2b301e11eb18"
+      },
+      {
+        "path": "stable/v2/FileChangePatchUpdatedNotification.ts",
+        "bytes": 354,
+        "sha256": "e35e5bc0a0050762febfd6199f4b8d1d7fb991ab4591e118709b163189183f8a"
+      },
+      {
+        "path": "stable/v2/FileChangeRequestApprovalParams.ts",
+        "bytes": 649,
+        "sha256": "32ec2fef83e1e17db98ea0b9b86baaa5c8bf2e8979988f5ad8fef3a93ab15074"
+      },
+      {
+        "path": "stable/v2/FileChangeRequestApprovalResponse.ts",
+        "bytes": 327,
+        "sha256": "c7c0a57e085077823b53a00c9a30ea1208f8cf565ab6a68e2f47760793c66ecb"
+      },
+      {
+        "path": "stable/v2/FileSystemAccessMode.ts",
+        "bytes": 215,
+        "sha256": "36689572cd7c9e23ec2fa01912b8ca2abd331608dfd89b691b87351b5e520389"
+      },
+      {
+        "path": "stable/v2/FileSystemPath.ts",
+        "bytes": 475,
+        "sha256": "2af5d9c4b0de4ed7ffc3ca8bb22d418bccc68b46d4c7b1f87adec8eda6fef1e6"
+      },
+      {
+        "path": "stable/v2/FileSystemSandboxEntry.ts",
+        "bytes": 377,
+        "sha256": "b1c4a6c6c3a588e14af48306c5e8678afd287cbff19647d5c3481d21a37e7f15"
+      },
+      {
+        "path": "stable/v2/FileSystemSpecialPath.ts",
+        "bytes": 496,
+        "sha256": "a10a4420d463a7222b5670b22149626e38cb8d7e3235f6865517b0412a426da1"
+      },
+      {
+        "path": "stable/v2/FileUpdateChange.ts",
+        "bytes": 301,
+        "sha256": "44d26d479756b731f76537a7a291f99d9ceba59fae0916d86025990f22279a9d"
+      },
+      {
+        "path": "stable/v2/FsChangedNotification.ts",
+        "bytes": 514,
+        "sha256": "e533b6dc911be9c409389a13bf8909bace16f9adf560e1e271d5e82b921b5fb7"
+      },
+      {
+        "path": "stable/v2/GitInfo.ts",
+        "bytes": 249,
+        "sha256": "ae05c1fdc69bba0d6aea22f2f7a8e2f7c5b494330d6827cfac9ec9a9cc290269"
+      },
+      {
+        "path": "stable/v2/GrantedPermissionProfile.ts",
+        "bytes": 463,
+        "sha256": "19191e0bc68a2a75fc8fe3a96fc292439a5e8fe920b23f43ea6c46dd44f1cc04"
+      },
+      {
+        "path": "stable/v2/GuardianApprovalReview.ts",
+        "bytes": 739,
+        "sha256": "a5866cd24fa5cf78f8eae44af679e5b0e69bf93c4849e2420de1cb5a3bb2e9dd"
+      },
+      {
+        "path": "stable/v2/GuardianApprovalReviewAction.ts",
+        "bytes": 1310,
+        "sha256": "a5623be938cdff481fc17c6f4f17c3eb3e8ca3cd530eda464d0e58601c246fac"
+      },
+      {
+        "path": "stable/v2/GuardianApprovalReviewStatus.ts",
+        "bytes": 326,
+        "sha256": "ed176cb0601517ff3aa9225f43c5393ff451517dd26f7cc04548083afc535cb8"
+      },
+      {
+        "path": "stable/v2/GuardianCommandSource.ts",
+        "bytes": 214,
+        "sha256": "7529b5e63b8a8a210f457359a81a51e868005ca01d5eae4b5293c86f2dda43ea"
+      },
+      {
+        "path": "stable/v2/GuardianRiskLevel.ts",
+        "bytes": 292,
+        "sha256": "0da8ac0802b03984034228cb30e306b973eef94eeb9d8fab76d1d540c3747d91"
+      },
+      {
+        "path": "stable/v2/GuardianUserAuthorization.ts",
+        "bytes": 308,
+        "sha256": "fa796e3b1473b7ff56348b9f50b6aeb98dd292474edbc3840449e172372fc75a"
+      },
+      {
+        "path": "stable/v2/GuardianWarningNotification.ts",
+        "bytes": 344,
+        "sha256": "9cfb33ba9dbb20ae28059abcb694e9b63e712cd63d0d8508be7ba8e6d350b9d6"
+      },
+      {
+        "path": "stable/v2/HookCompletedNotification.ts",
+        "bytes": 319,
+        "sha256": "187d5a673cdc22d93f1d0d28b2b46d2796be14118d9cfa1318bbf8148caf7afe"
+      },
+      {
+        "path": "stable/v2/HookEventName.ts",
+        "bytes": 375,
+        "sha256": "3a65592721ee8448410ba47b8d4d6ef4b2ed3c52fe560ef38f3c96b9dff3b559"
+      },
+      {
+        "path": "stable/v2/HookExecutionMode.ts",
+        "bytes": 203,
+        "sha256": "e8bcb5b57feed919b55542cf80efa7f0b78b3997cad57e44021b038f7346a230"
+      },
+      {
+        "path": "stable/v2/HookHandlerType.ts",
+        "bytes": 227,
+        "sha256": "4e4510716a8e20d046664be0f94ab0e1483553cae73ab4e38bf46e4e226ad0c7"
+      },
+      {
+        "path": "stable/v2/HookOutputEntry.ts",
+        "bytes": 298,
+        "sha256": "eafb6d579135f5d3f0e1aa3775091aff756a0b66b0ecf78b626f1168ae88976f"
+      },
+      {
+        "path": "stable/v2/HookOutputEntryKind.ts",
+        "bytes": 242,
+        "sha256": "8bc9293bf87538a9c2b47b74649d4f8bc9faaccac23aff7d1d15b09f0456d83d"
+      },
+      {
+        "path": "stable/v2/HookPromptFragment.ts",
+        "bytes": 224,
+        "sha256": "391260c67d7fbd0aaf3f641c3764892f655871047085df45048057066db1d0ea"
+      },
+      {
+        "path": "stable/v2/HookRunStatus.ts",
+        "bytes": 241,
+        "sha256": "026f4356b110a32c2b2a04d4807284099c9e2ebf42520bb414e2f16a1cbeeaeb"
+      },
+      {
+        "path": "stable/v2/HookRunSummary.ts",
+        "bytes": 1001,
+        "sha256": "35de080cc3b60f33d8e03d07a4821085e888c2ab77c2ae093138c7898a0ca83f"
+      },
+      {
+        "path": "stable/v2/HookScope.ts",
+        "bytes": 196,
+        "sha256": "d9d65a4afcd428a6124ccc40b3ca1bfc95430be484030f717100482a78b46ce6"
+      },
+      {
+        "path": "stable/v2/HookSource.ts",
+        "bytes": 357,
+        "sha256": "c4e539bd5f7b0dd619cfd26008266e5e87be5834679ac438cc232f84d0d76d09"
+      },
+      {
+        "path": "stable/v2/HookStartedNotification.ts",
+        "bytes": 317,
+        "sha256": "b130424b8f6d524402e07f426149e342279528f99c317d6016f51aa7991ff8f3"
+      },
+      {
+        "path": "stable/v2/ItemCompletedNotification.ts",
+        "bytes": 404,
+        "sha256": "f79cddf5fef00d9d7d40b0c86885f0f9a183cfcf2f5dcd0d9461c2b3a1978829"
+      },
+      {
+        "path": "stable/v2/ItemGuardianApprovalReviewCompletedNotification.ts",
+        "bytes": 1783,
+        "sha256": "dae31873b14cd648447b5b6e110e2f8732decbca3b0902c5603e0f040eed4966"
+      },
+      {
+        "path": "stable/v2/ItemGuardianApprovalReviewStartedNotification.ts",
+        "bytes": 1565,
+        "sha256": "d8bcaed97746b2210d4e5bc0bedc42896826878392e2eeb5f3b381f23922047a"
+      },
+      {
+        "path": "stable/v2/ItemStartedNotification.ts",
+        "bytes": 398,
+        "sha256": "21e11ac674eaa9a0264a4b82f8d03d1622b9c71ba6b78e577c5afa143aa4a252"
+      },
+      {
+        "path": "stable/v2/McpElicitationArrayType.ts",
+        "bytes": 200,
+        "sha256": "d75b2840d2fedfb2c430551051d085b09c9c9233d6019751b43997424c2a0a48"
+      },
+      {
+        "path": "stable/v2/McpElicitationBooleanSchema.ts",
+        "bytes": 371,
+        "sha256": "e8024c640e1cdd660eeceba72023975484cdd0d22d3c50f30a8ed2165ee3e2d7"
+      },
+      {
+        "path": "stable/v2/McpElicitationBooleanType.ts",
+        "bytes": 204,
+        "sha256": "09f1f230cda7670e33c441339a14228d696e16faf4c3e3c4d4d9fac7535a19de"
+      },
+      {
+        "path": "stable/v2/McpElicitationConstOption.ts",
+        "bytes": 228,
+        "sha256": "341a34201fc1c0b6cc8340b62871660e50d80b4a4db939df5c2b58b48e581711"
+      },
+      {
+        "path": "stable/v2/McpElicitationEnumSchema.ts",
+        "bytes": 614,
+        "sha256": "c25d2e8498f174b8432c0441c13f7d0d22da5823bca4cfb9056ce3ba2d4eae7e"
+      },
+      {
+        "path": "stable/v2/McpElicitationLegacyTitledEnumSchema.ts",
+        "bytes": 424,
+        "sha256": "90a0f1b6cbbce22187d890ae953faa11575e85da7fe018978f7c841b61c68533"
+      },
+      {
+        "path": "stable/v2/McpElicitationMultiSelectEnumSchema.ts",
+        "bytes": 522,
+        "sha256": "23a9d6e57f8f78a25d34a51070cbd8c283db0754760a6dee74d2a7917580a958"
+      },
+      {
+        "path": "stable/v2/McpElicitationNumberSchema.ts",
+        "bytes": 402,
+        "sha256": "22a973535b30ef3070d4827495e27bf8d12e9e24d1aa0fcd39d680153e4f79f7"
+      },
+      {
+        "path": "stable/v2/McpElicitationNumberType.ts",
+        "bytes": 214,
+        "sha256": "2ade548b2b885762e5a5b2fc978d23d9c6e625625df278ae8aad66c7e5409b73"
+      },
+      {
+        "path": "stable/v2/McpElicitationObjectType.ts",
+        "bytes": 202,
+        "sha256": "3db6db2ea1712dbf00e9d2d4481051e1782e821746adbaabe4bab948d47af1fc"
+      },
+      {
+        "path": "stable/v2/McpElicitationPrimitiveSchema.ts",
+        "bytes": 641,
+        "sha256": "1cfb74f2bb78ec04f1711eb4f0eeebc4afe1ef67d650acfcabb06c703da8848f"
+      },
+      {
+        "path": "stable/v2/McpElicitationSchema.ts",
+        "bytes": 678,
+        "sha256": "1cb858a166dadb4002f088bbf27366442ac5bf60c2b1ceaa545ac95a64c26f1e"
+      },
+      {
+        "path": "stable/v2/McpElicitationSingleSelectEnumSchema.ts",
+        "bytes": 529,
+        "sha256": "34a9acf6fa27e50ebabde951288f204b7e27645efff020d57b814bc75e195adf"
+      },
+      {
+        "path": "stable/v2/McpElicitationStringFormat.ts",
+        "bytes": 234,
+        "sha256": "14e26733bcbc578a59ba8f45113588b7d6bda43686e638a4508cbf6faa9063a5"
+      },
+      {
+        "path": "stable/v2/McpElicitationStringSchema.ts",
+        "bytes": 526,
+        "sha256": "faf0b5f1690b7b3a291609a9bab87abb8fd86fe41dbb473eaab46b89607cf138"
+      },
+      {
+        "path": "stable/v2/McpElicitationStringType.ts",
+        "bytes": 202,
+        "sha256": "bc3146f96d49d25e49220ee2faa88bb043229a277fa6e40b32643132051b8ed7"
+      },
+      {
+        "path": "stable/v2/McpElicitationTitledEnumItems.ts",
+        "bytes": 324,
+        "sha256": "e547e5a198a74dc07539b7c45d1167b5c387a3b79b0762a95a005f8abeec1bac"
+      },
+      {
+        "path": "stable/v2/McpElicitationTitledMultiSelectEnumSchema.ts",
+        "bytes": 550,
+        "sha256": "7ca0da26c90f416e1a853152354ea674aa4f24a5710c974f776da37680b902b9"
+      },
+      {
+        "path": "stable/v2/McpElicitationTitledSingleSelectEnumSchema.ts",
+        "bytes": 504,
+        "sha256": "4fc31929b3e8837dc6c702f4ff3cf3d4c54ab488d88286fbaf5aedf5328523c3"
+      },
+      {
+        "path": "stable/v2/McpElicitationUntitledEnumItems.ts",
+        "bytes": 336,
+        "sha256": "84cf8179f184eb7f0cba05df4b7d3eac1b2527656652840b95dea3a27d884989"
+      },
+      {
+        "path": "stable/v2/McpElicitationUntitledMultiSelectEnumSchema.ts",
+        "bytes": 558,
+        "sha256": "983028494b180e6415bd6fff57a9ce21677348b6bf401fe98f7a857922469665"
+      },
+      {
+        "path": "stable/v2/McpElicitationUntitledSingleSelectEnumSchema.ts",
+        "bytes": 405,
+        "sha256": "67323c0d019024a9c95caaa913712cb5568fc3d8b8d07de321002dad39067957"
+      },
+      {
+        "path": "stable/v2/McpServerElicitationAction.ts",
+        "bytes": 227,
+        "sha256": "2f0de09e3c4bf2e4afe28eb1175c73286270f5fdf527f4658bb0a7d43c03a7ab"
+      },
+      {
+        "path": "stable/v2/McpServerElicitationRequestParams.ts",
+        "bytes": 1192,
+        "sha256": "aa2b4af4c989293303b9264c1dff2213d7e2430bb3e41ae9628060a02a468fed"
+      },
+      {
+        "path": "stable/v2/McpServerElicitationRequestResponse.ts",
+        "bytes": 682,
+        "sha256": "779e1357731c173e28e8b2edc76cb9ff87d48677edcbd31f3a6769a39ceaec6a"
+      },
+      {
+        "path": "stable/v2/McpServerEventNotification.ts",
+        "bytes": 295,
+        "sha256": "152e0c0de8caffbd845d34ee10087fd733a085280cc890f1d11e0a985248d1d9"
+      },
+      {
+        "path": "stable/v2/McpServerEventStreamNotification.ts",
+        "bytes": 354,
+        "sha256": "d67b71d688baabd27f4c02cbe4208e35e5ee0180fdd761d7d472365b0d357bc5"
+      },
+      {
+        "path": "stable/v2/McpServerOauthLoginCompletedNotification.ts",
+        "bytes": 286,
+        "sha256": "cb97c2c126e0923a4612f52223acc04d9eca905c3f5dd9f1c94406045090d585"
+      },
+      {
+        "path": "stable/v2/McpServerStartupFailureReason.ts",
+        "bytes": 225,
+        "sha256": "a946867153147b6da20aa839dfa9a63b48e4a36dd836971ba51e1002179decd8"
+      },
+      {
+        "path": "stable/v2/McpServerStartupState.ts",
+        "bytes": 236,
+        "sha256": "23449b2d30c4a64892667f783a41cd4b88fe87f5eff2cb6c69f420c39dfa330f"
+      },
+      {
+        "path": "stable/v2/McpServerStatusUpdatedNotification.ts",
+        "bytes": 514,
+        "sha256": "6c935786271eb37de460616e2a0bf82dc0a9ad9a557e64ea84f7346781addcee"
+      },
+      {
+        "path": "stable/v2/McpToolCallAppContext.ts",
+        "bytes": 317,
+        "sha256": "5de0ef0ec8a5b74b51421f43012bb0a69dbaebbe7a5604c592336f94ad01c279"
+      },
+      {
+        "path": "stable/v2/McpToolCallError.ts",
+        "bytes": 206,
+        "sha256": "639a626f2b8932812fd0c94c027b35aea0dd8fad18bcc720d690ef5f824d2c75"
+      },
+      {
+        "path": "stable/v2/McpToolCallProgressNotification.ts",
+        "bytes": 271,
+        "sha256": "39ff4bfe3cbd0d2b886dbba70e4916182c9e75802217e3ae2a5e4914569c6e16"
+      },
+      {
+        "path": "stable/v2/McpToolCallResult.ts",
+        "bytes": 340,
+        "sha256": "763ac90c9aa5cb4fb0245b277bfa2fb8a0d168a05c8105381066dce08cc8dc14"
+      },
+      {
+        "path": "stable/v2/McpToolCallStatus.ts",
+        "bytes": 224,
+        "sha256": "cd64f4dbfbeccfd1c5a5c5982ccddd803b6ea1a909c8756e0b9274bbf34e515c"
+      },
+      {
+        "path": "stable/v2/MemoryCitation.ts",
+        "bytes": 319,
+        "sha256": "5577ad2090862aa0ca047aa483f7e8545e316ac319725055b9d3f01b34892a45"
+      },
+      {
+        "path": "stable/v2/MemoryCitationEntry.ts",
+        "bytes": 256,
+        "sha256": "b0a7a2a637e64c04df5da35880065941f0a3d033ebb220d67b1766e72cb4b18c"
+      },
+      {
+        "path": "stable/v2/MisalignmentErrorDetails.ts",
+        "bytes": 628,
+        "sha256": "8f4827ad9912091231c0edace4d825ed89e22a1ac7124901fe5e1bb85f142b7c"
+      },
+      {
+        "path": "stable/v2/MisalignmentSteer.ts",
+        "bytes": 207,
+        "sha256": "4f3eb00040e49c4e7a38d6f6115c1c1d0c00e40dbb6a12430a1dd1dc7ea3bb22"
+      },
+      {
+        "path": "stable/v2/Model.ts",
+        "bytes": 1406,
+        "sha256": "49d83bdb4ee3ba3756f2fb1ba5f432d6cf54b51118cbdc92e6e8f427d19295d9"
+      },
+      {
+        "path": "stable/v2/ModelAvailabilityNux.ts",
+        "bytes": 210,
+        "sha256": "35f13293530e619e27a58f7b655e858083f80ad5dadd5bdc85430dba0f9a6da0"
+      },
+      {
+        "path": "stable/v2/ModelListParams.ts",
+        "bytes": 490,
+        "sha256": "9749040f93232fee23f044d307fd69eb08fea77eb6c56b1d04593d7533dd7bf4"
+      },
+      {
+        "path": "stable/v2/ModelListResponse.ts",
+        "bytes": 408,
+        "sha256": "6aeb3d3602e7e0d428550f99b5459ddb85a13d49ef061bdb791df2be970d35ed"
+      },
+      {
+        "path": "stable/v2/ModelRerouteReason.ts",
+        "bytes": 211,
+        "sha256": "a7d637ad4aa97c1695dabbce11cb20d77cae71cae4598f350a27f9ad8c1534f9"
+      },
+      {
+        "path": "stable/v2/ModelReroutedNotification.ts",
+        "bytes": 363,
+        "sha256": "ca9559ead3f072c493eaf3a722cd4a5487ec1de0d36a6d29b2830ac02e09d202"
+      },
+      {
+        "path": "stable/v2/ModelSafetyBufferingUpdatedNotification.ts",
+        "bytes": 364,
+        "sha256": "08a27ee8fb5e86a41cdac88583c112a49b5a356d1fe9d001a725e3441a0e4f90"
+      },
+      {
+        "path": "stable/v2/ModelServiceTier.ts",
+        "bytes": 236,
+        "sha256": "c926a88f721864aa8fedf5c46b118d76baf58384aa880221d422d00759bb35a2"
+      },
+      {
+        "path": "stable/v2/ModelUpgradeInfo.ts",
+        "bytes": 412,
+        "sha256": "0cd44f4b05d66c802b4f155afd7c3b976d6939913b57bd91635adf6e4511321a"
+      },
+      {
+        "path": "stable/v2/ModelVerification.ts",
+        "bytes": 210,
+        "sha256": "ad5aaf545bede542d3c69eda3232e9c5a197689d9e69aa5daa9311b6c61845e6"
+      },
+      {
+        "path": "stable/v2/ModelVerificationNotification.ts",
+        "bytes": 342,
+        "sha256": "2bf9ecde69761e9e29ce03f11a243864d925bcac9d5ff4943a9c0efa8ddbec0a"
+      },
+      {
+        "path": "stable/v2/MultiAgentVersion.ts",
+        "bytes": 264,
+        "sha256": "ec8db72e668f2e8ff5b199aab03df8e31ac7fbb33edd63edd05aa1b38fe53771"
+      },
+      {
+        "path": "stable/v2/NetworkAccess.ts",
+        "bytes": 207,
+        "sha256": "3622aa2cccf2a1835cd561d97187db75eba8cc379c03e56b5d1c91ab901da9dc"
+      },
+      {
+        "path": "stable/v2/NetworkApprovalProtocol.ts",
+        "bytes": 237,
+        "sha256": "50489d7ee01bb75b2ad453e2f976e8b92a3334a973637c0c36ccd1c547a0d894"
+      },
+      {
+        "path": "stable/v2/NonSteerableTurnKind.ts",
+        "bytes": 210,
+        "sha256": "94d47f993e7c00ca78c5c2b28d71fab767ce59ff8da60c4458bffff08755e863"
+      },
+      {
+        "path": "stable/v2/PatchApplyStatus.ts",
+        "bytes": 236,
+        "sha256": "b2a140e4b5f2de8f051bf5c52ce2cf975987180253b29287d64fd52715bca192"
+      },
+      {
+        "path": "stable/v2/PatchChangeKind.ts",
+        "bytes": 275,
+        "sha256": "20e95907d698efbef2fa9d9ab00392b10caf127dfc5e0df1ba9878ad6f42531d"
+      },
+      {
+        "path": "stable/v2/PermissionGrantScope.ts",
+        "bytes": 208,
+        "sha256": "2ea29b4448c98516a2e1e4f5bbc22e95147ad46cbc0fd0c83377c2fa4db37f8d"
+      },
+      {
+        "path": "stable/v2/PermissionProfileListParams.ts",
+        "bytes": 469,
+        "sha256": "cf28b4491d5288d3039c3e6b8eca84db14ed8c71a9efbda6f8145d8d34960921"
+      },
+      {
+        "path": "stable/v2/PermissionProfileListResponse.ts",
+        "bytes": 477,
+        "sha256": "efbd4bd91d112327d499e0e80f087780d195aeecaa3d9b55d718d80c72327e79"
+      },
+      {
+        "path": "stable/v2/PermissionProfileSummary.ts",
+        "bytes": 451,
+        "sha256": "1202513133554ed4a96b916b5117ff2a0e5bbded9d326f44d39d622a418944c7"
+      },
+      {
+        "path": "stable/v2/PermissionsRequestApprovalParams.ts",
+        "bytes": 611,
+        "sha256": "ee5b7e91ebf546af32da8958645b7df6be4b7401e03be8fac7fb018c01048ff8"
+      },
+      {
+        "path": "stable/v2/PermissionsRequestApprovalResponse.ts",
+        "bytes": 544,
+        "sha256": "dd7fd422057a47c429eba34b945b02328dd73e9afb4bbecea9d19790f7397fbe"
+      },
+      {
+        "path": "stable/v2/PlanDeltaNotification.ts",
+        "bytes": 420,
+        "sha256": "1327cadca2e857d313aa04c1b9822443104319262d17424b4490e5da9f8298ec"
+      },
+      {
+        "path": "stable/v2/ProcessExitedNotification.ts",
+        "bytes": 1069,
+        "sha256": "3c703edf527a8d0aadb507661c022801a3aa93c729b33867029a36ed194e4f52"
+      },
+      {
+        "path": "stable/v2/ProcessOutputDeltaNotification.ts",
+        "bytes": 736,
+        "sha256": "3544ca192513df98dd198c8874fec05c0f64a2a650f1398c0551b1c6d244e0c9"
+      },
+      {
+        "path": "stable/v2/ProcessOutputStream.ts",
+        "bytes": 273,
+        "sha256": "86115324ab7087296e12deaa2e20a3b896db55335c56542d56d761e4049d1319"
+      },
+      {
+        "path": "stable/v2/ProjectChangeType.ts",
+        "bytes": 220,
+        "sha256": "24923fd7dfa0b6276d713fd5d472ae2aa213c355b86c01b391507ef1ed763338"
+      },
+      {
+        "path": "stable/v2/ProjectChangedNotification.ts",
+        "bytes": 314,
+        "sha256": "fca08bd779b3a37e6ce3e57ff4d116926911ae9e797ef917d93886e390c86f3e"
+      },
+      {
+        "path": "stable/v2/RateLimitReachedType.ts",
+        "bytes": 366,
+        "sha256": "67ca3e1a5154ac7ea40be29b31ad55be4a786b228ce89fecc566ef00309b5e8c"
+      },
+      {
+        "path": "stable/v2/RateLimitSnapshot.ts",
+        "bytes": 931,
+        "sha256": "a61f560ecf4e30a6c4e440f52aad79496f86f5f1a4cfbdb12494e801b369845f"
+      },
+      {
+        "path": "stable/v2/RateLimitWindow.ts",
+        "bytes": 269,
+        "sha256": "d1c57b5226a87ef3c02643835d62fe2c95b78c6c37cd53fd4aeccf68be9a7f1b"
+      },
+      {
+        "path": "stable/v2/RawResponseCompletedNotification.ts",
+        "bytes": 593,
+        "sha256": "ad6683c2cb392c6e5bbcd7a62f0beb74c90ba600d92a3ea4ede5dfa8165223bb"
+      },
+      {
+        "path": "stable/v2/RawResponseItemCompletedNotification.ts",
+        "bytes": 319,
+        "sha256": "77d8a77360311d0386e9390f69bd27e38d164261aa001696f52dd2a419ed1502"
+      },
+      {
+        "path": "stable/v2/ReasoningEffortOption.ts",
+        "bytes": 311,
+        "sha256": "1b5daeb65152f8a7197350b3c6ac4b84d6b8cd57b686941bc4589e72c2ff9e70"
+      },
+      {
+        "path": "stable/v2/ReasoningSummaryPartAddedNotification.ts",
+        "bytes": 282,
+        "sha256": "beeae50a6a6f7a3438d7cb6e49e4353228f92c554e5331bf6f288ff7a50b1932"
+      },
+      {
+        "path": "stable/v2/ReasoningSummaryTextDeltaNotification.ts",
+        "bytes": 297,
+        "sha256": "46edaeb45c009106583d4793419b1a60b621cf93aecba734b7ef103178416261"
+      },
+      {
+        "path": "stable/v2/ReasoningTextDeltaNotification.ts",
+        "bytes": 290,
+        "sha256": "be86447b21cca238370ec3074d903dbedd6f28f298b482d2938e46f39fd1c2ae"
+      },
+      {
+        "path": "stable/v2/RemoteControlConnectionStatus.ts",
+        "bytes": 250,
+        "sha256": "2f1628e07ecb5c0e3bdf5f00b2daf593c5355097054dc3b9cf71958a61abfbed"
+      },
+      {
+        "path": "stable/v2/RemoteControlStatusChangedNotification.ts",
+        "bytes": 505,
+        "sha256": "fbaeb12425a856de2e6e9e155cbb6de76f7237cd7f6dfc62cdc851e0b8b87411"
+      },
+      {
+        "path": "stable/v2/RequestPermissionProfile.ts",
+        "bytes": 475,
+        "sha256": "0d09972c6fa2636dd0d05f7b0b4ac34c728a24e0816943e3afeb0b9d99fed7c6"
+      },
+      {
+        "path": "stable/v2/ResponseUsageMetadata.ts",
+        "bytes": 368,
+        "sha256": "09a7a040dc009abb1dd2cdf4dcebaaaf7ccc634647de357e2a55c73ccc84713c"
+      },
+      {
+        "path": "stable/v2/SandboxPolicy.ts",
+        "bytes": 596,
+        "sha256": "98a67b2337f9a579a352ba8e4ae65f3cb6cfe8fae0c4b7fc8bdfd1cb142c0616"
+      },
+      {
+        "path": "stable/v2/ServerRequestResolvedNotification.ts",
+        "bytes": 296,
+        "sha256": "94995f9d434f7f5076381546cd99b27fe89293f93fe6d46ba2212aef4889f4ea"
+      },
+      {
+        "path": "stable/v2/SessionSource.ts",
+        "bytes": 350,
+        "sha256": "ff49430ecbf188b2874d124d51d87f7f6c2bdd38dec313cd4620b62dec122a26"
+      },
+      {
+        "path": "stable/v2/SkillDependencies.ts",
+        "bytes": 294,
+        "sha256": "e13df77e822c270be0f0da38fb8116066a21562c6c1370d5c7dfe7e74fead8bc"
+      },
+      {
+        "path": "stable/v2/SkillErrorInfo.ts",
+        "bytes": 218,
+        "sha256": "0d59892e9b1d002a1d7065a49b3951c3d9a8b73bd1746a5b76c3018882296a54"
+      },
+      {
+        "path": "stable/v2/SkillInterface.ts",
+        "bytes": 575,
+        "sha256": "bb48a615cb9df2d0312dcb381d33705a0709618fa11953d2cf5fceff0097834a"
+      },
+      {
+        "path": "stable/v2/SkillMetadata.ts",
+        "bytes": 800,
+        "sha256": "4222946c7e62ddfb19cdee8642e867e5bf6072f7ed71d0a7c57835f9589e4e70"
+      },
+      {
+        "path": "stable/v2/SkillScope.ts",
+        "bytes": 216,
+        "sha256": "cc13d4657511705e351a68c578caaec3112bf8e59284384d994675ec403371a6"
+      },
+      {
+        "path": "stable/v2/SkillToolDependency.ts",
+        "bytes": 295,
+        "sha256": "4e658e9cd6d6bedb73870f1b742cf5cf79d9eb4c8635838e2acc99d328810ab5"
+      },
+      {
+        "path": "stable/v2/SkillsChangedNotification.ts",
+        "bytes": 436,
+        "sha256": "dc477a4b72f138928f65a366114abdd99523b9e979a3d569818075659eb77235"
+      },
+      {
+        "path": "stable/v2/SkillsListEntry.ts",
+        "bytes": 378,
+        "sha256": "84730e671548b307634ba0e20b8c399844170d26e4db303df9210be6609f7ee1"
+      },
+      {
+        "path": "stable/v2/SkillsListParams.ts",
+        "bytes": 384,
+        "sha256": "c7ba20615ea17d426387c5bd53d2dc0e4ab9a3845e21f07b127d459b6b54aa1d"
+      },
+      {
+        "path": "stable/v2/SkillsListResponse.ts",
+        "bytes": 282,
+        "sha256": "a5b85a40ef7c052eca56e1e8e5111bb1b700ecd456fe0257ff222112e0d6f293"
+      },
+      {
+        "path": "stable/v2/SortDirection.ts",
+        "bytes": 197,
+        "sha256": "9ad2278213c1d99366e0ac2ecf6cbc069f9cf1090aafd4e71462a3945c14638a"
+      },
+      {
+        "path": "stable/v2/SpendControlLimitSnapshot.ts",
+        "bytes": 271,
+        "sha256": "c58ca129df392a50bd08ad077fc862a89f15981d91c059a1aeac33b8b318493f"
+      },
+      {
+        "path": "stable/v2/StrictReviewRequiredNotification.ts",
+        "bytes": 330,
+        "sha256": "dfaea356e9ed91ff3e5c11fe119d8423726158b1ba3f05574689abea904bb250"
+      },
+      {
+        "path": "stable/v2/SubAgentActivityKind.ts",
+        "bytes": 244,
+        "sha256": "01aa0e764bdc6fa0e527d16626334ad790bc9b0766241d49af900e3fe681d883"
+      },
+      {
+        "path": "stable/v2/TerminalInteractionNotification.ts",
+        "bytes": 288,
+        "sha256": "c22bbace10fb3c79e3ff5f04721ecf6f3fb15919ea29ff3dfd7168a18a97b74f"
+      },
+      {
+        "path": "stable/v2/TextElement.ts",
+        "bytes": 446,
+        "sha256": "22aaef8159d2f09af4d6dc54e58441999a5b3596c0916c698074242d24b12e6b"
+      },
+      {
+        "path": "stable/v2/TextPosition.ts",
+        "bytes": 308,
+        "sha256": "dc12349f71f374fb7ebf8672f7d2a3250e9edc84bdf58ccec401ec86db0f9c3b"
+      },
+      {
+        "path": "stable/v2/TextRange.ts",
+        "bytes": 277,
+        "sha256": "40b0c2b06f93016ba80f0576c05d26b1f11ed33a33717bbefdf765f364cd1ed3"
+      },
+      {
+        "path": "stable/v2/Thread.ts",
+        "bytes": 3659,
+        "sha256": "43915c662fe3c9e0c12fac320b64008629f0d83f25847e52c1445db2f478639e"
+      },
+      {
+        "path": "stable/v2/ThreadActiveFlag.ts",
+        "bytes": 228,
+        "sha256": "0e17998362c085d594478d3fac2a330e89ab49669f8481e9f4791272932e3cfd"
+      },
+      {
+        "path": "stable/v2/ThreadArchivedNotification.ts",
+        "bytes": 217,
+        "sha256": "9b1747973cae28bf84f0e4b0656b03bdc0ed396b53f9f5f5711acd56110271f7"
+      },
+      {
+        "path": "stable/v2/ThreadClosedNotification.ts",
+        "bytes": 215,
+        "sha256": "dbd10ae7871ba82b0b0265761b957bb8942a50e8f40e832a161ff7e7ef0e42e0"
+      },
+      {
+        "path": "stable/v2/ThreadCompactStartParams.ts",
+        "bytes": 215,
+        "sha256": "cc4e0caf37ed09f92fc8882a5e1cc280ec928313d307431cb85fcaa530f93071"
+      },
+      {
+        "path": "stable/v2/ThreadCompactStartResponse.ts",
+        "bytes": 217,
+        "sha256": "bf1b80a2e9e4db9537b74245b3d9ff8a568f3292228ff8e69cd93610fec8d181"
+      },
+      {
+        "path": "stable/v2/ThreadDeletedNotification.ts",
+        "bytes": 216,
+        "sha256": "da8e8cc9f4ad4521127adcb91dd1bb997daff4ae885dbaf56a8778e191c1be7f"
+      },
+      {
+        "path": "stable/v2/ThreadGoal.ts",
+        "bytes": 420,
+        "sha256": "3f4fbc0b9fe6a0755154f89ac3b0e131c8cc8e6cec14588c4334e59733b34d56"
+      },
+      {
+        "path": "stable/v2/ThreadGoalClearParams.ts",
+        "bytes": 212,
+        "sha256": "fd897540ed17861a0a1ab7d40c33c8ecde827dcf7ed4396215ff4187da5e4c93"
+      },
+      {
+        "path": "stable/v2/ThreadGoalClearResponse.ts",
+        "bytes": 214,
+        "sha256": "66db3d13739db5ab70b0ea953cb570301d570f765eeb039feee9ad24ee3b0939"
+      },
+      {
+        "path": "stable/v2/ThreadGoalClearedNotification.ts",
+        "bytes": 220,
+        "sha256": "c7b2fae35683f672813077daf88ba9797ff0657f7eeba16655c32c13ac5e595d"
+      },
+      {
+        "path": "stable/v2/ThreadGoalGetParams.ts",
+        "bytes": 210,
+        "sha256": "e1ae9159cda0aab46e3c98c8bc623ee6ffcf65fbadd0e42968722110ea30873f"
+      },
+      {
+        "path": "stable/v2/ThreadGoalGetResponse.ts",
+        "bytes": 270,
+        "sha256": "3764d9b8f8e91e37010b4b18e9c8e69e11f13d7de2e7362e23e3ef30fabd47dc"
+      },
+      {
+        "path": "stable/v2/ThreadGoalSetParams.ts",
+        "bytes": 363,
+        "sha256": "0325b4ef7888ec35e2a8ed35790631184bf69a06ddeb0d532e0d56a3d499102b"
+      },
+      {
+        "path": "stable/v2/ThreadGoalSetResponse.ts",
+        "bytes": 263,
+        "sha256": "18ee24a63176f7198f59eeb4b69db363331990c5d1ed77bda4e5125eba652195"
+      },
+      {
+        "path": "stable/v2/ThreadGoalStatus.ts",
+        "bytes": 265,
+        "sha256": "5250124cee5771e27211537b1a0a35e7363f3ba170908e316691682b87b9d663"
+      },
+      {
+        "path": "stable/v2/ThreadGoalUpdatedNotification.ts",
+        "bytes": 312,
+        "sha256": "436a9edf2328e94660840be66138b05636d3ca156163eec729f9217b02bf270d"
+      },
+      {
+        "path": "stable/v2/ThreadHistoryMode.ts",
+        "bytes": 209,
+        "sha256": "d04b0642316299374bf7075f68d1faee8f503bb568983075f955ce939a4b6add"
+      },
+      {
+        "path": "stable/v2/ThreadInjectItemsParams.ts",
+        "bytes": 384,
+        "sha256": "688253b2cd75e27c9e86f59cdd7abc9c42fbfb7e2ed4dd2649fbc22e5344888b"
+      },
+      {
+        "path": "stable/v2/ThreadInjectItemsResponse.ts",
+        "bytes": 216,
+        "sha256": "2a9673eb6a45c2d7d822e2474a3523c3a2e9019477379bf6ae2e2c7875d28582"
+      },
+      {
+        "path": "stable/v2/ThreadItem.ts",
+        "bytes": 6076,
+        "sha256": "96a702bdd1f86f6a9ad688ed3e6a68ba7050b72822400e4be3a63b101b4ce3c0"
+      },
+      {
+        "path": "stable/v2/ThreadItemEntry.ts",
+        "bytes": 311,
+        "sha256": "8b50b5beb6459df3f540f5e68d3c49952818df1e35bc4aa6eb21a5e5768bf37b"
+      },
+      {
+        "path": "stable/v2/ThreadItemsListParams.ts",
+        "bytes": 656,
+        "sha256": "9e72ee48138d0c8bdb04876b9b16a9e71ec9f4420be3f8a5dc1f7251db686d74"
+      },
+      {
+        "path": "stable/v2/ThreadItemsListResponse.ts",
+        "bytes": 621,
+        "sha256": "e48c73ad2017949e6208e67caf38260ac7e2c78ac198749e45c1d65161c1463e"
+      },
+      {
+        "path": "stable/v2/ThreadLoadedListParams.ts",
+        "bytes": 360,
+        "sha256": "e2866a4b9d686413f62f57567f0f4ae9bcde6805041f955ce057f864d7b5e99e"
+      },
+      {
+        "path": "stable/v2/ThreadLoadedListResponse.ts",
+        "bytes": 438,
+        "sha256": "7fd42a34e5c85d0e6f81c440b9f6c14bf1f76d2059813ee7719cd6c55940f459"
+      },
+      {
+        "path": "stable/v2/ThreadNameUpdatedNotification.ts",
+        "bytes": 241,
+        "sha256": "079c829d8ed4a1aab49f0357354b684d2f5abd0ab63cf93d25355629abed57a7"
+      },
+      {
+        "path": "stable/v2/ThreadProjectUpdatedNotification.ts",
+        "bytes": 249,
+        "sha256": "7dc5a9e9760091fe5f4f1121396f8abd236668d00b2566e788483e37216b8b4f"
+      },
+      {
+        "path": "stable/v2/ThreadQueueChangedNotification.ts",
+        "bytes": 221,
+        "sha256": "19a40539c34e12d9546572f916a526ae3b97ad7f5c5a1e34a9b2564e6621bf79"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeAudioChunk.ts",
+        "bytes": 364,
+        "sha256": "bd17d95ef970847308b7875fce875b254cd737ee93d87934a01d2f6b104a1c9e"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeBemItemPresentation.ts",
+        "bytes": 398,
+        "sha256": "1625c254b59a5776a826cb4bc86524221ffd7a4bed180361652f47010087449b"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeClosedNotification.ts",
+        "bytes": 319,
+        "sha256": "96f698f47161d279d86bd3c95db496bfb39d5501bd8f879b9a4e52bb733327c2"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeErrorNotification.ts",
+        "bytes": 315,
+        "sha256": "73e74e9c2818597afd19d01793e7e7d4d55fa1d22843a8f54fc9428a2e14c463"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeItem.ts",
+        "bytes": 902,
+        "sha256": "8339f4538107a990f858711257a522ab307ce36049d06d97942ce5eeae32a351"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeItemAddedNotification.ts",
+        "bytes": 389,
+        "sha256": "dc889e649ab09838485ade6050267fbf82a08bd4dbabd27060ff4a37d9486959"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeItemCompletedNotification.ts",
+        "bytes": 408,
+        "sha256": "3ba5bb74d9a7399c63f40ba79f3e1eb968ea33d939f63421c3258dcb0fb88dc8"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeItemStartedNotification.ts",
+        "bytes": 408,
+        "sha256": "3d91c26ff6fa38b7f4afb4fea7e5046cf4be8c8d6204b254f3d9b100e7bd4cd1"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeItemTranscriptDeltaNotification.ts",
+        "bytes": 346,
+        "sha256": "b4cc55983e818db84f790547bc1c01f1219a05e9da13b9259ce8658e7c6cf6db"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeOutputAudioDeltaNotification.ts",
+        "bytes": 421,
+        "sha256": "58508e3774f09985d894dcdf67316345c57911e577c59c5428295c2b81e33785"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeSdpNotification.ts",
+        "bytes": 318,
+        "sha256": "d0cd47d527495f4d6257627cdd4cf473d0c593641c71c1917e2964cdf5ff8196"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeSessionOutcome.ts",
+        "bytes": 216,
+        "sha256": "faa161e3102ebda54de41e8d91a5c9d07d62d193e09bb56fbdd3cc5f57939c48"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeStartedNotification.ts",
+        "bytes": 458,
+        "sha256": "3b7372ee47f8fba4fe3f7714df3218c023d8835a93cfe5ba6b9768679be004ab"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeTranscriptDeltaNotification.ts",
+        "bytes": 421,
+        "sha256": "9fe0837b12573eacf36384ff25aed63685de51a2b58edf7c6f74ce5b47d80532"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeTranscriptDoneNotification.ts",
+        "bytes": 417,
+        "sha256": "fb2e667c004c529028f51558f07e40d5e7f9869081f3b0ad644441cdcb8e6f9f"
+      },
+      {
+        "path": "stable/v2/ThreadRealtimeTranscriptRole.ts",
+        "bytes": 218,
+        "sha256": "da3503ecb32d08082a0b06a7c2e4fae3bba37426d2fa3a73e5b9ea9a950b1de0"
+      },
+      {
+        "path": "stable/v2/ThreadRevertedNotification.ts",
+        "bytes": 217,
+        "sha256": "5b4d5848279e4010521cf2b8cca4abf068ef44bc70a7aed941cf48e4d8f4cf3a"
+      },
+      {
+        "path": "stable/v2/ThreadSection.ts",
+        "bytes": 594,
+        "sha256": "aac3ccfa2c5420d1b9f8a56d6008b23369ee5790d91bdfecff0c7d52d9bb7f3c"
+      },
+      {
+        "path": "stable/v2/ThreadSectionAppearance.ts",
+        "bytes": 310,
+        "sha256": "e56160b23e50b1019b41e8d69c55d7a910fecd9a41f60e4657e49ea06a557827"
+      },
+      {
+        "path": "stable/v2/ThreadSetNameParams.ts",
+        "bytes": 224,
+        "sha256": "6ebe6eeb613fd65860d822f94808b61e06349479bd8c70d5e4ed51c6ff735cb6"
+      },
+      {
+        "path": "stable/v2/ThreadSetNameResponse.ts",
+        "bytes": 212,
+        "sha256": "5b8371ac83b80437414d6b243778a1b7e3cba0c5840468e821e57dc124b5dc6f"
+      },
+      {
+        "path": "stable/v2/ThreadSettings.ts",
+        "bytes": 1132,
+        "sha256": "02bfd2ecc006548cfebc5cde9b1515ff244be64e295c7eb613c7d41f69e46887"
+      },
+      {
+        "path": "stable/v2/ThreadSettingsUpdatedNotification.ts",
+        "bytes": 315,
+        "sha256": "c6a46be588e94c51ffa82cddac1ac861636e09def2257bc02d821bbaee0896c8"
+      },
+      {
+        "path": "stable/v2/ThreadSource.ts",
+        "bytes": 188,
+        "sha256": "d850342355769c7de914d16fb2e555056c30d46dd1a407ad1702b210244b58c4"
+      },
+      {
+        "path": "stable/v2/ThreadStartedNotification.ts",
+        "bytes": 257,
+        "sha256": "328262a5a3b06f08312f7378a2d701d92af6275f79577eb77dece9141eb34dc3"
+      },
+      {
+        "path": "stable/v2/ThreadStatus.ts",
+        "bytes": 379,
+        "sha256": "f47e1a803675acc8f52aa0cce5c3a461c4268f33367fedf1a5c04ac97b30dbd9"
+      },
+      {
+        "path": "stable/v2/ThreadStatusChangedNotification.ts",
+        "bytes": 299,
+        "sha256": "b2f90e6ddc845cf3efa0cef3fb9c4705fbf4f420b900ce78afe7849c76703342"
+      },
+      {
+        "path": "stable/v2/ThreadTokenUsage.ts",
+        "bytes": 348,
+        "sha256": "d7076e0fafcb89830310f10976ca431446cd2ad7d29282fda9c58c69951485da"
+      },
+      {
+        "path": "stable/v2/ThreadTokenUsageUpdatedNotification.ts",
+        "bytes": 335,
+        "sha256": "c6bbdd9f7f8ca8783ef593f31efbeedc07e7ed6c1b1c15ba85247efbdf6af8fb"
+      },
+      {
+        "path": "stable/v2/ThreadTurnsListParams.ts",
+        "bytes": 723,
+        "sha256": "885b8d7328ab79d15f06dc6dc54facbdd7d57662444b538aa8db354cd79a7afd"
+      },
+      {
+        "path": "stable/v2/ThreadTurnsListResponse.ts",
+        "bytes": 700,
+        "sha256": "b59a5f47e07db92a749a362eafbfb33f0aaf52df0fb4bd27929969555e28b43d"
+      },
+      {
+        "path": "stable/v2/ThreadUnarchivedNotification.ts",
+        "bytes": 219,
+        "sha256": "2c85d5622b0d5f3ecc48f117388be3f678a3685ca25536a76b66ac8600aafdfc"
+      },
+      {
+        "path": "stable/v2/ThreadUnsubscribeParams.ts",
+        "bytes": 214,
+        "sha256": "5780913f01bac19e8edb8c01c77151efefdae62bf451968270e5bb8e0dda37b2"
+      },
+      {
+        "path": "stable/v2/ThreadUnsubscribeResponse.ts",
+        "bytes": 308,
+        "sha256": "0f515de453d78e1b181d9999e47803033962a2c3987818a75b87df10c9071261"
+      },
+      {
+        "path": "stable/v2/ThreadUnsubscribeStatus.ts",
+        "bytes": 239,
+        "sha256": "0efe48aff131c9c0270d6ad2c5db92e4660e7e89a27d03c05053648ac349382a"
+      },
+      {
+        "path": "stable/v2/TokenUsageBreakdown.ts",
+        "bytes": 345,
+        "sha256": "e983f21175fdfdf1a239e26cd8916e1cb765bc0cb7904e2bd9cc83ffe325c8a7"
+      },
+      {
+        "path": "stable/v2/ToolRequestUserInputAnswer.ts",
+        "bytes": 307,
+        "sha256": "271fbffc377b53570fae244df734bb666cb902bdff633bf27842a5bdd7e3d628"
+      },
+      {
+        "path": "stable/v2/ToolRequestUserInputOption.ts",
+        "bytes": 319,
+        "sha256": "ec2f4b008b872a96c8460f4a830b8d0c20b60ef0421541970e3db62f329ef485"
+      },
+      {
+        "path": "stable/v2/ToolRequestUserInputParams.ts",
+        "bytes": 592,
+        "sha256": "7299b0a997e9b8cc2158b318c701dc2558deb63865ad28ff4f1ed375be8ea0dc"
+      },
+      {
+        "path": "stable/v2/ToolRequestUserInputQuestion.ts",
+        "bytes": 512,
+        "sha256": "f38592527bbaf585343c051b392e9f43e0ca5dd89b4417efc0c1de36713bad1d"
+      },
+      {
+        "path": "stable/v2/ToolRequestUserInputResponse.ts",
+        "bytes": 418,
+        "sha256": "aab0b68d428393835862f69c9bf06bac417a3cd68cffb413efcca0a838ece04b"
+      },
+      {
+        "path": "stable/v2/Turn.ts",
+        "bytes": 1053,
+        "sha256": "acaea8712132b044c5c51dc67f779a3a3041ff0cd466b205cd672f97dfca7fe7"
+      },
+      {
+        "path": "stable/v2/TurnCompletedNotification.ts",
+        "bytes": 267,
+        "sha256": "0c27d8d18c8030f413c2281e3c7f5625b6da5956333bbc2c8a397f2df9d30815"
+      },
+      {
+        "path": "stable/v2/TurnDiffUpdatedNotification.ts",
+        "bytes": 394,
+        "sha256": "fe6d3f22009556852bd6d3fb4c7a557fe7ce182d36f6dd9c741597555c0beef9"
+      },
+      {
+        "path": "stable/v2/TurnError.ts",
+        "bytes": 551,
+        "sha256": "0c285797a0fdb9b4533943aec30b39c2163206ea48b20d6994585eb4e606a4ce"
+      },
+      {
+        "path": "stable/v2/TurnInterruptParams.ts",
+        "bytes": 226,
+        "sha256": "643034c3d25c23c7700236d4d1ff16286565786d48148e85b0c4761fe46d3804"
+      },
+      {
+        "path": "stable/v2/TurnInterruptResponse.ts",
+        "bytes": 212,
+        "sha256": "3994cb114b2c4a2e81ba3a349c3a7d1f13ce1b165776b2162b52c9a114c24bc4"
+      },
+      {
+        "path": "stable/v2/TurnItemsView.ts",
+        "bytes": 215,
+        "sha256": "df5e5fd79e6c28ff89e5e201c761535d7988fbaa9caa5fc6bf71f655f353668c"
+      },
+      {
+        "path": "stable/v2/TurnModerationMetadataNotification.ts",
+        "bytes": 323,
+        "sha256": "c2697722a618b03e6e5974da0e68bbc6877e6deae23a4c53f06219779d64614c"
+      },
+      {
+        "path": "stable/v2/TurnPlanStep.ts",
+        "bytes": 294,
+        "sha256": "b1f3b5b48cedd6f72148870072b0c6eea02db81d14c7dff5fac9756cc59baae0"
+      },
+      {
+        "path": "stable/v2/TurnPlanStepStatus.ts",
+        "bytes": 226,
+        "sha256": "ab9c561f1910a2fd7e624dfa4481eedb0636725643c5925479cd358406202c19"
+      },
+      {
+        "path": "stable/v2/TurnPlanUpdatedNotification.ts",
+        "bytes": 344,
+        "sha256": "793d1f35a4576ff0959df89e35c1e473d07f38589555dfd0587d30f352d306a4"
+      },
+      {
+        "path": "stable/v2/TurnStartParams.ts",
+        "bytes": 2392,
+        "sha256": "08f1324f94fc1700edf961f5753deb7332a421c6cecf6f1ac500b019ae493873"
+      },
+      {
+        "path": "stable/v2/TurnStartResponse.ts",
+        "bytes": 241,
+        "sha256": "b0dee9129d1d3e908d518e951ffb312b5fbfb8fe3d1eed2bcad349c777debd55"
+      },
+      {
+        "path": "stable/v2/TurnStartedNotification.ts",
+        "bytes": 265,
+        "sha256": "c832f6d3bca20c398de79d288ec65fa6c1987e950c52693b700c6b7242bf0850"
+      },
+      {
+        "path": "stable/v2/TurnStatus.ts",
+        "bytes": 233,
+        "sha256": "c69049363f97e97844e9fc851f0cd4122da057ba1371de003a28c00ab7a6ef1a"
+      },
+      {
+        "path": "stable/v2/TurnSteerParams.ts",
+        "bytes": 458,
+        "sha256": "c2c371c45b5d23508821615b05a5fb6a0c695aab4aca91505be2d9d53006a3b6"
+      },
+      {
+        "path": "stable/v2/TurnSteerResponse.ts",
+        "bytes": 206,
+        "sha256": "b77bae04f63621580d71aecab4c19c9dcd8d9147be1c4b07fe809dcaf584212b"
+      },
+      {
+        "path": "stable/v2/TurnToolOutput.ts",
+        "bytes": 335,
+        "sha256": "b16908b17ba6f7b38d15b912d50921d43938ac48d8657347b9e938441a4ef666"
+      },
+      {
+        "path": "stable/v2/UserInput.ts",
+        "bytes": 744,
+        "sha256": "eaaa351ea1c3bb9b34c7c830f41ee4af24f22fa09dfff45ce9c8edf10220212c"
+      },
+      {
+        "path": "stable/v2/WarningNotification.ts",
+        "bytes": 364,
+        "sha256": "51857f21a6b49cbdbc0edbb638f03bbf1eac421e26d171873b335db3385b6934"
+      },
+      {
+        "path": "stable/v2/WebSearchAction.ts",
+        "bytes": 399,
+        "sha256": "f1dc1197e35b48fd16134a80353ebb606256126a634b4580406a5bffed1b0395"
+      },
+      {
+        "path": "stable/v2/WindowsSandboxSetupCompletedNotification.ts",
+        "bytes": 361,
+        "sha256": "316944fb9503b1709c46a36e60c38b40aa3e65d89bb6b5a5779cb23a4caa9d98"
+      },
+      {
+        "path": "stable/v2/WindowsSandboxSetupMode.ts",
+        "bytes": 218,
+        "sha256": "8f3f840d6f5ed486e08d618ccce8cfd69dc981801dd1d5695978a0f9b494f3fc"
+      },
+      {
+        "path": "stable/v2/WindowsWorldWritableWarningNotification.ts",
+        "bytes": 281,
+        "sha256": "e72526faa6bd3e8983c6aec0899cc3f705bb5f0c84c9f3d671901fe5d2cef2c2"
+      },
+      {
+        "path": "validators.ts",
+        "bytes": 2015878,
+        "sha256": "33bbcfbbafae7d43fd508b5ab14ad28267c7c3ce53c021e349cccbcc1adadf1d"
+      }
+    ]
+  },
+  "parserPolicy": "one selected structural profile per route; no stable/experimental fallback",
+  "errorSurfaces": [
+    {
+      "kind": "error_notification",
+      "method": "error",
+      "officialDefinition": "ErrorNotification",
+      "disposition": "adopted_stable"
+    },
+    {
+      "kind": "rpc_error_response",
+      "officialDefinition": null,
+      "disposition": "missing_from_generated_route_result_mapping",
+      "sedesAuthority": "src/server/backends/codex/rpc/codex-rpc-client.ts"
+    }
+  ],
+  "cutoverOrder": [
+    "initialization",
+    "thread_history",
+    "live_turns",
+    "interactions",
+    "actions"
+  ],
+  "routes": [
+    {
+      "direction": "client_request",
+      "method": "initialize",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "initialization",
+      "paramsDefinition": "InitializeParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/InitializeParams"
+      },
+      "resultDefinition": "InitializeResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/InitializeResponse"
+      },
+      "sedesRefinements": [
+        "release_guard",
+        "owned_scope",
+        "native_text_bounds"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/list",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "experimental",
+      "domain": "thread_history",
+      "paramsDefinition": "ThreadListParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadListParams"
+      },
+      "resultDefinition": "ThreadListResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadListResponse"
+      },
+      "sedesRefinements": [
+        "native_identity_bounds",
+        "history_bounds",
+        "consumed_projection"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/loaded/list",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "thread_history",
+      "paramsDefinition": "ThreadLoadedListParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadLoadedListParams"
+      },
+      "resultDefinition": "ThreadLoadedListResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadLoadedListResponse"
+      },
+      "sedesRefinements": [
+        "native_identity_bounds",
+        "history_bounds",
+        "consumed_projection"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/read",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "experimental",
+      "domain": "thread_history",
+      "paramsDefinition": "ThreadReadParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadReadParams"
+      },
+      "resultDefinition": "ThreadReadResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadReadResponse"
+      },
+      "sedesRefinements": [
+        "native_identity_bounds",
+        "history_bounds",
+        "consumed_projection"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/resume",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "experimental",
+      "domain": "thread_history",
+      "paramsDefinition": "ThreadResumeParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadResumeParams"
+      },
+      "resultDefinition": "ThreadResumeResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadResumeResponse"
+      },
+      "sedesRefinements": [
+        "native_identity_bounds",
+        "history_bounds",
+        "consumed_projection"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/turns/list",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "thread_history",
+      "paramsDefinition": "ThreadTurnsListParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadTurnsListParams"
+      },
+      "resultDefinition": "ThreadTurnsListResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadTurnsListResponse"
+      },
+      "sedesRefinements": [
+        "native_identity_bounds",
+        "history_bounds",
+        "consumed_projection"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/items/list",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "thread_history",
+      "paramsDefinition": "ThreadItemsListParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadItemsListParams"
+      },
+      "resultDefinition": "ThreadItemsListResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadItemsListResponse"
+      },
+      "sedesRefinements": [
+        "native_identity_bounds",
+        "history_bounds",
+        "consumed_projection"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/unsubscribe",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "thread_history",
+      "paramsDefinition": "ThreadUnsubscribeParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadUnsubscribeParams"
+      },
+      "resultDefinition": "ThreadUnsubscribeResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadUnsubscribeResponse"
+      },
+      "sedesRefinements": [
+        "native_identity_bounds",
+        "history_bounds",
+        "consumed_projection"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/start",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "experimental",
+      "domain": "thread_history",
+      "paramsDefinition": "ThreadStartParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadStartParams"
+      },
+      "resultDefinition": "ThreadStartResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadStartResponse"
+      },
+      "sedesRefinements": [
+        "native_identity_bounds",
+        "history_bounds",
+        "consumed_projection"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "turn/start",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "TurnStartParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/TurnStartParams"
+      },
+      "resultDefinition": "TurnStartResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/TurnStartResponse"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "turn/steer",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "TurnSteerParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/TurnSteerParams"
+      },
+      "resultDefinition": "TurnSteerResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/TurnSteerResponse"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "turn/interrupt",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "TurnInterruptParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/TurnInterruptParams"
+      },
+      "resultDefinition": "TurnInterruptResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/TurnInterruptResponse"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/name/set",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "actions",
+      "paramsDefinition": "ThreadSetNameParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadSetNameParams"
+      },
+      "resultDefinition": "ThreadSetNameResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadSetNameResponse"
+      },
+      "sedesRefinements": [
+        "outbound_subset",
+        "safe_integer_bounds",
+        "postcondition_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/compact/start",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "actions",
+      "paramsDefinition": "ThreadCompactStartParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadCompactStartParams"
+      },
+      "resultDefinition": "ThreadCompactStartResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadCompactStartResponse"
+      },
+      "sedesRefinements": [
+        "outbound_subset",
+        "safe_integer_bounds",
+        "postcondition_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "model/list",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "initialization",
+      "paramsDefinition": "ModelListParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ModelListParams"
+      },
+      "resultDefinition": "ModelListResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ModelListResponse"
+      },
+      "sedesRefinements": [
+        "release_guard",
+        "owned_scope",
+        "native_text_bounds"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "experimentalFeature/list",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "actions",
+      "paramsDefinition": "ExperimentalFeatureListParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ExperimentalFeatureListParams"
+      },
+      "resultDefinition": "ExperimentalFeatureListResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ExperimentalFeatureListResponse"
+      },
+      "sedesRefinements": [
+        "outbound_subset",
+        "safe_integer_bounds",
+        "postcondition_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "skills/list",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "actions",
+      "paramsDefinition": "SkillsListParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/SkillsListParams"
+      },
+      "resultDefinition": "SkillsListResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/SkillsListResponse"
+      },
+      "sedesRefinements": [
+        "outbound_subset",
+        "safe_integer_bounds",
+        "postcondition_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "permissionProfile/list",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "actions",
+      "paramsDefinition": "PermissionProfileListParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/PermissionProfileListParams"
+      },
+      "resultDefinition": "PermissionProfileListResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/PermissionProfileListResponse"
+      },
+      "sedesRefinements": [
+        "outbound_subset",
+        "safe_integer_bounds",
+        "postcondition_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/fork",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "experimental",
+      "domain": "actions",
+      "paramsDefinition": "ThreadForkParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadForkParams"
+      },
+      "resultDefinition": "ThreadForkResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadForkResponse"
+      },
+      "sedesRefinements": [
+        "outbound_subset",
+        "safe_integer_bounds",
+        "postcondition_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/inject_items",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "actions",
+      "paramsDefinition": "ThreadInjectItemsParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadInjectItemsParams"
+      },
+      "resultDefinition": "ThreadInjectItemsResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadInjectItemsResponse"
+      },
+      "sedesRefinements": [
+        "outbound_subset",
+        "safe_integer_bounds",
+        "postcondition_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/goal/get",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "actions",
+      "paramsDefinition": "ThreadGoalGetParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadGoalGetParams"
+      },
+      "resultDefinition": "ThreadGoalGetResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadGoalGetResponse"
+      },
+      "sedesRefinements": [
+        "outbound_subset",
+        "safe_integer_bounds",
+        "postcondition_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/goal/set",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "actions",
+      "paramsDefinition": "ThreadGoalSetParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadGoalSetParams"
+      },
+      "resultDefinition": "ThreadGoalSetResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadGoalSetResponse"
+      },
+      "sedesRefinements": [
+        "outbound_subset",
+        "safe_integer_bounds",
+        "postcondition_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/goal/clear",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "actions",
+      "paramsDefinition": "ThreadGoalClearParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadGoalClearParams"
+      },
+      "resultDefinition": "ThreadGoalClearResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadGoalClearResponse"
+      },
+      "sedesRefinements": [
+        "outbound_subset",
+        "safe_integer_bounds",
+        "postcondition_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/settings/update",
+      "use": "invoked",
+      "stability": "experimental",
+      "artifactProfile": "experimental",
+      "domain": "actions",
+      "paramsDefinition": "ThreadSettingsUpdateParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadSettingsUpdateParams"
+      },
+      "resultDefinition": "ThreadSettingsUpdateResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadSettingsUpdateResponse"
+      },
+      "sedesRefinements": [
+        "outbound_subset",
+        "safe_integer_bounds",
+        "postcondition_semantics"
+      ]
+    },
+    {
+      "direction": "client_notification",
+      "method": "initialized",
+      "use": "emitted",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "initialization",
+      "envelopeDefinition": "ClientNotification",
+      "paramsDefinition": null,
+      "sedesRefinements": [
+        "release_guard",
+        "owned_scope",
+        "native_text_bounds"
+      ]
+    },
+    {
+      "direction": "server_request",
+      "method": "account/chatgptAuthTokens/refresh",
+      "use": "recognized_fail_closed",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "interactions",
+      "paramsDefinition": "ChatgptAuthTokensRefreshParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/ChatgptAuthTokensRefreshParams"
+      },
+      "resultDefinition": "ChatgptAuthTokensRefreshResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/ChatgptAuthTokensRefreshResponse"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "supported_decisions",
+        "answer_data_properties"
+      ]
+    },
+    {
+      "direction": "server_request",
+      "method": "applyPatchApproval",
+      "use": "handled",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "interactions",
+      "paramsDefinition": "ApplyPatchApprovalParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/ApplyPatchApprovalParams"
+      },
+      "resultDefinition": "ApplyPatchApprovalResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/ApplyPatchApprovalResponse"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "supported_decisions",
+        "answer_data_properties"
+      ]
+    },
+    {
+      "direction": "server_request",
+      "method": "attestation/generate",
+      "use": "recognized_fail_closed",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "interactions",
+      "paramsDefinition": "AttestationGenerateParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/AttestationGenerateParams"
+      },
+      "resultDefinition": "AttestationGenerateResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/AttestationGenerateResponse"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "supported_decisions",
+        "answer_data_properties"
+      ]
+    },
+    {
+      "direction": "server_request",
+      "method": "execCommandApproval",
+      "use": "handled",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "interactions",
+      "paramsDefinition": "ExecCommandApprovalParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/ExecCommandApprovalParams"
+      },
+      "resultDefinition": "ExecCommandApprovalResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/ExecCommandApprovalResponse"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "supported_decisions",
+        "answer_data_properties"
+      ]
+    },
+    {
+      "direction": "server_request",
+      "method": "item/commandExecution/requestApproval",
+      "use": "handled",
+      "stability": "stable",
+      "artifactProfile": "experimental",
+      "domain": "interactions",
+      "paramsDefinition": "CommandExecutionRequestApprovalParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/CommandExecutionRequestApprovalParams"
+      },
+      "resultDefinition": "CommandExecutionRequestApprovalResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/CommandExecutionRequestApprovalResponse"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "supported_decisions",
+        "answer_data_properties"
+      ]
+    },
+    {
+      "direction": "server_request",
+      "method": "item/fileChange/requestApproval",
+      "use": "handled",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "interactions",
+      "paramsDefinition": "FileChangeRequestApprovalParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/FileChangeRequestApprovalParams"
+      },
+      "resultDefinition": "FileChangeRequestApprovalResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/FileChangeRequestApprovalResponse"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "supported_decisions",
+        "answer_data_properties"
+      ]
+    },
+    {
+      "direction": "server_request",
+      "method": "item/permissions/requestApproval",
+      "use": "handled",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "interactions",
+      "paramsDefinition": "PermissionsRequestApprovalParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/PermissionsRequestApprovalParams"
+      },
+      "resultDefinition": "PermissionsRequestApprovalResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/PermissionsRequestApprovalResponse"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "supported_decisions",
+        "answer_data_properties"
+      ]
+    },
+    {
+      "direction": "server_request",
+      "method": "item/tool/call",
+      "use": "recognized_fail_closed",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "interactions",
+      "paramsDefinition": "DynamicToolCallParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/DynamicToolCallParams"
+      },
+      "resultDefinition": "DynamicToolCallResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/DynamicToolCallResponse"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "supported_decisions",
+        "answer_data_properties"
+      ]
+    },
+    {
+      "direction": "server_request",
+      "method": "item/tool/requestUserInput",
+      "use": "handled",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "interactions",
+      "paramsDefinition": "ToolRequestUserInputParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/ToolRequestUserInputParams"
+      },
+      "resultDefinition": "ToolRequestUserInputResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/ToolRequestUserInputResponse"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "supported_decisions",
+        "answer_data_properties"
+      ]
+    },
+    {
+      "direction": "server_request",
+      "method": "mcpServer/elicitation/request",
+      "use": "handled",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "interactions",
+      "paramsDefinition": "McpServerElicitationRequestParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/McpServerElicitationRequestParams"
+      },
+      "resultDefinition": "McpServerElicitationRequestResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.schemas.json",
+        "pointer": "#/definitions/McpServerElicitationRequestResponse"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "supported_decisions",
+        "answer_data_properties"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "account/updated",
+      "use": "ignored_lifecycle",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "initialization",
+      "paramsDefinition": "AccountUpdatedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/AccountUpdatedNotification"
+      },
+      "sedesRefinements": [
+        "none_beyond_official_structure"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "warning",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "WarningNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/WarningNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "error",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ErrorNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ErrorNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "thread/status/changed",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ThreadStatusChangedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadStatusChangedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "thread/name/updated",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ThreadNameUpdatedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadNameUpdatedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "thread/goal/updated",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ThreadGoalUpdatedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadGoalUpdatedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "thread/goal/cleared",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ThreadGoalClearedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadGoalClearedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "thread/settings/updated",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "experimental",
+      "domain": "live_turns",
+      "paramsDefinition": "ThreadSettingsUpdatedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadSettingsUpdatedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "thread/tokenUsage/updated",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ThreadTokenUsageUpdatedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadTokenUsageUpdatedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "thread/compacted",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ContextCompactedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ContextCompactedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "turn/started",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "TurnStartedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/TurnStartedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "turn/completed",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "TurnCompletedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/TurnCompletedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "turn/diff/updated",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "TurnDiffUpdatedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/TurnDiffUpdatedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "turn/plan/updated",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "TurnPlanUpdatedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/TurnPlanUpdatedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "item/started",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ItemStartedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ItemStartedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "item/completed",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ItemCompletedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ItemCompletedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "item/agentMessage/delta",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "AgentMessageDeltaNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/AgentMessageDeltaNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "item/plan/delta",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "PlanDeltaNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/PlanDeltaNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "item/commandExecution/outputDelta",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "CommandExecutionOutputDeltaNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/CommandExecutionOutputDeltaNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "item/fileChange/outputDelta",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "FileChangeOutputDeltaNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/FileChangeOutputDeltaNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "item/fileChange/patchUpdated",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "FileChangePatchUpdatedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/FileChangePatchUpdatedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "item/mcpToolCall/progress",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "McpToolCallProgressNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/McpToolCallProgressNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "item/reasoning/summaryPartAdded",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ReasoningSummaryPartAddedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ReasoningSummaryPartAddedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "item/reasoning/summaryTextDelta",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ReasoningSummaryTextDeltaNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ReasoningSummaryTextDeltaNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "item/reasoning/textDelta",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ReasoningTextDeltaNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ReasoningTextDeltaNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "modelProvider/authRecoveryStarted",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "AuthRecoveryNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/AuthRecoveryNotification"
+      },
+      "sedesRefinements": [
+        "route_identity"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "modelProvider/authRecoveryCompleted",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "AuthRecoveryNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/AuthRecoveryNotification"
+      },
+      "sedesRefinements": [
+        "route_identity"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "mcpServer/startupStatus/updated",
+      "use": "ignored_informational",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "initialization",
+      "paramsDefinition": "McpServerStatusUpdatedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/McpServerStatusUpdatedNotification"
+      },
+      "sedesRefinements": [
+        "none_beyond_official_structure"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "serverRequest/resolved",
+      "use": "decoded",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ServerRequestResolvedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ServerRequestResolvedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity",
+        "collection_bounds",
+        "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "skills/changed",
+      "use": "catalog_invalidation",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "actions",
+      "paramsDefinition": "SkillsChangedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/SkillsChangedNotification"
+      },
+      "sedesRefinements": [
+        "catalog_generation_invalidation"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "thread/started",
+      "use": "creation_correlation",
+      "stability": "stable",
+      "artifactProfile": "experimental",
+      "domain": "thread_history",
+      "paramsDefinition": "ThreadStartedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadStartedNotification"
+      },
+      "sedesRefinements": [
+        "creation_correlation",
+        "native_identity_bounds",
+        "owned_scope"
+      ]
+    }
+  ]
+}

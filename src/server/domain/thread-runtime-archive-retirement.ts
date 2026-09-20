@@ -1,0 +1,59 @@
+import {
+  ThreadRuntimeNotIdleError,
+  ThreadRuntimeRetirementUnprovenError,
+} from "../events/thread-runtime-coordinator.js";
+import type { RequestScope } from "../identity/identity-provider.js";
+import { DomainError } from "./errors.js";
+
+export interface ArchivedThreadRuntimeRetirement {
+  runWithRuntimeRetired<Result>(
+    scope: RequestScope,
+    applicationThreadId: string,
+    operation: () => Promise<Result>,
+  ): Promise<Result>;
+}
+
+/**
+ * Holds deterministic per-thread maintenance fences across an archive commit.
+ * This makes the idle check and inventory transition one operation: a turn
+ * cannot be admitted between them, and overlapping family archives cannot
+ * deadlock by taking their thread fences in different orders.
+ */
+export async function runWithArchivedThreadRuntimesRetired<Result>(input: {
+  readonly scope: RequestScope;
+  readonly threadIds: readonly string[];
+  readonly runtimes: ArchivedThreadRuntimeRetirement;
+  readonly operation: () => Promise<Result>;
+}): Promise<Result> {
+  const threadIds = [...new Set(input.threadIds)].sort();
+  const retire = async (index: number): Promise<Result> => {
+    const threadId = threadIds[index];
+    if (threadId === undefined) return input.operation();
+    try {
+      return await input.runtimes.runWithRuntimeRetired(
+        input.scope,
+        threadId,
+        () => retire(index + 1),
+      );
+    } catch (error) {
+      if (error instanceof ThreadRuntimeNotIdleError) {
+        throw new DomainError(
+          "invalid_transition",
+          "A thread became active before the inventory change could commit. Wait for it to finish, then try again.",
+          false,
+          { cause: error },
+        );
+      }
+      if (error instanceof ThreadRuntimeRetirementUnprovenError) {
+        throw new DomainError(
+          "operation_outcome_uncertain",
+          "Sedes could not prove that a thread runtime stopped. Restart Sedes before retrying the inventory operation.",
+          false,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  };
+  return retire(0);
+}

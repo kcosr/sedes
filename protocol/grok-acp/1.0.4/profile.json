@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "profileId": "grok-acp/1.0.4",
+  "status": "production-admitted",
+  "candidateBuild": "d846eb93d9",
+  "acp": {
+    "expectedFamily": "ACP V1 plus Grok-private x.ai extensions",
+    "initializeEvidence": "contained-O2a",
+    "authenticatedEvidence": "production-native-L-suite",
+    "shippingCodec": "first-class-stable-1.x",
+    "productionCapabilityClaims": [
+      "native cached-token authentication",
+      "model catalog and effective session selection",
+      "bounded session-list discovery",
+      "provider-assigned session creation",
+      "bounded authoritative load replay",
+      "ordered text, Task, staged file, and native image submission with durable operation correlation",
+      "standard ACP resource links for path-native staged files",
+      "standard ACP image content blocks from canonical attachment bytes",
+      "restart reconciliation",
+      "session close as unload"
+    ]
+  },
+  "tranches": {
+    "O0": {
+      "status": "contained-captured",
+      "providerCapacity": false,
+      "evidence": "evidence/o0/capture.json"
+    },
+    "O1": {
+      "status": "contained-captured",
+      "providerCapacity": false,
+      "evidence": "evidence/o1/capture.json",
+      "evidenceSha256": "7d11c6939ddae0cb498bb155032a90f5d6e65f594587f4130b2c7783618b53b4"
+    },
+    "O2a": {
+      "status": "contained-captured",
+      "providerCapacity": false,
+      "evidence": "evidence/o2a/capture.json",
+      "evidenceSha256": "7657352425f23f4d1f5dc79ae5543ebae17a906b3efc42e2f84f7283e62809da",
+      "boundedObservationMilliseconds": 750,
+      "ignoredNotifications": 1,
+      "ignoredNotificationBytes": 81
+    },
+    "O2b": {
+      "status": "pending",
+      "providerCapacity": false,
+      "evidence": null
+    },
+    "L-readonly": {
+      "status": "contained-captured",
+      "providerCapacity": true,
+      "authenticated": true,
+      "evidence": "evidence/l-readonly/capture.json",
+      "evidenceSha256": "ea0e21e316189fe9bb288c132e00a17a110db5ba57194931b0e8a9f4ba3a7c2d"
+    },
+    "L": {
+      "status": "production-native-suite-passed",
+      "providerCapacity": true,
+      "authenticated": true,
+      "evidence": null,
+      "suite": "tests/real-grok/grok-session-lifecycle.test.ts",
+      "verifiedAt": "2026-08-16",
+      "exactBuild": "d846eb93d9"
+    }
+  },
+  "unsupportedOrDeferred": [
+    "provider tool execution and interactive permission routing",
+    "interrupt and adjacent-prompt cancellation",
+    "provider-generated images and provider image display",
+    "fork, steer, queue, and interject",
+    "rename and other thread actions",
+    "automation and managed terminals"
+  ],
+  "disposition": "Stable 1.x runtimes at or above the reviewed 1.0.4 floor are admitted for the listed production capabilities; the 1.0.4/d846eb93d9 production-shaped native L suite remains captured regression evidence with the operator's normal HOME/GROK_HOME and opaque provider-managed authentication; source-visible standard ACP image mechanics are pinned separately; O2b is nonblocking and unsupported features remain fail closed"
+}

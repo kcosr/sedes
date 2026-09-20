@@ -1,0 +1,740 @@
+/* Styles for the flat (mixed) sidebar views: FlatThreadRow and
+   ThreadPeekCard. All class names are namespaced (flat-row- /
+   thread-peek-) so they cannot collide with the legacy .thread-row styles.
+   Only theme custom properties from styles.css are referenced. */
+
+/* ---------------------------------------------------------------- row */
+
+.flat-row {
+  --environment-row-start: 0;
+  --environment-row-end: 0;
+  --flat-row-surface: transparent;
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-ctl);
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      oklch(
+          var(--environment-tint-lightness) var(--environment-chroma, 0)
+            var(--environment-hue, 0) / var(--environment-row-start)
+        )
+        var(--environment-gradient-head-stop),
+      oklch(
+          var(--environment-tint-lightness) var(--environment-chroma, 0)
+            var(--environment-hue, 0) / var(--environment-row-end)
+        )
+        var(--environment-row-tail-stop),
+      transparent var(--environment-row-clear-stop),
+      transparent 100%
+    ),
+    var(--flat-row-surface);
+  transition: background var(--motion-fast);
+}
+
+.flat-list-item[data-environment-tint="true"] .flat-row {
+  --environment-row-start: var(--environment-row-start-opacity);
+  --environment-row-end: var(--environment-row-tail-opacity);
+}
+
+.flat-row:hover,
+.flat-row:has(:focus-visible) {
+  --flat-row-surface: var(--secondary);
+}
+
+.flat-row-selected {
+  --flat-row-surface: var(--secondary);
+}
+
+/* Selected: 2px neutral left rail at 60% height (no accent fill). */
+.flat-row-selected::before {
+  position: absolute;
+  top: 20%;
+  left: 0;
+  width: 2px;
+  height: 60%;
+  border-radius: 999px;
+  background: var(--muted-foreground);
+  content: "";
+}
+
+.flat-row-link {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.flat-row-compact .flat-row-link {
+  min-height: 32px;
+}
+
+.flat-row-card {
+  align-items: flex-start;
+}
+
+.flat-row-card-content {
+  position: relative;
+  display: flex;
+  border-radius: inherit;
+  min-width: 0;
+  flex: 1;
+  padding: 5px 8px;
+}
+
+.flat-row-card .flat-row-link,
+.flat-row-card-content {
+  min-height: 50px;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 3px;
+}
+
+.flat-row-card-has-group > .flat-row-link,
+.flat-row-card-has-group .flat-row-card-content {
+  min-height: 70px;
+  padding-bottom: 23px;
+}
+
+.flat-row-group {
+  position: absolute;
+  right: 8px;
+  bottom: 7px;
+  z-index: 2;
+  max-width: calc(100% - 86px);
+  overflow: hidden;
+  padding: 2px 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.flat-row-group:hover,
+.flat-row-group:focus-visible {
+  border-color: var(--muted-foreground);
+  color: var(--foreground);
+}
+
+.flat-row-line1 {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Line 2 indents past the 16px glyph column + 6px gap. */
+.flat-row-line2 {
+  display: flex;
+  min-width: 0;
+  min-height: 16px;
+  align-items: center;
+  gap: 6px;
+  padding-left: 22px;
+}
+
+.flat-row-glyph {
+  display: grid;
+  width: 16px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--muted-foreground-2);
+}
+
+.flat-row-brand {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  margin-right: 2px;
+  color: var(--muted-foreground-2);
+  /* Optical: geometric centering is exact, but the title's ink floats high
+     in its 1.5 line box, so an unadjusted mark reads slightly low. */
+  transform: translateY(-0.5px);
+}
+
+/* Three-color budget: red = broken, amber = blocked on user, info-blue =
+   machine working. Everything else stays monochrome. */
+.flat-row-glyph[data-glyph="failed"],
+.thread-peek-row-icon[data-glyph="failed"] {
+  color: var(--destructive);
+}
+
+.flat-row-glyph[data-glyph="waiting"],
+.thread-peek-row-icon[data-glyph="waiting"] {
+  color: var(--warning);
+}
+
+.flat-row-glyph[data-glyph="running"],
+.thread-peek-row-icon[data-glyph="running"] {
+  color: var(--info);
+}
+
+.flat-row-glyph[data-glyph="unseen"] {
+  color: var(--info);
+}
+
+.flat-row-idle-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--muted-foreground-2);
+}
+
+/* Idle-but-disconnected: hollow dot. */
+.flat-row-idle-dot-hollow {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--muted-foreground-2);
+}
+
+/* Sizing only; the sweep, mask, and rotation come from .comet-spinner, which
+   also carries the reduced-motion guard. Colour is inherited from the glyph's
+   `color: var(--info)` above. */
+.flat-row-spin {
+  --comet-spinner-size: 14px;
+  --comet-spinner-thickness: 2.2px;
+  --comet-spinner-speed: 1s;
+  display: block;
+}
+
+.flat-row-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 13px;
+  letter-spacing: -0.006em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Title carries weight only while a completion is unseen. */
+.flat-row-unseen .flat-row-title {
+  font-weight: 500;
+}
+
+/* Settled recession: muted title and project; additive status badges are
+   suppressed in the component while durable row indicators remain. */
+.flat-row-settled .flat-row-title {
+  color: var(--muted-foreground);
+}
+
+.flat-row-settled .flat-row-project {
+  opacity: 0.55;
+}
+
+.flat-row-badges {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.flat-row-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted-foreground-2);
+}
+
+.flat-row-chip svg {
+  display: block;
+}
+
+.flat-row-chip[data-chip="alert"] {
+  color: var(--destructive);
+}
+
+.flat-row-chip[data-chip="queued"] {
+  color: var(--info);
+}
+
+/* Wake, fork, and task presence pack into one dynamic trailing-metadata group.
+   Missing indicators render no placeholder; fork always precedes task when
+   both are present. Width changes are immediate rather than animated so
+   loading or count updates do not visibly slide the row. */
+.flat-row-indicators {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.flat-row-indicator {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted-foreground-2);
+}
+
+.flat-row-indicator svg {
+  display: block;
+}
+
+/* Pending wake is warning attention in the trailing icon list; it survives
+   settled suppression until acknowledged. */
+.flat-row-indicator[data-indicator="wake"] {
+  color: var(--warning);
+}
+
+.flat-row-indicator-count {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* Unseen completion is an exceptional leading state, not trailing metadata. */
+.flat-row-unseen-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--info);
+}
+
+/* The trailing slot sizes itself from persistent metadata until its actions
+   are shown. Hover/focus actions then join the row layout so the title
+   narrows through its real ellipsis boundary instead of being covered. */
+.flat-row-trailing {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  margin-right: 6px;
+}
+
+.flat-row-trailing > * {
+  grid-area: 1 / 1;
+}
+
+/* In card density the trailing cell hugs line 1. */
+.flat-row-card .flat-row-trailing {
+  align-self: flex-start;
+  min-height: 26px;
+  margin-top: 7px;
+}
+
+.flat-row-default-trailing {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 8px;
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity var(--motion-fast);
+}
+
+.flat-row-actions {
+  position: absolute;
+  right: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 2px;
+  padding-left: 4px;
+  border-radius: var(--radius-ctl);
+  background: var(--secondary);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-fast);
+}
+
+/* Hover and keyboard-visible focus only. Plain :focus-within would stick
+   after a mouse click selects the row link, leaving settle/archive icons
+   visible once the pointer leaves. */
+.flat-row:hover .flat-row-actions,
+.flat-row:has(:focus-visible) .flat-row-actions {
+  position: relative;
+  right: auto;
+  opacity: 1;
+}
+
+.flat-row:hover .flat-row-actions > *,
+.flat-row:has(:focus-visible) .flat-row-actions > * {
+  pointer-events: auto;
+}
+
+.flat-row:hover .flat-row-default-trailing,
+.flat-row:has(:focus-visible) .flat-row-default-trailing {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Holding the quick-switch modifier gives the numbered hints precedence over
+   hover/focus actions so the row under the pointer does not lose its number. */
+.sidebar-inner[data-quick-switch-visible="true"] .flat-row-actions {
+  position: absolute;
+  right: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sidebar-inner[data-quick-switch-visible="true"] .flat-row-actions > * {
+  pointer-events: none;
+}
+
+.sidebar-inner[data-quick-switch-visible="true"] .flat-row-default-trailing {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.flat-row:has(.flat-row-time[data-shortcut="confirmation"]) .flat-row-actions {
+  position: absolute;
+  right: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.flat-row:has(.flat-row-time[data-shortcut="confirmation"])
+  .flat-row-actions
+  > * {
+  pointer-events: none;
+}
+
+.flat-row:has(.flat-row-time[data-shortcut="confirmation"])
+  .flat-row-default-trailing {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch rows expose lifecycle and archive actions through long-press, leaving
+   the trailing timestamp unobstructed. */
+@media (hover: none), (pointer: coarse) {
+  .flat-row-trailing {
+    display: grid;
+  }
+
+  .flat-row-actions {
+    display: none;
+  }
+
+  .flat-row .flat-row-default-trailing,
+  .flat-row:hover .flat-row-default-trailing,
+  .flat-row:has(:focus-visible) .flat-row-default-trailing {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.flat-row-time {
+  min-width: 3ch;
+  max-width: 88px;
+  overflow: hidden;
+  color: var(--muted-foreground-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Past-due wake / next-run stamps clamp to warning. */
+.flat-row-time[data-overdue="true"] {
+  color: var(--warning);
+}
+
+.flat-row-time[data-shortcut] {
+  display: inline-flex;
+  min-width: 3.25ch;
+  min-height: 22px;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+  box-shadow: 0 1px 0 var(--border-soft);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  line-height: 1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .flat-row-time[data-shortcut="confirmation"] {
+    animation: sidebar-shortcut-confirmation 300ms ease-out forwards;
+  }
+}
+
+/* Card line-2 context slot, right-aligned; one string only. */
+.flat-row-context {
+  margin-left: auto;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--muted-foreground-2);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flat-row-context[data-tone="failure"] {
+  color: var(--destructive);
+}
+
+/* ------------------------------------------------------ workspace chip */
+
+.flat-row-location {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--muted-foreground-2);
+  font-size: 11px;
+}
+
+.flat-row-location-part {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.flat-row-location-part + .flat-row-location-part::before {
+  flex: 0 0 auto;
+  color: var(--muted-foreground-2);
+  content: "·";
+}
+
+.flat-row-location-part > svg {
+  flex: 0 0 auto;
+}
+
+.flat-row-location-part > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.flat-row-target {
+  color: var(--muted-foreground-2);
+}
+
+.flat-row-compact .flat-row-target {
+  max-width: 34%;
+  flex: 0 1 auto;
+  font-size: 11px;
+}
+
+.flat-row-compact .flat-row-target > svg {
+  display: none;
+}
+
+/* ------------------------------------------------------------- peek */
+
+.thread-peek {
+  position: fixed;
+  z-index: 60;
+  width: 236px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--popover);
+  box-shadow:
+    0 1px 2px oklch(0 0 0 / 0.3),
+    0 8px 28px oklch(0 0 0 / 0.35);
+  /* Read-only panel: never traps the pointer away from the list. */
+  pointer-events: none;
+}
+
+.thread-peek-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.thread-peek-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.thread-peek-time {
+  flex: 0 0 auto;
+  color: var(--muted-foreground-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-peek-time[data-overdue="true"] {
+  color: var(--warning);
+}
+
+.thread-peek-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.thread-peek-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.thread-peek-row-icon {
+  display: grid;
+  width: 16px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--muted-foreground-2);
+}
+
+.thread-peek-row-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-peek-path {
+  margin-left: 6px;
+  color: var(--muted-foreground-2);
+  font-size: 11px;
+}
+
+.thread-peek-row-failure,
+.thread-peek-row-failure .thread-peek-row-icon {
+  color: var(--destructive);
+}
+
+.thread-peek-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--info);
+}
+
+.flat-row-question-indicator {
+  color: var(--warning);
+  border: 0;
+  padding: 0;
+  background: none;
+}
+
+button.flat-row-question-indicator {
+  cursor: pointer;
+}
+
+.flat-row-question-indicator:focus-visible {
+  outline: 2px solid var(--warning);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+/* Question controls remain reachable while hover replaces the adjacent
+   metadata with lifecycle actions. */
+.flat-row > .flat-row-question-indicator,
+.thread-row > .flat-row-question-indicator {
+  margin-right: 5px;
+}
+
+.flat-row-card > .flat-row-question-indicator {
+  align-self: flex-start;
+  margin-top: 13px;
+}
+
+/* Stretch the thread button behind metadata; location filters are sibling
+   buttons above it, never nested interactive controls. */
+.flat-row-card-content .flat-row-link {
+  min-height: 0;
+  align-items: stretch;
+  flex: 0 0 auto;
+  padding: 0;
+}
+
+.flat-row-card-content .flat-row-link::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  content: "";
+}
+
+.flat-row-card-content .flat-row-line2 {
+  pointer-events: none;
+}
+
+.flat-row .flat-row-location-filter {
+  position: relative;
+  z-index: 1;
+  pointer-events: auto;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  width: auto;
+  flex: 0 1 auto;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.flat-row-location-filter .flat-row-filter-name {
+  text-decoration: underline;
+  padding-bottom: 2px;
+  text-decoration-color: color-mix(in srgb, currentColor 60%, transparent);
+  text-underline-offset: 2px;
+}
+
+.flat-row-location-filter:hover .flat-row-filter-name,
+.flat-row-location-filter:focus-visible .flat-row-filter-name {
+  text-decoration-color: currentColor;
+}
+
+.flat-row-location-filter:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+/* Leave room for both names, including when the shortcuts are disabled. */
+.flat-row-location > .flat-row-project {
+  width: auto;
+  flex: 0 1 auto;
+}
+
+.flat-row-environment {
+  font: inherit;
+  color: inherit;
+}

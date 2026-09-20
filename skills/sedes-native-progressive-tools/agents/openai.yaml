@@ -1,0 +1,6 @@
+interface:
+  display_name: "Sedes Native Progressive Tools"
+  short_description: "Use progressive native Sedes gateways"
+  default_prompt: "Use $sedes-native-progressive-tools to discover and invoke the appropriate Sedes operation through native progressive gateways."
+policy:
+  allow_implicit_invocation: false

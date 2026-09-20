@@ -1,0 +1,15 @@
+{
+  "name": "@sedes/electron-workspace-file-download",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "capacitor": {
+    "electron": {
+      "src": "electron"
+    }
+  },
+  "files": [
+    "electron/dist/plugin.mjs"
+  ]
+}

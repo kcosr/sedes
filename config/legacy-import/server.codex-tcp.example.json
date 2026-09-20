@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 10,
+  "executionEnvironments": [
+    {
+      "id": "019196f7-a0a8-7bc4-a89b-8cf013978405",
+      "kind": "local",
+      "label": "Local"
+    }
+  ],
+  "backends": [
+    {
+      "id": "codex-local-tcp",
+      "kind": "codex_app_server",
+      "label": "Codex TCP",
+      "enabled": true,
+      "modelPolicy": { "type": "catalog" },
+      "moduleConfiguration": {
+        "connection": {
+          "ownership": "external",
+          "channel": {
+            "type": "tcp_websocket",
+            "url": "ws://127.0.0.1:4500",
+            "authentication": {
+              "type": "capability_token",
+              "secret": {
+                "source": "environment",
+                "variable": "SEDES_CODEX_LOCAL_TOKEN"
+              }
+            }
+          }
+        },
+        "policy": {
+          "allowedSandboxModes": ["read-only", "workspace-write"],
+          "allowedNetworkAccess": ["disabled", "enabled"],
+          "allowedApprovalPolicies": ["untrusted", "on-request", "never"],
+          "allowedApprovalReviewers": ["user", "auto_review"]
+        }
+      }
+    }
+  ],
+  "targets": [
+    {
+      "id": "codex-tcp-default",
+      "kind": "codex_app_server",
+      "label": "Codex TCP",
+      "backendInstanceId": "codex-local-tcp",
+      "executionEnvironmentId": "019196f7-a0a8-7bc4-a89b-8cf013978405",
+      "enabled": true,
+      "moduleConfiguration": {
+        "defaults": {
+          "sandboxMode": "read-only",
+          "networkAccess": "disabled",
+          "approvalPolicy": "never",
+          "approvalReviewer": "user",
+          "model": {
+            "type": "catalogDefault"
+          }
+        }
+      }
+    }
+  ],
+  "defaultTargetId": "codex-tcp-default"
+}

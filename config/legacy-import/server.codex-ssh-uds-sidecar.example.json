@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 10,
+  "executionEnvironments": [
+    {
+      "id": "019196f7-a0a8-7bc4-a89b-8cf013978405",
+      "kind": "local",
+      "label": "Local"
+    },
+    {
+      "id": "019196f7-a0a8-7bc4-a89b-8cf013978406",
+      "kind": "ssh",
+      "label": "Remote Codex host with managed operations",
+      "hostAlias": "srv",
+      "workspaceRoots": ["/absolute/remote/workspaces"],
+      "operations": {
+        "kind": "sidecar",
+        "deployment": "managed",
+        "carrier": { "kind": "ssh_stdio" },
+        "enabledCapabilities": [
+          "directory_browser",
+          "workspace_files",
+          "composer_attachments",
+          "agent_tools_cli",
+          "interactive_terminal"
+        ]
+      }
+    }
+  ],
+  "backends": [
+    {
+      "id": "codex-ssh-uds",
+      "kind": "codex_app_server",
+      "label": "Codex over SSH UDS",
+      "enabled": true,
+      "modelPolicy": { "type": "catalog" },
+      "moduleConfiguration": {
+        "connection": {
+          "ownership": "external",
+          "channel": {
+            "type": "unix_websocket",
+            "socketPath": "/absolute/remote/app-server.sock"
+          }
+        },
+        "policy": {
+          "allowedSandboxModes": ["read-only", "workspace-write"],
+          "allowedNetworkAccess": ["disabled", "enabled"],
+          "allowedApprovalPolicies": ["untrusted", "on-request", "never"],
+          "allowedApprovalReviewers": ["user", "auto_review"]
+        }
+      }
+    }
+  ],
+  "targets": [
+    {
+      "id": "codex-ssh-uds-default",
+      "kind": "codex_app_server",
+      "label": "Codex over SSH UDS with remote operations",
+      "backendInstanceId": "codex-ssh-uds",
+      "executionEnvironmentId": "019196f7-a0a8-7bc4-a89b-8cf013978406",
+      "enabled": true,
+      "moduleConfiguration": {
+        "defaults": {
+          "sandboxMode": "read-only",
+          "networkAccess": "enabled",
+          "approvalPolicy": "never",
+          "approvalReviewer": "user",
+          "model": { "type": "catalogDefault" }
+        }
+      }
+    }
+  ],
+  "defaultTargetId": "codex-ssh-uds-default"
+}

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 11,
+  "packagedClients": [],
+  "listen": {
+    "host": "127.0.0.1",
+    "port": 4784
+  }
+}

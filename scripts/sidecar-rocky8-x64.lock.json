@@ -1,0 +1,93 @@
+{
+  "architecture": "x64",
+  "distribution": "rocky8",
+  "packages": [
+    {
+      "epoch": "0",
+      "name": "filesystem",
+      "release": "6.el8",
+      "sha256": "a620c8dc9acec25088fa83a1061bbda6d391dd1aab36b9eed75144d5d4caf8d7",
+      "url": "https://download.rockylinux.org/pub/rocky/8/BaseOS/x86_64/os/Packages/f/filesystem-3.8-6.el8.x86_64.rpm",
+      "version": "3.8"
+    },
+    {
+      "epoch": "0",
+      "name": "gcc",
+      "release": "28.el8_10",
+      "sha256": "1001f6b4f57720b49bd0fcc64d2b5e29020fd74750611f53f4e815ab79d0939e",
+      "url": "https://download.rockylinux.org/pub/rocky/8/AppStream/x86_64/os/Packages/g/gcc-8.5.0-28.el8_10.x86_64.rpm",
+      "version": "8.5.0"
+    },
+    {
+      "epoch": "0",
+      "name": "glibc",
+      "release": "251.el8_10.40",
+      "sha256": "f9ee0ed8611d1b4421ac5f9b377ac238377e47466aaaf075822b2d811f01bbdf",
+      "url": "https://download.rockylinux.org/pub/rocky/8/BaseOS/x86_64/os/Packages/g/glibc-2.28-251.el8_10.40.x86_64.rpm",
+      "version": "2.28"
+    },
+    {
+      "epoch": "0",
+      "name": "glibc-devel",
+      "release": "251.el8_10.40",
+      "sha256": "a362e73867c2151cdf19f6fe2fdc520d9b3414b9f922eac3de708669411c7e67",
+      "url": "https://download.rockylinux.org/pub/rocky/8/BaseOS/x86_64/os/Packages/g/glibc-devel-2.28-251.el8_10.40.x86_64.rpm",
+      "version": "2.28"
+    },
+    {
+      "epoch": "0",
+      "name": "glibc-headers",
+      "release": "251.el8_10.40",
+      "sha256": "137c4b4bb4074fca3c51bb64f81b193557efd5f0e4aab9dafa88049c136b78da",
+      "url": "https://download.rockylinux.org/pub/rocky/8/BaseOS/x86_64/os/Packages/g/glibc-headers-2.28-251.el8_10.40.x86_64.rpm",
+      "version": "2.28"
+    },
+    {
+      "epoch": "0",
+      "name": "kernel-headers",
+      "release": "553.159.1.el8_10",
+      "sha256": "6bebb9a78c0f004d3a2fd7170dbfad0a9b9a75467d08b5844f983682f25610da",
+      "url": "https://download.rockylinux.org/pub/rocky/8/BaseOS/x86_64/os/Packages/k/kernel-headers-4.18.0-553.159.1.el8_10.x86_64.rpm",
+      "version": "4.18.0"
+    },
+    {
+      "epoch": "0",
+      "name": "libgcc",
+      "release": "28.el8_10",
+      "sha256": "89f98cff56955f9dc4965dede3749c3b9cecd2d626b493112776c416c865c072",
+      "url": "https://download.rockylinux.org/pub/rocky/8/BaseOS/x86_64/os/Packages/l/libgcc-8.5.0-28.el8_10.x86_64.rpm",
+      "version": "8.5.0"
+    },
+    {
+      "epoch": "0",
+      "name": "libstdc++",
+      "release": "28.el8_10",
+      "sha256": "85b013213afce80a5f22cae6f17aa00c6b18fcfe923839a4a1e31e92ed5b150f",
+      "url": "https://download.rockylinux.org/pub/rocky/8/BaseOS/x86_64/os/Packages/l/libstdc++-8.5.0-28.el8_10.x86_64.rpm",
+      "version": "8.5.0"
+    },
+    {
+      "epoch": "0",
+      "name": "libstdc++-devel",
+      "release": "28.el8_10",
+      "sha256": "4cff90b17f8fe47534c9e520f3bdcb932683d859de300eb30c994b14f61aade2",
+      "url": "https://download.rockylinux.org/pub/rocky/8/AppStream/x86_64/os/Packages/l/libstdc++-devel-8.5.0-28.el8_10.x86_64.rpm",
+      "version": "8.5.0"
+    }
+  ],
+  "repositories": [
+    {
+      "primarySha256": "4e3e9c14741ea15719cd171b4b76bc2531136d92d248b7d55f70cf212ab07b95",
+      "primaryUrl": "https://download.rockylinux.org/pub/rocky/8/BaseOS/x86_64/os/repodata/4e3e9c14741ea15719cd171b4b76bc2531136d92d248b7d55f70cf212ab07b95-primary.xml.gz",
+      "sha256": "5793de4f34a6cd5236a0c60e6bd02a0175847d4017787d4dad80e5e6c2b72b45",
+      "url": "https://download.rockylinux.org/pub/rocky/8/BaseOS/x86_64/os/repodata/repomd.xml"
+    },
+    {
+      "primarySha256": "a08d42345366f8bfd8552a4955ca0bc11ceaf9f3810d096753ed8eaa6876bf26",
+      "primaryUrl": "https://download.rockylinux.org/pub/rocky/8/AppStream/x86_64/os/repodata/a08d42345366f8bfd8552a4955ca0bc11ceaf9f3810d096753ed8eaa6876bf26-primary.xml.gz",
+      "sha256": "19fd70a18c86c19d8745c46a777689d39efbe0280ffe8a7610e1d5b751bca446",
+      "url": "https://download.rockylinux.org/pub/rocky/8/AppStream/x86_64/os/repodata/repomd.xml"
+    }
+  ],
+  "schemaVersion": 1
+}

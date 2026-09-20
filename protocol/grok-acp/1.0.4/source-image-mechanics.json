@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "extraction": {
+    "command": "npm run extract:grok-source-routes",
+    "extractor": "scripts/grok-probes/extract-grok-source-routes.mjs",
+    "sourceLocator": "GROK_SOURCE_REPO or sibling ../grok-build checkout",
+    "claim": "reviewed stable-1.x profile evidence from the 1.0.4-declaring source; not exact-binary proof"
+  },
+  "revision": {
+    "releaseDeclaration": "1.0.4",
+    "commit": "5163763e703c319e4554c2f455535c5adb6e51e8",
+    "sourceRevision": "84ae1223e57a5048afb570d74d45c051fa604982"
+  },
+  "mechanics": [
+    {
+      "id": "standard_acp_image_content_ingest",
+      "path": "crates/codegen/xai-grok-shell/src/session/prompt_parser.rs",
+      "line": 112,
+      "evidenceSha256": "e7d9be65349edb7e35a8e708f97cf173fbb291d652de3f9509efb5e787b6233a"
+    },
+    {
+      "id": "standard_acp_resource_link_ingest",
+      "path": "crates/codegen/xai-grok-shell/src/session/prompt_parser.rs",
+      "line": 113,
+      "evidenceSha256": "f1be2a714c3deca8261ade27081e1672a980d34fbfb47983afe18daa87bcec56"
+    },
+    {
+      "id": "meta_free_resource_link_path_projection",
+      "path": "crates/codegen/xai-grok-shell/src/session/prompt_parser.rs",
+      "line": 115,
+      "evidenceSha256": "2f7a162985c88785345a6cd1fd860fb600efdb65be7f4bef22afac037e175268"
+    },
+    {
+      "id": "canonical_base64_image_bytes",
+      "path": "crates/codegen/xai-grok-shell/src/session/image_describe.rs",
+      "line": 376,
+      "evidenceSha256": "8523b67e9b282451a10b69de239402b0ed64843d3dd638aab4f342973b1b43f9"
+    },
+    {
+      "id": "model_explicit_image_boolean_precedence",
+      "path": "crates/codegen/xai-grok-pager/src/acp/model_state.rs",
+      "line": 110,
+      "evidenceSha256": "fd01d26d75a7683831ca2cbdc31f6c8e0f05dc1276d89cae6e7c71070e2f3d60"
+    },
+    {
+      "id": "model_input_modalities_negative_evidence",
+      "path": "crates/codegen/xai-grok-pager/src/acp/model_state.rs",
+      "line": 113,
+      "evidenceSha256": "9db2190f54bda0c17660eafb16a2ded6d4d3be1b64f02660e3e589be27ecbda9"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+.workpad-document { position: relative; min-width: 0; overflow-wrap: anywhere; }
+.workpad-attribution { color: inherit; padding: 0; border-radius: 2px; cursor: pointer; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+/* Attribution marks open author details, but their prose remains copyable. */
+.workpad-attribution {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+.workpad-attribution-0 { background: #dceafa; }
+.workpad-attribution-1 { background: #e8def8; }
+.workpad-attribution-2 { background: #d6eee1; }
+.workpad-attribution-3 { background: #f6e5ce; }
+.workpad-attribution-4 { background: #f6dfe7; }
+.workpad-attribution-5 { background: #d6edf0; }
+.workpad-attribution:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.workpad-attribution-detail { position: fixed; z-index: 80; width: min(420px, calc(100vw - 24px)); max-height: 35vh; overflow: auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--popover); color: var(--popover-foreground); font-size: 12px; box-shadow: 0 2px 8px #0001; }
+.workpad-attribution-meta { color: var(--muted-foreground); }
+.workpad-attribution-detail button { flex-shrink: 0; min-width: 32px; min-height: 32px; border-radius: 4px; font-size: 20px; }
+.workpad-attribution-detail button:hover { background: var(--accent); }
+
+[data-theme="dark"] .workpad-attribution-0 { background: #243b56; }
+[data-theme="dark"] .workpad-attribution-1 { background: #403053; }
+[data-theme="dark"] .workpad-attribution-2 { background: #244538; }
+[data-theme="dark"] .workpad-attribution-3 { background: #503e27; }
+[data-theme="dark"] .workpad-attribution-4 { background: #51303d; }
+[data-theme="dark"] .workpad-attribution-5 { background: #22454c; }

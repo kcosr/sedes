@@ -1,0 +1,9 @@
+Run the agent over stdio
+
+Usage: grok agent stdio [OPTIONS]
+
+Options:
+      --debug                 Enable debug logging
+      --debug-file <FILE>     Write debug logs to FILE
+  -h, --help                  Print help
+      --leader-socket <PATH>  Use a custom leader socket path instead of the default `~/.grok/leader.sock`

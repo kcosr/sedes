@@ -1,0 +1,662 @@
+/* Tasks panel — desktop floating card + mobile sheet. Follows the canonical
+   floating-surface tokens (§ styles.css "one floating-popover surface"). */
+
+.tasks-panel {
+  position: fixed;
+  /* Keep the shared workbench bar and panel chrome reachable while Tasks is
+     open. The card used to begin halfway through the panel header after the
+     workbench bar was introduced, which made the underlying Chat/Files
+     controls impossible to click. */
+  top: 96px;
+  right: 12px;
+  z-index: 50;
+  width: var(--tasks-panel-width, 340px);
+  max-width: calc(100vw - 24px);
+  max-height: min(70dvh, calc(100dvh - 108px));
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--popover);
+  box-shadow: var(--shadow);
+}
+
+.tasks-panel-resize-handle {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  bottom: 8px;
+  left: -5px;
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.tasks-panel-resize-handle::after {
+  content: "";
+  position: absolute;
+  inset: 0 4px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background var(--motion-fast);
+}
+
+.tasks-panel-resize-handle:hover::after,
+.tasks-panel-resize-handle:focus-visible::after,
+.tasks-panel-resize-handle[data-dragging]::after {
+  background: var(--muted-foreground-2);
+}
+
+/* Mobile bottom sheet: content-fit height (short lists make a short sheet).
+   The component lifts and caps the sheet against the visual-viewport keyboard
+   inset so Android's soft keyboard cannot cover the editor. */
+.tasks-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: auto;
+  bottom: var(--tasks-keyboard-inset, 0px);
+  z-index: 61;
+  width: 100%;
+  display: flex;
+  max-height: min(80dvh, calc(100dvh - var(--tasks-keyboard-inset, 0px)));
+  background: var(--popover);
+  border-top: 1px solid var(--border);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: var(--shadow);
+}
+
+.tasks-sheet .tasks-panel-body {
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+}
+
+.tasks-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  width: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.tasks-panel-body[data-task-scope-drop-target="true"] {
+  box-shadow: inset 0 0 0 2px var(--accent, var(--primary));
+  border-radius: var(--radius-card);
+}
+
+.tasks-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tasks-panel-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.tasks-panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tasks-segments {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-soft, var(--border));
+  border-radius: var(--radius-ctl);
+  background: color-mix(in srgb, var(--secondary) 55%, transparent);
+}
+
+.tasks-segment {
+  flex: 1;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: calc(var(--radius-ctl) - 2px);
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tasks-segment[aria-checked="true"] {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+.tasks-segment[data-task-scope-drop-target="true"] {
+  background: color-mix(
+    in srgb,
+    var(--accent, var(--primary)) 18%,
+    var(--secondary)
+  );
+  color: var(--foreground);
+  box-shadow: inset 0 0 0 1px var(--accent, var(--primary));
+}
+
+.tasks-segment:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.tasks-segments[data-size="small"] .tasks-segment {
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.tasks-nested-scopes-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.tasks-new-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tasks-panel-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--destructive, #b91c1c);
+}
+
+.tasks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.tasks-empty {
+  padding: 14px 4px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+
+/* The whole row is the select affordance (the checkbox stops propagation);
+   the title button inside carries the keyboard/AT semantics. */
+.tasks-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 4px;
+  border-bottom: 1px solid var(--border-soft, var(--border));
+  cursor: pointer;
+}
+
+.tasks-row:hover {
+  background: color-mix(in srgb, var(--secondary) 40%, transparent);
+}
+
+.tasks-row[data-selected] {
+  background: color-mix(in srgb, var(--secondary) 65%, transparent);
+}
+
+.tasks-row:last-child {
+  border-bottom: 0;
+}
+
+.tasks-row-drag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 24px;
+  margin-right: -4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-inline);
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: grab;
+  opacity: 0.45;
+}
+
+.tasks-row-drag:hover,
+.tasks-row-drag:focus-visible {
+  background: color-mix(in srgb, var(--secondary) 72%, transparent);
+  color: var(--foreground);
+  opacity: 1;
+}
+
+.tasks-row-drag:active {
+  cursor: grabbing;
+}
+
+.tasks-row-checkbox {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.tasks-row[data-completed] .tasks-row-checkbox {
+  color: var(--foreground);
+}
+
+.tasks-row-title {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border: 0;
+  border-radius: var(--radius-inline);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-row-title:focus-visible {
+  background: color-mix(in srgb, var(--secondary) 55%, transparent);
+}
+
+.tasks-row-location {
+  max-width: 42%;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 10.5px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-detail-area {
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding: 10px 4px 2px;
+  border-top: 1px solid var(--border-soft, var(--border));
+}
+
+.tasks-detail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tasks-detail-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-detail-description {
+  margin: 0 0 8px;
+  max-height: 30dvh;
+  overflow-y: auto;
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tasks-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tasks-row-notes,
+.tasks-row-files {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted-foreground);
+}
+
+.tasks-row-pin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-inline);
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.tasks-row:hover .tasks-row-pin,
+.tasks-row-pin:focus-visible,
+.tasks-row-pin[data-pinned] {
+  opacity: 1;
+}
+
+.tasks-row-pin[data-pinned] {
+  color: var(--foreground);
+}
+
+.tasks-row-pin[data-pinned] svg {
+  fill: currentColor;
+}
+
+.tasks-detail-heading-actions,
+.tasks-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tasks-files {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0 0 8px;
+}
+
+.tasks-files-label {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.tasks-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: color-mix(in srgb, var(--secondary) 38%, transparent);
+  color: var(--muted-foreground);
+  font: inherit;
+  text-align: left;
+}
+
+button.tasks-file-row {
+  cursor: pointer;
+  color: var(--foreground);
+}
+
+button.tasks-file-row:hover {
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+}
+
+.tasks-file-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tasks-file-name {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-file-path {
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  color: var(--muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border-soft, var(--border));
+  padding-top: 10px;
+}
+
+.tasks-editor-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tasks-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 30px;
+  gap: 8px;
+}
+
+.tasks-editor-delete-prompt {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tasks-editor-scope {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tasks-editor-label {
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+
+.tasks-editor-scope .tasks-segments {
+  flex: 1;
+}
+
+.tasks-editor-files {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tasks-editor-file-row,
+.tasks-editor-file-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tasks-editor-file-row {
+  padding-left: 5px;
+  color: var(--muted-foreground);
+}
+
+.tasks-editor-file-path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-editor-file-add > :first-child {
+  flex: 1;
+}
+
+.tasks-editor-actions-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The shared .menu-popover layer sits at z-index 50, which is beneath the
+   mobile sheet dialog (61); this menu must stack above both surfaces. */
+.menu-popover.tasks-panel-menu {
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  width: 240px;
+}
+
+.tasks-panel-menu-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tasks-panel-menu-label {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.tasks-panel-menu-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* Home/archived routes have no thread header; the toggle floats in the pane
+   corner where the thread route's `.thread-controls` cluster would sit. */
+.tasks-corner-controls {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+}
+
+/* Archive-time open-task disposition (rendered inside the archive dropdown,
+   context submenu, and mobile archive dialog). */
+.archive-task-disposition {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  margin: 2px 0;
+  border: 1px solid var(--border-soft, var(--border));
+  border-radius: var(--radius-ctl);
+}
+
+.archive-task-disposition-label {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.archive-stashed-prompt-warning {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  margin: 2px 0;
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+  border-radius: var(--radius-ctl);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.archive-stashed-prompt-warning strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.archive-task-summary-scroll {
+  display: grid;
+  gap: 7px;
+  max-height: 164px;
+  padding: 6px;
+  overflow-y: auto;
+  border-radius: calc(var(--radius-ctl) - 2px);
+  background: var(--secondary);
+  scrollbar-gutter: stable;
+}
+
+.archive-task-summary-scroll:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.archive-task-summary-group {
+  min-width: 0;
+}
+
+.archive-task-summary-group h4 {
+  margin: 0 0 3px;
+  color: var(--muted-foreground-2);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.archive-task-summary-group ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.archive-task-summary-group li {
+  display: grid;
+  min-width: 0;
+}
+
+.archive-task-summary-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.archive-task-summary-owner {
+  overflow: hidden;
+  color: var(--muted-foreground-2);
+  font-size: 10px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archive-task-summary-omitted {
+  margin: 0;
+  color: var(--muted-foreground-2);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.archive-descendants-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+@media (max-width: 819px) {
+  .tasks-panel {
+    display: none;
+  }
+
+  .tasks-row-pin {
+    opacity: 1;
+  }
+}

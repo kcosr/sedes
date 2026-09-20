@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Sedes</string>
+    <string name="title_activity_main">Sedes</string>
+    <string name="package_name">dev.sedes.local</string>
+    <string name="custom_url_scheme">dev.sedes.local</string>
+</resources>

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Sedes Native Individual Tools"
+  short_description: "Use individually exposed native Sedes tools"
+  default_prompt: "Use $sedes-native-individual-tools to invoke the appropriate individually exposed native Sedes operation."
+policy:
+  allow_implicit_invocation: false

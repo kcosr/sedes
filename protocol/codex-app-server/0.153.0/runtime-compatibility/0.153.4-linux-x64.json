@@ -1,0 +1,49 @@
+{
+  "release": "0.153.4",
+  "parserRelease": "0.153.0",
+  "platform": "linux/x64",
+  "executableSha256": "56ef98ab4032d317ab26e9b5e5a175650717351edb16ed9cde0cb6d1734d62da",
+  "exactOfficialArtifactInventories": {
+    "stable/typescript": 706,
+    "stable/json-schema": 304,
+    "experimental/typescript": 827,
+    "experimental/json-schema": 416
+  },
+  "experimentalGateRejected": true,
+  "notificationsValidated": [
+    "thread/started",
+    "turn/completed",
+    "item/started",
+    "item/completed",
+    "item/agentMessage/delta"
+  ],
+  "methodsValidated": [
+    "model/list",
+    "thread/fork",
+    "thread/items/list",
+    "thread/list",
+    "thread/read",
+    "thread/resume",
+    "thread/settings/update",
+    "thread/start",
+    "thread/turns/list",
+    "turn/start"
+  ],
+  "modelIds": [
+    "gpt-6-astra",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-daybreak-blue-latest",
+    "gpt-daybreak-red-latest",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.2",
+    "codex-auto-review"
+  ],
+  "deterministicProviderRequests": 1,
+  "persistentTurnResumedAfterRestart": true,
+  "forkHistoryPreserved": true,
+  "liveProviderVerified": false
+}
