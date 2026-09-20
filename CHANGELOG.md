@@ -4,6 +4,9 @@
 
 ### Changed
 
+- Clarify Linux, macOS, and limited Windows standalone server support, add a
+  Windows entry point, and identify Linux as the developer's primary server host.
+
 - Refresh README examples with desktop conversations, bookmarks, inline diffs,
   and mobile thread and terminal screenshots.
 

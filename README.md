@@ -14,7 +14,7 @@
 
 > [!NOTE]
 > **Primary setup:** The developer regularly uses Electron, Android, and web
-> clients connected to a long-running Sedes server, with persistent remote
+> clients connected to a long-running Sedes server on Linux, with persistent remote
 > environments reached over SSH or HTTP(S). Most day-to-day use is Codex via
 > an external app-server's Unix-domain socket (UDS), plus Pi SDK for local
 > models. These workflows receive the most everyday use. Claude and Grok are
@@ -66,11 +66,24 @@ is maintained.
 
 ## Current status
 
-The supported standalone server runs from a Linux x64 or macOS Apple
-silicon/Intel source checkout with Node.js 24.18 or newer. Electron Managed
-Local can also stage and run that server on native Windows as a buildable
-preview. The Android and Electron projects are buildable previews; the
-repository does not publish signed or notarized client binaries.
+Sedes runs on **Windows, macOS, and Linux**, with different deployment options:
+
+| Platform | Available setup |
+| --- | --- |
+| Windows | Standalone server with limited support; Electron desktop client with a managed local server or a connection to a remote server; browser client; outbound execution host. |
+| macOS | Standalone server on Apple silicon or Intel; Electron desktop client with a managed local or remote server; browser client; outbound execution host. |
+| Linux | Standalone server on x64; Electron desktop client with a managed local or remote server; browser client; outbound execution host. |
+| Android | Packaged client connecting to a server. |
+
+The standalone server supports Linux and macOS, with **limited Windows support**
+based on limited use by the developer. Windows also supports
+[Electron Managed Local](docs/operator/clients/electron.md#use-managed-local).
+The standalone source-server instructions below target Linux and macOS and
+require Node.js 24.18 or newer. See [Outbound hosts](docs/operator/outbound-hosts.md)
+for remote execution prerequisites and backend limitations.
+
+The Android and Electron projects are buildable previews; the repository does
+not publish signed or notarized client binaries.
 
 The repository does not publish an npm package, server archive, container
 image, or stable upgrade channel. Provider compatibility is deliberately
@@ -220,7 +233,7 @@ The complete audience and topic index is at [docs/index.md](docs/index.md).
 - Provider executables, accounts, and native conversation stores remain
   separately installed and provider-owned.
 - The standalone server is supported on Linux x64 and macOS on Apple silicon
-  or Intel. Native Windows server execution is currently supported only through
+  or Intel, with limited standalone Windows support. Windows also supports
   the Electron Managed Local preview. Android and Electron are source-build
   previews, not signed release distributions.
 - Electron includes one built-in Local connection and can remember multiple

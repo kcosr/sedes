@@ -24,7 +24,8 @@ the linked section below owns the complete rules and remains authoritative
 before you change a deployment shape, upgrade, or restore.
 
 - **Supported shape.** Run one server process listening on `127.0.0.1` on a
-  supported standalone host (Linux x64, or macOS on Apple silicon or Intel),
+  standalone host (Linux x64 or macOS on Apple silicon or Intel; Windows has
+  limited support based on limited use by the developer),
   and put [Tailscale Serve](#tailscale-serve) in front of that loopback
   listener when a device off the host must reach it. Every admitted and
   unsupported shape is in the [deployment matrix](#deployment-matrix).

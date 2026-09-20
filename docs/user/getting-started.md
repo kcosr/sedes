@@ -4,6 +4,12 @@ This source-based quick start runs Sedes and its bundled Pi SDK on one trusted
 Linux x64 or macOS Apple silicon/Intel computer. It ends with a remembered
 project and a first completed agent turn.
 
+The standalone server also has **limited Windows support**, based on limited
+use by the developer. On Windows, you can also use
+[Electron Managed Local](../operator/clients/electron.md#use-managed-local)
+or connect the Electron or browser client to a remote server. The commands
+below cover the standalone Linux/macOS setup.
+
 Sedes uses passwordless client pairing. Keep the server on its
 default loopback address until you have read
 [Operations and security](../operator/operations.md).
