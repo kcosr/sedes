@@ -47,7 +47,7 @@ it("admits same-origin requests through the development proxy without admitting 
       : { ...configuredProxy, target };
     const vite = await createViteServer({
       configFile: false,
-      server: { middlewareMode: true, hmr: false, proxy: { "/api": proxy } },
+      server: { middlewareMode: true, hmr: false, watch: null, proxy: { "/api": proxy } },
       optimizeDeps: { noDiscovery: true, include: [] },
     });
     const frontend = createHttpServer(vite.middlewares);
