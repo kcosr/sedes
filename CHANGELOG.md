@@ -4,6 +4,11 @@
 
 ### Changed
 
+- Add explicit Electron `client` and `full` distribution profiles. Client keeps
+  Direct/SSH connections without a bundled backend; full retains Managed Local
+  with shared locked server dependencies and target-pruned native payloads.
+  Both use separately installed Codex, Claude Code, and Grok executables.
+
 - Install standalone servers from verified, target-specific slim runtime packages
   with an independent dependency lock, external Node 24.18.0+, source-built
   SQLite/PTY addons, offline activation, and extraction checks. `install:server`

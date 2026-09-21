@@ -105,8 +105,9 @@ CLI, shared, sidecar, and worker source against exact runtime dependencies;
 packaging additionally checks compiled modules. When imports or versions
 change, update this manifest and run
 `env -u NODE_ENV npm install --package-lock-only --ignore-scripts --prefix packages/server-runtime`,
-then rerun the check and packaging verification. Root development, Electron,
-Android, and provider dependencies remain separate.
+then rerun the check and packaging verification. Full Electron staging consumes this same backend manifest and lock, with
+addons compiled for Electron. Root development and Android dependencies remain
+separate.
 
 The packaged sidecar contains native terminal support only for the selected
 target. Heterogeneous remote hosts require separately prepared compatible

@@ -6,22 +6,70 @@ client**, not a signed or notarized desktop release.
 
 The application loads bundled frontend assets from the fixed
 `capacitor-electron://localhost` origin. On first launch, it opens a connection
-chooser with one built-in **Local** connection plus saved Direct HTTP(S) and
-managed SSH connections to separately operated servers. Every choice must pass
+chooser with saved Direct HTTP(S) and managed SSH connections to separately
+operated servers. The full distribution also includes one built-in **Local**
+connection. Every choice must pass
 the normalized server session handshake before entering the application; the
 application inventory then arrives through its SSE snapshot and replay stream.
 
 See [Packaged clients](index.md) for the shared architecture, connection
 comparison, compatibility policy, and security boundary.
 
+## Distribution profiles
+
+| Profile | Contents | Connections |
+| --- | --- | --- |
+| `client` | Electron, bundled frontend, credential/connection/download plugins | Direct HTTP(S) and managed SSH |
+| `full` | Client profile plus the slim server runtime and Electron-compatible native addons | Local, Direct HTTP(S), managed SSH |
+
+The native main process reads an immutable packaged profile manifest. A client
+build hides Local and rejects native Local startup. A Local preference left by
+a previous full installation does not start a server in client mode; its saved
+preference and state are preserved for a later full installation. Changing
+renderer preferences cannot enable the omitted backend.
+
+Build each profile explicitly:
+
+```sh
+env -u NODE_ENV npm run electron:package -- --profile client
+env -u NODE_ENV npm run electron:package -- --profile full
+```
+
+Add `--dir` for an unpacked package. Outputs are separated under
+`electron/dist/client/` and `electron/dist/full/`, and artifact names include
+`sedes-client` or `sedes-full`, the version, OS, and architecture. Existing
+`electron:build`, `electron:run`, and `electron:smoke` commands use full by
+default. For profile-specific preparation and verification:
+
+```sh
+env -u NODE_ENV npm run electron:sync -- --profile client
+env -u NODE_ENV npm run electron:verify -- --profile client
+env -u NODE_ENV npm run electron:verify -- --profile full
+```
+
+Client builds skip local-server staging and addon compilation. Full builds
+consume the same `packages/server-runtime` manifest and independent lockfile
+as standalone server distributions, with an Electron-specific native build.
+They remove preferred upstream SQLite/PTY prebuilds before source compilation,
+retain only runtime build outputs, and prune foreign optional packages at every
+nesting level, including Pi's esbuild executables. Remote sidecar native assets
+retain their separate external-Node requirements; Electron addons are never
+substituted for them. Full retains the backend's served browser assets to
+preserve its HTTP behavior.
+
+Neither profile ships Codex CLI or Claude Code executables. Codex's build-time
+package is retained in the development tree for protocol generation; desktop
+staging copies only its small protocol release metadata. Claude's SDK JavaScript
+and Pi provider libraries are included only in full. Executable paths and
+provider authentication remain operator responsibilities.
+
 ## What the Electron package provides
 
 - The full Sedes frontend in a dedicated desktop window.
-- A packaged, current-platform Sedes server runtime for the built-in Local
-  connection.
+- In full, a packaged, current-platform Sedes server runtime for Local.
 - Multiple named, device-local direct or managed SSH connection profiles.
 - HTTP(S) API, SSE, and WebSocket connectivity to the selected server.
-- A narrow native connection runtime that owns the one Local server and uses
+- A narrow native connection runtime that owns the full profile's Local server and uses
   the system OpenSSH client for managed SSH loopback forwarding.
 - A narrow native workspace-file download plugin that streams validated server
   bytes to a user-selected destination.
@@ -29,7 +77,7 @@ comparison, compatibility policy, and security boundary.
   eligible threads when the desktop account has a compatible Codex CLI
   installed or the backend configures its canonical `tuiExecutablePath`.
 
-The package contains the compiled Sedes server, its statically compiled backend
+The full package contains the compiled Sedes server, its statically compiled backend
 dependencies, workers, and native modules built for the current operating
 system, architecture, and Electron ABI. It does not contain a standalone Node
 distribution, user configuration, application state, provider credentials,
@@ -55,10 +103,10 @@ Install the root dependencies first:
 env -u NODE_ENV npm ci
 ```
 
-The Electron runtime has its own lockfile and dependencies. Public
-`electron:*` commands run the `preelectron:sync` hook, which installs that
-subproject with `npm --prefix electron ci`; a normal root install does not
-download Electron.
+The Electron shell has its own lockfile and build dependencies. The profile
+orchestrator installs that subproject with `npm --prefix electron ci`; a normal
+root install does not download Electron. The full backend uses the shared
+server-runtime lock, with addons built for Electron.
 
 The committed project pins Electron, electron-builder, and the pre-1.0
 `@capawesome/capacitor-electron` adapter. Treat adapter upgrades as native
@@ -68,15 +116,17 @@ verification.
 Build each release artifact on a host or CI runner whose operating system and
 CPU architecture match the artifact. The Local staging step uses that host's
 platform, architecture, Electron ABI, and native provider packages; it is not
-a cross-compilation step. Run `npm run electron:verify` before
-`npm run electron:build` on every Linux, macOS, or Windows target. macOS
+a cross-compilation step. Run `npm run electron:verify -- --profile PROFILE`
+for each selected profile on every Linux, macOS, or Windows target. Windows
+build and validation are delegated to the Windows deployment agent; Linux
+checks do not establish Windows or macOS compatibility. macOS
 distribution additionally requires Apple signing and notarization on macOS;
 Windows distribution requires its own code-signing setup. An unsigned build
 from this preview workflow is suitable only for deliberate local testing.
 
 ## Use managed Local
 
-Managed Local runs on Linux, macOS, and Windows. Pi isolated-workspace execution
+Managed Local is included in full. It runs on Linux, macOS, and Windows. Pi isolated-workspace execution
 requires Linux and an executable Bubblewrap installation at `/usr/bin/bwrap`.
 When that runtime is unavailable, Local still starts normally and Pi runs
 directly in the selected project; the isolated-workspace selector is not shown.

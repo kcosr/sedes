@@ -26,7 +26,7 @@ function fixture() {
   git("init", "--bare", remote);
   git("config", `url.${remote}.insteadOf`, "https://github.com/kcosr/sedes.git");
   git("remote", "add", "origin", "https://github.com/kcosr/sedes.git");
-  for (const file of ["scripts/release.mjs", "scripts/version.mjs", "src/shared/version.ts", "package.json", "package-lock.json", "electron/package.json", "electron/package-lock.json", "packages/electron-client-credentials/package.json", "packages/electron-connection-runtime/package.json", "packages/electron-local-server-runtime/package.json", "packages/electron-local-server-runtime/package-lock.json", "packages/server-runtime/package.json", "packages/server-runtime/package-lock.json", "packages/electron-workspace-file-download/package.json"]) {
+  for (const file of ["scripts/release.mjs", "scripts/version.mjs", "src/shared/version.ts", "package.json", "package-lock.json", "electron/package.json", "electron/package-lock.json", "packages/electron-client-credentials/package.json", "packages/electron-connection-runtime/package.json", "packages/server-runtime/package.json", "packages/server-runtime/package-lock.json", "packages/electron-workspace-file-download/package.json"]) {
     mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     cpSync(path.join(source, file), path.join(root, file));
   }

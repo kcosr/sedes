@@ -103,14 +103,24 @@ export async function runElectronDistribution(options) {
   if (options.command === 'sync') return;
   await npm(['run', options.command === 'verify' || options.directory ? 'pack:dir' : 'pack'], electron);
   await node(['scripts/verify-electron-package.mjs', '--packaged']);
-  if (options.command === 'verify') await node(['scripts/run-electron-smoke.mjs', '--packaged', '--profile', options.profile]);
   const output = path.join(electron, 'dist', options.profile);
-  await writeElectronOutputProvenance(output, { ...info, validation: {
-    synchronizedAssets: true,
-    packageContents: true,
-    runtimeSmoke: options.command === 'verify', liveProviders: false,
+  const validation = {
+    synchronizedAssets: true, packageContents: true,
+    runtimeSmoke: false, liveProviders: false,
     limitations: ['Validated only on the recorded host; other platforms require independent validation.', 'Unsigned preview; installation, signing, and live providers are not validated by this command.'],
-  } });
+  };
+  // Preserve truthful provenance even when the runtime gate fails after a
+  // successful package build (for example, a host without a secure keyring).
+  await writeElectronOutputProvenance(output, { ...info, validation });
+  if (options.command === 'verify') {
+    try {
+      await node(['scripts/run-electron-smoke.mjs', '--packaged', '--profile', options.profile]);
+      validation.runtimeSmoke = true;
+    } catch (error) {
+      validation.runtimeSmokeFailure = error.message;
+      throw error;
+    } finally { await writeElectronOutputProvenance(output, { ...info, validation }); }
+  }
   console.log(`Electron ${options.profile} output: ${output}`);
 }
 

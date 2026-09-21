@@ -32,7 +32,7 @@ Packages listed: 595.
 
 - License: Apache-2.0
 - URL: https://github.com/agentclientprotocol/typescript-sdk
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [e8e2fe35f5fd](#license-text-e8e2fe35f5fd)
 
 ### @antfu/install-pkg 1.1.0
@@ -46,252 +46,252 @@ Packages listed: 595.
 
 - License: SEE LICENSE IN README.md
 - URL: https://github.com/anthropics/claude-agent-sdk-typescript
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.md`): [af2be7b670a0](#license-text-af2be7b670a0)
 
 ### @anthropic-ai/sdk 0.124.0
 
 - License: MIT
 - URL: https://github.com/anthropics/anthropic-sdk-typescript
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d298496454d4](#license-text-d298496454d4)
 
 ### @aws-sdk/client-bedrock-runtime 3.1127.0
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/clients/client-bedrock-runtime
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [711cb7cff0da](#license-text-711cb7cff0da)
 
 ### @aws-sdk/core 3.977.9
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/core
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [edea91454b81](#license-text-edea91454b81)
 
 ### @aws-sdk/core 3.978.0
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/core
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [edea91454b81](#license-text-edea91454b81)
 
 ### @aws-sdk/credential-provider-env 3.972.70
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-env
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @aws-sdk/credential-provider-env 3.972.71
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-env
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @aws-sdk/credential-provider-http 3.972.72
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-http
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @aws-sdk/credential-provider-http 3.972.73
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-http
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @aws-sdk/credential-provider-ini 3.973.15
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-ini
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @aws-sdk/credential-provider-ini 3.973.16
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-ini
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @aws-sdk/credential-provider-login 3.972.77
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-login
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @aws-sdk/credential-provider-login 3.972.78
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-login
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @aws-sdk/credential-provider-node 3.972.82
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-node
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @aws-sdk/credential-provider-node 3.972.83
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-node
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @aws-sdk/credential-provider-process 3.972.70
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-process
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [2ef1e48ea743](#license-text-2ef1e48ea743)
 
 ### @aws-sdk/credential-provider-process 3.972.71
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-process
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [2ef1e48ea743](#license-text-2ef1e48ea743)
 
 ### @aws-sdk/credential-provider-sso 3.973.14
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-sso
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [2ef1e48ea743](#license-text-2ef1e48ea743)
 
 ### @aws-sdk/credential-provider-sso 3.973.15
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-sso
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [2ef1e48ea743](#license-text-2ef1e48ea743)
 
 ### @aws-sdk/credential-provider-web-identity 3.972.76
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-web-identity
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [2ef1e48ea743](#license-text-2ef1e48ea743)
 
 ### @aws-sdk/credential-provider-web-identity 3.972.77
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/credential-provider-web-identity
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [2ef1e48ea743](#license-text-2ef1e48ea743)
 
 ### @aws-sdk/eventstream-handler-node 3.972.34
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/eventstream-handler-node
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [2ef1e48ea743](#license-text-2ef1e48ea743)
 
 ### @aws-sdk/middleware-eventstream 3.972.29
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/middleware-eventstream
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @aws-sdk/middleware-websocket 3.972.52
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/middleware-websocket
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [2ef1e48ea743](#license-text-2ef1e48ea743)
 
 ### @aws-sdk/middleware-websocket 3.972.53
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/middleware-websocket
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [2ef1e48ea743](#license-text-2ef1e48ea743)
 
 ### @aws-sdk/nested-clients 3.997.44
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages/nested-clients
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @aws-sdk/nested-clients 3.997.45
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages/nested-clients
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @aws-sdk/signature-v4-multi-region 3.996.46
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages/signature-v4-multi-region
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [2ef1e48ea743](#license-text-2ef1e48ea743)
 
 ### @aws-sdk/token-providers 3.1116.0
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages/token-providers
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @aws-sdk/token-providers 3.1127.0
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages/token-providers
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @aws-sdk/token-providers 3.1129.0
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages/token-providers
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @aws-sdk/types 3.974.5
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/types
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @aws-sdk/xml-builder 3.972.40
 
 - License: Apache-2.0
 - URL: https://github.com/aws/aws-sdk-js-v3/tree/HEAD/packages-internal/xml-builder
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @aws/lambda-invoke-store 0.3.0
 
 - License: Apache-2.0
 - URL: https://github.com/awslabs/aws-lambda-invoke-store
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [7fb46adff902](#license-text-7fb46adff902)
 
 ### @babel/runtime 7.29.2
 
 - License: MIT
 - URL: https://github.com/babel/babel/tree/HEAD/packages/babel-runtime
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [8f08c824b2bb](#license-text-8f08c824b2bb)
 
 ### @babel/runtime 7.29.7
 
 - License: MIT
 - URL: https://github.com/babel/babel/tree/HEAD/packages/babel-runtime
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [8f08c824b2bb](#license-text-8f08c824b2bb)
 
 ### @braintree/sanitize-url 7.1.2
@@ -347,224 +347,224 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/earendil-works/pi/tree/HEAD/packages/chord
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @earendil-works/pi-agent-core 0.86.0
 
 - License: MIT
 - URL: https://github.com/earendil-works/pi/tree/HEAD/packages/agent
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @earendil-works/pi-ai 0.86.0
 
 - License: MIT
 - URL: https://github.com/earendil-works/pi/tree/HEAD/packages/ai
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @earendil-works/pi-coding-agent 0.86.0
 
 - License: MIT
 - URL: https://github.com/earendil-works/pi/tree/HEAD/packages/coding-agent
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @earendil-works/pi-telemetry 0.86.0
 
 - License: MIT
 - URL: https://github.com/earendil-works/pi/tree/HEAD/packages/telemetry
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @earendil-works/pi-tui 0.86.0
 
 - License: MIT
 - URL: https://github.com/earendil-works/pi/tree/HEAD/packages/tui
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/aix-ppc64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/android-arm 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/android-arm64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/android-x64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/darwin-arm64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/darwin-x64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/freebsd-arm64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/freebsd-x64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/linux-arm 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/linux-arm64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/linux-ia32 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/linux-loong64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/linux-mips64el 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/linux-ppc64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/linux-riscv64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/linux-s390x 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/linux-x64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/netbsd-arm64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/netbsd-x64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/openbsd-arm64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/openbsd-x64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/openharmony-arm64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/sunos-x64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/win32-arm64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/win32-ia32 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @esbuild/win32-x64 0.28.2
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @floating-ui/core 1.8.0
@@ -606,7 +606,7 @@ Packages listed: 595.
 
 - License: Apache-2.0
 - URL: https://github.com/googleapis/js-genai
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [283ea6cc2997](#license-text-283ea6cc2997)
 
 ### @hono/node-server 2.0.12
@@ -620,7 +620,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: not declared in package metadata
-- Shipped by: @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @iconify/types 2.0.0
@@ -648,7 +648,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/modelcontextprotocol/typescript-sdk
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [8694aa57bec3](#license-text-8694aa57bec3)
 
 ### @noble/hashes 2.4.0
@@ -697,70 +697,70 @@ Packages listed: 595.
 
 - License: BSD-3-Clause
 - URL: https://github.com/dcodeIO/protobuf.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [56c9299ed8fb](#license-text-56c9299ed8fb)
 
 ### @protobufjs/base64 1.1.2
 
 - License: BSD-3-Clause
 - URL: https://github.com/dcodeIO/protobuf.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [56c9299ed8fb](#license-text-56c9299ed8fb)
 
 ### @protobufjs/codegen 2.0.5
 
 - License: BSD-3-Clause
 - URL: https://github.com/dcodeIO/protobuf.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [56c9299ed8fb](#license-text-56c9299ed8fb)
 
 ### @protobufjs/eventemitter 1.1.1
 
 - License: BSD-3-Clause
 - URL: https://github.com/dcodeIO/protobuf.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [56c9299ed8fb](#license-text-56c9299ed8fb)
 
 ### @protobufjs/fetch 1.1.1
 
 - License: BSD-3-Clause
 - URL: https://github.com/dcodeIO/protobuf.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [56c9299ed8fb](#license-text-56c9299ed8fb)
 
 ### @protobufjs/float 1.0.2
 
 - License: BSD-3-Clause
 - URL: https://github.com/dcodeIO/protobuf.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [56c9299ed8fb](#license-text-56c9299ed8fb)
 
 ### @protobufjs/path 1.1.2
 
 - License: BSD-3-Clause
 - URL: https://github.com/dcodeIO/protobuf.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [56c9299ed8fb](#license-text-56c9299ed8fb)
 
 ### @protobufjs/pool 1.1.0
 
 - License: BSD-3-Clause
 - URL: https://github.com/dcodeIO/protobuf.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [56c9299ed8fb](#license-text-56c9299ed8fb)
 
 ### @protobufjs/utf8 1.1.1
 
 - License: BSD-3-Clause
 - URL: https://github.com/dcodeIO/protobuf.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [56c9299ed8fb](#license-text-56c9299ed8fb)
 
 ### @protobufjs/utf8 1.1.2
 
 - License: BSD-3-Clause
 - URL: https://github.com/protobufjs/protobuf.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [56c9299ed8fb](#license-text-56c9299ed8fb)
 
 ### @radix-ui/number 1.1.3
@@ -1250,63 +1250,63 @@ Packages listed: 595.
 
 - License: Apache-2.0
 - URL: https://github.com/silvia-odwyer/photon
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.md`): [bef9ee0b92a1](#license-text-bef9ee0b92a1)
 
 ### @smithy/core 3.33.3
 
 - License: Apache-2.0
 - URL: https://github.com/smithy-lang/smithy-typescript/tree/HEAD/packages/core
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [2ef1e48ea743](#license-text-2ef1e48ea743)
 
 ### @smithy/core 3.34.1
 
 - License: Apache-2.0
 - URL: https://github.com/smithy-lang/smithy-typescript/tree/HEAD/packages/core
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [2ef1e48ea743](#license-text-2ef1e48ea743)
 
 ### @smithy/credential-provider-imds 4.5.2
 
 - License: Apache-2.0
 - URL: https://github.com/smithy-lang/smithy-typescript/tree/HEAD/packages/credential-provider-imds
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @smithy/fetch-http-handler 5.8.0
 
 - License: Apache-2.0
 - URL: https://github.com/smithy-lang/smithy-typescript/tree/HEAD/packages/fetch-http-handler
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @smithy/node-http-handler 4.12.1
 
 - License: Apache-2.0
 - URL: https://github.com/smithy-lang/smithy-typescript/tree/HEAD/packages/node-http-handler
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @smithy/signature-v4 5.7.3
 
 - License: Apache-2.0
 - URL: https://github.com/smithy-lang/smithy-typescript/tree/HEAD/packages/signature-v4
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d82ceb8cbd00](#license-text-d82ceb8cbd00)
 
 ### @smithy/types 4.18.0
 
 - License: Apache-2.0
 - URL: https://github.com/smithy-lang/smithy-typescript/tree/HEAD/packages/types
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [2ef1e48ea743](#license-text-2ef1e48ea743)
 
 ### @stablelib/base64 1.0.1
 
 - License: MIT
 - URL: https://github.com/StableLib/stablelib
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [fe1812441c6d](#license-text-fe1812441c6d)
 
 ### @types/d3 7.4.3
@@ -1579,7 +1579,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/DefinitelyTyped/DefinitelyTyped/tree/HEAD/types/node
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [ff82c90f8494](#license-text-ff82c90f8494)
 
 ### @types/node 26.1.2
@@ -1593,7 +1593,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: not declared in package metadata
-- Shipped by: @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @types/react 19.2.17
@@ -1607,7 +1607,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/DefinitelyTyped/DefinitelyTyped
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [8e1c6bd583a7](#license-text-8e1c6bd583a7)
 
 ### @types/trusted-types 2.0.7
@@ -1649,56 +1649,56 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/xtermjs/xterm.js/tree/master/addons/addon-serialize
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### @xterm/addon-unicode11 0.9.0
 
 - License: MIT
 - URL: https://github.com/xtermjs/xterm.js/tree/master/addons/addon-unicode11
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [c434897a5a6c](#license-text-c434897a5a6c)
 
 ### @xterm/headless 6.0.0
 
 - License: MIT
 - URL: https://github.com/xtermjs/xterm.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### accepts 2.0.0
 
 - License: MIT
 - URL: https://github.com/jshttp/accepts
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [a3fb4c94aaf6](#license-text-a3fb4c94aaf6)
 
 ### agent-base 7.1.4
 
 - License: MIT
 - URL: https://github.com/TooTallNate/proxy-agents/tree/HEAD/packages/agent-base
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [8d8c55319c77](#license-text-8d8c55319c77)
 
 ### agent-base 9.0.0
 
 - License: MIT
 - URL: https://github.com/TooTallNate/proxy-agents/tree/HEAD/packages/agent-base
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [8d8c55319c77](#license-text-8d8c55319c77)
 
 ### ajv 8.20.0
 
 - License: MIT
 - URL: https://github.com/ajv-validator/ajv
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [f2fde84e6c1f](#license-text-f2fde84e6c1f)
 
 ### ajv-formats 3.0.1
 
 - License: MIT
 - URL: https://github.com/ajv-validator/ajv-formats
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [0eb7e0538bf8](#license-text-0eb7e0538bf8)
 
 ### aria-hidden 1.2.6
@@ -1719,77 +1719,77 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/juliangruber/balanced-match
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.md`): [23b57495a1f9](#license-text-23b57495a1f9)
 
 ### base64-js 1.5.1
 
 - License: MIT
 - URL: https://github.com/beatgammit/base64-js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [ce471b4b8188](#license-text-ce471b4b8188)
 
 ### better-sqlite3 13.0.2
 
 - License: MIT
 - URL: https://github.com/WiseLibs/better-sqlite3
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [490ab72226a2](#license-text-490ab72226a2)
 
 ### bignumber.js 9.3.1
 
 - License: MIT
 - URL: https://github.com/MikeMcl/bignumber.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENCE.md`): [7ed7c157c417](#license-text-7ed7c157c417)
 
 ### body-parser 2.3.0
 
 - License: MIT
 - URL: https://github.com/expressjs/body-parser
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [7cb4d976f1c8](#license-text-7cb4d976f1c8)
 
 ### bowser 2.14.1
 
 - License: MIT
 - URL: https://github.com/bowser-js/bowser
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [0139f2c14d4e](#license-text-0139f2c14d4e)
 
 ### brace-expansion 5.0.9
 
 - License: MIT
 - URL: https://github.com/juliangruber/brace-expansion
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [f36e2da26df2](#license-text-f36e2da26df2)
 
 ### buffer-equal-constant-time 1.0.1
 
 - License: BSD-3-Clause
 - URL: https://github.com/goinstant/buffer-equal-constant-time
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.txt`): [2c44cee9bf9d](#license-text-2c44cee9bf9d)
 
 ### bytes 3.1.2
 
 - License: MIT
 - URL: https://github.com/visionmedia/bytes.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [811223f2d339](#license-text-811223f2d339)
 
 ### call-bind-apply-helpers 1.0.2
 
 - License: MIT
 - URL: https://github.com/ljharb/call-bind-apply-helpers
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [3df72862fb6d](#license-text-3df72862fb6d)
 
 ### call-bound 1.0.4
 
 - License: MIT
 - URL: https://github.com/ljharb/call-bound
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [3df72862fb6d](#license-text-3df72862fb6d)
 
 ### ccount 2.0.1
@@ -1803,7 +1803,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/chalk/chalk
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`license`): [1529f88b3675](#license-text-1529f88b3675)
 
 ### character-entities 2.0.2
@@ -1873,14 +1873,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/jshttp/content-disposition
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [0696190d4967](#license-text-0696190d4967)
 
 ### content-type 1.0.5
 
 - License: MIT
 - URL: https://github.com/jshttp/content-type
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [fb06d5b872e5](#license-text-fb06d5b872e5)
 
 ### content-type 2.0.0
@@ -1894,28 +1894,28 @@ Packages listed: 595.
 
 - License: MIT
 - URL: not declared in package metadata
-- Shipped by: @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### cookie 0.7.2
 
 - License: MIT
 - URL: https://github.com/jshttp/cookie
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [b970cfe4a7f3](#license-text-b970cfe4a7f3)
 
 ### cookie-signature 1.2.2
 
 - License: MIT
 - URL: https://github.com/visionmedia/node-cookie-signature
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [bdbe1c003ac6](#license-text-bdbe1c003ac6)
 
 ### cors 2.8.6
 
 - License: MIT
 - URL: https://github.com/expressjs/cors
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [6efa74cb6d21](#license-text-6efa74cb6d21)
 
 ### cose-base 1.0.3
@@ -1936,14 +1936,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/harrisiirak/cron-parser
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [9a08965c44ca](#license-text-9a08965c44ca)
 
 ### cross-spawn 7.0.6
 
 - License: MIT
 - URL: https://github.com/moxystudio/node-cross-spawn
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [5e7b89989b94](#license-text-5e7b89989b94)
 
 ### csstype 3.2.3
@@ -2231,7 +2231,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/TooTallNate/node-data-uri-to-buffer
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### dayjs 1.11.21
@@ -2245,7 +2245,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/debug-js/debug
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d9e5aa2747f3](#license-text-d9e5aa2747f3)
 
 ### decode-named-character-reference 1.3.0
@@ -2266,7 +2266,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/dougwilson/nodejs-depd
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [f889cb863a1f](#license-text-f889cb863a1f)
 
 ### dequal 2.0.3
@@ -2294,14 +2294,14 @@ Packages listed: 595.
 
 - License: BSD-3-Clause
 - URL: https://github.com/kpdecker/jsdiff
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [ef7eb99d9a97](#license-text-ef7eb99d9a97)
 
 ### diff 9.0.0
 
 - License: BSD-3-Clause
 - URL: https://github.com/kpdecker/jsdiff
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [ef7eb99d9a97](#license-text-ef7eb99d9a97)
 
 ### dompurify 3.4.13
@@ -2316,49 +2316,49 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/es-shims/dunder-proto
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [42fbee6b9cc2](#license-text-42fbee6b9cc2)
 
 ### ecdsa-sig-formatter 1.0.11
 
 - License: Apache-2.0
 - URL: https://github.com/Brightspace/node-ecdsa-sig-formatter
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [50640bbffc17](#license-text-50640bbffc17)
 
 ### ee-first 1.1.1
 
 - License: MIT
 - URL: https://github.com/jonathanong/ee-first
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d68cfda21300](#license-text-d68cfda21300)
 
 ### encodeurl 2.0.0
 
 - License: MIT
 - URL: https://github.com/pillarjs/encodeurl
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [b4d257dd0d1c](#license-text-b4d257dd0d1c)
 
 ### es-define-property 1.0.1
 
 - License: MIT
 - URL: https://github.com/ljharb/es-define-property
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [3df72862fb6d](#license-text-3df72862fb6d)
 
 ### es-errors 1.3.0
 
 - License: MIT
 - URL: https://github.com/ljharb/es-errors
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [3df72862fb6d](#license-text-3df72862fb6d)
 
 ### es-object-atoms 1.1.2
 
 - License: MIT
 - URL: https://github.com/ljharb/es-object-atoms
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [3df72862fb6d](#license-text-3df72862fb6d)
 
 ### es-toolkit 1.50.0
@@ -2372,14 +2372,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/evanw/esbuild
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.md`): [f2b90afb27a6](#license-text-f2b90afb27a6)
 
 ### escape-html 1.0.3
 
 - License: MIT
 - URL: https://github.com/component/escape-html
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [b2bf1d8ed89e](#license-text-b2bf1d8ed89e)
 
 ### escape-string-regexp 5.0.0
@@ -2400,14 +2400,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/jshttp/etag
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [49fa72ab1de5](#license-text-49fa72ab1de5)
 
 ### eventsource 3.0.7
 
 - License: MIT
 - URL: https://git@github.com/EventSource/eventsource
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [e4f413b3ca5e](#license-text-e4f413b3ca5e)
 
 ### eventsource-parser 3.1.0
@@ -2421,14 +2421,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: not declared in package metadata
-- Shipped by: @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### express 5.2.1
 
 - License: MIT
 - URL: https://github.com/expressjs/express
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [93321073ebe5](#license-text-93321073ebe5)
 
 ### express-rate-limit 8.6.1
@@ -2442,28 +2442,28 @@ Packages listed: 595.
 
 - License: MIT
 - URL: not declared in package metadata
-- Shipped by: @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### extend 3.0.2
 
 - License: MIT
 - URL: https://github.com/justmoon/node-extend
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [b079b743d39a](#license-text-b079b743d39a)
 
 ### fast-deep-equal 3.1.3
 
 - License: MIT
 - URL: https://github.com/epoberezkin/fast-deep-equal
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [aa407ee69b3f](#license-text-aa407ee69b3f)
 
 ### fast-sha256 1.3.0
 
 - License: Unlicense
 - URL: https://github.com/dchest/fast-sha256-js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [79d0fc447160](#license-text-79d0fc447160)
 
 ### fast-uri 3.1.5
@@ -2477,84 +2477,84 @@ Packages listed: 595.
 
 - License: BSD-3-Clause
 - URL: not declared in package metadata
-- Shipped by: @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### fetch-blob 3.2.0
 
 - License: MIT
 - URL: https://github.com/node-fetch/fetch-blob
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [da98afd61ac8](#license-text-da98afd61ac8)
 
 ### finalhandler 2.1.1
 
 - License: MIT
 - URL: https://github.com/pillarjs/finalhandler
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [887ee21f80fd](#license-text-887ee21f80fd)
 
 ### formdata-polyfill 4.0.10
 
 - License: MIT
 - URL: https://jimmywarting@github.com/jimmywarting/FormData
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [95b423fd389e](#license-text-95b423fd389e)
 
 ### forwarded 0.2.0
 
 - License: MIT
 - URL: https://github.com/jshttp/forwarded
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [0696190d4967](#license-text-0696190d4967)
 
 ### fresh 2.0.0
 
 - License: MIT
 - URL: https://github.com/jshttp/fresh
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [72bb6356e9ef](#license-text-72bb6356e9ef)
 
 ### function-bind 1.1.2
 
 - License: MIT
 - URL: https://github.com/Raynos/function-bind
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [741668cc2214](#license-text-741668cc2214)
 
 ### gaxios 7.1.4
 
 - License: Apache-2.0
 - URL: https://github.com/googleapis/google-cloud-node-core/tree/HEAD/packages/gaxios
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [283ea6cc2997](#license-text-283ea6cc2997)
 
 ### gaxios 7.3.1
 
 - License: Apache-2.0
 - URL: https://github.com/googleapis/google-cloud-node/tree/HEAD/core/packages/gaxios
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [283ea6cc2997](#license-text-283ea6cc2997)
 
 ### gcp-metadata 8.1.2
 
 - License: Apache-2.0
 - URL: https://github.com/googleapis/google-cloud-node-core/tree/HEAD/packages/gcp-metadata
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [283ea6cc2997](#license-text-283ea6cc2997)
 
 ### get-east-asian-width 1.6.0
 
 - License: MIT
 - URL: https://github.com/sindresorhus/get-east-asian-width
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`license`): [1529f88b3675](#license-text-1529f88b3675)
 
 ### get-intrinsic 1.3.0
 
 - License: MIT
 - URL: https://github.com/ljharb/get-intrinsic
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [006a2e42087f](#license-text-006a2e42087f)
 
 ### get-nonce 1.0.1
@@ -2568,7 +2568,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/ljharb/get-proto
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [c09860913a77](#license-text-c09860913a77)
 
 ### ghostty-web 0.4.0
@@ -2582,42 +2582,42 @@ Packages listed: 595.
 
 - License: Apache-2.0
 - URL: https://github.com/googleapis/google-cloud-node-core/tree/HEAD/packages/google-auth-library-nodejs
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [283ea6cc2997](#license-text-283ea6cc2997)
 
 ### google-auth-library 10.9.1
 
 - License: Apache-2.0
 - URL: https://github.com/googleapis/google-cloud-node/tree/HEAD/core/packages/google-auth-library-nodejs
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [283ea6cc2997](#license-text-283ea6cc2997)
 
 ### google-logging-utils 1.1.3
 
 - License: Apache-2.0
 - URL: https://github.com/googleapis/google-cloud-node-core/tree/HEAD/dev-packages/logging-utils
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [283ea6cc2997](#license-text-283ea6cc2997)
 
 ### gopd 1.2.0
 
 - License: MIT
 - URL: https://github.com/ljharb/gopd
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [3f7cd27a6e50](#license-text-3f7cd27a6e50)
 
 ### graceful-fs 4.2.11
 
 - License: ISC
 - URL: https://github.com/isaacs/node-graceful-fs
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [740bb4e91297](#license-text-740bb4e91297)
 
 ### grok-mermaid 0.2.3
 
 - License: Apache-2.0
 - URL: https://github.com/xl0/grok-mermaid
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [ac29541ee357](#license-text-ac29541ee357)
 
 ### hachure-fill 0.5.2
@@ -2631,14 +2631,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/inspect-js/has-symbols
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [fdb3f0dc5ffa](#license-text-fdb3f0dc5ffa)
 
 ### hasown 2.0.4
 
 - License: MIT
 - URL: https://github.com/inspect-js/hasOwn
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [928a86b1d298](#license-text-928a86b1d298)
 
 ### hast-util-to-html 9.0.5
@@ -2666,7 +2666,7 @@ Packages listed: 595.
 
 - License: BSD-3-Clause
 - URL: https://github.com/highlightjs/highlight.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [eabb8d3cadaf](#license-text-eabb8d3cadaf)
 
 ### hono 4.12.32
@@ -2680,14 +2680,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: not declared in package metadata
-- Shipped by: @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### hosted-git-info 9.0.3
 
 - License: ISC
 - URL: https://github.com/npm/hosted-git-info
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d28e1b882ecc](#license-text-d28e1b882ecc)
 
 ### html-url-attributes 3.0.1
@@ -2708,28 +2708,28 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/jshttp/http-errors
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [b279be1458cd](#license-text-b279be1458cd)
 
 ### http-proxy-agent 9.1.0
 
 - License: MIT
 - URL: https://github.com/TooTallNate/proxy-agents/tree/HEAD/packages/http-proxy-agent
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [8d8c55319c77](#license-text-8d8c55319c77)
 
 ### https-proxy-agent 7.0.6
 
 - License: MIT
 - URL: https://github.com/TooTallNate/proxy-agents/tree/HEAD/packages/https-proxy-agent
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [8d8c55319c77](#license-text-8d8c55319c77)
 
 ### https-proxy-agent 9.1.0
 
 - License: MIT
 - URL: https://github.com/TooTallNate/proxy-agents/tree/HEAD/packages/https-proxy-agent
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [8d8c55319c77](#license-text-8d8c55319c77)
 
 ### iconv-lite 0.6.3
@@ -2743,14 +2743,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/pillarjs/iconv-lite
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [48186f5950f2](#license-text-48186f5950f2)
 
 ### ignore 7.0.8
 
 - License: MIT
 - URL: https://github.com/kaelzhang/node-ignore
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE-MIT`): [9c94db23dc4b](#license-text-9c94db23dc4b)
 
 ### import-meta-resolve 4.2.0
@@ -2764,7 +2764,7 @@ Packages listed: 595.
 
 - License: ISC
 - URL: https://github.com/isaacs/inherits
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [3a395674c5c9](#license-text-3a395674c5c9)
 
 ### inline-style-parser 0.2.7
@@ -2799,14 +2799,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: not declared in package metadata
-- Shipped by: @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### ipaddr.js 1.9.1
 
 - License: MIT
 - URL: https://github.com/whitequark/ipaddr.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [ad66ea5b7919](#license-text-ad66ea5b7919)
 
 ### is-alphabetical 2.0.1
@@ -2848,28 +2848,28 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/then/is-promise
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [44191656d296](#license-text-44191656d296)
 
 ### isexe 2.0.0
 
 - License: ISC
 - URL: https://github.com/isaacs/isexe
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [0ae52fe329cc](#license-text-0ae52fe329cc)
 
 ### jiti 2.7.0
 
 - License: MIT
 - URL: https://github.com/unjs/jiti
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [f7673e959327](#license-text-f7673e959327)
 
 ### jose 6.2.10
 
 - License: MIT
 - URL: not declared in package metadata
-- Shipped by: @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### jose 6.2.5
@@ -2883,42 +2883,42 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/sidorares/json-bigint
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [faa1180b6bfe](#license-text-faa1180b6bfe)
 
 ### json-schema-to-ts 3.1.1
 
 - License: MIT
 - URL: https://github.com/ThomasAribart/json-schema-to-ts
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [3d1a950648d8](#license-text-3d1a950648d8)
 
 ### json-schema-traverse 1.0.0
 
 - License: MIT
 - URL: https://github.com/epoberezkin/json-schema-traverse
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [aa407ee69b3f](#license-text-aa407ee69b3f)
 
 ### json-schema-typed 8.0.2
 
 - License: BSD-2-Clause
 - URL: https://github.com/RemyRylan/json-schema-typed
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.md`): [ff750f6d635d](#license-text-ff750f6d635d)
 
 ### jwa 2.0.1
 
 - License: MIT
 - URL: https://github.com/brianloveswords/node-jwa
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [f175d4a76efe](#license-text-f175d4a76efe)
 
 ### jws 4.0.1
 
 - License: MIT
 - URL: https://github.com/brianloveswords/node-jws
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [f175d4a76efe](#license-text-f175d4a76efe)
 
 ### katex 0.16.47
@@ -2960,7 +2960,7 @@ Packages listed: 595.
 
 - License: Apache-2.0
 - URL: https://github.com/dcodeIO/long.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [283ea6cc2997](#license-text-283ea6cc2997)
 
 ### longest-streak 3.1.0
@@ -2981,7 +2981,7 @@ Packages listed: 595.
 
 - License: BlueOak-1.0.0
 - URL: https://github.com/isaacs/node-lru-cache
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.md`): [1a9975c75cfc](#license-text-1a9975c75cfc)
 
 ### lucide-react 1.27.0
@@ -2995,7 +2995,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/moment/luxon
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.md`): [f8f62778c92d](#license-text-f8f62778c92d)
 
 ### markdown-table 3.0.4
@@ -3016,14 +3016,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/markedjs/marked
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [dd923de97698](#license-text-dd923de97698)
 
 ### math-intrinsics 1.1.0
 
 - License: MIT
 - URL: https://github.com/es-shims/math-intrinsics
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [42fbee6b9cc2](#license-text-42fbee6b9cc2)
 
 ### mdast-util-find-and-replace 3.0.2
@@ -3135,14 +3135,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/jshttp/media-typer
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [0696190d4967](#license-text-0696190d4967)
 
 ### merge-descriptors 2.0.0
 
 - License: MIT
 - URL: https://github.com/sindresorhus/merge-descriptors
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`license`): [d48d15a12e71](#license-text-d48d15a12e71)
 
 ### mermaid 11.16.1
@@ -3352,28 +3352,28 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/jshttp/mime-db
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [9116bd624634](#license-text-9116bd624634)
 
 ### mime-types 3.0.2
 
 - License: MIT
 - URL: https://github.com/jshttp/mime-types
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [a3fb4c94aaf6](#license-text-a3fb4c94aaf6)
 
 ### minimatch 10.2.6
 
 - License: BlueOak-1.0.0
 - URL: https://github.com/isaacs/minimatch
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.md`): [aa4c6585f201](#license-text-aa4c6585f201)
 
 ### ms 2.1.3
 
 - License: MIT
 - URL: https://github.com/vercel/ms
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`license.md`): [e91069c31b4e](#license-text-e91069c31b4e)
 
 ### negotiator 1.0.0
@@ -3387,14 +3387,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: not declared in package metadata
-- Shipped by: @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### node-addon-api 7.1.1
 
 - License: MIT
 - URL: https://github.com/nodejs/node-addon-api
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.md`): [1d660eff8965](#license-text-1d660eff8965)
 
 ### node-addon-api 8.9.0
@@ -3408,56 +3408,56 @@ Packages listed: 595.
 
 - License: MIT
 - URL: not declared in package metadata
-- Shipped by: @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### node-domexception 1.0.0
 
 - License: MIT
 - URL: https://github.com/jimmywarting/node-domexception
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [8c46e0985782](#license-text-8c46e0985782)
 
 ### node-fetch 3.3.2
 
 - License: MIT
 - URL: https://github.com/node-fetch/node-fetch
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.md`): [399cbcc4b8a2](#license-text-399cbcc4b8a2)
 
 ### node-pty 1.1.0
 
 - License: MIT
 - URL: https://github.com/microsoft/node-pty
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [cab518dd82c2](#license-text-cab518dd82c2)
 
 ### object-assign 4.1.1
 
 - License: MIT
 - URL: https://github.com/sindresorhus/object-assign
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`license`): [2bc4beb49d48](#license-text-2bc4beb49d48)
 
 ### object-inspect 1.13.4
 
 - License: MIT
 - URL: https://github.com/inspect-js/object-inspect
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [dd58f6060d93](#license-text-dd58f6060d93)
 
 ### on-finished 2.4.1
 
 - License: MIT
 - URL: https://github.com/jshttp/on-finished
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [5de22a7021a0](#license-text-5de22a7021a0)
 
 ### once 1.4.0
 
 - License: ISC
 - URL: https://github.com/isaacs/once
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [0ae52fe329cc](#license-text-0ae52fe329cc)
 
 ### oniguruma-parser 0.12.2
@@ -3478,14 +3478,14 @@ Packages listed: 595.
 
 - License: Apache-2.0
 - URL: https://github.com/openai/openai-node
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [7d52eae0c2f0](#license-text-7d52eae0c2f0)
 
 ### p-retry 4.6.2
 
 - License: MIT
 - URL: https://github.com/sindresorhus/p-retry
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`license`): [c9808a775260](#license-text-c9808a775260)
 
 ### package-manager-detector 1.8.0
@@ -3506,14 +3506,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/pillarjs/parseurl
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [9179082f29f0](#license-text-9179082f29f0)
 
 ### partial-json 0.1.7
 
 - License: MIT
 - URL: https://github.com/promplate/partial-json-parser-js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [b72c84b52e8f](#license-text-b72c84b52e8f)
 
 ### path-data-parser 0.1.0
@@ -3527,21 +3527,21 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/sindresorhus/path-key
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`license`): [c9808a775260](#license-text-c9808a775260)
 
 ### path-to-regexp 8.4.2
 
 - License: MIT
 - URL: https://github.com/pillarjs/path-to-regexp
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [e257f36bcf5e](#license-text-e257f36bcf5e)
 
 ### pkce-challenge 5.0.1
 
 - License: MIT
 - URL: https://github.com/crouchcd/pkce-challenge
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [64c4e54df59c](#license-text-64c4e54df59c)
 
 ### points-on-curve 0.2.0
@@ -3576,7 +3576,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/moxystudio/node-proper-lockfile
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [5e7b89989b94](#license-text-5e7b89989b94)
 
 ### property-information 7.2.0
@@ -3590,28 +3590,28 @@ Packages listed: 595.
 
 - License: BSD-3-Clause
 - URL: https://github.com/protobufjs/protobuf.js
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [79157668b360](#license-text-79157668b360)
 
 ### proxy-addr 2.0.7
 
 - License: MIT
 - URL: https://github.com/jshttp/proxy-addr
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [49fa72ab1de5](#license-text-49fa72ab1de5)
 
 ### proxy-agent-negotiate 1.1.0
 
 - License: MIT
 - URL: https://github.com/TooTallNate/proxy-agents/tree/HEAD/packages/negotiate
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### qs 6.15.3
 
 - License: BSD-3-Clause
 - URL: https://github.com/ljharb/qs
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.md`): [14d069c68fe7](#license-text-14d069c68fe7)
 
 ### radix-ui 1.6.7
@@ -3625,14 +3625,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/jshttp/range-parser
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [98a2c2007296](#license-text-98a2c2007296)
 
 ### raw-body 3.0.2
 
 - License: MIT
 - URL: https://github.com/stream-utils/raw-body
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [b5954f59305d](#license-text-b5954f59305d)
 
 ### react 19.2.8
@@ -3730,21 +3730,21 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/floatdrop/require-from-string
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`license`): [937e8ea6d28e](#license-text-937e8ea6d28e)
 
 ### retry 0.12.0
 
 - License: MIT
 - URL: https://github.com/tim-kos/node-retry
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`License`): [1418710b026f](#license-text-1418710b026f)
 
 ### retry 0.13.1
 
 - License: MIT
 - URL: https://github.com/tim-kos/node-retry
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`License`): [1418710b026f](#license-text-1418710b026f)
 
 ### robust-predicates 3.0.3
@@ -3765,7 +3765,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/pillarjs/router
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [59ebe0cf27c4](#license-text-59ebe0cf27c4)
 
 ### rw 1.3.3
@@ -3779,14 +3779,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/feross/safe-buffer
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [dff1a84cb703](#license-text-dff1a84cb703)
 
 ### safer-buffer 2.1.2
 
 - License: MIT
 - URL: https://github.com/ChALkeR/safer-buffer
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [aa72fb6117e4](#license-text-aa72fb6117e4)
 
 ### scheduler 0.27.0
@@ -3800,42 +3800,42 @@ Packages listed: 595.
 
 - License: ISC
 - URL: https://github.com/npm/node-semver
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [0ae52fe329cc](#license-text-0ae52fe329cc)
 
 ### send 1.2.1
 
 - License: MIT
 - URL: https://github.com/pillarjs/send
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [f4b733956caa](#license-text-f4b733956caa)
 
 ### serve-static 2.2.1
 
 - License: MIT
 - URL: https://github.com/expressjs/serve-static
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [d80ea12109c5](#license-text-d80ea12109c5)
 
 ### setprototypeof 1.2.0
 
 - License: ISC
 - URL: https://github.com/wesleytodd/setprototypeof
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [db05b3b0f72f](#license-text-db05b3b0f72f)
 
 ### shebang-command 2.0.0
 
 - License: MIT
 - URL: https://github.com/kevva/shebang-command
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`license`): [1407925f6128](#license-text-1407925f6128)
 
 ### shebang-regex 3.0.0
 
 - License: MIT
 - URL: https://github.com/sindresorhus/shebang-regex
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`license`): [c9808a775260](#license-text-c9808a775260)
 
 ### shiki 4.4.2
@@ -3849,35 +3849,35 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/ljharb/side-channel
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [7ae85337f549](#license-text-7ae85337f549)
 
 ### side-channel-list 1.0.1
 
 - License: MIT
 - URL: https://github.com/ljharb/side-channel-list
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [3df72862fb6d](#license-text-3df72862fb6d)
 
 ### side-channel-map 1.0.1
 
 - License: MIT
 - URL: https://github.com/ljharb/side-channel-map
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [3df72862fb6d](#license-text-3df72862fb6d)
 
 ### side-channel-weakmap 1.0.2
 
 - License: MIT
 - URL: https://github.com/ljharb/side-channel-weakmap
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [7ae85337f549](#license-text-7ae85337f549)
 
 ### signal-exit 3.0.7
 
 - License: ISC
 - URL: https://github.com/tapjs/signal-exit
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.txt`): [fc5c72a172de](#license-text-fc5c72a172de)
 
 ### space-separated-tokens 2.0.2
@@ -3898,14 +3898,14 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/standard-webhooks/standard-webhooks
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### statuses 2.0.2
 
 - License: MIT
 - URL: https://github.com/jshttp/statuses
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [bc11a2b203c7](#license-text-bc11a2b203c7)
 
 ### stringify-entities 4.0.4
@@ -3954,7 +3954,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/component/toidentifier
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [8d512baec1ac](#license-text-8d512baec1ac)
 
 ### trim-lines 3.0.1
@@ -3975,7 +3975,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/ThomasAribart/ts-algebra
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [3d1a950648d8](#license-text-3d1a950648d8)
 
 ### ts-dedent 2.3.0
@@ -3989,42 +3989,42 @@ Packages listed: 595.
 
 - License: 0BSD
 - URL: https://github.com/Microsoft/tslib
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.txt`): [0e8d2550baea](#license-text-0e8d2550baea)
 
 ### type-is 2.1.0
 
 - License: MIT
 - URL: https://github.com/jshttp/type-is
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [7cb4d976f1c8](#license-text-7cb4d976f1c8)
 
 ### typebox 1.3.27
 
 - License: MIT
 - URL: https://github.com/sinclairzx81/typebox
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`license`): [e8a7cc256941](#license-text-e8a7cc256941)
 
 ### typebox 1.3.7
 
 - License: MIT
 - URL: https://github.com/sinclairzx81/typebox
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`license`): [e8a7cc256941](#license-text-e8a7cc256941)
 
 ### undici 8.10.2
 
 - License: MIT
 - URL: https://github.com/nodejs/undici
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [fe64958bfaef](#license-text-fe64958bfaef)
 
 ### undici-types 6.21.0
 
 - License: MIT
 - URL: https://github.com/nodejs/undici
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [fe64958bfaef](#license-text-fe64958bfaef)
 
 ### undici-types 8.3.0
@@ -4038,7 +4038,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: not declared in package metadata
-- Shipped by: @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: @sedes/server-runtime
 - License text: license text not included in package; see repository
 
 ### unified 11.0.5
@@ -4087,7 +4087,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/stream-utils/unpipe
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [072fb4ea37f0](#license-text-072fb4ea37f0)
 
 ### use-callback-ref 1.3.3
@@ -4115,7 +4115,7 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/jshttp/vary
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [0696190d4967](#license-text-0696190d4967)
 
 ### vfile 6.0.3
@@ -4136,56 +4136,56 @@ Packages listed: 595.
 
 - License: MIT
 - URL: https://github.com/MattiasBuelens/web-streams-polyfill
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [fda0e18e4dc7](#license-text-fda0e18e4dc7)
 
 ### which 2.0.2
 
 - License: ISC
 - URL: https://github.com/isaacs/node-which
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [0ae52fe329cc](#license-text-0ae52fe329cc)
 
 ### wrappy 1.0.2
 
 - License: ISC
 - URL: https://github.com/npm/wrappy
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [0ae52fe329cc](#license-text-0ae52fe329cc)
 
 ### ws 8.21.0
 
 - License: MIT
 - URL: https://github.com/websockets/ws
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [7adebaeee45b](#license-text-7adebaeee45b)
 
 ### ws 8.21.1
 
 - License: MIT
 - URL: https://github.com/websockets/ws
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [7adebaeee45b](#license-text-7adebaeee45b)
 
 ### yaml 2.9.0
 
 - License: ISC
 - URL: https://github.com/eemeli/yaml
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [cf12d35c36ba](#license-text-cf12d35c36ba)
 
 ### zod 4.4.3
 
 - License: MIT
 - URL: https://github.com/colinhacks/zod
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [f61cacc2acb8](#license-text-f61cacc2acb8)
 
 ### zod-to-json-schema 3.25.2
 
 - License: ISC
 - URL: https://github.com/StefanTerdell/zod-to-json-schema
-- Shipped by: sedes, @sedes/electron-local-server-runtime, @sedes/server-runtime
+- Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [80d3168ad2f7](#license-text-80d3168ad2f7)
 
 ### zwitch 2.0.4

@@ -82,6 +82,8 @@ The standalone source-server instructions below target Linux and macOS and
 require Node.js 24.18 or newer. See [Outbound hosts](docs/operator/outbound-hosts.md)
 for remote execution prerequisites and backend limitations.
 
+Electron offers client-only and full distributions; see the
+[desktop packaging profiles](docs/operator/clients/electron.md#distribution-profiles).
 The Android and Electron projects are buildable previews; the repository does
 not publish signed or notarized client binaries.
 
