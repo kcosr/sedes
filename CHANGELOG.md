@@ -11,6 +11,7 @@
   Revision pickers show commit messages and dates, searchable branch groups,
   scoped history, and branch-comparison presets. Requires matching
   clients and managed sidecars with `workspace_files@8`.
+  ([#1](https://github.com/kcosr/sedes/pull/1))
 
 - Clarify Linux, macOS, and limited Windows standalone server support, add a
   Windows entry point, and identify Linux as the developer's primary server host.
@@ -40,9 +41,11 @@
 
 - Bound changed-file filters so long pasted input cannot interrupt saved Files
   navigation.
+  ([#1](https://github.com/kcosr/sedes/pull/1))
 
 - Keep historical review comments and reviewed flags off replacement comparisons;
   editing a historical comment no longer creates an unrelated current review.
+  ([#1](https://github.com/kcosr/sedes/pull/1))
 
 - Preserve interrupted status when Pi provider setup returns an error after
   cancellation, in both live output and restored history.
