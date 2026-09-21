@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export function parseElectronDistributionArguments(args) {
   const [command, ...rest] = args;
-  if (!['sync', 'package', 'verify'].includes(command)) throw new Error('Expected sync, package, or verify');
+  if (!['sync', 'package', 'verify', 'clean'].includes(command)) throw new Error('Expected sync, package, verify, or clean');
   let profile = 'full';
   let directory = false;
   let profileProvided = false;
@@ -19,8 +19,9 @@ export function parseElectronDistributionArguments(args) {
     if (rest[index] === '--profile' && !profileProvided && ['client', 'full'].includes(rest[index + 1])) {
       profile = rest[++index]; profileProvided = true;
     } else if (rest[index] === '--dir' && command === 'package' && !directory) directory = true;
-    else throw new Error('Usage: electron-distribution.mjs sync|package|verify [--profile client|full] [--dir (package only)]');
+    else throw new Error('Usage: electron-distribution.mjs sync|package|verify|clean [--profile client|full (required for clean)] [--dir (package only)]');
   }
+  if (command === 'clean' && !profileProvided) throw new Error('Electron cleanup requires an explicit --profile client|full');
   return { command, profile, directory };
 }
 
@@ -49,6 +50,22 @@ export async function prepareElectronOutputDirectory(electronRoot, profile) {
   }
   await mkdir(output);
   return { output, previous };
+}
+
+/** Explicit operator cleanup of generated prior output, never current builds. */
+export async function cleanElectronPreviousOutputs(electronRoot, profile) {
+  if (!['client', 'full'].includes(profile)) throw new Error('electron_distribution_profile_invalid');
+  const dist = path.join(electronRoot, 'dist');
+  const entries = await readdir(dist, { withFileTypes: true }).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+  const selected = new RegExp(`^previous-${profile}-[A-Za-z0-9]{6}$`, 'u');
+  const removed = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !selected.test(entry.name)) continue;
+    const directory = path.join(dist, entry.name);
+    await rm(directory, { recursive: true });
+    removed.push(directory);
+  }
+  return removed;
 }
 
 export async function writeElectronOutputProvenance(output, info) {
@@ -87,6 +104,11 @@ function run(command, args, cwd, env, { capture = false } = {}) {
 
 export async function runElectronDistribution(options) {
   const electron = path.join(root, 'electron');
+  if (options.command === 'clean') {
+    const removed = await cleanElectronPreviousOutputs(electron, options.profile);
+    console.log(`Removed ${removed.length} previous Electron ${options.profile} output directories.`);
+    return;
+  }
   const env = { ...process.env };
   delete env.NODE_ENV;
   const node = (args, cwd = root, extra) => run(process.execPath, args, cwd, env, extra);
@@ -118,7 +140,7 @@ export async function runElectronDistribution(options) {
     dirty, platform: process.platform, architecture: process.arch,
     host: { platform: os.platform(), architecture: os.arch(), release: os.release(), version: os.version(), glibc: process.report.getReport().header.glibcVersionRuntime ?? null },
     electron: { version: electronManifest.devDependencies.electron, abi: getAbi(electronManifest.devDependencies.electron, 'electron') },
-    buildNode: process.version, dependencyLockSha256: locks,
+    buildNode: process.version, buildCommand: process.argv, dependencyLockSha256: locks,
     builtAt: new Date().toISOString(), providerExecutables: 'operator-provided',
   };
   await writeFile(path.join(electron, 'generated/BUILD-INFO.json'), JSON.stringify(info, null, 2) + '\n');

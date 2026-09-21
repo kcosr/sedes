@@ -57,6 +57,12 @@ with the packaged Electron executable. Remote worker probes use external Node.
 The graphical smoke gate additionally needs a secure OS keyring; a failure
 there is recorded separately from the native runtime checks.
 
+When previous outputs are no longer needed, run
+`env -u NODE_ENV npm run electron:clean -- --profile full` (or `client`).
+Cleanup requires an explicit profile and removes only its generated
+`previous-<profile>-<six-character-suffix>` directories. It preserves current
+output, other profiles, and symlinks. Builds never run this cleanup automatically.
+
 Client builds skip local-server staging and addon compilation. Full builds
 consume the same `packages/server-runtime` manifest and independent lockfile
 as standalone server distributions, with an Electron-specific native build.

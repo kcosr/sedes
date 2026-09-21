@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parseElectronDistributionArguments, prepareElectronOutputDirectory, writeElectronDistribution, writeElectronOutputProvenance } from '../../scripts/electron-distribution.mjs';
+import { cleanElectronPreviousOutputs, parseElectronDistributionArguments, prepareElectronOutputDirectory, writeElectronDistribution, writeElectronOutputProvenance } from '../../scripts/electron-distribution.mjs';
 import { electronNativeOutputs, rebuildElectronNativeAddons } from '../../scripts/prepare-electron-local-server.mjs';
 
 const temporary = [];
@@ -17,7 +17,8 @@ describe('Electron distribution profiles', () => {
   it('defaults existing workflows to full and rejects ambiguous profiles/options', () => {
     expect(parseElectronDistributionArguments(['sync'])).toEqual({ command: 'sync', profile: 'full', directory: false });
     expect(parseElectronDistributionArguments(['package', '--profile', 'client', '--dir'])).toEqual({ command: 'package', profile: 'client', directory: true });
-    for (const args of [['package','--profile','unknown'], ['verify','--dir'], ['sync','--profile','client','--profile','full'], ['package','--dir','--dir']]) expect(() => parseElectronDistributionArguments(args)).toThrow();
+    expect(parseElectronDistributionArguments(['clean', '--profile', 'client'])).toEqual({ command: 'clean', profile: 'client', directory: false });
+    for (const args of [['package','--profile','unknown'], ['verify','--dir'], ['sync','--profile','client','--profile','full'], ['package','--dir','--dir'], ['clean'], ['clean', '--profile', 'full', '--dir']]) expect(() => parseElectronDistributionArguments(args)).toThrow();
   });
   it('clears stale full payload when switching profiles and writes only the native-owned profile', async () => {
     const root = await fixture();
@@ -76,6 +77,28 @@ describe('Electron distribution profiles', () => {
     await put(root, 'dist/client', 'not a directory');
     await expect(prepareElectronOutputDirectory(root, 'client')).rejects.toThrow('output_not_directory');
     expect(await readFile(path.join(root, 'dist/client'), 'utf8')).toBe('not a directory');
+  });
+  it('cleans only explicitly selected prior output after repeated builds', async () => {
+    const root = await fixture();
+    for (let build = 0; build < 3; build++) {
+      const { output } = await prepareElectronOutputDirectory(root, 'full');
+      await put(output, 'installer.exe', `build-${build}`);
+    }
+    await put(root, 'dist/client/current.txt', 'current other profile');
+    await put(root, 'dist/previous-client-AbCd12/installer.exe', 'previous other profile');
+    await put(root, 'dist/previous-full-manual-backup/keep.txt', 'unmatched directory');
+    await put(root, 'dist/previous-full-FILE12', 'regular file');
+    await symlink(path.join(root, 'dist/client'), path.join(root, 'dist/previous-full-LINK12'), process.platform === 'win32' ? 'junction' : 'dir');
+    const removed = await cleanElectronPreviousOutputs(root, 'full');
+    expect(removed).toHaveLength(2);
+    for (const previous of removed) expect(await exists(previous)).toBe(false);
+    expect(await readFile(path.join(root, 'dist/full/installer.exe'), 'utf8')).toBe('build-2');
+    expect(await readFile(path.join(root, 'dist/client/current.txt'), 'utf8')).toBe('current other profile');
+    expect(await readFile(path.join(root, 'dist/previous-client-AbCd12/installer.exe'), 'utf8')).toBe('previous other profile');
+    expect(await readFile(path.join(root, 'dist/previous-full-manual-backup/keep.txt'), 'utf8')).toBe('unmatched directory');
+    expect(await readFile(path.join(root, 'dist/previous-full-FILE12'), 'utf8')).toBe('regular file');
+    expect(await exists(path.join(root, 'dist/previous-full-LINK12'))).toBe(true);
+    expect(await cleanElectronPreviousOutputs(root, 'full')).toEqual([]);
   });
 });
 
