@@ -184,6 +184,11 @@ export const boundedToolResultSchema = z.strictObject({
 });
 export type BoundedToolResult = z.infer<typeof boundedToolResultSchema>;
 
+export const turnFailureSchema = z.strictObject({
+  message: boundedDisplayTextSchema,
+});
+export type TurnFailure = z.infer<typeof turnFailureSchema>;
+
 export const safeItemErrorSchema = z.strictObject({
   category: z.enum([
     "unavailable",

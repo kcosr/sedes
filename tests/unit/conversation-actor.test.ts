@@ -2350,8 +2350,9 @@ describe("ConversationActorManager", () => {
     await manager.close();
   });
 
-  it("resolves an explicit latest-completed checkpoint selection", async () => {
+  it.each(["idle", "failed"] as const)("resolves an explicit latest-completed checkpoint from a %s source", async (runState) => {
     const { driver, handle, manager } = fixture();
+    handle.establishmentSnapshots[0] = { ...snapshot(), runState };
     handle.backendCapabilities.mockResolvedValueOnce(
       selectedBranchingCapabilities([
         "latest_completed",
@@ -2481,7 +2482,7 @@ describe("ConversationActorManager", () => {
     await manager.close();
   });
 
-  it.each(["reconciling", "disconnected", "failed"] as const)(
+  it.each(["reconciling", "disconnected"] as const)(
     "rejects the latest provider snapshot while the source is %s",
     async (runState) => {
       const { driver, handle, manager } = fixture();
@@ -2591,6 +2592,38 @@ describe("ConversationActorManager", () => {
       await manager.close();
     },
   );
+
+  it("fences provider-snapshot fork execution on a failed source until admitted work settles authoritatively", async () => {
+    const { driver, handle, manager } = fixture();
+    handle.establishmentSnapshots[0] = { ...snapshot(), runState: "failed" };
+    handle.backendCapabilities.mockResolvedValueOnce(
+      selectedBranchingCapabilities(["latest_provider_snapshot"], false),
+    );
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    await acquired.actor.submit({
+      applicationOperationId: "failed-source-retry",
+      source: { kind: "user" },
+      mutationId: "failed-source-retry",
+      reconciliationToken: "failed-source-retry",
+      text: "Retry source work",
+      contextExcerpts: [], attachments: [], taskContexts: [],
+    });
+    expect(acquired.actor.timeline.runState).toBe("failed");
+    expect(acquired.actor.authoritativelySettled).toBe(false);
+    const execute = vi.fn(async () => "fork-executed");
+    await expect(acquired.actor.withBranchExecution("provider_snapshot_at_acceptance", execute))
+      .rejects.toMatchObject({ category: "invalid_state", retryable: true });
+    expect(execute).not.toHaveBeenCalled();
+    handle.emit(0, { type: "run_state_changed", state: "running" }, 0);
+    handle.emit(0, { type: "run_state_changed", state: "failed" }, 1);
+    await vi.waitFor(() => expect(acquired.actor.authoritativelySettled).toBe(true));
+    expect(acquired.actor.timeline.runState).toBe("failed");
+    await expect(acquired.actor.withBranchExecution("provider_snapshot_at_acceptance", execute))
+      .resolves.toBe("fork-executed");
+    expect(execute).toHaveBeenCalledOnce();
+    acquired.release();
+    await manager.close();
+  });
 
   it("allows a latest provider snapshot after accepted source work becomes authoritatively active", async () => {
     const { driver, handle, manager } = fixture();
@@ -2743,6 +2776,19 @@ describe("ConversationActorManager", () => {
       acquired.actor.resolveBranchCheckpoint({ kind: "latest_completed" }),
     ).rejects.toMatchObject({ category: "invalid_state", retryable: true });
 
+    acquired.release();
+    await manager.close();
+  });
+
+  it.each(["selected_completed_turn", "latest_provider_snapshot"] as const)("allows %s from an authoritatively failed source", async (kind) => {
+    const { driver, handle, manager } = fixture();
+    handle.establishmentSnapshots[0] = { ...snapshot(), runState: "failed" };
+    handle.backendCapabilities.mockResolvedValueOnce(selectedBranchingCapabilities([kind], true));
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const sourceTurnId = acquired.actor.timeline.orderedTurnIds[0]!;
+    await expect(acquired.actor.resolveBranchCheckpoint(kind === "selected_completed_turn"
+      ? { kind, turnId: sourceTurnId, expectedTurnRevision: acquired.actor.timeline.turnsById[sourceTurnId]!.revision }
+      : { kind })).resolves.toMatchObject({ backendTurnId: kind === "selected_completed_turn" ? "turn-1" : null });
     acquired.release();
     await manager.close();
   });

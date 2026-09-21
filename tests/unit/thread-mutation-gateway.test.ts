@@ -78,6 +78,7 @@ function fixture(input?: {
     | "waiting_for_approval"
     | "waiting_for_input"
     | "idle"
+    | "failed"
     | "starting"
     | "stopping"
     | "disconnected"
@@ -156,6 +157,7 @@ function fixture(input?: {
         | "waiting_for_approval"
         | "waiting_for_input"
         | "idle"
+        | "failed"
         | "starting"
         | "stopping"
         | "disconnected"
@@ -178,7 +180,7 @@ function fixture(input?: {
       >
     >;
   } = {
-    get authoritativelySettled() { return this.timeline.runState === "idle"; },
+    get authoritativelySettled() { return this.timeline.runState === "idle" || this.timeline.runState === "failed"; },
     get canEvict() {
       return this.timeline.runState === "idle";
     },
@@ -603,9 +605,9 @@ describe("ThreadMutationGateway direct agent control", () => {
       mutationId,
     });
 
-  it("admits one bound-idle input without consulting the human composer draft", async () => {
+  it.each(["idle", "failed"] as const)("admits one bound %s input without consulting the human composer draft", async (runState) => {
     const subject = fixture({
-      runState: "idle",
+      runState,
       draft: {
         revision: 9,
         text: "unfinished human text",
@@ -749,6 +751,8 @@ describe("ThreadMutationGateway direct agent control", () => {
 
   it.each([
     ["running target", { runState: "running" as const }],
+    ["disconnected target", { runState: "disconnected" as const }],
+    ["reconciling target", { runState: "reconciling" as const }],
     [
       "archived target",
       { runState: "idle" as const, inventoryState: "archived" as const },

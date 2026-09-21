@@ -1,3 +1,4 @@
+import { turnFailure } from "../turn-failure.js";
 import { createHash } from "node:crypto";
 import type {
   BackendConversationSnapshot,
@@ -819,7 +820,7 @@ function projectRunState(
   switch (thread.status.type) {
     case "notLoaded":
     case "idle":
-      return "idle";
+      return thread.turns.at(-1)?.status === "failed" ? "failed" : "idle";
     case "systemError":
       return "failed";
     case "active":
@@ -876,6 +877,7 @@ export function projectCodexTurnFromSlices(
         ...identity,
         status: "failed",
         endedBy: "failed",
+        failure: turnFailure(turn.error?.message),
         orderedBackendItemIds: [...orderedBackendItemIds],
         ...timestamps,
       };

@@ -109,7 +109,7 @@ function authenticatedTcpTransportFactory(
 
 const goodInitialize = {
   userAgent:
-    "sedes_web/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; 0.1.0)",
+    `sedes_web/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
   codexHome,
   platformFamily: "unix",
   platformOs: "linux",
@@ -540,7 +540,7 @@ describe("CodexDaemonSupervisor", () => {
         initialize: {
           ...goodInitialize,
           userAgent:
-            "sedes_web/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; 0.1.0)",
+            `sedes_web/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
           futureRuntimeMetadata: { revision: 2 },
         },
       },
@@ -573,7 +573,7 @@ describe("CodexDaemonSupervisor", () => {
         initialize: {
           ...goodInitialize,
           userAgent:
-            "codex-tui/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; 0.1.0)",
+            `codex-tui/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
         },
       },
     ]);
@@ -593,7 +593,7 @@ describe("CodexDaemonSupervisor", () => {
         initialize: {
           ...goodInitialize,
           userAgent:
-            "pi_web_harness/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; 0.1.0)",
+            `pi_web_harness/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
         },
       },
     ]);
@@ -610,7 +610,7 @@ describe("CodexDaemonSupervisor", () => {
   it.each([
     [
       "an unrelated runtime prefix",
-      "unrelated-runtime/0.151.1 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; 0.1.0)",
+      `unrelated-runtime/0.151.1 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
     ],
     [
       "the historical client suffix",
@@ -638,7 +638,7 @@ describe("CodexDaemonSupervisor", () => {
           initialize: {
             ...goodInitialize,
             userAgent:
-              "sedes_web/0.155.0+vendor.1 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; 0.1.0)",
+              `sedes_web/0.155.0+vendor.1 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
           },
         },
       ],
@@ -666,7 +666,7 @@ describe("CodexDaemonSupervisor", () => {
           {
             initialize: {
               ...goodInitialize,
-              userAgent: `sedes_web/${initializedRuntimeVersion} (Ubuntu 26.4.0; x86_64) unknown (sedes_web; 0.1.0)`,
+              userAgent: `sedes_web/${initializedRuntimeVersion} (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
             },
           },
         ],
@@ -697,23 +697,23 @@ describe("CodexDaemonSupervisor", () => {
   it.each([
     [
       "malformed",
-      "sedes_web/not-a-version (Ubuntu 26.4.0; x86_64) unknown (sedes_web; 0.1.0)",
+      `sedes_web/not-a-version (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
     ],
     [
       "unsupported older release",
-      "sedes_web/0.145.9 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; 0.1.0)",
+      `sedes_web/0.145.9 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
     ],
     [
       "unsupported patch release",
-      "sedes_web/0.148.1 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; 0.1.0)",
+      `sedes_web/0.148.1 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
     ],
     [
       "unsupported prerelease alias",
-      "sedes_web/0.153.0-rc.1 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; 0.1.0)",
+      `sedes_web/0.153.0-rc.1 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
     ],
     [
       "unknown server product",
-      "forged-server/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; 0.1.0)",
+      `forged-server/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
     ],
   ])(
     "rejects a %s initialized runtime version on a replacement generation",
@@ -792,7 +792,7 @@ describe("CodexDaemonSupervisor", () => {
             initialize: {
               ...goodInitialize,
               userAgent:
-                "Codex Desktop/0.153.4 (Windows 10.0.26200; x86_64) unknown (sedes_web; 0.1.0)",
+                `Codex Desktop/0.153.4 (Windows 10.0.26200; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
               codexHome: windowsHome,
               platformFamily: "windows",
               platformOs: "windows",

@@ -1,3 +1,4 @@
+import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
 import { claudeResultUserMessageIds } from "../../src/server/backends/claude/claude-result-lifecycle.js";
 import { claudeSteerOperationsMigration } from "../../src/server/db/migrations/102-claude-steer-operations.js";
 import { claudeTaskLifecycleMigration } from "../../src/server/db/migrations/100-claude-task-lifecycle.js";
@@ -281,6 +282,7 @@ describe.sequential("real Claude subscription driver", () => {
         )
       ) STRICT
     `);
+    database.exec(claudeTurnFailureDetailsMigration.sql);
     database.exec(claudeTaskLifecycleMigration.sql);
   database.exec(claudeSteerOperationsMigration.sql);
     const settings = new ClaudeThreadRepository(database);

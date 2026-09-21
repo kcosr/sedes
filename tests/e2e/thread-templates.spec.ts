@@ -119,7 +119,7 @@ test("templates prefill editable thread creation and survive Agent drift", async
     creation.getByRole("combobox", { name: "Template", exact: true }),
   ).toContainText("Configure manually");
   await expect(creation.getByRole("combobox", { name: "Agent", exact: true })).toHaveText(
-    /Choose (an Agent|Target and Project first)|Loading Agents…/,
+    "Custom",
   );
   await selectProjectIfNeeded(page, repositoryLabel);
   const targetPicker = creation.getByRole("combobox", {

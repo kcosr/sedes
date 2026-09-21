@@ -669,9 +669,28 @@ plugins = false
       ).toBe(false);
       expect((await driver.read(boundInput)).snapshot.runState).toBe("idle");
       unsubscribeProjection();
+      expect(provider.requestCount()).toBe(3);
+      provider.failNextResponse();
+      const failureCompleted = nextNotification(supervisor.client, "turn/completed", (value) =>
+        isRecord(value) && value.threadId === started.thread.id && isRecord(value.turn) && value.turn.status === "failed");
+      const failedSubmission = await handle.submit({
+        applicationOperationId: "sedes-live-model-failure", source: { kind: "user" },
+        mutationId: "sedes-live-model-failure", reconciliationToken: "sedes-live-model-failure",
+        contextExcerpts: [], taskContexts: [], attachments: [], text: "Trigger the isolated model failure.",
+      });
+      await failureCompleted;
+      const failed = await handle.establishProjection({ signal: new AbortController().signal });
+      const failedTurn = failed.snapshot.turnsById[failedSubmission.backendTurnId!]!;
+      expect(failedTurn.status).toBe("failed");
+      expect(failedTurn.failure?.message.text).toContain("Invalid model configuration for Sedes fixture");
       await handle.close();
       expect(ownership.size()).toBe(0);
-      expect(provider.requestCount()).toBe(3);
+      const reopened = await driver.attach(boundInput);
+      try {
+        const restored = await reopened.establishProjection({ signal: new AbortController().signal });
+        expect(restored.snapshot.turnsById[failedSubmission.backendTurnId!]?.failure).toEqual(failedTurn.failure);
+      } finally { await reopened.close(); }
+      expect(provider.requestCount()).toBe(4);
 
       await supervisor.close();
       expect(supervisor.snapshot().state).toBe("closed");
@@ -2474,11 +2493,13 @@ async function startLocalProvider(): Promise<{
   readonly baseUrl: string;
   requestCount(): number;
   holdNextResponse(): void;
+  failNextResponse(): void;
   heldResponseCloseCount(): number;
   close(): Promise<void>;
 }> {
   let requests = 0;
   let holdNextResponse = false;
+  let failNextResponse = false;
   let heldResponseCloses = 0;
   const server = createServer((request, response) => {
     if (request.method !== "POST" || !request.url?.endsWith("/responses")) {
@@ -2488,6 +2509,13 @@ async function startLocalProvider(): Promise<{
     request.resume();
     request.once("end", () => {
       requests += 1;
+      if (failNextResponse) {
+        failNextResponse = false;
+        response.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({
+          error: { message: "Invalid model configuration for Sedes fixture", type: "invalid_request_error", code: "model_not_found" },
+        }));
+        return;
+      }
       const holdResponse = holdNextResponse;
       holdNextResponse = false;
       const responseId = `live-fixture-response-${requests}`;
@@ -2623,6 +2651,7 @@ async function startLocalProvider(): Promise<{
       }
       holdNextResponse = true;
     },
+    failNextResponse: () => { failNextResponse = true; },
     heldResponseCloseCount: () => heldResponseCloses,
     close: () => closeServer(server),
   });

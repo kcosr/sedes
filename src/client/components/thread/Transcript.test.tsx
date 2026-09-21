@@ -558,6 +558,19 @@ describe("Transcript history positioning", () => {
     });
   });
 
+  it("keeps past failure details inspectable without duplicating the current failure banner", () => {
+    const snapshot = userMessageSnapshot(["turn-1"]);
+    snapshot.turnsById["turn-1"] = { ...snapshot.turnsById["turn-1"]!, status: "failed", failure: { message: { text: "Unknown model." } } };
+    snapshot.runState = "failed";
+    const fake = new FakeTranscriptStore(snapshot);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    expect(screen.queryByText("Failed turn details")).toBeNull();
+    act(() => fake.replaceSnapshot({ ...snapshot, runState: "running" }));
+    expect(screen.getByText("Failed turn details")).toBeVisible();
+    expect(screen.getByText("Unknown model.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it.each(["interrupted", "failed"] as const)("keeps bookmarks available after a turn is %s", (status) => {
     const snapshot = userMessageSnapshot(["turn-1"]);
     snapshot.turnsById["turn-1"] = { ...snapshot.turnsById["turn-1"]!, status };

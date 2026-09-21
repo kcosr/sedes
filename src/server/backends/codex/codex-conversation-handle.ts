@@ -4459,7 +4459,12 @@ export class CodexConversationHandle implements ConversationHandle {
         if (parsed.willRetry) return true;
         this.#terminalErrorRecoveryGeneration = generation;
         this.#terminalErrorFallbackThread = materializeLiveThread(
-          thread,
+          {
+            ...thread,
+            turns: thread.turns.map((turn) => turn.id === parsed.turnId
+              ? { ...turn, error: parsed.error }
+              : turn),
+          },
           this.#liveProjectionOverlay.materializedItems(),
         );
         this.#failureFencedGeneration = undefined;

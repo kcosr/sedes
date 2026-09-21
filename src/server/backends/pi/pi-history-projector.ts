@@ -1,3 +1,5 @@
+import { turnFailure } from "../turn-failure.js";
+import { cancelledPiRetryEntries, piCancelledRetryMarkerType } from "./pi-cancelled-retry-marker.js";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type {
   BackendConversationSnapshot,
@@ -67,6 +69,7 @@ interface MutableTurn {
   completionCorrelations?: string[];
   status: BackendTurn["status"];
   endedBy?: BackendTurn["endedBy"];
+  failure?: BackendTurn["failure"];
   startedAt?: string;
   completedAt?: string;
   orderedBackendItemIds: string[];
@@ -241,12 +244,14 @@ function applyAssistantOutcome(
   completedAt: string,
 ): void {
   const stopReason = own(message, "stopReason");
+  delete turn.failure;
   if (stopReason === "aborted") {
     turn.status = "interrupted";
     turn.endedBy = "interrupted";
     turn.completedAt = completedAt;
   } else if (stopReason === "error") {
     turn.status = "failed";
+    turn.failure = turnFailure(own(message, "errorMessage"));
     turn.endedBy = "failed";
     turn.completedAt = completedAt;
   } else if (stopReason === "stop" || stopReason === "length") {
@@ -287,6 +292,7 @@ export class PiHistoryProjector {
   }
 
   project(branch: readonly SessionEntry[]): PiHistoryProjection {
+    const cancelledRetryEntries = cancelledPiRetryEntries(branch, this.#toolIdentityAuthentication);
     const turns: MutableTurn[] = [];
     const items: BackendItem[] = [];
     const itemIndex = new Map<string, number>();
@@ -778,6 +784,7 @@ export class PiHistoryProjector {
               turn.completionCorrelations.push(correlation);
             }
             turn.status = "in_progress";
+            delete turn.failure;
             delete turn.endedBy;
             delete turn.completedAt;
           }
@@ -932,6 +939,11 @@ export class PiHistoryProjector {
             }
           }
           applyAssistantOutcome(turn, message, entry.timestamp);
+          if (cancelledRetryEntries.has(entry.id)) {
+            turn.status = "interrupted";
+            turn.endedBy = "interrupted";
+            delete turn.failure;
+          }
           continue;
         }
         if (messageRole === "toolResult") {
@@ -1079,6 +1091,7 @@ export class PiHistoryProjector {
       }
 
       if (entry.type === "custom") {
+        if (entry.customType === piCancelledRetryMarkerType) continue;
         if (isPiContextExcerptMarkerType(entry.customType)) {
           continue;
         }
@@ -1165,6 +1178,9 @@ export class PiHistoryProjector {
         current.backendTurnId === this.#activeUserEntryId)
     ) {
       current.status = "in_progress";
+      delete current.failure;
+      delete current.endedBy;
+      delete current.completedAt;
     }
     const snapshotTurns = turns.map<BackendTurn>((turn) => ({
       ...turn,

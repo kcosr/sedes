@@ -7040,6 +7040,15 @@ body:has(.thread-settings-sheet[data-state="open"])
   }
 }
 
+.turn-failure-details {
+  margin: 0.5rem 0;
+  color: var(--muted-foreground-2);
+  font-size: 0.85rem;
+}
+
+.turn-failure-details summary { cursor: pointer; }
+.turn-failure-details p { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 .turn-fork-footer {
   display: flex;
   min-height: 38px;

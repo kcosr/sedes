@@ -20,6 +20,7 @@ import {
   requireSerializedByteLimit,
   requireConsistentFileReplacement,
   safeItemErrorSchema,
+  turnFailureSchema,
   unifiedDiffSchema,
 } from "./payload.js";
 import { normalizedImageSchema } from "./output-artifacts.js";
@@ -74,6 +75,7 @@ export const backendTurnSchema = z
       .max(1_000)
       .optional(),
     status: z.enum(["in_progress", "completed", "interrupted", "failed"]),
+    failure: turnFailureSchema.optional(),
     endedBy: z
       .enum(["agent_settled", "steer", "interrupted", "failed"])
       .optional(),
@@ -84,6 +86,9 @@ export const backendTurnSchema = z
       .max(MAXIMUM_BACKEND_ITEMS_PER_TURN),
   })
   .superRefine((turn, context) => {
+    if (turn.failure !== undefined && turn.status !== "failed") {
+      context.addIssue({ code: "custom", path: ["failure"], message: "Failure details belong to failed turns only." });
+    }
     if (turn.completionCorrelations) {
       requireUniqueIdentifiers(
         turn.completionCorrelations,

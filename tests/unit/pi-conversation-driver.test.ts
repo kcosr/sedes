@@ -405,6 +405,7 @@ function fakeSessionFactory(
                 },
               },
               stopReason,
+              ...(stopReason === "error" ? { errorMessage: "Unknown model: broken-model" } : {}),
               timestamp: Date.now(),
             };
             emit({ type: "message_start", message: assistant } as never);
@@ -6231,7 +6232,80 @@ describe("Pi conversation backend driver", () => {
     await handle.close();
   });
 
-  it("resnapshots after provider retries and classifies the final successful response as idle", async () => {
+  it("preserves cancellation during retry backoff on reopen without a provider message", async () => {
+    const fixture = await workspace();
+    let waitingForRetry = false;
+    const base = fakeSessionFactory(1, false, undefined, 0, undefined, 0, ["error"]);
+    const driver = new PiConversationBackendDriver({
+      instance, connection, nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
+      toolProvenanceKey, agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy,
+      sessionDirectory: fixture.sessions,
+      sessionFactory: { async create(input) {
+        const session = await base.create(input);
+        let idle = true;
+        let listener: Parameters<PiSdkSession["subscribe"]>[0] | undefined;
+        return {
+          ...session,
+          get isIdle() { return idle; },
+          subscribe(callback) {
+            listener = callback;
+            return session.subscribe(event => {
+              // The native errored attempt is persisted, but retries have not settled.
+              if (event.type === "agent_settled") waitingForRetry = true;
+              else callback(event);
+            });
+          },
+          async prompt(text, options) { idle = false; await session.prompt(text, options); },
+          async abort() {
+            idle = true;
+            // Pi cancels backoff without an additional assistant message.
+            listener?.({ type: "agent_settled" });
+          },
+        };
+      } },
+    });
+    const created = await driver.create({ scope, workspace: fixture.workspace,
+      applicationThreadId: "cancel-retry", applicationOperationId: "cancel-retry", source: { kind: "user" } });
+    const attach = { scope, workspace: fixture.workspace, binding: binding(created.backendConversationId), opaqueBindingDetail: created.opaqueBindingDetail };
+    const handle = await driver.attach(attach);
+    const submitted = await handle.submit({ applicationOperationId: "send", source: { kind: "user" },
+      mutationId: "send", reconciliationToken: "send", contextExcerpts: [], attachments: [], taskContexts: [], text: "hi" });
+    await vi.waitFor(() => expect(waitingForRetry).toBe(true));
+    await handle.interrupt({ applicationOperationId: "cancel", expectedBackendTurnId: submitted.backendTurnId! });
+    const live = await handle.establishProjection({ signal: new AbortController().signal });
+    expect(live.snapshot.runState).toBe("idle");
+    expect(Object.values(live.snapshot.turnsById).at(-1)).toMatchObject({ status: "interrupted", endedBy: "interrupted" });
+    expect(Object.values(live.snapshot.turnsById).at(-1)?.failure).toBeUndefined();
+    await handle.close();
+    const reopened = await driver.attach(attach);
+    const cold = await reopened.establishProjection({ signal: new AbortController().signal });
+    expect(cold.snapshot.runState).toBe("idle");
+    expect(Object.values(cold.snapshot.turnsById).at(-1)).toMatchObject({ status: "interrupted", endedBy: "interrupted" });
+    expect(Object.values(cold.snapshot.turnsById).at(-1)?.failure).toBeUndefined();
+    const persisted = await new PiSessionStore({ sessionDirectory: fixture.sessions }).openPersisted(fixture.workspace, created.backendConversationId);
+    expect(persisted?.getBranch().filter(entry => entry.type === "message")).toHaveLength(2);
+    await reopened.close();
+    const assistant = persisted?.getBranch().find(entry => entry.type === "message" && entry.message.role === "assistant");
+    if (!persisted || assistant?.type !== "message" || assistant.message.role !== "assistant") throw new Error("Missing assistant fixture");
+    persisted.appendMessage({ role: "user", content: [{ type: "text", text: "Later successful work" }], timestamp: Date.now() });
+    persisted.appendMessage({ ...assistant.message, stopReason: "stop", errorMessage: undefined, timestamp: Date.now() });
+    const sourceCheckpoint = await driver.resolveBranchCheckpoint({ ...attach, selection: { kind: "latest_completed" } });
+    const child = await driver.branchConversation({
+      scope, workspace: fixture.workspace, applicationOperationId: "cancelled-retry-fork",
+      childApplicationThreadId: "cancelled-retry-child", source: { kind: "user" },
+      sourceBinding: attach.binding, sourceOpaqueBindingDetail: created.opaqueBindingDetail,
+      sourceCheckpoint, requestedBackendConversationId: "cancelled-retry-child", inheritedSettings: { toolAccess: "full" },
+    });
+    const fork = await driver.attach({ ...attach, binding: binding(child.backendConversationId), opaqueBindingDetail: child.opaqueBindingDetail });
+    const forked = await fork.establishProjection({ signal: new AbortController().signal });
+    expect(forked.snapshot.runState).toBe("idle");
+    const inheritedCancelledTurn = forked.snapshot.turnsById[submitted.backendTurnId!];
+    expect(inheritedCancelledTurn).toMatchObject({ status: "interrupted" });
+    expect(inheritedCancelledTurn?.failure).toBeUndefined();
+    await fork.close();
+  });
+
+  it.each(["stop", "error"] as const)("retains only the final %s outcome after retries, live and on reopen", async (finalReason) => {
     const fixture = await workspace();
     const driver = new PiConversationBackendDriver({
       instance,
@@ -6248,7 +6322,7 @@ describe("Pi conversation backend driver", () => {
         0,
         undefined,
         0,
-        ["error", "error", "stop"],
+        ["error", "error", finalReason],
       ),
     });
     const created = await driver.create({
@@ -6297,12 +6371,19 @@ describe("Pi conversation backend driver", () => {
     ).toMatchObject({
       event: {
         type: "turn_completed",
-        turn: { status: "completed", endedBy: "agent_settled" },
+        turn: { status: finalReason === "stop" ? "completed" : "failed", endedBy: finalReason === "stop" ? "agent_settled" : "failed" },
       },
     });
-    expect(replacement.snapshot.runState).toBe("idle");
+    const expectedFailure = finalReason === "error" ? { message: { text: "Unknown model: broken-model" } } : undefined;
+    const completionIndex = events.findIndex(({ event }) => event.type === "turn_completed");
+    expect(events.slice(0, completionIndex).some(({ event }) => event.type === "run_state_changed" && event.state === "failed")).toBe(false);
+    const completed = events[completionIndex]!.event;
+    if (completed.type !== "turn_completed") throw new Error("Expected completion");
+    expect(completed.turn.failure).toEqual(expectedFailure);
+    expect(Object.values(replacement.snapshot.turnsById).at(-1)?.failure).toEqual(expectedFailure);
+    expect(replacement.snapshot.runState).toBe(finalReason === "stop" ? "idle" : "failed");
     expect(Object.values(replacement.snapshot.turnsById).at(-1)).toMatchObject({
-      status: "completed",
+      status: finalReason === "stop" ? "completed" : "failed",
     });
     const persisted = await new PiSessionStore({
       sessionDirectory: fixture.sessions,
@@ -6315,6 +6396,11 @@ describe("Pi conversation backend driver", () => {
         ),
     ).toHaveLength(1);
     await handle.close();
+    const reopened = await driver.attach({ scope, workspace: fixture.workspace, binding: binding(created.backendConversationId), opaqueBindingDetail: created.opaqueBindingDetail });
+    const cold = await reopened.establishProjection({ signal: new AbortController().signal });
+    expect(cold.snapshot.runState).toBe(finalReason === "stop" ? "idle" : "failed");
+    expect(Object.values(cold.snapshot.turnsById).at(-1)?.failure).toEqual(expectedFailure);
+    await reopened.close();
   });
 
   it("reconciles only exact durable interaction-response markers across restart", async () => {

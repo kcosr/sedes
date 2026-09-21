@@ -1178,7 +1178,7 @@ test("Codex stacks serial Steers and preserves Queue-to-Steer presentation until
     exact: true,
   });
   await selectRadixOption(page, target, "Codex TCP external · Codex TCP");
-  await page.getByRole("button", { name: "Use Custom" }).click();
+  await expect(page.getByRole("combobox", { name: "Agent" })).toHaveText(/Custom/);
   const created = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&

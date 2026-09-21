@@ -1,3 +1,4 @@
+import { turnFailure } from "../turn-failure.js";
 import type { ClaudeTaskLifecycleReceipt } from "./claude-thread-repository.js";
 import { createHash } from "node:crypto";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -141,7 +142,7 @@ export type ClaudeTerminalReceiptOverride = Pick<
   | "providerTerminalReason"
   | "providerResultUuid"
   | "terminalAt"
->;
+> & { readonly failureMessage?: string | null };
 
 export interface ClaudeHistoryAuthentication {
   readonly steerOperations?: ReadonlyMap<string, string | null>;
@@ -978,6 +979,7 @@ function applyTerminalReceipts(
     turnsById[candidate.backendTurnId] = {
       ...turn,
       status: candidate.status,
+      ...(candidate.status === "failed" ? { failure: turnFailure(candidate.failureMessage) } : {}),
       endedBy:
         candidate.status === "completed" ? "agent_settled" : candidate.status,
       completedAt,

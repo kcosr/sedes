@@ -136,7 +136,7 @@ export function NewThreadControl({
   const [requiresTargetReselection, setRequiresTargetReselection] =
     useState(false);
   const [selection, setSelection] = useState<CreationSelection>({
-    kind: "unselected",
+    kind: "custom",
   });
   const [selectedAgentSummary, setSelectedAgentSummary] =
     useState<Pick<SavedAgentSummary, "id" | "name" | "backend">>();
@@ -430,7 +430,7 @@ export function NewThreadControl({
     setProjectScopeReleased(false);
     setRequiresWorkspaceReselection(false);
     setRequiresTargetReselection(false);
-    setSelection({ kind: "unselected" });
+    setSelection({ kind: "custom" });
     setSelectedAgentSummary(undefined);
     setSelectedTargetId(undefined);
     setExecutionWorkspace(undefined);
@@ -720,7 +720,7 @@ export function NewThreadControl({
     setExecutionWorkspace(undefined);
     setRequiresWorkspaceReselection(false);
     setRequiresTargetReselection(false);
-    setSelection({ kind: "unselected" });
+    setSelection({ kind: "custom" });
     setSelectedAgentSummary(undefined);
     setResolution(undefined);
     setTemplateAgentMissing(false);
@@ -1179,7 +1179,7 @@ export function NewThreadControl({
                     setSelectedTargetId(undefined);
                     setRequiresTargetReselection(false);
                     setExecutionWorkspace(undefined);
-                    setSelection({ kind: "unselected" });
+                    setSelection({ kind: "custom" });
                     setSelectedAgentSummary(undefined);
                     setResolution(undefined);
                     setAgents([]);
@@ -1223,7 +1223,7 @@ export function NewThreadControl({
                     setSelectedTargetId(value);
                     setRequiresTargetReselection(false);
                     setExecutionWorkspace(undefined);
-                    setSelection({ kind: "unselected" });
+                    setSelection({ kind: "custom" });
                     setSelectedAgentSummary(undefined);
                     setResolution(undefined);
                     setAgents([]);
@@ -1267,7 +1267,7 @@ export function NewThreadControl({
                     setSelectedWorkspaceId(value);
                     setRequiresWorkspaceReselection(false);
                     setExecutionWorkspace(undefined);
-                    setSelection({ kind: "unselected" });
+                    setSelection({ kind: "custom" });
                     setSelectedAgentSummary(undefined);
                     setResolution(undefined);
                     setError("");

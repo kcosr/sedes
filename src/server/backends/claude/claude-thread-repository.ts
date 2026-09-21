@@ -67,6 +67,7 @@ export interface ClaudeTerminalReceipt {
   readonly backendTurnId: string;
   readonly status: ClaudeTerminalStatus;
   readonly providerTerminalReason: string | null;
+  readonly failureMessage: string | null;
   readonly providerResultUuid: string | null;
   readonly terminalAt: number;
   readonly createdAt: number;
@@ -148,6 +149,7 @@ const terminalReceiptColumns = `
   backend_turn_id AS backendTurnId,
   status,
   provider_terminal_reason AS providerTerminalReason,
+  failure_message AS failureMessage,
   provider_result_uuid AS providerResultUuid,
   terminal_at AS terminalAt,
   created_at AS createdAt,
@@ -986,6 +988,7 @@ export class ClaudeThreadRepository {
       readonly backendTurnId: string;
       readonly status: ClaudeTerminalStatus;
       readonly providerTerminalReason?: string;
+      readonly failureMessage?: string;
       readonly providerResultUuid?: string;
       readonly terminalAt: number;
       readonly now: number;
@@ -1013,6 +1016,10 @@ export class ClaudeThreadRepository {
         "provider_result_uuid",
       );
     }
+    if (input.failureMessage !== undefined) {
+      if (input.status !== "failed") throw new Error("claude_terminal_failure_status_invalid");
+      requireBoundedBytes(input.failureMessage, 1024, "failure_message");
+    }
     requireTimestamp(input.terminalAt, "terminal_at");
     requireTimestamp(input.now, "created_at");
 
@@ -1022,8 +1029,8 @@ export class ClaudeThreadRepository {
           INSERT INTO claude_turn_terminal_receipts(
             tenant_id, owner_principal_id, application_thread_id,
             backend_turn_id, status, provider_terminal_reason,
-            provider_result_uuid, terminal_at, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            provider_result_uuid, terminal_at, created_at, updated_at, failure_message
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(
             tenant_id, owner_principal_id, application_thread_id,
             backend_turn_id
@@ -1041,6 +1048,7 @@ export class ClaudeThreadRepository {
         input.terminalAt,
         input.now,
         input.now,
+        input.failureMessage ?? null,
       );
     const receipt = this.findTerminalReceipt(scope, {
       applicationThreadId,

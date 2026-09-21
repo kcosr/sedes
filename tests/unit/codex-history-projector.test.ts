@@ -3707,3 +3707,13 @@ function usage() {
     modelContextWindow: 100,
   };
 }
+
+
+it.each(["idle", "notLoaded", "active"])("retains native Codex failure details without overriding %s lifecycle", (state) => {
+  const projection = projectCodexHistory(thread([turn("failed-turn", [], {
+    status: "failed", error: { message: "Unknown model", codexErrorInfo: null, additionalDetails: null },
+  })], { status: state === "active" ? { type: state, activeFlags: [] } : { type: state } }));
+  const projectedTurn = Object.values(projection.snapshot.turnsById)[0]!;
+  expect(projectedTurn).toMatchObject({ status: "failed", failure: { message: { text: "Unknown model" } } });
+  expect(projection.snapshot.runState).toBe(state === "active" ? "running" : "failed");
+});

@@ -1,3 +1,4 @@
+import { turnFailure } from "../backends/turn-failure.js";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { BackgroundActivity } from "../../shared/protocol/background-activity.js";
@@ -78,7 +79,7 @@ function branchingAllowsBoundaryForSourceState(input: {
   readonly sourceRunState: ThreadRunState;
 }): boolean {
   if (input.branching.availability !== "available") return false;
-  if (input.sourceRunState === "idle") return true;
+  if (input.sourceRunState === "idle" || input.sourceRunState === "failed") return true;
   return (
     !input.branching.sourceMustBeIdle &&
     activeSourceHistoricalForkStates.has(input.sourceRunState)
@@ -668,6 +669,9 @@ export class ConversationProjector {
     ) {
       return this.#invalidate("backend_turn_identity_changed");
     }
+    if (prior?.failure && JSON.stringify(prior.failure) !== JSON.stringify(backendTurn.failure)) {
+      return this.#invalidate("backend_turn_failure_changed");
+    }
     let referencesUnseenItem = false;
     for (const backendItemId of backendTurn.orderedBackendItemIds) {
       const itemId = this.#itemIds.get(backendItemId);
@@ -915,6 +919,7 @@ export class ConversationProjector {
       id,
       revision,
       status: backendTurn.status,
+      ...(backendTurn.status === "failed" ? { failure: backendTurn.failure ?? turnFailure(undefined) } : {}),
       ...(backendTurn.endedBy ? { endedBy: backendTurn.endedBy } : {}),
       ...(backendTurn.startedAt ? { startedAt: backendTurn.startedAt } : {}),
       ...(backendTurn.completedAt
@@ -1058,6 +1063,7 @@ function equalBackendTurn(left: BackendTurn, right: BackendTurn): boolean {
     left.backendTurnId === right.backendTurnId &&
     left.status === right.status &&
     left.endedBy === right.endedBy &&
+    JSON.stringify(left.failure) === JSON.stringify(right.failure) &&
     left.startedAt === right.startedAt &&
     left.completedAt === right.completedAt &&
     left.orderedBackendItemIds.length === right.orderedBackendItemIds.length &&
@@ -1075,6 +1081,7 @@ function equalConversationTurn(
     left.id === right.id &&
     left.status === right.status &&
     left.endedBy === right.endedBy &&
+    JSON.stringify(left.failure) === JSON.stringify(right.failure) &&
     left.startedAt === right.startedAt &&
     left.completedAt === right.completedAt &&
     left.orderedItemIds.length === right.orderedItemIds.length &&

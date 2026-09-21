@@ -1,3 +1,4 @@
+import { claudeTurnFailureDetailsMigration } from "./migrations/109-claude-turn-failure-details.js";
 import { forkEnvironmentFingerprintsMigration } from "./migrations/108-fork-environment-fingerprints.js";
 import { scopedEnvironmentVariablesMigration } from "./migrations/107-scoped-environment-variables.js";
 import { classifiedCompletionResultMigration } from "./migrations/104-classified-completion-result.js";
@@ -230,6 +231,7 @@ export const backendNormalizedMigrations = [
   notificationPhaseSelectionMigration,
   scopedEnvironmentVariablesMigration,
   forkEnvironmentFingerprintsMigration,
+  claudeTurnFailureDetailsMigration,
 ] as const;
 
 export type DatabaseMigration = {

@@ -2605,7 +2605,7 @@ describe("CodexConversationBackendDriver", () => {
     });
     expect(fallback.snapshot.runState).toBe("failed");
     expect(Object.values(fallback.snapshot.turnsById)).toEqual([
-      expect.objectContaining({ status: "failed", endedBy: "failed" }),
+      expect.objectContaining({ status: "failed", endedBy: "failed", failure: { message: { text: "The turn failed." } } }),
     ]);
     expect(
       Object.values(fallback.snapshot.itemsById).find(

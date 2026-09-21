@@ -1,3 +1,4 @@
+import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
 import { claudeSteerOperationsMigration } from "../../src/server/db/migrations/102-claude-steer-operations.js";
 import { claudeTaskLifecycleMigration } from "../../src/server/db/migrations/100-claude-task-lifecycle.js";
 import Database from "better-sqlite3";
@@ -116,6 +117,7 @@ function repository(): ClaudeThreadRepository {
       PRIMARY KEY(tenant_id, owner_principal_id, application_thread_id)
     );
   `);
+  database.exec(claudeTurnFailureDetailsMigration.sql);
   database.exec(claudeTaskLifecycleMigration.sql);
   database.exec(claudeSteerOperationsMigration.sql);
   const settings = new ClaudeThreadRepository(database);

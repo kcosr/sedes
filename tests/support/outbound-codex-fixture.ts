@@ -1,3 +1,4 @@
+import { SEDES_VERSION } from "../../src/shared/version.js";
 import { chmod } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { Socket } from "node:net";
@@ -109,7 +110,7 @@ export class OutboundCodexFixture {
     const params = request.params ?? {};
     switch (request.method) {
       case "initialize": return {
-        userAgent: "sedes_web/0.153.0 (Linux 6.8; x86_64) unknown (sedes_web; 0.1.0)",
+        userAgent: `sedes_web/0.153.0 (Linux 6.8; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
         codexHome: this.#codexHome,
         platformFamily: "unix",
         platformOs: process.platform === "darwin" ? "macos" : "linux",

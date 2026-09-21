@@ -536,7 +536,8 @@ export class ConversationActor {
       if (
         (this.#awaitingAuthoritativeIdle &&
           (branching.sourceMustBeIdle ||
-            (snapshotBoundary && sourceRunState === "idle"))) ||
+            (snapshotBoundary &&
+              (sourceRunState === "idle" || sourceRunState === "failed")))) ||
         !branchingAllowsSelectedCompletedTurnForSourceState({
           branching,
           sourceRunState,
@@ -592,11 +593,12 @@ export class ConversationActor {
     const sourceRunState = this.#projector.timeline().runState;
     if (
       selection.kind === "latest_completed"
-        ? this.#awaitingAuthoritativeIdle || sourceRunState !== "idle"
+        ? this.#awaitingAuthoritativeIdle ||
+          (sourceRunState !== "idle" && sourceRunState !== "failed")
         : (this.#awaitingAuthoritativeIdle &&
             (branching.sourceMustBeIdle ||
               (selection.kind === "latest_provider_snapshot" &&
-                sourceRunState === "idle"))) ||
+                (sourceRunState === "idle" || sourceRunState === "failed")))) ||
           !branchingAllowsSelectedCompletedTurnForSourceState({
             branching,
             sourceRunState,
