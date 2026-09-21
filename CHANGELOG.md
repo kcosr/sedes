@@ -40,7 +40,8 @@
 ### Fixed
 
 - Preserve the browser Host header in the development API proxy so same-origin
-  mutations pass origin validation. ([Issue #2](https://github.com/kcosr/sedes/issues/2))
+  mutations pass origin validation.
+  ([Issue #2](https://github.com/kcosr/sedes/issues/2), [PR #3](https://github.com/kcosr/sedes/pull/3))
 
 - Bound changed-file filters so long pasted input cannot interrupt saved Files
   navigation.
