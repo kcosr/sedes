@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Optional Linux-only installer for a versioned per-user Sedes installation.
+// Offline installer for a versioned per-user Sedes server package.
 // See `node scripts/install-server.mjs --help` and docs/operator/operations.md.
 import { installServer } from "./install-server-lib.mjs";
 

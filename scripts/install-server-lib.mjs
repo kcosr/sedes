@@ -1,9 +1,5 @@
-// Optional Linux-only installer: turns a built source checkout into a
-// versioned per-user installation with a systemd user service. The desktop
-// equivalent is the Electron Managed Local server; both stage a production
-// dependency tree with `npm ci --omit=dev --ignore-scripts`, followed by an
-// explicit native PTY build and smoke test before activation.
-import { execFile } from "node:child_process";
+// Offline installer for versioned Linux/macOS server packages.
+// Native compilation and dependency resolution belong to package:server.
 import { randomBytes } from "node:crypto";
 import {
   chmod,
@@ -23,11 +19,8 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
-import { installServerDependencies } from "./install-server-runtime.mjs";
-
-const execFileAsync = promisify(execFile);
+import { verifyServerRelease } from "./install-server-runtime.mjs";
 
 export const unitMarker = "# Managed by sedes install:server";
 const unitOwnerPrefix = "# Installation prefix: ";
@@ -35,11 +28,12 @@ const unitOwnerPrefix = "# Installation prefix: ";
 class InstallerRefusal extends Error {}
 
 export const usage = `Usage:
-  npm run install:server -- [--prefix DIR] [--bin-dir DIR] [--no-systemd] [--no-activate] [--force]
+  npm run install:server -- --package DIR [--prefix DIR] [--bin-dir DIR] [--no-systemd] [--no-activate] [--force]
   npm run install:server -- --activate VERSION [--prefix DIR] [--bin-dir DIR] [--no-systemd]
   npm run install:server -- --list [--prefix DIR]
   npm run install:server -- --uninstall [--prefix DIR] [--bin-dir DIR] [--purge]
 
+  --package DIR   extracted server release (defaults to this script's package)
   --prefix DIR    installation root (default \${XDG_DATA_HOME:-$HOME/.local/share}/sedes)
   --bin-dir DIR   directory for the sedes launchers (default $HOME/.local/bin)
   --no-systemd    do not write ~/.config/systemd/user/sedes.service
@@ -52,6 +46,8 @@ const requiredBuildArtifacts = [
   path.join("dist", "server", "index.js"),
   path.join("dist", "cli", "sedes-cli-main.js"),
   path.join("dist", "client", "index.html"),
+  "BUILD-INFO.json", "FILES.json", "SHA256SUMS",
+  path.join("bin", "sedes"), path.join("bin", "sedes-automation"), path.join("bin", "sedes-server"),
 ];
 
 const binaryWrappers = [
@@ -71,7 +67,13 @@ function wrapperSource({ entry, server }) {
   // so the wrapper resolves itself before locating the release root.
   const lines = [
     "#!/bin/sh",
-    'root=$(dirname "$(dirname "$(readlink -f "$0")")")',
+    'script=$0',
+    'while [ -L "$script" ]; do',
+    '  base=$(cd -P "$(dirname "$script")" && pwd)',
+    '  script=$(readlink "$script")',
+    '  case "$script" in /*) ;; *) script="$base/$script" ;; esac',
+    'done',
+    'root=$(cd -P "$(dirname "$script")/.." && pwd)',
   ];
   if (server) {
     lines.push(`NODE_ENV=production exec node "$root/${entry}" "$@"`);
@@ -79,6 +81,16 @@ function wrapperSource({ entry, server }) {
     lines.push(`exec node "$root/${entry}" "$@"`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+export async function writeServerWrappers(root) {
+  const binDirectory = path.join(root, "bin");
+  await mkdir(binDirectory, { recursive: true });
+  for (const wrapper of binaryWrappers) {
+    const filename = path.join(binDirectory, wrapper.name);
+    await writeFile(filename, wrapperSource(wrapper), "utf8");
+    await chmod(filename, 0o755);
+  }
 }
 
 export function unitFileContents(prefix) {
@@ -109,6 +121,7 @@ function parseArguments(argv) {
   const parsed = {
     mode: "install",
     prefix: undefined,
+    package: undefined,
     binDir: undefined,
     systemd: true,
     activate: true,
@@ -136,6 +149,9 @@ function parseArguments(argv) {
       case "--help":
       case "-h":
         return { mode: "help" };
+      case "--package":
+        parsed.package = value("--package");
+        break;
       case "--prefix":
         parsed.prefix = value("--prefix");
         break;
@@ -182,6 +198,7 @@ function parseArguments(argv) {
   const rejected = [];
   if (parsed.mode !== "install") {
     if (parsed.force) rejected.push("--force");
+    if (parsed.package !== undefined) rejected.push("--package");
     if (!parsed.systemd && parsed.mode !== "activate") rejected.push("--no-systemd");
     if (!parsed.activate) rejected.push("--no-activate");
   }
@@ -232,39 +249,6 @@ async function installedReleases(releasesRoot) {
     .sort((left, right) =>
       left.localeCompare(right, "en", { numeric: true, sensitivity: "base" }),
     );
-}
-
-async function resolveGitCommit(sourceRoot) {
-  const result = await execFileAsync("git", ["rev-parse", "HEAD"], {
-    cwd: sourceRoot,
-  }).catch(() => undefined);
-  const commit = result?.stdout?.trim();
-  return commit !== undefined && /^[0-9a-f]{7,64}$/u.test(commit)
-    ? commit
-    : undefined;
-}
-
-async function copyLocalFileDependencies(sourceRoot, stagingDirectory, manifest) {
-  const specifiers = [
-    ...Object.values(manifest.dependencies ?? {}),
-    ...Object.values(manifest.optionalDependencies ?? {}),
-  ];
-  const directories = new Set(
-    specifiers
-      .filter(
-        (specifier) =>
-          typeof specifier === "string" && specifier.startsWith("file:"),
-      )
-      .map((specifier) => specifier.slice("file:".length))
-      .filter((relative) => !path.isAbsolute(relative)),
-  );
-  for (const relative of directories) {
-    await cp(
-      path.join(sourceRoot, relative),
-      path.join(stagingDirectory, relative),
-      { recursive: true },
-    );
-  }
 }
 
 async function checkBinaryOwnership({ prefix, binDir }, name) {
@@ -393,7 +377,6 @@ async function stageRelease(context) {
   const {
     sourceRoot,
     prefix,
-    environment,
     io,
     options,
     parsed,
@@ -402,7 +385,7 @@ async function stageRelease(context) {
   for (const artifact of requiredBuildArtifacts) {
     if ((await entryKind(path.join(sourceRoot, artifact))) !== "file") {
       io.stderr.write(
-        `Missing ${artifact} in ${sourceRoot}; run \`npm run build\` first.\n`,
+        `Missing ${artifact} in ${sourceRoot}; create a release with \`npm run package:server -- --target <target>\` first.\n`,
       );
       return 1;
     }
@@ -412,7 +395,7 @@ async function stageRelease(context) {
     await readFile(path.join(sourceRoot, "package.json"), "utf8"),
   );
   const version = manifest.version;
-  if (typeof version !== "string" || version === "") {
+  if (typeof version !== "string" || !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(version)) {
     io.stderr.write(`${sourceRoot}/package.json has no version.\n`);
     return 1;
   }
@@ -436,8 +419,6 @@ async function stageRelease(context) {
     }
   }
 
-  const commit =
-    (await (options.resolveCommit ?? resolveGitCommit)(sourceRoot)) ?? null;
   const stagingDirectory = path.join(
     releasesRoot,
     `.staging-${version}-${token()}`,
@@ -447,47 +428,17 @@ async function stageRelease(context) {
 
   let staged = false;
   try {
-    await copyFile(
-      path.join(sourceRoot, "package.json"),
-      path.join(stagingDirectory, "package.json"),
-    );
-    await copyFile(
-      path.join(sourceRoot, "package-lock.json"),
-      path.join(stagingDirectory, "package-lock.json"),
-    );
-    await copyLocalFileDependencies(sourceRoot, stagingDirectory, manifest);
-    await mkdir(path.join(stagingDirectory, "config"), { recursive: true });
-    await copyFile(
-      path.join(sourceRoot, "config", "server.example.json"),
-      path.join(stagingDirectory, "config", "server.example.json"),
-    );
-    await cp(
-      path.join(sourceRoot, "dist"),
-      path.join(stagingDirectory, "dist"),
-      { recursive: true },
-    );
+    await cp(sourceRoot, stagingDirectory, { recursive: true, verbatimSymlinks: true });
+    io.stdout.write("Verifying copied server package offline before activation\n");
+    const info = await verifyRelease(context, stagingDirectory, false);
 
-    io.stdout.write(
-      "Installing production dependencies (npm ci --omit=dev --ignore-scripts)\n",
-    );
-    await (options.installDependencies ??
-      ((directory) => installServerDependencies(directory, environment)))(
-      stagingDirectory,
-    );
-
-    const binDirectory = path.join(stagingDirectory, "bin");
-    await mkdir(binDirectory, { recursive: true });
-    for (const wrapper of binaryWrappers) {
-      const filename = path.join(binDirectory, wrapper.name);
-      await writeFile(filename, wrapperSource(wrapper), "utf8");
-      await chmod(filename, 0o755);
-    }
     await writeFile(
       path.join(stagingDirectory, "RELEASE.json"),
       `${JSON.stringify(
         {
           version,
-          commit,
+          commit: info.source.commit,
+          target: info.target.label,
           systemd: parsed.systemd,
           installedAt: (options.now?.() ?? new Date()).toISOString(),
           node: options.nodeVersion ?? process.version,
@@ -529,6 +480,17 @@ async function stageRelease(context) {
   return await finishActivation(context, version, parsed.systemd);
 }
 
+async function verifyRelease(context, root, installed) {
+  const { options, environment } = context;
+  return await (options.verifyPackage ?? verifyServerRelease)(root, environment, {
+    installed,
+    platform: options.platform ?? process.platform,
+    arch: options.arch ?? process.arch,
+    nodeVersion: options.nodeVersion ?? process.version,
+    nodeAbi: options.nodeAbi ?? process.versions.modules,
+  });
+}
+
 async function finishActivation(context, version, systemd) {
   const { prefix, binDir, environment, configHome, io } = context;
   const active = await activeVersion(prefix);
@@ -558,6 +520,7 @@ async function swapCurrent(prefix, version) {
 async function activateRelease(context) {
   const { prefix, io, parsed } = context;
   const version = parsed.version;
+  if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(version)) throw new InstallerRefusal("Invalid release version.");
   const releaseDirectory = path.join(prefix, "releases", version);
   if ((await entryKind(releaseDirectory)) === "missing") {
     io.stderr.write(
@@ -570,6 +533,7 @@ async function activateRelease(context) {
   if (release.version !== version || typeof release.systemd !== "boolean") {
     throw new InstallerRefusal(`Invalid release metadata for ${version}.`);
   }
+  await verifyRelease(context, releaseDirectory, true);
   const systemd = parsed.systemd && release.systemd;
   if ((await activeVersion(prefix)) === version) {
     io.stdout.write(`${version} is already the active release; checking installation setup.\n`);
@@ -712,10 +676,10 @@ export async function installServer(options = {}) {
   }
 
   const platform = options.platform ?? process.platform;
-  if (platform !== "linux") {
+  if (!["linux", "darwin"].includes(platform) || (platform !== "linux" && parsed.systemd && ["install", "activate"].includes(parsed.mode))) {
     io.stderr.write(
       `install:server installs a systemd user service and supports Linux only; this host reports ${platform}.\n` +
-        "Use the Electron Managed Local server or run the built checkout directly instead.\n",
+        "On macOS pass --no-systemd and manage the server process separately.\n",
     );
     return 1;
   }
@@ -742,7 +706,7 @@ export async function installServer(options = {}) {
       path.join(homeDirectory, ".local", "bin"),
   );
   const sourceRoot = path.resolve(
-    options.sourceRoot ??
+    parsed.package ?? options.packageRoot ??
       path.dirname(path.dirname(fileURLToPath(import.meta.url))),
   );
   const context = {

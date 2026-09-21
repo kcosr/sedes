@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 interface InstallServerOptions {
   argv?: string[];
-  sourceRoot?: string;
+  packageRoot?: string;
   prefix?: string;
   binDir?: string;
   homeDirectory?: string;
@@ -15,8 +15,9 @@ interface InstallServerOptions {
     stdout: { write(value: string): unknown };
     stderr: { write(value: string): unknown };
   };
-  installDependencies?: (stagingDirectory: string) => Promise<void>;
-  resolveCommit?: (sourceRoot: string) => Promise<string | undefined>;
+  verifyPackage?: (stagingDirectory: string, environment: Record<string, string | undefined>, options: Record<string, unknown>) => Promise<{source: {commit: string}, target: {label: string}}>;
+  arch?: string;
+  nodeAbi?: string;
   now?: () => Date;
   nodeVersion?: string;
 }
@@ -24,13 +25,18 @@ interface InstallServerOptions {
 interface InstallServerModule {
   installServer(options?: InstallServerOptions): Promise<number>;
   unitMarker: string;
+  writeServerWrappers(root: string): Promise<void>;
 }
 
 // scripts/ is plain ESM JavaScript, so the module is loaded through its URL
 // rather than a typed static import.
-const { installServer, unitMarker } = (await import(
+const { installServer, unitMarker, writeServerWrappers } = (await import(
   new URL("../../scripts/install-server-lib.mjs", import.meta.url).href
 )) as InstallServerModule;
+
+const { writePackageIntegrity, verifyPackageIntegrity } = await import(
+  new URL("../../scripts/server-package-integrity.mjs", import.meta.url).href
+);
 
 const exampleConfiguration = {
   schemaVersion: 11,
@@ -76,7 +82,7 @@ async function createSourceRoot(version: string): Promise<string> {
   await writeFile(path.join(root, "dist", "client", "index.html"), "<!doctype html>\n", "utf8");
   await writeFile(
     path.join(root, "package.json"),
-    `${JSON.stringify({ name: "sedes", version, private: true, dependencies: {} }, null, 2)}\n`,
+    `${JSON.stringify({ name: "@sedes/server-runtime", version, private: true, dependencies: {} }, null, 2)}\n`,
     "utf8",
   );
   await writeFile(
@@ -89,6 +95,16 @@ async function createSourceRoot(version: string): Promise<string> {
     `${JSON.stringify(exampleConfiguration, null, 2)}\n`,
     "utf8",
   );
+  await mkdir(path.join(root, "node_modules"));
+  await writeFile(path.join(root, "node_modules", ".stub"), "stub\n");
+  await writeFile(path.join(root, "BUILD-INFO.json"), JSON.stringify({
+    format: 1, version,
+    source: { commit: "0123456789abcdef0123456789abcdef01234567" },
+    target: { platform: "linux", arch: "x64", label: "linux-x86_64" },
+    node: { minimum: "24.18.0", version: "24.18.0", abi: process.versions.modules },
+  }));
+  await writeServerWrappers(root);
+  await writePackageIntegrity(root);
   return root;
 }
 
@@ -120,19 +136,16 @@ async function createInstallation(sourceRoot: string): Promise<Installation> {
       const io = capture();
       const exitCode = await installServer({
         argv,
-        sourceRoot,
+        packageRoot: sourceRoot,
         prefix,
         binDir,
         homeDirectory: home,
         environment: { HOME: home, PATH: `${binDir}${path.delimiter}/usr/bin` },
         platform: "linux",
         io: io.io,
-        resolveCommit: async () => "0123456789abcdef0123456789abcdef01234567",
+        arch: "x64",
         nodeVersion: "v24.18.0",
-        installDependencies: async (stagingDirectory: string) => {
-          await mkdir(path.join(stagingDirectory, "node_modules"), { recursive: true });
-          await writeFile(path.join(stagingDirectory, "node_modules", ".stub"), "stub\n", "utf8");
-        },
+        verifyPackage: async (directory, _environment, options) => verifyPackageIntegrity(directory, options),
         ...overrides,
       });
       return { exitCode, stdout: io.stdout(), stderr: io.stderr() };
@@ -261,7 +274,7 @@ describe("install:server refusals", () => {
     await expect(readdir(installation.prefix)).rejects.toThrow();
   });
 
-  it("refuses a source tree that has not been built", async () => {
+  it("refuses an incomplete extracted package", async () => {
     const broken = await createSourceRoot("1.2.3");
     const installation = await createInstallation(broken);
     await rm(path.join(broken, "dist", "cli", "sedes-cli-main.js"));
@@ -270,7 +283,7 @@ describe("install:server refusals", () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("dist/cli/sedes-cli-main.js");
-    expect(result.stderr).toContain("npm run build");
+    expect(result.stderr).toContain("npm run package:server");
   });
 
   it("refuses to install the same version twice without --force", async () => {
@@ -283,7 +296,7 @@ describe("install:server refusals", () => {
     expect(active.exitCode).toBe(1);
     expect(active.stderr).toContain("active release");
 
-    expect((await installation.run([], { sourceRoot: newerSourceRoot })).exitCode).toBe(0);
+    expect((await installation.run([], { packageRoot: newerSourceRoot })).exitCode).toBe(0);
     const result = await installation.run([]);
 
     expect(result.exitCode).toBe(1);
@@ -344,14 +357,11 @@ describe("install:server staging and activation", () => {
     const newerSourceRoot = await createSourceRoot("1.3.0");
     const installation = await createInstallation(sourceRoot);
     expect((await installation.run([])).exitCode).toBe(0);
-    expect((await installation.run([], { sourceRoot: newerSourceRoot })).exitCode).toBe(0);
+    expect((await installation.run([], { packageRoot: newerSourceRoot })).exitCode).toBe(0);
 
-    const result = await installation.run(["--force"], {
-      installDependencies: async (stagingDirectory: string) => {
-        await mkdir(path.join(stagingDirectory, "node_modules"), { recursive: true });
-        await writeFile(path.join(stagingDirectory, "node_modules", ".stub"), "replaced\n", "utf8");
-      },
-    });
+    await writeFile(path.join(sourceRoot, "node_modules", ".stub"), "replaced\n");
+    await writePackageIntegrity(sourceRoot);
+    const result = await installation.run(["--force"]);
 
     expect(result.exitCode).toBe(0);
     expect(await readFile(path.join(installation.prefix, "releases", "1.2.3", "node_modules", ".stub"), "utf8")).toBe(
@@ -367,7 +377,7 @@ describe("install:server staging and activation", () => {
     const installation = await createInstallation(sourceRoot);
     expect((await installation.run([])).exitCode).toBe(0);
 
-    const result = await installation.run(["--no-activate"], { sourceRoot: newerSourceRoot });
+    const result = await installation.run(["--no-activate"], { packageRoot: newerSourceRoot });
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("--activate 1.3.0");
@@ -382,7 +392,7 @@ describe("install:server staging and activation", () => {
     const newerSourceRoot = await createSourceRoot("1.3.0");
     const installation = await createInstallation(sourceRoot);
     expect((await installation.run([])).exitCode).toBe(0);
-    expect((await installation.run(["--no-activate"], { sourceRoot: newerSourceRoot })).exitCode).toBe(0);
+    expect((await installation.run(["--no-activate"], { packageRoot: newerSourceRoot })).exitCode).toBe(0);
 
     const result = await installation.run(["--activate", "1.3.0"]);
 
@@ -432,7 +442,7 @@ describe("install:server unit file management", () => {
     expect(await readFile(installation.unitFile, "utf8")).toContain(unitMarker);
 
     await writeFile(installation.unitFile, (await readFile(installation.unitFile, "utf8")).replace(/^ExecStart=.*$/m, "ExecStart=/stale"), "utf8");
-    const upgrade = await installation.run([], { sourceRoot: newerSourceRoot });
+    const upgrade = await installation.run([], { packageRoot: newerSourceRoot });
     expect(upgrade.exitCode).toBe(0);
     expect(upgrade.stdout).toContain("Updated");
     expect(await readFile(installation.unitFile, "utf8")).toContain(
@@ -442,7 +452,7 @@ describe("install:server unit file management", () => {
 
     const edited = "[Unit]\nDescription=Operator managed sedes\n";
     await writeFile(installation.unitFile, edited, "utf8");
-    const third = await installation.run([], { sourceRoot: await createSourceRoot("1.4.0") });
+    const third = await installation.run([], { packageRoot: await createSourceRoot("1.4.0") });
 
     expect(third.exitCode).toBe(0);
     expect(third.stderr).toContain("not installer-managed");
@@ -460,7 +470,7 @@ describe("install:server --list", () => {
     expect(empty.stdout).toContain("No releases installed");
 
     expect((await installation.run([])).exitCode).toBe(0);
-    expect((await installation.run(["--no-activate"], { sourceRoot: await createSourceRoot("1.3.0") })).exitCode).toBe(
+    expect((await installation.run(["--no-activate"], { packageRoot: await createSourceRoot("1.3.0") })).exitCode).toBe(
       0,
     );
 
@@ -523,7 +533,7 @@ describe("install:server lifecycle regression coverage", () => {
       const installation = await createInstallation(await createSourceRoot("1.2.3"));
       expect((await installation.run([])).exitCode).toBe(0);
       const newerSource = await createSourceRoot("1.3.0");
-      expect((await installation.run(["--no-activate"], { sourceRoot: newerSource })).exitCode).toBe(0);
+      expect((await installation.run(["--no-activate"], { packageRoot: newerSource })).exitCode).toBe(0);
       const launcher = path.join(installation.binDir, name);
       const otherName = name === "sedes" ? "sedes-automation" : "sedes";
       const otherLauncher = path.join(installation.binDir, otherName);
@@ -537,7 +547,7 @@ describe("install:server lifecycle regression coverage", () => {
         [["--activate", "1.3.0"], newerSource],
         [[], await createSourceRoot("1.4.0")],
       ] as const) {
-        const result = await installation.run([...argv], { sourceRoot });
+        const result = await installation.run([...argv], { packageRoot: sourceRoot });
         expect(result.exitCode).toBe(1);
         expect(await readlink(path.join(installation.prefix, "current"))).toBe("releases/1.2.3");
         expect(await readlink(otherLauncher)).toBe(originalOtherTarget);
@@ -590,23 +600,22 @@ describe("install:server lifecycle regression coverage", () => {
   it("rejects activation and uninstall while the same prefix has a force install in progress", async () => {
     const installation = await createInstallation(await createSourceRoot("1.2.3"));
     expect((await installation.run([])).exitCode).toBe(0);
-    expect((await installation.run([], { sourceRoot: await createSourceRoot("1.3.0") })).exitCode).toBe(0);
+    expect((await installation.run([], { packageRoot: await createSourceRoot("1.3.0") })).exitCode).toBe(0);
     let entered!: () => void;
     let release!: () => void;
     const stagingEntered = new Promise<void>((resolve) => { entered = resolve; });
     const stagingRelease = new Promise<void>((resolve) => { release = resolve; });
     const staging = installation.run(["--force", "--no-activate"], {
-      installDependencies: async (directory) => {
+      verifyPackage: async (directory, _environment, options) => {
         entered();
         await stagingRelease;
-        await mkdir(path.join(directory, "node_modules"));
-        await writeFile(path.join(directory, "node_modules", ".stub"), "replacement");
+        return await verifyPackageIntegrity(directory, options);
       },
     });
     try {
       await Promise.race([
         stagingEntered,
-        staging.then(() => { throw new Error("Staging ended before reaching dependency installation."); }),
+        staging.then(() => { throw new Error("Staging ended before reaching package verification."); }),
       ]);
       for (const argv of [["--activate", "1.2.3"], ["--uninstall"]]) {
         const blocked = await installation.run(argv);
@@ -621,7 +630,7 @@ describe("install:server lifecycle regression coverage", () => {
     }
     expect((await staging).exitCode).toBe(0);
     expect((await installation.run(["--activate", "1.2.3"])).exitCode).toBe(0);
-    expect(await readFile(path.join(installation.prefix, "current", "node_modules", ".stub"), "utf8")).toBe("replacement");
+    expect(await readFile(path.join(installation.prefix, "current", "node_modules", ".stub"), "utf8")).toBe("stub\n");
   });
 
   it("uninstalls a second prefix without removing the first prefix's managed unit", async () => {
@@ -658,22 +667,21 @@ describe("install:server lifecycle regression coverage", () => {
 
 
 describe("install:server staging failure recovery", () => {
-  it("preserves installed releases and releases mutation locks after dependency preparation fails", async () => {
+  it("preserves installed releases and releases mutation locks after package verification fails", async () => {
     const installation = await createInstallation(await createSourceRoot("1.2.3"));
     expect((await installation.run([])).exitCode).toBe(0);
-    expect((await installation.run([], { sourceRoot: await createSourceRoot("1.3.0") })).exitCode).toBe(0);
+    expect((await installation.run([], { packageRoot: await createSourceRoot("1.3.0") })).exitCode).toBe(0);
     const unitBefore = await readFile(installation.unitFile, "utf8");
 
     const result = await installation.run(["--force"], {
-      installDependencies: async (directory) => {
-        await mkdir(path.join(directory, "node_modules"));
+      verifyPackage: async (directory, _environment, options) => {
         await writeFile(path.join(directory, "node_modules", ".partial"), "partial");
-        throw new Error("Native dependency preparation failed");
+        throw new Error("Package verification failed");
       },
     });
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("Native dependency preparation failed");
+    expect(result.stderr).toContain("Package verification failed");
     expect(await readlink(path.join(installation.prefix, "current"))).toBe("releases/1.3.0");
     expect(await readFile(installation.unitFile, "utf8")).toBe(unitBefore);
     expect((await readdir(path.join(installation.prefix, "releases"))).sort()).toEqual(["1.2.3", "1.3.0"]);
@@ -687,5 +695,46 @@ describe("install:server staging failure recovery", () => {
     ]) await expect(stat(lock)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await installation.run(["--force"])).exitCode).toBe(0);
     expect(await readlink(path.join(installation.prefix, "current"))).toBe("releases/1.2.3");
+  });
+});
+
+describe("install:server package interface", () => {
+  it("takes the extracted package explicitly, without using the checkout dependency tree", async () => {
+    const installation = await createInstallation(await temporaryDirectory());
+    const release = await createSourceRoot("1.2.3");
+    const result = await installation.run(["--package", release, "--no-systemd"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Verifying copied server package offline");
+    expect(result.stdout).not.toContain("npm ci");
+    expect(await readFile(path.join(installation.prefix, "current", "FILES.json"), "utf8")).toBe(await readFile(path.join(release, "FILES.json"), "utf8"));
+  });
+
+  it.each(["corruption", "abi"])("refuses rollback after %s changes and preserves current", async (reason) => {
+    const installation = await createInstallation(await createSourceRoot("1.2.3"));
+    expect((await installation.run([])).exitCode).toBe(0);
+    expect((await installation.run([], { packageRoot: await createSourceRoot("1.3.0") })).exitCode).toBe(0);
+    if (reason === "corruption") await writeFile(path.join(installation.prefix, "releases", "1.2.3", "dist", "server", "index.js"), "damaged");
+    const result = await installation.run(["--activate", "1.2.3"], reason === "abi" ? { nodeAbi: "other" } : {});
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/mismatch|does not match/);
+    expect(await readlink(path.join(installation.prefix, "current"))).toBe("releases/1.3.0");
+  });
+
+  it("supports macOS packages with explicit --no-systemd", async () => {
+    const root = await createSourceRoot("1.2.3");
+    const info = JSON.parse(await readFile(path.join(root, "BUILD-INFO.json"), "utf8"));
+    info.target = { platform: "darwin", arch: "arm64", label: "macos-arm64" };
+    await writeFile(path.join(root, "BUILD-INFO.json"), JSON.stringify(info));
+    await writePackageIntegrity(root);
+    const installation = await createInstallation(root);
+    expect((await installation.run(["--no-systemd"], { platform: "darwin", arch: "arm64" })).exitCode).toBe(0);
+    await expect(stat(installation.unitFile)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(path.join(installation.prefix, "current", "bin", "sedes"), "utf8")).not.toContain("readlink -f");
+  });
+
+  it("rejects version traversal and package options on non-install modes", async () => {
+    const installation = await createInstallation(await createSourceRoot("1.2.3"));
+    expect((await installation.run(["--activate", "../elsewhere"])).stderr).toContain("Invalid release version");
+    expect((await installation.run(["--list", "--package", "/somewhere"])).exitCode).toBe(2);
   });
 });

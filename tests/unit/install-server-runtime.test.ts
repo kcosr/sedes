@@ -1,102 +1,92 @@
-import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-type ExecutionOptions = {
-  cwd: string;
-  env: Record<string, string | undefined>;
-  timeout?: number;
-  maxBuffer: number;
-};
-type Execute = (command: string, args: string[], options: ExecutionOptions) => Promise<unknown>;
-const { installServerDependencies } = (await import(
-  new URL("../../scripts/install-server-runtime.mjs", import.meta.url).href
-)) as {
-  installServerDependencies(root: string, environment: NodeJS.ProcessEnv, options?: { execute: Execute }): Promise<void>;
-};
-const execFileAsync = promisify(execFile);
+const { verifyServerRelease } = await import(new URL("../../scripts/install-server-runtime.mjs", import.meta.url).href);
+const { writePackageIntegrity, verifyPackageIntegrity } = await import(new URL("../../scripts/server-package-integrity.mjs", import.meta.url).href);
 
 async function fixture(run: (root: string) => Promise<void>) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "sedes-native-install-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "sedes-package-integrity-"));
   try {
-    await mkdir(path.join(root, "node_modules", "node-pty"), { recursive: true });
-    await writeFile(path.join(root, "node_modules", "node-pty", "package.json"), JSON.stringify({ name: "node-pty", version: "1.1.0" }));
+    await mkdir(path.join(root, "bin"));
+    await writeFile(path.join(root, "bin", "server"), "#!/bin/sh\n", { mode: 0o755 });
+    await symlink("server", path.join(root, "bin", "linked"));
+    await writeFile(path.join(root, "package.json"), JSON.stringify({ name: "@sedes/server-runtime", version: "1.0.0" }));
+    await writeFile(path.join(root, "BUILD-INFO.json"), JSON.stringify({
+      format: 1, version: "1.0.0", source: { commit: "a".repeat(40) },
+      target: { platform: process.platform, arch: process.arch, label: `${process.platform === "darwin" ? "macos" : process.platform}-${process.arch === "x64" ? "x86_64" : process.arch}` },
+      node: { minimum: "24.18.0", version: process.version, abi: process.versions.modules },
+    }));
+    await writePackageIntegrity(root);
     await run(root);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  } finally { await rm(root, { recursive: true, force: true }); }
 }
 
-describe("installed server native runtime", () => {
-  it("permits only the reviewed node-pty hooks and validates before succeeding", async () => {
+describe("offline server package verification", () => {
+  it("verifies bytes, executable permissions and relative symlinks before offline smoke", async () => {
     await fixture(async (root) => {
-      const unused = path.join(root, "node_modules", "@anthropic-ai", "claude-agent-sdk-linux-x64");
-      const sdk = path.join(root, "node_modules", "@anthropic-ai", "claude-agent-sdk");
-      await mkdir(unused, { recursive: true });
-      await mkdir(sdk, { recursive: true });
-      const calls: { command: string; args: string[]; options: ExecutionOptions }[] = [];
-      await installServerDependencies(root, { NODE_ENV: "production", npm_execpath: "/npm/bin/npm-cli.js" }, {
-        execute: async (command, args, options) => { calls.push({ command, args, options }); },
+      const calls: {command: string, args: string[], options: {env: NodeJS.ProcessEnv}}[] = [];
+      await verifyServerRelease(root, { NODE_ENV: "production", PATH: process.env.PATH }, {
+        execute: async (command: string, args: string[], options: {env: NodeJS.ProcessEnv}) => { calls.push({ command, args, options }); },
       });
-      expect(calls[0]?.args).toEqual(["/npm/bin/npm-cli.js", "ci", "--omit=dev", "--ignore-scripts"]);
-      expect(calls[1]?.args).toEqual(["/npm/bin/npm-cli.js", "rebuild", "node-pty@1.1.0", "--ignore-scripts=false", "--foreground-scripts"]);
-      expect(calls[1]?.options.env.npm_config_build_from_source).toBe("true");
-      expect(calls.every((call) => call.options.env.NODE_ENV === undefined)).toBe(true);
-      expect(calls[2]?.command).toBe(process.execPath);
-      expect(calls[2]?.args[0]).toBe("--eval");
-      expect(calls[2]?.options.timeout).toBe(10_000);
-      expect(await stat(sdk)).toBeDefined();
-      await expect(stat(unused)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.command).toBe(process.execPath);
+      expect(calls[0]?.args).toEqual([path.join(root, "scripts", "verify-server-package.mjs"), "--package", root]);
+      expect(calls[0]?.options.env.NODE_ENV).toBeUndefined();
+      expect(calls[0]?.args.join(" ")).not.toMatch(/npm|rebuild/);
     });
   });
-
-  it("rejects a changed native package before allowing its lifecycle scripts", async () => {
+  it.each(["bytes", "permissions", "symlink", "extra", "missing", "checksums"])("refuses %s corruption before executing any release code", async (kind) => {
     await fixture(async (root) => {
-      const manifest = path.join(root, "node_modules", "node-pty", "package.json");
-      await writeFile(manifest, (await readFile(manifest, "utf8")).replace("1.1.0", "1.2.0"));
-      const calls: string[][] = [];
-      await expect(installServerDependencies(root, {}, {
-        execute: async (_command, args) => { calls.push(args); },
-      })).rejects.toThrow("install_server_node_pty_version_unreviewed");
-      expect(calls).toEqual([["ci", "--omit=dev", "--ignore-scripts"]]);
+      if (kind === "bytes") await writeFile(path.join(root, "bin", "server"), "damaged");
+      if (kind === "permissions") await chmod(path.join(root, "bin", "server"), 0o644);
+      if (kind === "symlink") {
+        await rm(path.join(root, "bin", "linked"));
+        await symlink("../package.json", path.join(root, "bin", "linked"));
+      }
+      if (kind === "extra") await writeFile(path.join(root, "extra"), "unexpected");
+      if (kind === "missing") await rm(path.join(root, "bin", "server"));
+      if (kind === "checksums") await writeFile(path.join(root, "SHA256SUMS"), "invalid");
+      let executed = false;
+      await expect(verifyServerRelease(root, {}, { execute: async () => { executed = true; } })).rejects.toThrow(/mismatch/);
+      expect(executed).toBe(false);
     });
   });
-
-  it("propagates a compiler failure instead of certifying an incomplete release", async () => {
+  it.each([
+    { nodeVersion: "24.17.9" }, { nodeVersion: "23.99.0" }, { nodeAbi: "wrong" },
+    { platform: "win32" }, { arch: "other" },
+  ])("refuses an incompatible target runtime %j", async (options) => {
     await fixture(async (root) => {
-      let smokeStarted = false;
-      await expect(installServerDependencies(root, {}, {
-        execute: async (_command, args) => {
-          if (args[0] === "rebuild") throw new Error("compiler unavailable");
-          if (args[0] === "--eval") smokeStarted = true;
-        },
-      })).rejects.toThrow("compiler unavailable");
-      expect(smokeStarted).toBe(false);
+      await expect(verifyPackageIntegrity(root, options)).rejects.toThrow(/require|does not match/);
     });
   });
-
-  it.each([true, false])("checks actual PTY output and exit in the smoke child (valid=%s)", async (valid) => {
+  it("allows installer metadata only for installed releases and still checks wrappers", async () => {
     await fixture(async (root) => {
-      const sqlite = path.join(root, "node_modules", "better-sqlite3");
-      await mkdir(sqlite);
-      await writeFile(path.join(sqlite, "index.js"), "module.exports = class { prepare() { return { get() { return {ok: 1}; } }; } close() {} };\n");
-      await writeFile(path.join(root, "node_modules", "node-pty", "index.js"), `
-        exports.spawn = () => ({
-          kill() {},
-          onData(callback) { setTimeout(() => callback(${JSON.stringify(valid ? "sedes_native_pty_ok" : "incorrect output")}), 5); },
-          onExit(callback) { setTimeout(() => callback({exitCode: 0}), 10); },
-        });
-      `);
-      const operation = installServerDependencies(root, process.env, {
-        execute: async (command, args, options) => {
-          if (args[0] === "--eval") return execFileAsync(command, args, options);
-        },
-      });
-      if (valid) await expect(operation).resolves.toBeUndefined();
-      else await expect(operation).rejects.toThrow("install_server_pty_smoke_failed");
+      await writeFile(path.join(root, "RELEASE.json"), "{}");
+      await expect(verifyPackageIntegrity(root)).rejects.toThrow("RELEASE.json");
+      await expect(verifyPackageIntegrity(root, { installed: true })).resolves.toMatchObject({ version: "1.0.0" });
+      await chmod(path.join(root, "bin", "server"), 0o644);
+      await expect(verifyPackageIntegrity(root, { installed: true })).rejects.toThrow("bin/server");
+    });
+  });
+  it("rejects links escaping the release even when generating an inventory", async () => {
+    await fixture(async (root) => {
+      await symlink("../../outside", path.join(root, "bin", "escape"));
+      await expect(writePackageIntegrity(root)).rejects.toThrow("escapes release");
+    });
+  });
+  it("rejects build metadata for a different manifest version", async () => {
+    await fixture(async (root) => {
+      const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+      await writeFile(path.join(root, "package.json"), JSON.stringify({ ...manifest, version: "2.0.0" }));
+      await writePackageIntegrity(root);
+      await expect(verifyPackageIntegrity(root)).rejects.toThrow("manifest does not match");
+    });
+  });
+  it("propagates failed runtime smoke without accepting the package", async () => {
+    await fixture(async (root) => {
+      await expect(verifyServerRelease(root, {}, { execute: async () => { throw new Error("PTY smoke failed"); } })).rejects.toThrow("PTY smoke failed");
     });
   });
 });
