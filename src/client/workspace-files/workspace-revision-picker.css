@@ -7,7 +7,7 @@
 .workspace-revision-search { display: flex; align-items: center; gap: 7px; padding: 6px; border-bottom: 1px solid var(--border); }
 .workspace-revision-search input { flex: 1; min-width: 0; background: transparent; outline: none; font-size: 12px; }
 .workspace-revision-history { display: flex; align-items: center; gap: 9px; color: var(--muted-foreground); font-size: 11px; }
-.workspace-revision-history select { min-width: 0; flex: 1; padding: 4px; background: var(--background); color: var(--foreground); border: 1px solid var(--border); border-radius: 4px; }
+.workspace-revision-history select { font-size: 12px; min-width: 0; flex: 1; padding: 4px; background: var(--background); color: var(--foreground); border: 1px solid var(--border); border-radius: 4px; }
 .workspace-revision-options { min-height: 80px; max-height: 340px; overflow: auto; }
 .workspace-revision-group-title { margin: 8px 6px 4px; color: var(--muted-foreground); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
 .workspace-revision-options button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px; border-radius: 5px; text-align: left; }

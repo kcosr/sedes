@@ -204,8 +204,15 @@ test.describe.serial("workspace files compare", () => {
     ]) {
       await expect(control).toHaveCSS("font-size", "12px");
       await expect(control).toHaveCSS("font-weight", "400");
+      await expect(control).toHaveCSS("letter-spacing", "normal");
     }
-    await expect(settings.locator(".workspace-revision-label").first()).toHaveCSS("font-size", "11px");
+    for (const label of [
+      settings.locator(".workspace-revision-label").first(),
+      settings.locator(".workspace-compare-strategy > span"),
+    ]) {
+      await expect(label).toHaveCSS("font-size", "11px");
+      await expect(label).toHaveCSS("font-weight", "600");
+    }
     await expect(runCompare).toBeEnabled();
     await runCompare.click();
     await expect(settings).toBeHidden();
@@ -291,6 +298,13 @@ test.describe.serial("workspace files compare", () => {
     await settings.getByRole("button", { name: "Base revision", exact: true }).click();
     const revisionDialog = page.getByRole("dialog", { name: "Choose base revision" });
     await expect(revisionDialog.getByText("Seed workspace file fixture", { exact: true })).toBeVisible();
+    for (const control of [
+      revisionDialog.getByRole("textbox", { name: "Search base revisions" }),
+      revisionDialog.getByRole("combobox", { name: "Base commit history" }),
+      revisionDialog.locator(".workspace-revision-option-copy strong").first(),
+    ]) {
+      await expect(control).toHaveCSS("font-size", "12px");
+    }
     await capture(page, testInfo, "workspace-files-revision-picker.png");
     await revisionDialog.getByRole("textbox", { name: "Search base revisions" }).fill("main");
     await expect(revisionDialog.getByRole("listbox").getByRole("option").filter({ hasText: "main" })).toBeVisible();
