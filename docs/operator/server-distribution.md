@@ -154,8 +154,10 @@ roll back, restore the matching pre-upgrade state backup, then:
 
 ```sh
 node /absolute/extracted-release/scripts/install-server.mjs --activate PREVIOUS_VERSION
-systemctl --user restart sedes.service
 ```
+
+Then start or restart the server through your chosen supervisor. If you use
+the opt-in systemd unit, run `systemctl --user restart sedes.service`.
 
 Activation rechecks integrity, runtime compatibility, and isolated smoke
 tests, including older candidates. A database migrated by a newer version

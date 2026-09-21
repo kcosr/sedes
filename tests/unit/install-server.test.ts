@@ -450,10 +450,12 @@ describe("install:server unit file management", () => {
     expect(upgrade.exitCode).toBe(0);
     expect(await readFile(installation.unitFile, "utf8")).toBe(unit);
     expect(upgrade.stdout).not.toContain("systemctl");
+    expect(upgrade.stdout).toContain("start or restart the server through your chosen supervisor");
     const rollback = await installation.run(["--activate", "1.2.3"]);
     expect(rollback.exitCode).toBe(0);
     expect(await readFile(installation.unitFile, "utf8")).toBe(unit);
     expect(rollback.stdout).not.toContain("systemctl");
+    expect(rollback.stdout).toContain("start or restart the server through your chosen supervisor");
     expect(await readlink(path.join(installation.prefix, "current"))).toBe("releases/1.2.3");
   });
 
@@ -616,6 +618,24 @@ describe("install:server lifecycle regression coverage", () => {
     } else {
       await expect(stat(installation.unitFile)).rejects.toMatchObject({ code: "ENOENT" });
       expect(result.stdout).not.toContain("systemctl");
+    }
+  });
+
+  it.each([true, false])("ignores an obsolete stored systemd=%s preference during activation", async (storedSystemd) => {
+    const installation = await createInstallation(await createSourceRoot("1.2.3"));
+    expect((await installation.run(["--no-activate"])).exitCode).toBe(0);
+    const metadataFile = path.join(installation.prefix, "releases", "1.2.3", "RELEASE.json");
+    const metadata = JSON.parse(await readFile(metadataFile, "utf8"));
+    await writeFile(metadataFile, JSON.stringify({ ...metadata, systemd: storedSystemd }));
+
+    const result = await installation.run(["--activate", "1.2.3", ...(storedSystemd ? [] : ["--systemd"])]);
+
+    expect(result.exitCode).toBe(0);
+    if (storedSystemd) {
+      await expect(stat(path.dirname(installation.unitFile))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(result.stdout).not.toContain("systemctl");
+    } else {
+      expect(await readFile(installation.unitFile, "utf8")).toContain(unitMarker);
     }
   });
 

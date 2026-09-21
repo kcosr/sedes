@@ -362,7 +362,7 @@ function printNextSteps({ io, upgraded, wroteUnit, systemd }) {
     );
   } else {
     io.stdout.write(
-      "  (no unit file managed here; start the service the way this host already does)\n",
+      "  Service configuration left unchanged; start or restart the server through your chosen supervisor to use the activated release.\n",
     );
   }
   io.stdout.write(
