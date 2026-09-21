@@ -47,6 +47,16 @@ env -u NODE_ENV npm run electron:verify -- --profile client
 env -u NODE_ENV npm run electron:verify -- --profile full
 ```
 
+Each package build starts a fresh profile output directory. Prior output is
+preserved under `electron/dist/previous-<profile>-<unique>/<profile>/`, keeping
+its original metadata. `BUILD-INFO.json` records the source commit, branch,
+commit timestamp, lock hashes, host, Electron ABI, and validation results;
+`SHA256SUMS` covers the current output. Full package verification runs SQLite,
+migrations, a real PTY, provider imports, and server HTTP/startup/shutdown checks
+with the packaged Electron executable. Remote worker probes use external Node.
+The graphical smoke gate additionally needs a secure OS keyring; a failure
+there is recorded separately from the native runtime checks.
+
 Client builds skip local-server staging and addon compilation. Full builds
 consume the same `packages/server-runtime` manifest and independent lockfile
 as standalone server distributions, with an Electron-specific native build.
