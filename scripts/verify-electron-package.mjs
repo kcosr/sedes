@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
+import { packageDirectories } from "./server-package-native.mjs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +12,9 @@ const repositoryRoot = path.resolve(
   "..",
 );
 const expectedAppId = "dev.sedes.local";
+const distribution = JSON.parse(await readFile(path.join(repositoryRoot, "electron/generated/distribution.json"), "utf8"));
+if (Object.keys(distribution).length !== 1 || !["client", "full"].includes(distribution.profile)) throw new Error("electron_distribution_invalid");
+const profile = distribution.profile;
 const mode = process.argv[2];
 if (mode !== "--synced" && mode !== "--packaged") {
   throw new Error("Usage: verify-electron-package.mjs --synced|--packaged");
@@ -137,6 +142,9 @@ function betterSqlitePlatform() {
 }
 
 async function verifySynced() {
+  const local = path.join(repositoryRoot, "electron/generated/local-server");
+  const localExists = await stat(local).then(() => true, error => { if (error.code === "ENOENT") return false; throw error; });
+  if (localExists !== (profile === "full")) throw new Error("electron_distribution_local_payload_mismatch");
   const clientRoot = path.join(repositoryRoot, "dist", "client");
   const appRoot = path.join(repositoryRoot, "electron", "app");
   const [clientFiles, appFiles] = await Promise.all([
@@ -235,9 +243,10 @@ async function verifyPackaged() {
     repositoryRoot,
     "electron",
     "dist",
+    profile,
     unpackedName,
   );
-  const resourcesRoot = path.join(unpackedRoot, "resources");
+  const resourcesRoot = process.platform === "darwin" ? path.join(unpackedRoot, "Sedes.app/Contents/Resources") : path.join(unpackedRoot, "resources");
   const localServerRoot = path.join(resourcesRoot, "local-server");
   const asar = path.join(resourcesRoot, "app.asar");
   if (!(await stat(asar)).isFile())
@@ -281,6 +290,8 @@ async function verifyPackaged() {
     "/build/main.js",
     "/app/index.html",
     "/generated/plugin-manifest.json",
+    "/generated/distribution.json",
+    "/generated/BUILD-INFO.json",
     "/node_modules/@capawesome/capacitor-electron/package.json",
     "/node_modules/@sedes/electron-client-credentials/package.json",
     "/node_modules/@sedes/electron-client-credentials/electron/dist/plugin.mjs",
@@ -362,6 +373,19 @@ async function verifyPackaged() {
     }
   }
 
+  const requireElectron = createRequire(path.join(repositoryRoot, "electron/package.json"));
+  const { extractFile } = requireElectron("@electron/asar");
+  const packagedDistribution = JSON.parse(extractFile(asar, "generated/distribution.json").toString("utf8"));
+  if (JSON.stringify(packagedDistribution) !== JSON.stringify(distribution)) throw new Error("electron_packaged_profile_mismatch");
+  const buildInfo = JSON.parse(extractFile(asar, "generated/BUILD-INFO.json").toString("utf8"));
+  if (buildInfo.profile !== profile || buildInfo.platform !== process.platform || buildInfo.architecture !== process.arch) throw new Error("electron_packaged_provenance_mismatch");
+  if (profile === "client") {
+    if (await stat(localServerRoot).then(() => true, error => { if (error.code === "ENOENT") return false; throw error; })) throw new Error("electron_client_contains_server");
+    if (applicationEntries.some(entry => /\/node_modules\/(?:@earendil-works|@anthropic-ai|@openai|better-sqlite3|node-pty)(?:\/|$)/u.test(entry))) throw new Error("electron_client_contains_backend_dependencies");
+    process.stdout.write(`Electron client package verified (${entries.length} ASAR entries).\n`);
+    return;
+  }
+  await verifyRuntimePlatforms(path.join(localServerRoot, "node_modules"));
   const localServerEntries = await packagedEntriesUnder(localServerRoot);
   const localServerEntrySet = new Set(
     localServerEntries.map((entry) => entry.replaceAll("\\", "/")),
@@ -428,8 +452,9 @@ async function verifyPackaged() {
     }
   }
   for (const nativeSuffix of [
-    `better-sqlite3/prebuilds/${betterSqlitePlatform()}-${process.arch}.node`,
+    "better-sqlite3/build/Release/better_sqlite3.node",
     "node-pty/build/Release/pty.node",
+    ...(process.platform === "win32" ? ["node-pty/build/Release/conpty.node", "node-pty/build/Release/conpty_console_list.node"] : []),
   ]) {
     if (!nativeManifest.files.some((entry) => entry.endsWith(nativeSuffix))) {
       throw new Error(
@@ -439,8 +464,7 @@ async function verifyPackaged() {
   }
   for (const filename of nativeManifest.files) {
     if (
-      (/better-sqlite3\/prebuilds\//u.test(filename) &&
-        !filename.endsWith(`${betterSqlitePlatform()}-${process.arch}.node`)) ||
+      (/better-sqlite3\/prebuilds\//u.test(filename)) ||
       (/node-pty\/prebuilds\/([^/]+)\//u.test(filename) &&
         !filename.includes(
           `/node-pty/prebuilds/${process.platform}-${process.arch}/`,
@@ -487,3 +511,13 @@ async function verifyPackaged() {
 
 if (mode === "--synced") await verifySynced();
 else await verifyPackaged();
+
+async function verifyRuntimePlatforms(modules) {
+  for (const directory of await packageDirectories(modules)) {
+    const manifest = JSON.parse(await readFile(path.join(directory, "package.json"), "utf8"));
+    const accepts = (values, selected) => !values || !values.includes(`!${selected}`) && (values.includes(selected) || values.includes("any") || values.every(value => value.startsWith("!")));
+    if (!accepts(manifest.os, process.platform) || !accepts(manifest.cpu, process.arch) || !accepts(manifest.libc, "glibc")) throw new Error(`electron_foreign_runtime_package:${manifest.name}`);
+    if (["electron", "@anthropic-ai/claude-code", "@capawesome/capacitor-electron"].includes(manifest.name) || manifest.name.startsWith("@capacitor/")) throw new Error(`electron_forbidden_runtime_package:${manifest.name}`);
+    await verifyRuntimePlatforms(path.join(directory, "node_modules"));
+  }
+}
