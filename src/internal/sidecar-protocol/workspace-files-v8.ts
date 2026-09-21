@@ -41,7 +41,7 @@ import {
 } from "./operation-registry.js";
 
 export const WORKSPACE_FILES_CAPABILITY_ID = "workspace_files" as const;
-export const WORKSPACE_FILES_MAJOR_VERSION = 7 as const;
+export const WORKSPACE_FILES_MAJOR_VERSION = 8 as const;
 export const WORKSPACE_FILES_MAX_POLICY_ROOTS = 16 as const;
 const rootHandleSchema = z.string().uuid();
 const subscriptionHandleSchema = z.string().uuid();
@@ -496,10 +496,7 @@ export const workspaceFilesDiffRepositoriesOperation = definition({
 
 export const workspaceFilesDiffRefCatalogOperation = definition({
   operation: "diff.refs",
-  requestSchema: z.strictObject({
-    rootHandle: rootHandleSchema,
-    ...workspaceDiffRefCatalogQuerySchema.shape,
-  }),
+  requestSchema: workspaceDiffRefCatalogQuerySchema.safeExtend({ rootHandle: rootHandleSchema }),
   responseSchema: workspaceDiffRefCatalogResultSchema,
   maximumDeadlineMilliseconds: 60_000,
 });
@@ -600,7 +597,7 @@ export const workspaceFilesDiffReviewRepositoryIdentityOperation = definition({
   maximumDeadlineMilliseconds: 60_000,
 });
 
-export const workspaceFilesV7Operations = Object.freeze([
+export const workspaceFilesV8Operations = Object.freeze([
   workspaceFilesRootOpenOperation,
   workspaceFilesRootValidateOperation,
   workspaceFilesRootCloseOperation,
@@ -642,7 +639,7 @@ type HandlerFor<Definition> = Definition extends {
     ) => Promise<Response> | Response
   : never;
 
-export interface WorkspaceFilesV7Handlers {
+export interface WorkspaceFilesV8Handlers {
   readonly mutationList: HandlerFor<typeof workspaceFilesMutationListOperation>;
   readonly mutationInspect: HandlerFor<
     typeof workspaceFilesMutationInspectOperation
@@ -708,9 +705,9 @@ export interface WorkspaceFilesV7Handlers {
   >;
 }
 
-export function registerWorkspaceFilesV7Operations(
+export function registerWorkspaceFilesV8Operations(
   registry: SidecarOperationRegistry,
-  handlers: WorkspaceFilesV7Handlers,
+  handlers: WorkspaceFilesV8Handlers,
 ): void {
   registry.register(workspaceFilesRootValidateOperation, handlers.rootValidate);
   registry.register(workspaceFilesRootOpenOperation, handlers.rootOpen);

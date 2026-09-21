@@ -9,6 +9,13 @@ const TOOL_ROUTES = new Set(["/api/agent-tools", "/api/agent-tool-descriptions",
 const safe = new Set(["GET", "HEAD", "OPTIONS"]);
 const unauthorized = () => new ApiError(401, "authentication_required", "Pair this client with the Sedes server.");
 
+/** Stable browser storage boundary; never use a client ID or a browser-selected identity. */
+export function deriveClientNavigationNamespace(installationKey: Uint8Array, scope: { readonly tenantId: string; readonly principalId: string }): string {
+  return createHmac("sha256", installationKey)
+    .update(JSON.stringify(["client-navigation-v1", scope.tenantId, scope.principalId]))
+    .digest("hex");
+}
+
 function singleHeader(request: IncomingMessage, name: string): string | undefined {
   let count = 0;
   for (let i = 0; i < request.rawHeaders.length; i += 2) {
@@ -29,7 +36,7 @@ export class AuthenticationAdmission {
   readonly #timer: ReturnType<typeof setInterval>;
   readonly #csrfSecret = randomBytes(32);
   constructor(readonly repository: AuthenticationRepository, namespace: string,
-    readonly options: { required?: boolean; canEnrollSidecar?: (connectorId: string) => boolean } = {}) {
+    readonly options: { required?: boolean; navigationNamespace?: string; canEnrollSidecar?: (connectorId: string) => boolean } = {}) {
     this.cookieName = `sedes_session_${createHash("sha256").update(namespace).digest("hex").slice(0, 16)}`;
     this.#timer = setInterval(() => this.refresh(), 1_000);
     this.#timer.unref();
@@ -149,7 +156,7 @@ export class AuthenticationAdmission {
     router.get("/status", (request, response) => {
       let client: AuthenticationClient | undefined;
       try { client = this.clientForRequest(request); } catch { /* Show the pairing screen for invalid credentials. */ }
-      response.json({ required: this.required, authenticated: client?.kind === "management", ...(client?.kind === "management" ? { client } : {}) });
+      response.json({ required: this.required, authenticated: client?.kind === "management", ...(client?.kind === "management" ? { client } : {}), ...((client?.kind === "management" || !this.required) && this.options.navigationNamespace ? { navigationNamespace: this.options.navigationNamespace } : {}) });
     });
     router.post("/pair", express.json({ limit: "4kb", strict: true }), (request, response) => {
       if (!request.is("application/json")) throw new ApiError(415, "invalid_content_type", "Pairing requires JSON.");
@@ -163,8 +170,8 @@ export class AuthenticationAdmission {
       this.refresh();
       if (input.kind === "browser") {
         this.#cookie(request, response, result.credential, result.client.expiresAt);
-        response.json({ client: result.client });
-      } else response.json(result);
+        response.json({ client: result.client, ...(this.options.navigationNamespace ? { navigationNamespace: this.options.navigationNamespace } : {}) });
+      } else response.json({ ...result, ...(input.kind !== "sidecar" && this.options.navigationNamespace ? { navigationNamespace: this.options.navigationNamespace } : {}) });
     });
     router.get("/clients", (request, response) => { this.#requireManagement(request); response.json({ clients: this.repository.listClients() }); });
     router.delete("/clients/:id", (request, response) => {

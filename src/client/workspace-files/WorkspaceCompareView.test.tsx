@@ -6,6 +6,7 @@ import {
   cleanup,
   fireEvent,
   render,
+  within,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -21,6 +22,7 @@ import type {
 import type { WorkspaceFileRootId } from "../../shared/protocol/workspace-files.js";
 import { WORKSPACE_DIFF_MAX_PATCH_BYTES } from "../../shared/workspace-diff-limits.js";
 
+let viewportViewer: Record<string, unknown> | undefined;
 let capturedCodeViewProps: Record<string, unknown> | undefined;
 const scrollTo = vi.fn();
 const resizeObservers: Array<{
@@ -36,13 +38,23 @@ vi.mock("@pierre/diffs/react", () => ({
     capturedCodeViewProps = props;
     useImperativeHandle(
       ref,
-      () => ({ scrollTo }) as unknown as CodeViewHandle<unknown>,
+      () =>
+        ({
+          scrollTo,
+          getInstance: () => viewportViewer,
+        }) as unknown as CodeViewHandle<unknown>,
     );
-    const items = props.items as readonly { id: string }[];
+    const items = props.items as readonly { id: string; type: string }[];
+    const renderHeader = props.renderCustomHeader as
+      | ((item: (typeof items)[number]) => React.ReactNode)
+      | undefined;
     return (
       <div data-testid="code-view">
         {items.map((item) => (
-          <span key={item.id}>{item.id}</span>
+          <div key={item.id}>
+            {item.id}
+            {renderHeader?.(item)}
+          </div>
         ))}
       </div>
     );
@@ -97,6 +109,7 @@ describe("WorkspaceCompareView", () => {
   beforeEach(() => {
     measuredWidth = 900;
     capturedCodeViewProps = undefined;
+    viewportViewer = undefined;
     resizeObservers.length = 0;
     scrollTo.mockReset();
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
@@ -129,7 +142,7 @@ describe("WorkspaceCompareView", () => {
     expect(screen.queryByLabelText("Repository")).toBeNull();
     fireEvent.click(settings);
     expect(settings).toHaveAttribute("aria-expanded", "false");
-    expect(screen.getByText("Review controls")).not.toBeVisible();
+    expect(screen.getByText("Review controls")).toBeVisible();
     fireEvent.click(settings);
 
     const compare = await screen.findByRole("button", { name: "Compare" });
@@ -149,15 +162,9 @@ describe("WorkspaceCompareView", () => {
     );
     await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(8));
     expect(screen.queryByText("Sedes")).toBeNull();
-    expect(
-      await screen.findByText("Load more diffs (8 of 10)"),
-    ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText("Load more diffs (8 of 10)"));
+    expect(screen.queryByText(/Load more diffs/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("treeitem", { name: /file-9.ts/ }));
     await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(10));
-    await waitFor(() =>
-      expect(screen.queryByText(/Load more diffs/)).not.toBeInTheDocument(),
-    );
   });
 
   it("loads an exact navigator target before scrolling to its opaque item id", async () => {
@@ -168,8 +175,7 @@ describe("WorkspaceCompareView", () => {
     fireEvent.click(compare);
     await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(8));
 
-    fireEvent.click(screen.getByRole("button", { name: /Files/ }));
-    fireEvent.click(screen.getByRole("button", { name: /src\/file-10\.ts/ }));
+    fireEvent.click(screen.getByRole("treeitem", { name: /file-10\.ts/ }));
     await waitFor(() =>
       expect(dataSource.loadPatch).toHaveBeenCalledWith(
         expect.objectContaining({ fileId: "file-10" }),
@@ -178,7 +184,7 @@ describe("WorkspaceCompareView", () => {
     );
     await waitFor(() =>
       expect(scrollTo).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "file-10", type: "line" }),
+        expect.objectContaining({ id: "file-10", type: "item" }),
       ),
     );
   });
@@ -199,8 +205,8 @@ describe("WorkspaceCompareView", () => {
     const unified = screen.getByRole("button", { name: "Unified" });
     const split = screen.getByRole("button", { name: "Split" });
     const wrap = screen.getByRole("button", { name: "Wrap" });
-    expect(unified).toHaveAttribute("aria-pressed", "true");
-    expect(split).toHaveAttribute("aria-pressed", "false");
+    expect(unified).toHaveAttribute("aria-pressed", "false");
+    expect(split).toHaveAttribute("aria-pressed", "true");
     expect(wrap).toHaveAttribute("aria-pressed", "false");
 
     fireEvent.click(split);
@@ -254,34 +260,43 @@ describe("WorkspaceCompareView", () => {
       "Comparison strategy",
     )) as HTMLSelectElement;
     await waitFor(() =>
-      expect(screen.getByLabelText("Base revision")).toHaveValue(
-        "revision:revision-main",
-      ),
+      expect(screen.getByLabelText("Base revision")).toHaveTextContent("main"),
     );
-    await waitFor(() =>
-      expect(screen.getByLabelText("Compare revision")).toHaveValue(
-        "working_tree",
-      ),
-    );
-    await waitFor(() =>
-      expect(screen.getByLabelText("Base revision")).toHaveValue(
-        "revision:revision-main",
-      ),
+    expect(screen.getByLabelText("Compare revision")).toHaveTextContent(
+      "Working tree",
     );
     expect(strategy).toHaveValue("direct");
-    expect(screen.getByRole("option", { name: "Merge base" })).toBeDisabled();
+    expect(
+      screen.getByRole("option", {
+        name: "Changes introduced by compare branch",
+      }),
+    ).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText("Compare revision"), {
-      target: { value: "revision:revision-main" },
-    });
+    fireEvent.click(screen.getByLabelText("Compare revision"));
+    fireEvent.click(
+      within(
+        screen.getByRole("listbox", { name: "Compare sources" }),
+      ).getByRole("option", { name: /main/ }),
+    );
     await waitFor(() => expect(strategy).toHaveValue("merge_base"));
-    expect(screen.getByRole("option", { name: "Merge base" })).toBeEnabled();
+    expect(
+      screen.getByRole("option", {
+        name: "Changes introduced by compare branch",
+      }),
+    ).toBeEnabled();
 
-    fireEvent.change(screen.getByLabelText("Base revision"), {
-      target: { value: "index" },
-    });
+    fireEvent.click(screen.getByLabelText("Base revision"));
+    fireEvent.click(
+      within(
+        screen.getByRole("dialog", { name: "Choose base revision" }),
+      ).getByRole("option", { name: /Staged changes/ }),
+    );
     await waitFor(() => expect(strategy).toHaveValue("direct"));
-    expect(screen.getByRole("option", { name: "Merge base" })).toBeDisabled();
+    expect(
+      screen.getByRole("option", {
+        name: "Changes introduced by compare branch",
+      }),
+    ).toBeDisabled();
   });
 
   it("captures exact displayed diff lines for the shared selection action", async () => {
@@ -302,6 +317,11 @@ describe("WorkspaceCompareView", () => {
         (capturedCodeViewProps?.items as readonly unknown[] | undefined)
           ?.length,
       ).toBe(1),
+    );
+    await waitFor(() =>
+      expect(
+        (capturedCodeViewProps?.items as readonly { type: string }[])[0]?.type,
+      ).toBe("diff"),
     );
     const options = capturedCodeViewProps?.options as {
       onLineSelectionEnd(
@@ -348,15 +368,14 @@ describe("WorkspaceCompareView", () => {
     await waitFor(() => expect(compare).toBeEnabled());
     fireEvent.click(compare);
 
-    await screen.findByText("Patch is unavailable");
+    await screen.findByText("Diff unavailable");
     await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(1));
     await act(async () => {
       await Promise.resolve();
     });
     expect(dataSource.loadPatch).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole("button", { name: /Files/ }));
-    fireEvent.click(screen.getByRole("button", { name: /src\/file-1\.ts/ }));
+    fireEvent.click(screen.getByRole("treeitem", { name: /file-1\.ts/ }));
     await act(async () => {
       await Promise.resolve();
     });
@@ -366,7 +385,7 @@ describe("WorkspaceCompareView", () => {
     await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(2));
   });
 
-  it("hides Load more once every changed file has been attempted", async () => {
+  it("keeps terminal files ordered and loads the region around a jump", async () => {
     const dataSource = createDataSource(10, {
       loadPatch: async (file) =>
         file.fileId === "file-9"
@@ -382,18 +401,547 @@ describe("WorkspaceCompareView", () => {
     await waitFor(() => expect(compare).toBeEnabled());
     fireEvent.click(compare);
 
-    const loadMore = await screen.findByRole("button", {
-      name: "Load more diffs (8 of 10)",
-    });
-    fireEvent.click(loadMore);
-
+    await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(8));
+    fireEvent.click(screen.getByRole("treeitem", { name: /file-9.ts/ }));
     await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(10));
     await waitFor(() =>
       expect(
         screen.queryByRole("button", { name: /Load more diffs/ }),
       ).not.toBeInTheDocument(),
     );
-    expect(screen.getByText("Patch is too large")).toBeInTheDocument();
+    expect(screen.getByText("Diff exceeds the size limit")).toBeInTheDocument();
+  });
+
+  it("bounds concurrent patch requests and fences old comparison results", async () => {
+    const completions: Array<() => void> = [];
+    let active = 0;
+    let maximum = 0;
+    const dataSource = createDataSource(20, {
+      loadPatch: (file) =>
+        new Promise((resolve) => {
+          active++;
+          maximum = Math.max(maximum, active);
+          completions.push(() => {
+            active--;
+            resolve(availablePatch(file));
+          });
+        }),
+    });
+    const { unmount } = render(
+      <WorkspaceCompareView rootId="primary" dataSource={dataSource} />,
+    );
+    const compare = await screen.findByRole("button", { name: "Compare" });
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(3));
+    expect(maximum).toBe(3);
+    fireEvent.click(screen.getByRole("treeitem", { name: /file-20.ts/ }));
+    await act(async () => {
+      completions.shift()?.();
+    });
+    await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(4));
+    expect(vi.mocked(dataSource.loadPatch).mock.calls[3]?.[0].fileId).toBe(
+      "file-20",
+    );
+    expect(maximum).toBe(3);
+    unmount();
+    await act(async () => {
+      for (const finish of completions.splice(0)) finish();
+    });
+    expect(dataSource.loadPatch).toHaveBeenCalledTimes(4);
+  });
+
+  it("restores a distant path first with fresh IDs and preserves direct strategy", async () => {
+    const dataSource = createDataSource(420);
+    const onNavigationChange = vi.fn();
+    render(
+      <WorkspaceCompareView
+        rootId="primary"
+        dataSource={dataSource}
+        onNavigationChange={onNavigationChange}
+        initialNavigation={{
+          repository: {
+            repositoryKey: "repository-key-sedes",
+            displayName: "Sedes",
+          },
+          base: { kind: "ref", refKind: "local_branch", label: "main" },
+          head: { kind: "working_tree" },
+          mode: "direct",
+          fingerprint: "fingerprint_123456789",
+          file: {
+            oldPath: "src/file-400.ts",
+            newPath: "src/file-400.ts",
+            changeKind: "modified",
+            line: 1,
+            side: "additions",
+            offset: 0,
+          },
+          filter: "",
+          navigatorWidth: 280,
+          collapsedDirectories: [],
+          preferences: { diffStyle: "split", overflow: "wrap" },
+        }}
+      />,
+    );
+    await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalled());
+    expect(vi.mocked(dataSource.loadPatch).mock.calls[0]?.[0].fileId).toBe(
+      "file-400",
+    );
+    expect(dataSource.loadPatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ fileId: "file-1" }),
+      expect.anything(),
+    );
+    await waitFor(() =>
+      expect(scrollTo).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "file-400",
+          type: "line",
+          lineNumber: 1,
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(onNavigationChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repository: expect.objectContaining({
+            repositoryKey: "repository-key-sedes",
+          }),
+          file: expect.objectContaining({ newPath: "src/file-400.ts" }),
+        }),
+      ),
+    );
+    const emitted = onNavigationChange.mock.calls.at(-1)?.[0];
+    expect(emitted.file).not.toHaveProperty("fileId");
+    expect(emitted.file).not.toHaveProperty("binary");
+    expect(Object.keys(emitted.file).sort()).toEqual([
+      "changeKind",
+      "line",
+      "newPath",
+      "offset",
+      "oldPath",
+      "side",
+    ]);
+  });
+
+  it("reports history failures without replacing the active comparison", async () => {
+    const dataSource = createDataSource(1);
+    const original = dataSource.listRevisions;
+    vi.mocked(dataSource.listRevisions).mockImplementation(
+      async (repository, signal, query) => {
+        if (query?.history) throw new Error("Offline");
+        return originalResult;
+      },
+    );
+    const originalResult = await createDataSource(1).listRevisions(
+      "repository-1" as Parameters<typeof original>[0],
+    );
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Base revision")).toHaveTextContent("main"),
+    );
+    fireEvent.click(screen.getByLabelText("Base revision"));
+    fireEvent.change(screen.getByLabelText("Base commit history"), {
+      target: { value: "all" },
+    });
+    await screen.findByText("Commit history could not be loaded: Offline.");
+    expect(screen.getByLabelText("Base revision")).toHaveTextContent("main");
+  });
+
+  it("keeps the latest requested history when responses arrive out of order", async () => {
+    const dataSource = createDataSource(1);
+    const original = await dataSource.listRevisions(
+      "repository-1" as Parameters<typeof dataSource.listRevisions>[0],
+    );
+    if (original.status !== "available") throw new Error("Fixture");
+    let finishOld: ((value: typeof original) => void) | undefined;
+    let oldSignal: AbortSignal | undefined;
+    vi.mocked(dataSource.listRevisions).mockImplementation(
+      async (_repository, signal, query) => {
+        if (query?.history === "all") {
+          oldSignal = signal;
+          return new Promise((resolve) => {
+            finishOld = resolve;
+          });
+        }
+        return original;
+      },
+    );
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Base revision")).toHaveTextContent("main"),
+    );
+    fireEvent.click(screen.getByLabelText("Base revision"));
+    fireEvent.change(screen.getByLabelText("Base commit history"), {
+      target: { value: "all" },
+    });
+    fireEvent.change(screen.getByLabelText("Base commit history"), {
+      target: { value: "head" },
+    });
+    expect(oldSignal?.aborted).toBe(true);
+    await act(async () =>
+      finishOld?.({
+        ...original,
+        revisions: [
+          ...original.revisions,
+          {
+            ...original.revisions[0]!,
+            kind: "commit",
+            revisionId:
+              "late-commit" as WorkspaceDiffRevisionDescriptor["revisionId"],
+            label: "late",
+            summary: "Obsolete history response",
+          },
+        ],
+      }),
+    );
+    expect(screen.queryByText("Obsolete history response")).toBeNull();
+    expect(screen.getByLabelText("Base commit history")).toHaveValue("head");
+  });
+
+  it("re-resolves a moving named branch before refreshing", async () => {
+    const dataSource = createDataSource(1);
+    const initial = await dataSource.listRevisions(
+      "repository-1" as Parameters<typeof dataSource.listRevisions>[0],
+    );
+    if (initial.status !== "available") throw new Error("Fixture");
+    vi.mocked(dataSource.listRevisions).mockImplementation(
+      async (_repository, _signal, query) =>
+        query?.resolveRef
+          ? {
+              ...initial,
+              revisions: [
+                {
+                  ...initial.revisions[0]!,
+                  revisionId:
+                    "advanced-main" as WorkspaceDiffRevisionDescriptor["revisionId"],
+                  commitHash: "b".repeat(40),
+                },
+              ],
+            }
+          : initial,
+    );
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const compare = await screen.findByRole("button", { name: "Compare" });
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    await waitFor(() =>
+      expect(dataSource.createComparison).toHaveBeenCalledWith(
+        expect.objectContaining({
+          base: { kind: "revision", revisionId: "advanced-main" },
+        }),
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(dataSource.listRevisions).toHaveBeenCalledWith(
+      "repository-1",
+      expect.any(AbortSignal),
+      { resolveRef: "refs/heads/main" },
+    );
+  });
+
+  it("renders file headers with review and Browse actions for loaded diffs", async () => {
+    const dataSource = createDataSource(1);
+    const onOpenFile = vi.fn();
+    const onReviewedChange = vi.fn();
+    render(
+      <WorkspaceCompareView
+        rootId="primary"
+        dataSource={dataSource}
+        onOpenFile={onOpenFile}
+        onReviewedChange={onReviewedChange}
+      />,
+    );
+    const compare = await screen.findByRole("button", { name: "Compare" });
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    const reviewed = await screen.findByRole("button", {
+      name: "Mark reviewed",
+    });
+    expect(
+      within(screen.getByTestId("code-view")).getByText("src/file-1.ts"),
+    ).toBeVisible();
+    fireEvent.click(reviewed);
+    expect(onReviewedChange).toHaveBeenCalledWith("file-1", true);
+    fireEvent.click(screen.getByRole("button", { name: "Open file" }));
+    expect(onOpenFile).toHaveBeenCalledWith("src/file-1.ts");
+  });
+
+  it("loads every visible short-file entry without requiring a scroll event", async () => {
+    const dataSource = createDataSource(20);
+    viewportViewer = {
+      getScrollTop: () => 0,
+      getHeight: () => 1200,
+      getRenderedItems: () => capturedCodeViewProps?.items ?? [],
+      getTopForItem: (id: string) =>
+        (capturedCodeViewProps?.items as readonly { id: string }[]).findIndex(
+          (item) => item.id === id,
+        ) * 44,
+    };
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const compare = await screen.findByRole("button", { name: "Compare" });
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(20));
+    expect(dataSource.loadPatch).toHaveBeenCalledWith(
+      expect.objectContaining({ fileId: "file-20" }),
+      expect.any(AbortSignal),
+    );
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("refreshes mounted comparisons with fresh repository and pinned-commit handles after restart", async () => {
+    const dataSource = createDataSource(1);
+    const discovery = await dataSource.listRepositories("primary");
+    const catalog = await dataSource.listRevisions(
+      "repository-1" as Parameters<typeof dataSource.listRevisions>[0],
+    );
+    if (discovery.status !== "available" || catalog.status !== "available")
+      throw new Error("Fixture");
+    let restarted = false;
+    const oldBranch = catalog.revisions[0]!;
+    const pin = {
+      ...oldBranch,
+      kind: "commit" as const,
+      revisionId: "pin-old" as WorkspaceDiffRevisionDescriptor["revisionId"],
+      summary: "Pinned original commit",
+    };
+    const newBranch = {
+      ...oldBranch,
+      revisionId: "branch-new" as WorkspaceDiffRevisionDescriptor["revisionId"],
+      commitHash: "b".repeat(40),
+    };
+    const newPin = {
+      ...pin,
+      revisionId: "pin-new" as WorkspaceDiffRevisionDescriptor["revisionId"],
+    };
+    vi.mocked(dataSource.listRepositories).mockImplementation(async () => ({
+      ...discovery,
+      repositories: [
+        {
+          ...discovery.repositories[0]!,
+          repositoryId: (restarted
+            ? "repository-new"
+            : "repository-1") as WorkspaceDiffRepositoryDescriptor["repositoryId"],
+        },
+      ],
+    }));
+    vi.mocked(dataSource.listRevisions).mockImplementation(
+      async (repository, _signal, query) => {
+        if (!restarted) return { ...catalog, revisions: [oldBranch, pin] };
+        if (repository !== "repository-new")
+          throw new Error("Expired repository handle");
+        return {
+          ...catalog,
+          repositoryId: repository,
+          revisions: query?.resolveCommit ? [newBranch, newPin] : [newBranch],
+        };
+      },
+    );
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Base revision")).toHaveTextContent("main"),
+    );
+    fireEvent.click(screen.getByLabelText("Base revision"));
+    fireEvent.click(
+      within(screen.getByRole("listbox", { name: "Base sources" })).getByRole(
+        "option",
+        { name: /Pinned original commit/ },
+      ),
+    );
+    fireEvent.click(screen.getByLabelText("Compare revision"));
+    fireEvent.click(
+      within(
+        screen.getByRole("listbox", { name: "Compare sources" }),
+      ).getByRole("option", { name: /main/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+    await waitFor(() =>
+      expect(dataSource.createComparison).toHaveBeenCalledTimes(1),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Refresh comparison" }),
+      ).toBeEnabled(),
+    );
+    restarted = true;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh comparison" }));
+    await waitFor(() =>
+      expect(dataSource.createComparison).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          repositoryId: "repository-new",
+          base: { kind: "revision", revisionId: "pin-new" },
+          head: { kind: "revision", revisionId: "branch-new" },
+        }),
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(dataSource.listRevisions).toHaveBeenCalledWith(
+      "repository-new",
+      expect.any(AbortSignal),
+      { resolveCommit: "a".repeat(40) },
+    );
+    fireEvent.click(screen.getByLabelText("Base revision"));
+    expect(
+      within(
+        screen.getByRole("listbox", { name: "Base sources" }),
+      ).getAllByRole("option", { name: /main/ }),
+    ).toHaveLength(1);
+  });
+
+  it("does not substitute a different repository on refresh", async () => {
+    const dataSource = createDataSource(1);
+    const discovery = await dataSource.listRepositories("primary");
+    if (discovery.status !== "available") throw new Error("Fixture");
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const compare = await screen.findByRole("button", { name: "Compare" });
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    await waitFor(() =>
+      expect(dataSource.createComparison).toHaveBeenCalledTimes(1),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Refresh comparison" }),
+      ).toBeEnabled(),
+    );
+    vi.mocked(dataSource.listRepositories).mockResolvedValue({
+      ...discovery,
+      repositories: [
+        {
+          ...discovery.repositories[0]!,
+          repositoryKey: "different-repository-key",
+        },
+      ],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh comparison" }));
+    await screen.findByText(/selected repository is no longer available/);
+    expect(dataSource.createComparison).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists the recovered current file instead of a missing old anchor", async () => {
+    const dataSource = createDataSource(1);
+    const onNavigationChange = vi.fn();
+    render(
+      <WorkspaceCompareView
+        rootId="primary"
+        dataSource={dataSource}
+        onNavigationChange={onNavigationChange}
+        initialNavigation={{
+          repository: {
+            repositoryKey: "repository-key-sedes",
+            displayName: "Sedes",
+          },
+          base: { kind: "ref", refKind: "local_branch", label: "main" },
+          head: { kind: "working_tree" },
+          mode: "direct",
+          fingerprint: "old-fingerprint",
+          file: {
+            oldPath: "gone.ts",
+            newPath: "gone.ts",
+            changeKind: "modified",
+            line: 100,
+          },
+          filter: "",
+          navigatorWidth: 260,
+          collapsedDirectories: [],
+          preferences: { diffStyle: "split", overflow: "scroll" },
+        }}
+      />,
+    );
+    await screen.findByText(
+      "The previously viewed file is no longer in this comparison.",
+    );
+    await waitFor(() =>
+      expect(onNavigationChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          file: {
+            oldPath: "src/file-1.ts",
+            newPath: "src/file-1.ts",
+            changeKind: "modified",
+          },
+        }),
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Refresh comparison" }));
+    await waitFor(() =>
+      expect(dataSource.createComparison).toHaveBeenCalledTimes(2),
+    );
+    expect(
+      screen.queryByText(
+        "The previously viewed file is no longer in this comparison.",
+      ),
+    ).toBeNull();
+  });
+
+  it("resolves namespace-like branch names using their declared ref kind on restore and refresh", async () => {
+    const dataSource = createDataSource(1);
+    const initial = await dataSource.listRevisions(
+      "repository-1" as Parameters<typeof dataSource.listRevisions>[0],
+    );
+    if (initial.status !== "available") throw new Error("Fixture");
+    const branch = {
+      ...initial.revisions[0]!,
+      revisionId:
+        "revision-refs-topic" as WorkspaceDiffRevisionDescriptor["revisionId"],
+      label: "refs/topic",
+    };
+    vi.mocked(dataSource.listRevisions).mockImplementation(
+      async (_repository, _signal, query) => {
+        if (!query?.resolveRef) return initial;
+        return query.resolveRef === "refs/heads/refs/topic"
+          ? { ...initial, revisions: [...initial.revisions, branch] }
+          : {
+              status: "unavailable",
+              diagnosticCode: "workspace_diff_ref_unavailable",
+            };
+      },
+    );
+    render(
+      <WorkspaceCompareView
+        rootId="primary"
+        dataSource={dataSource}
+        initialNavigation={{
+          repository: {
+            repositoryKey: "repository-key-sedes",
+            displayName: "Sedes",
+          },
+          base: { kind: "ref", refKind: "local_branch", label: "refs/topic" },
+          head: { kind: "working_tree" },
+          mode: "direct",
+          filter: "",
+          navigatorWidth: 260,
+          collapsedDirectories: [],
+          preferences: { diffStyle: "split", overflow: "scroll" },
+        }}
+      />,
+    );
+    await waitFor(() =>
+      expect(dataSource.createComparison).toHaveBeenCalledTimes(1),
+    );
+    expect(dataSource.createComparison).toHaveBeenCalledWith(
+      expect.objectContaining({
+        base: { kind: "revision", revisionId: "revision-refs-topic" },
+      }),
+      expect.any(AbortSignal),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Refresh comparison" }),
+      ).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Refresh comparison" }));
+    await waitFor(() =>
+      expect(dataSource.createComparison).toHaveBeenCalledTimes(2),
+    );
+    const resolutions = vi
+      .mocked(dataSource.listRevisions)
+      .mock.calls.map((call) => call[2]?.resolveRef)
+      .filter(Boolean);
+    expect(resolutions).toEqual([
+      "refs/heads/refs/topic",
+      "refs/heads/refs/topic",
+      "refs/heads/refs/topic",
+    ]);
   });
 
   it("clears the truncated warning when the root changes", async () => {
@@ -432,6 +980,7 @@ function createDataSource(
 ): WorkspaceCompareDataSource {
   const repository = {
     repositoryId: "repository-1",
+    repositoryKey: "repository-key-sedes",
     rootId: "primary",
     displayName: "Sedes",
   } as WorkspaceDiffRepositoryDescriptor;

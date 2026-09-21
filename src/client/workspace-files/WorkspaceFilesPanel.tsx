@@ -1,6 +1,11 @@
+import { NavigationScopeContext } from "../authentication/AuthenticationGate.js";
+import { workspaceCompareStorage } from "./workspace-compare-storage.js";
+import type { WorkspaceCompareNavigation } from "./workspace-compare-navigation.js";
+import "./workspace-review-inspector.css";
 import type { ContextExcerptStagingTarget } from "../context-excerpts/coordinator.js";
 import {
   useCallback,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
@@ -243,6 +248,13 @@ export function WorkspaceFilesPanel({
   readonly uiStateCache?: WorkspaceFilesUiStateCache;
 }): React.JSX.Element {
   const workspaceId = context.workspaceId;
+  const navigationScope = useContext(NavigationScopeContext);
+  const savedRootScopeKey = JSON.stringify([navigationScope, workspaceId]);
+  const savedRootRequestRef = useRef({ key: savedRootScopeKey, rootId: workspaceCompareStorage.latest(navigationScope, workspaceId) });
+  if (savedRootRequestRef.current.key !== savedRootScopeKey) {
+    savedRootRequestRef.current = { key: savedRootScopeKey, rootId: workspaceCompareStorage.latest(navigationScope, workspaceId) };
+  }
+  const [dismissedRootRecovery, setDismissedRootRecovery] = useState<string>();
   const [documentVisible, setDocumentVisible] = useState(
     () => document.visibilityState !== "hidden",
   );
@@ -300,7 +312,7 @@ export function WorkspaceFilesPanel({
     [],
   );
   const [activeRootId, setActiveRootId] = useState<WorkspaceFileRootId>(
-    currentThread?.preferredWorktree?.rootId ?? "primary",
+    currentThread?.preferredWorktree?.rootId ?? workspaceCompareStorage.latest(navigationScope, workspaceId) ?? "primary",
   );
   const [rootsLoading, setRootsLoading] = useState(true);
   const [rootsError, setRootsError] = useState<string>();
@@ -336,6 +348,7 @@ export function WorkspaceFilesPanel({
   const [attaching, setAttaching] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [treeOpen, setTreeOpen] = useState(initialUiRestore.treeOpen);
+  const [reviewInspectorMode, setReviewInspectorMode] = useState<"current" | "history">("current");
   const [mode, setMode] = useState<WorkspaceFilesMode>("browse");
   const [compareOpened, setCompareOpened] = useState(false);
   const [activeComparison, setActiveComparison] =
@@ -428,7 +441,7 @@ export function WorkspaceFilesPanel({
   activeRootIdRef.current = activeRootId;
   const appliedPreferredRootKeyRef = useRef<string | undefined>(undefined);
   const effectivePreferredRootId =
-    currentThread?.preferredWorktree?.rootId ?? null;
+    currentThread?.preferredWorktree?.rootId ?? workspaceCompareStorage.latest(navigationScope, workspaceId) ?? null;
   const resolvedPreferredRootId = resolvePreferredRootId(
     roots,
     effectivePreferredRootId,
@@ -440,9 +453,10 @@ export function WorkspaceFilesPanel({
   );
   const activeCompareReviewIdRef = useRef(activeCompareReviewId);
   activeCompareReviewIdRef.current = activeCompareReviewId;
-  const compareReviewContextKey =
+  const compareReviewIdentityKey =
     workspaceId && activeComparison
       ? [
+          navigationScope ?? "",
           workspaceId,
           activeRootId,
           activeComparison.repositoryId,
@@ -450,6 +464,12 @@ export function WorkspaceFilesPanel({
           activeComparison.fingerprint,
         ].join("\u0000")
       : undefined;
+  const compareReviewEpochRef = useRef({ identity: compareReviewIdentityKey, epoch: 0 });
+  if (compareReviewEpochRef.current.identity !== compareReviewIdentityKey) {
+    compareReviewEpochRef.current = { identity: compareReviewIdentityKey, epoch: compareReviewEpochRef.current.epoch + 1 };
+  }
+  const compareReviewContextKey = compareReviewIdentityKey === undefined
+    ? undefined : `${compareReviewEpochRef.current.epoch}\0${compareReviewIdentityKey}`;
   const compareReviewContextKeyRef = useRef(compareReviewContextKey);
   compareReviewContextKeyRef.current = compareReviewContextKey;
   const consumedIntentSequenceRef = useRef<number | undefined>(undefined);
@@ -797,7 +817,7 @@ export function WorkspaceFilesPanel({
     expandedPathsByRootRef.current = pending?.expandedPathsByRoot ?? {};
     linkOnlyRootIdsRef.current = new Set(pending?.linkOnlyRootIds ?? []);
     const restoredRootId =
-      pending?.activeRootId ?? pending?.tabs.active?.rootId ?? "primary";
+      pending?.activeRootId ?? pending?.tabs.active?.rootId ?? workspaceCompareStorage.latest(navigationScope, workspaceId) ?? "primary";
     activeRootIdRef.current = restoredRootId;
     setActiveRootId(restoredRootId);
     setRoots([]);
@@ -839,7 +859,6 @@ export function WorkspaceFilesPanel({
     setCompareReviewLoading(false);
     setCompareReviewMutating(false);
     setCompareReviewError(undefined);
-    setCompareCommentDraft(undefined);
     setCompareCommentSaving(false);
     setAwaitingUiRestore(restoredPresentation.awaitingUiRestore);
     setUiReconciled(false);
@@ -1883,11 +1902,11 @@ export function WorkspaceFilesPanel({
         ? {
             listRepositories: (rootId, signal) =>
               api.listWorkspaceDiffRepositories(workspaceId, rootId, signal),
-            listRevisions: (repositoryId, signal) =>
+            listRevisions: (repositoryId, signal, query) =>
               api.listWorkspaceDiffRefs(
                 workspaceId,
                 activeRootId,
-                { repositoryId, pageSize: 200 },
+                { repositoryId, pageSize: 200, ...query },
                 signal,
               ),
             createComparison: (request, signal) =>
@@ -2005,7 +2024,11 @@ export function WorkspaceFilesPanel({
     setCompareReviewStateDraft(activeCompareReview?.state ?? "open");
   }, [activeCompareReview]);
 
+  const loadedReviewContextRef = useRef<string | undefined>(undefined);
   useEffect(() => {
+    loadedReviewContextRef.current = undefined;
+    setCompareReviewMutating(false);
+    setCompareCommentSaving(false);
     if (!activeComparison) {
       openingCompareReviewRef.current = undefined;
       setCompareFiles([]);
@@ -2020,7 +2043,6 @@ export function WorkspaceFilesPanel({
       setCompareReviewError(undefined);
       setCompareReviewLoading(false);
       setCompareReviewMutating(false);
-      setCompareCommentDraft(undefined);
       setCompareCommentSaving(false);
       setCompareDetailsOpen(false);
       return;
@@ -2040,6 +2062,7 @@ export function WorkspaceFilesPanel({
     ])
       .then(([exact, history]) => {
         if (cancelled) return;
+        loadedReviewContextRef.current = compareReviewContextKeyRef.current;
         const exactReviews = exact.reviews;
         setCompareReviews(exactReviews);
         setCompareHistoryReviews(history.reviews);
@@ -2049,7 +2072,8 @@ export function WorkspaceFilesPanel({
             (review) => review.id === current,
           )
             ? current
-            : (preferredWorkspaceDiffReview(exactReviews)?.id ??
+            : ([...exactReviews, ...history.reviews].find(review => review.id === workspaceCompareStorage.get(navigationScope, workspaceId, activeRootId)?.selectedReviewId)?.id ??
+              preferredWorkspaceDiffReview(exactReviews)?.id ??
               preferredWorkspaceDiffReview(history.reviews)?.id),
         );
       })
@@ -2071,7 +2095,13 @@ export function WorkspaceFilesPanel({
     return () => {
       cancelled = true;
     };
-  }, [activeComparison, activeRootId, api, workspaceId]);
+  }, [activeComparison, activeRootId, api, workspaceId, navigationScope]);
+
+  useEffect(() => {
+    if (!activeCompareReviewId || loadedReviewContextRef.current !== compareReviewContextKeyRef.current) return;
+    const saved = workspaceCompareStorage.get(navigationScope, workspaceId, activeRootId);
+    workspaceCompareStorage.set(navigationScope, workspaceId, activeRootId, { ...saved, mode: modeRef.current, selectedReviewId: activeCompareReviewId });
+  }, [activeCompareReviewId, navigationScope, workspaceId, activeRootId]);
 
   useEffect(() => {
     if (!activeCompareReviewId) {
@@ -2080,6 +2110,8 @@ export function WorkspaceFilesPanel({
       return;
     }
     let cancelled = false;
+    setCompareComments([]);
+    setCompareReviewedFiles([]);
     setCompareReviewLoading(true);
     setCompareReviewError(undefined);
     void Promise.all([
@@ -2105,15 +2137,14 @@ export function WorkspaceFilesPanel({
     };
   }, [activeCompareReviewId, api]);
 
+  const currentInlineReviewIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (
-      !currentCompareReview ||
-      currentCompareReview.id === activeCompareReviewId
-    ) {
-      setCompareCurrentComments(compareComments);
-      setCompareCurrentReviewedFiles(compareReviewedFiles);
-      return;
+    if (currentInlineReviewIdRef.current !== currentCompareReview?.id) {
+      setCompareCurrentComments([]);
+      setCompareCurrentReviewedFiles([]);
     }
+    currentInlineReviewIdRef.current = currentCompareReview?.id;
+    if (!currentCompareReview) return;
     let cancelled = false;
     void Promise.all([
       api.listWorkspaceDiffReviewComments(currentCompareReview.id),
@@ -2133,13 +2164,7 @@ export function WorkspaceFilesPanel({
     return () => {
       cancelled = true;
     };
-  }, [
-    activeCompareReviewId,
-    api,
-    compareComments,
-    compareReviewedFiles,
-    currentCompareReview,
-  ]);
+  }, [api, currentCompareReview]);
 
   const ensureCurrentCompareReview = useCallback(async () => {
     if (currentCompareReview) return currentCompareReview;
@@ -2256,19 +2281,22 @@ export function WorkspaceFilesPanel({
   );
 
   const startCompareReview = useCallback(async () => {
+    const requestContextKey = compareReviewContextKeyRef.current;
     setCompareReviewMutating(true);
     setCompareReviewError(undefined);
     try {
       await ensureCurrentCompareReview();
     } catch (error) {
+      if (compareReviewContextKeyRef.current !== requestContextKey) return;
       setCompareReviewError(messageFor(error));
     } finally {
-      setCompareReviewMutating(false);
+      if (compareReviewContextKeyRef.current === requestContextKey) setCompareReviewMutating(false);
     }
   }, [ensureCurrentCompareReview]);
 
   const saveCompareReviewDetails = useCallback(async () => {
     if (!activeCompareReview) return;
+    const requestContextKey = compareReviewContextKeyRef.current;
     setCompareReviewMutating(true);
     setCompareReviewError(undefined);
     try {
@@ -2282,6 +2310,7 @@ export function WorkspaceFilesPanel({
           mutationId: crypto.randomUUID(),
         },
       );
+      if (compareReviewContextKeyRef.current !== requestContextKey) return;
       setCompareReviews((current) =>
         current.map((item) => (item.id === review.id ? review : item)),
       );
@@ -2289,9 +2318,10 @@ export function WorkspaceFilesPanel({
         current.map((item) => (item.id === review.id ? review : item)),
       );
     } catch (error) {
+      if (compareReviewContextKeyRef.current !== requestContextKey) return;
       setCompareReviewError(messageFor(error));
     } finally {
-      setCompareReviewMutating(false);
+      if (compareReviewContextKeyRef.current === requestContextKey) setCompareReviewMutating(false);
     }
   }, [
     activeCompareReview,
@@ -2310,7 +2340,7 @@ export function WorkspaceFilesPanel({
         body: comment.body,
         state: comment.state,
       });
-      setCompareDetailsOpen(true);
+      setCompareDetailsOpen(false);
       setCompareReviewError(undefined);
     },
     [],
@@ -2322,6 +2352,7 @@ export function WorkspaceFilesPanel({
       state: WorkspaceDiffReviewCommentState,
     ) => {
       if (!activeCompareReview) return;
+      const requestContextKey = compareReviewContextKeyRef.current;
       setCompareReviewMutating(true);
       setCompareReviewError(undefined);
       try {
@@ -2336,6 +2367,7 @@ export function WorkspaceFilesPanel({
             mutationId: crypto.randomUUID(),
           },
         );
+        if (compareReviewContextKeyRef.current !== requestContextKey) return;
         setCompareReviews((current) =>
           current.map((item) =>
             item.id === result.review.id ? result.review : item,
@@ -2351,7 +2383,7 @@ export function WorkspaceFilesPanel({
             item.id === result.comment.id ? result.comment : item,
           ),
         );
-        if (activeCompareReview.id === currentCompareReview?.id) {
+        if (activeCompareReview.id === currentInlineReviewIdRef.current) {
           setCompareCurrentComments((current) =>
             current.map((item) =>
               item.id === result.comment.id ? result.comment : item,
@@ -2359,9 +2391,10 @@ export function WorkspaceFilesPanel({
           );
         }
       } catch (error) {
+        if (compareReviewContextKeyRef.current !== requestContextKey) return;
         setCompareReviewError(messageFor(error));
       } finally {
-        setCompareReviewMutating(false);
+        if (compareReviewContextKeyRef.current === requestContextKey) setCompareReviewMutating(false);
       }
     },
     [activeCompareReview, api, currentCompareReview],
@@ -2369,6 +2402,7 @@ export function WorkspaceFilesPanel({
 
   const toggleCompareReviewState = useCallback(async () => {
     if (!activeCompareReview) return;
+    const requestContextKey = compareReviewContextKeyRef.current;
     setCompareReviewMutating(true);
     setCompareReviewError(undefined);
     try {
@@ -2382,6 +2416,7 @@ export function WorkspaceFilesPanel({
           mutationId: crypto.randomUUID(),
         },
       );
+      if (compareReviewContextKeyRef.current !== requestContextKey) return;
       setCompareReviews((current) =>
         current.map((item) => (item.id === review.id ? review : item)),
       );
@@ -2389,9 +2424,10 @@ export function WorkspaceFilesPanel({
         current.map((item) => (item.id === review.id ? review : item)),
       );
     } catch (error) {
+      if (compareReviewContextKeyRef.current !== requestContextKey) return;
       setCompareReviewError(messageFor(error));
     } finally {
-      setCompareReviewMutating(false);
+      if (compareReviewContextKeyRef.current === requestContextKey) setCompareReviewMutating(false);
     }
   }, [activeCompareReview, api]);
 
@@ -2403,15 +2439,18 @@ export function WorkspaceFilesPanel({
       setCompareReviewError("Enter a comment before saving it.");
       return;
     }
+    const requestContextKey = compareReviewContextKeyRef.current;
     setCompareCommentSaving(true);
     setCompareReviewError(undefined);
     try {
-      const review = await ensureCurrentCompareReview();
-      if (!review) {
-        setCompareReviewError("No workspace review is available.");
-        return;
-      }
       if (draft.mode === "create") {
+        if (draft.target.comparison.comparisonId !== activeComparison?.comparisonId ||
+            draft.target.comparison.fingerprint !== activeComparison.fingerprint) {
+          setCompareReviewError("This comparison changed. Copy your draft before selecting new lines.");
+          return;
+        }
+        const review = await ensureCurrentCompareReview();
+        if (!review || compareReviewContextKeyRef.current !== requestContextKey) return;
         const result = await api.createWorkspaceDiffReviewComment(
           workspaceId,
           activeRootId,
@@ -2432,6 +2471,7 @@ export function WorkspaceFilesPanel({
             mutationId: crypto.randomUUID(),
           },
         );
+        if (compareReviewContextKeyRef.current !== requestContextKey) return;
         setCompareReviews((current) =>
           current.map((item) =>
             item.id === result.review.id ? result.review : item,
@@ -2442,8 +2482,8 @@ export function WorkspaceFilesPanel({
             item.id === result.review.id ? result.review : item,
           ),
         );
-        setCompareComments((current) => [...current, result.comment]);
-        if (review.id === currentCompareReview?.id) {
+        setCompareComments((current) => activeCompareReviewIdRef.current === review.id ? [...current, result.comment] : [result.comment]);
+        if (review.id === currentInlineReviewIdRef.current) {
           setCompareCurrentComments((current) => [...current, result.comment]);
         }
         setActiveCompareReviewId(result.review.id);
@@ -2470,6 +2510,7 @@ export function WorkspaceFilesPanel({
             mutationId: crypto.randomUUID(),
           },
         );
+        if (compareReviewContextKeyRef.current !== requestContextKey) return;
         setCompareReviews((current) =>
           current.map((item) =>
             item.id === result.review.id ? result.review : item,
@@ -2485,7 +2526,7 @@ export function WorkspaceFilesPanel({
             item.id === result.comment.id ? result.comment : item,
           ),
         );
-        if (review.id === currentCompareReview?.id) {
+        if (review.id === currentInlineReviewIdRef.current) {
           setCompareCurrentComments((current) =>
             current.map((item) =>
               item.id === result.comment.id ? result.comment : item,
@@ -2493,13 +2534,15 @@ export function WorkspaceFilesPanel({
           );
         }
       }
-      setCompareCommentDraft(undefined);
+      setCompareCommentDraft((current) => current === draft ? undefined : current);
     } catch (error) {
+      if (compareReviewContextKeyRef.current !== requestContextKey) return;
       setCompareReviewError(messageFor(error));
     } finally {
-      setCompareCommentSaving(false);
+      if (compareReviewContextKeyRef.current === requestContextKey) setCompareCommentSaving(false);
     }
   }, [
+    activeComparison,
     activeCompareReview,
     activeRootId,
     api,
@@ -2516,6 +2559,7 @@ export function WorkspaceFilesPanel({
     async (annotation: WorkspaceCompareReviewAnnotation) => {
       const comment = compareCurrentAnnotationById.get(annotation.annotationId);
       if (!comment || !currentCompareReview) return;
+      const requestContextKey = compareReviewContextKeyRef.current;
       setCompareReviewMutating(true);
       setCompareReviewError(undefined);
       try {
@@ -2528,6 +2572,7 @@ export function WorkspaceFilesPanel({
             mutationId: crypto.randomUUID(),
           },
         );
+        if (compareReviewContextKeyRef.current !== requestContextKey) return;
         setCompareReviews((current) =>
           current.map((item) =>
             item.id === result.review.id ? result.review : item,
@@ -2547,9 +2592,10 @@ export function WorkspaceFilesPanel({
           current.filter((item) => item.id !== comment.id),
         );
       } catch (error) {
+        if (compareReviewContextKeyRef.current !== requestContextKey) return;
         setCompareReviewError(messageFor(error));
       } finally {
-        setCompareReviewMutating(false);
+        if (compareReviewContextKeyRef.current === requestContextKey) setCompareReviewMutating(false);
       }
     },
     [api, compareCurrentAnnotationById, currentCompareReview],
@@ -2560,6 +2606,7 @@ export function WorkspaceFilesPanel({
       review: WorkspaceDiffReview,
       comment: WorkspaceDiffReviewComment,
     ) => {
+      const requestContextKey = compareReviewContextKeyRef.current;
       setCompareReviewMutating(true);
       setCompareReviewError(undefined);
       try {
@@ -2572,6 +2619,7 @@ export function WorkspaceFilesPanel({
             mutationId: crypto.randomUUID(),
           },
         );
+        if (compareReviewContextKeyRef.current !== requestContextKey) return;
         setCompareReviews((current) =>
           current.map((item) =>
             item.id === result.review.id ? result.review : item,
@@ -2593,9 +2641,10 @@ export function WorkspaceFilesPanel({
           );
         }
       } catch (error) {
+        if (compareReviewContextKeyRef.current !== requestContextKey) return;
         setCompareReviewError(messageFor(error));
       } finally {
-        setCompareReviewMutating(false);
+        if (compareReviewContextKeyRef.current === requestContextKey) setCompareReviewMutating(false);
       }
     },
     [api, currentCompareReview],
@@ -2608,16 +2657,17 @@ export function WorkspaceFilesPanel({
         (candidate) => candidate.fileId === fileId,
       );
       if (!file) return;
-      const review = await ensureCurrentCompareReview();
-      if (!review) return;
-      const filePath = file.newPath ?? file.oldPath;
-      if (!filePath) {
-        setCompareReviewError("That changed file cannot be marked reviewed.");
-        return;
-      }
+      const requestContextKey = compareReviewContextKeyRef.current;
       setCompareReviewMutating(true);
       setCompareReviewError(undefined);
       try {
+        const review = await ensureCurrentCompareReview();
+        if (!review || compareReviewContextKeyRef.current !== requestContextKey) return;
+        const filePath = file.newPath ?? file.oldPath;
+        if (!filePath) {
+          setCompareReviewError("That changed file cannot be marked reviewed.");
+          return;
+        }
         const result = await api.setWorkspaceDiffReviewedFile(
           workspaceId,
           activeRootId,
@@ -2633,6 +2683,7 @@ export function WorkspaceFilesPanel({
             mutationId: crypto.randomUUID(),
           },
         );
+        if (compareReviewContextKeyRef.current !== requestContextKey) return;
         setCompareReviews((current) =>
           current.map((item) =>
             item.id === result.review.id ? result.review : item,
@@ -2644,12 +2695,13 @@ export function WorkspaceFilesPanel({
           ),
         );
         setCompareReviewedFiles((current) => {
+          if (activeCompareReviewIdRef.current !== review.id) return current;
           const next = current.filter(
             (item) => item.fileIdentity !== result.file.fileIdentity,
           );
           return [...next, result.file];
         });
-        if (review.id === currentCompareReview?.id) {
+        if (review.id === currentInlineReviewIdRef.current) {
           setCompareCurrentReviewedFiles((current) => {
             const next = current.filter(
               (item) => item.fileIdentity !== result.file.fileIdentity,
@@ -2658,9 +2710,10 @@ export function WorkspaceFilesPanel({
           });
         }
       } catch (error) {
+        if (compareReviewContextKeyRef.current !== requestContextKey) return;
         setCompareReviewError(messageFor(error));
       } finally {
-        setCompareReviewMutating(false);
+        if (compareReviewContextKeyRef.current === requestContextKey) setCompareReviewMutating(false);
       }
     },
     [
@@ -2676,13 +2729,52 @@ export function WorkspaceFilesPanel({
   );
 
   const selectMode = useCallback((next: WorkspaceFilesMode) => {
+    const previous = workspaceCompareStorage.get(navigationScope, workspaceId, activeRootId);
+    workspaceCompareStorage.set(navigationScope, workspaceId, activeRootId, { ...previous, mode: next });
     setMode(next);
     if (next === "compare") {
       setCompareOpened(true);
       return;
     }
     if (tabsRef.current.files.length === 0) setTreeOpen(true);
+  }, [navigationScope, workspaceId, activeRootId]);
+
+  useEffect(() => {
+    const saved = workspaceCompareStorage.get(navigationScope, workspaceId, activeRootId);
+    if (!fileOpenIntentRef.current && saved?.mode === "compare") {
+      setMode("compare");
+      setCompareOpened(true);
+    }
+  }, [navigationScope, workspaceId, activeRootId]);
+  const navigationPendingRef = useRef<{ scope: string | undefined; workspaceId: string | undefined; rootId: string; navigation: WorkspaceCompareNavigation } | undefined>(undefined);
+  const navigationTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const flushCompareNavigation = useCallback(() => {
+    clearTimeout(navigationTimerRef.current);
+    const pending = navigationPendingRef.current;
+    if (!pending) return;
+    navigationPendingRef.current = undefined;
+    const previous = workspaceCompareStorage.get(pending.scope, pending.workspaceId, pending.rootId);
+    workspaceCompareStorage.set(pending.scope, pending.workspaceId, pending.rootId, { ...previous, mode: previous?.mode ?? "compare", navigation: pending.navigation });
   }, []);
+  useEffect(() => {
+    const hide = () => { if (document.visibilityState === "hidden") flushCompareNavigation(); };
+    document.addEventListener("visibilitychange", hide);
+    window.addEventListener("pagehide", flushCompareNavigation);
+    return () => {
+      flushCompareNavigation();
+      document.removeEventListener("visibilitychange", hide);
+      window.removeEventListener("pagehide", flushCompareNavigation);
+    };
+  }, [flushCompareNavigation, navigationScope, workspaceId, activeRootId]);
+  useEffect(() => { flushCompareNavigation(); }, [mode, context.visible, flushCompareNavigation]);
+  const saveCompareNavigation = useCallback((navigation: WorkspaceCompareNavigation) => {
+    // Flush the old scope before replacing a pending record.
+    const pending = navigationPendingRef.current;
+    if (pending && (pending.workspaceId !== workspaceId || pending.rootId !== activeRootId || pending.scope !== navigationScope)) flushCompareNavigation();
+    navigationPendingRef.current = { scope: navigationScope, workspaceId, rootId: activeRootId, navigation };
+    clearTimeout(navigationTimerRef.current);
+    navigationTimerRef.current = setTimeout(flushCompareNavigation, 200);
+  }, [navigationScope, workspaceId, activeRootId, flushCompareNavigation]);
 
   const focusTab = (index: number) => {
     const files = tabsRef.current.files;
@@ -2811,106 +2903,26 @@ export function WorkspaceFilesPanel({
     (file) => file.reviewed,
   ).length;
   const compareCommentCount = compareCurrentComments.length;
-  const viewingHistoricalCompareReview =
-    !!activeCompareReview &&
-    (!!currentCompareReview
-      ? activeCompareReview.id !== currentCompareReview.id
-      : true);
+  const showReviewInspector = (view: "current" | "history") => {
+    setReviewInspectorMode(view);
+    setActiveCompareReviewId(view === "current" ? currentCompareReview?.id :
+      (compareHistoryReviews.find((review) => review.id === activeCompareReviewId && review.id !== currentCompareReview?.id)?.id ?? compareHistoryReviews.find((review) => review.id !== currentCompareReview?.id)?.id));
+    setCompareDetailsOpen(true);
+  };
   const compareReviewControls = (
     <div className="workspace-files-compare-review-bar">
       <div className="workspace-files-compare-review-summary">
-        {currentCompareReview ? (
-          <>
-            <strong>{currentCompareReview.title || "Workspace review"}</strong>
-            <span>
-              {compareCommentCount} comments · {compareReviewedCount} reviewed
-            </span>
-            {viewingHistoricalCompareReview && activeCompareReview && (
-              <span className="workspace-files-compare-review-context">
-                Viewing history details for{" "}
-                {activeCompareReview.title || "Workspace review"}. Inline
-                comments and reviewed badges stay on the current review.
-              </span>
-            )}
-          </>
-        ) : (
-          <>
-            <strong>No active review</strong>
-            <span>
-              {compareRepositoryHistoryCount === 0
-                ? "Start a review to keep comments and reviewed state."
-                : `${compareRepositoryHistoryCount} review entries in this repository.`}
-            </span>
-            {viewingHistoricalCompareReview && activeCompareReview && (
-              <span className="workspace-files-compare-review-context">
-                Viewing history details for{" "}
-                {activeCompareReview.title || "Workspace review"}. Start a
-                current review to restore inline comments and reviewed badges.
-              </span>
-            )}
-          </>
-        )}
+        <span>{compareReviewedCount} of {compareFiles.length} reviewed</span>
+        {!currentCompareReview && <span>No active review</span>}
       </div>
       <div className="workspace-files-compare-review-actions">
-        {compareReviewOptions.length > 0 && (
-          <label className="workspace-files-compare-review-picker">
-            <span className="sr-only">Review</span>
-            <select
-              aria-label="Active workspace diff review"
-              value={activeCompareReviewId ?? ""}
-              onChange={(event) =>
-                setActiveCompareReviewId(event.target.value || undefined)
-              }
-            >
-              {compareReviewOptions.map((review) => (
-                <option key={review.id} value={review.id}>
-                  {review.id === currentCompareReview?.id
-                    ? "Current · "
-                    : "History · "}
-                  {review.title || "Workspace review"}
-                  {review.state === "archived" ? " (archived)" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={
-            !activeComparison ||
-            compareReviewLoading ||
-            compareReviewMutating ||
-            compareCommentSaving
-          }
-          onClick={() => void startCompareReview()}
-        >
-          {currentCompareReview
-            ? currentCompareReview.state === "open"
-              ? "Current review"
-              : "Reopen current"
-            : "Start review"}
-        </Button>
-        {activeCompareReview && (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={compareReviewMutating || compareCommentSaving}
-            onClick={() => void toggleCompareReviewState()}
-          >
-            {activeCompareReview.state === "open" ? "Archive" : "Reopen"}
-          </Button>
-        )}
-        {activeCompareReview && (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={compareReviewLoading}
-            onClick={() => setCompareDetailsOpen(true)}
-          >
-            Details
-          </Button>
-        )}
+        {!currentCompareReview && <Button variant="ghost" size="sm"
+          disabled={!activeComparison || compareReviewLoading || compareReviewMutating || compareCommentSaving}
+          onClick={() => void startCompareReview()}>Start review</Button>}
+        {currentCompareReview && <Button variant="ghost" size="sm"
+          onClick={() => showReviewInspector("current")}>Comments ({compareCommentCount})</Button>}
+        <Button variant="ghost" size="sm" disabled={compareRepositoryHistoryCount === 0}
+          onClick={() => showReviewInspector("history")}>History</Button>
       </div>
     </div>
   );
@@ -2938,6 +2950,14 @@ export function WorkspaceFilesPanel({
         }
       }}
     >
+      {!rootsLoading && !rootsError && savedRootRequestRef.current.rootId &&
+        !roots.some(root => root.rootId === savedRootRequestRef.current.rootId) &&
+        dismissedRootRecovery !== savedRootScopeKey && (
+          <div className="workspace-compare-restore-notice" role="status">
+            <span>The previously selected Files root is unavailable. Choose an available root.</span>
+            <button type="button" aria-label="Dismiss root recovery notice" onClick={() => setDismissedRootRecovery(savedRootScopeKey)}><X size={14} /></button>
+          </div>
+        )}
       {createPortal(
         <div className="workspace-files-toolbar-actions">
           <div
@@ -2961,7 +2981,7 @@ export function WorkspaceFilesPanel({
               className={mode === "compare" ? "is-active" : undefined}
               onClick={() => selectMode("compare")}
             >
-              Compare
+              Changes
             </button>
           </div>
           <Button
@@ -3531,8 +3551,15 @@ export function WorkspaceFilesPanel({
               </p>
             )}
             <WorkspaceCompareView
+              key={JSON.stringify([navigationScope, workspaceId, activeRootId])}
+              initialNavigation={workspaceCompareStorage.get(navigationScope, workspaceId, activeRootId)?.navigation}
+              onNavigationChange={saveCompareNavigation}
               stagingTarget={context.contextExcerpts}
               rootId={activeRootId}
+              onOpenFile={(path) => {
+                openTab({ rootId: activeRootId, path }, { hideTree: true });
+                selectMode("browse");
+              }}
               dataSource={compareDataSource}
               visible={context.visible && mode === "compare"}
               reviewControls={compareReviewControls}
@@ -3573,7 +3600,12 @@ export function WorkspaceFilesPanel({
                 }
                 editCompareComment(comment);
               }}
-              onComparisonChange={setActiveComparison}
+              onComparisonChange={(comparison) => {
+                setCompareReviews([]);
+                setCompareCurrentComments([]);
+                setCompareCurrentReviewedFiles([]);
+                setActiveComparison(comparison);
+              }}
               onFilesChange={setCompareFiles}
               onAttachSelection={attachCompareSelection}
             />
@@ -3604,6 +3636,7 @@ export function WorkspaceFilesPanel({
             Comment
             <Textarea
               aria-label="Workspace diff review comment"
+              disabled={compareCommentSaving}
               value={compareCommentDraft?.body ?? ""}
               onChange={(event) =>
                 setCompareCommentDraft((current) =>
@@ -3617,6 +3650,7 @@ export function WorkspaceFilesPanel({
             State
             <select
               aria-label="Workspace diff review comment state"
+              disabled={compareCommentSaving}
               value={compareCommentDraft?.state ?? "published"}
               onChange={(event) =>
                 setCompareCommentDraft((current) =>
@@ -3676,17 +3710,37 @@ export function WorkspaceFilesPanel({
       >
         <DialogContent
           showCloseButton={false}
+          placement="side"
           className="workspace-files-compare-details-dialog"
         >
           <DialogHeader>
             <DialogTitle>
-              {activeCompareReview?.title || "Workspace review"}
+              Review
             </DialogTitle>
             <DialogDescription>
               Edit review details, inspect repository history state, and manage
               saved comments.
             </DialogDescription>
           </DialogHeader>
+          <div className="workspace-files-mode-switcher" aria-label="Review view">
+            <button type="button" className={reviewInspectorMode === "current" ? "is-active" : undefined}
+              onClick={() => showReviewInspector("current")}>Current review</button>
+            <button type="button" className={reviewInspectorMode === "history" ? "is-active" : undefined}
+              onClick={() => showReviewInspector("history")}>History</button>
+          </div>
+          {reviewInspectorMode === "history" && <>
+            <p className="workspace-files-review-history-note">Historical comments belong to their original comparison. Selecting a review does not restore an old working tree.</p>
+            <label className="workspace-files-compare-review-picker">Historical review
+              <select aria-label="Historical workspace diff review" value={activeCompareReviewId ?? ""}
+                onChange={(event) => setActiveCompareReviewId(event.target.value || undefined)}>
+                <option value="">Select a historical review</option>
+                {compareHistoryReviews.filter((review) => review.id !== currentCompareReview?.id).map((review) =>
+                  <option key={review.id} value={review.id}>{review.title || "Workspace review"} · {review.updatedAt}</option>)}
+              </select>
+            </label>
+          </>}
+          {activeCompareReview && <Button variant="ghost" size="sm" disabled={compareReviewMutating || compareCommentSaving}
+            onClick={() => void toggleCompareReviewState()}>{activeCompareReview.state === "open" ? "Archive" : "Reopen"}</Button>}
           {activeCompareReview ? (
             <div className="workspace-files-compare-details-body">
               <label className="workspace-files-compare-comment-field">
@@ -3727,7 +3781,7 @@ export function WorkspaceFilesPanel({
               </label>
               <div className="workspace-files-compare-details-meta">
                 <span>
-                  {activeCompareReview.id === currentCompareReview?.id
+                  {activeCompareReview.id === currentInlineReviewIdRef.current
                     ? "Current review"
                     : "Repository history"}
                 </span>

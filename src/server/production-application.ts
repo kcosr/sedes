@@ -196,7 +196,7 @@ import { CompositeWorkspaceFileProvider } from "./workspace-files/composite-work
 import { type WorkspaceFileProvider } from "./workspace-files/contracts.js";
 import { SingleUserIdentityProvider } from "./identity/identity-provider.js";
 import { AuthenticationRepository } from "./authentication/authentication-repository.js";
-import { AuthenticationAdmission } from "./authentication/authentication-admission.js";
+import { AuthenticationAdmission, deriveClientNavigationNamespace } from "./authentication/authentication-admission.js";
 import { createNormalizedApp } from "./normalized-app.js";
 import {
   AutomationQueueRunObserver,
@@ -408,6 +408,7 @@ export async function startProductionApplication(
     const csrfToken = createCsrfToken();
     const authentication = new AuthenticationAdmission(authenticationRepository, config.stateDirectory, {
       required: config.authenticationRequired,
+      navigationNamespace: deriveClientNavigationNamespace(toolProvenanceKey, scope),
       canEnrollSidecar: connectorId => {
         if (authenticationRepository.hasConnectorIdentity(connectorId)) return true;
         const existing = hostPairings.list(scope);
@@ -2600,7 +2601,7 @@ export async function startProductionApplication(
         const owner = environmentRuntimes.get(environmentId)?.sidecarRuntime;
         if (!owner) throw new DomainError("runtime_unavailable", "The execution host is unavailable for operation recovery.", true);
         const lease = await owner.acquireRecovery(candidate, environmentId, managementSignal(), [
-          {capabilityId: "workspace_files", majorVersion: 7},
+          {capabilityId: "workspace_files", majorVersion: 8},
           {capabilityId: "workspace_tools", majorVersion: 2},
           {capabilityId: "workspace_context", majorVersion: 1},
         ]);

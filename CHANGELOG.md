@@ -4,6 +4,12 @@
 
 ### Changed
 
+- Redesign Files Changes with a persistent changed-file navigator, automatic
+  diff loading, local reading-position restoration, and separate current/history
+  review controls. Revision pickers show commit messages and dates, searchable
+  branch groups, scoped history, and branch-comparison presets. Requires matching
+  clients and managed sidecars with `workspace_files@8`.
+
 - Clarify Linux, macOS, and limited Windows standalone server support, add a
   Windows entry point, and identify Linux as the developer's primary server host.
 
@@ -29,6 +35,9 @@
   ([#51](https://github.com/kcosr/sedes/pull/51))
 
 ### Fixed
+
+- Keep historical review comments and reviewed flags off replacement comparisons;
+  editing a historical comment no longer creates an unrelated current review.
 
 - Preserve interrupted status when Pi provider setup returns an error after
   cancellation, in both live output and restored history.

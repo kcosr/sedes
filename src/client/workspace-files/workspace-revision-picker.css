@@ -1,0 +1,20 @@
+.workspace-revision-picker { display: flex; flex: 1 1 170px; min-width: 0; flex-direction: column; gap: 5px; }
+.workspace-revision-label { color: var(--muted-foreground); font-size: 11px; font-weight: 600; }
+.workspace-revision-trigger { display: flex; width: 100%; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--background); padding: 7px 9px; text-align: left; font-size: 12px; }
+.workspace-revision-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-revision-picker svg, .workspace-revision-popover svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.workspace-revision-popover { width: min(430px, calc(100vw - 24px)); padding: 8px; gap: 8px; }
+.workspace-revision-search { display: flex; align-items: center; gap: 7px; padding: 6px; border-bottom: 1px solid var(--border); }
+.workspace-revision-search input { flex: 1; min-width: 0; background: transparent; outline: none; font-size: 12px; }
+.workspace-revision-history { display: flex; align-items: center; gap: 9px; color: var(--muted-foreground); font-size: 11px; }
+.workspace-revision-history select { min-width: 0; flex: 1; padding: 4px; background: var(--background); color: var(--foreground); border: 1px solid var(--border); border-radius: 4px; }
+.workspace-revision-options { min-height: 80px; max-height: 340px; overflow: auto; }
+.workspace-revision-group-title { margin: 8px 6px 4px; color: var(--muted-foreground); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+.workspace-revision-options button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px; border-radius: 5px; text-align: left; }
+.workspace-revision-options button:hover, .workspace-revision-options button:focus-visible { background: var(--accent); outline: 2px solid var(--ring); outline-offset: -2px; }
+.workspace-revision-options button[aria-selected="true"] { background: var(--accent); }
+.workspace-revision-option-copy { flex: 1; min-width: 0; }
+.workspace-revision-option-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.workspace-revision-option-copy em { margin-left: 7px; color: var(--muted-foreground); font-size: 10px; font-style: normal; }
+.workspace-revision-option-copy small { display: block; margin-top: 2px; color: var(--muted-foreground); font-size: 10px; }
+.workspace-revision-options > p, .workspace-revision-limit { margin: 6px; color: var(--muted-foreground); font-size: 11px; }

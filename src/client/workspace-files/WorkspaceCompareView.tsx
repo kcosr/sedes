@@ -18,15 +18,18 @@ import type {
   FileDiffMetadata,
   SelectedLineRange,
 } from "@pierre/diffs";
-import { parsePatchFiles } from "@pierre/diffs";
+import { parsePatchFiles, DEFAULT_CODE_VIEW_FILE_METRICS } from "@pierre/diffs";
 import { CodeView, type CodeViewHandle } from "@pierre/diffs/react";
 import {
   Check,
+  Circle,
+  FileText,
+  ArrowUp,
+  ArrowDown,
+  PanelLeft,
   ChevronDown,
-  Files,
   LoaderCircle,
   RotateCw,
-  Search,
   X,
 } from "lucide-react";
 import type {
@@ -42,6 +45,7 @@ import type {
   WorkspaceDiffFileRequest,
   WorkspaceDiffPatchResult,
   WorkspaceDiffRefCatalogResult,
+  WorkspaceDiffRefCatalogQuery,
   WorkspaceDiffRepositoriesResult,
   WorkspaceDiffRepositoryDescriptor,
   WorkspaceDiffRepositoryId,
@@ -62,28 +66,31 @@ import {
   PierreSelectionAction,
   type PierreSelectionStageResult,
 } from "../context-excerpts/PierreSelectionAction.js";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "../components/ui/popover.js";
 import { boundedPierreLanguage } from "./pierre-language.js";
 import {
   DEFAULT_WORKSPACE_COMPARE_PREFERENCES,
   defaultWorkspaceCompareSelections,
   effectiveWorkspaceComparePreferences,
-  filterWorkspaceCompareFiles,
-  workspaceCompareChangeLabel,
   workspaceCompareFilePath,
-  workspaceCompareSelectionFromKey,
+  workspaceComparePresetSelections,
+  workspaceCompareSelectionLabel,
   workspaceCompareSelectionKey,
   workspaceCompareSupportsMergeBase,
   type WorkspaceComparePreferences,
 } from "./workspace-compare-state.js";
+import { WorkspaceRevisionPicker } from "./WorkspaceRevisionPicker.js";
+import { WorkspaceChangedFileNavigator } from "./WorkspaceChangedFileNavigator.js";
+import {
+  compareEndpointIntent,
+  compareEndpointSelection,
+  type WorkspaceCompareNavigation,
+} from "./workspace-compare-navigation.js";
 import "./workspace-compare.css";
 
 const INITIAL_DIFF_BATCH_SIZE = 8;
-const NEXT_DIFF_BATCH_SIZE = 12;
+const MAX_PATCH_REQUESTS = 3;
+const MAX_QUEUED_PATCH_REQUESTS = 12;
+const MAX_PATCH_CACHE_BYTES = 32 * 1024 * 1024;
 
 export interface WorkspaceCompareDataSource {
   readonly listRepositories: (
@@ -93,6 +100,7 @@ export interface WorkspaceCompareDataSource {
   readonly listRevisions: (
     repositoryId: WorkspaceDiffRepositoryId,
     signal?: AbortSignal,
+    query?: Partial<Omit<WorkspaceDiffRefCatalogQuery, "repositoryId">>,
   ) => Promise<WorkspaceDiffRefCatalogResult>;
   readonly createComparison: (
     request: WorkspaceDiffComparisonCreateRequest,
@@ -130,12 +138,18 @@ export interface WorkspaceCompareLineTarget {
   readonly range: SelectedLineRange;
 }
 
-export interface WorkspaceCompareCapturedLineTarget extends WorkspaceCompareLineTarget {
+export interface WorkspaceCompareCapturedLineTarget
+  extends WorkspaceCompareLineTarget {
   readonly captured: CapturedDiffLineSelection;
 }
 
 export interface WorkspaceCompareViewProps {
   readonly rootId: WorkspaceFileRootId;
+  readonly initialNavigation?: WorkspaceCompareNavigation;
+  readonly onNavigationChange?: (
+    navigation: WorkspaceCompareNavigation,
+  ) => void;
+  readonly onOpenFile?: (path: string) => void;
   readonly dataSource: WorkspaceCompareDataSource;
   readonly visible?: boolean;
   readonly reviewControls?: ReactNode;
@@ -180,6 +194,7 @@ type PatchLoad =
   | {
       readonly status: "loaded";
       readonly item: CodeViewDiffItem<WorkspaceCompareReviewAnnotation>;
+      readonly bytes: number;
     }
   | {
       readonly status: "binary" | "too_large" | "unavailable" | "invalid";
@@ -188,6 +203,9 @@ type PatchLoad =
 
 export function WorkspaceCompareView({
   rootId,
+  initialNavigation,
+  onNavigationChange,
+  onOpenFile,
   dataSource,
   visible = true,
   reviewControls,
@@ -203,6 +221,50 @@ export function WorkspaceCompareView({
   onAttachSelection,
   stagingTarget,
 }: WorkspaceCompareViewProps): React.JSX.Element {
+  const restoreRef = useRef(initialNavigation);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+  const navigationCallbackRef = useRef(onNavigationChange);
+  navigationCallbackRef.current = onNavigationChange;
+  const returnLocationsRef = useRef(
+    new Map(
+      (initialNavigation?.returnLocations ?? []).map((anchor) => [
+        JSON.stringify([anchor.oldPath, anchor.newPath, anchor.changeKind]),
+        anchor,
+      ]),
+    ),
+  );
+  const rememberAnchor = (
+    anchor: NonNullable<WorkspaceCompareNavigation["file"]>,
+  ) => {
+    const key = JSON.stringify([
+      anchor.oldPath,
+      anchor.newPath,
+      anchor.changeKind,
+    ]);
+    returnLocationsRef.current.delete(key);
+    returnLocationsRef.current.set(key, anchor);
+    while (returnLocationsRef.current.size > 32)
+      returnLocationsRef.current.delete(
+        returnLocationsRef.current.keys().next().value!,
+      );
+  };
+  const currentFileRef = useRef<WorkspaceDiffFileId | undefined>(undefined);
+  const anchorRef = useRef<WorkspaceCompareNavigation["file"]>(undefined);
+  const [currentFileId, setCurrentFileId] = useState<WorkspaceDiffFileId>();
+  const [navigatorWidth, setNavigatorWidth] = useState(
+    initialNavigation?.navigatorWidth ?? 260,
+  );
+  const [collapsedDirectories, setCollapsedDirectories] = useState<
+    readonly string[]
+  >(initialNavigation?.collapsedDirectories ?? []);
+  const [restoreNotice, setRestoreNotice] = useState<string>();
+  const patchSlotsRef = useRef(0);
+  const patchWaitersRef = useRef<
+    Array<{ fileId: WorkspaceDiffFileId; resume: (proceed: boolean) => void }>
+  >([]);
+  const prefetchRef = useRef<(index: number) => void>(() => undefined);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const settingsToggleRef = useRef<HTMLButtonElement>(null);
   const settingsBodyRef = useRef<HTMLDivElement>(null);
@@ -222,17 +284,25 @@ export function WorkspaceCompareView({
     new Map(),
   );
   const requestGenerationRef = useRef(0);
+  const liveRepositoryRef = useRef<
+    WorkspaceDiffRepositoryDescriptor | undefined
+  >(undefined);
   const comparisonAbortRef = useRef<AbortController | undefined>(undefined);
   const fileLoadAbortControllersRef = useRef(new Set<AbortController>());
   const onComparisonChangeRef = useRef(onComparisonChange);
   onComparisonChangeRef.current = onComparisonChange;
 
   const abortComparisonWork = useCallback(() => {
+    requestGenerationRef.current++;
+    activeComparisonRef.current = undefined;
+    historyAbortRef.current?.abort();
     comparisonAbortRef.current?.abort();
     comparisonAbortRef.current = undefined;
     for (const controller of fileLoadAbortControllersRef.current)
       controller.abort();
     fileLoadAbortControllersRef.current.clear();
+    for (const waiting of patchWaitersRef.current.splice(0))
+      waiting.resume(false);
   }, []);
   const replacePatches = useCallback(
     (next: ReadonlyMap<WorkspaceDiffFileId, PatchLoad>) => {
@@ -256,11 +326,16 @@ export function WorkspaceCompareView({
 
   const [themeType, setThemeType] = useState(getResolvedAppearance);
   const [narrow, setNarrow] = useState(false);
+  const [surfaceWidth, setSurfaceWidth] = useState(0);
+  const [surfaceHeight, setSurfaceHeight] = useState(0);
   const [settingsExpanded, setSettingsExpanded] = useState(true);
   const [repositories, setRepositories] = useState<
     readonly WorkspaceDiffRepositoryDescriptor[]
   >([]);
   const [repositoryId, setRepositoryId] = useState<WorkspaceDiffRepositoryId>();
+  const [historyScope, setHistoryScope] = useState("head");
+  const [revisionsLoading, setRevisionsLoading] = useState(false);
+  const [revisionsTruncated, setRevisionsTruncated] = useState(false);
   const [revisions, setRevisions] = useState<
     readonly WorkspaceDiffRevisionDescriptor[]
   >([]);
@@ -271,7 +346,7 @@ export function WorkspaceCompareView({
   const [mode, setMode] =
     useState<WorkspaceDiffComparisonCreateRequest["mode"]>("direct");
   const [preferences, setPreferences] = useState<WorkspaceComparePreferences>(
-    DEFAULT_WORKSPACE_COMPARE_PREFERENCES,
+    initialNavigation?.preferences ?? DEFAULT_WORKSPACE_COMPARE_PREFERENCES,
   );
   const [comparison, setComparison] =
     useState<WorkspaceDiffComparisonDescriptor>();
@@ -287,13 +362,16 @@ export function WorkspaceCompareView({
   const [pendingSelection, setPendingSelection] =
     useState<PendingWorkspaceCompareSelection>();
   const [navigatorOpen, setNavigatorOpen] = useState(false);
-  const [filter, setFilter] = useState("");
+  const [filter, setFilter] = useState(initialNavigation?.filter ?? "");
   const [busy, setBusy] = useState<
     "repositories" | "revisions" | "comparison" | "idle"
   >("repositories");
   const [notice, setNotice] = useState<string>();
   const [pendingScrollFileId, setPendingScrollFileId] =
     useState<WorkspaceDiffFileId>();
+  const preserveEndpointModeRef = useRef(false);
+  const historyAbortRef = useRef<AbortController | undefined>(undefined);
+  const drawerRef = useRef<HTMLDivElement>(null);
   const previousEndpointKeyRef = useRef<string | undefined>(undefined);
 
   useEffect(() => subscribeResolvedAppearance(setThemeType), []);
@@ -309,7 +387,11 @@ export function WorkspaceCompareView({
   useEffect(() => {
     const element = surfaceRef.current;
     if (!element) return;
-    const update = () => setNarrow(element.clientWidth < 720);
+    const update = () => {
+      setNarrow(element.clientWidth < 720);
+      setSurfaceWidth(element.clientWidth);
+      setSurfaceHeight(element.clientHeight);
+    };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(element);
@@ -320,6 +402,11 @@ export function WorkspaceCompareView({
     const previousKey = previousEndpointKeyRef.current;
     previousEndpointKeyRef.current = endpointKey;
     if (previousKey === undefined || previousKey === endpointKey) return;
+    if (restoreRef.current) return;
+    if (preserveEndpointModeRef.current) {
+      preserveEndpointModeRef.current = false;
+      return;
+    }
     setMode(
       workspaceCompareSupportsMergeBase(base, head) ? "merge_base" : "direct",
     );
@@ -332,6 +419,7 @@ export function WorkspaceCompareView({
     setBusy("repositories");
     setNotice(undefined);
     setRepositories([]);
+    liveRepositoryRef.current = undefined;
     setRepositoryId(undefined);
     setRevisions([]);
     setComparison(undefined);
@@ -358,7 +446,17 @@ export function WorkspaceCompareView({
           return;
         }
         setRepositories(result.repositories);
-        setRepositoryId(result.repositories[0]?.repositoryId);
+        const saved = restoreRef.current?.repository;
+        const matching = saved
+          ? result.repositories.find(
+              (repo) => repo.repositoryKey === saved.repositoryKey,
+            )
+          : result.repositories[0];
+        setRepositoryId(matching?.repositoryId);
+        if (saved && !matching)
+          setNotice(
+            "The saved repository is no longer available. Choose a repository to continue.",
+          );
         if (result.repositories.length === 0)
           setNotice("No Git repository was found for this Files root.");
       })
@@ -387,6 +485,9 @@ export function WorkspaceCompareView({
 
   useEffect(() => {
     if (!repositoryId) return;
+    liveRepositoryRef.current = repositories.find(
+      (repository) => repository.repositoryId === repositoryId,
+    );
     abortComparisonWork();
     const controller = new AbortController();
     const generation = ++requestGenerationRef.current;
@@ -404,7 +505,7 @@ export function WorkspaceCompareView({
     onSelectedLinesChange?.(undefined);
     void dataSource
       .listRevisions(repositoryId, controller.signal)
-      .then((result) => {
+      .then(async (result) => {
         if (generation !== requestGenerationRef.current) return;
         if (result.status === "unavailable") {
           setNotice(
@@ -415,10 +516,58 @@ export function WorkspaceCompareView({
           );
           return;
         }
-        setRevisions(result.revisions);
-        const defaults = defaultWorkspaceCompareSelections(result.revisions);
-        setBase(defaults.base);
-        setHead(defaults.head);
+        let catalog = [...result.revisions];
+        const savedIntent = restoreRef.current;
+        if (savedIntent)
+          for (const intent of [savedIntent.base, savedIntent.head]) {
+            if (compareEndpointSelection(intent, catalog)) continue;
+            const query =
+              intent.kind === "commit"
+                ? { resolveCommit: intent.commitHash }
+                : intent.kind === "ref"
+                  ? {
+                      resolveRef: `refs/${intent.refKind === "local_branch" ? "heads" : intent.refKind === "remote_branch" ? "remotes" : "tags"}/${intent.label}`,
+                    }
+                  : undefined;
+            if (!query) continue;
+            const resolved = await dataSource.listRevisions(
+              repositoryId,
+              controller.signal,
+              query,
+            );
+            if (generation !== requestGenerationRef.current) return;
+            if (resolved.status === "available")
+              catalog = [
+                ...catalog,
+                ...resolved.revisions.filter(
+                  (entry) =>
+                    !catalog.some(
+                      (known) => known.revisionId === entry.revisionId,
+                    ),
+                ),
+              ];
+          }
+        setRevisions(catalog);
+        setRevisionsTruncated(result.truncated);
+        const defaults = defaultWorkspaceCompareSelections(
+          catalog,
+          repositories.find((repo) => repo.repositoryId === repositoryId)?.head
+            ?.commitHash,
+        );
+        const saved = restoreRef.current;
+        const restoredBase = saved
+          ? compareEndpointSelection(saved.base, catalog)
+          : defaults.base;
+        const restoredHead = saved
+          ? compareEndpointSelection(saved.head, catalog)
+          : defaults.head;
+        setBase(restoredBase);
+        setHead(restoredHead ?? { kind: "working_tree" });
+        if (saved && (!restoredBase || !restoredHead))
+          setNotice(
+            "A saved revision is no longer available. Select the comparison endpoints again.",
+          );
+        if (saved) setMode(saved.mode);
         if (!defaults.base)
           setNotice("This repository has no revision available as a base.");
       })
@@ -446,12 +595,15 @@ export function WorkspaceCompareView({
 
   const loadComparison = useCallback(async () => {
     if (!repositoryId || !base) return;
+    const previousFile = anchorRef.current;
+    const previousFingerprint = activeComparisonRef.current?.fingerprint;
     abortComparisonWork();
     const generation = ++requestGenerationRef.current;
     const controller = new AbortController();
     comparisonAbortRef.current = controller;
     setBusy("comparison");
     setNotice(undefined);
+    setRestoreNotice(undefined);
     setComparison(undefined);
     onComparisonChangeRef.current?.(undefined);
     activeComparisonRef.current = undefined;
@@ -463,12 +615,126 @@ export function WorkspaceCompareView({
     setPendingSelection(undefined);
     onSelectedLinesChange?.(undefined);
     try {
+      const selectedRepository = repositories.find(
+        (repository) => repository.repositoryId === repositoryId,
+      );
+      const baseIntent = compareEndpointIntent(base, revisions);
+      const headIntent = compareEndpointIntent(head, revisions);
+      if (!selectedRepository || !baseIntent || !headIntent)
+        throw new Error("Select both comparison sources again.");
+      const discovered = await dataSource.listRepositories(
+        rootId,
+        controller.signal,
+      );
+      if (generation !== requestGenerationRef.current) return;
+      if (discovered.status !== "available")
+        throw new Error(
+          "The repository is temporarily unavailable. Refresh when the connection returns.",
+        );
+      const freshRepository = discovered.repositories.find(
+        (repository) =>
+          repository.repositoryKey === selectedRepository.repositoryKey,
+      );
+      if (!freshRepository)
+        throw new Error(
+          "The selected repository is no longer available. Choose another Files root or repository.",
+        );
+      const freshCatalog = await dataSource.listRevisions(
+        freshRepository.repositoryId,
+        controller.signal,
+      );
+      if (generation !== requestGenerationRef.current) return;
+      if (freshCatalog.status !== "available")
+        throw new Error(
+          "Revisions are unavailable. Refresh when the connection returns.",
+        );
+      let nextRevisions = [...freshCatalog.revisions];
+      const intents = [baseIntent, headIntent];
+      const isEndpointRevision = (revision: WorkspaceDiffRevisionDescriptor) =>
+        intents.some((intent) =>
+          intent.kind === "commit"
+            ? revision.kind === "commit" &&
+              revision.commitHash === intent.commitHash
+            : intent.kind === "ref" &&
+              revision.kind === intent.refKind &&
+              revision.label === intent.label,
+        );
+      for (const intent of intents) {
+        const query =
+          intent.kind === "ref"
+            ? {
+                resolveRef: `refs/${intent.refKind === "local_branch" ? "heads" : intent.refKind === "remote_branch" ? "remotes" : "tags"}/${intent.label}`,
+              }
+            : intent.kind === "commit" &&
+                !compareEndpointSelection(intent, nextRevisions)
+              ? { resolveCommit: intent.commitHash }
+              : undefined;
+        if (!query) continue;
+        const catalog = await dataSource.listRevisions(
+          freshRepository.repositoryId,
+          controller.signal,
+          query,
+        );
+        if (generation !== requestGenerationRef.current) return;
+        if (
+          catalog.status !== "available" ||
+          !compareEndpointSelection(intent, catalog.revisions)
+        )
+          throw new Error(
+            "A comparison revision is no longer available. Select the endpoints again.",
+          );
+        nextRevisions = [
+          ...catalog.revisions,
+          ...nextRevisions.filter(
+            (entry) =>
+              isEndpointRevision(entry) &&
+              !catalog.revisions.some(
+                (next) =>
+                  next.revisionId === entry.revisionId ||
+                  (entry.kind !== "commit" &&
+                    next.kind === entry.kind &&
+                    next.label === entry.label),
+              ),
+          ),
+        ];
+      }
+      const nextBase = compareEndpointSelection(baseIntent, nextRevisions);
+      const nextHead = compareEndpointSelection(headIntent, nextRevisions);
+      if (!nextBase || !nextHead)
+        throw new Error(
+          "A comparison revision is no longer available. Select the endpoints again.",
+        );
+      liveRepositoryRef.current = freshRepository;
+      preserveEndpointModeRef.current =
+        workspaceCompareSelectionKey(nextBase) !==
+          workspaceCompareSelectionKey(base) ||
+        workspaceCompareSelectionKey(nextHead) !==
+          workspaceCompareSelectionKey(head);
+      setBase(nextBase);
+      setHead(nextHead);
+      setRevisions(nextRevisions);
+      setHistoryScope((scope) => {
+        if (!scope.startsWith("revision:")) return scope;
+        const previous = revisions.find(
+          (revision) => `revision:${revision.revisionId}` === scope,
+        );
+        const current =
+          previous &&
+          nextRevisions.find(
+            (revision) =>
+              revision.kind === previous.kind &&
+              revision.label === previous.label,
+          );
+        return current ? `revision:${current.revisionId}` : "head";
+      });
       const result = await dataSource.createComparison(
         {
-          repositoryId,
-          mode: workspaceCompareSupportsMergeBase(base, head) ? mode : "direct",
-          base,
-          head,
+          repositoryId: freshRepository.repositoryId,
+          mode: workspaceCompareSupportsMergeBase(nextBase, nextHead)
+            ? mode
+            : "direct",
+          base: nextBase,
+          head: nextHead,
         },
         controller.signal,
       );
@@ -489,6 +755,8 @@ export function WorkspaceCompareView({
       let after: WorkspaceDiffFileId | undefined;
       const accumulated: WorkspaceDiffChangedFileSummary[] = [];
       let truncated = false;
+      const seenCursors = new Set<string>();
+      const seenFiles = new Set<string>();
       do {
         const page = await dataSource.listChangedFiles(
           {
@@ -517,13 +785,74 @@ export function WorkspaceCompareView({
           );
           return;
         }
-        accumulated.push(...page.files);
+        accumulated.push(
+          ...page.files.filter((file) => {
+            if (seenFiles.has(file.fileId)) return false;
+            seenFiles.add(file.fileId);
+            return true;
+          }),
+        );
         setChangedFiles([...accumulated]);
         changedFilesRef.current = [...accumulated];
         truncated ||= page.truncated;
         after = page.nextCursor;
+        if (after && seenCursors.has(after))
+          throw new Error("Changed files returned a repeated cursor.");
+        if (after) seenCursors.add(after);
       } while (after);
       setFilesTruncated(truncated);
+      const saved = restoreRef.current;
+      const target = previousFile ?? saved?.file;
+      if (
+        nextComparison.fingerprint !==
+        (previousFingerprint ?? saved?.fingerprint)
+      )
+        returnLocationsRef.current.clear();
+      const targetFile =
+        target &&
+        accumulated.find(
+          (file) =>
+            file.oldPath === target.oldPath &&
+            file.newPath === target.newPath &&
+            file.changeKind === target.changeKind,
+        );
+      if (targetFile) {
+        const exact =
+          nextComparison.fingerprint ===
+          (previousFingerprint ?? saved?.fingerprint);
+        anchorRef.current = {
+          oldPath: targetFile.oldPath,
+          newPath: targetFile.newPath,
+          changeKind: targetFile.changeKind,
+          ...(exact
+            ? { line: target?.line, side: target?.side, offset: target?.offset }
+            : {}),
+        };
+        currentFileRef.current = targetFile.fileId;
+        setCurrentFileId(targetFile.fileId);
+        setPendingScrollFileId(targetFile.fileId);
+        if (!exact)
+          setRestoreNotice(
+            "The comparison changed. Returned to the file header.",
+          );
+      } else {
+        if (target)
+          setRestoreNotice(
+            "The previously viewed file is no longer in this comparison.",
+          );
+        const first = accumulated[0];
+        anchorRef.current = first
+          ? {
+              oldPath: first.oldPath,
+              newPath: first.newPath,
+              changeKind: first.changeKind,
+            }
+          : undefined;
+        currentFileRef.current = first?.fileId;
+        setCurrentFileId(first?.fileId);
+        setPendingScrollFileId(undefined);
+      }
+      restoreRef.current = undefined;
       if (accumulated.length === 0)
         setNotice("No changed files in this comparison.");
     } catch (error: unknown) {
@@ -546,22 +875,78 @@ export function WorkspaceCompareView({
     onSelectedLinesChange,
     replacePatches,
     repositoryId,
+    repositories,
+    rootId,
+    revisions,
   ]);
 
   const ensurePatch = useCallback(
     async (
       file: WorkspaceDiffChangedFileSummary,
-      options: { readonly force?: boolean } = {},
+      options: { readonly force?: boolean; readonly priority?: boolean } = {},
     ): Promise<boolean> => {
       const active = activeComparisonRef.current;
       if (!active) return false;
       const existing = patchesRef.current.get(file.fileId);
       if (existing?.status === "loaded") return true;
-      if (existing?.status === "loading") return false;
+      if (existing?.status === "loading") {
+        if (options.priority) {
+          const index = patchWaitersRef.current.findIndex(
+            (entry) => entry.fileId === file.fileId,
+          );
+          if (index > 0) {
+            const [entry] = patchWaitersRef.current.splice(index, 1);
+            patchWaitersRef.current.unshift(entry!);
+          }
+        }
+        return false;
+      }
       if (existing && !options.force) return false;
       updatePatches((current) =>
         new Map(current).set(file.fileId, { status: "loading" }),
       );
+      const generation = requestGenerationRef.current;
+      while (patchSlotsRef.current >= MAX_PATCH_REQUESTS) {
+        if (generation !== requestGenerationRef.current) return false;
+        const proceed = await new Promise<boolean>((resume) => {
+          if (patchWaitersRef.current.length >= MAX_QUEUED_PATCH_REQUESTS) {
+            if (!options.priority) {
+              resume(false);
+              return;
+            }
+            patchWaitersRef.current.pop()?.resume(false);
+          }
+          const entry = { fileId: file.fileId, resume };
+          if (options.priority) patchWaitersRef.current.unshift(entry);
+          else patchWaitersRef.current.push(entry);
+        });
+        if (!proceed) {
+          if (generation === requestGenerationRef.current)
+            updatePatches((current) => {
+              const next = new Map(current);
+              next.delete(file.fileId);
+              return next;
+            });
+          return false;
+        }
+      }
+      if (
+        generation !== requestGenerationRef.current ||
+        activeComparisonRef.current?.comparisonId !== active.comparisonId
+      )
+        return false;
+      if (
+        (!visibleRef.current || document.visibilityState === "hidden") &&
+        !options.priority
+      ) {
+        updatePatches((current) => {
+          const next = new Map(current);
+          next.delete(file.fileId);
+          return next;
+        });
+        return false;
+      }
+      patchSlotsRef.current++;
       const controller = new AbortController();
       fileLoadAbortControllersRef.current.add(controller);
       try {
@@ -573,7 +958,10 @@ export function WorkspaceCompareView({
           },
           controller.signal,
         );
-        if (activeComparisonRef.current?.comparisonId !== active.comparisonId)
+        if (
+          generation !== requestGenerationRef.current ||
+          activeComparisonRef.current?.comparisonId !== active.comparisonId
+        )
           return false;
         if (result.status === "stale") {
           activeComparisonRef.current = undefined;
@@ -610,11 +998,19 @@ export function WorkspaceCompareView({
           fileDiff,
         };
         updatePatches((current) =>
-          new Map(current).set(file.fileId, { status: "loaded", item }),
+          new Map(current).set(file.fileId, {
+            status: "loaded",
+            item,
+            bytes: result.patch.length * 2,
+          }),
         );
         return true;
       } catch (error: unknown) {
-        if (controller.signal.aborted) return false;
+        if (
+          controller.signal.aborted ||
+          generation !== requestGenerationRef.current
+        )
+          return false;
         updatePatches((current) =>
           new Map(current).set(file.fileId, {
             status: "unavailable",
@@ -623,25 +1019,95 @@ export function WorkspaceCompareView({
         );
         return false;
       } finally {
+        patchSlotsRef.current--;
+        patchWaitersRef.current.shift()?.resume(true);
         fileLoadAbortControllersRef.current.delete(controller);
       }
     },
-    [dataSource, updatePatches],
+    [dataSource, updatePatches, visible],
   );
 
-  useEffect(() => {
-    for (const file of changedFiles.slice(0, INITIAL_DIFF_BATCH_SIZE))
+  prefetchRef.current = (index: number) => {
+    if (!visible || document.visibilityState === "hidden") return;
+    const files = changedFilesRef.current;
+    for (const file of files.slice(
+      Math.max(0, index),
+      index + INITIAL_DIFF_BATCH_SIZE,
+    ))
       void ensurePatch(file);
-  }, [changedFiles, ensurePatch]);
+  };
+  useEffect(() => {
+    if (!visible) return;
+    const saved = restoreRef.current?.file;
+    const index = saved
+      ? changedFiles.findIndex(
+          (file) =>
+            file.oldPath === saved.oldPath && file.newPath === saved.newPath,
+        )
+      : changedFiles.findIndex(
+          (file) =>
+            file.fileId === (pendingScrollFileId ?? currentFileRef.current),
+        );
+    if (saved && index < 0) return;
+    prefetchRef.current(Math.max(0, index));
+  }, [changedFiles, visible, pendingScrollFileId]);
+  useEffect(() => {
+    const resume = () =>
+      prefetchRef.current(
+        Math.max(
+          0,
+          changedFilesRef.current.findIndex(
+            (file) => file.fileId === currentFileRef.current,
+          ),
+        ),
+      );
+    document.addEventListener("visibilitychange", resume);
+    return () => document.removeEventListener("visibilitychange", resume);
+  }, []);
+  useEffect(() => {
+    let bytes = 0;
+    for (const load of patches.values())
+      if (load.status === "loaded") bytes += load.bytes;
+    if (bytes <= MAX_PATCH_CACHE_BYTES) return;
+    const currentIndex = changedFiles.findIndex(
+      (file) => file.fileId === currentFileRef.current,
+    );
+    const protectedIds = new Set(
+      changedFiles
+        .slice(
+          Math.max(0, currentIndex - 3),
+          currentIndex + INITIAL_DIFF_BATCH_SIZE,
+        )
+        .map((file) => file.fileId),
+    );
+    if (pendingScrollFileId) protectedIds.add(pendingScrollFileId);
+    if (selectedLines)
+      protectedIds.add(selectedLines.id as WorkspaceDiffFileId);
+    const next = new Map(patches);
+    for (const [id, load] of next) {
+      if (bytes <= MAX_PATCH_CACHE_BYTES) break;
+      if (load.status === "loaded" && !protectedIds.has(id)) {
+        next.delete(id);
+        bytes -= load.bytes;
+      }
+    }
+    if (next.size !== patches.size) replacePatches(next);
+  }, [
+    patches,
+    changedFiles,
+    pendingScrollFileId,
+    selectedLines,
+    replacePatches,
+  ]);
 
+  const splitFeasible =
+    !narrow &&
+    surfaceWidth - Math.min(navigatorWidth, surfaceWidth * 0.45) >= 600;
   const effectivePreferences = effectiveWorkspaceComparePreferences(
     preferences,
-    narrow,
+    !splitFeasible,
   );
-  const unattemptedFiles = useMemo(
-    () => changedFiles.filter((file) => !patches.has(file.fileId)),
-    [changedFiles, patches],
-  );
+
   const annotationsByFile = useMemo(
     () => groupAnnotations(annotations, changedFiles),
     [annotations, changedFiles],
@@ -650,28 +1116,108 @@ export function WorkspaceCompareView({
     readonly CodeViewItem<WorkspaceCompareReviewAnnotation>[]
   >(
     () =>
-      changedFiles.flatMap((file) => {
-        const load = patches.get(file.fileId);
-        if (load?.status !== "loaded") return [];
-        const fileAnnotations = (annotationsByFile.get(file.fileId) ?? []).map(
-          (
-            annotation,
-          ): DiffLineAnnotation<WorkspaceCompareReviewAnnotation> => ({
-            side: annotation.side,
-            lineNumber: annotation.lineNumber,
-            metadata: annotation,
-          }),
-        );
-        return [
-          {
-            ...load.item,
-            annotations: fileAnnotations,
-            version: annotationVersion(fileAnnotations),
-          },
-        ];
-      }),
-    [annotationsByFile, changedFiles, patches],
+      changedFiles.flatMap<CodeViewItem<WorkspaceCompareReviewAnnotation>>(
+        (file) => {
+          const load = patches.get(file.fileId);
+          if (load?.status !== "loaded")
+            return [
+              {
+                id: file.fileId,
+                type: "file" as const,
+                collapsed: true,
+                file: {
+                  name: workspaceCompareFilePath(file),
+                  contents: "",
+                  lang: "text" as const,
+                  cacheKey: `status:${comparison?.fingerprint}:${file.fileId}`,
+                },
+                version: load?.status === "loading" ? 1 : load ? 2 : 0,
+              },
+            ];
+          const fileAnnotations = (
+            annotationsByFile.get(file.fileId) ?? []
+          ).map(
+            (
+              annotation,
+            ): DiffLineAnnotation<WorkspaceCompareReviewAnnotation> => ({
+              side: annotation.side,
+              lineNumber: annotation.lineNumber,
+              metadata: annotation,
+            }),
+          );
+          return [
+            {
+              ...load.item,
+              annotations: fileAnnotations,
+              version: annotationVersion(fileAnnotations),
+            },
+          ];
+        },
+      ),
+    [annotationsByFile, changedFiles, patches, comparison?.fingerprint],
   );
+
+  // A viewport can hold more than the initial prefetch window (for example,
+  // many pure renames). Demand visible entries after the renderer has measured
+  // the new layout, even when there is no scrollbar to trigger onScroll.
+  useEffect(() => {
+    if (
+      !visible ||
+      document.visibilityState === "hidden" ||
+      pendingScrollFileId ||
+      restoreRef.current
+    )
+      return;
+    const generation = requestGenerationRef.current;
+    let secondFrame: number | undefined;
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => {
+        if (
+          !visibleRef.current ||
+          document.visibilityState === "hidden" ||
+          generation !== requestGenerationRef.current ||
+          !activeComparisonRef.current
+        )
+          return;
+        const viewer = codeViewRef.current?.getInstance?.();
+        if (!viewer) return;
+        const top = viewer.getScrollTop();
+        const bottom = top + viewer.getHeight();
+        let room =
+          MAX_PATCH_REQUESTS +
+          MAX_QUEUED_PATCH_REQUESTS -
+          patchSlotsRef.current -
+          patchWaitersRef.current.length;
+        for (const item of viewer.getRenderedItems()) {
+          if (room <= 0) break;
+          const itemTop = viewer.getTopForItem(item.id);
+          if (
+            itemTop === undefined ||
+            itemTop < top - 200 ||
+            itemTop > bottom + 120
+          )
+            continue;
+          const file = changedFilesRef.current.find(
+            (candidate) => candidate.fileId === item.id,
+          );
+          if (!file || patchesRef.current.has(file.fileId)) continue;
+          room--;
+          void ensurePatch(file);
+        }
+      });
+    });
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
+    };
+  }, [
+    items,
+    visible,
+    pendingScrollFileId,
+    surfaceWidth,
+    surfaceHeight,
+    ensurePatch,
+  ]);
 
   useEffect(() => {
     if (
@@ -680,13 +1226,29 @@ export function WorkspaceCompareView({
     )
       return;
     const timer = globalThis.setTimeout(() => {
-      codeViewRef.current?.scrollTo({
-        type: "line",
-        id: pendingScrollFileId,
-        lineNumber: 1,
-        align: "start",
-        behavior: "smooth-auto",
-      });
+      const load = patchesRef.current.get(pendingScrollFileId);
+      const anchor = anchorRef.current;
+      if (load?.status === "loading" || !load) return;
+      codeViewRef.current?.scrollTo(
+        anchor?.line && load.status === "loaded"
+          ? {
+              type: "line",
+              id: pendingScrollFileId,
+              lineNumber: anchor.line,
+              side: anchor.side,
+              offset: anchor.offset,
+              align: "start",
+              behavior: "instant",
+            }
+          : {
+              type: "item",
+              id: pendingScrollFileId,
+              align: "start",
+              behavior: "instant",
+            },
+      );
+      currentFileRef.current = pendingScrollFileId;
+      setCurrentFileId(pendingScrollFileId);
       setPendingScrollFileId(undefined);
     }, 0);
     return () => globalThis.clearTimeout(timer);
@@ -696,10 +1258,17 @@ export function WorkspaceCompareView({
     () => async (fileDiff) => {
       const active = activeComparisonRef.current;
       const file = fileByMetadataRef.current.get(fileDiff);
-      if (!active || !file)
+      const currentPatch = file && patchesRef.current.get(file.fileId);
+      if (
+        !active ||
+        !file ||
+        currentPatch?.status !== "loaded" ||
+        currentPatch.item.fileDiff !== fileDiff
+      )
         throw new Error(
           "This diff no longer belongs to the active comparison.",
         );
+      const generation = requestGenerationRef.current;
       const controller = new AbortController();
       fileLoadAbortControllersRef.current.add(controller);
       const loadSide = async (
@@ -729,6 +1298,12 @@ export function WorkspaceCompareView({
           loadSide("old"),
           loadSide("new"),
         ]);
+        if (
+          controller.signal.aborted ||
+          generation !== requestGenerationRef.current ||
+          activeComparisonRef.current?.comparisonId !== active.comparisonId
+        )
+          throw new Error("The comparison changed while loading context.");
         if (oldFile && newFile) return { oldFile, newFile };
         if (!oldFile && newFile && fileDiff.type === "rename-pure")
           return { oldFile: null, newFile };
@@ -745,8 +1320,19 @@ export function WorkspaceCompareView({
   const navigateToFile = useCallback(
     async (file: WorkspaceDiffChangedFileSummary) => {
       setNavigatorOpen(false);
+      if (anchorRef.current) rememberAnchor(anchorRef.current);
+      anchorRef.current = returnLocationsRef.current.get(
+        JSON.stringify([file.oldPath, file.newPath, file.changeKind]),
+      ) ?? {
+        oldPath: file.oldPath,
+        newPath: file.newPath,
+        changeKind: file.changeKind,
+      };
+      currentFileRef.current = file.fileId;
+      setCurrentFileId(file.fileId);
       setPendingScrollFileId(file.fileId);
-      if (!patchesRef.current.has(file.fileId)) await ensurePatch(file);
+      if (!patchesRef.current.has(file.fileId))
+        await ensurePatch(file, { priority: true });
     },
     [ensurePatch],
   );
@@ -765,7 +1351,15 @@ export function WorkspaceCompareView({
       const file = changedFilesRef.current.find(
         (candidate) => candidate.fileId === item.id,
       );
-      if (!active || !file || !range || item.type !== "diff") {
+      const currentPatch = file && patchesRef.current.get(file.fileId);
+      if (
+        !active ||
+        !file ||
+        !range ||
+        item.type !== "diff" ||
+        currentPatch?.status !== "loaded" ||
+        currentPatch.item.fileDiff !== item.fileDiff
+      ) {
         onSelectedLinesChange?.(undefined);
         setPendingSelection(undefined);
         return;
@@ -789,17 +1383,133 @@ export function WorkspaceCompareView({
     [onAttachSelection, onSelectedLinesChange],
   );
 
-  const loadedCount = items.length;
-  const filteredFiles = filterWorkspaceCompareFiles(changedFiles, filter);
+  const commentCounts = useMemo(
+    () =>
+      new Map(
+        [...annotationsByFile].map(([id, entries]) => [id, entries.length]),
+      ),
+    [annotationsByFile],
+  );
+  const emitNavigation = useCallback(() => {
+    const repo = repositories.find(
+      (item) => item.repositoryId === repositoryId,
+    );
+    const baseIntent = compareEndpointIntent(base, revisions);
+    const headIntent = compareEndpointIntent(head, revisions);
+    if (!repo || !baseIntent || !headIntent || restoreRef.current) return;
+    navigationCallbackRef.current?.({
+      repository: {
+        repositoryKey: repo.repositoryKey,
+        displayName: repo.displayName,
+        pathPrefix: repo.pathPrefix,
+      },
+      base: baseIntent,
+      head: headIntent,
+      mode,
+      fingerprint: comparison?.fingerprint,
+      file: anchorRef.current,
+      returnLocations: [...returnLocationsRef.current.values()],
+      filter,
+      navigatorWidth,
+      collapsedDirectories,
+      preferences,
+    });
+  }, [
+    repositories,
+    repositoryId,
+    base,
+    head,
+    revisions,
+    mode,
+    comparison?.fingerprint,
+    filter,
+    navigatorWidth,
+    collapsedDirectories,
+    preferences,
+  ]);
+  const emitNavigationRef = useRef(emitNavigation);
+  emitNavigationRef.current = emitNavigation;
+  useEffect(() => {
+    emitNavigation();
+  }, [emitNavigation, currentFileId]);
+  useEffect(() => {
+    const flush = () => emitNavigationRef.current();
+    window.addEventListener("pagehide", flush);
+    return () => {
+      flush();
+      window.removeEventListener("pagehide", flush);
+    };
+  }, []);
+  const onDiffScroll = useCallback(
+    (
+      top: number,
+      viewer: NonNullable<
+        ReturnType<
+          CodeViewHandle<WorkspaceCompareReviewAnnotation>["getInstance"]
+        >
+      >,
+    ) => {
+      const rendered = viewer.getRenderedItems();
+      const current =
+        [...rendered]
+          .reverse()
+          .find(
+            (item) => (viewer.getTopForItem(item.id) ?? Infinity) <= top + 2,
+          ) ?? rendered[0];
+      if (!current || pendingScrollFileId) return;
+      const file = changedFilesRef.current.find(
+        (candidate) => candidate.fileId === current.id,
+      );
+      if (!file) return;
+      const itemTop = viewer.getTopForItem(current.id) ?? top;
+      const stickyOffset = DEFAULT_CODE_VIEW_FILE_METRICS.diffHeaderHeight;
+      const anchor =
+        itemTop < top
+          ? current.instance.getNumericScrollAnchor(
+              top - itemTop + stickyOffset,
+            )
+          : undefined;
+      anchorRef.current = {
+        oldPath: file.oldPath,
+        newPath: file.newPath,
+        changeKind: file.changeKind,
+        ...(anchor
+          ? {
+              line: anchor.lineNumber,
+              side: anchor.side,
+              offset: anchor.top - (top - itemTop) - stickyOffset,
+            }
+          : { offset: 0 }),
+      };
+      rememberAnchor(anchorRef.current);
+      currentFileRef.current = file.fileId;
+      setCurrentFileId(file.fileId);
+      emitNavigationRef.current();
+      prefetchRef.current(changedFilesRef.current.indexOf(file));
+    },
+    [pendingScrollFileId],
+  );
+  const currentIndex = changedFiles.findIndex(
+    (file) => file.fileId === currentFileId,
+  );
+  const navigator = (
+    <WorkspaceChangedFileNavigator
+      files={changedFiles}
+      currentFileId={currentFileId}
+      reviewedFileIds={reviewedFileIds}
+      commentCounts={commentCounts}
+      filter={filter}
+      onFilterChange={setFilter}
+      collapsedDirectories={collapsedDirectories}
+      onCollapsedDirectoriesChange={setCollapsedDirectories}
+      onNavigate={(file) => void navigateToFile(file)}
+      onClose={narrow ? () => setNavigatorOpen(false) : undefined}
+      loading={busy === "comparison"}
+      truncated={filesTruncated}
+    />
+  );
   const settingsSummary = `${workspaceCompareSelectionLabel(base, revisions)} → ${workspaceCompareSelectionLabel(head, revisions)}`;
   const mergeBaseAllowed = workspaceCompareSupportsMergeBase(base, head);
-  useEffect(() => {
-    setMode((current) => {
-      if (!mergeBaseAllowed)
-        return current === "merge_base" ? "direct" : current;
-      return current === "direct" ? "merge_base" : current;
-    });
-  }, [mergeBaseAllowed]);
   useEffect(() => {
     if (!narrow || !comparison) return;
     if (
@@ -811,12 +1521,88 @@ export function WorkspaceCompareView({
     }
     setSettingsExpanded(false);
   }, [comparison, narrow]);
+  const changeHistoryScope = async (scope: string) => {
+    if (!repositoryId) return;
+    historyAbortRef.current?.abort();
+    const controller = new AbortController();
+    historyAbortRef.current = controller;
+    setHistoryScope(scope);
+    setRevisionsLoading(true);
+    const generation = requestGenerationRef.current;
+    try {
+      const result = await dataSource.listRevisions(
+        liveRepositoryRef.current?.repositoryId ?? repositoryId,
+        controller.signal,
+        {
+          history: scope as NonNullable<
+            WorkspaceDiffRefCatalogQuery["history"]
+          >,
+        },
+      );
+      if (
+        generation !== requestGenerationRef.current ||
+        historyAbortRef.current !== controller
+      )
+        return;
+      if (result.status === "available") {
+        setRevisions((current) => [
+          ...result.revisions,
+          ...current.filter(
+            (entry) =>
+              ((base?.kind === "revision" &&
+                entry.revisionId === base.revisionId) ||
+                (head.kind === "revision" &&
+                  entry.revisionId === head.revisionId)) &&
+              !result.revisions.some(
+                (next) => next.revisionId === entry.revisionId,
+              ),
+          ),
+        ]);
+        setRevisionsTruncated(result.truncated);
+      } else setRestoreNotice("Commit history could not be loaded.");
+    } catch (error) {
+      if (
+        !controller.signal.aborted &&
+        generation === requestGenerationRef.current &&
+        historyAbortRef.current === controller
+      )
+        setRestoreNotice(
+          errorMessage("Commit history could not be loaded", error),
+        );
+    } finally {
+      if (historyAbortRef.current === controller) setRevisionsLoading(false);
+    }
+  };
+  const restoredComparisonStartedRef = useRef(false);
+  useEffect(() => {
+    if (
+      !restoreRef.current ||
+      restoredComparisonStartedRef.current ||
+      busy !== "idle" ||
+      !base ||
+      !compareEndpointSelection(restoreRef.current.head, revisions)
+    )
+      return;
+    restoredComparisonStartedRef.current = true;
+    void loadComparison();
+  }, [busy, base, revisions, loadComparison]);
   const changeBase = (selection: WorkspaceDiffRevisionSelection) => {
+    restoreRef.current = undefined;
+    preserveEndpointModeRef.current = false;
     setBase(selection);
   };
   const changeHead = (selection: WorkspaceDiffRevisionSelection) => {
+    restoreRef.current = undefined;
+    preserveEndpointModeRef.current = false;
     setHead(selection);
   };
+  useEffect(() => {
+    if (!narrow || !navigatorOpen) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const drawer = drawerRef.current;
+    drawer?.querySelector<HTMLInputElement>("input")?.focus();
+    return () => previous?.focus();
+  }, [narrow, navigatorOpen]);
   const initialLoading =
     (busy === "repositories" || busy === "revisions") &&
     repositories.length === 0;
@@ -848,21 +1634,94 @@ export function WorkspaceCompareView({
           className="workspace-compare-settings-body"
           hidden={!settingsExpanded}
         >
-          {reviewControls}
+          {(repositories.length > 1 ||
+            (!repositoryId && repositories.length > 0)) && (
+            <label className="workspace-compare-repository">
+              Repository
+              <select
+                aria-label="Repository"
+                value={repositoryId ?? ""}
+                onChange={(event) => {
+                  restoreRef.current = undefined;
+                  anchorRef.current = undefined;
+                  returnLocationsRef.current.clear();
+                  setRepositoryId(
+                    event.target.value as WorkspaceDiffRepositoryId,
+                  );
+                }}
+              >
+                {!repositoryId && <option value="">Choose a repository</option>}
+                {repositories.map((repository) => (
+                  <option
+                    key={repository.repositoryId}
+                    value={repository.repositoryId}
+                  >
+                    {repository.displayName}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <div className="workspace-compare-presets">
+            {(["uncommitted", "staged", "branches"] as const).map((preset) => (
+              <button
+                type="button"
+                key={preset}
+                onClick={() => {
+                  const next = workspaceComparePresetSelections(
+                    preset,
+                    revisions,
+                    repositories.find(
+                      (repo) => repo.repositoryId === repositoryId,
+                    )?.head?.commitHash,
+                  );
+                  setBase(next.base);
+                  setHead(next.head);
+                  setMode(next.mode);
+                }}
+              >
+                {preset === "uncommitted"
+                  ? "Uncommitted"
+                  : preset === "staged"
+                    ? "Staged"
+                    : "Branches"}
+              </button>
+            ))}
+            <button
+              type="button"
+              disabled={!base}
+              onClick={() => {
+                if (base) {
+                  setHead(base);
+                  setBase(head);
+                }
+              }}
+            >
+              Swap sides
+            </button>
+          </div>
           <div className="workspace-compare-controls">
-            <RevisionSelect
+            <WorkspaceRevisionPicker
               label="Base"
               selection={base}
               revisions={revisions}
+              historyScope={historyScope}
+              onHistoryScopeChange={(scope) => void changeHistoryScope(scope)}
+              loading={revisionsLoading}
+              truncated={revisionsTruncated}
               onChange={changeBase}
             />
             <span className="workspace-compare-arrow" aria-hidden="true">
               →
             </span>
-            <RevisionSelect
+            <WorkspaceRevisionPicker
               label="Compare"
               selection={head}
               revisions={revisions}
+              historyScope={historyScope}
+              onHistoryScopeChange={(scope) => void changeHistoryScope(scope)}
+              loading={revisionsLoading}
+              truncated={revisionsTruncated}
               onChange={changeHead}
             />
             <label className="workspace-compare-strategy">
@@ -872,9 +1731,9 @@ export function WorkspaceCompareView({
                 value={mode}
                 onChange={(event) => setMode(event.target.value as typeof mode)}
               >
-                <option value="direct">Direct</option>
+                <option value="direct">Differences between sources</option>
                 <option value="merge_base" disabled={!mergeBaseAllowed}>
-                  Merge base
+                  Changes introduced by compare branch
                 </option>
               </select>
             </label>
@@ -937,9 +1796,11 @@ export function WorkspaceCompareView({
             onClick={() =>
               setPreferences((current) => ({ ...current, diffStyle: "split" }))
             }
-            disabled={narrow}
+            disabled={!splitFeasible}
             title={
-              narrow ? "Split view is unavailable at this width" : undefined
+              !splitFeasible
+                ? "Split view is unavailable at this width"
+                : undefined
             }
           >
             Split
@@ -959,213 +1820,376 @@ export function WorkspaceCompareView({
           >
             Wrap
           </button>
-          <div className="workspace-compare-files-anchor">
-            <Popover open={navigatorOpen} onOpenChange={setNavigatorOpen}>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="workspace-compare-files-button"
-                  aria-expanded={navigatorOpen}
-                >
-                  <Files aria-hidden="true" /> Files{" "}
-                  <ChevronDown aria-hidden="true" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent
-                className="workspace-compare-navigator"
-                role="dialog"
-                aria-label="Changed files"
-                align="end"
-                side="bottom"
-                sideOffset={8}
-              >
-                <div className="workspace-compare-navigator-search">
-                  <Search aria-hidden="true" />
-                  <input
-                    autoFocus
-                    aria-label="Filter changed files"
-                    value={filter}
-                    onChange={(event) => setFilter(event.target.value)}
-                    placeholder="Filter changed files"
-                  />
-                  <button
-                    type="button"
-                    aria-label="Close changed files"
-                    onClick={() => setNavigatorOpen(false)}
-                  >
-                    <X aria-hidden="true" />
-                  </button>
-                </div>
-                <div className="workspace-compare-file-list">
-                  {filteredFiles.map((file) => {
-                    const load = patches.get(file.fileId);
-                    return (
-                      <button
-                        type="button"
-                        key={file.fileId}
-                        onClick={() => void navigateToFile(file)}
-                      >
-                        <ChangeBadge file={file} />
-                        <span className="workspace-compare-file-path">
-                          {workspaceCompareFilePath(file)}
-                        </span>
-                        <FileStats file={file} />
-                        {load?.status === "loading" && (
-                          <LoaderCircle
-                            className="workspace-compare-spin"
-                            aria-label="Loading diff"
-                          />
-                        )}
-                        {reviewedFileIds.has(file.fileId) && (
-                          <Check
-                            className="workspace-compare-reviewed-icon"
-                            aria-label="Reviewed"
-                          />
-                        )}
-                      </button>
-                    );
-                  })}
-                  {filteredFiles.length === 0 && (
-                    <p>No changed files match this filter.</p>
-                  )}
-                </div>
-              </PopoverContent>
-            </Popover>
-          </div>
+          {comparison && (
+            <button
+              type="button"
+              aria-label="Refresh comparison"
+              title="Refresh comparison"
+              disabled={busy !== "idle" || !base}
+              onClick={() => void loadComparison()}
+            >
+              <RotateCw />
+            </button>
+          )}
+          {narrow && (
+            <button
+              type="button"
+              aria-label="Changed files"
+              aria-expanded={navigatorOpen}
+              onClick={() => setNavigatorOpen((open) => !open)}
+            >
+              <PanelLeft />
+              Files
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label="Previous changed file"
+            disabled={currentIndex <= 0}
+            onClick={() => void navigateToFile(changedFiles[currentIndex - 1]!)}
+          >
+            <ArrowUp />
+          </button>
+          <button
+            type="button"
+            aria-label="Next changed file"
+            disabled={
+              !changedFiles.length || currentIndex >= changedFiles.length - 1
+            }
+            onClick={() => void navigateToFile(changedFiles[currentIndex + 1]!)}
+          >
+            <ArrowDown />
+          </button>
         </div>
       </div>
 
-      <div className="workspace-compare-body">
-        {initialLoading && (
-          <CompareState
-            icon={<LoaderCircle className="workspace-compare-spin" />}
-            title="Finding repositories…"
-          />
-        )}
-        {!initialLoading && notice && (
-          <CompareState
-            title={notice}
-            action={
-              comparison ? (
-                <button type="button" onClick={() => void loadComparison()}>
-                  Refresh comparison
-                </button>
-              ) : undefined
-            }
-          />
-        )}
-        {!initialLoading && !notice && !comparison && (
-          <CompareState title="Choose two sources, then start a comparison." />
-        )}
-        {comparison && changedFiles.length > 0 && (
-          <CodeView<WorkspaceCompareReviewAnnotation>
-            ref={codeViewRef}
-            className="workspace-compare-code-view"
-            items={items}
-            options={{
-              themeType,
-              diffStyle: effectivePreferences.diffStyle,
-              overflow: effectivePreferences.overflow,
-              stickyHeaders: true,
-              enableLineSelection: true,
-              enableGutterUtility: onCreateAnnotation !== undefined,
-              lineHoverHighlight: "number",
-              loadDiffFiles,
-              onLineSelectionEnd(range, context) {
-                handleSelection(range, context.item);
-              },
-              onGutterUtilityClick(range, context) {
-                if (!context.item || context.item.type !== "diff") return;
-                const active = activeComparisonRef.current;
-                const file = changedFilesRef.current.find(
-                  (candidate) => candidate.fileId === context.item.id,
-                );
-                if (active && file)
-                  onCreateAnnotation?.({ comparison: active, file, range });
-              },
-            }}
-            selectedLines={selectedLines}
-            onSelectedLinesChange={setSelectedLines}
-            renderHeaderMetadata={(item) => {
-              const file = changedFiles.find(
-                (candidate) => candidate.fileId === item.id,
-              );
-              return file ? <FileStats file={file} /> : null;
-            }}
-            renderHeaderFilenameSuffix={(item) => {
-              const file = changedFiles.find(
-                (candidate) => candidate.fileId === item.id,
-              );
-              if (!file || !onReviewedChange) return null;
-              const reviewed = reviewedFileIds.has(file.fileId);
-              return (
-                <button
-                  type="button"
-                  className={`workspace-compare-reviewed ${reviewed ? "is-reviewed" : ""}`}
-                  onClick={() => onReviewedChange(file.fileId, !reviewed)}
-                >
-                  {reviewed && <Check aria-hidden="true" />}
-                  {reviewed ? "Reviewed" : "Mark reviewed"}
-                </button>
-              );
-            }}
-            renderAnnotation={(annotation) => (
-              <div
-                className={`workspace-compare-annotation is-${annotation.metadata.placement ?? "current"}`}
-              >
-                <div>
-                  <strong>
-                    {annotation.metadata.authorLabel ?? "Comment"}
-                  </strong>
-                  {annotation.metadata.placement === "outdated" && (
-                    <span>Outdated</span>
-                  )}
-                </div>
-                <p>{annotation.metadata.body}</p>
-                {onDeleteAnnotation && (
-                  <button
-                    type="button"
-                    onClick={() => onDeleteAnnotation(annotation.metadata)}
-                  >
-                    Delete
-                  </button>
-                )}
-                {onSelectAnnotation && (
-                  <button
-                    type="button"
-                    onClick={() => onSelectAnnotation(annotation.metadata)}
-                  >
-                    Open
-                  </button>
-                )}
-              </div>
-            )}
-            style={{ height: "100%", overflow: "auto" }}
-          />
-        )}
-        {comparison && unattemptedFiles.length > 0 && (
+      {restoreNotice && (
+        <div className="workspace-compare-restore-notice" role="status">
+          {restoreNotice}
           <button
             type="button"
-            className="workspace-compare-load-more"
-            onClick={() => {
-              const unloaded = unattemptedFiles.slice(0, NEXT_DIFF_BATCH_SIZE);
-              for (const file of unloaded) void ensurePatch(file);
+            onClick={() => setRestoreNotice(undefined)}
+            aria-label="Dismiss navigation notice"
+          >
+            <X />
+          </button>
+        </div>
+      )}
+      {reviewControls}
+      <div className="workspace-compare-workspace">
+        {!narrow && (
+          <div
+            className="workspace-compare-sidebar-slot"
+            style={{ width: navigatorWidth }}
+          >
+            {navigator}
+            <div
+              role="separator"
+              tabIndex={0}
+              aria-label="Resize changed file navigator"
+              aria-orientation="vertical"
+              aria-valuemin={180}
+              aria-valuemax={480}
+              aria-valuenow={navigatorWidth}
+              className="workspace-compare-sidebar-resize"
+              onKeyDown={(event) => {
+                if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                  event.preventDefault();
+                  setNavigatorWidth((width) =>
+                    Math.max(
+                      180,
+                      Math.min(
+                        480,
+                        width + (event.key === "ArrowRight" ? 16 : -16),
+                      ),
+                    ),
+                  );
+                }
+              }}
+              onPointerDown={(event) => {
+                event.preventDefault();
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={(event) => {
+                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                  const left =
+                    surfaceRef.current?.getBoundingClientRect().left ?? 0;
+                  setNavigatorWidth(
+                    Math.max(180, Math.min(480, event.clientX - left)),
+                  );
+                }
+              }}
+            />
+          </div>
+        )}
+        {narrow && navigatorOpen && (
+          <div
+            ref={drawerRef}
+            className="workspace-compare-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Changed files"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setNavigatorOpen(false);
+              if (event.key === "Tab") {
+                const targets = [
+                  ...event.currentTarget.querySelectorAll<HTMLElement>(
+                    'input,button,[tabindex="0"]',
+                  ),
+                ];
+                const index = targets.indexOf(
+                  document.activeElement as HTMLElement,
+                );
+                if (event.shiftKey && index <= 0) {
+                  event.preventDefault();
+                  targets.at(-1)?.focus();
+                } else if (!event.shiftKey && index === targets.length - 1) {
+                  event.preventDefault();
+                  targets[0]?.focus();
+                }
+              }
             }}
           >
-            Load more diffs ({loadedCount} of {changedFiles.length})
-          </button>
+            <button
+              className="workspace-compare-drawer-backdrop"
+              aria-label="Close changed file drawer"
+              onClick={() => setNavigatorOpen(false)}
+            />
+            {navigator}
+          </div>
         )}
-        {comparison &&
-          changedFiles.some((file) => {
-            const status = patches.get(file.fileId)?.status;
-            return status && status !== "loaded" && status !== "loading";
-          }) && (
-            <PatchNotices
-              files={changedFiles}
-              patches={patches}
-              onRetry={(file) => ensurePatch(file, { force: true })}
+        <div className="workspace-compare-body">
+          {initialLoading && (
+            <CompareState
+              icon={<LoaderCircle className="workspace-compare-spin" />}
+              title="Finding repositories…"
             />
           )}
+          {!initialLoading && notice && (
+            <CompareState
+              title={notice}
+              action={
+                comparison ? (
+                  <button type="button" onClick={() => void loadComparison()}>
+                    Refresh comparison
+                  </button>
+                ) : undefined
+              }
+            />
+          )}
+          {!initialLoading && !notice && !comparison && (
+            <CompareState title="Choose two sources, then start a comparison." />
+          )}
+          {comparison && changedFiles.length > 0 && (
+            <CodeView<WorkspaceCompareReviewAnnotation>
+              ref={codeViewRef}
+              containerRef={scrollContainerRef}
+              onScroll={onDiffScroll}
+              renderCustomHeader={(item) => {
+                const file = changedFiles.find(
+                  (candidate) => candidate.fileId === item.id,
+                );
+                if (!file) return null;
+                const load = patches.get(file.fileId);
+                const label =
+                  load?.status === "binary"
+                    ? "Binary file — no text diff"
+                    : load?.status === "too_large"
+                      ? "Diff exceeds the size limit"
+                      : load?.status === "invalid"
+                        ? "Patch could not be displayed"
+                        : load?.status === "unavailable"
+                          ? "Diff unavailable"
+                          : load?.status === "loading"
+                            ? "Loading diff…"
+                            : "Diff loads as you scroll";
+                return (
+                  <div
+                    className={
+                      item.type === "diff"
+                        ? "workspace-compare-file-header"
+                        : "workspace-compare-status-card"
+                    }
+                  >
+                    <strong
+                      title={
+                        file.oldPath &&
+                        file.newPath &&
+                        file.oldPath !== file.newPath
+                          ? `${file.oldPath} → ${file.newPath}`
+                          : workspaceCompareFilePath(file)
+                      }
+                    >
+                      {workspaceCompareFilePath(file)}
+                    </strong>
+                    {item.type === "diff" && <FileStats file={file} />}
+                    {item.type !== "diff" && (
+                      <span
+                        className="workspace-compare-status-label"
+                        title={label}
+                      >
+                        <span className="workspace-compare-status-full">
+                          {label}
+                        </span>
+                        <span className="workspace-compare-status-short">
+                          {load?.status === "binary"
+                            ? "Binary"
+                            : load?.status === "too_large"
+                              ? "Too large"
+                              : load?.status === "unavailable" ||
+                                  load?.status === "invalid"
+                                ? "Unavailable"
+                                : load?.status === "loading"
+                                  ? "Loading…"
+                                  : "Pending"}
+                        </span>
+                      </span>
+                    )}
+                    {file.newPath && onOpenFile && (
+                      <button
+                        type="button"
+                        className="workspace-compare-header-action"
+                        aria-label="Open file"
+                        title="Open file"
+                        onClick={() => onOpenFile(file.newPath!)}
+                      >
+                        <span className="workspace-compare-header-action-icon">
+                          <FileText aria-hidden="true" />
+                        </span>
+                        <span className="workspace-compare-header-action-label">
+                          Open file
+                        </span>
+                      </button>
+                    )}
+                    {onReviewedChange && load && load.status !== "loading" && (
+                      <button
+                        type="button"
+                        className={`workspace-compare-header-action workspace-compare-reviewed ${reviewedFileIds.has(file.fileId) ? "is-reviewed" : ""}`}
+                        aria-label={
+                          reviewedFileIds.has(file.fileId)
+                            ? "Reviewed"
+                            : "Mark reviewed"
+                        }
+                        title={
+                          reviewedFileIds.has(file.fileId)
+                            ? "Reviewed"
+                            : "Mark reviewed"
+                        }
+                        aria-pressed={reviewedFileIds.has(file.fileId)}
+                        onClick={() =>
+                          onReviewedChange(
+                            file.fileId,
+                            !reviewedFileIds.has(file.fileId),
+                          )
+                        }
+                      >
+                        <span className="workspace-compare-header-action-icon">
+                          {reviewedFileIds.has(file.fileId) ? (
+                            <Check aria-hidden="true" />
+                          ) : (
+                            <Circle aria-hidden="true" />
+                          )}
+                        </span>
+                        <span className="workspace-compare-header-action-label">
+                          {reviewedFileIds.has(file.fileId)
+                            ? "Reviewed"
+                            : "Mark reviewed"}
+                        </span>
+                      </button>
+                    )}
+                    {(load?.status === "unavailable" ||
+                      load?.status === "invalid") && (
+                      <button
+                        type="button"
+                        className="workspace-compare-header-action"
+                        aria-label="Retry"
+                        title="Retry diff"
+                        onClick={() =>
+                          void ensurePatch(file, {
+                            force: true,
+                            priority: true,
+                          })
+                        }
+                      >
+                        <span className="workspace-compare-header-action-icon">
+                          <RotateCw aria-hidden="true" />
+                        </span>
+                        <span className="workspace-compare-header-action-label">
+                          Retry
+                        </span>
+                      </button>
+                    )}
+                  </div>
+                );
+              }}
+              className="workspace-compare-code-view"
+              items={items}
+              options={{
+                themeType,
+                diffStyle: effectivePreferences.diffStyle,
+                overflow: effectivePreferences.overflow,
+                stickyHeaders: true,
+                enableLineSelection: true,
+                enableGutterUtility: onCreateAnnotation !== undefined,
+                lineHoverHighlight: "number",
+                loadDiffFiles,
+                onLineSelectionEnd(range, context) {
+                  handleSelection(range, context.item);
+                },
+                onGutterUtilityClick(range, context) {
+                  if (!context.item || context.item.type !== "diff") return;
+                  const active = activeComparisonRef.current;
+                  const file = changedFilesRef.current.find(
+                    (candidate) => candidate.fileId === context.item.id,
+                  );
+                  const currentPatch =
+                    file && patchesRef.current.get(file.fileId);
+                  if (
+                    active &&
+                    file &&
+                    currentPatch?.status === "loaded" &&
+                    currentPatch.item.fileDiff === context.item.fileDiff
+                  )
+                    onCreateAnnotation?.({ comparison: active, file, range });
+                },
+              }}
+              selectedLines={selectedLines}
+              onSelectedLinesChange={setSelectedLines}
+              renderAnnotation={(annotation) => (
+                <div
+                  className={`workspace-compare-annotation is-${annotation.metadata.placement ?? "current"}`}
+                >
+                  <div>
+                    <strong>
+                      {annotation.metadata.authorLabel ?? "Comment"}
+                    </strong>
+                    {annotation.metadata.placement === "outdated" && (
+                      <span>Outdated</span>
+                    )}
+                  </div>
+                  <p>{annotation.metadata.body}</p>
+                  {onDeleteAnnotation && (
+                    <button
+                      type="button"
+                      onClick={() => onDeleteAnnotation(annotation.metadata)}
+                    >
+                      Delete
+                    </button>
+                  )}
+                  {onSelectAnnotation && (
+                    <button
+                      type="button"
+                      onClick={() => onSelectAnnotation(annotation.metadata)}
+                    >
+                      Open
+                    </button>
+                  )}
+                </div>
+              )}
+              style={{ height: "100%", overflow: "auto" }}
+            />
+          )}
+        </div>
       </div>
       {visible && pendingSelection && onAttachSelection && (
         <PierreSelectionAction
@@ -1246,78 +2270,6 @@ function workspaceCompareSelectionFailureMessage(
   }[reason];
 }
 
-function workspaceCompareSelectionLabel(
-  selection: WorkspaceDiffRevisionSelection | undefined,
-  revisions: readonly WorkspaceDiffRevisionDescriptor[],
-): string {
-  if (!selection) return "Select a revision";
-  if (selection.kind === "index") return "Index";
-  if (selection.kind === "working_tree") return "Working tree";
-  const revision = revisions.find(
-    (candidate) => candidate.revisionId === selection.revisionId,
-  );
-  return revision ? `${revision.label} · ${revision.shortHash}` : "Revision";
-}
-
-function RevisionSelect({
-  label,
-  selection,
-  revisions,
-  onChange,
-}: {
-  readonly label: string;
-  readonly selection?: WorkspaceDiffRevisionSelection;
-  readonly revisions: readonly WorkspaceDiffRevisionDescriptor[];
-  readonly onChange: (selection: WorkspaceDiffRevisionSelection) => void;
-}): React.JSX.Element {
-  return (
-    <label>
-      <span>{label}</span>
-      <select
-        aria-label={`${label} revision`}
-        value={selection ? workspaceCompareSelectionKey(selection) : ""}
-        onChange={(event) => {
-          const next = workspaceCompareSelectionFromKey(
-            event.target.value,
-            revisions,
-          );
-          if (next) onChange(next);
-        }}
-      >
-        {!selection && <option value="">Select a revision</option>}
-        {revisions.map((revision) => (
-          <option
-            key={revision.revisionId}
-            value={workspaceCompareSelectionKey({
-              kind: "revision",
-              revisionId: revision.revisionId,
-            })}
-          >
-            {revision.label} · {revision.shortHash}
-          </option>
-        ))}
-        <option value="index">Index (staged)</option>
-        <option value="working_tree">Working tree</option>
-      </select>
-    </label>
-  );
-}
-
-function ChangeBadge({
-  file,
-}: {
-  readonly file: WorkspaceDiffChangedFileSummary;
-}): React.JSX.Element {
-  return (
-    <span
-      className={`workspace-compare-change is-${file.changeKind}`}
-      title={workspaceCompareChangeLabel(file.changeKind)}
-    >
-      {workspaceCompareChangeLabel(file.changeKind).slice(0, 1)}
-    </span>
-  );
-}
-
 function FileStats({
   file,
 }: {
@@ -1351,50 +2303,6 @@ function CompareState({
       {icon}
       <p>{title}</p>
       {action}
-    </div>
-  );
-}
-
-function PatchNotices({
-  files,
-  patches,
-  onRetry,
-}: {
-  readonly files: readonly WorkspaceDiffChangedFileSummary[];
-  readonly patches: ReadonlyMap<WorkspaceDiffFileId, PatchLoad>;
-  readonly onRetry: (file: WorkspaceDiffChangedFileSummary) => Promise<boolean>;
-}): React.JSX.Element {
-  const unavailable = files.filter((file) => {
-    const status = patches.get(file.fileId)?.status;
-    return status && status !== "loaded" && status !== "loading";
-  });
-  return (
-    <div
-      className="workspace-compare-patch-notices"
-      aria-label="Diffs that could not be displayed"
-    >
-      {unavailable.map((file) => {
-        const load = patches.get(file.fileId)!;
-        const message =
-          load.status === "binary"
-            ? "Binary file"
-            : load.status === "too_large"
-              ? "Patch is too large"
-              : load.status === "invalid"
-                ? "Patch could not be parsed"
-                : "Patch is unavailable";
-        return (
-          <div key={file.fileId}>
-            <span>{workspaceCompareFilePath(file)}</span>
-            <span>{message}</span>
-            {load.status === "unavailable" && (
-              <button type="button" onClick={() => void onRetry(file)}>
-                Retry
-              </button>
-            )}
-          </div>
-        );
-      })}
     </div>
   );
 }

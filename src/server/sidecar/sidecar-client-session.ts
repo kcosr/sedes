@@ -16,7 +16,7 @@ import {
   interactiveTerminalV2Operations,
   workspaceFilesInvalidatedEventSchema,
   workspaceFilesWatchFailedEventSchema,
-  workspaceFilesV7Operations,
+  workspaceFilesV8Operations,
   workspaceFilesDownloadTerminalSchema,
   workspaceToolsShellTerminalSchema,
   workspaceContextV1Operations,
@@ -99,7 +99,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
     this.#removeEventListeners = Object.freeze([
       input.peer.onEvent({
         capabilityId: "workspace_files",
-        majorVersion: 7,
+        majorVersion: 8,
         event: "files.invalidated",
         schema: workspaceFilesInvalidatedEventSchema,
         listener: ({ subscriptionHandle }) => {
@@ -114,7 +114,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
       }),
       input.peer.onEvent({
         capabilityId: "workspace_files",
-        majorVersion: 7,
+        majorVersion: 8,
         event: "files.watch_failed",
         schema: workspaceFilesWatchFailedEventSchema,
         listener: (event) => {
@@ -239,7 +239,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
             : authorized.capabilityId === "interactive_terminal"
               ? interactiveTerminalV2Operations
               : authorized.capabilityId === "workspace_files"
-                ? workspaceFilesV7Operations
+                ? workspaceFilesV8Operations
                 : authorized.capabilityId === "workspace_tools"
                   ? [
                       ...workspaceToolsV2Operations,
@@ -349,7 +349,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
     return this.#peer.registerIncomingStream({
       streamId: input.streamId,
       capabilityId: "workspace_files",
-      majorVersion: 7,
+      majorVersion: 8,
       initialCreditBytes: input.initialCreditBytes,
       terminalSchema: workspaceFilesDownloadTerminalSchema,
       onData: input.onData,
@@ -521,7 +521,7 @@ function validateAuthorizedCapabilities(
       (capability, index) =>
         capability.majorVersion !==
           (capability.capabilityId === "workspace_files"
-            ? 7
+            ? 8
             : capability.capabilityId === "workspace_tools"
               ? 2
             : capability.capabilityId === "agent_tools_cli"

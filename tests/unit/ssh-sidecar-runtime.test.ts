@@ -87,7 +87,7 @@ function fixture(
     isAutomaticConnectionEnabled: () => true,
     isTransportAvailable: options.isTransportAvailable,
     authorizedCapabilities: [
-      { capabilityId: "workspace_files", majorVersion: 7 },
+      { capabilityId: "workspace_files", majorVersion: 8 },
       ...(options.terminal ? [{ capabilityId: "interactive_terminal" as const, majorVersion: 2 as const }] : []),
       ...(options.agentTools
         ? ([{ capabilityId: "agent_tools_cli", majorVersion: 3 }] as const)
@@ -667,7 +667,7 @@ describe("SidecarRuntimeOwner", () => {
       authorizedRuntimeCapabilities: [],
       isAutomaticConnectionEnabled: () => true,
       authorizedCapabilities: [
-        { capabilityId: "workspace_files", majorVersion: 7 },
+        { capabilityId: "workspace_files", majorVersion: 8 },
       ],
       activeEnvironmentConfigurationRevision: () => 3,
       activeOperationsConfigurationRevision: () => 7,
@@ -719,7 +719,7 @@ describe("SidecarRuntimeOwner", () => {
       authorizedRuntimeCapabilities: [],
       isAutomaticConnectionEnabled: () => true,
       authorizedCapabilities: [
-        { capabilityId: "workspace_files", majorVersion: 7 },
+        { capabilityId: "workspace_files", majorVersion: 8 },
       ],
       activeEnvironmentConfigurationRevision: () => 3,
       activeOperationsConfigurationRevision: () => 7,
@@ -821,7 +821,7 @@ describe("SidecarRuntimeOwner", () => {
       authorizedRuntimeCapabilities: [],
       isAutomaticConnectionEnabled: () => true,
       authorizedCapabilities: [
-        { capabilityId: "workspace_files", majorVersion: 7 },
+        { capabilityId: "workspace_files", majorVersion: 8 },
       ],
       activeEnvironmentConfigurationRevision: () => 3,
       activeOperationsConfigurationRevision: () => 7,
@@ -878,7 +878,7 @@ class FakeSession implements SidecarRuntimeSession {
   });
 
   constructor(closeError?: Error, closeGate?: Promise<void>, terminalSupported = false) {
-    this.negotiatedCapabilities = [{ capabilityId: "workspace_files", majorVersion: 7, operations: ["root.open"] }, ...(terminalSupported ? [{ capabilityId: "interactive_terminal", majorVersion: 2, operations: ["terminal.prepare"] }] : [])];
+    this.negotiatedCapabilities = [{ capabilityId: "workspace_files", majorVersion: 8, operations: ["root.open"] }, ...(terminalSupported ? [{ capabilityId: "interactive_terminal", majorVersion: 2, operations: ["terminal.prepare"] }] : [])];
     this.#closeError = closeError;
     this.#closeGate = closeGate;
   }

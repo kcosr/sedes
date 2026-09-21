@@ -14,7 +14,7 @@ export interface WorkspaceComparePreferences {
 
 export const DEFAULT_WORKSPACE_COMPARE_PREFERENCES: WorkspaceComparePreferences =
   {
-    diffStyle: "unified",
+    diffStyle: "split",
     overflow: "scroll",
   };
 
@@ -29,11 +29,14 @@ export function effectiveWorkspaceComparePreferences(
 
 export function defaultWorkspaceCompareSelections(
   revisions: readonly WorkspaceDiffRevisionDescriptor[],
+  headCommitHash?: string,
 ): {
   readonly base?: WorkspaceDiffRevisionSelection;
   readonly head: WorkspaceDiffRevisionSelection;
 } {
-  const first = revisions[0];
+  const first = revisions.find((revision) => revision.isCurrentBranch)
+    ?? revisions.find((revision) => revision.kind === "commit" && revision.commitHash === headCommitHash)
+    ?? revisions[0];
   return {
     ...(first
       ? { base: { kind: "revision", revisionId: first.revisionId } as const }
@@ -122,4 +125,43 @@ export function workspaceCompareChangeLabel(
     type_changed: "Type changed",
     unmerged: "Unmerged",
   }[changeKind];
+}
+
+export function workspaceCompareSelectionLabel(
+  selection: WorkspaceDiffRevisionSelection | undefined,
+  revisions: readonly WorkspaceDiffRevisionDescriptor[],
+): string {
+  if (!selection) return "Select a revision";
+  if (selection.kind === "index") return "Staged changes";
+  if (selection.kind === "working_tree") return "Working tree";
+  const revision = revisions.find((candidate) => candidate.revisionId === selection.revisionId);
+  if (!revision) return "Revision unavailable";
+  return revision.kind === "commit"
+    ? `${revision.summary || "Untitled commit"} · ${revision.shortHash}`
+    : revision.label;
+}
+
+export type WorkspaceComparePreset = "uncommitted" | "staged" | "branches";
+
+export function workspaceComparePresetSelections(
+  preset: WorkspaceComparePreset,
+  revisions: readonly WorkspaceDiffRevisionDescriptor[],
+  headCommitHash?: string,
+): { readonly base?: WorkspaceDiffRevisionSelection; readonly head: WorkspaceDiffRevisionSelection; readonly mode: "direct" | "merge_base" } {
+  const defaults = defaultWorkspaceCompareSelections(revisions, headCommitHash);
+  if (preset === "uncommitted") return { ...defaults, mode: "direct" };
+  if (preset === "staged") return { base: defaults.base, head: { kind: "index" }, mode: "direct" };
+  const branches = revisions.filter((revision) => revision.kind === "local_branch" || revision.kind === "remote_branch");
+  const current = branches.find((revision) => revision.isCurrentBranch) ?? branches[0];
+  const other = branches.find((revision) => revision !== current && revision.label === "main")
+    ?? branches.find((revision) => revision !== current && revision.label === "master")
+    ?? branches.find((revision) => revision !== current);
+  const currentIsMainline = current?.label === "main" || current?.label === "master";
+  const baseBranch = currentIsMainline ? current : other;
+  const compareBranch = currentIsMainline ? other : current;
+  return {
+    ...(baseBranch ? { base: { kind: "revision" as const, revisionId: baseBranch.revisionId } } : {}),
+    head: compareBranch ? { kind: "revision", revisionId: compareBranch.revisionId } : defaults.head,
+    mode: baseBranch && compareBranch ? "merge_base" : "direct",
+  };
 }

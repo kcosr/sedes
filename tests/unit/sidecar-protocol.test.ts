@@ -15,8 +15,9 @@ import {
   sidecarAgentToolCliMetadataSchema,
   workspaceFilesInvalidatedEventSchema,
   workspaceFilesDiffCreateComparisonOperation,
+  workspaceFilesDiffRefCatalogOperation,
   workspaceFilesDiffValidateReviewAnchorOperation,
-  workspaceFilesV7Operations,
+  workspaceFilesV8Operations,
   workspaceFilesWriteOperation,
   type SidecarFrame,
   type SidecarFrameLane,
@@ -89,12 +90,24 @@ const agentToolInvokeOperation = defineSidecarOperation({
 });
 
 describe("sidecar private protocol", () => {
-  it("exposes one closed workspace_files@7 inventory with bounded worktree discovery", () => {
+  it("keeps revision history and exact resolver validation strict across the sidecar", () => {
+    const query = { rootHandle: randomUUID(), repositoryId: "repository-1", pageSize: 20, history: "revision:revision-1", resolveRef: "refs/heads/feature/layout" };
+    expect(workspaceFilesDiffRefCatalogOperation.requestSchema.parse(query)).toEqual(query);
+    for (const extra of [
+      { history: "HEAD~1" },
+      { resolveRef: "refs/heads/main~1" },
+      { resolveCommit: "a".repeat(40) },
+      { after: "unknown" },
+    ]) expect(workspaceFilesDiffRefCatalogOperation.requestSchema.safeParse({ ...query, ...extra }).success).toBe(false);
+    expect(workspaceFilesDiffRefCatalogOperation.requestSchema.safeParse({ ...query, resolveRef: undefined, resolveCommit: "a".repeat(40), history: "all" }).success).toBe(true);
+  });
+
+  it("exposes one closed workspace_files@8 inventory with bounded worktree discovery", () => {
     expect(
-      workspaceFilesV7Operations.map((definition) => definition.majorVersion),
-    ).toEqual(workspaceFilesV7Operations.map(() => 7));
+      workspaceFilesV8Operations.map((definition) => definition.majorVersion),
+    ).toEqual(workspaceFilesV8Operations.map(() => 8));
     expect(
-      workspaceFilesV7Operations
+      workspaceFilesV8Operations
         .map((definition) => definition.operation)
         .sort(),
     ).toEqual([

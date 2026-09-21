@@ -83,7 +83,7 @@ refreshes root topology; loaded directories and clean editor contents are
 refreshed explicitly. The Files events API remains available for explicit
 consumers; its filesystem and Git-metadata invalidations can also refresh
 topology when a consumer holds a subscription.
-SSH uses the same behavior through `workspace_files@7` and never interprets
+SSH uses the same behavior through `workspace_files@8` and never interprets
 remote paths on the Sedes host.
 
 Each principal/thread stores a nullable preferred linked-worktree root ID and
@@ -295,34 +295,64 @@ become available again after the filesystem or environment policy is repaired.
 
 ## Compare mode
 
-Compare is a retained second mode inside Files. Browse and Compare share the
-thread's effective project root and the panel's supplemental-root tabs.
-Switching modes never unmounts open file tabs, never writes Browse drafts, and
-never resizes the open document just to show the tree or changed-files
-overlays.
+The user-facing **Changes** mode is retained beside Browse inside Files.
+Both modes share the effective root; open Browse documents and unsaved edits
+remain mounted during mode changes. Open file from a diff explicitly selects
+its current new path in Browse; deleted content does not open another file.
 
-Compare is available only when the active root resolves to a Git repository.
-Direct strategy can compare a repository revision, the Git index, or the
-working tree on either side. Merge-base strategy requires revisions on both
-sides. The UI exposes:
+The changed-file navigator is grouped, virtualized, resizable, and independent
+of patch availability. Actual panel width determines whether it is a persistent
+sidebar or a drawer and whether split diffs fit. Preferred split/unified and
+wrap/scroll settings remain separate from their effective narrow presentation.
+The existing Pierre CodeView renders a continuous document. Unloaded and
+terminal states use collapsed non-selectable file items with explicit status
+headers, never fabricated patches. Nearby files load through a bounded queue;
+large comparisons retain a bounded patch cache and preserve semantic anchors
+while distant patches are evicted. Hidden panels stop prefetching. Metadata
+pagination remains separate from patch loading.
 
-- repository, Base, Compare, and strategy selectors;
-- unified or split diff layout, with split automatically disabled on narrow
-  widths;
-- a changed-files overlay that opens under the Files button without resizing
-  the diff canvas;
-- exact diff-line context attachment into the active thread draft; and
-- durable review comments plus per-file reviewed state for the active exact
-  comparison.
+Repository discovery returns a stable `repositoryKey`. Revision catalogs contain
+local/remote branches, tags, and recent commits with messages and commit dates. The current branch
+is marked explicitly. Commit history defaults to HEAD and can select another
+catalog revision or all branches. Search is over the bounded catalog, whose
+truncation is visible. The catalog's optional exact full ref/full commit
+resolver supports saved navigation beyond the recent commit window; it accepts
+neither arbitrary Git expressions nor refs outside heads/remotes/tags. Named
+refs resolve again for refresh; selected commit hashes stay pinned. Direct
+comparison shows differences between endpoint contents; merge-base comparison
+shows changes from the common ancestor to the Compare endpoint. Mutable
+index/working-tree endpoints only support direct comparison.
 
-The revision catalog remains grouped by revision kind. Recent commit entries
-are ordered by commit time, newest first; entries without a commit time follow
-dated commits with stable label and hash tie-breakers.
+Navigation is client-local principal-owned state. Authentication status and
+management pairing expose an opaque namespace derived from the installation's
+persisted key and server-resolved tenant/principal, never from a credential.
+It is combined with the server origin. Bounded versioned records scope mode,
+endpoint intent, repository identity, file/line/side anchors, up to 32 per-file
+return locations, filter, directory expansion, navigator width, display
+preferences, and selected review by workspace/root. Writes debounce and flush
+on mode transitions, panel hiding, and page hiding. Runtime handles, patches,
+and full file contents are not persisted. Invalid/obsolete records are
+rejected; storage denial retains bounded memory state. Restoration obtains
+fresh handles, resolves semantic endpoints, prioritizes the target file, and
+uses exact line anchors only for an unchanged fingerprint. Changed comparisons
+return to the file header with a notice. Missing revisions require explicit
+reselection.
 
-Compare is read-only against Git and the filesystem. It does not stage files,
-write the worktree, create commits, or rewrite refs. Unsaved Browse drafts are
-excluded from the comparison and are called out explicitly while Compare is
-visible.
+Changes is read-only against Git and the filesystem. It never stages files,
+writes the worktree, creates commits, or rewrites refs. Unsaved Browse drafts
+are excluded and called out while Changes is visible. The shell owns root and
+Browse state; the comparison surface owns endpoint intent, patch scheduling,
+and navigation. Review state remains separate and never supplies historical
+inline collections when no current review exists. Historical edits operate on
+their original review without creating a current review. Comment creation
+checks its captured comparison before and after asynchronous review creation.
+
+The normalized browser contract is version 116; sidecar Files uses the strict
+`workspace_files@8` contract, including scoped catalogs and stable repository
+keys. Local and SSH/outbound engines use the same revision resolver and bounds.
+Pi, Codex, Claude, and Grok consume the shared environment-owned Files surface:
+no provider event, SDK, or history contract changes. Unsupported execution
+environments retain capability denial and never fall back to server-local Git.
 
 Diff review state is principal-owned Sedes application state scoped to the
 current workspace, effective Files root, and canonical repository identity.

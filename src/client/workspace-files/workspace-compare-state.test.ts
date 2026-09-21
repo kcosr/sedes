@@ -11,6 +11,8 @@ import {
   workspaceCompareSelectionFromKey,
   workspaceCompareSelectionKey,
   workspaceCompareSupportsMergeBase,
+  workspaceComparePresetSelections,
+  workspaceCompareSelectionLabel,
 } from "./workspace-compare-state.js";
 
 describe("workspace compare state", () => {
@@ -29,6 +31,24 @@ describe("workspace compare state", () => {
       base: { kind: "revision", revisionId: "rev-main" },
       head: { kind: "working_tree" },
     });
+  });
+
+  it("defaults to the current branch and chooses a sensible branch review base", () => {
+    const current = { ...revisions[0]!, revisionId: "feature" as never, label: "feature", isCurrentBranch: true };
+    const catalog = [...revisions, current];
+    expect(defaultWorkspaceCompareSelections(catalog).base).toEqual({ kind: "revision", revisionId: "feature" });
+    expect(workspaceComparePresetSelections("branches", catalog)).toEqual({ base: { kind: "revision", revisionId: "rev-main" }, head: { kind: "revision", revisionId: "feature" }, mode: "merge_base" });
+    expect(workspaceComparePresetSelections("branches", catalog.map(revision => ({ ...revision, isCurrentBranch: revision.label === "main" })))).toEqual({ base: { kind: "revision", revisionId: "rev-main" }, head: { kind: "revision", revisionId: "feature" }, mode: "merge_base" });
+    expect(workspaceComparePresetSelections("staged", catalog)).toEqual({ base: { kind: "revision", revisionId: "feature" }, head: { kind: "index" }, mode: "direct" });
+    expect(workspaceComparePresetSelections("uncommitted", catalog).head).toEqual({ kind: "working_tree" });
+  });
+
+  it("uses exact detached HEAD instead of a clock-skewed ancestor and labels commit messages", () => {
+    const ancestor = { ...revisions[0]!, kind: "commit" as const, summary: "Ancestor" };
+    const head = { ...ancestor, revisionId: "head" as never, commitHash: "b".repeat(40), shortHash: "bbbbbbb", summary: "Checked out commit" };
+    const selection = defaultWorkspaceCompareSelections([ancestor, head], head.commitHash).base;
+    expect(selection).toEqual({ kind: "revision", revisionId: "head" });
+    expect(workspaceCompareSelectionLabel(selection, [ancestor, head])).toBe("Checked out commit · bbbbbbb");
   });
 
   it("round trips only catalogued opaque revision selectors", () => {

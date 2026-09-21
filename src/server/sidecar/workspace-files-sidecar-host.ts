@@ -7,7 +7,7 @@ import {
   workspaceFilesMutationInspectOperation,
   type SidecarOutboundStream,
   type WorkspaceFilesDownloadTerminal,
-  type WorkspaceFilesV7Handlers,
+  type WorkspaceFilesV8Handlers,
 } from "../../internal/sidecar-protocol/index.js";
 import {
   WorkspaceFileAccessError,
@@ -54,7 +54,7 @@ interface ActiveDownload {
 
 /** Sidecar-only authority adapter over the shared Files engine. */
 export class WorkspaceFilesSidecarHost {
-  readonly handlers: WorkspaceFilesV7Handlers;
+  readonly handlers: WorkspaceFilesV8Handlers;
   readonly #sessionNonce: string;
   readonly #engine: WorkspaceFilesEngine;
   readonly #diffsEngine: WorkspaceDiffsEngine;

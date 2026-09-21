@@ -157,8 +157,10 @@ export function compareWorkspaceDiffRevisionDescriptors(
   left: WorkspaceDiffRevisionDescriptor,
   right: WorkspaceDiffRevisionDescriptor,
 ): number {
-  const kindOrder = left.kind.localeCompare(right.kind);
+  const kinds = { local_branch: 0, remote_branch: 1, tag: 2, commit: 3 };
+  const kindOrder = kinds[left.kind] - kinds[right.kind];
   if (kindOrder !== 0) return kindOrder;
+  if (Boolean(left.isCurrentBranch) !== Boolean(right.isCurrentBranch)) return left.isCurrentBranch ? -1 : 1;
   if (left.kind === "commit" && right.kind === "commit") {
     const leftCommittedAt = left.committedAt ? Date.parse(left.committedAt) : Number.NaN;
     const rightCommittedAt = right.committedAt ? Date.parse(right.committedAt) : Number.NaN;
@@ -349,6 +351,7 @@ export class WorkspaceDiffsEngine {
       .then(({ stdout }) => stdout.trim() || undefined)
       .catch(() => undefined);
     const descriptor: WorkspaceDiffRepositoryDescriptor = {
+      repositoryKey: digest(durableKey, repositoryPath),
       repositoryId,
       rootId: rootTarget.rootId,
       displayName: path.basename(repositoryPath),
@@ -380,70 +383,113 @@ export class WorkspaceDiffsEngine {
     const repository = await this.#repository(rootTarget, query.repositoryId);
     if (!repository) return unavailable("workspace_diff_repository_unavailable");
     const requested = Math.min(query.pageSize, WORKSPACE_DIFF_MAX_REFS);
+    const currentBranch = await this.#git(repository, ["symbolic-ref", "--quiet", "--short", "HEAD"], 4_096)
+      .then(({ stdout }) => stdout.trim()).catch(() => undefined);
+    const headHash = await this.#headCommit(repository);
+    let historyTarget = headHash;
+    if (query.history?.startsWith("revision:")) {
+      const selected = this.#revisions.get(query.history.slice(9) as WorkspaceDiffRevisionId);
+      if (!selected || selected.repositoryId !== repository.repositoryId) {
+        return unavailable("workspace_diff_revision_unavailable");
+      }
+      selected.lastUsedAt = this.#clock();
+      historyTarget = selected.oid;
+    }
+    const classify = (refName: string) => refName.startsWith("refs/heads/")
+      ? { kind: "local_branch" as const, label: refName.slice(11) }
+      : refName.startsWith("refs/remotes/")
+        ? { kind: "remote_branch" as const, label: refName.slice(13) }
+        : refName.startsWith("refs/tags/")
+          ? { kind: "tag" as const, label: refName.slice(10) } : undefined;
+    const descriptors: WorkspaceDiffRevisionDescriptor[] = [];
+    const add = (descriptor: WorkspaceDiffRevisionDescriptor) => {
+      if (!descriptors.some((candidate) => candidate.revisionId === descriptor.revisionId)) descriptors.push(descriptor);
+    };
+    const readCommit = async (oid: string) => {
+      const result = await this.#git(repository, ["show", "--no-patch", "--format=%H%x00%ct%x00%s", oid, "--"], MAX_GIT_REF_BYTES);
+      const [hash, timestamp, summary] = result.stdout.trimEnd().split("\0");
+      if (!hash || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(hash)) return undefined;
+      return this.#revision(repository, "commit", hash.slice(0, 12), hash, {
+        ...(summary ? { summary: summary.slice(0, 500) } : {}),
+        ...(timestamp && /^\d+$/u.test(timestamp) ? { committedAt: new Date(Number(timestamp) * 1_000).toISOString() } : {}),
+      });
+    };
+    if (query.resolveRef || query.resolveCommit) {
+      try {
+        let target = query.resolveRef ?? query.resolveCommit!;
+        if (query.resolveRef) {
+          await this.#git(repository, ["check-ref-format", query.resolveRef], 1_024);
+          // Snapshot the exact ref once. Peeling its OID prevents a concurrent deletion
+          // from turning the later rev-parse into a DWIM lookup of another ref.
+          target = (await this.#git(repository, ["show-ref", "--verify", "--hash", "--", query.resolveRef], 1_024)).stdout.trim();
+        }
+        const oid = (await this.#git(repository, ["rev-parse", "--verify", "--end-of-options", `${target}^{commit}`], 1_024)).stdout.trim();
+        const classification = query.resolveRef ? classify(query.resolveRef) : undefined;
+        const resolved = classification
+          ? this.#revision(repository, classification.kind, classification.label, oid, {
+            ...(classification.kind === "local_branch" && classification.label === currentBranch ? { isCurrentBranch: true } : {}),
+          })
+          : await readCommit(oid);
+        if (!resolved) return unavailable("workspace_diff_revision_unavailable");
+        add(resolved);
+      } catch {
+        return unavailable("workspace_diff_revision_unavailable");
+      }
+    }
+    // Always reserve the checked-out source, including detached HEAD, before bounded catalogs.
+    if (headHash && descriptors.length < requested) {
+      if (currentBranch) add(this.#revision(repository, "local_branch", currentBranch, headHash, { isCurrentBranch: true }));
+      else {
+        const detached = await readCommit(headHash).catch(() => undefined);
+        if (detached) add(detached);
+      }
+    }
     let refs: string;
     try {
       ({ stdout: refs } = await this.#git(repository, [
-        "for-each-ref",
-        `--count=${requested + 1}`,
+        "for-each-ref", `--count=${requested + 1}`, "--sort=refname",
         "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(objecttype)%00%(*objecttype)",
         "refs/heads", "refs/remotes", "refs/tags",
       ], MAX_GIT_REF_BYTES));
     } catch {
       return unavailable("workspace_diff_ref_catalog_unavailable");
     }
-    const descriptors: WorkspaceDiffRevisionDescriptor[] = [];
     let truncated = false;
+    // Reserve half the page for history so many refs cannot hide every commit.
+    const refLimit = Math.max(descriptors.length, Math.ceil(requested / 2));
     for (const line of refs.split("\n")) {
       if (!line) continue;
-      if (descriptors.length >= requested) {
-        truncated = true;
-        break;
-      }
       const [refName, objectName, peeledName, objectType, peeledType] = line.split("\0");
       if (!refName || !objectName) continue;
-      const oid = objectType === "commit" ? objectName
-        : peeledType === "commit" ? peeledName : undefined;
+      const oid = objectType === "commit" ? objectName : peeledType === "commit" ? peeledName : undefined;
       if (!oid || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(oid)) continue;
-      const classification = refName.startsWith("refs/heads/")
-        ? { kind: "local_branch" as const, label: refName.slice(11) }
-        : refName.startsWith("refs/remotes/")
-          ? { kind: "remote_branch" as const, label: refName.slice(13) }
-          : refName.startsWith("refs/tags/")
-            ? { kind: "tag" as const, label: refName.slice(10) }
-            : undefined;
+      const classification = classify(refName);
       if (!classification || Buffer.byteLength(classification.label, "utf8") > 1_024) continue;
-      descriptors.push(this.#revision(repository, classification.kind, classification.label, oid));
+      if (descriptors.some((candidate) => candidate.kind === classification.kind && candidate.label === classification.label)) continue;
+      if (descriptors.length >= refLimit) { truncated = true; continue; }
+      add(this.#revision(repository, classification.kind, classification.label, oid));
     }
     const remaining = Math.max(0, requested - descriptors.length);
-    if (remaining > 0) {
+    if (remaining > 0 && (historyTarget || query.history === "all")) {
       const recent = await this.#git(repository, [
-        "log", "--all", `--max-count=${remaining + 1}`, "--format=%H%x00%ct%x00%s",
+        "log", "--date-order", `--max-count=${remaining + 1}`, "--format=%H%x00%ct%x00%s",
+        ...(query.history === "all" ? ["--all"] : [historyTarget!]), "--",
       ], MAX_GIT_REF_BYTES).catch(() => undefined);
-      for (const line of recent?.stdout.split("\n") ?? []) {
-        if (descriptors.length >= requested) {
-          truncated = true;
-          break;
-        }
+      if (!recent) return unavailable("workspace_diff_ref_catalog_unavailable");
+      for (const line of recent.stdout.split("\n")) {
+        if (!line) continue;
         const [oid, timestamp, summary] = line.split("\0");
         if (!oid || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(oid)) continue;
-        const descriptor = this.#revision(repository, "commit", oid.slice(0, 12), oid, {
+        if (descriptors.some((candidate) => candidate.kind === "commit" && candidate.commitHash === oid)) continue;
+        if (descriptors.length >= requested) { truncated = true; break; }
+        add(this.#revision(repository, "commit", oid.slice(0, 12), oid, {
           ...(summary ? { summary: summary.slice(0, 500) } : {}),
-          ...(timestamp && /^\d+$/u.test(timestamp)
-            ? { committedAt: new Date(Number(timestamp) * 1_000).toISOString() }
-            : {}),
-        });
-        if (!descriptors.some((candidate) => candidate.commitHash === oid && candidate.kind === "commit")) {
-          descriptors.push(descriptor);
-        }
+          ...(timestamp && /^\d+$/u.test(timestamp) ? { committedAt: new Date(Number(timestamp) * 1_000).toISOString() } : {}),
+        }));
       }
     }
     descriptors.sort(compareWorkspaceDiffRevisionDescriptors);
-    return {
-      status: "available",
-      repositoryId: repository.repositoryId,
-      revisions: descriptors.slice(0, requested),
-      truncated,
-    };
+    return { status: "available", repositoryId: repository.repositoryId, revisions: descriptors.slice(0, requested), truncated };
   }
 
   async #createComparisonForRoot(
@@ -880,7 +926,7 @@ export class WorkspaceDiffsEngine {
     kind: WorkspaceDiffRevisionDescriptor["kind"],
     label: string,
     oid: string,
-    extra: Pick<WorkspaceDiffRevisionDescriptor, "summary" | "committedAt"> = {},
+    extra: Pick<WorkspaceDiffRevisionDescriptor, "summary" | "committedAt" | "isCurrentBranch"> = {},
   ): WorkspaceDiffRevisionDescriptor {
     const key = `${repository.repositoryId}\0${kind}\0${label}\0${oid}`;
     let revisionId = this.#revisionIds.get(key);

@@ -344,7 +344,7 @@ describe("WorkspaceFilesSidecarHost", () => {
     const repositories = vi.fn(async () => ({
       status: "available" as const,
       repositories: [
-        { repositoryId, rootId: "primary" as const, displayName: "workspace" },
+        { repositoryId, repositoryKey: "repository-key-0001", rootId: "primary" as const, displayName: "workspace" },
       ],
     }));
     const host = new WorkspaceFilesSidecarHost({

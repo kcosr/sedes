@@ -500,3 +500,15 @@ boundaries. See [operations and security](../operator/operations.md).
 - [Configuration](../operator/configuration.md) — operator-owned topology and
   policy
 - [User documentation](../user/index.md) — user-facing concepts and workflows
+
+## Client navigation identity
+
+Management authentication status and pairing may include `navigationNamespace`,
+an opaque HMAC of the installation's persisted key and its server-resolved
+principal/tenant. Files uses it with server origin to scope local navigation
+records. It contains no credential and grants no authority. Required-auth
+unauthenticated status and sidecar enrollment do not expose it. An installation
+that explicitly disables authentication uses its same local-principal namespace.
+Changing credentials does not change the principal's navigation identity;
+changing installation, tenant, or principal does. Client protocol 116 carries
+the Files revision catalog contract used by this navigation restore path.

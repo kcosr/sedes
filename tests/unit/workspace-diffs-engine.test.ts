@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -102,13 +102,120 @@ describe("WorkspaceDiffsEngine", () => {
     expect(revisions.sort(compareWorkspaceDiffRevisionDescriptors).map(
       ({ kind, label }) => `${kind}:${label}`,
     )).toEqual([
+      "local_branch:main",
+      "tag:v1",
       "commit:newer-a",
       "commit:newer-z",
       "commit:older",
       "commit:missing-date",
-      "local_branch:main",
-      "tag:v1",
     ]);
+  });
+
+  it("scopes recent commits to HEAD or a selected branch, with explicit all-branch history", async () => {
+    const current = await fixture();
+    await git(current.directory, "switch", "-qc", "feature");
+    await git(current.directory, "commit", "--allow-empty", "-qm", "feature only");
+    const featureHash = (await git(current.directory, "rev-parse", "HEAD")).trim();
+    await git(current.directory, "switch", "-q", "main");
+    await git(current.directory, "commit", "--allow-empty", "-qm", "main only");
+    const { repository, refs } = await catalog(current);
+    expect(refs.find((ref) => ref.kind === "local_branch" && ref.isCurrentBranch)?.label).toBe("main");
+    expect(refs.filter((ref) => ref.kind === "commit").map((ref) => ref.summary)).toEqual(expect.arrayContaining(["initial", "main only"]));
+    expect(refs.some((ref) => ref.kind === "commit" && ref.commitHash === featureHash)).toBe(false);
+    const feature = refs.find((ref) => ref.kind === "local_branch" && ref.label === "feature")!;
+    const scoped = await current.engine.refCatalog(current.root, { repositoryId: repository.repositoryId, pageSize: 100, history: `revision:${feature.revisionId}` });
+    expect(scoped.status).toBe("available");
+    if (scoped.status !== "available") throw new Error("history unavailable");
+    expect(scoped.revisions.filter((ref) => ref.kind === "commit").map((ref) => ref.summary)).toEqual(expect.arrayContaining(["initial", "feature only"]));
+    expect(scoped.revisions.some((ref) => ref.kind === "commit" && ref.summary === "main only")).toBe(false);
+    const all = await current.engine.refCatalog(current.root, { repositoryId: repository.repositoryId, pageSize: 100, history: "all" });
+    expect(all.status).toBe("available");
+    if (all.status !== "available") throw new Error("history unavailable");
+    expect(all.revisions.filter((ref) => ref.kind === "commit").map((ref) => ref.summary)).toEqual(expect.arrayContaining(["initial", "main only", "feature only"]));
+    await expect(current.engine.refCatalog(current.root, { repositoryId: repository.repositoryId, pageSize: 100, history: "revision:unknown" })).resolves.toEqual({ status: "unavailable", diagnosticCode: "workspace_diff_revision_unavailable" });
+  });
+
+  it("isolates history IDs and exposes restart-stable root-scoped repository identity", async () => {
+    const engine = new WorkspaceDiffsEngine();
+    const first = await fixture(engine);
+    const second = await fixture(engine);
+    const left = await catalog(first);
+    const right = await catalog(second);
+    expect(left.repository.repositoryKey).not.toBe(right.repository.repositoryKey);
+    const restarted = await catalog({ ...first, engine: new WorkspaceDiffsEngine() });
+    expect(restarted.repository.repositoryKey).toBe(left.repository.repositoryKey);
+    expect(restarted.repository.repositoryId).not.toBe(left.repository.repositoryId);
+    const scoped = await first.engine.refCatalog(first.root, { repositoryId: left.repository.repositoryId, pageSize: 100, history: `revision:${right.refs[0]!.revisionId}` });
+    expect(scoped).toEqual({ status: "unavailable", diagnosticCode: "workspace_diff_revision_unavailable" });
+    const wrongPrincipal = await first.engine.repositories({ ...first.root, durableRootKey: "tenant-1\0principal-2\0workspace-1\0primary", operationKey: "tenant-1\0principal-2\0workspace-1\0primary" });
+    if (wrongPrincipal.status !== "available") throw new Error("repository unavailable");
+    expect(wrongPrincipal.repositories[0]!.repositoryKey).not.toBe(left.repository.repositoryKey);
+  });
+
+  it("resolves exact named refs and pinned commits outside a bounded catalog without revision expressions", async () => {
+    const current = await fixture();
+    const initial = (await git(current.directory, "rev-parse", "HEAD")).trim();
+    await git(current.directory, "branch", "zzz-old");
+    await git(current.directory, "commit", "--allow-empty", "-qm", "new head");
+    const { repository } = await catalog(current);
+    const resolve = (extra: { resolveCommit?: string; resolveRef?: string }) => current.engine.refCatalog(current.root, { repositoryId: repository.repositoryId, pageSize: 1, ...extra });
+    const pinned = await resolve({ resolveCommit: initial });
+    expect(pinned).toMatchObject({ status: "available", revisions: [{ kind: "commit", commitHash: initial, summary: "initial" }], truncated: true });
+    const named = await resolve({ resolveRef: "refs/heads/zzz-old" });
+    expect(named).toMatchObject({ status: "available", revisions: [{ kind: "local_branch", label: "zzz-old", commitHash: initial }], truncated: true });
+    await expect(resolve({ resolveRef: "refs/heads/zzz-old~1" })).resolves.toMatchObject({ status: "unavailable" });
+    await expect(resolve({ resolveRef: "refs/heads/missing" })).resolves.toMatchObject({ status: "unavailable" });
+    await expect(resolve({ resolveCommit: "f".repeat(40) })).resolves.toMatchObject({ status: "unavailable" });
+  });
+
+  it("pins the exact ref snapshot when its name disappears before commit peeling", async () => {
+    const current = await fixture();
+    const original = (await git(current.directory, "rev-parse", "HEAD")).trim();
+    await git(current.directory, "branch", "target");
+    await git(current.directory, "commit", "--allow-empty", "-qm", "replacement");
+    const replacement = (await git(current.directory, "rev-parse", "HEAD")).trim();
+    const { repository } = await catalog(current);
+    const realGit = (await execFile("which", ["git"], { encoding: "utf8" })).stdout.trim();
+    const shimDirectory = path.join(current.directory, "git-shim");
+    await mkdir(shimDirectory);
+    const shim = path.join(shimDirectory, "git");
+    await writeFile(shim, `#!${process.execPath}
+const { spawnSync } = require("node:child_process");
+const git = ${JSON.stringify(realGit)};
+const repository = ${JSON.stringify(current.directory)};
+const args = process.argv.slice(2);
+const result = spawnSync(git, args, { encoding: "utf8" });
+if (result.status === 0 && args.includes("show-ref") && args.at(-1) === "refs/heads/target") {
+  spawnSync(git, ["-C", repository, "update-ref", "-d", "refs/heads/target"]);
+  spawnSync(git, ["-C", repository, "update-ref", "refs/heads/refs/heads/target", ${JSON.stringify(replacement)}]);
+}
+process.stdout.write(result.stdout || "");
+process.stderr.write(result.stderr || "");
+process.exit(result.status ?? 1);
+`);
+    await chmod(shim, 0o700);
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = `${shimDirectory}:${previousPath ?? ""}`;
+      const result = await current.engine.refCatalog(current.root, { repositoryId: repository.repositoryId, pageSize: 1, resolveRef: "refs/heads/target" });
+      expect(result).toMatchObject({ status: "available", revisions: [{ kind: "local_branch", label: "target", commitHash: original }] });
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
+  it("keeps a listed revision pinned while resolving a named branch again at its new tip", async () => {
+    const current = await fixture();
+    const { repository, refs } = await catalog(current);
+    const original = refs.find((ref) => ref.isCurrentBranch)!;
+    await git(current.directory, "commit", "--allow-empty", "-qm", "advanced branch");
+    const resolved = await current.engine.refCatalog(current.root, { repositoryId: repository.repositoryId, pageSize: 100, resolveRef: "refs/heads/main" });
+    if (resolved.status !== "available") throw new Error("resolution unavailable");
+    const updated = resolved.revisions.find((ref) => ref.kind === "local_branch" && ref.label === "main")!;
+    expect(updated.commitHash).not.toBe(original.commitHash);
+    const comparison = await current.engine.createComparison(current.root, { repositoryId: repository.repositoryId, mode: "direct", base: { kind: "revision", revisionId: original.revisionId }, head: { kind: "revision", revisionId: updated.revisionId } });
+    expect(comparison).toMatchObject({ status: "available", comparison: { base: { commitHash: original.commitHash }, head: { commitHash: updated.commitHash } } });
   });
 
   it("compares only opaque catalog revisions and returns bounded patches and sides", async () => {
@@ -254,6 +361,34 @@ describe("WorkspaceDiffsEngine", () => {
     });
     expect(changed).toMatchObject({ status: "available", files: [{ oldPath: "safe.ts", newPath: "safe.ts" }] });
     if (changed.status === "available") expect(changed.files).toHaveLength(1);
+  });
+
+  it("distinguishes feature changes from direct differences between diverged branch tips", async () => {
+    const current = await fixture();
+    const ancestor = (await git(current.directory, "rev-parse", "HEAD")).trim();
+    await git(current.directory, "switch", "-qc", "feature");
+    await writeFile(path.join(current.directory, "feature.txt"), "feature only\n");
+    await git(current.directory, "add", "feature.txt");
+    await git(current.directory, "commit", "-qm", "feature work");
+    await git(current.directory, "switch", "-q", "main");
+    await writeFile(path.join(current.directory, "main.txt"), "main only\n");
+    await git(current.directory, "add", "main.txt");
+    await git(current.directory, "commit", "-qm", "main work");
+    const { repository, refs } = await catalog(current);
+    const main = refs.find((ref) => ref.kind === "local_branch" && ref.label === "main")!;
+    const feature = refs.find((ref) => ref.kind === "local_branch" && ref.label === "feature")!;
+    const compare = async (mode: "direct" | "merge_base") => {
+      const created = await current.engine.createComparison(current.root, { repositoryId: repository.repositoryId, mode, base: { kind: "revision", revisionId: main.revisionId }, head: { kind: "revision", revisionId: feature.revisionId } });
+      if (created.status !== "available") throw new Error("comparison unavailable");
+      const changed = await current.engine.changedFiles(current.root, { comparisonId: created.comparison.comparisonId, fingerprint: created.comparison.fingerprint, pageSize: 20 });
+      if (changed.status !== "available") throw new Error("files unavailable");
+      return { comparison: created.comparison, files: changed.files };
+    };
+    const direct = await compare("direct");
+    expect(direct.files.map((file) => [file.changeKind, file.newPath ?? file.oldPath])).toEqual([["added", "feature.txt"], ["deleted", "main.txt"]]);
+    const review = await compare("merge_base");
+    expect(review.comparison.mergeBaseCommitHash).toBe(ancestor);
+    expect(review.files.map((file) => [file.changeKind, file.newPath ?? file.oldPath])).toEqual([["added", "feature.txt"]]);
   });
 
   it("requires immutable revisions for merge-base and anchors only displayed hunk lines", async () => {

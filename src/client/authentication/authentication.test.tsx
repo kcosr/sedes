@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { useEffect } from "react";
+import { useContext, useEffect } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AuthenticationGate, readPairingToken } from "./AuthenticationGate.js";
+import { AuthenticationGate, NavigationScopeContext, readPairingToken } from "./AuthenticationGate.js";
 import { authenticatedFetch, getEndpointCredential, notifyUnauthorized, setEndpointCredential } from "./auth-transport.js";
 import { configuredSedesServer, sameOriginSedesServer } from "../app/server-endpoint.js";
 const native = vi.hoisted(() => ({ enabled: false, get: vi.fn(), set: vi.fn(), remove: vi.fn() }));
@@ -10,6 +10,44 @@ vi.mock("../app/client-platform.js", () => ({ isPackagedClient: () => native.ena
 vi.mock("../app/client-credentials.js", () => ({ getCredential: native.get, setCredential: native.set, removeCredential: native.remove }));
 afterEach(() => { cleanup(); native.enabled = false; vi.clearAllMocks(); vi.unstubAllGlobals(); window.history.replaceState({}, "", "/"); });
 describe("connection authentication", () => {
+  it("remounts in-memory application drafts when an admitted navigation namespace changes", async () => {
+    native.enabled = true;
+    let finishCredentials!: (credential: string) => void;
+    native.get.mockReturnValue(new Promise<string>((resolve) => { finishCredentials = resolve; }));
+    const endpoint = configuredSedesServer("https://scope-reset.example");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ required: false, authenticated: false, navigationNamespace: "a".repeat(64) }))
+      .mockResolvedValueOnce(Response.json({ required: false, authenticated: false, navigationNamespace: "b".repeat(64) }));
+    vi.stubGlobal("fetch", fetchMock);
+    function Draft() { return <><output data-testid="scope">{useContext(NavigationScopeContext)}</output><input aria-label="Local draft" defaultValue="" /></>; }
+    render(<AuthenticationGate endpoint={endpoint} profileId="profile"><Draft /></AuthenticationGate>);
+    const oldInput = await screen.findByLabelText("Local draft");
+    fireEvent.change(oldInput, { target: { value: "Prior principal draft" } });
+    await act(async () => { finishCredentials("c".repeat(43)); });
+    await waitFor(() => expect(screen.getByTestId("scope").textContent).toContain("b".repeat(64)));
+    expect(screen.getByLabelText("Local draft")).not.toBe(oldInput);
+    expect(screen.getByLabelText("Local draft")).toHaveValue("");
+  });
+
+  it("provides server-origin and admitted-principal storage scope after status and pairing", async () => {
+    const namespace = "a".repeat(64);
+    const endpoint = configuredSedesServer("https://scope.example");
+    function ScopedChild() { return <output data-testid="navigation-scope">{useContext(NavigationScopeContext) ?? "disabled"}</output>; }
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ required: false, authenticated: false, navigationNamespace: namespace })));
+    const view = render(<AuthenticationGate endpoint={endpoint}><ScopedChild /></AuthenticationGate>);
+    expect((await screen.findByTestId("navigation-scope")).textContent).toBe(JSON.stringify(["https://scope.example", namespace]));
+    view.unmount();
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => Response.json(url.endsWith("/status") ? { required: true, authenticated: false } : {
+      client: { id: "10000000-0000-4000-8000-000000000001", name: "Browser", kind: "management", createdAt: "2026-09-13T00:00:00Z", expiresAt: "2027-09-13T00:00:00Z" }, navigationNamespace: namespace,
+    })));
+    render(<AuthenticationGate endpoint={endpoint}><ScopedChild /></AuthenticationGate>);
+    fireEvent.change(await screen.findByLabelText("Pairing URL or code"), { target: { value: "BCDF-GHJK" } });
+    fireEvent.click(screen.getByRole("button", { name: "Pair connection" }));
+    expect((await screen.findByTestId("navigation-scope")).textContent).toBe(JSON.stringify(["https://scope.example", namespace]));
+    act(() => notifyUnauthorized(endpoint));
+    await waitFor(() => expect(screen.queryByTestId("navigation-scope")).toBeNull());
+  });
+
   it("sends credentials only to their bound endpoint and rejects redirects", async () => {
     const a = configuredSedesServer("https://a.example");
     const b = configuredSedesServer("https://b.example");
