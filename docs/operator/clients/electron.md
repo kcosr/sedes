@@ -127,9 +127,9 @@ Build each release artifact on a host or CI runner whose operating system and
 CPU architecture match the artifact. The Local staging step uses that host's
 platform, architecture, Electron ABI, and native provider packages; it is not
 a cross-compilation step. Run `npm run electron:verify -- --profile PROFILE`
-for each selected profile on every Linux, macOS, or Windows target. Windows
-build and validation are delegated to the Windows deployment agent; Linux
-checks do not establish Windows or macOS compatibility. macOS
+for each selected profile on every Linux, macOS, or Windows target. Build and
+verify Windows profiles on Windows; Linux checks do not establish Windows
+or macOS compatibility. macOS
 distribution additionally requires Apple signing and notarization on macOS;
 Windows distribution requires its own code-signing setup. An unsigned build
 from this preview workflow is suitable only for deliberate local testing.

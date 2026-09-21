@@ -34,8 +34,8 @@ SQLite's loader preferring a prebuild compiled for a newer glibc. No dependency
 lifecycle hooks run in the staged runtime. Build tools stay in the source
 checkout, outside the release.
 
-For **Rocky Linux 8**, Deployments must build on Rocky 8 using its mounted Node
-24.18.0+ runtime and a suitable C++20 toolchain, then run the extraction checks
+For **Rocky Linux 8**, build on a Rocky 8 host using Node
+24.18.0+ and a suitable C++20 toolchain, then run the extraction checks
 on that host. Its glibc 2.28 cannot load a library requiring glibc 2.29. Inspect
 the recorded `nativeLibraries` output and all native runtime files on the
 target. A package built on another Linux distribution does not establish
@@ -71,13 +71,15 @@ transfer channel, then verify the archive checksum and extracted package:
 
 ```sh
 sha256sum -c sedes_<timestamp>_<sha>_<target>.tar.gz.sha256
-tar -xzf sedes_<timestamp>_<sha>_<target>.tar.gz
+tar -xpzf sedes_<timestamp>_<sha>_<target>.tar.gz
 node sedes_<timestamp>_<sha>_<target>/scripts/verify-server-package.mjs \
   --package "$PWD/sedes_<timestamp>_<sha>_<target>"
 ```
 
 Verification checks file hashes, modes, relative symlinks, unexpected/missing
-files, target and Node ABI. It creates disposable state and configuration,
+files, target and Node ABI. Preserve package permissions with `tar -xpzf`,
+including under a restrictive umask; the installer checks exact file modes.
+Verification creates disposable state and configuration,
 starts the server on a loopback ephemeral port, fetches the browser HTML and
 referenced JS/CSS assets, runs SQLite queries and migrations, spawns a real
 PTY, imports backend/provider modules, loads sidecar/worker entry points up

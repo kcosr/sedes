@@ -11,6 +11,7 @@ import { assertBuildTarget, buildNativeAddons, prunePlatformPackages } from './s
 import { writePackageIntegrity, verifyPackageIntegrity } from './server-package-integrity.mjs';
 import { writeServerWrappers } from './install-server-lib.mjs';
 import { verifyRuntime } from './verify-server-package.mjs';
+import { resolveServerToolchain } from './server-package-toolchain.mjs';
 
 const execute = promisify(execFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -49,30 +50,32 @@ let extractionDirectory;
 const published = [];
 let complete = false;
 try {
+  const toolchain = await resolveServerToolchain(repositoryRoot, { environment: env });
+  Object.assign(env, toolchain.environment);
   console.log('Building browser, server, workers, and sidecars from committed source…');
   await run('npm', ['run', 'build']);
   await assertServerRuntimeBoundary({repositoryRoot, distRoot:path.join(repositoryRoot, 'dist')});
   await mkdir(stage);
   for (const filename of ['package.json','package-lock.json']) await cp(path.join(repositoryRoot, 'packages/server-runtime', filename), path.join(stage, filename));
-  await cp(path.join(repositoryRoot, 'dist'), path.join(stage, 'dist'), {recursive:true, filter: filename => !filename.endsWith('.map')});
+  await cp(path.join(repositoryRoot, 'dist'), path.join(stage, 'dist'), {recursive:true, filter: filename => !filename.endsWith('.map') && !filename.endsWith('.test.js')});
   for (const filename of ['LICENSE','THIRD-PARTY-NOTICES.md','config/server.example.json']) {
     await mkdir(path.dirname(path.join(stage, filename)), {recursive:true});
     await cp(path.join(repositoryRoot, filename), path.join(stage, filename));
   }
   await cp(path.join(repositoryRoot, 'docs/operator/server-distribution.md'), path.join(stage, 'README.md'));
   await mkdir(path.join(stage, 'scripts'));
-  for (const filename of ['install-server.mjs','install-server-lib.mjs','install-server-runtime.mjs','server-package-integrity.mjs','verify-server-package.mjs']) await cp(path.join(repositoryRoot, 'scripts', filename), path.join(stage, 'scripts', filename));
+  for (const filename of ['install-server.mjs','install-server-lib.mjs','install-server-runtime.mjs','server-package-integrity.mjs','server-package-payload.mjs','verify-server-package.mjs']) await cp(path.join(repositoryRoot, 'scripts', filename), path.join(stage, 'scripts', filename));
   console.log('Installing the locked server graph without lifecycle hooks…');
   await run('npm', ['ci','--omit=dev','--ignore-scripts','--no-audit','--no-fund'], stage);
   const removedPackages = await prunePlatformPackages(path.join(stage, 'node_modules'), target);
   console.log('Compiling SQLite and PTY addons for this Node runtime…');
-  const nativeBuilds = await buildNativeAddons(repositoryRoot, stage, {nodedir:options['--nodedir']});
+  const nativeBuilds = await buildNativeAddons(repositoryRoot, stage, {nodedir:options['--nodedir'],environment:env});
   // Rebuild the sidecar with only the freshly compiled target addon. The normal
   // development/Electron build remains free to collect its portable payloads.
   await rm(path.join(stage, 'dist/sidecar'), {recursive:true});
   await run(process.execPath, ['scripts/build-sidecar.mjs','--output-directory',path.join(stage, 'dist/sidecar')], repositoryRoot, {SEDES_PACKAGE_NODE_PTY_ROOT:path.join(stage,'node_modules/node-pty')});
   for (const name of ['better-sqlite3','node-pty']) {
-    for (const relative of ['prebuilds','src','deps','binding.gyp']) await rm(path.join(stage,'node_modules',name,relative), {recursive:true,force:true});
+    for (const relative of ['prebuilds','src','deps','binding.gyp','third_party']) await rm(path.join(stage,'node_modules',name,relative), {recursive:true,force:true});
   }
   await writeServerWrappers(stage);
   console.log('Checking isolated runtime, browser assets, migrations, providers, and PTY…');
@@ -99,10 +102,10 @@ try {
     source:{commit,branch,commitTimestamp,dirty:false}, target,
     node:{minimum:'24.18.0',version:process.version,abi:process.versions.modules},
     host:{platform:os.platform(),architecture:os.arch(),release:os.release(),distribution:target.platform === 'linux' ? await readFile('/etc/os-release','utf8').catch(() => null) : await toolVersion('sw_vers',[]),glibc:process.report.getReport().header.glibcVersionRuntime ?? null},
-    build:{startedAt:buildStartedAt,completedAt:new Date().toISOString(),command:process.argv, npm:await toolVersion('npm',['--version']),nodeGyp:JSON.parse(await readFile(path.join(repositoryRoot,'node_modules/node-gyp/package.json'),'utf8')).version,compiler:await toolVersion(process.env.CXX ?? 'c++',['--version']),python:await toolVersion(process.env.PYTHON ?? 'python3',['--version']),nativeBuilds},
+    build:{startedAt:buildStartedAt,completedAt:new Date().toISOString(),command:process.argv,...toolchain.provenance,nodeGyp:JSON.parse(await readFile(path.join(repositoryRoot,'node_modules/node-gyp/package.json'),'utf8')).version,nativeBuilds},
     lockedDependencies:Object.fromEntries(Object.entries(lock.packages).filter(([key]) => key).map(([key,value]) => [key,{version:value.version,integrity:value.integrity}])),
     removedPackages,nativeLibraries,
-    validation:{checks,liveProviders:false,rocky8Validated:false,limitations:['Validated only on the recorded build host; other distributions and targets require independent validation.','Worker/sidecar probes validate module loading and argument guards; they do not exercise sandbox or remote/provider sessions.']},
+    validation:{checks,liveProviders:false,limitations:['Validated only on the recorded build host; other distributions and targets require independent validation.','Worker/sidecar probes validate module loading and argument guards; they do not exercise sandbox or remote/provider sessions.']},
     packagedAt:new Date().toISOString(),
   };
   if (await git('rev-parse','HEAD') !== commit || await git('status','--porcelain','--untracked-files=normal')) throw new Error('Source changed during packaging; retry from a clean committed checkout.');
@@ -115,7 +118,7 @@ try {
   // Extract outside the workspace so its node_modules cannot mask an omission.
   const extracted = await mkdtemp(path.join(os.tmpdir(),'sedes-extract-'));
   extractionDirectory = extracted;
-  await run('tar',['-xzf',archive,'-C',extracted]);
+  await run('tar',['-xpzf',archive,'-C',extracted]);
   const extractedRoot = path.join(extracted,name);
   await verifyPackageIntegrity(extractedRoot);
   await verifyRuntime(extractedRoot);
