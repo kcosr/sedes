@@ -529,6 +529,11 @@ async function activateRelease(context) {
     );
     return 1;
   }
+  for (const inventory of ["BUILD-INFO.json", "FILES.json", "SHA256SUMS"]) {
+    if (await entryKind(path.join(releaseDirectory, inventory)) === "missing") {
+      throw new InstallerRefusal(`Release ${version} predates dedicated server package inventories or is incomplete (missing ${inventory}). Rebuild this revision with npm run package:server and install its package before activation.`);
+    }
+  }
   const release = JSON.parse(await readFile(path.join(releaseDirectory, "RELEASE.json"), "utf8"));
   if (release.version !== version || typeof release.systemd !== "boolean") {
     throw new InstallerRefusal(`Invalid release metadata for ${version}.`);

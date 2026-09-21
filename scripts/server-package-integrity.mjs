@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat, readFile, readdir, readlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, readFile, readdir, readlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const inventories = new Set(["FILES.json", "SHA256SUMS"]);
@@ -15,7 +15,7 @@ function safeRelative(relative) {
     !relative.includes("\\") && !relative.includes("\n") && !relative.includes("\r") &&
     !path.posix.isAbsolute(relative) && relative.split("/").every((part) => part !== "." && part !== ".." && part !== "");
 }
-async function inventory(root, installed = false) {
+async function inventory(root, installed = false, normalizeModes = false) {
   const entries = {};
   async function walk(directory, prefix = "") {
     for (const name of (await readdir(directory)).sort()) {
@@ -32,9 +32,17 @@ async function inventory(root, installed = false) {
         }
         entries[relative] = { type: "symlink", target };
       } else if (stat.isDirectory()) {
+        if (normalizeModes) await chmod(filename, 0o755);
         await walk(filename, relative);
       } else if (stat.isFile()) {
-        entries[relative] = { type: "file", mode: stat.mode & 0o777, sha256: await digest(filename) };
+        let mode = stat.mode & 0o777;
+        if (normalizeModes) {
+          // Worker manifests/artifacts deliberately retain owner-only read or
+          // execute access. Other payload modes do not depend on builder umask.
+          if (mode !== 0o400 && mode !== 0o500) mode = mode & 0o111 ? 0o755 : 0o644;
+          await chmod(filename, mode);
+        }
+        entries[relative] = { type: "file", mode, sha256: await digest(filename) };
       } else throw new Error(`Unsupported package entry: ${relative}`);
     }
   }
@@ -48,9 +56,12 @@ function checksumContents(entries, inventoryHash) {
 
 /** Record every shipped file, executable permission, and relative symlink. */
 export async function writePackageIntegrity(root) {
-  const entries = await inventory(root);
+  await chmod(root, 0o755);
+  const entries = await inventory(root, false, true);
   await writeFile(path.join(root, "FILES.json"), `${JSON.stringify(entries, null, 2)}\n`);
+  await chmod(path.join(root, "FILES.json"), 0o644);
   await writeFile(path.join(root, "SHA256SUMS"), checksumContents(entries, await digest(path.join(root, "FILES.json"))));
+  await chmod(path.join(root, "SHA256SUMS"), 0o644);
 }
 
 export function checkPackageCompatibility(info, {
@@ -76,16 +87,26 @@ export function checkPackageCompatibility(info, {
   }
 }
 
+function permissionMismatch(names) {
+  return new Error(`Package permissions mismatch: ${names.slice(0, 8).join(", ")}. Re-extract with tar -xpzf <archive> -C <directory> to preserve packaged permissions, then retry verification.`);
+}
+
 /** Checksums detect transfer/copy damage; authenticate archives through a trusted channel. */
 export async function verifyPackageIntegrity(root, { installed = false, ...compatibility } = {}) {
   for (const name of inventories) {
-    if (!(await lstat(path.join(root, name))).isFile()) throw new Error(`Invalid package inventory: ${name}`);
+    const stat = await lstat(path.join(root, name));
+    if (!stat.isFile()) throw new Error(`Invalid package inventory: ${name}`);
+    if ((stat.mode & 0o777) !== 0o644) throw permissionMismatch([name]);
   }
   const expected = JSON.parse(await readFile(path.join(root, "FILES.json"), "utf8"));
   const actual = await inventory(root, installed);
   if (JSON.stringify(expected) !== JSON.stringify(actual)) {
     const changed = new Set([...Object.keys(expected), ...Object.keys(actual)]);
     const failed = [...changed].filter((name) => JSON.stringify(expected[name]) !== JSON.stringify(actual[name]));
+    if (failed.every(name => expected[name]?.type === "file" && actual[name]?.type === "file" &&
+        expected[name].sha256 === actual[name].sha256 && expected[name].mode !== actual[name].mode)) {
+      throw permissionMismatch(failed);
+    }
     throw new Error(`Package integrity mismatch: ${failed.slice(0, 8).join(", ")}`);
   }
   const checksums = await readFile(path.join(root, "SHA256SUMS"), "utf8");

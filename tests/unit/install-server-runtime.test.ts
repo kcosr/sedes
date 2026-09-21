@@ -1,4 +1,6 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -87,6 +89,50 @@ describe("offline server package verification", () => {
   it("propagates failed runtime smoke without accepting the package", async () => {
     await fixture(async (root) => {
       await expect(verifyServerRelease(root, {}, { execute: async () => { throw new Error("PTY smoke failed"); } })).rejects.toThrow("PTY smoke failed");
+    });
+  });
+});
+
+
+describe("server package permission portability", () => {
+  it("normalizes builder modes while retaining intentionally protected worker files", async () => {
+    await fixture(async (root) => {
+      await chmod(path.join(root, "package.json"), 0o660);
+      await chmod(path.join(root, "bin", "server"), 0o770);
+      await writeFile(path.join(root, "worker-manifest.json"), "{}", { mode: 0o400 });
+      await writeFile(path.join(root, "worker.mjs"), "// worker", { mode: 0o500 });
+      await writePackageIntegrity(root);
+      const entries = JSON.parse(await readFile(path.join(root, "FILES.json"), "utf8"));
+      expect(entries["package.json"].mode).toBe(0o644);
+      expect(entries["bin/server"].mode).toBe(0o755);
+      expect(entries["worker-manifest.json"].mode).toBe(0o400);
+      expect(entries["worker.mjs"].mode).toBe(0o500);
+      await expect(verifyPackageIntegrity(root)).resolves.toMatchObject({ version: "1.0.0" });
+    });
+  });
+
+  it.each(["027", "077"])("preserves exact permissions when extracting under umask %s with tar -p", async (umask) => {
+    await fixture(async (root) => {
+      const temporary = await mkdtemp(path.join(os.tmpdir(), "sedes-package-tar-"));
+      const execute = promisify(execFile);
+      try {
+        await writeFile(path.join(root, "protected-worker.mjs"), "// worker", { mode: 0o500 });
+        await writePackageIntegrity(root);
+        const archive = path.join(temporary, "release.tar.gz");
+        await execute("tar", ["-czf", archive, "-C", root, "."]);
+        const reduced = path.join(temporary, "reduced");
+        const preserved = path.join(temporary, "preserved");
+        await mkdir(reduced);
+        await mkdir(preserved);
+        for (const [flags, destination] of [["-xzf", reduced], ["-xpzf", preserved]]) {
+          await execute("/bin/sh", ["-c", 'umask "$1"; exec tar "$2" "$3" -C "$4"', "extract", umask, flags!, archive, destination!]);
+        }
+        await expect(verifyPackageIntegrity(reduced)).rejects.toThrow("Re-extract with tar -xpzf");
+        await expect(verifyPackageIntegrity(preserved)).resolves.toMatchObject({ version: "1.0.0" });
+        expect((await stat(path.join(preserved, "bin", "server"))).mode & 0o777).toBe(0o755);
+        expect((await stat(path.join(preserved, "protected-worker.mjs"))).mode & 0o777).toBe(0o500);
+        await execute(path.join(preserved, "bin", "server"));
+      } finally { await rm(temporary, { recursive: true, force: true }); }
     });
   });
 });

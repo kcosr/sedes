@@ -738,3 +738,22 @@ describe("install:server package interface", () => {
     expect((await installation.run(["--list", "--package", "/somewhere"])).exitCode).toBe(2);
   });
 });
+
+
+describe("install:server inventory upgrade boundary", () => {
+  it.each(["BUILD-INFO.json", "FILES.json", "SHA256SUMS"])("explains that a release missing %s must be rebuilt before activation", async (missing) => {
+    const installation = await createInstallation(await createSourceRoot("1.2.3"));
+    expect((await installation.run([])).exitCode).toBe(0);
+    expect((await installation.run([], { packageRoot: await createSourceRoot("1.3.0") })).exitCode).toBe(0);
+    const unit = await readFile(installation.unitFile, "utf8");
+    await rm(path.join(installation.prefix, "releases", "1.2.3", missing));
+    const result = await installation.run(["--activate", "1.2.3"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("predates dedicated server package inventories or is incomplete");
+    expect(result.stderr).toContain(`missing ${missing}`);
+    expect(result.stderr).toContain("Rebuild this revision with npm run package:server");
+    expect(result.stderr).not.toContain("ENOENT");
+    expect(await readlink(path.join(installation.prefix, "current"))).toBe("releases/1.3.0");
+    expect(await readFile(installation.unitFile, "utf8")).toBe(unit);
+  });
+});
