@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { execFile, fork } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,6 +57,9 @@ const requirePackage = require('node:module').createRequire(path.join(root, 'pac
 `;
 
 export async function verifyRuntime(root, { nodeExecutable = process.execPath, electronRunAsNode = false } = {}) {
+  // Worker entry guards compare argv to import.meta.url. Resolve installation
+  // aliases such as `current` before launching their executable entry points.
+  root = await realpath(root);
   await verifyServerPayload(root, { allowRemoteSidecarTargets: electronRunAsNode });
   const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
   if (process.platform === 'win32' && (!systemRoot || !path.isAbsolute(systemRoot))) throw new Error('Windows verification requires SystemRoot');

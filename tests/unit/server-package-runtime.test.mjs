@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { access, chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { verifyRuntime } from '../../scripts/verify-server-package.mjs';
@@ -11,7 +11,7 @@ afterEach(async () => {
 });
 
 describe('package verification executable isolation', () => {
-  it.skipIf(process.platform === 'win32').each([false, true])('uses the selected executable with explicit Electron mode %s and isolated state', async electronRunAsNode => {
+  it.skipIf(process.platform === 'win32').each([[false, false], [true, false], [false, true], [true, true]])('uses the selected executable with Electron mode %s, symlink root %s, and isolated state', async (electronRunAsNode, alias) => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'sedes-verifier-runtime-'));
     temporary.push(root);
     const executable = path.join(root, 'selected-runtime');
@@ -23,12 +23,14 @@ process.exit(42);
     vi.stubEnv('ELECTRON_RUN_AS_NODE', 'inherited-untrusted-mode');
     vi.stubEnv('SEDES_TEST_PROVIDER_SECRET', 'must-not-leak');
     vi.stubEnv('NODE_OPTIONS', '--invalid-option-must-not-leak');
-    const error = await verifyRuntime(root, { nodeExecutable: executable, electronRunAsNode }).catch(error => error);
+    const selectedRoot = alias ? `${root}-current` : root;
+    if (alias) { await symlink(root, selectedRoot); temporary.push(selectedRoot); }
+    const error = await verifyRuntime(selectedRoot, { nodeExecutable: executable, electronRunAsNode }).catch(error => error);
     expect(error.code).toBe(42);
     const observed = JSON.parse(error.stderr.trim());
     expect(observed).toMatchObject({ selected: true, electron: electronRunAsNode ? '1' : null, secret: null, nodeOptions: null });
     expect(observed.args[0]).toBe('--input-type=module');
-    expect(observed.args.at(-1)).toBe(root);
+    expect(observed.args.at(-1)).toBe(await realpath(root));
     expect(observed.home).not.toBe(process.env.HOME);
     expect(await access(observed.home).then(() => true, () => false)).toBe(false);
   });
