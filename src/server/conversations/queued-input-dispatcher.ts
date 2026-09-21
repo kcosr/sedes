@@ -1224,7 +1224,7 @@ export class QueuedInputDispatcher {
             return;
           }
           if (current.state === "pending") {
-            await this.#dispatchThread(scope, current.applicationThreadId);
+            await this.#dispatchAfterDurableTransition(scope, current.applicationThreadId);
           }
         }),
       ),

@@ -55,6 +55,9 @@
 
 ### Fixed
 
+- Keep pending messages queued and retry unavailable backends during startup,
+  instead of preventing the server from starting.
+
 - Preserve the browser Host header in the development API proxy so same-origin
   mutations pass origin validation.
   ([Issue #2](https://github.com/kcosr/sedes/issues/2), [PR #3](https://github.com/kcosr/sedes/pull/3))
