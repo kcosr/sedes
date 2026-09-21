@@ -2436,8 +2436,11 @@ describe("ClaudeConversationHandle", () => {
     await handle.close();
   });
 
-  it.each(["error_during_execution", "success", "error_max_turns"])("retains failed terminal evidence after Claude's trailing idle signal (%s)", async (subtype) => {
-    const expectedFailure = subtype === "error_max_turns" ? "Claude reached the configured turn limit." : "provider failed";
+  it.each(["error_during_execution", "success", "error_max_turns", "startup_failure", "multiline_diagnostic", "stack_only"])("retains failed terminal evidence after Claude's trailing idle signal (%s)", async (subtype) => {
+    const expectedFailure = subtype === "error_max_turns" ? "Claude reached the configured turn limit."
+      : subtype === "startup_failure" ? "Claude proxy configuration is invalid."
+      : subtype === "stack_only" ? "The provider reported a failure but supplied no explanation."
+      : "provider failed";
     const provider = fixture();
     const { handle, settings } = createHandle(provider);
     const established = await handle.establishProjection({
@@ -2460,7 +2463,7 @@ describe("ClaudeConversationHandle", () => {
     await submitted;
     provider.messages.push({
       type: "result",
-      subtype,
+      subtype: ["startup_failure", "multiline_diagnostic", "stack_only"].includes(subtype) ? "error_during_execution" : subtype,
       duration_ms: 10,
       duration_api_ms: 8,
       is_error: true,
@@ -2481,7 +2484,11 @@ describe("ClaudeConversationHandle", () => {
         },
       },
       permission_denials: [],
-      ...(subtype === "success" ? { result: "provider failed" } : { errors: subtype === "error_max_turns" ? [] : ["provider failed"] }),
+      ...(subtype === "success" ? { result: "provider failed" }
+        : subtype === "startup_failure" ? { startup_failure_reason: "proxy_invalid", errors: ["private startup stderr that must not be retained"] }
+        : subtype === "multiline_diagnostic" ? { errors: ["  at privateStack (/private/file:1:2)\nError:\nprovider failed\n  at otherPrivateStack (/private/other:3:4)", "second unrelated diagnostic"] }
+        : subtype === "stack_only" ? { errors: ["Error:\n  at privateStack (/private/file:1:2)"] }
+        : { errors: subtype === "error_max_turns" ? [] : ["provider failed"] }),
       uuid: crypto.randomUUID(),
       session_id: SESSION_ID,
     } as unknown as SDKMessage);

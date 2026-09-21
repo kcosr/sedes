@@ -935,7 +935,11 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       const submit = runtime.hub.snapshot?.capabilities.deliveryModes.find(
         ({ id }) => id === "submit",
       );
-      if (runtime.actor.timeline.runState !== "idle" || !submit?.available) {
+      if (
+        (runtime.actor.timeline.runState !== "idle" &&
+          runtime.actor.timeline.runState !== "failed") ||
+        !submit?.available
+      ) {
         throw new DomainError(
           "invalid_transition",
           submit?.unavailableReason?.text ??

@@ -9,6 +9,7 @@ import type {
   PermissionMode,
   SDKMessage,
   SDKResultMessage,
+  SDKStartupFailureReason,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -2583,9 +2584,40 @@ function aggregateModelUsage(
   };
 }
 
+const startupFailureMessages: Record<SDKStartupFailureReason, string> = {
+  org_pin_api_key_conflict: "Claude organization policy conflicts with the configured API key.",
+  org_verify_failed: "Claude could not verify the required organization.",
+  org_pin_mismatch: "Claude is signed into a different organization than required.",
+  managed_settings_invalid: "Claude managed settings are invalid.",
+  remote_settings_required_unavailable: "Required Claude remote settings are unavailable.",
+  gateway_signin_required: "Claude gateway sign-in is required.",
+  gateway_access_denied: "Claude gateway access was denied.",
+  proxy_invalid: "Claude proxy configuration is invalid.",
+  temp_dir_unusable: "Claude cannot use its temporary directory.",
+  cwd_unavailable: "Claude cannot access the working directory.",
+  shell_tool_missing: "A shell tool required by Claude is unavailable.",
+  session_held_by_background: "The Claude session is held by background work.",
+  worktree_resume_refused: "Claude refused to resume the worktree.",
+  worktree_unverified: "Claude could not verify the worktree.",
+  cli_version_too_old: "The installed Claude CLI version is too old.",
+  bypass_root: "Claude cannot bypass permissions while running as root.",
+};
+
+function firstDiagnosticLine(details: readonly string[]): string | undefined {
+  for (const detail of details) {
+    for (const line of detail.split(/\r?\n/)) {
+      const text = line.trim();
+      if (text && !/^(?:at\s|Traceback\b|File\s+["']|[A-Za-z]*Error:\s*$)/.test(text)) return text;
+    }
+  }
+  return undefined;
+}
+
 function terminalFailureMessage(message: SDKResultMessage): string | undefined {
-  if (message.subtype === "success") return message.result;
-  const details = message.errors.join("\n").trim();
+  if (message.subtype === "success") return firstDiagnosticLine([message.result]);
+  // Startup result.errors mirrors stderr. Never copy it into durable UI state.
+  if (message.startup_failure_reason !== undefined) return startupFailureMessages[message.startup_failure_reason];
+  const details = firstDiagnosticLine(message.errors);
   if (details) return details;
   switch (message.subtype) {
     case "error_max_turns": return "Claude reached the configured turn limit.";

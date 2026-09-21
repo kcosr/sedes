@@ -1087,10 +1087,16 @@ requires an authoritative resnapshot. Never infer failure from a retry warning,
 a tool error, cancellation, or unknown delivery outcome.
 
 Pi derives the final diagnostic after retry settlement and reconstructs it from
-native assistant records. Codex uses native turn errors and retains terminal
+native assistant records. Cancellation during retry backoff is retained as
+conversation-authenticated non-message metadata, since Pi does not append an
+aborted assistant record in that case. It remains interrupted after reopening.
+Codex uses native turn errors and retains terminal
 notification details for its existing exhausted-recovery projection; cold reads
 show only evidence retained by the provider. Claude stores the selected diagnostic
 in its existing scoped write-once terminal receipt; old receipts have no detail.
+Claude maps declared startup-failure reasons to fixed explanations instead of
+storing startup stderr, and selects one non-stack diagnostic line from other
+terminal results.
 Grok exposes no confirmed failed-turn outcome in its current admitted protocol;
 its submission errors and unknown-outcome recovery remain separate.
 

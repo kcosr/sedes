@@ -1,4 +1,5 @@
 import { turnFailure } from "../turn-failure.js";
+import { cancelledPiRetryEntries, createPiCancelledRetryMarker, piCancelledRetryMarkerType } from "./pi-cancelled-retry-marker.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import { createHash, randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
@@ -2459,10 +2460,11 @@ class PiConversationHandle implements ConversationHandle {
     this.#modelPolicy = options.modelPolicy;
     this.#runState = options.session.isIdle ? "idle" : "running";
     if (options.session.isIdle) {
-      const latest = options.session.sessionManager.getBranch().findLast((entry) =>
+      const branch = options.session.sessionManager.getBranch();
+      const latest = branch.findLast((entry) =>
         entry.type === "message" && (entry.message.role === "assistant" || entry.message.role === "user"),
       );
-      if (latest?.type === "message" && latest.message.role === "assistant" && latest.message.stopReason === "error") {
+      if (latest?.type === "message" && latest.message.role === "assistant" && latest.message.stopReason === "error" && !cancelledPiRetryEntries(branch, this.#toolIdentityAuthentication).has(latest.id)) {
         this.#runState = "failed";
       }
     }
@@ -3798,6 +3800,17 @@ class PiConversationHandle implements ConversationHandle {
       }
       queueMicrotask(() => this.#correlatePersistedMessage(event.message));
     } else if (event.type === "agent_settled") {
+      if (this.#terminalOutcome === "interrupted" && this.#terminalFailure) {
+        // Pi cancels retry backoff without appending an aborted assistant record.
+        // Retain the confirmed cancellation as authenticated non-message metadata.
+        const latest = this.#session.sessionManager.getBranch().findLast((entry) =>
+          entry.type === "message" && (entry.message.role === "assistant" || entry.message.role === "user"),
+        );
+        if (latest?.type === "message" && latest.message.role === "assistant" && latest.message.stopReason === "error") {
+          this.#session.sessionManager.appendCustomEntry(piCancelledRetryMarkerType,
+            createPiCancelledRetryMarker(latest.id, this.#toolIdentityAuthentication));
+        }
+      }
       this.#closeLivePendingSteerAsLost();
       for (const projected of this.#liveTools.settlementCheck()) {
         this.#emit(projected);

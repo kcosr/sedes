@@ -1,4 +1,5 @@
 import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
+import { createPiCancelledRetryMarker, readPiCancelledRetryMarker } from "./pi-cancelled-retry-marker.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -272,6 +273,8 @@ function resignAuthenticatedConversationMarkers(
     sourceAuthentication,
   ).map((entry) => {
     if (entry.type !== "custom") return entry;
+    const cancelledRetry = readPiCancelledRetryMarker(entry, sourceAuthentication);
+    if (cancelledRetry) return { ...entry, data: createPiCancelledRetryMarker(cancelledRetry, targetAuthentication) };
     if (isPiToolIdentityMarkerType(entry.customType)) {
       const result = readPiToolIdentityMarker(entry, sourceAuthentication);
       if (result.status !== "authenticated") return entry;

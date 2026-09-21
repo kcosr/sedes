@@ -1,4 +1,5 @@
 import { turnFailure } from "../turn-failure.js";
+import { cancelledPiRetryEntries, piCancelledRetryMarkerType } from "./pi-cancelled-retry-marker.js";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type {
   BackendConversationSnapshot,
@@ -291,6 +292,7 @@ export class PiHistoryProjector {
   }
 
   project(branch: readonly SessionEntry[]): PiHistoryProjection {
+    const cancelledRetryEntries = cancelledPiRetryEntries(branch, this.#toolIdentityAuthentication);
     const turns: MutableTurn[] = [];
     const items: BackendItem[] = [];
     const itemIndex = new Map<string, number>();
@@ -937,6 +939,11 @@ export class PiHistoryProjector {
             }
           }
           applyAssistantOutcome(turn, message, entry.timestamp);
+          if (cancelledRetryEntries.has(entry.id)) {
+            turn.status = "interrupted";
+            turn.endedBy = "interrupted";
+            delete turn.failure;
+          }
           continue;
         }
         if (messageRole === "toolResult") {
@@ -1084,6 +1091,7 @@ export class PiHistoryProjector {
       }
 
       if (entry.type === "custom") {
+        if (entry.customType === piCancelledRetryMarkerType) continue;
         if (isPiContextExcerptMarkerType(entry.customType)) {
           continue;
         }

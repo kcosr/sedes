@@ -79,7 +79,7 @@ function branchingAllowsBoundaryForSourceState(input: {
   readonly sourceRunState: ThreadRunState;
 }): boolean {
   if (input.branching.availability !== "available") return false;
-  if (input.sourceRunState === "idle") return true;
+  if (input.sourceRunState === "idle" || input.sourceRunState === "failed") return true;
   return (
     !input.branching.sourceMustBeIdle &&
     activeSourceHistoricalForkStates.has(input.sourceRunState)

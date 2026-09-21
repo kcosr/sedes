@@ -465,6 +465,16 @@ describe("ConversationProjector", () => {
       orderedItemIds: [],
     };
 
+    for (const sourceMustBeIdle of [true, false]) {
+      for (const sourceRunState of ["failed", "disconnected", "reconciling"] as const) {
+        const expected = sourceRunState === "failed";
+        expect(projectedTurnForkCapability({ turn, branching: { ...branching, sourceMustBeIdle }, sourceRunState }).available).toBe(expected);
+        const projected = projectedThreadForkSourceCapability({ branching: { ...branching, sourceMustBeIdle }, sourceRunState });
+        expect(projected.selectedCompletedTurn.available).toBe(expected);
+        expect(projected.latestProviderSnapshot.available).toBe(expected);
+      }
+    }
+
     expect(
       projectedTurnForkCapability({
         turn,
