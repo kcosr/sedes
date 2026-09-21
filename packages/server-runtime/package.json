@@ -1,5 +1,5 @@
 {
-  "name": "@sedes/electron-local-server-runtime",
+  "name": "@sedes/server-runtime",
   "version": "0.1.0",
   "private": true,
   "type": "module",

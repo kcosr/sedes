@@ -45,6 +45,7 @@ const sshStatusSchema = z.discriminatedUnion("status", [
     remotePort: remotePortSchema,
   }),
 ]);
+const capabilitiesSchema = z.strictObject({ localServer: z.boolean() });
 const statusSchema = z.strictObject({
   local: localStatusSchema,
   ssh: sshStatusSchema,
@@ -64,6 +65,7 @@ const stateChangeSchema = z.strictObject({
 export type ElectronConnectionRuntimeConnection = z.infer<
   typeof connectionSchema
 >;
+export type ElectronConnectionRuntimeCapabilities = z.infer<typeof capabilitiesSchema>;
 export type ElectronConnectionRuntimeStatus = z.infer<typeof statusSchema>;
 export type ElectronConnectionRuntimeStateChange = z.infer<
   typeof stateChangeSchema
@@ -79,6 +81,7 @@ interface NativeElectronConnectionRuntimePlugin {
   }): Promise<unknown>;
   disconnect(input: { readonly connectionId: string }): Promise<void>;
   getStatus(): Promise<unknown>;
+  getCapabilities(): Promise<unknown>;
   addListener(
     eventName: "stateChange",
     listener: (state: unknown) => void,
@@ -116,6 +119,10 @@ export const electronConnectionRuntime = Object.freeze({
     return nativeRuntime.disconnect({
       connectionId: connectionIdSchema.parse(input.connectionId),
     });
+  },
+
+  async getCapabilities(): Promise<ElectronConnectionRuntimeCapabilities> {
+    return capabilitiesSchema.parse(await nativeRuntime.getCapabilities());
   },
 
   async getStatus(): Promise<ElectronConnectionRuntimeStatus> {

@@ -1,14 +1,14 @@
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { connect as connectSocket } from "node:net";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { _electron as electron } from "@playwright/test";
 import { WebSocketServer } from "ws";
-import { SEDES_CLIENT_PROTOCOL_VERSION } from "../dist/shared/protocol/application.js";
-import { SEDES_VERSION } from "../dist/shared/version.js";
+import { SEDES_CLIENT_PROTOCOL_VERSION } from "../src/shared/protocol/application.ts";
+import { SEDES_VERSION } from "../src/shared/version.ts";
 import { electronBuilderUnpackedDirectory } from "./electron-package-layout.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -17,6 +17,10 @@ const mode = process.argv[2] ?? "--source";
 if (mode !== "--source" && mode !== "--packaged") {
   throw new Error("Usage: smoke-electron-client.mjs [--source|--packaged]");
 }
+const profileArguments = process.argv.slice(3);
+if (profileArguments.length && (profileArguments.length !== 2 || profileArguments[0] !== "--profile" || !["client", "full"].includes(profileArguments[1]))) throw new Error("Invalid Electron smoke profile");
+const profile = profileArguments[1] ?? "full";
+const full = profile === "full";
 const packaged = mode === "--packaged";
 const expectedOrigin = "capacitor-electron://localhost";
 const lifecycle = [];
@@ -405,6 +409,7 @@ async function launchElectron() {
   const unpackedRoot = path.join(
     electronRoot,
     "dist",
+    profile,
     electronBuilderUnpackedDirectory(process.platform, process.arch),
   );
   const executablePath = packaged
@@ -919,6 +924,28 @@ try {
   let launched = await launchElectron();
   electronApp = launched.app;
   let page = launched.page;
+  await page
+    .getByRole("heading", { name: "Choose a Sedes connection" })
+    .waitFor();
+  const capabilities = await page.evaluate(() => window.Capacitor.Plugins.ElectronConnectionRuntime.getCapabilities());
+  if (capabilities.localServer !== full) throw new Error('electron_smoke_profile_capability_mismatch');
+  if (!full) {
+    if (await page.getByRole('listitem').filter({hasText:'Local'}).count()) throw new Error('electron_smoke_client_exposes_local');
+    const rejection = await page.evaluate(async () => {
+      try { await window.Capacitor.Plugins.ElectronConnectionRuntime.startLocal({connectionId:'00000000-0000-4000-8000-000000000099'}); return null; }
+      catch (error) { return error.message; }
+    });
+    if (rejection !== 'Local is unavailable in this Sedes client distribution.') throw new Error('electron_smoke_client_local_guard_invalid:' + rejection);
+    await page.evaluate(() => window.Capacitor.Plugins.Preferences.set({key:'sedes.electron.connections.v1', value:JSON.stringify({version:2,profiles:[],selectedProfileId:'00000000-0000-4000-8000-000000000001',autoConnectAtStartup:true})}));
+    await page.reload();
+    await page.getByRole('heading',{name:'Choose a Sedes connection'}).waitFor();
+    if (await page.getByRole('listitem').filter({hasText:'Local'}).count()) throw new Error('electron_smoke_client_restored_local_card');
+    if (await selectedProfileId(page) !== '00000000-0000-4000-8000-000000000001') throw new Error('electron_smoke_client_destroyed_saved_local_preference');
+    const state = await connectionRuntimeStatus(page);
+    if (state.local.status !== 'disconnected') throw new Error('electron_smoke_client_auto_started_local');
+    if (await lstat(path.join(userDataDirectory,'managed-local')).catch(error => {if (error.code === 'ENOENT') return undefined; throw error;})) throw new Error('electron_smoke_client_created_local_state');
+    progress('client capability, native Local rejection, and preserved Local preference verified');
+  }
   const credentialStorage = await electronApp.evaluate(({ safeStorage }) => ({
     available: safeStorage.isEncryptionAvailable(),
     backend: process.platform === "linux" ? safeStorage.getSelectedStorageBackend() : "platform-keychain",
@@ -927,53 +954,56 @@ try {
     throw new Error(`electron_smoke_secure_storage_unavailable:configure_OS_keyring:${credentialStorage.backend}`);
   }
 
-  await page
-    .getByRole("heading", { name: "Choose a Sedes connection" })
-    .waitFor();
-  const localCard = page.getByRole("listitem").filter({ hasText: "Local" });
-  await localCard.getByRole("button", { name: "Connect" }).click();
-  await waitForConnected(page);
-  const firstLocalStatus = await connectionRuntimeStatus(page);
-  if (firstLocalStatus.local.status !== "connected") {
-    throw new Error(
-      `electron_smoke_local_not_connected:${JSON.stringify(firstLocalStatus)}`,
+  let firstLocalStatus;
+  let firstLocalPort;
+  if (full) {
+    const localCard = page.getByRole("listitem").filter({ hasText: "Local" });
+    await localCard.getByRole("button", { name: "Connect" }).click();
+    await waitForConnected(page);
+    firstLocalStatus = await connectionRuntimeStatus(page);
+    if (firstLocalStatus.local.status !== "connected") {
+      throw new Error(
+        `electron_smoke_local_not_connected:${JSON.stringify(firstLocalStatus)}`,
+      );
+    }
+    firstLocalPort = portFromLoopbackOrigin(firstLocalStatus.local.baseUrl);
+    const seededConfiguration = JSON.parse(
+      await readFile(
+        path.join(userDataDirectory, "managed-local", "config", "server.json"),
+        "utf8",
+      ),
     );
-  }
-  const firstLocalPort = portFromLoopbackOrigin(firstLocalStatus.local.baseUrl);
-  const seededConfiguration = JSON.parse(
-    await readFile(
-      path.join(userDataDirectory, "managed-local", "config", "server.json"),
-      "utf8",
-    ),
-  );
-  if (
-    seededConfiguration.schemaVersion !== 11 ||
-    Object.keys(seededConfiguration).some(key => !["schemaVersion", "packagedClients", "listen"].includes(key)) ||
-    JSON.stringify(seededConfiguration.packagedClients) !==
-      JSON.stringify(["electron"])
-  ) {
-    throw new Error("electron_smoke_local_configuration_not_seeded");
-  }
-  progress("managed Local profile connected from packaged runtime");
+    if (
+      seededConfiguration.schemaVersion !== 11 ||
+      Object.keys(seededConfiguration).some(key => !["schemaVersion", "packagedClients", "listen"].includes(key)) ||
+      JSON.stringify(seededConfiguration.packagedClients) !==
+        JSON.stringify(["electron"])
+    ) {
+      throw new Error("electron_smoke_local_configuration_not_seeded");
+    }
+    progress("managed Local profile connected from packaged runtime");
 
-  await openChooser(page);
-  await page.getByText("Currently running", { exact: true }).waitFor();
+    await openChooser(page);
+    await page.getByText("Currently running", { exact: true }).waitFor();
+  }
   await addConnection(page, {
     name: "Direct A",
     baseUrl: directA.origin,
   });
-  const retainedBeforeConfirmation = await connectionRuntimeStatus(page);
-  if (
-    retainedBeforeConfirmation.local.status !== "connected" ||
-    retainedBeforeConfirmation.local.connectionId !==
-      firstLocalStatus.local.connectionId
-  ) {
-    throw new Error("electron_smoke_local_not_retained_before_confirmation");
+  if (full) {
+    const retainedBeforeConfirmation = await connectionRuntimeStatus(page);
+    if (
+      retainedBeforeConfirmation.local.status !== "connected" ||
+      retainedBeforeConfirmation.local.connectionId !==
+        firstLocalStatus.local.connectionId
+    ) {
+      throw new Error("electron_smoke_local_not_retained_before_confirmation");
+    }
+    await confirmSwitchFromLocal(page, "Direct A");
   }
-  await confirmSwitchFromLocal(page, "Direct A");
   await pairBackend(page, directA);
   await waitForConnected(page);
-  await expectPortClosed(firstLocalPort);
+  if (full) await expectPortClosed(firstLocalPort);
   progress("first direct profile connected");
   await verifyElectronSecurity(electronApp, page, directA.origin);
   await verifyDownload(electronApp, page, directA.origin);
@@ -1120,140 +1150,147 @@ try {
   await failedDirectCard.getByRole("button", { name: "Connect" }).click();
   await waitForConnected(page);
 
-  await openChooser(page);
-  await page
-    .getByRole("listitem")
-    .filter({ hasText: "Local" })
-    .getByRole("button", { name: "Connect" })
-    .click();
-  await waitForConnected(page);
-  const rollbackLocalStatus = await connectionRuntimeStatus(page);
-  if (rollbackLocalStatus.local.status !== "connected") {
-    throw new Error("electron_smoke_rollback_local_not_connected");
-  }
-  const rollbackLocalPort = portFromLoopbackOrigin(
-    rollbackLocalStatus.local.baseUrl,
-  );
+  if (full) {
+    await openChooser(page);
+    await page
+      .getByRole("listitem")
+      .filter({ hasText: "Local" })
+      .getByRole("button", { name: "Connect" })
+      .click();
+    await waitForConnected(page);
+    const rollbackLocalStatus = await connectionRuntimeStatus(page);
+    if (rollbackLocalStatus.local.status !== "connected") {
+      throw new Error("electron_smoke_rollback_local_not_connected");
+    }
+    const rollbackLocalPort = portFromLoopbackOrigin(
+      rollbackLocalStatus.local.baseUrl,
+    );
 
-  directB.setSessionFailure(true);
-  await openChooser(page);
-  await page
-    .getByRole("listitem")
-    .filter({ hasText: "Direct B" })
-    .getByRole("button", { name: "Connect" })
-    .click();
-  await confirmSwitchFromLocal(page, "Direct B");
-  await waitForConnected(page);
-  await page
-    .getByRole("alert")
-    .filter({ hasText: "Local is still running" })
-    .waitFor();
-  const restoredLocalStatus = await connectionRuntimeStatus(page);
-  if (
-    restoredLocalStatus.local.status !== "connected" ||
-    restoredLocalStatus.local.connectionId !==
-      rollbackLocalStatus.local.connectionId ||
-    restoredLocalStatus.local.baseUrl !== rollbackLocalStatus.local.baseUrl
-  ) {
-    throw new Error("electron_smoke_failed_switch_did_not_restore_exact_local");
-  }
-  directB.setSessionFailure(false);
-  progress("failed replacement restored the exact Local process");
+    directB.setSessionFailure(true);
+    await openChooser(page);
+    await page
+      .getByRole("listitem")
+      .filter({ hasText: "Direct B" })
+      .getByRole("button", { name: "Connect" })
+      .click();
+    await confirmSwitchFromLocal(page, "Direct B");
+    await waitForConnected(page);
+    await page
+      .getByRole("alert")
+      .filter({ hasText: "Local is still running" })
+      .waitFor();
+    const restoredLocalStatus = await connectionRuntimeStatus(page);
+    if (
+      restoredLocalStatus.local.status !== "connected" ||
+      restoredLocalStatus.local.connectionId !==
+        rollbackLocalStatus.local.connectionId ||
+      restoredLocalStatus.local.baseUrl !== rollbackLocalStatus.local.baseUrl
+    ) {
+      throw new Error("electron_smoke_failed_switch_did_not_restore_exact_local");
+    }
+    directB.setSessionFailure(false);
+    progress("failed replacement restored the exact Local process");
 
-  await openChooser(page);
-  await page
-    .getByRole("listitem")
-    .filter({ hasText: "Direct B" })
-    .getByRole("button", { name: "Connect" })
-    .click();
-  await confirmSwitchFromLocal(page, "Direct B");
-  await waitForConnected(page);
-  await expectPortClosed(rollbackLocalPort);
-  progress("confirmed successful replacement stopped Local");
+    await openChooser(page);
+    await page
+      .getByRole("listitem")
+      .filter({ hasText: "Direct B" })
+      .getByRole("button", { name: "Connect" })
+      .click();
+    await confirmSwitchFromLocal(page, "Direct B");
+    await waitForConnected(page);
+    await expectPortClosed(rollbackLocalPort);
+    progress("confirmed successful replacement stopped Local");
 
-  await openChooser(page);
-  await page
-    .getByRole("listitem")
-    .filter({ hasText: "Local" })
-    .getByRole("button", { name: "Connect" })
-    .click();
-  await waitForConnected(page);
-  const quitLocalStatus = await connectionRuntimeStatus(page);
-  if (quitLocalStatus.local.status !== "connected") {
-    throw new Error("electron_smoke_quit_local_not_connected");
-  }
-  const quitLocalPort = portFromLoopbackOrigin(quitLocalStatus.local.baseUrl);
-  await closeElectron(electronApp);
-  electronApp = undefined;
-  await expectPortClosed(quitLocalPort);
+    await openChooser(page);
+    await page
+      .getByRole("listitem")
+      .filter({ hasText: "Local" })
+      .getByRole("button", { name: "Connect" })
+      .click();
+    await waitForConnected(page);
+    const quitLocalStatus = await connectionRuntimeStatus(page);
+    if (quitLocalStatus.local.status !== "connected") {
+      throw new Error("electron_smoke_quit_local_not_connected");
+    }
+    const quitLocalPort = portFromLoopbackOrigin(quitLocalStatus.local.baseUrl);
+    await closeElectron(electronApp);
+    electronApp = undefined;
+    await expectPortClosed(quitLocalPort);
 
-  launched = await launchElectron();
-  electronApp = launched.app;
-  page = launched.page;
-  await waitForConnected(page);
-  const relaunchedLocalStatus = await connectionRuntimeStatus(page);
-  if (
-    relaunchedLocalStatus.local.status !== "connected" ||
-    relaunchedLocalStatus.local.connectionId ===
-      quitLocalStatus.local.connectionId
-  ) {
-    throw new Error("electron_smoke_local_not_restarted_for_new_app_session");
-  }
+    launched = await launchElectron();
+    electronApp = launched.app;
+    page = launched.page;
+    await waitForConnected(page);
+    const relaunchedLocalStatus = await connectionRuntimeStatus(page);
+    if (
+      relaunchedLocalStatus.local.status !== "connected" ||
+      relaunchedLocalStatus.local.connectionId ===
+        quitLocalStatus.local.connectionId
+    ) {
+      throw new Error("electron_smoke_local_not_restarted_for_new_app_session");
+    }
 
-  await openChooser(page);
-  const autoConnectAtStartup = page.getByRole("checkbox", {
-    name: "Connect automatically at startup",
-  });
-  if ((await autoConnectAtStartup.getAttribute("aria-checked")) !== "true") {
-    throw new Error("electron_smoke_auto_connect_not_defaulted_on");
-  }
-  if (/\bElectron\b/u.test(await page.locator("body").innerText())) {
-    throw new Error("electron_smoke_implementation_stack_visible");
-  }
-  await autoConnectAtStartup.click();
-  await page.waitForFunction(() =>
-    Boolean(document.querySelector('[role="checkbox"][aria-checked="false"]')),
-  );
-  if ((await autoConnectAtStartup.getAttribute("aria-checked")) !== "false") {
-    throw new Error("electron_smoke_auto_connect_not_disabled");
-  }
-  const optedOutLocalPort = portFromLoopbackOrigin(
-    relaunchedLocalStatus.local.baseUrl,
-  );
-  await closeElectron(electronApp);
-  electronApp = undefined;
-  await expectPortClosed(optedOutLocalPort);
+    await openChooser(page);
+    const autoConnectAtStartup = page.getByRole("checkbox", {
+      name: "Connect automatically at startup",
+    });
+    if ((await autoConnectAtStartup.getAttribute("aria-checked")) !== "true") {
+      throw new Error("electron_smoke_auto_connect_not_defaulted_on");
+    }
+    if (/\bElectron\b/u.test(await page.locator("body").innerText())) {
+      throw new Error("electron_smoke_implementation_stack_visible");
+    }
+    await autoConnectAtStartup.click();
+    await page.waitForFunction(() =>
+      Boolean(document.querySelector('[role="checkbox"][aria-checked="false"]')),
+    );
+    if ((await autoConnectAtStartup.getAttribute("aria-checked")) !== "false") {
+      throw new Error("electron_smoke_auto_connect_not_disabled");
+    }
+    const optedOutLocalPort = portFromLoopbackOrigin(
+      relaunchedLocalStatus.local.baseUrl,
+    );
+    await closeElectron(electronApp);
+    electronApp = undefined;
+    await expectPortClosed(optedOutLocalPort);
 
-  launched = await launchElectron();
-  electronApp = launched.app;
-  page = launched.page;
-  await page
-    .getByRole("heading", { name: "Choose a Sedes connection" })
-    .waitFor();
-  const optedOutStatus = await connectionRuntimeStatus(page);
-  if (optedOutStatus.local.status !== "disconnected") {
-    throw new Error("electron_smoke_auto_connect_opt_out_started_local");
+    launched = await launchElectron();
+    electronApp = launched.app;
+    page = launched.page;
+    await page
+      .getByRole("heading", { name: "Choose a Sedes connection" })
+      .waitFor();
+    const optedOutStatus = await connectionRuntimeStatus(page);
+    if (optedOutStatus.local.status !== "disconnected") {
+      throw new Error("electron_smoke_auto_connect_opt_out_started_local");
+    }
+    if (
+      (await page
+        .getByRole("checkbox", { name: "Connect automatically at startup" })
+        .getAttribute("aria-checked")) !== "false"
+    ) {
+      throw new Error("electron_smoke_auto_connect_opt_out_not_persisted");
+    }
+    await page
+      .getByRole("listitem")
+      .filter({ hasText: "Local" })
+      .getByRole("button", { name: "Connect" })
+      .click();
+    await waitForConnected(page);
+    const manuallyStartedLocalStatus = await connectionRuntimeStatus(page);
+    if (manuallyStartedLocalStatus.local.status !== "connected") {
+      throw new Error("electron_smoke_manual_local_after_opt_out_failed");
+    }
+    progress(
+      "startup auto-connect opt-out persisted and manual Local still connected",
+    );
+
+  } else {
+    const state = await connectionRuntimeStatus(page);
+    if (state.local.status !== 'disconnected') throw new Error('electron_smoke_client_local_process_present');
+    if (await lstat(path.join(userDataDirectory,'managed-local')).catch(error => {if (error.code === 'ENOENT') return undefined; throw error;})) throw new Error('electron_smoke_client_created_local_state');
   }
-  if (
-    (await page
-      .getByRole("checkbox", { name: "Connect automatically at startup" })
-      .getAttribute("aria-checked")) !== "false"
-  ) {
-    throw new Error("electron_smoke_auto_connect_opt_out_not_persisted");
-  }
-  await page
-    .getByRole("listitem")
-    .filter({ hasText: "Local" })
-    .getByRole("button", { name: "Connect" })
-    .click();
-  await waitForConnected(page);
-  const manuallyStartedLocalStatus = await connectionRuntimeStatus(page);
-  if (manuallyStartedLocalStatus.local.status !== "connected") {
-    throw new Error("electron_smoke_manual_local_after_opt_out_failed");
-  }
-  progress(
-    "startup auto-connect opt-out persisted and manual Local still connected",
-  );
 
   if (directA.pairedCount !== 1 || directB.pairedCount !== 1 || sshRemote.pairedCount !== 1) {
     throw new Error("electron_smoke_saved_authentication_not_reused");
@@ -1261,7 +1298,7 @@ try {
   verifyOrigins();
   await verifyRendererNavigationDenied(electronApp, page);
   process.stdout.write(
-    "Electron smoke passed: first-run managed Local startup, seeded private configuration, retained-Local confirmation, exact rollback and successful teardown, app-exit cleanup and next-session restart, persisted startup auto-connect opt-out with manual Local connection, single-use device pairing and encrypted per-profile credential reuse after relaunch, multiple Direct profiles with authenticated SSE teardown ordering, managed SSH forwarding/failure/cancellation/teardown, selected-profile relaunch and recovery, bundled-origin API/SSE/one-shot-WS/downloads, and Electron navigation/popup/permission/Node isolation all passed.\n",
+    full ? "Electron full smoke passed: first-run managed Local startup, seeded private configuration, retained-Local confirmation, exact rollback and successful teardown, app-exit cleanup and next-session restart, persisted startup auto-connect opt-out with manual Local connection, single-use device pairing and encrypted per-profile credential reuse after relaunch, multiple Direct profiles with authenticated SSE teardown ordering, managed SSH forwarding/failure/cancellation/teardown, selected-profile relaunch and recovery, bundled-origin API/SSE/one-shot-WS/downloads, and Electron navigation/popup/permission/Node isolation all passed.\n" : "Electron client smoke passed: Local capability disabled, native Local startup rejected, saved Local preference preserved without startup, Direct/SSH pairing, connections, teardown, relaunch, downloads, origins, and renderer security checks passed.\n",
   );
 } catch (error) {
   console.error("Electron smoke failed before cleanup:", error);

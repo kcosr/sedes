@@ -1043,6 +1043,31 @@ describe("ThreadCompletionCallbackDispatcher", () => {
 });
 
 describe("QueuedInputDispatcher", () => {
+  it("starts with pending input on an unavailable backend and retries without losing it", async () => {
+    const fixture = createFixture();
+    const repository = new QueuedInputRepository(fixture.database);
+    const [threadId] = fixture.threadIds;
+    enqueue(fixture, repository, threadId, "offline-startup", 800);
+    const gateway = new FakeGateway();
+    gateway.withConversationFailures.push(new Error("backend unavailable"));
+    const scheduler = new ManualScheduler();
+    const { dispatcher } = createDispatcher(repository, gateway, {
+      now: { value: 810 }, scheduler,
+    });
+    try {
+      await expect(dispatcher.recover(fixture.scope)).resolves.toBeUndefined();
+      expect(repository.get(fixture.scope, threadId, "offline-startup").state).toBe("pending");
+      expect(gateway.submitted).toEqual([]);
+      expect(scheduler.scheduled.at(-1)?.delay).toBe(100);
+      scheduler.runLatest();
+      await vi.waitFor(() => expect(repository.get(fixture.scope, threadId, "offline-startup").state).toBe("accepted"));
+      expect(gateway.submitted).toHaveLength(1);
+    } finally {
+      await dispatcher.close();
+      fixture.database.close();
+    }
+  });
+
   it("admits question responses independently of the composer and submits once after settling", async () => {
     const fixture = createFixture();
     const repository = new QueuedInputRepository(fixture.database);

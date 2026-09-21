@@ -1,8 +1,12 @@
 const { chmod } = require('node:fs/promises');
 const path = require('node:path');
+const { readFileSync } = require('node:fs');
+const distribution = JSON.parse(readFileSync(path.join(__dirname, 'generated/distribution.json'), 'utf8'));
+if (Object.keys(distribution).length !== 1 || !['client', 'full'].includes(distribution.profile)) throw new Error('electron_distribution_invalid');
+const full = distribution.profile === 'full';
 
 async function restoreManagedRuntimeModes(context) {
-  if (context.packager.platform.name === 'windows') return;
+  if (!full || context.packager.platform.name === 'windows') return;
   const runtimeRoot = path.join(
     context.packager.getResourcesDir(context.appOutDir),
     'local-server',
@@ -27,10 +31,10 @@ module.exports = {
   appId: 'dev.sedes.local',
   productName: 'Sedes',
   directories: {
-    output: 'dist',
+    output: `dist/${distribution.profile}`,
     buildResources: 'assets',
   },
-  artifactName: 'sedes-${version}-${os}-${arch}.${ext}',
+  artifactName: 'sedes-' + distribution.profile + '-${version}-${os}-${arch}.${ext}',
   afterPack: restoreManagedRuntimeModes,
   linux: {
     target: ['AppImage', 'deb'],
@@ -54,7 +58,7 @@ module.exports = {
     // Platform runtime + plugins, prepared by `capacitor-electron vendor`.
     { from: 'vendor/node_modules', to: 'node_modules' },
   ],
-  extraResources: [
+  extraResources: full ? [
     {
       from: 'generated/local-server',
       to: 'local-server',
@@ -72,5 +76,5 @@ module.exports = {
       to: 'local-server/node_modules',
       filter: ['**/*', '!.bin{,/**/*}'],
     },
-  ],
+  ] : [],
 };

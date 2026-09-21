@@ -6,7 +6,7 @@
 //   node scripts/generate-third-party-notices.mjs --check   # verify it is current
 //
 // package-lock.json is the source of truth for what is installed. A root
-// directory that owns a package-lock.json (packages/electron-local-server-runtime,
+// directory that owns a package-lock.json (packages/server-runtime,
 // electron/) is walked through that lockfile, because packaging installs it from
 // there and it can pin versions the root lockfile does not have. Package
 // directories under node_modules supply license metadata and license text.

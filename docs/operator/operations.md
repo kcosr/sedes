@@ -399,21 +399,20 @@ directory remains part of native conversation and credential backup authority.
 
 ### Installed user service on Linux
 
-On Linux, an optional installer turns a built checkout into a versioned
-per-user installation with a systemd user service, so the running service no
-longer depends on a git working tree. From the built source checkout:
+The installer installs a verified slim server package into versioned per-user
+releases on Linux and macOS. Systemd integration is opt-in: add `--systemd`
+on Linux to create or update a user service unit. Build and extract a
+package as described in [Server distribution](server-distribution.md), then:
 
 ```sh
-env -u NODE_ENV npm run build
-env -u NODE_ENV npm run install:server
+npm run install:server -- --package /absolute/extracted-release --systemd
 ```
 
-Installation requires the Linux native build tools used by `node-pty`
-(Python, make, and a C/C++ compiler, plus headers for the running Node version).
-The installer installs locked production dependencies with lifecycle scripts
-disabled, explicitly rebuilds the reviewed `node-pty` version, and checks
-SQLite and a real PTY before making the release available for activation.
-A native build or smoke-test failure leaves the active release unchanged.
+Installation is offline and requires Node.js 24.18.0 or newer with the package's
+Node ABI. It never reinstalls the root production dependency graph or compiles
+addons. Integrity, browser/server startup, SQLite migrations, real PTY, and
+module checks must pass before activation. Native compilation happens on the
+target build host during packaging. A failure leaves the active release unchanged.
 
 The installer creates this layout and never touches state or configuration
 beyond seeding a missing `server.json` from `config/server.example.json`:
@@ -425,7 +424,7 @@ ${XDG_DATA_HOME:-~/.local/share}/sedes/
 ~/.local/bin/sedes -> .../current/bin/sedes
 ~/.local/bin/sedes-automation -> .../current/bin/sedes-automation
 ~/.config/sedes/server.json        seeded only if absent
-~/.config/systemd/user/sedes.service   written only if absent or still installer-managed
+~/.config/systemd/user/sedes.service   with --systemd, only if absent or still installer-managed
 ```
 
 `current` is the only place that records the active version. The bin links and
@@ -445,7 +444,7 @@ version and run the installer again; it stages the new release beside the old
 one and activates it. Restart the service to pick it up:
 
 ```sh
-env -u NODE_ENV npm run install:server
+npm run install:server -- --package /absolute/extracted-release --systemd
 systemctl --user restart sedes.service
 ```
 
@@ -454,7 +453,7 @@ older release refuses a database a newer release has migrated:
 
 ```sh
 npm run install:server -- --list
-npm run install:server -- --activate 0.1.0
+npm run install:server -- --activate 0.1.0 --systemd
 systemctl --user restart sedes.service
 ```
 
@@ -463,18 +462,22 @@ comes from a version manager that only configures interactive shells, add an
 absolute `Environment=PATH=...` line to the unit and remove its
 `# Managed by sedes install:server` marker to keep those edits on later runs.
 
-`--prefix` and `--bin-dir` change the install locations, `--no-systemd` skips
-the unit file, `--no-activate` stages a release without switching to it, and
+`--prefix` and `--bin-dir` change the install locations, `--systemd` opts into
+unit creation or updates, `--no-activate` stages a release without switching to it, and
 `--uninstall` removes the releases, links, and installer-managed unit while
 leaving state and configuration in place. The installer refuses to replace the
-active release and refuses to run on a platform other than Linux.
+active release. macOS installations use the default command without `--systemd`; Windows remains
+outside this package installer.
 
-A release staged with `--no-activate` carries its sample configuration and
-systemd preference. A later `--activate VERSION` completes first-install setup
+A release staged with `--no-activate` carries its sample configuration.
+A later `--activate VERSION` completes first-install setup
 even if the original checkout is gone: it seeds missing configuration, creates
-the launchers and owned service unit, then switches `current`. A staged
-`--no-systemd` preference is retained; `--activate VERSION --no-systemd` can
-also skip unit creation for that activation.
+the launchers, then switches `current`. Add `--systemd` to that activation
+command to create or update the owned service unit. Service preferences are
+not stored with releases; each install or activation requires explicit opt-in.
+Without the flag, existing units remain unchanged and are not disabled or
+removed. Run `current/bin/sedes-server` directly or through your own supervisor
+when not using systemd.
 
 Existing launcher files and links belonging to another installation are
 refused rather than replaced. Generated service units record their owning

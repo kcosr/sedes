@@ -38,7 +38,7 @@ const buildId = `sedes-${packageMetadata.version}`;
 const claudeWorker = await buildClaudeRuntimeWorkerArtifact(repositoryRoot, buildId);
 const require = createRequire(import.meta.url);
 const { nativeAssets, sources } = await collectSidecarNativeArtifacts({
-  nodePtyRoot: path.dirname(require.resolve("node-pty/package.json")),
+  nodePtyRoot: process.env.SEDES_PACKAGE_NODE_PTY_ROOT ?? path.dirname(require.resolve("node-pty/package.json")),
 });
 
 await mkdir(outputDirectory, { recursive: true });

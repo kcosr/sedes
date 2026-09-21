@@ -2,7 +2,25 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `install:server` now requires a verified, extracted server package built with
+  `package:server`, instead of a built root checkout. Previously installed
+  releases must be rebuilt as dedicated packages before activation or rollback.
+  Packages use an independent dependency lock, external Node 24.18.0+,
+  source-built SQLite/PTY addons, offline activation, and extraction checks.
+  Systemd unit creation and updates now require explicit `--systemd` on each
+  install or activation; the former `--no-systemd` option is removed. Linux
+  and macOS default to installation without service integration.
+  ([#4](https://github.com/kcosr/sedes/pull/4))
+
 ### Changed
+
+- Add explicit Electron `client` and `full` distribution profiles. Client keeps
+  Direct/SSH connections without a bundled backend; full retains Managed Local
+  with shared locked server dependencies and target-pruned native payloads.
+  Both use separately installed Codex, Claude Code, and Grok executables.
+  ([#4](https://github.com/kcosr/sedes/pull/4))
 
 - Redesign Files Changes with a persistent changed-file navigator, automatic
   diff loading, local reading-position restoration, and separate current/history
@@ -38,6 +56,10 @@
   ([#51](https://github.com/kcosr/sedes/pull/51))
 
 ### Fixed
+
+- Keep pending messages queued and retry unavailable backends during startup,
+  instead of preventing the server from starting.
+  ([#4](https://github.com/kcosr/sedes/pull/4))
 
 - Preserve the browser Host header in the development API proxy so same-origin
   mutations pass origin validation.

@@ -16,6 +16,7 @@ If you only want to use an existing installation, start with
 | Goal | Guide |
 | --- | --- |
 | Install and run from source | [Run from source](#run-from-source) |
+| Build, verify, and install a slim server package | [Server distribution](server-distribution.md) |
 | Select providers, targets, models, roots, and integrations | [Configuration](configuration.md) |
 | See how clients, provider runtimes, and execution environments fit together | [Connection model](connections.md) |
 | Choose a safe deployment shape | [Operations and security](operations.md#deployment-matrix) |

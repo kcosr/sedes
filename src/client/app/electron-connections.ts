@@ -142,6 +142,20 @@ export interface ElectronConnectionPreferences {
   readonly autoConnectAtStartup: boolean;
 }
 
+/** Hide unavailable built-ins without rewriting preferences saved by another distribution. */
+export function availableElectronConnectionPreferences(
+  preferences: ElectronConnectionPreferences,
+  capabilities: { readonly localServer: boolean },
+): ElectronConnectionPreferences {
+  const profiles = preferences.profiles.filter(profile => profile.kind !== "local" || capabilities.localServer);
+  return {
+    ...preferences,
+    profiles,
+    selectedProfileId: profiles.some(profile => profile.id === preferences.selectedProfileId)
+      ? preferences.selectedProfileId : null,
+  };
+}
+
 interface StoredElectronConnectionPreferences {
   readonly version: 2;
   readonly profiles: readonly ElectronSavedConnectionProfile[];

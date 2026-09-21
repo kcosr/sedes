@@ -217,7 +217,7 @@ Before release, review every migration added since the prior supported release:
 Where possible, rehearse an upgrade using a disposable copy of representative
 state. On Linux, rehearse through the installer as well: install the prior
 release into a disposable prefix with `npm run install:server -- --prefix DIR
---bin-dir DIR --no-systemd`, start it against the copied state, then install
+--bin-dir DIR`, start it against the copied state, then install
 the candidate the same way, activate it, and confirm the health check and the
 rollback path with `--activate`. Never use live production state as an
 experimental downgrade target.
