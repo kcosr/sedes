@@ -83,6 +83,7 @@ describe('server package native targets', () => {
       const directory = await pkg(path.join(root, 'node_modules'), name, { version });
       await put(directory, 'prebuilds/incompatible.node', 'stale');
       await put(directory, 'build/Release/stale.node', 'stale');
+      await put(directory, 'third_party/conpty/win32-x64/conpty.dll', 'unused Windows DLL');
     }
     return root;
   }
@@ -116,6 +117,7 @@ describe('server package native targets', () => {
       const directory = path.join(root, 'node_modules', build.name);
       expect((await readdir(path.join(directory, 'build/Release'))).sort()).toEqual([...build.outputs].sort());
       expect(await exists(path.join(directory, '.sedes-native'))).toBe(false);
+      expect(await exists(path.join(directory, 'third_party'))).toBe(false);
       for (const output of build.outputs) expect((await stat(path.join(directory, 'build/Release', output))).mode & 0o777).toBe(0o755);
     }
     expect(await exists(path.join(root, 'node_modules/better-sqlite3/prebuilds'))).toBe(false);

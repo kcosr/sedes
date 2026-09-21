@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { verifyPackageIntegrity } from './server-package-integrity.mjs';
+import { verifyServerPayload } from './server-package-payload.mjs';
 
 const execute = promisify(execFile);
 const nativeProbe = `
@@ -56,6 +57,7 @@ const requirePackage = require('node:module').createRequire(path.join(root, 'pac
 `;
 
 export async function verifyRuntime(root, { nodeExecutable = process.execPath, electronRunAsNode = false } = {}) {
+  await verifyServerPayload(root, { allowRemoteSidecarTargets: electronRunAsNode });
   const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
   if (process.platform === 'win32' && (!systemRoot || !path.isAbsolute(systemRoot))) throw new Error('Windows verification requires SystemRoot');
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'sedes-pkg-'));

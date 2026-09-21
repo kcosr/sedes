@@ -44,7 +44,7 @@ export async function rebuildElectronNativeAddons(stage, { electronVersion, rebu
       if (platform !== 'win32') await chmod(path.join(directory, 'build/Release', filename), 0o755);
     }
     await rm(retained, { recursive: true });
-    for (const relative of ['prebuilds', 'src', 'deps', 'binding.gyp']) await rm(path.join(directory, relative), { recursive: true, force: true });
+    for (const relative of ['prebuilds', 'src', 'deps', 'binding.gyp', 'third_party']) await rm(path.join(directory, relative), { recursive: true, force: true });
   }
 }
 

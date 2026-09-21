@@ -86,6 +86,7 @@ describe('Electron source native rebuilds', () => {
       await put(root, `node_modules/${name}/package.json`, JSON.stringify({ name, version }));
       await put(root, `node_modules/${name}/prebuilds/stale.node`);
       await put(root, `node_modules/${name}/build/Release/stale.node`);
+      await put(root, `node_modules/${name}/third_party/conpty/conpty.dll`, 'unused Windows DLL');
     }
     const outputs = electronNativeOutputs(platform);
     await rebuildElectronNativeAddons(root, { electronVersion: '44.0.0', platform, arch: 'x64', rebuild: async options => {
@@ -99,6 +100,7 @@ describe('Electron source native rebuilds', () => {
     } });
     for (const [name, files] of Object.entries(outputs)) {
       const release = path.join(root, 'node_modules', name, 'build/Release');
+      expect(await exists(path.join(root, 'node_modules', name, 'third_party'))).toBe(false);
       expect((await readdir(release)).sort()).toEqual([...files].sort());
       if (platform !== 'win32') for (const file of files) expect((await stat(path.join(release, file))).mode & 0o777).toBe(0o755);
     }

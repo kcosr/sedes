@@ -112,6 +112,9 @@ export async function buildNativeAddons(repositoryRoot, stage, { nodedir, enviro
       await chmod(path.join(directory, 'build/Release', output), 0o755);
     }
     await rm(keep, { recursive: true });
+    // Sedes uses the operating system's ConPTY, never node-pty's optional
+    // useConptyDll payload. Keep generated runtime outputs, not vendor DLLs.
+    await rm(path.join(directory, 'third_party'), { recursive: true, force: true });
     // Sidecar collection uses this ABI declaration for the freshly built Linux addon.
     if (name === 'node-pty') {
       const native = path.join(directory, 'prebuilds', `${process.platform}-${process.arch}`);
