@@ -4,6 +4,18 @@
 
 ### Breaking Changes
 
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.1.1] - 2026-09-21
+
+### Breaking Changes
+
 - `install:server` now requires a verified, extracted server package built with
   `package:server`, instead of a built root checkout. Previously installed
   releases must be rebuilt as dedicated packages before activation or rollback.

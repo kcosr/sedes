@@ -1,7 +1,7 @@
 {
   "name": "sedes-electron",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "description": "Electron platform project for Sedes.",
   "homepage": "https://github.com/kcosr/sedes",
