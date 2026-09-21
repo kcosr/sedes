@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { packageDirectories } from "./server-package-native.mjs";
+import { verifyRuntime } from "./verify-server-package.mjs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -504,8 +505,12 @@ async function verifyPackaged() {
       }
     }
   }
+  const executable = process.platform === "darwin"
+    ? path.join(unpackedRoot, "Sedes.app/Contents/MacOS/Sedes")
+    : path.join(unpackedRoot, process.platform === "win32" ? "Sedes.exe" : "sedes-electron");
+  const runtimeChecks = await verifyRuntime(localServerRoot, { nodeExecutable: executable, electronRunAsNode: true });
   process.stdout.write(
-    `Electron packaged payload verified (${entries.length} ASAR entries, ${unpackedAsarEntries.length} unpacked ASAR files, ${packagedFilesystemEntries.length} packaged files, ${localServerEntries.length} managed Local files).\n`,
+    `Electron packaged payload and native runtime verified (${entries.length} ASAR entries, ${unpackedAsarEntries.length} unpacked ASAR files, ${packagedFilesystemEntries.length} packaged files, ${localServerEntries.length} managed Local files): ${runtimeChecks.join(", ")}.\n`,
   );
 }
 

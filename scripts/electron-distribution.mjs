@@ -105,7 +105,7 @@ export async function runElectronDistribution(options) {
   await node(['scripts/verify-electron-package.mjs', '--packaged']);
   const output = path.join(electron, 'dist', options.profile);
   const validation = {
-    synchronizedAssets: true, packageContents: true,
+    synchronizedAssets: true, packageContents: true, nativeRuntime: options.profile === 'full',
     runtimeSmoke: false, liveProviders: false,
     limitations: ['Validated only on the recorded host; other platforms require independent validation.', 'Unsigned preview; installation, signing, and live providers are not validated by this command.'],
   };

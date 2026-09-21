@@ -43,7 +43,10 @@ const requirePackage = require('node:module').createRequire(path.join(root, 'pac
   const transformed = requirePi('esbuild').transformSync('const answer: number = 42', {loader:'ts'});
   assert.ok(transformed.code.includes('42'), 'Pi esbuild target executable failed');
   await new Promise((resolve, reject) => {
-    const terminal = requirePackage('node-pty').spawn('/bin/sh', ['-c', 'printf sedes_package_pty_ok'], {name:'xterm', cols:80, rows:24, cwd:root, env:process.env});
+    const windows = process.platform === 'win32';
+    const shell = windows ? process.env.ComSpec : '/bin/sh';
+    const args = windows ? ['/d', '/s', '/c', 'echo sedes_package_pty_ok'] : ['-c', 'printf sedes_package_pty_ok'];
+    const terminal = requirePackage('node-pty').spawn(shell, args, {name:'xterm', cols:80, rows:24, cwd:root, env:process.env});
     let output = '';
     const timer = setTimeout(() => { terminal.kill(); reject(new Error('PTY timed out')); }, 5000);
     terminal.onData(data => { output += data; });
@@ -52,7 +55,9 @@ const requirePackage = require('node:module').createRequire(path.join(root, 'pac
 })().catch(error => { console.error(error); process.exitCode = 1; });
 `;
 
-export async function verifyRuntime(root) {
+export async function verifyRuntime(root, { nodeExecutable = process.execPath, electronRunAsNode = false } = {}) {
+  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+  if (process.platform === 'win32' && (!systemRoot || !path.isAbsolute(systemRoot))) throw new Error('Windows verification requires SystemRoot');
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'sedes-pkg-'));
   // Deliberately do not inherit provider credentials, NODE_PATH, Node flags,
   // Sedes configuration, or the invoking account's home/runtime state.
@@ -63,25 +68,38 @@ export async function verifyRuntime(root) {
     APP_STATE_DIR: path.join(temporary, 'state'), NODE_ENV: 'production',
     SEDES_CONFIG_FILE: path.join(temporary, 'server.json'),
   };
+  if (process.platform === 'win32') {
+    Object.assign(env, {
+      SystemRoot: systemRoot, WINDIR: systemRoot,
+      ComSpec: path.join(systemRoot, 'System32', 'cmd.exe'),
+      PATH: [path.dirname(process.execPath), path.join(systemRoot, 'System32'), path.join(systemRoot, 'System32/WindowsPowerShell/v1.0'), systemRoot].join(path.delimiter),
+      USERPROFILE: temporary, APPDATA: path.join(temporary, 'AppData/Roaming'), LOCALAPPDATA: path.join(temporary, 'AppData/Local'),
+      TEMP: temporary, TMP: temporary,
+    });
+  }
+  // Electron's backend addons use its ABI. Remote artifacts intentionally run
+  // with standalone Node and must not inherit Electron's executable mode.
+  const externalNodeEnvironment = { ...env };
+  if (electronRunAsNode) env.ELECTRON_RUN_AS_NODE = '1';
   let server;
   let exited;
   try {
     await mkdir(env.APP_STATE_DIR);
     await writeFile(env.SEDES_CONFIG_FILE, JSON.stringify({schemaVersion:11, packagedClients:[], listen:{host:'127.0.0.1', port:0}}));
-    await execute(process.execPath, ['--input-type=module', '--eval', nativeProbe, root], {cwd:root, env, timeout:30_000, maxBuffer:4*1024*1024});
+    await execute(nodeExecutable, ['--input-type=module', '--eval', nativeProbe, root], {cwd:root, env, timeout:30_000, maxBuffer:4*1024*1024});
     for (const [artifact, args, expected] of [
       ['dist/sidecar/sedes', ['service'], 'sidecar_arguments_invalid'],
       ['dist/pi-sandbox-worker/sedes-pi-sandbox-worker.mjs', [], 'pi_sandbox_worker_arguments_invalid'],
       ['dist/claude-runtime-worker/sedes-claude-runtime-worker.mjs', [], 'claude_runtime_worker_arguments_invalid'],
     ]) {
-      const result = await execute(process.execPath, [path.join(root, artifact), ...args], {cwd:temporary, env, timeout:10_000}).then(
+      const result = await execute(process.execPath, [path.join(root, artifact), ...args], {cwd:temporary, env:externalNodeEnvironment, timeout:10_000}).then(
         value => ({...value, code:0}), error => error,
       );
       assert.equal(result.code, 1, `${artifact} must reach its argument guard`);
       assert.equal(result.stderr.trim(), expected, `${artifact} failed before its argument guard`);
     }
-    await execute(process.execPath, [path.join(root, 'dist/connector/sedes-sidecar.mjs'), '--help'], {cwd:temporary, env, timeout:10_000});
-    server = fork(path.join(root, 'dist/server/index.js'), [], {cwd:temporary, env:{...env, SEDES_MANAGED_PARENT_PROTOCOL:'electron-local-v1'}, execArgv:[], stdio:['ignore','pipe','pipe','ipc']});
+    await execute(process.execPath, [path.join(root, 'dist/connector/sedes-sidecar.mjs'), '--help'], {cwd:temporary, env:externalNodeEnvironment, timeout:10_000});
+    server = fork(path.join(root, 'dist/server/index.js'), [], {cwd:temporary, env:{...env, SEDES_MANAGED_PARENT_PROTOCOL:'electron-local-v1'}, execPath:nodeExecutable, execArgv:[], stdio:['ignore','pipe','pipe','ipc']});
     let logs = '';
     server.stdout.on('data', chunk => { logs += chunk; });
     server.stderr.on('data', chunk => { logs += chunk; });
