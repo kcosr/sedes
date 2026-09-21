@@ -18,12 +18,14 @@ const manifests = [
   "packages/electron-client-credentials/package.json",
   "packages/electron-connection-runtime/package.json",
   "packages/electron-local-server-runtime/package.json",
+  "packages/server-runtime/package.json",
   "packages/electron-workspace-file-download/package.json",
 ];
 const lockfiles = [
   "package-lock.json",
   "electron/package-lock.json",
   "packages/electron-local-server-runtime/package-lock.json",
+  "packages/server-runtime/package-lock.json",
 ];
 const versionModule = "src/shared/version.ts";
 const versionPattern = /^export const SEDES_VERSION = "([^"]+)";$/mu;

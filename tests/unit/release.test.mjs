@@ -26,7 +26,7 @@ function fixture() {
   git("init", "--bare", remote);
   git("config", `url.${remote}.insteadOf`, "https://github.com/kcosr/sedes.git");
   git("remote", "add", "origin", "https://github.com/kcosr/sedes.git");
-  for (const file of ["scripts/release.mjs", "scripts/version.mjs", "src/shared/version.ts", "package.json", "package-lock.json", "electron/package.json", "electron/package-lock.json", "packages/electron-client-credentials/package.json", "packages/electron-connection-runtime/package.json", "packages/electron-local-server-runtime/package.json", "packages/electron-local-server-runtime/package-lock.json", "packages/electron-workspace-file-download/package.json"]) {
+  for (const file of ["scripts/release.mjs", "scripts/version.mjs", "src/shared/version.ts", "package.json", "package-lock.json", "electron/package.json", "electron/package-lock.json", "packages/electron-client-credentials/package.json", "packages/electron-connection-runtime/package.json", "packages/electron-local-server-runtime/package.json", "packages/electron-local-server-runtime/package-lock.json", "packages/server-runtime/package.json", "packages/server-runtime/package-lock.json", "packages/electron-workspace-file-download/package.json"]) {
     mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     cpSync(path.join(source, file), path.join(root, file));
   }
@@ -88,6 +88,8 @@ describe("source release workflow", () => {
     expect(f.run("prepare", increment).status).toBe(0);
     expect(JSON.parse(f.read("package.json")).version).toBe(expected);
     expect(JSON.parse(f.read("electron/package-lock.json")).version).toBe(expected);
+    expect(JSON.parse(f.read("packages/server-runtime/package.json")).version).toBe(expected);
+    expect(JSON.parse(f.read("packages/server-runtime/package-lock.json")).packages[""].version).toBe(expected);
     expect(f.read("src/shared/version.ts")).toContain(`"${expected}"`);
     // Preparation's version helper checks every package and workspace lock entry.
     f.commit();
