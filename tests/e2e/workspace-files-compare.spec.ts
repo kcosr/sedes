@@ -163,11 +163,6 @@ test.describe.serial("workspace files compare", () => {
     await page.getByRole("tab", { name: "Changes", exact: true }).click();
     const compareSurface = panel.locator(".workspace-files-compare-surface");
     await expect(compareSurface).toBeVisible();
-    await expect(
-      compareSurface.getByText(
-        "Unsaved Browse drafts are excluded from this comparison.",
-      ),
-    ).toBeVisible();
 
     const compareBeforeTree = await compareSurface.boundingBox();
     expect(compareBeforeTree).not.toBeNull();
@@ -191,15 +186,20 @@ test.describe.serial("workspace files compare", () => {
     await treeToggle.click();
     await expect(treeToggle).toHaveAttribute("aria-expanded", "false");
 
-    const runCompare = compareSurface.getByRole("button", {
+    const settingsToggle = compareSurface.getByRole("button", { name: "Comparison settings", exact: true });
+    await settingsToggle.click();
+    const settings = page.getByRole("dialog", { name: "Comparison settings", exact: true });
+    await expect(compareSurface.getByText("Unsaved Browse drafts are excluded from this comparison.")).toBeVisible();
+    const runCompare = settings.getByRole("button", {
       name: "Compare",
       exact: true,
     });
     await expect(runCompare).toBeEnabled();
     await runCompare.click();
-    await expect(compareSurface.getByText(/changed files?/)).toBeVisible({
-      timeout: 20_000,
-    });
+    await expect(settings).toBeHidden();
+    await expect(compareSurface.locator("diffs-container").first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("button", { name: "Refresh comparison", exact: true })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Refresh workspace files", exact: true })).toHaveCount(0);
 
     const filesButton = compareSurface.getByRole("button", {
       name: "Changed files",
@@ -231,7 +231,11 @@ test.describe.serial("workspace files compare", () => {
     await page.getByRole("button", { name: "Collapse Chat panel" }).click();
     const navigator = compareSurface.getByRole("complementary", { name: "Changed files" });
     await expect(navigator).toBeVisible();
-    await compareSurface.getByRole("button", { name: "Split", exact: true }).click();
+    const viewToggle = compareSurface.getByRole("button", { name: "Diff view options", exact: true });
+    const viewOptions = page.getByRole("dialog", { name: "Diff view options", exact: true });
+    await viewToggle.click();
+    await viewOptions.getByRole("button", { name: "Split", exact: true }).click();
+    await page.keyboard.press("Escape");
     await navigator.getByRole("textbox", { name: "Filter changed files" }).fill("status");
     await navigator.getByRole("treeitem").filter({ hasText: "status.ts" }).click();
     const changedFileFilter = navigator.getByRole("textbox", { name: "Filter changed files" });
@@ -245,8 +249,18 @@ test.describe.serial("workspace files compare", () => {
       return { filterLength: entry?.navigation?.filter.length, filePath: entry?.navigation?.file?.newPath };
     })).toEqual({ filterLength: 1024, filePath: "src/status.ts" });
     await navigator.getByRole("textbox", { name: "Filter changed files" }).fill("");
+    const assertCompactToolbar = async () => {
+      const toolbar = await compareSurface.locator(".workspace-compare-toolbar").boundingBox();
+      const workspace = await compareSurface.locator(".workspace-compare-workspace").boundingBox();
+      expect(toolbar).not.toBeNull();
+      expect(workspace).not.toBeNull();
+      expect(toolbar!.height).toBeLessThanOrEqual(44);
+      expect(workspace!.y - (toolbar!.y + toolbar!.height)).toBeLessThanOrEqual(1);
+    };
+    await assertCompactToolbar();
     await capture(page, testInfo, "workspace-files-compare-desktop.png");
-    await compareSurface.getByRole("button", { name: "Comments (0)", exact: true }).click();
+    await compareSurface.getByRole("button", { name: "Review controls", exact: true }).click();
+    await page.getByRole("dialog", { name: "Review options", exact: true }).getByRole("button", { name: "Comments (0)", exact: true }).click();
     const review = page.getByRole("dialog", { name: "Review", exact: true });
     await expect(review.getByRole("button", { name: "Current review", exact: true })).toBeVisible();
     const reviewBounds = await review.boundingBox();
@@ -258,41 +272,54 @@ test.describe.serial("workspace files compare", () => {
     await expect(compareSurface.getByText("Binary file — no text diff", { exact: true })).toBeVisible();
     await navigator.getByRole("treeitem").filter({ hasText: "status.ts" }).click();
     // A searchable commit row exposes the subject and date rather than a duplicate hash.
-    const settingsToggle = compareSurface.getByRole("button", { name: /Comparison and review/ });
-    if (await settingsToggle.getAttribute("aria-expanded") !== "true") await settingsToggle.click();
-    await compareSurface.getByRole("button", { name: "Base revision", exact: true }).click();
+    const workspaceBeforeSettings = await compareSurface.locator(".workspace-compare-workspace").boundingBox();
+    await settingsToggle.click();
+    expect(await compareSurface.locator(".workspace-compare-workspace").boundingBox()).toEqual(workspaceBeforeSettings);
+    await settings.getByRole("button", { name: "Base revision", exact: true }).click();
     const revisionDialog = page.getByRole("dialog", { name: "Choose base revision" });
     await expect(revisionDialog.getByText("Seed workspace file fixture", { exact: true })).toBeVisible();
     await capture(page, testInfo, "workspace-files-revision-picker.png");
     await revisionDialog.getByRole("textbox", { name: "Search base revisions" }).fill("main");
     await expect(revisionDialog.getByRole("listbox").getByRole("option").filter({ hasText: "main" })).toBeVisible();
     await page.keyboard.press("Escape");
-
+    await expect(revisionDialog).toBeHidden();
+    await page.keyboard.press("Escape");
+    await expect(settings).toBeHidden();
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(
-      compareSurface.getByRole("button", { name: "Split" }),
-    ).toBeDisabled();
-    await expect(
-      compareSurface.getByRole("button", { name: /Comparison and review/ }),
-    ).toHaveAttribute("aria-expanded", "false");
-    await expect(compareSurface.getByRole("button", { name: "Base revision" })).toBeHidden();
+    await viewToggle.click();
+    await expect(viewOptions.getByRole("button", { name: "Split", exact: true })).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(settingsToggle).toHaveAttribute("aria-expanded", "false");
+    await assertCompactToolbar();
     await compareSurface.getByRole("button", { name: "Changed files", exact: true }).click();
     await expect(compareSurface.getByRole("tree", { name: "Changed file tree" })).toBeVisible();
     await compareSurface.getByRole("button", { name: "Close changed files" }).click();
     await capture(page, testInfo, "workspace-files-compare-mobile.png");
+    await settingsToggle.click();
+    await expect(settings).toBeVisible();
+    const mobileSettingsBounds = await settings.boundingBox();
+    expect(mobileSettingsBounds!.x).toBeGreaterThanOrEqual(0);
+    expect(mobileSettingsBounds!.x + mobileSettingsBounds!.width).toBeLessThanOrEqual(390);
+    const mobileStrategyBounds = await settings.getByRole("combobox", { name: "Comparison strategy" }).boundingBox();
+    expect(mobileStrategyBounds!.width).toBeGreaterThan(300);
+    await capture(page, testInfo, "workspace-files-compare-settings-mobile.png");
+    await page.keyboard.press("Escape");
+    await expect(settings).toBeHidden();
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.getByRole("tab", { name: "Browse" }).click();
     await expect(editor(panel)).toContainText("export const answer = 99;");
     await page.getByRole("tab", { name: "Changes", exact: true }).click();
-    await expect(compareSurface.getByRole("button", { name: "Split", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await viewToggle.click();
+    await expect(viewOptions.getByRole("button", { name: "Split", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Escape");
     // Review the feature branch from its common ancestor with main.
     if (await settingsToggle.getAttribute("aria-expanded") !== "true") await settingsToggle.click();
-    await compareSurface.getByRole("button", { name: "Branches", exact: true }).click();
-    await compareSurface.getByRole("button", { name: "Compare revision", exact: true }).click();
+    await settings.getByRole("button", { name: "Branches", exact: true }).click();
+    await settings.getByRole("button", { name: "Compare revision", exact: true }).click();
     await page.getByRole("dialog", { name: "Choose compare revision" }).getByRole("listbox").getByRole("option").filter({ hasText: "feature/navigation" }).click();
     await runCompare.click();
-    await expect(compareSurface.getByText("1 changed file", { exact: true })).toBeVisible();
+    await expect(compareSurface.getByLabel("1 changed file", { exact: true })).toBeVisible();
     await expect(compareSurface.locator("diffs-container").filter({ hasText: "branch-only.ts" })).toBeVisible();
     await capture(page, testInfo, "workspace-files-branch-comparison.png");
     // Save the retained Browse draft before reloading the application.
@@ -305,9 +332,10 @@ test.describe.serial("workspace files compare", () => {
     await page.reload();
     const restored = await openFilesPanel(page);
     await expect(page.getByRole("tab", { name: "Changes", exact: true })).toHaveAttribute("aria-selected", "true");
-    await expect(restored.getByText("1 changed file", { exact: true })).toBeVisible();
+    await expect(restored.getByLabel("1 changed file", { exact: true })).toBeVisible();
     await expect(restored.locator("diffs-container").filter({ hasText: "branch-only.ts" })).toBeVisible();
     await page.emulateMedia({ colorScheme: "dark" });
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await capture(page, testInfo, "workspace-files-restored-dark.png");
   });
 });

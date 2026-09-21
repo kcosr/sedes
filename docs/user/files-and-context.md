@@ -133,8 +133,9 @@ Supplemental roots do not change:
 ## Compare Git changes
 
 Choose **Changes** in Files for a root that belongs to a Git repository.
-**Uncommitted**, **Staged**, and **Branches** set up common comparisons. Open
-**Comparison and review** to choose the base, comparison source, and strategy.
+Click the source pair in the compact toolbar to open **Comparison settings**.
+**Uncommitted**, **Staged**, and **Branches** set up common comparisons; choose
+the base, comparison source, and strategy there.
 Revision pickers search branch names, commit messages, and hashes. Local
 branches, remote branches, tags, and recent commits have separate groups;
 commits show their message, date, and short hash, newest first. Commit history
@@ -147,11 +148,14 @@ For branch review, choose the target branch as **Base** and your feature branch
 as **Compare**. **Changes introduced by compare branch** compares their common ancestor
 to the feature branch. **Differences between sources** compares their current
 contents directly. **Swap sides** reverses the endpoints. Refresh follows named
-branches and tags, while a selected commit stays pinned.
+branches and tags, while a selected commit stays pinned. It uses the displayed
+comparison; apply edited source settings with **Compare**.
 
 A persistent, resizable changed-file navigator accompanies the continuous diff
 on wider panels. Filter filenames, expand directory groups, select a file, or
-use previous/next file controls. Scrolling updates the selected file and loads
+use previous/next controls in each file header. The file count sits beside the
+filter. **View** contains unified/split and line-wrapping preferences. The Files
+titlebar refresh button refreshes whichever mode is active. Scrolling updates the selected file and loads
 nearby diffs automatically. Binary, oversized, and failed files retain a
 navigation position; failed reads offer Retry. Narrow panels use a file drawer
 and unified diffs, restoring your chosen split layout when widened.
@@ -164,8 +168,9 @@ changed, Sedes returns to the file header with an explanation; missing
 revisions require selecting endpoints again. Browser storage restrictions can
 limit retention to memory.
 
-Start a review to keep comments and reviewed flags. **Comments** opens the
-current review inspector; **History** shows earlier reviews separately.
+Open **Review** to start a review and keep comments and reviewed flags. During
+a review, its toolbar button shows reviewed-file progress. **Comments** opens
+the current review inspector; **History** shows earlier reviews separately.
 Historical comments never annotate the current comparison. A published comment
 is local to Sedes and does not publish to Git hosting. Diff-line context
 attachment continues to target the current conversation draft.

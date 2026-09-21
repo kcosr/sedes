@@ -46,8 +46,7 @@ vi.mock("@pierre/diffs/react", () => ({
     );
     const items = props.items as readonly { id: string; type: string }[];
     const renderHeader = props.renderCustomHeader as
-      | ((item: (typeof items)[number]) => React.ReactNode)
-      | undefined;
+      ((item: (typeof items)[number]) => React.ReactNode) | undefined;
     return (
       <div data-testid="code-view">
         {items.map((item) => (
@@ -67,9 +66,39 @@ vi.mock("../app/appearance.js", () => ({
 }));
 
 import {
-  WorkspaceCompareView,
+  WorkspaceCompareView as ActualWorkspaceCompareView,
   type WorkspaceCompareDataSource,
+  type WorkspaceCompareRefreshControl,
 } from "./WorkspaceCompareView.js";
+
+let refreshControl: WorkspaceCompareRefreshControl | undefined;
+const captureRefresh = (
+  control: WorkspaceCompareRefreshControl | undefined,
+) => {
+  refreshControl = control;
+};
+function WorkspaceCompareView(
+  props: React.ComponentProps<typeof ActualWorkspaceCompareView>,
+) {
+  return (
+    <ActualWorkspaceCompareView
+      {...props}
+      onRefreshControlChange={props.onRefreshControlChange ?? captureRefresh}
+    />
+  );
+}
+function openSettings() {
+  const trigger = screen.getByRole("button", { name: "Comparison settings" });
+  if (trigger.getAttribute("aria-expanded") !== "true")
+    fireEvent.click(trigger);
+}
+async function configureComparison() {
+  openSettings();
+  return screen.findByRole("button", { name: "Compare" });
+}
+function refreshComparison() {
+  act(() => refreshControl?.refresh());
+}
 
 let measuredWidth = 900;
 let notifyResize: () => void = () => undefined;
@@ -108,6 +137,7 @@ class TestResizeObserver {
 describe("WorkspaceCompareView", () => {
   beforeEach(() => {
     measuredWidth = 900;
+    refreshControl = undefined;
     capturedCodeViewProps = undefined;
     viewportViewer = undefined;
     resizeObservers.length = 0;
@@ -135,17 +165,17 @@ describe("WorkspaceCompareView", () => {
     );
 
     const settings = screen.getByRole("button", {
-      name: /Comparison and review/,
+      name: "Comparison settings",
     });
-    expect(settings).toHaveAttribute("aria-expanded", "true");
+    expect(settings).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByText("Review controls")).toBeVisible();
     expect(screen.queryByLabelText("Repository")).toBeNull();
     fireEvent.click(settings);
-    expect(settings).toHaveAttribute("aria-expanded", "false");
+    expect(settings).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Review controls")).toBeVisible();
     fireEvent.click(settings);
 
-    const compare = await screen.findByRole("button", { name: "Compare" });
+    const compare = await configureComparison();
     await waitFor(() => expect(compare).toBeEnabled());
     fireEvent.click(compare);
 
@@ -170,7 +200,7 @@ describe("WorkspaceCompareView", () => {
   it("loads an exact navigator target before scrolling to its opaque item id", async () => {
     const dataSource = createDataSource(10);
     render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
-    const compare = await screen.findByRole("button", { name: "Compare" });
+    const compare = await configureComparison();
     await waitFor(() => expect(compare).toBeEnabled());
     fireEvent.click(compare);
     await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(8));
@@ -189,76 +219,50 @@ describe("WorkspaceCompareView", () => {
     );
   });
 
-  it("falls back to unified rendering when its panel becomes narrow", async () => {
+  it("keeps display preferences in View and restores split after widening", async () => {
     const dataSource = createDataSource(1);
     render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
-    const compare = await screen.findByRole("button", { name: "Compare" });
+    const compare = await configureComparison();
     await waitFor(() => expect(compare).toBeEnabled());
     fireEvent.click(compare);
+    await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(1));
     await waitFor(() =>
       expect(
-        (capturedCodeViewProps?.items as readonly unknown[] | undefined)
-          ?.length,
-      ).toBe(1),
+        screen.queryByRole("dialog", { name: "Comparison settings" }),
+      ).toBeNull(),
     );
-
-    const unified = screen.getByRole("button", { name: "Unified" });
+    expect(screen.queryByRole("button", { name: "Unified" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Diff view options" }));
     const split = screen.getByRole("button", { name: "Split" });
     const wrap = screen.getByRole("button", { name: "Wrap" });
-    expect(unified).toHaveAttribute("aria-pressed", "false");
     expect(split).toHaveAttribute("aria-pressed", "true");
-    expect(wrap).toHaveAttribute("aria-pressed", "false");
-
-    fireEvent.click(split);
-    await waitFor(() =>
-      expect(
-        (capturedCodeViewProps?.options as { diffStyle: string }).diffStyle,
-      ).toBe("split"),
-    );
-    expect(unified).toHaveAttribute("aria-pressed", "false");
-    expect(split).toHaveAttribute("aria-pressed", "true");
-
     fireEvent.click(wrap);
-    await waitFor(() =>
-      expect(
-        (capturedCodeViewProps?.options as { overflow: string }).overflow,
-      ).toBe("wrap"),
-    );
-    expect(wrap).toHaveAttribute("aria-pressed", "true");
-
-    const baseRevision = screen.getByLabelText("Base revision");
-    baseRevision.focus();
-    expect(baseRevision).toHaveFocus();
-    measuredWidth = 600;
-    notifyResize();
-    await waitFor(() =>
-      expect(
-        (capturedCodeViewProps?.options as { diffStyle: string }).diffStyle,
-      ).toBe("unified"),
-    );
-    expect(unified).toHaveAttribute("aria-pressed", "true");
-    expect(split).toHaveAttribute("aria-pressed", "false");
-    expect(split).toBeDisabled();
-    expect(wrap).toHaveAttribute("aria-pressed", "true");
-    const settings = screen.getByRole("button", {
-      name: /Comparison and review/,
+    act(() => {
+      measuredWidth = 600;
+      notifyResize();
     });
-    await waitFor(() =>
-      expect(settings).toHaveAttribute("aria-expanded", "false"),
+    await waitFor(() => expect(split).toBeDisabled());
+    expect(screen.getByRole("button", { name: "Unified" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
     );
-    expect(settings).toHaveFocus();
-    expect(screen.getByLabelText("Base revision")).not.toBeVisible();
-    fireEvent.click(settings);
-    expect(settings).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByLabelText("Base revision")).toBeVisible();
+    act(() => {
+      measuredWidth = 900;
+      notifyResize();
+    });
+    await waitFor(() => expect(split).toBeEnabled());
+    expect(split).toHaveAttribute("aria-pressed", "true");
+    expect(wrap).toHaveAttribute("aria-pressed", "true");
   });
 
   it("defaults to merge-base only when both endpoints are revisions", async () => {
     const dataSource = createDataSource(1);
     render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    openSettings();
     const strategy = (await screen.findByLabelText(
       "Comparison strategy",
     )) as HTMLSelectElement;
+    openSettings();
     await waitFor(() =>
       expect(screen.getByLabelText("Base revision")).toHaveTextContent("main"),
     );
@@ -285,6 +289,7 @@ describe("WorkspaceCompareView", () => {
       }),
     ).toBeEnabled();
 
+    openSettings();
     fireEvent.click(screen.getByLabelText("Base revision"));
     fireEvent.click(
       within(
@@ -309,7 +314,7 @@ describe("WorkspaceCompareView", () => {
         onAttachSelection={onAttachSelection}
       />,
     );
-    const compare = await screen.findByRole("button", { name: "Compare" });
+    const compare = await configureComparison();
     await waitFor(() => expect(compare).toBeEnabled());
     fireEvent.click(compare);
     await waitFor(() =>
@@ -364,7 +369,7 @@ describe("WorkspaceCompareView", () => {
     });
     render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
 
-    const compare = await screen.findByRole("button", { name: "Compare" });
+    const compare = await configureComparison();
     await waitFor(() => expect(compare).toBeEnabled());
     fireEvent.click(compare);
 
@@ -397,7 +402,7 @@ describe("WorkspaceCompareView", () => {
     });
     render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
 
-    const compare = await screen.findByRole("button", { name: "Compare" });
+    const compare = await configureComparison();
     await waitFor(() => expect(compare).toBeEnabled());
     fireEvent.click(compare);
 
@@ -430,7 +435,7 @@ describe("WorkspaceCompareView", () => {
     const { unmount } = render(
       <WorkspaceCompareView rootId="primary" dataSource={dataSource} />,
     );
-    const compare = await screen.findByRole("button", { name: "Compare" });
+    const compare = await configureComparison();
     await waitFor(() => expect(compare).toBeEnabled());
     fireEvent.click(compare);
     await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(3));
@@ -536,9 +541,11 @@ describe("WorkspaceCompareView", () => {
       "repository-1" as Parameters<typeof original>[0],
     );
     render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    openSettings();
     await waitFor(() =>
       expect(screen.getByLabelText("Base revision")).toHaveTextContent("main"),
     );
+    openSettings();
     fireEvent.click(screen.getByLabelText("Base revision"));
     fireEvent.change(screen.getByLabelText("Base commit history"), {
       target: { value: "all" },
@@ -567,9 +574,11 @@ describe("WorkspaceCompareView", () => {
       },
     );
     render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    openSettings();
     await waitFor(() =>
       expect(screen.getByLabelText("Base revision")).toHaveTextContent("main"),
     );
+    openSettings();
     fireEvent.click(screen.getByLabelText("Base revision"));
     fireEvent.change(screen.getByLabelText("Base commit history"), {
       target: { value: "all" },
@@ -621,7 +630,7 @@ describe("WorkspaceCompareView", () => {
           : initial,
     );
     render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
-    const compare = await screen.findByRole("button", { name: "Compare" });
+    const compare = await configureComparison();
     await waitFor(() => expect(compare).toBeEnabled());
     fireEvent.click(compare);
     await waitFor(() =>
@@ -651,7 +660,7 @@ describe("WorkspaceCompareView", () => {
         onReviewedChange={onReviewedChange}
       />,
     );
-    const compare = await screen.findByRole("button", { name: "Compare" });
+    const compare = await configureComparison();
     await waitFor(() => expect(compare).toBeEnabled());
     fireEvent.click(compare);
     const reviewed = await screen.findByRole("button", {
@@ -678,7 +687,7 @@ describe("WorkspaceCompareView", () => {
         ) * 44,
     };
     render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
-    const compare = await screen.findByRole("button", { name: "Compare" });
+    const compare = await configureComparison();
     await waitFor(() => expect(compare).toBeEnabled());
     fireEvent.click(compare);
     await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(20));
@@ -738,9 +747,11 @@ describe("WorkspaceCompareView", () => {
       },
     );
     render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    openSettings();
     await waitFor(() =>
       expect(screen.getByLabelText("Base revision")).toHaveTextContent("main"),
     );
+    openSettings();
     fireEvent.click(screen.getByLabelText("Base revision"));
     fireEvent.click(
       within(screen.getByRole("listbox", { name: "Base sources" })).getByRole(
@@ -758,13 +769,9 @@ describe("WorkspaceCompareView", () => {
     await waitFor(() =>
       expect(dataSource.createComparison).toHaveBeenCalledTimes(1),
     );
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Refresh comparison" }),
-      ).toBeEnabled(),
-    );
+    await waitFor(() => expect(refreshControl?.disabled).toBe(false));
     restarted = true;
-    fireEvent.click(screen.getByRole("button", { name: "Refresh comparison" }));
+    refreshComparison();
     await waitFor(() =>
       expect(dataSource.createComparison).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -780,6 +787,7 @@ describe("WorkspaceCompareView", () => {
       expect.any(AbortSignal),
       { resolveCommit: "a".repeat(40) },
     );
+    openSettings();
     fireEvent.click(screen.getByLabelText("Base revision"));
     expect(
       within(
@@ -793,17 +801,13 @@ describe("WorkspaceCompareView", () => {
     const discovery = await dataSource.listRepositories("primary");
     if (discovery.status !== "available") throw new Error("Fixture");
     render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
-    const compare = await screen.findByRole("button", { name: "Compare" });
+    const compare = await configureComparison();
     await waitFor(() => expect(compare).toBeEnabled());
     fireEvent.click(compare);
     await waitFor(() =>
       expect(dataSource.createComparison).toHaveBeenCalledTimes(1),
     );
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Refresh comparison" }),
-      ).toBeEnabled(),
-    );
+    await waitFor(() => expect(refreshControl?.disabled).toBe(false));
     vi.mocked(dataSource.listRepositories).mockResolvedValue({
       ...discovery,
       repositories: [
@@ -813,7 +817,7 @@ describe("WorkspaceCompareView", () => {
         },
       ],
     });
-    fireEvent.click(screen.getByRole("button", { name: "Refresh comparison" }));
+    refreshComparison();
     await screen.findByText(/selected repository is no longer available/);
     expect(dataSource.createComparison).toHaveBeenCalledTimes(1);
   });
@@ -862,7 +866,7 @@ describe("WorkspaceCompareView", () => {
         }),
       ),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Refresh comparison" }));
+    refreshComparison();
     await waitFor(() =>
       expect(dataSource.createComparison).toHaveBeenCalledTimes(2),
     );
@@ -924,12 +928,8 @@ describe("WorkspaceCompareView", () => {
       }),
       expect.any(AbortSignal),
     );
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Refresh comparison" }),
-      ).toBeEnabled(),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Refresh comparison" }));
+    await waitFor(() => expect(refreshControl?.disabled).toBe(false));
+    refreshComparison();
     await waitFor(() =>
       expect(dataSource.createComparison).toHaveBeenCalledTimes(2),
     );
@@ -944,17 +944,187 @@ describe("WorkspaceCompareView", () => {
     ]);
   });
 
+  it("refreshes and persists the displayed sources when settings contain unapplied drafts", async () => {
+    const dataSource = createDataSource(1);
+    const onNavigationChange = vi.fn();
+    render(
+      <WorkspaceCompareView
+        rootId="primary"
+        dataSource={dataSource}
+        onNavigationChange={onNavigationChange}
+      />,
+    );
+    const compare = await configureComparison();
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    await waitFor(() => expect(refreshControl?.disabled).toBe(false));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Comparison settings" }),
+      ).toBeNull(),
+    );
+    const firstRequest = vi.mocked(dataSource.createComparison).mock
+      .calls[0]![0];
+    const savedSources = onNavigationChange.mock.calls.at(-1)![0];
+    openSettings();
+    fireEvent.click(screen.getByRole("button", { name: "Staged" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Comparison settings" }),
+    );
+    expect(onNavigationChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        base: savedSources.base,
+        head: savedSources.head,
+        mode: savedSources.mode,
+        fingerprint: savedSources.fingerprint,
+      }),
+    );
+    refreshComparison();
+    await waitFor(() =>
+      expect(dataSource.createComparison).toHaveBeenCalledTimes(2),
+    );
+    expect(vi.mocked(dataSource.createComparison).mock.calls[1]![0]).toEqual(
+      firstRequest,
+    );
+    await waitFor(() => expect(refreshControl?.disabled).toBe(false));
+    openSettings();
+    expect(
+      screen.getByRole("button", { name: "Compare revision" }),
+    ).toHaveTextContent("Working tree");
+    fireEvent.click(screen.getByRole("button", { name: "Staged" }));
+    fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+    await waitFor(() =>
+      expect(dataSource.createComparison).toHaveBeenCalledTimes(3),
+    );
+    expect(
+      vi.mocked(dataSource.createComparison).mock.calls[2]![0].head,
+    ).toEqual({ kind: "index" });
+  });
+
+  it("registers the titlebar refresh action and clears it on unmount without duplicating a toolbar button", async () => {
+    const dataSource = createDataSource(1);
+    const register = vi.fn();
+    const { unmount } = render(
+      <WorkspaceCompareView
+        rootId="primary"
+        dataSource={dataSource}
+        onRefreshControlChange={register}
+      />,
+    );
+    await waitFor(() =>
+      expect(register).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          disabled: false,
+          refresh: expect.any(Function),
+        }),
+      ),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Refresh comparison" }),
+    ).toBeNull();
+    const control = register.mock.calls.at(
+      -1,
+    )![0] as WorkspaceCompareRefreshControl;
+    act(() => control.refresh());
+    await waitFor(() =>
+      expect(dataSource.createComparison).toHaveBeenCalledTimes(1),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Refresh comparison" }),
+    ).toBeNull();
+    unmount();
+    expect(register).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it("keeps file count with filtering and previous/next controls within file headers", async () => {
+    const dataSource = createDataSource(2);
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const compare = await configureComparison();
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(2));
+    expect(
+      screen
+        .getByLabelText("2 changed files")
+        .closest(".workspace-compare-navigator-search"),
+    ).not.toBeNull();
+    const next = within(screen.getByTestId("code-view")).getByRole("button", {
+      name: "Next changed file after src/file-1.ts",
+    });
+    expect(next.closest(".workspace-compare-file-header")).not.toBeNull();
+    expect(
+      document.querySelector(
+        '.workspace-compare-toolbar [aria-label^="Next changed file"]',
+      ),
+    ).toBeNull();
+    fireEvent.click(next);
+    await waitFor(() =>
+      expect(scrollTo).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "file-2" }),
+      ),
+    );
+  });
+
+  it.each(["Comparison settings", "Diff view options"] as const)(
+    "closes the portaled %s when Changes is hidden and keeps it closed on return",
+    async (label) => {
+      const dataSource = createDataSource(1);
+      const { rerender } = render(
+        <WorkspaceCompareView
+          rootId="primary"
+          dataSource={dataSource}
+          visible
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: label }));
+      expect(await screen.findByRole("dialog", { name: label })).toBeVisible();
+      if (label === "Comparison settings") {
+        fireEvent.click(screen.getByLabelText("Base revision"));
+        expect(
+          await screen.findByRole("dialog", { name: "Choose base revision" }),
+        ).toBeVisible();
+      }
+      rerender(
+        <WorkspaceCompareView
+          rootId="primary"
+          dataSource={dataSource}
+          visible={false}
+        />,
+      );
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: label })).toBeNull(),
+      );
+      expect(
+        screen.queryByRole("dialog", { name: "Choose base revision" }),
+      ).toBeNull();
+      rerender(
+        <WorkspaceCompareView
+          rootId="primary"
+          dataSource={dataSource}
+          visible
+        />,
+      );
+      expect(screen.queryByRole("dialog", { name: label })).toBeNull();
+      expect(screen.getByRole("button", { name: label })).toHaveAttribute(
+        "aria-expanded",
+        "false",
+      );
+    },
+  );
+
   it("clears the truncated warning when the root changes", async () => {
     const dataSource = createDataSource(1, { truncated: true });
     const { rerender } = render(
       <WorkspaceCompareView rootId="primary" dataSource={dataSource} />,
     );
 
-    const compare = await screen.findByRole("button", { name: "Compare" });
+    const compare = await configureComparison();
     await waitFor(() => expect(compare).toBeEnabled());
     fireEvent.click(compare);
 
-    expect(await screen.findByText("Result truncated")).toBeInTheDocument();
+    expect(
+      await screen.findByLabelText("Result truncated"),
+    ).toBeInTheDocument();
 
     rerender(
       <WorkspaceCompareView
@@ -964,7 +1134,9 @@ describe("WorkspaceCompareView", () => {
     );
 
     await waitFor(() =>
-      expect(screen.queryByText("Result truncated")).not.toBeInTheDocument(),
+      expect(
+        screen.queryByLabelText("Result truncated"),
+      ).not.toBeInTheDocument(),
     );
   });
 });

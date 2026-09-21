@@ -23,6 +23,27 @@
   font-size: 12px;
   line-height: 1.5;
 }
+.workspace-files-review-menu {
+  width: 230px;
+  gap: 4px;
+}
+.workspace-files-review-menu p {
+  margin: 4px 6px 8px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.workspace-files-review-menu > button {
+  width: 100%;
+  justify-content: flex-start;
+}
+.workspace-compare-review-badge {
+  padding: 1px 4px;
+  border-radius: var(--radius-inline);
+  background: var(--accent);
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
 .workspace-files-compare-details-dialog .workspace-files-boundary-note {
   position: static;
   margin: 0;

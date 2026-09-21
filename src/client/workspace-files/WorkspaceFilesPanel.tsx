@@ -18,6 +18,7 @@ import { createPortal } from "react-dom";
 import {
   AlertCircle,
   Check,
+  ChevronDown,
   Download,
   FilePenLine,
   FolderPlus,
@@ -42,6 +43,11 @@ import {
   type WorkspaceFileSupplementalRootId,
 } from "../../shared/index.js";
 import { Button } from "../components/ui/button.js";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "../components/ui/popover.js";
 import { ApiError, type ApiClient } from "../api/ApiClient.js";
 import { useApplicationStore } from "../stores/ApplicationClientStore.js";
 import {
@@ -96,6 +102,7 @@ import {
   type WorkspaceCompareCapturedLineTarget,
   type WorkspaceCompareDataSource,
   type WorkspaceCompareReviewAnnotation,
+  type WorkspaceCompareRefreshControl,
 } from "./WorkspaceCompareView.js";
 import type {
   WorkspaceDiffComparisonDescriptor,
@@ -349,6 +356,17 @@ export function WorkspaceFilesPanel({
   const [removing, setRemoving] = useState(false);
   const [treeOpen, setTreeOpen] = useState(initialUiRestore.treeOpen);
   const [reviewInspectorMode, setReviewInspectorMode] = useState<"current" | "history">("current");
+  const [reviewMenuOpen, setReviewMenuOpen] = useState(false);
+  const [compareRefreshControl, setCompareRefreshControl] = useState<
+    (WorkspaceCompareRefreshControl & { scope: string }) | undefined
+  >();
+  const compareRefreshScope = JSON.stringify([navigationScope, workspaceId, activeRootId]);
+  const registerCompareRefresh = useCallback(
+    (control: WorkspaceCompareRefreshControl | undefined) => {
+      setCompareRefreshControl(control ? { ...control, scope: compareRefreshScope } : undefined);
+    },
+    [compareRefreshScope],
+  );
   const [mode, setMode] = useState<WorkspaceFilesMode>("browse");
   const [compareOpened, setCompareOpened] = useState(false);
   const [activeComparison, setActiveComparison] =
@@ -472,6 +490,9 @@ export function WorkspaceFilesPanel({
     ? undefined : `${compareReviewEpochRef.current.epoch}\0${compareReviewIdentityKey}`;
   const compareReviewContextKeyRef = useRef(compareReviewContextKey);
   compareReviewContextKeyRef.current = compareReviewContextKey;
+  useEffect(() => {
+    setReviewMenuOpen(false);
+  }, [mode, compareReviewContextKey, context.visible]);
   const consumedIntentSequenceRef = useRef<number | undefined>(undefined);
   const recordedSeekIntentSequenceRef = useRef<number | undefined>(undefined);
   const pendingIntentAddressesRef = useRef(
@@ -2910,22 +2931,80 @@ export function WorkspaceFilesPanel({
     setCompareDetailsOpen(true);
   };
   const compareReviewControls = (
-    <div className="workspace-files-compare-review-bar">
-      <div className="workspace-files-compare-review-summary">
-        <span>{compareReviewedCount} of {compareFiles.length} reviewed</span>
-        {!currentCompareReview && <span>No active review</span>}
-      </div>
-      <div className="workspace-files-compare-review-actions">
-        {!currentCompareReview && <Button variant="ghost" size="sm"
-          disabled={!activeComparison || compareReviewLoading || compareReviewMutating || compareCommentSaving}
-          onClick={() => void startCompareReview()}>Start review</Button>}
-        {currentCompareReview && <Button variant="ghost" size="sm"
-          onClick={() => showReviewInspector("current")}>Comments ({compareCommentCount})</Button>}
-        <Button variant="ghost" size="sm" disabled={compareRepositoryHistoryCount === 0}
-          onClick={() => showReviewInspector("history")}>History</Button>
-      </div>
-    </div>
+    <Popover open={reviewMenuOpen} onOpenChange={setReviewMenuOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="workspace-compare-toolbar-button"
+          aria-label="Review controls"
+          disabled={!activeComparison}
+        >
+          Review
+          {currentCompareReview && (
+            <span
+              className="workspace-compare-review-badge"
+              title={`${compareReviewedCount} of ${compareFiles.length} files reviewed`}
+            >
+              {compareReviewedCount}/{compareFiles.length}
+            </span>
+          )}
+          <ChevronDown aria-hidden="true" size={13} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        className="workspace-files-review-menu"
+        aria-label="Review options"
+      >
+        {currentCompareReview ? (
+          <p>{compareReviewedCount} of {compareFiles.length} reviewed</p>
+        ) : (
+          <p>Start a review to save comments and reviewed files.</p>
+        )}
+        {!currentCompareReview && (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!activeComparison || compareReviewLoading || compareReviewMutating || compareCommentSaving}
+            onClick={() => {
+              setReviewMenuOpen(false);
+              void startCompareReview();
+            }}
+          >
+            Start review
+          </Button>
+        )}
+        {currentCompareReview && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setReviewMenuOpen(false);
+              showReviewInspector("current");
+            }}
+          >
+            Comments ({compareCommentCount})
+          </Button>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={compareRepositoryHistoryCount === 0}
+          onClick={() => {
+            setReviewMenuOpen(false);
+            showReviewInspector("history");
+          }}
+        >
+          History
+        </Button>
+      </PopoverContent>
+    </Popover>
   );
+  const activeCompareRefresh = compareRefreshControl?.scope === compareRefreshScope
+    ? compareRefreshControl : undefined;
+  const refreshDisabled = mode === "compare"
+    ? !activeCompareRefresh || activeCompareRefresh.disabled : refreshLoading;
+  const refreshLabel = mode === "compare" ? "Refresh comparison" : "Refresh workspace files";
 
   return (
     <section
@@ -3011,14 +3090,14 @@ export function WorkspaceFilesPanel({
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label="Refresh workspace files"
-            title="Refresh workspace files"
-            onClick={refreshWorkspaceFiles}
-            disabled={refreshLoading}
+            aria-label={refreshLabel}
+            title={refreshLabel}
+            onClick={mode === "compare" ? activeCompareRefresh?.refresh : refreshWorkspaceFiles}
+            disabled={refreshDisabled}
           >
             <RefreshCw
               size={15}
-              className={refreshLoading ? "workspace-files-spin" : undefined}
+              className={mode === "browse" && refreshLoading ? "workspace-files-spin" : undefined}
             />
           </Button>
         </div>,
@@ -3563,6 +3642,7 @@ export function WorkspaceFilesPanel({
               dataSource={compareDataSource}
               visible={context.visible && mode === "compare"}
               reviewControls={compareReviewControls}
+              onRefreshControlChange={registerCompareRefresh}
               annotations={compareAnnotations}
               reviewedFileIds={compareReviewedFileIds}
               onCreateAnnotation={(target) => {

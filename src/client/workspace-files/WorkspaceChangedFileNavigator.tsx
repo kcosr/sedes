@@ -114,12 +114,21 @@ export function WorkspaceChangedFileNavigator({
           maxLength={WORKSPACE_COMPARE_FILTER_MAX_LENGTH}
           value={filter}
           onChange={(event) => {
-            onFilterChange(event.target.value.slice(0, WORKSPACE_COMPARE_FILTER_MAX_LENGTH));
+            onFilterChange(
+              event.target.value.slice(0, WORKSPACE_COMPARE_FILTER_MAX_LENGTH),
+            );
             setFocused(0);
             setScrollTop(0);
             if (listRef.current) listRef.current.scrollTop = 0;
           }}
         />
+        <span
+          className="workspace-compare-file-count"
+          aria-label={`${files.length} changed ${files.length === 1 ? "file" : "files"}`}
+          title={`${files.length} changed ${files.length === 1 ? "file" : "files"}`}
+        >
+          {files.length}
+        </span>
         {onClose && (
           <button
             type="button"
@@ -281,12 +290,14 @@ export function WorkspaceChangedFileNavigator({
           </p>
         )}
       </div>
-      <div className="workspace-compare-sidebar-footer" role="status">
-        {loading
-          ? "Loading file list…"
-          : `${filtered.length} of ${files.length} files`}
-        {truncated ? " · Result truncated" : ""}
-      </div>
+      {(loading || truncated || filter) && (
+        <div className="workspace-compare-sidebar-footer" role="status">
+          {loading
+            ? "Loading file list…"
+            : `${filtered.length} of ${files.length} files`}
+          {truncated ? " · Result truncated" : ""}
+        </div>
+      )}
     </aside>
   );
 }

@@ -286,8 +286,8 @@ root topology and the selected root's loaded
 directories (or its explicitly loaded full-tree snapshot) and to reload a clean
 active file. Refresh never silently replaces an unsaved draft. Compare performs
 its own explicit Git reads when opened; rerun the comparison with Compare or
-Refresh comparison to pick up changes to its diffs. The Browse toolbar Refresh
-does not recompute a comparison. Directory, full-scan, page, content,
+the Files titlebar Refresh action to pick up changes to its diffs. That shared
+action follows the active mode; Browse refresh does not recompute a comparison. Directory, full-scan, page, content,
 and Git budgets apply independently to each root. A
 missing, moved, or disallowed supplemental root is shown as unavailable without
 preventing access to the other roots. Sedes retains the attachment so it can
@@ -299,6 +299,15 @@ The user-facing **Changes** mode is retained beside Browse inside Files.
 Both modes share the effective root; open Browse documents and unsaved edits
 remain mounted during mode changes. Open file from a diff explicitly selects
 its current new path in Browse; deleted content does not open another file.
+
+A single compact toolbar opens comparison settings, display preferences, and
+review actions in popovers without displacing the diff. Active review progress
+appears on the Review button. Counts sit beside the navigator filter, and
+previous/next file actions sit in diff file headers. The comparison registers
+a scope-bound refresh callback with the Files titlebar while mounted. Refresh
+and saved reading positions use the applied semantic endpoints; unapplied
+picker edits are applied only through Compare. Popovers close when the view
+is hidden.
 
 The changed-file navigator is grouped, virtualized, resizable, and independent
 of patch availability. Actual panel width determines whether it is a persistent

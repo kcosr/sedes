@@ -2,7 +2,6 @@ import type { ContextExcerptStagingTarget } from "../context-excerpts/coordinato
 import {
   useCallback,
   useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
@@ -78,6 +77,11 @@ import {
   workspaceCompareSupportsMergeBase,
   type WorkspaceComparePreferences,
 } from "./workspace-compare-state.js";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "../components/ui/popover.js";
 import { WorkspaceRevisionPicker } from "./WorkspaceRevisionPicker.js";
 import { WorkspaceChangedFileNavigator } from "./WorkspaceChangedFileNavigator.js";
 import {
@@ -138,9 +142,13 @@ export interface WorkspaceCompareLineTarget {
   readonly range: SelectedLineRange;
 }
 
-export interface WorkspaceCompareCapturedLineTarget
-  extends WorkspaceCompareLineTarget {
+export interface WorkspaceCompareCapturedLineTarget extends WorkspaceCompareLineTarget {
   readonly captured: CapturedDiffLineSelection;
+}
+
+export interface WorkspaceCompareRefreshControl {
+  readonly refresh: () => void;
+  readonly disabled: boolean;
 }
 
 export interface WorkspaceCompareViewProps {
@@ -153,6 +161,9 @@ export interface WorkspaceCompareViewProps {
   readonly dataSource: WorkspaceCompareDataSource;
   readonly visible?: boolean;
   readonly reviewControls?: ReactNode;
+  readonly onRefreshControlChange?: (
+    control: WorkspaceCompareRefreshControl | undefined,
+  ) => void;
   readonly annotations?: readonly WorkspaceCompareReviewAnnotation[];
   readonly reviewedFileIds?: ReadonlySet<WorkspaceDiffFileId>;
   readonly onCreateAnnotation?: (target: WorkspaceCompareLineTarget) => void;
@@ -209,6 +220,7 @@ export function WorkspaceCompareView({
   dataSource,
   visible = true,
   reviewControls,
+  onRefreshControlChange,
   annotations = [],
   reviewedFileIds = EMPTY_REVIEWED_FILES,
   onCreateAnnotation,
@@ -266,13 +278,13 @@ export function WorkspaceCompareView({
   const prefetchRef = useRef<(index: number) => void>(() => undefined);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
-  const settingsToggleRef = useRef<HTMLButtonElement>(null);
-  const settingsBodyRef = useRef<HTMLDivElement>(null);
-  const settingsId = useId();
   const codeViewRef =
     useRef<CodeViewHandle<WorkspaceCompareReviewAnnotation> | null>(null);
   const activeComparisonRef = useRef<
     WorkspaceDiffComparisonDescriptor | undefined
+  >(undefined);
+  const appliedEndpointsRef = useRef<
+    Pick<WorkspaceCompareNavigation, "base" | "head" | "mode"> | undefined
   >(undefined);
   const changedFilesRef = useRef<readonly WorkspaceDiffChangedFileSummary[]>(
     [],
@@ -328,7 +340,8 @@ export function WorkspaceCompareView({
   const [narrow, setNarrow] = useState(false);
   const [surfaceWidth, setSurfaceWidth] = useState(0);
   const [surfaceHeight, setSurfaceHeight] = useState(0);
-  const [settingsExpanded, setSettingsExpanded] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [viewOptionsOpen, setViewOptionsOpen] = useState(false);
   const [repositories, setRepositories] = useState<
     readonly WorkspaceDiffRepositoryDescriptor[]
   >([]);
@@ -377,6 +390,9 @@ export function WorkspaceCompareView({
   useEffect(() => subscribeResolvedAppearance(setThemeType), []);
   useEffect(() => {
     if (visible) return;
+    setSettingsOpen(false);
+    setViewOptionsOpen(false);
+    setNavigatorOpen(false);
     setPendingSelection(undefined);
     setSelectedLines(null);
     onSelectedLinesChange?.(undefined);
@@ -416,6 +432,7 @@ export function WorkspaceCompareView({
     abortComparisonWork();
     const controller = new AbortController();
     const generation = ++requestGenerationRef.current;
+    appliedEndpointsRef.current = undefined;
     setBusy("repositories");
     setNotice(undefined);
     setRepositories([]);
@@ -430,7 +447,7 @@ export function WorkspaceCompareView({
     replacePatches(new Map());
     setSelectedLines(null);
     setPendingSelection(undefined);
-    setSettingsExpanded(true);
+    setSettingsOpen(false);
     onSelectedLinesChange?.(undefined);
     void dataSource
       .listRepositories(rootId, controller.signal)
@@ -491,6 +508,7 @@ export function WorkspaceCompareView({
     abortComparisonWork();
     const controller = new AbortController();
     const generation = ++requestGenerationRef.current;
+    appliedEndpointsRef.current = undefined;
     setBusy("revisions");
     setNotice(undefined);
     setRevisions([]);
@@ -593,292 +611,326 @@ export function WorkspaceCompareView({
     repositoryId,
   ]);
 
-  const loadComparison = useCallback(async () => {
-    if (!repositoryId || !base) return;
-    const previousFile = anchorRef.current;
-    const previousFingerprint = activeComparisonRef.current?.fingerprint;
-    abortComparisonWork();
-    const generation = ++requestGenerationRef.current;
-    const controller = new AbortController();
-    comparisonAbortRef.current = controller;
-    setBusy("comparison");
-    setNotice(undefined);
-    setRestoreNotice(undefined);
-    setComparison(undefined);
-    onComparisonChangeRef.current?.(undefined);
-    activeComparisonRef.current = undefined;
-    setChangedFiles([]);
-    changedFilesRef.current = [];
-    setFilesTruncated(false);
-    replacePatches(new Map());
-    setSelectedLines(null);
-    setPendingSelection(undefined);
-    onSelectedLinesChange?.(undefined);
-    try {
-      const selectedRepository = repositories.find(
-        (repository) => repository.repositoryId === repositoryId,
-      );
-      const baseIntent = compareEndpointIntent(base, revisions);
-      const headIntent = compareEndpointIntent(head, revisions);
-      if (!selectedRepository || !baseIntent || !headIntent)
-        throw new Error("Select both comparison sources again.");
-      const discovered = await dataSource.listRepositories(
-        rootId,
-        controller.signal,
-      );
-      if (generation !== requestGenerationRef.current) return;
-      if (discovered.status !== "available")
-        throw new Error(
-          "The repository is temporarily unavailable. Refresh when the connection returns.",
+  const loadComparison = useCallback(
+    async (refresh = false) => {
+      if (!repositoryId || !base) return;
+      const applied =
+        refresh && activeComparisonRef.current
+          ? appliedEndpointsRef.current
+          : undefined;
+      const baseIntent =
+        applied?.base ?? compareEndpointIntent(base, revisions);
+      const headIntent =
+        applied?.head ?? compareEndpointIntent(head, revisions);
+      const requestedMode = applied?.mode ?? mode;
+      const previousFile = anchorRef.current;
+      const previousFingerprint = activeComparisonRef.current?.fingerprint;
+      abortComparisonWork();
+      const generation = ++requestGenerationRef.current;
+      const controller = new AbortController();
+      comparisonAbortRef.current = controller;
+      setBusy("comparison");
+      setNotice(undefined);
+      setRestoreNotice(undefined);
+      setComparison(undefined);
+      onComparisonChangeRef.current?.(undefined);
+      activeComparisonRef.current = undefined;
+      setChangedFiles([]);
+      changedFilesRef.current = [];
+      setFilesTruncated(false);
+      replacePatches(new Map());
+      setSelectedLines(null);
+      setPendingSelection(undefined);
+      onSelectedLinesChange?.(undefined);
+      try {
+        const selectedRepository = repositories.find(
+          (repository) => repository.repositoryId === repositoryId,
         );
-      const freshRepository = discovered.repositories.find(
-        (repository) =>
-          repository.repositoryKey === selectedRepository.repositoryKey,
-      );
-      if (!freshRepository)
-        throw new Error(
-          "The selected repository is no longer available. Choose another Files root or repository.",
-        );
-      const freshCatalog = await dataSource.listRevisions(
-        freshRepository.repositoryId,
-        controller.signal,
-      );
-      if (generation !== requestGenerationRef.current) return;
-      if (freshCatalog.status !== "available")
-        throw new Error(
-          "Revisions are unavailable. Refresh when the connection returns.",
-        );
-      let nextRevisions = [...freshCatalog.revisions];
-      const intents = [baseIntent, headIntent];
-      const isEndpointRevision = (revision: WorkspaceDiffRevisionDescriptor) =>
-        intents.some((intent) =>
-          intent.kind === "commit"
-            ? revision.kind === "commit" &&
-              revision.commitHash === intent.commitHash
-            : intent.kind === "ref" &&
-              revision.kind === intent.refKind &&
-              revision.label === intent.label,
-        );
-      for (const intent of intents) {
-        const query =
-          intent.kind === "ref"
-            ? {
-                resolveRef: `refs/${intent.refKind === "local_branch" ? "heads" : intent.refKind === "remote_branch" ? "remotes" : "tags"}/${intent.label}`,
-              }
-            : intent.kind === "commit" &&
-                !compareEndpointSelection(intent, nextRevisions)
-              ? { resolveCommit: intent.commitHash }
-              : undefined;
-        if (!query) continue;
-        const catalog = await dataSource.listRevisions(
-          freshRepository.repositoryId,
+        if (!selectedRepository || !baseIntent || !headIntent)
+          throw new Error("Select both comparison sources again.");
+        const discovered = await dataSource.listRepositories(
+          rootId,
           controller.signal,
-          query,
         );
         if (generation !== requestGenerationRef.current) return;
-        if (
-          catalog.status !== "available" ||
-          !compareEndpointSelection(intent, catalog.revisions)
-        )
+        if (discovered.status !== "available")
+          throw new Error(
+            "The repository is temporarily unavailable. Refresh when the connection returns.",
+          );
+        const freshRepository = discovered.repositories.find(
+          (repository) =>
+            repository.repositoryKey === selectedRepository.repositoryKey,
+        );
+        if (!freshRepository)
+          throw new Error(
+            "The selected repository is no longer available. Choose another Files root or repository.",
+          );
+        const freshCatalog = await dataSource.listRevisions(
+          freshRepository.repositoryId,
+          controller.signal,
+        );
+        if (generation !== requestGenerationRef.current) return;
+        if (freshCatalog.status !== "available")
+          throw new Error(
+            "Revisions are unavailable. Refresh when the connection returns.",
+          );
+        let nextRevisions = [...freshCatalog.revisions];
+        const intents = [baseIntent, headIntent];
+        const isEndpointRevision = (
+          revision: WorkspaceDiffRevisionDescriptor,
+        ) =>
+          intents.some((intent) =>
+            intent.kind === "commit"
+              ? revision.kind === "commit" &&
+                revision.commitHash === intent.commitHash
+              : intent.kind === "ref" &&
+                revision.kind === intent.refKind &&
+                revision.label === intent.label,
+          );
+        for (const intent of intents) {
+          const query =
+            intent.kind === "ref"
+              ? {
+                  resolveRef: `refs/${intent.refKind === "local_branch" ? "heads" : intent.refKind === "remote_branch" ? "remotes" : "tags"}/${intent.label}`,
+                }
+              : intent.kind === "commit" &&
+                  !compareEndpointSelection(intent, nextRevisions)
+                ? { resolveCommit: intent.commitHash }
+                : undefined;
+          if (!query) continue;
+          const catalog = await dataSource.listRevisions(
+            freshRepository.repositoryId,
+            controller.signal,
+            query,
+          );
+          if (generation !== requestGenerationRef.current) return;
+          if (
+            catalog.status !== "available" ||
+            !compareEndpointSelection(intent, catalog.revisions)
+          )
+            throw new Error(
+              "A comparison revision is no longer available. Select the endpoints again.",
+            );
+          nextRevisions = [
+            ...catalog.revisions,
+            ...nextRevisions.filter(
+              (entry) =>
+                isEndpointRevision(entry) &&
+                !catalog.revisions.some(
+                  (next) =>
+                    next.revisionId === entry.revisionId ||
+                    (entry.kind !== "commit" &&
+                      next.kind === entry.kind &&
+                      next.label === entry.label),
+                ),
+            ),
+          ];
+        }
+        const nextBase = compareEndpointSelection(baseIntent, nextRevisions);
+        const nextHead = compareEndpointSelection(headIntent, nextRevisions);
+        if (!nextBase || !nextHead)
           throw new Error(
             "A comparison revision is no longer available. Select the endpoints again.",
           );
-        nextRevisions = [
-          ...catalog.revisions,
-          ...nextRevisions.filter(
-            (entry) =>
-              isEndpointRevision(entry) &&
-              !catalog.revisions.some(
-                (next) =>
-                  next.revisionId === entry.revisionId ||
-                  (entry.kind !== "commit" &&
-                    next.kind === entry.kind &&
-                    next.label === entry.label),
-              ),
-          ),
-        ];
-      }
-      const nextBase = compareEndpointSelection(baseIntent, nextRevisions);
-      const nextHead = compareEndpointSelection(headIntent, nextRevisions);
-      if (!nextBase || !nextHead)
-        throw new Error(
-          "A comparison revision is no longer available. Select the endpoints again.",
-        );
-      liveRepositoryRef.current = freshRepository;
-      preserveEndpointModeRef.current =
-        workspaceCompareSelectionKey(nextBase) !==
-          workspaceCompareSelectionKey(base) ||
-        workspaceCompareSelectionKey(nextHead) !==
-          workspaceCompareSelectionKey(head);
-      setBase(nextBase);
-      setHead(nextHead);
-      setRevisions(nextRevisions);
-      setHistoryScope((scope) => {
-        if (!scope.startsWith("revision:")) return scope;
-        const previous = revisions.find(
-          (revision) => `revision:${revision.revisionId}` === scope,
-        );
-        const current =
-          previous &&
-          nextRevisions.find(
-            (revision) =>
-              revision.kind === previous.kind &&
-              revision.label === previous.label,
+        liveRepositoryRef.current = freshRepository;
+        preserveEndpointModeRef.current =
+          workspaceCompareSelectionKey(nextBase) !==
+            workspaceCompareSelectionKey(base) ||
+          workspaceCompareSelectionKey(nextHead) !==
+            workspaceCompareSelectionKey(head);
+        setBase(nextBase);
+        setHead(nextHead);
+        setRevisions(nextRevisions);
+        setHistoryScope((scope) => {
+          if (!scope.startsWith("revision:")) return scope;
+          const previous = revisions.find(
+            (revision) => `revision:${revision.revisionId}` === scope,
           );
-        return current ? `revision:${current.revisionId}` : "head";
-      });
-      const result = await dataSource.createComparison(
-        {
-          repositoryId: freshRepository.repositoryId,
-          mode: workspaceCompareSupportsMergeBase(nextBase, nextHead)
-            ? mode
-            : "direct",
-          base: nextBase,
-          head: nextHead,
-        },
-        controller.signal,
-      );
-      if (generation !== requestGenerationRef.current) return;
-      if (result.status === "unavailable") {
-        setNotice(
-          diagnosticMessage(
-            "Could not create comparison",
-            result.diagnosticCode,
-          ),
-        );
-        return;
-      }
-      const nextComparison = result.comparison;
-      setComparison(nextComparison);
-      onComparisonChangeRef.current?.(nextComparison);
-      activeComparisonRef.current = nextComparison;
-      let after: WorkspaceDiffFileId | undefined;
-      const accumulated: WorkspaceDiffChangedFileSummary[] = [];
-      let truncated = false;
-      const seenCursors = new Set<string>();
-      const seenFiles = new Set<string>();
-      do {
-        const page = await dataSource.listChangedFiles(
+          const current =
+            previous &&
+            nextRevisions.find(
+              (revision) =>
+                revision.kind === previous.kind &&
+                revision.label === previous.label,
+            );
+          return current ? `revision:${current.revisionId}` : "head";
+        });
+        const nextMode = workspaceCompareSupportsMergeBase(nextBase, nextHead)
+          ? requestedMode
+          : "direct";
+        setMode(nextMode);
+        const result = await dataSource.createComparison(
           {
-            comparisonId: nextComparison.comparisonId,
-            fingerprint: nextComparison.fingerprint,
-            ...(after ? { after } : {}),
-            pageSize: 200,
+            repositoryId: freshRepository.repositoryId,
+            mode: nextMode,
+            base: nextBase,
+            head: nextHead,
           },
           controller.signal,
         );
         if (generation !== requestGenerationRef.current) return;
-        if (page.status === "stale") {
-          activeComparisonRef.current = undefined;
-          onComparisonChangeRef.current?.(undefined);
-          setNotice(
-            "The working tree changed while this comparison was loading. Refresh to compare the current state.",
-          );
-          return;
-        }
-        if (page.status === "unavailable") {
+        if (result.status === "unavailable") {
           setNotice(
             diagnosticMessage(
-              "Changed files are unavailable",
-              page.diagnosticCode,
+              "Could not create comparison",
+              result.diagnosticCode,
             ),
           );
           return;
         }
-        accumulated.push(
-          ...page.files.filter((file) => {
-            if (seenFiles.has(file.fileId)) return false;
-            seenFiles.add(file.fileId);
-            return true;
-          }),
-        );
-        setChangedFiles([...accumulated]);
-        changedFilesRef.current = [...accumulated];
-        truncated ||= page.truncated;
-        after = page.nextCursor;
-        if (after && seenCursors.has(after))
-          throw new Error("Changed files returned a repeated cursor.");
-        if (after) seenCursors.add(after);
-      } while (after);
-      setFilesTruncated(truncated);
-      const saved = restoreRef.current;
-      const target = previousFile ?? saved?.file;
-      if (
-        nextComparison.fingerprint !==
-        (previousFingerprint ?? saved?.fingerprint)
-      )
-        returnLocationsRef.current.clear();
-      const targetFile =
-        target &&
-        accumulated.find(
-          (file) =>
-            file.oldPath === target.oldPath &&
-            file.newPath === target.newPath &&
-            file.changeKind === target.changeKind,
-        );
-      if (targetFile) {
-        const exact =
-          nextComparison.fingerprint ===
-          (previousFingerprint ?? saved?.fingerprint);
-        anchorRef.current = {
-          oldPath: targetFile.oldPath,
-          newPath: targetFile.newPath,
-          changeKind: targetFile.changeKind,
-          ...(exact
-            ? { line: target?.line, side: target?.side, offset: target?.offset }
-            : {}),
+        appliedEndpointsRef.current = {
+          base: baseIntent,
+          head: headIntent,
+          mode: nextMode,
         };
-        currentFileRef.current = targetFile.fileId;
-        setCurrentFileId(targetFile.fileId);
-        setPendingScrollFileId(targetFile.fileId);
-        if (!exact)
-          setRestoreNotice(
-            "The comparison changed. Returned to the file header.",
+        const nextComparison = result.comparison;
+        setComparison(nextComparison);
+        onComparisonChangeRef.current?.(nextComparison);
+        activeComparisonRef.current = nextComparison;
+        let after: WorkspaceDiffFileId | undefined;
+        const accumulated: WorkspaceDiffChangedFileSummary[] = [];
+        let truncated = false;
+        const seenCursors = new Set<string>();
+        const seenFiles = new Set<string>();
+        do {
+          const page = await dataSource.listChangedFiles(
+            {
+              comparisonId: nextComparison.comparisonId,
+              fingerprint: nextComparison.fingerprint,
+              ...(after ? { after } : {}),
+              pageSize: 200,
+            },
+            controller.signal,
           );
-      } else {
-        if (target)
-          setRestoreNotice(
-            "The previously viewed file is no longer in this comparison.",
+          if (generation !== requestGenerationRef.current) return;
+          if (page.status === "stale") {
+            activeComparisonRef.current = undefined;
+            onComparisonChangeRef.current?.(undefined);
+            setNotice(
+              "The working tree changed while this comparison was loading. Refresh to compare the current state.",
+            );
+            return;
+          }
+          if (page.status === "unavailable") {
+            setNotice(
+              diagnosticMessage(
+                "Changed files are unavailable",
+                page.diagnosticCode,
+              ),
+            );
+            return;
+          }
+          accumulated.push(
+            ...page.files.filter((file) => {
+              if (seenFiles.has(file.fileId)) return false;
+              seenFiles.add(file.fileId);
+              return true;
+            }),
           );
-        const first = accumulated[0];
-        anchorRef.current = first
-          ? {
-              oldPath: first.oldPath,
-              newPath: first.newPath,
-              changeKind: first.changeKind,
-            }
-          : undefined;
-        currentFileRef.current = first?.fileId;
-        setCurrentFileId(first?.fileId);
-        setPendingScrollFileId(undefined);
+          setChangedFiles([...accumulated]);
+          changedFilesRef.current = [...accumulated];
+          truncated ||= page.truncated;
+          after = page.nextCursor;
+          if (after && seenCursors.has(after))
+            throw new Error("Changed files returned a repeated cursor.");
+          if (after) seenCursors.add(after);
+        } while (after);
+        setFilesTruncated(truncated);
+        const saved = restoreRef.current;
+        const target = previousFile ?? saved?.file;
+        if (
+          nextComparison.fingerprint !==
+          (previousFingerprint ?? saved?.fingerprint)
+        )
+          returnLocationsRef.current.clear();
+        const targetFile =
+          target &&
+          accumulated.find(
+            (file) =>
+              file.oldPath === target.oldPath &&
+              file.newPath === target.newPath &&
+              file.changeKind === target.changeKind,
+          );
+        if (targetFile) {
+          const exact =
+            nextComparison.fingerprint ===
+            (previousFingerprint ?? saved?.fingerprint);
+          anchorRef.current = {
+            oldPath: targetFile.oldPath,
+            newPath: targetFile.newPath,
+            changeKind: targetFile.changeKind,
+            ...(exact
+              ? {
+                  line: target?.line,
+                  side: target?.side,
+                  offset: target?.offset,
+                }
+              : {}),
+          };
+          currentFileRef.current = targetFile.fileId;
+          setCurrentFileId(targetFile.fileId);
+          setPendingScrollFileId(targetFile.fileId);
+          if (!exact)
+            setRestoreNotice(
+              "The comparison changed. Returned to the file header.",
+            );
+        } else {
+          if (target)
+            setRestoreNotice(
+              "The previously viewed file is no longer in this comparison.",
+            );
+          const first = accumulated[0];
+          anchorRef.current = first
+            ? {
+                oldPath: first.oldPath,
+                newPath: first.newPath,
+                changeKind: first.changeKind,
+              }
+            : undefined;
+          currentFileRef.current = first?.fileId;
+          setCurrentFileId(first?.fileId);
+          setPendingScrollFileId(undefined);
+        }
+        restoreRef.current = undefined;
+        setSettingsOpen(false);
+        if (accumulated.length === 0)
+          setNotice("No changed files in this comparison.");
+      } catch (error: unknown) {
+        if (
+          !controller.signal.aborted &&
+          generation === requestGenerationRef.current
+        )
+          setNotice(errorMessage("Could not load comparison", error));
+      } finally {
+        if (comparisonAbortRef.current === controller)
+          comparisonAbortRef.current = undefined;
+        if (generation === requestGenerationRef.current) setBusy("idle");
       }
-      restoreRef.current = undefined;
-      if (accumulated.length === 0)
-        setNotice("No changed files in this comparison.");
-    } catch (error: unknown) {
-      if (
-        !controller.signal.aborted &&
-        generation === requestGenerationRef.current
-      )
-        setNotice(errorMessage("Could not load comparison", error));
-    } finally {
-      if (comparisonAbortRef.current === controller)
-        comparisonAbortRef.current = undefined;
-      if (generation === requestGenerationRef.current) setBusy("idle");
-    }
-  }, [
-    abortComparisonWork,
-    base,
-    dataSource,
-    head,
-    mode,
-    onSelectedLinesChange,
-    replacePatches,
-    repositoryId,
-    repositories,
-    rootId,
-    revisions,
-  ]);
+    },
+    [
+      abortComparisonWork,
+      base,
+      dataSource,
+      head,
+      mode,
+      onSelectedLinesChange,
+      replacePatches,
+      repositoryId,
+      repositories,
+      rootId,
+      revisions,
+    ],
+  );
+
+  const refreshRegistrationRef = useRef(onRefreshControlChange);
+  refreshRegistrationRef.current = onRefreshControlChange;
+  useEffect(() => {
+    onRefreshControlChange?.({
+      refresh: () => void loadComparison(true),
+      disabled: !base || !repositoryId || busy !== "idle",
+    });
+  }, [onRefreshControlChange, loadComparison, base, repositoryId, busy]);
+  useEffect(() => () => refreshRegistrationRef.current?.(undefined), []);
 
   const ensurePatch = useCallback(
     async (
@@ -1394,8 +1446,11 @@ export function WorkspaceCompareView({
     const repo = repositories.find(
       (item) => item.repositoryId === repositoryId,
     );
-    const baseIntent = compareEndpointIntent(base, revisions);
-    const headIntent = compareEndpointIntent(head, revisions);
+    const applied = activeComparisonRef.current
+      ? appliedEndpointsRef.current
+      : undefined;
+    const baseIntent = applied?.base ?? compareEndpointIntent(base, revisions);
+    const headIntent = applied?.head ?? compareEndpointIntent(head, revisions);
     if (!repo || !baseIntent || !headIntent || restoreRef.current) return;
     navigationCallbackRef.current?.({
       repository: {
@@ -1405,7 +1460,7 @@ export function WorkspaceCompareView({
       },
       base: baseIntent,
       head: headIntent,
-      mode,
+      mode: applied?.mode ?? mode,
       fingerprint: comparison?.fingerprint,
       file: anchorRef.current,
       returnLocations: [...returnLocationsRef.current.values()],
@@ -1489,9 +1544,6 @@ export function WorkspaceCompareView({
     },
     [pendingScrollFileId],
   );
-  const currentIndex = changedFiles.findIndex(
-    (file) => file.fileId === currentFileId,
-  );
   const navigator = (
     <WorkspaceChangedFileNavigator
       files={changedFiles}
@@ -1509,18 +1561,18 @@ export function WorkspaceCompareView({
     />
   );
   const settingsSummary = `${workspaceCompareSelectionLabel(base, revisions)} → ${workspaceCompareSelectionLabel(head, revisions)}`;
+  const sourcePairSummary = comparison
+    ? [comparison.base, comparison.head]
+        .map((endpoint) =>
+          endpoint.kind === "revision"
+            ? (endpoint.label ?? endpoint.commitHash.slice(0, 8))
+            : endpoint.kind === "index"
+              ? "Staged changes"
+              : "Working tree",
+        )
+        .join(" → ")
+    : settingsSummary;
   const mergeBaseAllowed = workspaceCompareSupportsMergeBase(base, head);
-  useEffect(() => {
-    if (!narrow || !comparison) return;
-    if (
-      settingsBodyRef.current?.contains(
-        settingsBodyRef.current.ownerDocument.activeElement,
-      )
-    ) {
-      settingsToggleRef.current?.focus();
-    }
-    setSettingsExpanded(false);
-  }, [comparison, narrow]);
   const changeHistoryScope = async (scope: string) => {
     if (!repositoryId) return;
     historyAbortRef.current?.abort();
@@ -1613,254 +1665,259 @@ export function WorkspaceCompareView({
       ref={surfaceRef}
       aria-label="Compare workspace files"
     >
-      <div className="workspace-compare-settings">
-        <button
-          ref={settingsToggleRef}
-          type="button"
-          className="workspace-compare-settings-toggle"
-          aria-expanded={settingsExpanded}
-          aria-controls={settingsId}
-          onClick={() => setSettingsExpanded((current) => !current)}
-        >
-          <span className="workspace-compare-settings-heading">
-            <strong>Comparison and review</strong>
-            <span>{settingsSummary}</span>
-          </span>
-          <ChevronDown aria-hidden="true" />
-        </button>
-        <div
-          ref={settingsBodyRef}
-          id={settingsId}
-          className="workspace-compare-settings-body"
-          hidden={!settingsExpanded}
-        >
-          {(repositories.length > 1 ||
-            (!repositoryId && repositories.length > 0)) && (
-            <label className="workspace-compare-repository">
-              Repository
-              <select
-                aria-label="Repository"
-                value={repositoryId ?? ""}
-                onChange={(event) => {
-                  restoreRef.current = undefined;
-                  anchorRef.current = undefined;
-                  returnLocationsRef.current.clear();
-                  setRepositoryId(
-                    event.target.value as WorkspaceDiffRepositoryId,
-                  );
-                }}
-              >
-                {!repositoryId && <option value="">Choose a repository</option>}
-                {repositories.map((repository) => (
-                  <option
-                    key={repository.repositoryId}
-                    value={repository.repositoryId}
+      <div className="workspace-compare-toolbar">
+        {narrow && (
+          <button
+            type="button"
+            className="workspace-compare-toolbar-button"
+            aria-label="Changed files"
+            title="Changed files"
+            aria-expanded={navigatorOpen}
+            onClick={() => setNavigatorOpen((open) => !open)}
+          >
+            <PanelLeft aria-hidden="true" />
+            <span>Files</span>
+          </button>
+        )}
+        <Popover open={visible && settingsOpen} onOpenChange={setSettingsOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="workspace-compare-source-trigger"
+              aria-label="Comparison settings"
+              title={sourcePairSummary}
+            >
+              <span>
+                {comparison ? sourcePairSummary : "Configure comparison"}
+              </span>
+              <ChevronDown aria-hidden="true" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            className="workspace-compare-settings-popover"
+            role="dialog"
+            aria-label="Comparison settings"
+            align="start"
+          >
+            {(repositories.length > 1 ||
+              (!repositoryId && repositories.length > 0)) && (
+              <label className="workspace-compare-repository">
+                Repository
+                <select
+                  aria-label="Repository"
+                  value={repositoryId ?? ""}
+                  onChange={(event) => {
+                    restoreRef.current = undefined;
+                    anchorRef.current = undefined;
+                    returnLocationsRef.current.clear();
+                    setRepositoryId(
+                      event.target.value as WorkspaceDiffRepositoryId,
+                    );
+                  }}
+                >
+                  {!repositoryId && (
+                    <option value="">Choose a repository</option>
+                  )}
+                  {repositories.map((repository) => (
+                    <option
+                      key={repository.repositoryId}
+                      value={repository.repositoryId}
+                    >
+                      {repository.displayName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <div className="workspace-compare-presets">
+              {(["uncommitted", "staged", "branches"] as const).map(
+                (preset) => (
+                  <button
+                    type="button"
+                    key={preset}
+                    onClick={() => {
+                      const next = workspaceComparePresetSelections(
+                        preset,
+                        revisions,
+                        repositories.find(
+                          (repo) => repo.repositoryId === repositoryId,
+                        )?.head?.commitHash,
+                      );
+                      setBase(next.base);
+                      setHead(next.head);
+                      setMode(next.mode);
+                    }}
                   >
-                    {repository.displayName}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <div className="workspace-compare-presets">
-            {(["uncommitted", "staged", "branches"] as const).map((preset) => (
+                    {preset === "uncommitted"
+                      ? "Uncommitted"
+                      : preset === "staged"
+                        ? "Staged"
+                        : "Branches"}
+                  </button>
+                ),
+              )}
               <button
                 type="button"
-                key={preset}
+                disabled={!base}
                 onClick={() => {
-                  const next = workspaceComparePresetSelections(
-                    preset,
-                    revisions,
-                    repositories.find(
-                      (repo) => repo.repositoryId === repositoryId,
-                    )?.head?.commitHash,
-                  );
-                  setBase(next.base);
-                  setHead(next.head);
-                  setMode(next.mode);
+                  if (base) {
+                    setHead(base);
+                    setBase(head);
+                  }
                 }}
               >
-                {preset === "uncommitted"
-                  ? "Uncommitted"
-                  : preset === "staged"
-                    ? "Staged"
-                    : "Branches"}
+                Swap sides
               </button>
-            ))}
-            <button
-              type="button"
-              disabled={!base}
-              onClick={() => {
-                if (base) {
-                  setHead(base);
-                  setBase(head);
-                }
-              }}
-            >
-              Swap sides
-            </button>
-          </div>
-          <div className="workspace-compare-controls">
-            <WorkspaceRevisionPicker
-              label="Base"
-              selection={base}
-              revisions={revisions}
-              historyScope={historyScope}
-              onHistoryScopeChange={(scope) => void changeHistoryScope(scope)}
-              loading={revisionsLoading}
-              truncated={revisionsTruncated}
-              onChange={changeBase}
-            />
-            <span className="workspace-compare-arrow" aria-hidden="true">
-              →
-            </span>
-            <WorkspaceRevisionPicker
-              label="Compare"
-              selection={head}
-              revisions={revisions}
-              historyScope={historyScope}
-              onHistoryScopeChange={(scope) => void changeHistoryScope(scope)}
-              loading={revisionsLoading}
-              truncated={revisionsTruncated}
-              onChange={changeHead}
-            />
-            <label className="workspace-compare-strategy">
-              <span>Strategy</span>
-              <select
-                aria-label="Comparison strategy"
-                value={mode}
-                onChange={(event) => setMode(event.target.value as typeof mode)}
+            </div>
+            <div className="workspace-compare-controls">
+              <WorkspaceRevisionPicker
+                label="Base"
+                selection={base}
+                revisions={revisions}
+                historyScope={historyScope}
+                onHistoryScopeChange={(scope) => void changeHistoryScope(scope)}
+                loading={revisionsLoading}
+                truncated={revisionsTruncated}
+                onChange={changeBase}
+              />
+              <span className="workspace-compare-arrow" aria-hidden="true">
+                →
+              </span>
+              <WorkspaceRevisionPicker
+                label="Compare"
+                selection={head}
+                revisions={revisions}
+                historyScope={historyScope}
+                onHistoryScopeChange={(scope) => void changeHistoryScope(scope)}
+                loading={revisionsLoading}
+                truncated={revisionsTruncated}
+                onChange={changeHead}
+              />
+              <label className="workspace-compare-strategy">
+                <span>Strategy</span>
+                <select
+                  aria-label="Comparison strategy"
+                  value={mode}
+                  onChange={(event) =>
+                    setMode(event.target.value as typeof mode)
+                  }
+                >
+                  <option value="direct">Differences between sources</option>
+                  <option value="merge_base" disabled={!mergeBaseAllowed}>
+                    Changes introduced by compare branch
+                  </option>
+                </select>
+              </label>
+              <button
+                className="workspace-compare-primary"
+                type="button"
+                onClick={() => void loadComparison()}
+                disabled={!base || !repositoryId || busy !== "idle"}
               >
-                <option value="direct">Differences between sources</option>
-                <option value="merge_base" disabled={!mergeBaseAllowed}>
-                  Changes introduced by compare branch
-                </option>
-              </select>
-            </label>
-            <button
-              className="workspace-compare-primary"
-              type="button"
-              onClick={() => void loadComparison()}
-              disabled={!base || !repositoryId || busy !== "idle"}
-            >
-              {busy === "comparison" ? (
-                <LoaderCircle
-                  className="workspace-compare-spin"
-                  aria-hidden="true"
-                />
-              ) : (
-                <RotateCw aria-hidden="true" />
-              )}
-              Compare
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="workspace-compare-toolbar">
-        <div className="workspace-compare-summary">
-          <strong>
-            {comparison
-              ? `${changedFiles.length} changed ${changedFiles.length === 1 ? "file" : "files"}`
-              : "Changed files"}
-          </strong>
-          {filesTruncated && (
-            <span className="workspace-compare-warning">Result truncated</span>
-          )}
-        </div>
-        <div
-          className="workspace-compare-view-options"
-          aria-label="Diff view options"
+                {busy === "comparison" ? (
+                  <LoaderCircle
+                    className="workspace-compare-spin"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <RotateCw aria-hidden="true" />
+                )}
+                Compare
+              </button>
+            </div>
+          </PopoverContent>
+        </Popover>
+        <Popover
+          open={visible && viewOptionsOpen}
+          onOpenChange={setViewOptionsOpen}
         >
-          <button
-            type="button"
-            className={
-              effectivePreferences.diffStyle === "unified" ? "is-active" : ""
-            }
-            aria-pressed={effectivePreferences.diffStyle === "unified"}
-            onClick={() =>
-              setPreferences((current) => ({
-                ...current,
-                diffStyle: "unified",
-              }))
-            }
-          >
-            Unified
-          </button>
-          <button
-            type="button"
-            className={
-              effectivePreferences.diffStyle === "split" ? "is-active" : ""
-            }
-            aria-pressed={effectivePreferences.diffStyle === "split"}
-            onClick={() =>
-              setPreferences((current) => ({ ...current, diffStyle: "split" }))
-            }
-            disabled={!splitFeasible}
-            title={
-              !splitFeasible
-                ? "Split view is unavailable at this width"
-                : undefined
-            }
-          >
-            Split
-          </button>
-          <button
-            type="button"
-            className={
-              effectivePreferences.overflow === "wrap" ? "is-active" : ""
-            }
-            aria-pressed={effectivePreferences.overflow === "wrap"}
-            onClick={() =>
-              setPreferences((current) => ({
-                ...current,
-                overflow: current.overflow === "wrap" ? "scroll" : "wrap",
-              }))
-            }
-          >
-            Wrap
-          </button>
-          {comparison && (
+          <PopoverTrigger asChild>
             <button
               type="button"
-              aria-label="Refresh comparison"
-              title="Refresh comparison"
-              disabled={busy !== "idle" || !base}
-              onClick={() => void loadComparison()}
+              className="workspace-compare-toolbar-button"
+              aria-label="Diff view options"
             >
-              <RotateCw />
+              View
+              <ChevronDown aria-hidden="true" />
             </button>
-          )}
-          {narrow && (
-            <button
-              type="button"
-              aria-label="Changed files"
-              aria-expanded={navigatorOpen}
-              onClick={() => setNavigatorOpen((open) => !open)}
+          </PopoverTrigger>
+          <PopoverContent
+            className="workspace-compare-view-popover"
+            role="dialog"
+            aria-label="Diff view options"
+            align="end"
+          >
+            <div
+              className="workspace-compare-view-options"
+              aria-label="Diff presentation"
             >
-              <PanelLeft />
-              Files
-            </button>
-          )}
-          <button
-            type="button"
-            aria-label="Previous changed file"
-            disabled={currentIndex <= 0}
-            onClick={() => void navigateToFile(changedFiles[currentIndex - 1]!)}
+              <button
+                type="button"
+                className={
+                  effectivePreferences.diffStyle === "unified"
+                    ? "is-active"
+                    : ""
+                }
+                aria-pressed={effectivePreferences.diffStyle === "unified"}
+                onClick={() =>
+                  setPreferences((current) => ({
+                    ...current,
+                    diffStyle: "unified",
+                  }))
+                }
+              >
+                Unified
+              </button>
+              <button
+                type="button"
+                className={
+                  effectivePreferences.diffStyle === "split" ? "is-active" : ""
+                }
+                aria-pressed={effectivePreferences.diffStyle === "split"}
+                onClick={() =>
+                  setPreferences((current) => ({
+                    ...current,
+                    diffStyle: "split",
+                  }))
+                }
+                disabled={!splitFeasible}
+                title={
+                  !splitFeasible
+                    ? "Split view is unavailable at this width"
+                    : undefined
+                }
+              >
+                Split
+              </button>
+              <button
+                type="button"
+                className={
+                  effectivePreferences.overflow === "wrap" ? "is-active" : ""
+                }
+                aria-pressed={effectivePreferences.overflow === "wrap"}
+                onClick={() =>
+                  setPreferences((current) => ({
+                    ...current,
+                    overflow: current.overflow === "wrap" ? "scroll" : "wrap",
+                  }))
+                }
+              >
+                Wrap
+              </button>
+            </div>
+          </PopoverContent>
+        </Popover>
+        {filesTruncated && (
+          <span
+            className="workspace-compare-truncation"
+            role="status"
+            aria-label="Result truncated"
+            title="Result truncated"
           >
-            <ArrowUp />
-          </button>
-          <button
-            type="button"
-            aria-label="Next changed file"
-            disabled={
-              !changedFiles.length || currentIndex >= changedFiles.length - 1
-            }
-            onClick={() => void navigateToFile(changedFiles[currentIndex + 1]!)}
-          >
-            <ArrowDown />
-          </button>
-        </div>
+            !
+          </span>
+        )}
+        <div className="workspace-compare-inline-review">{reviewControls}</div>
       </div>
 
       {restoreNotice && (
@@ -1875,7 +1932,6 @@ export function WorkspaceCompareView({
           </button>
         </div>
       )}
-      {reviewControls}
       <div className="workspace-compare-workspace">
         {!narrow && (
           <div
@@ -1978,7 +2034,14 @@ export function WorkspaceCompareView({
             />
           )}
           {!initialLoading && !notice && !comparison && (
-            <CompareState title="Choose two sources, then start a comparison." />
+            <CompareState
+              title="Choose sources to compare workspace changes."
+              action={
+                <button type="button" onClick={() => setSettingsOpen(true)}>
+                  Configure comparison
+                </button>
+              }
+            />
           )}
           {comparison && changedFiles.length > 0 && (
             <CodeView<WorkspaceCompareReviewAnnotation>
@@ -1991,6 +2054,7 @@ export function WorkspaceCompareView({
                 );
                 if (!file) return null;
                 const load = patches.get(file.fileId);
+                const fileIndex = changedFiles.indexOf(file);
                 const label =
                   load?.status === "binary"
                     ? "Binary file — no text diff"
@@ -2097,6 +2161,33 @@ export function WorkspaceCompareView({
                         </span>
                       </button>
                     )}
+                    <div
+                      className="workspace-compare-file-navigation"
+                      aria-label="File navigation"
+                    >
+                      <button
+                        type="button"
+                        aria-label={`Previous changed file before ${workspaceCompareFilePath(file)}`}
+                        title="Previous changed file"
+                        disabled={fileIndex <= 0}
+                        onClick={() =>
+                          void navigateToFile(changedFiles[fileIndex - 1]!)
+                        }
+                      >
+                        <ArrowUp aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Next changed file after ${workspaceCompareFilePath(file)}`}
+                        title="Next changed file"
+                        disabled={fileIndex >= changedFiles.length - 1}
+                        onClick={() =>
+                          void navigateToFile(changedFiles[fileIndex + 1]!)
+                        }
+                      >
+                        <ArrowDown aria-hidden="true" />
+                      </button>
+                    </div>
                     {(load?.status === "unavailable" ||
                       load?.status === "invalid") && (
                       <button

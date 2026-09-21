@@ -93,6 +93,12 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function openReviewMenu(): Promise<void> {
+  const trigger = screen.getByRole("button", { name: "Review controls" });
+  if (trigger.getAttribute("aria-expanded") !== "true") fireEvent.click(trigger);
+  await screen.findByRole("dialog", { name: "Review options" });
+}
+
 function openFileTabs(): HTMLElement[] {
   const tabList = screen.queryByRole("tablist", { name: "Open files" });
   return tabList ? within(tabList).queryAllByRole("tab") : [];
@@ -500,6 +506,29 @@ async function waitForListing(api: WorkspaceFilesApi): Promise<void> {
 }
 
 describe("WorkspaceFilesPanel", () => {
+  it("routes the single Files refresh action to the active mode", async () => {
+    const api = setupApi();
+    const { context } = setupContext();
+    render(<WorkspaceFilesPanel context={context} api={api} />);
+    await waitForListing(api);
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    const refresh = vi.fn();
+    act(() => {
+      (latestCompareProps?.onRefreshControlChange as (control: unknown) => void)({ refresh, disabled: false });
+    });
+    const scans = vi.mocked(api.listWorkspaceFileDirectory).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh comparison" }));
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(api.listWorkspaceFileDirectory).toHaveBeenCalledTimes(scans);
+    expect(screen.queryByRole("button", { name: "Refresh workspace files" })).not.toBeInTheDocument();
+    act(() => {
+      (latestCompareProps?.onRefreshControlChange as (control: unknown) => void)({ refresh, disabled: true });
+    });
+    expect(screen.getByRole("button", { name: "Refresh comparison" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
+    expect(screen.getByRole("button", { name: "Refresh workspace files" })).toBeEnabled();
+  });
+
   it("explains when a saved root is missing and keeps available roots usable", async () => {
     const scope = "missing-root-recovery";
     workspaceCompareStorage.set(scope, "workspace-1", "removed-root", { mode: "compare" });
@@ -512,6 +541,8 @@ describe("WorkspaceFilesPanel", () => {
     );
 
     expect(await screen.findByText("The previously selected Files root is unavailable. Choose an available root.")).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
+    await waitForListing(api);
     expect(screen.getByRole("button", { name: "Refresh workspace files" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss root recovery notice" }));
     expect(screen.queryByText("The previously selected Files root is unavailable. Choose an available root.")).not.toBeInTheDocument();
@@ -1100,6 +1131,7 @@ describe("WorkspaceFilesPanel", () => {
       (latestCompareProps?.onComparisonChange as (value: unknown) => void)(comparison);
       (latestCompareProps?.onFilesChange as (value: unknown) => void)([file]);
     });
+    await openReviewMenu();
     await waitFor(() => expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled());
     act(() => { (latestCompareProps?.onReviewedChange as (fileId: string, value: boolean) => void)(file.fileId, true); });
     await waitFor(() => expect(phase === "opening" ? api.openWorkspaceDiffReview : api.setWorkspaceDiffReviewedFile).toHaveBeenCalledOnce());
@@ -1115,6 +1147,7 @@ describe("WorkspaceFilesPanel", () => {
     expect(latestCompareProps?.reviewedFileIds).toEqual(new Set());
     expect(latestCompareProps?.annotations).toEqual([]);
     if (phase === "opening") expect(api.setWorkspaceDiffReviewedFile).not.toHaveBeenCalled();
+    await openReviewMenu();
     expect(await screen.findByRole("button", { name: "Start review" })).toBeEnabled();
   });
 
@@ -1385,9 +1418,11 @@ describe("WorkspaceFilesPanel", () => {
         ...comparison, comparisonId: "comparison_new1234567890", fingerprint: "fingerprint_new1234567890",
       });
     });
-    await waitFor(() => expect(screen.getByText("No active review")).toBeVisible());
+    await openReviewMenu();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled());
     expect(latestCompareProps?.annotations).toEqual([]);
     expect((latestCompareProps?.reviewedFileIds as ReadonlySet<string>).size).toBe(0);
+    await openReviewMenu();
     fireEvent.click(screen.getByRole("button", { name: "History" }));
     const historyDialog = await screen.findByRole("dialog", { name: "Review" });
     await waitFor(() => expect(within(historyDialog).getByText("Looks good")).toBeVisible());
@@ -1550,6 +1585,7 @@ describe("WorkspaceFilesPanel", () => {
       ]),
     );
 
+    await openReviewMenu();
     fireEvent.click(screen.getByRole("button", { name: "History" }));
     fireEvent.change(
       await screen.findByLabelText("Historical workspace diff review"),
@@ -1711,6 +1747,7 @@ describe("WorkspaceFilesPanel", () => {
       ).toBe(false),
     );
 
+    await openReviewMenu();
     fireEvent.click(screen.getByRole("button", { name: "History" }));
     fireEvent.change(
       await screen.findByLabelText("Historical workspace diff review"),
@@ -1871,6 +1908,7 @@ describe("WorkspaceFilesPanel", () => {
       ]),
     );
 
+    await openReviewMenu();
     fireEvent.click(screen.getByRole("button", { name: "History" }));
     fireEvent.change(
       await screen.findByLabelText("Historical workspace diff review"),
@@ -1987,7 +2025,8 @@ describe("WorkspaceFilesPanel", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /review/i })).toBeEnabled(),
     );
-    fireEvent.click(screen.getByRole("button", { name: /review/i }));
+    await openReviewMenu();
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
 
     await waitFor(() =>
       expect(api.openWorkspaceDiffReview).toHaveBeenCalledWith(
@@ -2030,9 +2069,8 @@ describe("WorkspaceFilesPanel", () => {
       await opening.promise;
     });
 
-    await waitFor(() =>
-      expect(screen.getByText("No active review")).toBeVisible(),
-    );
+    await openReviewMenu();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled());
     expect(screen.queryByText("First review")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
@@ -2088,7 +2126,8 @@ describe("WorkspaceFilesPanel", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /review/i })).toBeEnabled(),
     );
-    fireEvent.click(screen.getByRole("button", { name: /review/i }));
+    await openReviewMenu();
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     await waitFor(() =>
       expect(api.openWorkspaceDiffReview).toHaveBeenCalledWith(
         "workspace-1",
@@ -5059,13 +5098,16 @@ describe("WorkspaceFilesPanel", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
 
     expect(subscribeWorkspaceFiles).not.toHaveBeenCalled();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Refresh workspace files" }),
-    );
+    const refreshComparison = vi.fn();
+    act(() => {
+      (latestCompareProps?.onRefreshControlChange as (control: unknown) => void)({
+        refresh: refreshComparison, disabled: false,
+      });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh comparison" }));
 
-    await waitFor(() =>
-      expect(api.listWorkspaceFiles).toHaveBeenCalledTimes(2),
-    );
+    expect(refreshComparison).toHaveBeenCalledOnce();
+    expect(api.listWorkspaceFiles).toHaveBeenCalledTimes(1);
     expect(api.readWorkspaceFile).toHaveBeenCalledTimes(1);
     expect(subscribeWorkspaceFiles).not.toHaveBeenCalled();
   });
