@@ -1077,6 +1077,32 @@ inherit the behavior.
 
 ## Normalize history and live events
 
+Confirmed failed turns carry bounded `failure.message` metadata, separate from
+provider transcript items and transient runtime notices. Backends select a
+provider-authored diagnostic; the shared projector supplies a generic explanation
+when none was retained. Failure metadata is valid only on failed turns. Snapshot,
+live update, older history and targeted seek must agree; enriching a missing
+diagnostic publishes a turn revision, while replacing an observed diagnostic
+requires an authoritative resnapshot. Never infer failure from a retry warning,
+a tool error, cancellation, or unknown delivery outcome.
+
+Pi derives the final diagnostic after retry settlement and reconstructs it from
+native assistant records. Codex uses native turn errors and retains terminal
+notification details for its existing exhausted-recovery projection; cold reads
+show only evidence retained by the provider. Claude stores the selected diagnostic
+in its existing scoped write-once terminal receipt; old receipts have no detail.
+Grok exposes no confirmed failed-turn outcome in its current admitted protocol;
+its submission errors and unknown-outcome recovery remain separate.
+
+The current error presentation follows authoritative failed run state and the
+newest failed turn. New admitted work clears the current display; a rejected Send
+does not. Historical details remain quiet and do not drive the sidebar. Dormant
+thread summaries retain their existing loaded-runtime-only status behavior.
+Diagnostics use selected plain text with bounds and narrow credential-pattern
+scrubbing, not raw errors, provider payloads, stacks, or stderr. This is not a
+claim that arbitrary provider text is secret-free. Failed-turn diagnostics remain
+visible in both activity modes without exposing hidden operation details.
+
 Provider-billed work outside an assistant response must update normalized
 usage without fabricating a message or changing conversation run state.
 Preserve the provider's accounting scope across live updates and snapshots;

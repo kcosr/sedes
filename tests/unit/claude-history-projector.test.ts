@@ -1495,7 +1495,19 @@ describe("Claude history projection", () => {
     ]);
   });
 
-  it("applies durable failed terminal evidence after transcript projection", () => {
+  it("keeps failed status readable when optional stored diagnostic is malformed", () => {
+    const messages = [user(uuid(1), "hello")];
+    const turnId = projectClaudeHistory(messages).snapshot.orderedBackendTurnIds[0]!;
+    const projected = projectClaudeHistory(messages, [{
+      backendTurnId: turnId, status: "failed", providerTerminalReason: null,
+      providerResultUuid: null, terminalAt: 1, failureMessage: 42 as unknown as string,
+    }]);
+    expect(projected.snapshot.turnsById[turnId]).toMatchObject({
+      status: "failed", failure: { message: { text: "The provider reported a failure but supplied no explanation." } },
+    });
+  });
+
+  it.each([null, "Invalid model configuration"])("applies durable failed terminal evidence after transcript projection (%s)", (failureMessage) => {
     const messages = [
       user(uuid(1), "hello"),
       assistant(uuid(2), [{ type: "text", text: "partial answer" }]),
@@ -1506,6 +1518,7 @@ describe("Claude history projection", () => {
       {
         backendTurnId: turnId,
         status: "failed",
+        failureMessage,
         providerTerminalReason: "error_during_execution",
         providerResultUuid: uuid(3),
         terminalAt: 1_000,
@@ -1519,6 +1532,9 @@ describe("Claude history projection", () => {
       endedBy: "failed",
       completedAt: "1970-01-01T00:00:01.000Z",
     });
+    expect(projection.snapshot.turnsById[turnId]!.failure?.message.text).toBe(
+      failureMessage ?? "The provider reported a failure but supplied no explanation.",
+    );
     expect(projection.terminalCheckpointUuidByBackendTurnId.has(turnId)).toBe(
       false,
     );

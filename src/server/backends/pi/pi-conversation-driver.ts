@@ -1,3 +1,4 @@
+import { turnFailure } from "../turn-failure.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import { createHash, randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
@@ -2430,6 +2431,7 @@ class PiConversationHandle implements ConversationHandle {
   #assistantSourceOrderBase = 1;
   #nextAssistantSourceOrderBase = 1;
   #terminalOutcome?: "interrupted" | "failed";
+  #terminalFailure?: BackendTurn["failure"];
   #automaticCompactionProjectionPending = false;
   #livePendingSteer?: {
     readonly applicationOperationId: string;
@@ -2456,6 +2458,14 @@ class PiConversationHandle implements ConversationHandle {
     this.#onEffectiveSettings = options.onEffectiveSettings;
     this.#modelPolicy = options.modelPolicy;
     this.#runState = options.session.isIdle ? "idle" : "running";
+    if (options.session.isIdle) {
+      const latest = options.session.sessionManager.getBranch().findLast((entry) =>
+        entry.type === "message" && (entry.message.role === "assistant" || entry.message.role === "user"),
+      );
+      if (latest?.type === "message" && latest.message.role === "assistant" && latest.message.stopReason === "error") {
+        this.#runState = "failed";
+      }
+    }
     if (!options.session.isIdle) {
       const activeUserEntry = options.session.sessionManager
         .getBranch()
@@ -3731,6 +3741,7 @@ class PiConversationHandle implements ConversationHandle {
       });
     } else if (event.type === "agent_start") {
       this.#terminalOutcome = undefined;
+      this.#terminalFailure = undefined;
       this.#terminalAssistantItemIds.clear();
       this.#setRunState("running");
     } else if (
@@ -3739,6 +3750,7 @@ class PiConversationHandle implements ConversationHandle {
     ) {
       if (this.#terminalOutcome === "failed") {
         this.#terminalOutcome = undefined;
+        this.#terminalFailure = undefined;
         this.#setRunState("running", this.#activeTurnId);
       }
       this.#assistantEpoch = randomUUID();
@@ -3778,9 +3790,10 @@ class PiConversationHandle implements ConversationHandle {
         this.#completeAssistantItems(event.message);
         if (event.message.stopReason === "error") {
           this.#terminalOutcome = "failed";
-          this.#setRunState("failed", this.#activeTurnId);
+          this.#terminalFailure = turnFailure(event.message.errorMessage);
         } else if (event.message.stopReason === "aborted") {
           this.#terminalOutcome = "interrupted";
+          this.#terminalFailure = undefined;
         }
       }
       queueMicrotask(() => this.#correlatePersistedMessage(event.message));
@@ -3819,6 +3832,7 @@ class PiConversationHandle implements ConversationHandle {
           turn: {
             ...turn,
             status: outcome ?? "completed",
+            ...(outcome === "failed" ? { failure: this.#terminalFailure ?? turnFailure(undefined) } : {}),
             endedBy:
               outcome === "interrupted"
                 ? "interrupted"
@@ -3834,6 +3848,7 @@ class PiConversationHandle implements ConversationHandle {
       this.#setRunState(this.#terminalOutcome === "failed" ? "failed" : "idle");
       this.#emit({ type: "usage_changed", usage: piUsage(this.#session) });
       this.#terminalOutcome = undefined;
+      this.#terminalFailure = undefined;
       if (this.#automaticCompactionProjectionPending) {
         this.#flushAutomaticCompactionProjection();
       } else {
@@ -4267,7 +4282,7 @@ class PiConversationHandle implements ConversationHandle {
       ...(prior.completionCorrelations ?? []),
       ...(completionCorrelation ? [completionCorrelation] : []),
     ].filter((value, index, values) => values.indexOf(value) === index);
-    const { completedAt: _completedAt, endedBy: _endedBy, ...active } = prior;
+    const { completedAt: _completedAt, endedBy: _endedBy, failure: _failure, ...active } = prior;
     return {
       ...active,
       ...(completionCorrelations.length > 0 ? { completionCorrelations } : {}),

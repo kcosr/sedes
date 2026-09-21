@@ -171,7 +171,7 @@ provider conversations.
    **Project** only where more than one choice is eligible; choose explicitly
    whenever it asks.
 4. Select the project you just added.
-5. Choose **Custom** unless you already created a saved Agent.
+5. **Custom** is selected by default; choose a saved Agent if you want its preset.
 6. Choose **Create thread**.
 7. In the thread, choose an authenticated provider/model and conservative tool
    access before sending anything. If no authenticated model is offered, stop

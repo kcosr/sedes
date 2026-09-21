@@ -938,7 +938,7 @@ describe("NewThreadControl", () => {
       codexOption.querySelector('[data-backend-brand="codex"]'),
     ).not.toBeNull();
     await user.click(codexOption);
-    await user.click(await screen.findByRole("button", { name: "Use Custom" }));
+    expect(screen.getByRole("combobox", { name: "Agent" })).toHaveTextContent("Custom");
     await user.clear(screen.getByRole("textbox", { name: "Thread name" }));
     await user.type(
       screen.getByRole("textbox", { name: "Thread name" }),
@@ -1225,6 +1225,19 @@ describe("NewThreadControl", () => {
     expect(
       screen.getByRole("button", { name: "Create thread" }),
     ).toBeDisabled();
+  });
+
+  it.each([false, true])("defaults to Custom without an extra selection (empty Agents: %s)", async (empty) => {
+    const user = userEvent.setup();
+    const { createThread } = control(empty ? { agents: [] } : undefined);
+    await openPicker(user);
+    expect(screen.getByRole("combobox", { name: "Agent" })).toHaveTextContent("Custom");
+    const create = screen.getByRole("button", { name: "Create thread" });
+    await waitFor(() => expect(create).toBeEnabled());
+    await user.click(create);
+    await waitFor(() => expect(createThread).toHaveBeenCalledWith(expect.objectContaining({
+      configuration: { kind: "custom", targetId: "target-pi" },
+    })));
   });
 
   it("makes Custom and Create an Agent prominent for an empty collection", async () => {

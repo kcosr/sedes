@@ -43,6 +43,7 @@ import {
   type SeekDiagnosticEvent,
 } from "../../app/diagnostics.js";
 import { getDiagnosticCategoryEnabled } from "../../app/settings.js";
+import { currentFailedTurn, TurnFailureDetails } from "./ThreadFailureNotice.js";
 import { TurnForkDivider } from "./TurnForkDivider.js";
 import { ChatViewVisibilityContext } from "./chat-view-visibility.js";
 import { useSmoothStreaming } from "../../app/use-smooth-streaming.js";
@@ -224,6 +225,7 @@ export function Transcript({
     focusPage.activityDetail === activityDetail
       ? focusPage.page
       : undefined;
+  const currentFailureTurnId = snapshot ? currentFailedTurn(snapshot)?.id : undefined;
   const viewTurnsById = selectedFocusPage?.turnsById ?? snapshot?.turnsById;
   const viewForksByTurnId =
     selectedFocusPage?.forksByTurnId ?? snapshot?.forksByTurnId;
@@ -2069,6 +2071,7 @@ export function Transcript({
                     flushActivity();
                     return presentation;
                   })()}
+                  {currentFailureTurnId !== turn.id && <TurnFailureDetails turn={turn} />}
                   <TurnForkDivider
                     turn={turn}
                     copyText={

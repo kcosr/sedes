@@ -35,6 +35,27 @@ function snapshot(): BackendConversationSnapshot {
 }
 
 describe("ConversationProjector", () => {
+  it("projects failure metadata without adding items, and publishes one-way diagnostic enrichment", () => {
+    const projector = new ConversationProjector({ backendInstanceId: "backend", bindingIdentity: "binding" });
+    const source = snapshot();
+    const failed = { ...source.turnsById["user-1"]!, status: "failed" as const, endedBy: "failed" as const };
+    const backend = { ...source, runState: "failed" as const, turnsById: { "user-1": failed } };
+    const initial = projector.replace(backend, -1);
+    const turnId = initial.orderedTurnIds[0]!;
+    expect(initial.turnsById[turnId]?.failure?.message.text).toBe("The provider reported a failure but supplied no explanation.");
+    const enriched = { ...failed, failure: { message: { text: "Unknown model" } } };
+    const result = projector.apply({ handleSequence: 0, event: { type: "turn_updated", turn: enriched } });
+    expect(result).toMatchObject({ kind: "events", events: [{ type: "turn_upsert", turn: { id: turnId, revision: 1, failure: enriched.failure } }] });
+    expect(projector.timeline().itemsById).toEqual(initial.itemsById);
+    expect(projector.timeline().turnsById[turnId]?.orderedItemIds).toEqual(initial.turnsById[turnId]?.orderedItemIds);
+    const page = projector.projectHistoryPage({ orderedBackendTurnIds: backend.orderedBackendTurnIds, itemsById: backend.itemsById, turnsById: { "user-1": enriched } }, {
+      branching: { availability: "unavailable", reason: { text: "Unavailable" } }, sourceRunState: "failed",
+    });
+    expect(page.turnsById[turnId]?.failure).toEqual(enriched.failure);
+    expect(page.itemsById).toEqual(initial.itemsById);
+    expect(projector.apply({ handleSequence: 1, event: { type: "turn_updated", turn: failed } })).toMatchObject({ kind: "resnapshot_required" });
+  });
+
   it("retains assistant response classification only on the server across snapshots and updates", () => {
     const projector = new ConversationProjector({ backendInstanceId: "backend", bindingIdentity: "binding" });
     const source = snapshot();

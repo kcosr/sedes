@@ -1,3 +1,4 @@
+import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
 import { claudeSteerOperationsMigration } from "../../src/server/db/migrations/102-claude-steer-operations.js";
 import { claudeTaskLifecycleMigration } from "../../src/server/db/migrations/100-claude-task-lifecycle.js";
 import Database from "better-sqlite3";
@@ -122,6 +123,7 @@ function repository(): ClaudeThreadRepository {
       PRIMARY KEY (tenant_id, owner_principal_id, application_thread_id)
     ) STRICT;
   `);
+  database.exec(claudeTurnFailureDetailsMigration.sql);
   database.exec(claudeTaskLifecycleMigration.sql);
   database.exec(claudeSteerOperationsMigration.sql);
   return new ClaudeThreadRepository(database);
@@ -693,6 +695,7 @@ describe("Claude thread repository", () => {
       backendTurnId: "claude-turn:one",
       status: "failed",
       providerTerminalReason: "error_during_execution",
+      failureMessage: "Invalid model configuration",
       providerResultUuid: "00000000-0000-4000-8000-000000000001",
       terminalAt: 200,
       now: 201,
@@ -704,6 +707,7 @@ describe("Claude thread repository", () => {
       backendTurnId: "claude-turn:one",
       status: "failed",
       providerTerminalReason: "error_during_execution",
+      failureMessage: "Invalid model configuration",
       terminalAt: 200,
     });
     expect(
@@ -711,6 +715,7 @@ describe("Claude thread repository", () => {
         backendTurnId: "claude-turn:one",
         status: "failed",
         providerTerminalReason: "a replay cannot replace the first evidence",
+        failureMessage: "A replay cannot replace the original diagnostic",
         terminalAt: 300,
         now: 301,
       }),
@@ -723,6 +728,18 @@ describe("Claude thread repository", () => {
         now: 401,
       }),
     ).toThrow("claude_terminal_receipt_status_conflict");
+  });
+
+  it("rejects diagnostic text outside failed turns or the UTF-8 limit", () => {
+    const settings = repository();
+    for (const input of [
+      { status: "completed" as const, failureMessage: "Should not appear" },
+      { status: "failed" as const, failureMessage: "界".repeat(342) },
+    ]) {
+      expect(() => settings.writeTerminalReceipt(scope, "thread", {
+        backendTurnId: "turn", terminalAt: 1, now: 1, ...input,
+      })).toThrow();
+    }
   });
 
   it("lists terminal receipts only inside the exact principal and thread", () => {

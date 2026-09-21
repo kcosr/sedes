@@ -3460,6 +3460,27 @@ async function main(): Promise<void> {
     const scheduleResponse = driver.scheduleScriptedResponse.bind(driver);
     driver.scheduleScriptedResponse = (...args) => {
       const [record, turn, inputText] = args;
+      if (inputText === "Fail with a visible model configuration diagnostic") {
+        setTimeout(() => {
+          const completedAt = driver.now();
+          const failedTurn = {
+            ...record.snapshot.turnsById[turn.backendTurnId]!,
+            status: "failed" as const,
+            endedBy: "failed" as const,
+            completedAt,
+            failure: { message: { text: "The configured model is unavailable. Select another model." } },
+          };
+          record.snapshot.turnsById[turn.backendTurnId] = failedTurn;
+          record.snapshot.runState = "failed";
+          delete record.snapshot.activeBackendTurnId;
+          record.updatedAt = completedAt;
+          record.historyRevision += 1;
+          driver.updateTerminalReconciliation(record, failedTurn);
+          driver.emit(record, { type: "turn_completed", turn: failedTurn });
+          driver.emit(record, { type: "run_state_changed", state: "failed" });
+        }, 100).unref();
+        return;
+      }
       if (inputText === "Accumulate a retained background response") {
         if (piBackgroundBurst) throw new Error("e2e_background_burst_busy");
         const assistant = {

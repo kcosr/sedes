@@ -298,4 +298,16 @@ Operators and developers should follow
 [Debug diagnostics](../developer/diagnostics.md) before adding logging or
 sharing provider data.
 
+## Failed turn details
+
+When the current turn fails, the thread shows an explanation alongside its failed
+status. Starting another attempt clears the current explanation; clicking Send
+when the request is rejected does not. Older failed turns retain **Failed turn
+details** that you can expand without keeping the sidebar in an error state.
+Provider details unavailable from retained history use a generic explanation.
+Pi retries are not final failures until retry processing has settled. Grok
+submission refusals and uncertain outcomes keep their existing recovery controls.
+The sidebar reflects loaded runtimes, so its failed indicator can disappear when
+a runtime is unloaded and return when the failed conversation is reopened.
+
 Previous: [Settings](settings.md) · Back to the [User guide](index.md)

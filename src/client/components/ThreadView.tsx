@@ -26,6 +26,7 @@ import {
 import { InteractionPrompt } from "./thread/InteractionPrompt.js";
 import { BackgroundActivityStatus } from "./thread/BackgroundActivityStatus.js";
 import { ReasoningSummaryStatus } from "./thread/ReasoningSummaryStatus.js";
+import { ThreadFailureNotice } from "./thread/ThreadFailureNotice.js";
 import { ThreadHeader } from "./thread/ThreadHeader.js";
 import { ThreadFindBar } from "./thread/ThreadFindBar.js";
 import { ThreadRecoveryCallout } from "./thread/ThreadRecoveryCallout.js";
@@ -593,6 +594,7 @@ export function ThreadView({
             </Button>
           </aside>
         )}
+        <ThreadFailureNotice snapshot={snapshot} />
         {store.normalized.state.notices.map((notice) => (
           <div
             className={`thread-notice ${notice.tone}`}

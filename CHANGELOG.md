@@ -8,7 +8,15 @@
 
 ### Changed
 
+- New thread creation selects Custom by default, while explicit saved-Agent and
+  template choices remain available.
+
 ### Fixed
+
+- Show Pi, Codex, and Claude turn failure details with the current failed state,
+  and retain quiet details on historical turns. Clear the current explanation
+  when newer work starts; Pi retries do not leave a stale failure. Requires
+  matching browser and packaged clients using client protocol 117.
 
 ### Removed
 

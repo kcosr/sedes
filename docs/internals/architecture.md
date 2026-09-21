@@ -510,5 +510,5 @@ records. It contains no credential and grants no authority. Required-auth
 unauthenticated status and sidecar enrollment do not expose it. An installation
 that explicitly disables authentication uses its same local-principal namespace.
 Changing credentials does not change the principal's navigation identity;
-changing installation, tenant, or principal does. Client protocol 116 carries
+changing installation, tenant, or principal does. Client protocol 117 carries
 the Files revision catalog contract used by this navigation restore path.

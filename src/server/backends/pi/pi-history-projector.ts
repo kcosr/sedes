@@ -1,3 +1,4 @@
+import { turnFailure } from "../turn-failure.js";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type {
   BackendConversationSnapshot,
@@ -67,6 +68,7 @@ interface MutableTurn {
   completionCorrelations?: string[];
   status: BackendTurn["status"];
   endedBy?: BackendTurn["endedBy"];
+  failure?: BackendTurn["failure"];
   startedAt?: string;
   completedAt?: string;
   orderedBackendItemIds: string[];
@@ -241,12 +243,14 @@ function applyAssistantOutcome(
   completedAt: string,
 ): void {
   const stopReason = own(message, "stopReason");
+  delete turn.failure;
   if (stopReason === "aborted") {
     turn.status = "interrupted";
     turn.endedBy = "interrupted";
     turn.completedAt = completedAt;
   } else if (stopReason === "error") {
     turn.status = "failed";
+    turn.failure = turnFailure(own(message, "errorMessage"));
     turn.endedBy = "failed";
     turn.completedAt = completedAt;
   } else if (stopReason === "stop" || stopReason === "length") {
@@ -778,6 +782,7 @@ export class PiHistoryProjector {
               turn.completionCorrelations.push(correlation);
             }
             turn.status = "in_progress";
+            delete turn.failure;
             delete turn.endedBy;
             delete turn.completedAt;
           }
@@ -1165,6 +1170,9 @@ export class PiHistoryProjector {
         current.backendTurnId === this.#activeUserEntryId)
     ) {
       current.status = "in_progress";
+      delete current.failure;
+      delete current.endedBy;
+      delete current.completedAt;
     }
     const snapshotTurns = turns.map<BackendTurn>((turn) => ({
       ...turn,

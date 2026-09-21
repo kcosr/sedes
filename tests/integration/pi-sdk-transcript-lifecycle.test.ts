@@ -196,6 +196,7 @@ describe("Pi 0.86 transcript and lifecycle compatibility", () => {
     expect(Object.values(projection.snapshot.turnsById).at(-1)).toMatchObject({
       status: cancelled ? "interrupted" : "failed",
       endedBy: cancelled ? "interrupted" : "failed",
+      ...(cancelled ? {} : { failure: { message: { text: "provider setup failed" } } }),
     });
   });
 

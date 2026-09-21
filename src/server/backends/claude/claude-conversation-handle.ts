@@ -1,3 +1,4 @@
+import { turnFailure } from "../turn-failure.js";
 import type { ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { claudeMessageIsChildOwned } from "./claude-message-scope.js";
 import { ClaudeBackgroundActivity } from "./claude-background-activity.js";
@@ -1609,6 +1610,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
           {
             backendTurnId,
             status: terminalStatus,
+            ...(terminalStatus === "failed" ? {
+              failureMessage: turnFailure(terminalFailureMessage(message)).message.text,
+            } : {}),
             providerTerminalReason: message.terminal_reason ?? message.subtype,
             providerResultUuid: message.uuid,
             terminalAt,
@@ -2577,6 +2581,18 @@ function aggregateModelUsage(
       safeUsageAdd(cacheRead, cacheWrite),
     ),
   };
+}
+
+function terminalFailureMessage(message: SDKResultMessage): string | undefined {
+  if (message.subtype === "success") return message.result;
+  const details = message.errors.join("\n").trim();
+  if (details) return details;
+  switch (message.subtype) {
+    case "error_max_turns": return "Claude reached the configured turn limit.";
+    case "error_max_budget_usd": return "Claude reached the configured spending limit.";
+    case "error_max_structured_output_retries": return "Claude exceeded the structured output retry limit.";
+    case "error_during_execution": return undefined;
+  }
 }
 
 function terminalReceiptStatus(

@@ -1,3 +1,4 @@
+import { SEDES_VERSION } from "../../src/shared/version.js";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import type { BackendConversationEvent } from "../../src/shared/protocol/backend.js";
@@ -459,7 +460,7 @@ class ScriptedInteractionAppServer {
       state.role = clientName === "sedes_web" ? "controller" : "observer";
       await this.#respond(state, envelope.id, {
         userAgent:
-          "sedes_web/0.153.0 (Linux 6.8; x86_64) unknown (sedes_web; 0.1.0)",
+          `sedes_web/0.153.0 (Linux 6.8; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
         codexHome: CODEX_HOME,
         platformFamily: "unix",
         platformOs: "linux",

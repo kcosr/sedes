@@ -1,3 +1,4 @@
+import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
 import { claudeSteerOperationsMigration } from "../../src/server/db/migrations/102-claude-steer-operations.js";
 import { claudeTaskLifecycleMigration } from "../../src/server/db/migrations/100-claude-task-lifecycle.js";
 import Database from "better-sqlite3";
@@ -163,6 +164,7 @@ function repository(): ClaudeThreadRepository {
       PRIMARY KEY(tenant_id, owner_principal_id, application_thread_id)
     )
   `);
+  database.exec(claudeTurnFailureDetailsMigration.sql);
   database.exec(claudeTaskLifecycleMigration.sql);
   database.exec(claudeSteerOperationsMigration.sql);
   const result = new ClaudeThreadRepository(database);
@@ -2434,7 +2436,8 @@ describe("ClaudeConversationHandle", () => {
     await handle.close();
   });
 
-  it("retains failed terminal evidence after Claude's trailing idle signal", async () => {
+  it.each(["error_during_execution", "success", "error_max_turns"])("retains failed terminal evidence after Claude's trailing idle signal (%s)", async (subtype) => {
+    const expectedFailure = subtype === "error_max_turns" ? "Claude reached the configured turn limit." : "provider failed";
     const provider = fixture();
     const { handle, settings } = createHandle(provider);
     const established = await handle.establishProjection({
@@ -2457,7 +2460,7 @@ describe("ClaudeConversationHandle", () => {
     await submitted;
     provider.messages.push({
       type: "result",
-      subtype: "error_during_execution",
+      subtype,
       duration_ms: 10,
       duration_api_ms: 8,
       is_error: true,
@@ -2478,7 +2481,7 @@ describe("ClaudeConversationHandle", () => {
         },
       },
       permission_denials: [],
-      errors: ["provider failed"],
+      ...(subtype === "success" ? { result: "provider failed" } : { errors: subtype === "error_max_turns" ? [] : ["provider failed"] }),
       uuid: crypto.randomUUID(),
       session_id: SESSION_ID,
     } as unknown as SDKMessage);
@@ -2508,7 +2511,7 @@ describe("ClaudeConversationHandle", () => {
     const history = await handle.history({ limit: 10 });
     expect(Object.values(history.turnsById)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ status: "failed", endedBy: "failed" }),
+        expect.objectContaining({ status: "failed", endedBy: "failed", failure: { message: { text: expectedFailure } } }),
       ]),
     );
     await expect(handle.captureSubmissionRetryAnchor()).resolves.toContain(
@@ -2538,6 +2541,7 @@ describe("ClaudeConversationHandle", () => {
     expect(recovered.snapshot.turnsById[recoveredTurnId]).toMatchObject({
       status: "failed",
       endedBy: "failed",
+      failure: { message: { text: expectedFailure } },
     });
     await reopened.close();
   });

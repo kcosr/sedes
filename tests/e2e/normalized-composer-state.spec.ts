@@ -940,3 +940,47 @@ test.describe.serial("normalized composer state", () => {
     ).toBeVisible();
   });
 });
+
+
+test("failed turns explain the current error and retain quiet details after retry and reload", async ({ page }, testInfo) => {
+  await openSedesWorkspace(page, { preserveSidebarView: true });
+  await expect(page.getByTestId("desktop-sidebar").getByTestId("view-quick-toggle")).toHaveAccessibleName("Switch to Projects");
+  await createDraftThread(page);
+  await fillAndPersistDraft(page, "Fail with a visible model configuration diagnostic");
+  await sendCurrentDraft(page);
+  const diagnostic = "The configured model is unavailable. Select another model.";
+  const currentFailure = page.locator(".thread-notice.error").filter({ hasText: diagnostic });
+  await expect(currentFailure).toBeVisible();
+  await expect(page.locator(".turn-failure-details")).toHaveCount(0);
+  await expect(currentFailure).not.toHaveAttribute("role", "alert");
+  await capture(page, testInfo, "turn-failure-current.png");
+
+  await page.reload();
+  await expect(currentFailure).toBeVisible();
+  await expect(page.locator(".turn-failure-details")).toHaveCount(0);
+  await capture(page, testInfo, "turn-failure-reopened.png");
+
+  expect((await page.request.post("/__e2e/pi/turn-response/arm")).status()).toBe(204);
+  await fillAndPersistDraft(page, "Retry after correcting the model configuration");
+  // Drafting a retry is not an authoritative lifecycle transition.
+  await expect(currentFailure).toBeVisible();
+  await sendCurrentDraft(page);
+  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(currentFailure).toHaveCount(0);
+  const history = page.locator(".turn-failure-details");
+  await expect(history).toHaveCount(1);
+  await expect(history).not.toHaveAttribute("open");
+  await history.getByText("Failed turn details", { exact: true }).click();
+  await expect(history.getByText(diagnostic, { exact: true })).toBeVisible();
+  await capture(page, testInfo, "turn-failure-history-during-retry.png");
+  expect((await page.request.post("/__e2e/pi/turn-response/release")).status()).toBe(204);
+  // The retained scripted response completes at 13 × 800 ms after release.
+  await expect(page.getByRole("button", { name: "Stop" })).toBeHidden({ timeout: 20_000 });
+  await page.reload();
+  await expect(currentFailure).toHaveCount(0);
+  await expect(history).toHaveCount(1);
+  await expect(history).not.toHaveAttribute("open");
+  await history.getByText("Failed turn details", { exact: true }).click();
+  await expect(history.getByText(diagnostic, { exact: true })).toBeVisible();
+  await capture(page, testInfo, "turn-failure-history-reopened.png");
+});

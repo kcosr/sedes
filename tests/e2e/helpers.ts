@@ -53,8 +53,7 @@ export async function selectCustomNewThreadTarget(
   });
   await selectRadixOption(page, targetPicker, optionName);
   const agentPicker = page.getByRole("combobox", { name: "Agent" });
-  await agentPicker.click();
-  await page.getByRole("option", { name: /Custom/ }).click();
+  await expect(agentPicker).toHaveText(/Custom/);
   return targetPicker;
 }
 
@@ -79,6 +78,7 @@ const screenshotDirectory = loadE2ERunContext().screenshotsDirectory;
 export async function openWorkspaceDirectory(
   page: Page,
   directory: string,
+  options?: { readonly preserveSidebarView?: boolean },
 ): Promise<void> {
   await page.goto("/");
   await expect(
@@ -97,6 +97,7 @@ export async function openWorkspaceDirectory(
   );
   await page.getByRole("dialog", { name: "Add project" }).getByRole("button", { name: "Add project" }).click();
   await opened;
+  if (options?.preserveSidebarView) return;
   // This shared fixture exercises hierarchy-specific inventory controls.
   const sidebar = page.getByTestId("desktop-sidebar");
   await sidebar.getByTestId("view-options-trigger").click();
@@ -109,8 +110,11 @@ export async function openWorkspaceDirectory(
   ).toBeVisible();
 }
 
-export async function openSedesWorkspace(page: Page): Promise<void> {
-  await openWorkspaceDirectory(page, repositoryRoot);
+export async function openSedesWorkspace(
+  page: Page,
+  options?: { readonly preserveSidebarView?: boolean },
+): Promise<void> {
+  await openWorkspaceDirectory(page, repositoryRoot, options);
 }
 
 export async function createDraftThread(page: Page): Promise<string> {

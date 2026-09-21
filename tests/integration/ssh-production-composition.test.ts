@@ -1,3 +1,4 @@
+import { SEDES_VERSION } from "../../src/shared/version.js";
 import { authenticatedProductionFetch } from "../helpers/authenticated-production-client.js";
 import {
   execFile as execFileCallback,
@@ -677,7 +678,7 @@ class MinimalCodexAppServer {
                 id: envelope.id,
                 result: {
                   userAgent:
-                    "sedes_web/0.153.0 (Linux 6.8; x86_64) fixture (sedes_web; 0.1.0)",
+                    `sedes_web/0.153.0 (Linux 6.8; x86_64) fixture (sedes_web; ${SEDES_VERSION})`,
                   codexHome: "/fixture/codex-home",
                   platformFamily: "unix",
                   platformOs: "linux",

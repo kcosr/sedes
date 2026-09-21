@@ -21,6 +21,7 @@ import {
   requireSerializedByteLimit,
   requireConsistentFileReplacement,
   safeItemErrorSchema,
+  turnFailureSchema,
   truncationInfoSchema,
   unifiedDiffSchema,
 } from "./payload.js";
@@ -130,6 +131,7 @@ export const conversationTurnSchema = z
     id: applicationTurnIdSchema,
     revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     status: conversationTurnStatusSchema,
+    failure: turnFailureSchema.optional(),
     endedBy: z
       .enum(["agent_settled", "steer", "interrupted", "failed"])
       .optional(),
@@ -140,6 +142,9 @@ export const conversationTurnSchema = z
       .max(MAXIMUM_NORMALIZED_ITEMS_PER_TURN),
   })
   .superRefine((turn, context) => {
+    if ((turn.status === "failed") !== (turn.failure !== undefined)) {
+      context.addIssue({ code: "custom", path: ["failure"], message: "Failure details belong to failed turns and are required for them." });
+    }
     requireUniqueTimelineIdentifiers(
       turn.orderedItemIds,
       context,

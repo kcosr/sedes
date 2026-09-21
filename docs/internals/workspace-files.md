@@ -356,7 +356,7 @@ inline collections when no current review exists. Historical edits operate on
 their original review without creating a current review. Comment creation
 checks its captured comparison before and after asynchronous review creation.
 
-The normalized browser contract is version 116; sidecar Files uses the strict
+The normalized browser contract is version 117; sidecar Files uses the strict
 `workspace_files@8` contract, including scoped catalogs and stable repository
 keys. Local and SSH/outbound engines use the same revision resolver and bounds.
 Pi, Codex, Claude, and Grok consume the shared environment-owned Files surface:

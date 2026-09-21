@@ -405,6 +405,7 @@ function fakeSessionFactory(
                 },
               },
               stopReason,
+              ...(stopReason === "error" ? { errorMessage: "Unknown model: broken-model" } : {}),
               timestamp: Date.now(),
             };
             emit({ type: "message_start", message: assistant } as never);
@@ -6231,7 +6232,7 @@ describe("Pi conversation backend driver", () => {
     await handle.close();
   });
 
-  it("resnapshots after provider retries and classifies the final successful response as idle", async () => {
+  it.each(["stop", "error"] as const)("retains only the final %s outcome after retries, live and on reopen", async (finalReason) => {
     const fixture = await workspace();
     const driver = new PiConversationBackendDriver({
       instance,
@@ -6248,7 +6249,7 @@ describe("Pi conversation backend driver", () => {
         0,
         undefined,
         0,
-        ["error", "error", "stop"],
+        ["error", "error", finalReason],
       ),
     });
     const created = await driver.create({
@@ -6297,12 +6298,19 @@ describe("Pi conversation backend driver", () => {
     ).toMatchObject({
       event: {
         type: "turn_completed",
-        turn: { status: "completed", endedBy: "agent_settled" },
+        turn: { status: finalReason === "stop" ? "completed" : "failed", endedBy: finalReason === "stop" ? "agent_settled" : "failed" },
       },
     });
-    expect(replacement.snapshot.runState).toBe("idle");
+    const expectedFailure = finalReason === "error" ? { message: { text: "Unknown model: broken-model" } } : undefined;
+    const completionIndex = events.findIndex(({ event }) => event.type === "turn_completed");
+    expect(events.slice(0, completionIndex).some(({ event }) => event.type === "run_state_changed" && event.state === "failed")).toBe(false);
+    const completed = events[completionIndex]!.event;
+    if (completed.type !== "turn_completed") throw new Error("Expected completion");
+    expect(completed.turn.failure).toEqual(expectedFailure);
+    expect(Object.values(replacement.snapshot.turnsById).at(-1)?.failure).toEqual(expectedFailure);
+    expect(replacement.snapshot.runState).toBe(finalReason === "stop" ? "idle" : "failed");
     expect(Object.values(replacement.snapshot.turnsById).at(-1)).toMatchObject({
-      status: "completed",
+      status: finalReason === "stop" ? "completed" : "failed",
     });
     const persisted = await new PiSessionStore({
       sessionDirectory: fixture.sessions,
@@ -6315,6 +6323,11 @@ describe("Pi conversation backend driver", () => {
         ),
     ).toHaveLength(1);
     await handle.close();
+    const reopened = await driver.attach({ scope, workspace: fixture.workspace, binding: binding(created.backendConversationId), opaqueBindingDetail: created.opaqueBindingDetail });
+    const cold = await reopened.establishProjection({ signal: new AbortController().signal });
+    expect(cold.snapshot.runState).toBe(finalReason === "stop" ? "idle" : "failed");
+    expect(Object.values(cold.snapshot.turnsById).at(-1)?.failure).toEqual(expectedFailure);
+    await reopened.close();
   });
 
   it("reconciles only exact durable interaction-response markers across restart", async () => {
