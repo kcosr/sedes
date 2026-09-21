@@ -38,6 +38,10 @@ const { writePackageIntegrity, verifyPackageIntegrity } = await import(
   new URL("../../scripts/server-package-integrity.mjs", import.meta.url).href
 );
 
+const { verifyServerRelease } = await import(
+  new URL("../../scripts/install-server-runtime.mjs", import.meta.url).href
+);
+
 const exampleConfiguration = {
   schemaVersion: 11,
   packagedClients: [],
@@ -754,6 +758,30 @@ describe("install:server inventory upgrade boundary", () => {
     expect(result.stderr).toContain("Rebuild this revision with npm run package:server");
     expect(result.stderr).not.toContain("ENOENT");
     expect(await readlink(path.join(installation.prefix, "current"))).toBe("releases/1.3.0");
+    expect(await readFile(installation.unitFile, "utf8")).toBe(unit);
+  });
+});
+
+
+describe("install:server verifier completion boundary", () => {
+  it("keeps current unchanged when activation through a symlinked prefix reaches a silent verifier", async () => {
+    const installation = await createInstallation(await createSourceRoot("1.2.3"));
+    await mkdir(installation.prefix, { recursive: true });
+    const prefix = path.join(await temporaryDirectory(), "prefix-alias");
+    await symlink(installation.prefix, prefix);
+    expect((await installation.run([], { prefix })).exitCode).toBe(0);
+    const candidate = await createSourceRoot("1.3.0");
+    await mkdir(path.join(candidate, "scripts"));
+    await writeFile(path.join(candidate, "scripts", "verify-server-package.mjs"), "process.exitCode = 0;\n");
+    await writePackageIntegrity(candidate);
+    // Stage the fixture with its byte inventory; activation must additionally
+    // require the real verifier's completion report.
+    expect((await installation.run(["--no-activate"], { prefix, packageRoot: candidate })).exitCode).toBe(0);
+    const unit = await readFile(installation.unitFile, "utf8");
+    const result = await installation.run(["--activate", "1.3.0"], { prefix, verifyPackage: verifyServerRelease });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("server_package_verifier_report_invalid");
+    expect(await readlink(path.join(installation.prefix, "current"))).toBe("releases/1.2.3");
     expect(await readFile(installation.unitFile, "utf8")).toBe(unit);
   });
 });

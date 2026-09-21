@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -30,11 +30,12 @@ describe("offline server package verification", () => {
     await fixture(async (root) => {
       const calls: {command: string, args: string[], options: {env: NodeJS.ProcessEnv}}[] = [];
       await verifyServerRelease(root, { NODE_ENV: "production", PATH: process.env.PATH }, {
-        execute: async (command: string, args: string[], options: {env: NodeJS.ProcessEnv}) => { calls.push({ command, args, options }); },
+        execute: async (command: string, args: string[], options: {env: NodeJS.ProcessEnv}) => { calls.push({ command, args, options }); return { stdout: JSON.stringify({ checks: ["fixture-check"], liveProviders: false }) }; },
       });
       expect(calls).toHaveLength(1);
       expect(calls[0]?.command).toBe(process.execPath);
-      expect(calls[0]?.args).toEqual([path.join(root, "scripts", "verify-server-package.mjs"), "--package", root]);
+      const canonical = await realpath(root);
+      expect(calls[0]?.args).toEqual([path.join(canonical, "scripts", "verify-server-package.mjs"), "--package", canonical]);
       expect(calls[0]?.options.env.NODE_ENV).toBeUndefined();
       expect(calls[0]?.args.join(" ")).not.toMatch(/npm|rebuild/);
     });
@@ -133,6 +134,49 @@ describe("server package permission portability", () => {
         expect((await stat(path.join(preserved, "protected-worker.mjs"))).mode & 0o777).toBe(0o500);
         await execute(path.join(preserved, "bin", "server"));
       } finally { await rm(temporary, { recursive: true, force: true }); }
+    });
+  });
+});
+
+
+describe("server verifier completion reports", () => {
+  it.each([
+    undefined, "", "not JSON", "null", "[]", "{}",
+    JSON.stringify({ checks: [], liveProviders: false }),
+    JSON.stringify({ checks: [""], liveProviders: false }),
+    JSON.stringify({ checks: ["  "], liveProviders: false }),
+    JSON.stringify({ checks: [1], liveProviders: false }),
+    JSON.stringify({ checks: ["startup"] }),
+    JSON.stringify({ checks: ["startup"], liveProviders: true }),
+    JSON.stringify({ checks: ["startup"], liveProviders: false, extra: true }),
+  ])("refuses a successful verifier process with invalid report %j", async (stdout) => {
+    await fixture(async (root) => {
+      await expect(verifyServerRelease(root, {}, { execute: async () => ({ stdout }) })).rejects.toThrow("server_package_verifier_report_invalid");
+    });
+  });
+
+  it("rejects an actual silent verifier that exits successfully", async () => {
+    await fixture(async (root) => {
+      await mkdir(path.join(root, "scripts"));
+      await writeFile(path.join(root, "scripts", "verify-server-package.mjs"), "process.exitCode = 0;\n");
+      await writePackageIntegrity(root);
+      await expect(verifyServerRelease(root, {})).rejects.toThrow("server_package_verifier_report_invalid");
+    });
+  });
+
+  it("canonicalizes a symlinked package root before launching verification", async () => {
+    await fixture(async (root) => {
+      const directory = await mkdtemp(path.join(os.tmpdir(), "sedes-verifier-alias-"));
+      try {
+        const alias = path.join(directory, "release");
+        await symlink(root, alias);
+        const canonical = await realpath(root);
+        await expect(verifyServerRelease(alias, {}, { execute: async (_command: string, args: string[], options: { cwd: string }) => {
+          expect(args).toEqual([path.join(canonical, "scripts", "verify-server-package.mjs"), "--package", canonical]);
+          expect(options.cwd).toBe(canonical);
+          return { stdout: JSON.stringify({ checks: ["startup", "pty"], liveProviders: false }) };
+        } })).resolves.toMatchObject({ version: "1.0.0" });
+      } finally { await rm(directory, { recursive: true, force: true }); }
     });
   });
 });
