@@ -6299,8 +6299,9 @@ describe("Pi conversation backend driver", () => {
     const fork = await driver.attach({ ...attach, binding: binding(child.backendConversationId), opaqueBindingDetail: child.opaqueBindingDetail });
     const forked = await fork.establishProjection({ signal: new AbortController().signal });
     expect(forked.snapshot.runState).toBe("idle");
-    expect(Object.values(forked.snapshot.turnsById)[0]).toMatchObject({ status: "interrupted" });
-    expect(Object.values(forked.snapshot.turnsById)[0]?.failure).toBeUndefined();
+    const inheritedCancelledTurn = forked.snapshot.turnsById[submitted.backendTurnId!];
+    expect(inheritedCancelledTurn).toMatchObject({ status: "interrupted" });
+    expect(inheritedCancelledTurn?.failure).toBeUndefined();
     await fork.close();
   });
 
