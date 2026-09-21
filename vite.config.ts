@@ -46,7 +46,8 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      "/api": "http://127.0.0.1:4784",
+      // Preserve browser authority for the API's Host/Origin validation.
+      "/api": { target: "http://127.0.0.1:4784", changeOrigin: false },
     },
   },
   build: {
