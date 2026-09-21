@@ -16,6 +16,7 @@ const preferences = vi.hoisted(() => ({
 vi.mock("@capacitor/preferences", () => ({ Preferences: preferences }));
 
 import {
+  availableElectronConnectionPreferences,
   commitElectronConnectionProfileSelection,
   createElectronConnectionProfile,
   DEFAULT_SSH_REMOTE_PORT,
@@ -487,3 +488,23 @@ function documentWithTwoProfiles(
     autoConnectAtStartup,
   });
 }
+
+
+describe("Electron distribution preference presentation", () => {
+  it("hides unavailable Local and skips its selection without rewriting saved preferences", async () => {
+    await createElectronConnectionProfile({ name: "Remote", kind: "direct", baseUrl: "https://server.example.test" });
+    await commitElectronConnectionProfileSelection(ELECTRON_LOCAL_CONNECTION_PROFILE_ID, new AbortController().signal);
+    const original = preference.value;
+    preferences.set.mockClear();
+    const saved = await listElectronConnectionProfiles();
+    const client = availableElectronConnectionPreferences(saved, { localServer: false });
+    expect(client.profiles.map(profile => profile.kind)).toEqual(["direct"]);
+    expect(client.selectedProfileId).toBeNull();
+    expect(client.autoConnectAtStartup).toBe(true);
+    expect(preferences.set).not.toHaveBeenCalled();
+    expect(preference.value).toBe(original);
+    const full = availableElectronConnectionPreferences(await listElectronConnectionProfiles(), { localServer: true });
+    expect(full.profiles.map(profile => profile.kind)).toEqual(["local", "direct"]);
+    expect(full.selectedProfileId).toBe(ELECTRON_LOCAL_CONNECTION_PROFILE_ID);
+  });
+});

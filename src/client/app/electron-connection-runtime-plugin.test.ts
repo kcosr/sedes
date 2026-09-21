@@ -5,6 +5,7 @@ const plugin = vi.hoisted(() => ({
   connectSsh: vi.fn(),
   disconnect: vi.fn(),
   getStatus: vi.fn(),
+  getCapabilities: vi.fn(),
   addListener: vi.fn(),
 }));
 
@@ -121,5 +122,19 @@ describe("Electron connection runtime renderer contract", () => {
       error: { code: "local_server_lost", message: "Failed." },
     });
     expect(() => nativeListener?.({ status: "connected" })).toThrow();
+  });
+});
+
+
+describe("Electron native capability contract", () => {
+  it("accepts only the native boolean capability document", async () => {
+    for (const localServer of [false, true]) {
+      plugin.getCapabilities.mockResolvedValue({ localServer });
+      await expect(electronConnectionRuntime.getCapabilities()).resolves.toEqual({ localServer });
+    }
+    for (const value of [undefined, {}, { localServer: "full" }, { localServer: true, profile: "full" }]) {
+      plugin.getCapabilities.mockResolvedValue(value);
+      await expect(electronConnectionRuntime.getCapabilities()).rejects.toThrow();
+    }
   });
 });

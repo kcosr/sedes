@@ -43,6 +43,7 @@ import {
   isPackagedClient,
 } from "./client-platform.js";
 import {
+  availableElectronConnectionPreferences,
   createElectronConnectionProfile,
   commitElectronConnectionProfileSelection,
   deleteElectronConnectionProfile,
@@ -57,6 +58,7 @@ import {
 } from "./electron-connections.js";
 import {
   electronConnectionRuntime,
+  type ElectronConnectionRuntimeCapabilities,
   type ElectronConnectionRuntimeConnection,
   type ElectronConnectionRuntimeStateChange,
 } from "./electron-connection-runtime-plugin.js";
@@ -129,6 +131,9 @@ function ElectronApp({
 }): React.JSX.Element {
   const [preferences, setPreferences] =
     useState<ElectronConnectionPreferences | null>(null);
+  const [capabilities, setCapabilities] = useState<ElectronConnectionRuntimeCapabilities>({ localServer: false });
+  const capabilitiesRef = useRef<ElectronConnectionRuntimeCapabilities>({ localServer: false });
+  const availablePreferences = preferences ? availableElectronConnectionPreferences(preferences, capabilities) : null;
   const [storageError, setStorageError] = useState<string>();
   const [nativeError, setNativeError] = useState<string>();
   const [profileErrors, setProfileErrors] = useState<
@@ -172,6 +177,7 @@ function ElectronApp({
       profile: ElectronConnectionProfile,
       adopted?: ElectronConnectionRuntimeConnection & { authenticationRequired?: boolean },
     ): Promise<void> => {
+      if (profile.kind === "local" && !capabilitiesRef.current.localServer) throw new Error("Local is unavailable in this Sedes client distribution.");
       const generation = ++attemptGenerationRef.current;
       attemptAbortRef.current?.abort();
       const abort = new AbortController();
@@ -412,6 +418,10 @@ function ElectronApp({
       initializedRef.current = true;
       void (async () => {
         try {
+          const nativeCapabilities = await electronConnectionRuntime.getCapabilities();
+          if (!mountedRef.current) return;
+          capabilitiesRef.current = nativeCapabilities;
+          setCapabilities(nativeCapabilities);
           const handle = await electronConnectionRuntime.addListener(
             handleRuntimeStateChange,
           );
@@ -425,7 +435,7 @@ function ElectronApp({
           const loaded = await listElectronConnectionProfiles();
           if (!mountedRef.current) return;
           setPreferences(loaded);
-          const selected = loaded.profiles.find(
+          const selected = availableElectronConnectionPreferences(loaded, capabilitiesRef.current).profiles.find(
             ({ id }) => id === loaded.selectedProfileId,
           );
           if (
@@ -580,7 +590,7 @@ function ElectronApp({
 
   return (
     <ElectronConnectionLanding
-      profiles={preferences?.profiles ?? []}
+      profiles={availablePreferences?.profiles ?? []}
       autoConnectAtStartup={preferences?.autoConnectAtStartup ?? true}
       loading={preferences === null || switchingConnection}
       globalError={storageError ?? nativeError}
@@ -599,7 +609,7 @@ function ElectronApp({
           : undefined
       }
       onConnect={async (profileId) => {
-        const profile = preferences?.profiles.find(
+        const profile = availablePreferences?.profiles.find(
           ({ id }) => id === profileId,
         );
         if (!profile)

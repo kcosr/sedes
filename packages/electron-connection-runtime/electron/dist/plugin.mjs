@@ -1,9 +1,21 @@
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { app } from "electron";
 import { nativeCredentialStore } from "@sedes/electron-client-credentials/electron/dist/plugin.mjs";
 import { LocalServerManager } from "./local-server-manager.mjs";
 import { SshPortStore } from "./ssh-port-store.mjs";
 import { SshTunnelManager, validateDisconnectInput } from "./ssh-tunnel-manager.mjs";
+
+// This immutable build manifest is native-owned. Renderer preferences and
+// environment variables never grant local process authority.
+export function readDistribution(appPath) {
+  const value = JSON.parse(readFileSync(path.join(appPath, "generated", "distribution.json"), "utf8"));
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).length !== 1 || !["client", "full"].includes(value.profile)) {
+    throw new Error("electron_distribution_invalid");
+  }
+  return Object.freeze({ profile: value.profile });
+}
 
 export class ConnectionRuntimeManager {
   #local;
@@ -18,28 +30,33 @@ export class ConnectionRuntimeManager {
     return this.#ssh.connect(input);
   }
 
-  startLocal(input) {
+  async startLocal(input) {
+    if (!this.#local) throw Object.assign(new Error("Local is unavailable in this Sedes client distribution."), { code: "local_server_unavailable" });
     return this.#local.start(input);
+  }
+
+  getCapabilities() {
+    return Object.freeze({ localServer: Boolean(this.#local) });
   }
 
   async disconnect(input) {
     const connectionId = validateDisconnectInput(input);
     await Promise.all([
-      this.#local.disconnect({ connectionId }),
+      this.#local?.disconnect({ connectionId }),
       this.#ssh.disconnect({ connectionId }),
     ]);
   }
 
   getStatus() {
     return Object.freeze({
-      local: this.#local.getStatus(),
+      local: this.#local?.getStatus() ?? Object.freeze({ status: "disconnected" }),
       ssh: this.#ssh.getStatus(),
     });
   }
 
   async disconnectAll() {
     const outcomes = await Promise.allSettled([
-      this.#local.disconnectAll(),
+      this.#local?.disconnectAll(),
       this.#ssh.disconnectAll(),
     ]);
     const failures = outcomes
@@ -67,10 +84,11 @@ class ElectronConnectionRuntimeImpl {
         "stateChange",
         Object.freeze({ kind, ...state }),
       );
+    const distribution = dependencies.manager ? undefined : readDistribution(this.#app.getAppPath());
     this.#manager =
       dependencies.manager ??
       new ConnectionRuntimeManager({
-        local: new LocalServerManager({
+        local: distribution.profile === "full" ? new LocalServerManager({
           electronExecutable: process.execPath,
           resourceRoot: this.#app.isPackaged
             ? path.join(process.resourcesPath, "local-server")
@@ -78,7 +96,7 @@ class ElectronConnectionRuntimeImpl {
           userDataDirectory: this.#app.getPath("userData"),
           notify: notify("local"),
           saveCredential: (input) => nativeCredentialStore().setCredential(input),
-        }),
+        }) : null,
         ssh: new SshTunnelManager({
           notify: notify("ssh"),
           reservePort: (input) => new SshPortStore(path.join(this.#app.getPath("userData"), "ssh-ports")).portFor(input),
@@ -114,6 +132,10 @@ class ElectronConnectionRuntimeImpl {
     return this.#manager.getStatus();
   }
 
+  getCapabilities() {
+    return this.#manager.getCapabilities();
+  }
+
   #hasResources() {
     const status = this.#manager.getStatus();
     return (
@@ -142,7 +164,7 @@ class ElectronConnectionRuntimeImpl {
 
 ElectronConnectionRuntimeImpl.__capacitorElectronPlugin = {
   name: "ElectronConnectionRuntime",
-  methods: ["connectSsh", "startLocal", "disconnect", "getStatus"],
+  methods: ["connectSsh", "startLocal", "disconnect", "getStatus", "getCapabilities"],
 };
 
 export { ElectronConnectionRuntimeImpl as ElectronConnectionRuntime };

@@ -32,6 +32,7 @@ const connectionRuntimeNative = vi.hoisted(() => ({
   connectSsh: vi.fn(),
   disconnect: vi.fn(),
   getStatus: vi.fn(),
+  getCapabilities: vi.fn(),
   addListener: vi.fn(),
 }));
 
@@ -176,6 +177,8 @@ beforeEach(() => {
   connectionRuntimeNative.connectSsh.mockReset();
   connectionRuntimeNative.disconnect.mockReset();
   connectionRuntimeNative.disconnect.mockResolvedValue(undefined);
+  connectionRuntimeNative.getCapabilities.mockReset();
+  connectionRuntimeNative.getCapabilities.mockResolvedValue({ localServer: true });
   connectionRuntimeNative.getStatus.mockReset();
   connectionRuntimeNative.getStatus.mockResolvedValue({
     local: { status: "disconnected" },
@@ -1775,5 +1778,62 @@ describe("application endpoint startup", () => {
     await waitFor(() =>
       expect(notificationFetchCount()).toBe(startupNotificationCount + 1),
     );
+  });
+});
+
+describe("Electron client distribution", () => {
+  it("hides Local and leaves its saved selection untouched until full is installed again", async () => {
+    platform.native = true;
+    platform.name = "electron";
+    const saved = electronPreferencesDocument("local");
+    preferences.get.mockResolvedValue({ value: saved });
+    connectionRuntimeNative.getCapabilities.mockResolvedValue({ localServer: false });
+    const fetchMock = vi.fn(async () => Response.json(applicationBootstrap));
+    vi.stubGlobal("fetch", fetchMock);
+    const rendered = render(<StrictMode><App /></StrictMode>);
+    expect(await screen.findByRole("heading", { name: "Direct server" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Remote SSH" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Local" })).not.toBeInTheDocument();
+    expect(connectionRuntimeNative.startLocal).not.toHaveBeenCalled();
+    expect(connectionRuntimeNative.getStatus).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(preferences.set).not.toHaveBeenCalled();
+    expect(preferences.remove).not.toHaveBeenCalled();
+
+    rendered.unmount();
+    await act(async () => { await Promise.resolve(); });
+    connectionRuntimeNative.getCapabilities.mockResolvedValue({ localServer: true });
+    connectionRuntimeNative.startLocal.mockImplementation(async ({ connectionId }: { connectionId: string }) => ({
+      connectionId, authenticationRequired: true, baseUrl: "http://127.0.0.1:49150",
+    }));
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "What should the agent work on?" })).toBeInTheDocument();
+    expect(connectionRuntimeNative.startLocal).toHaveBeenCalledOnce();
+  });
+
+  it.each(["direct", "ssh"] as const)("auto-connects a saved %s profile without Local support", async (selected) => {
+    platform.native = true;
+    platform.name = "electron";
+    preferences.get.mockResolvedValue({ value: electronPreferencesDocument(selected) });
+    connectionRuntimeNative.getCapabilities.mockResolvedValue({ localServer: false });
+    connectionRuntimeNative.connectSsh.mockImplementation(async ({ connectionId }: { connectionId: string }) => ({ connectionId, baseUrl: "http://127.0.0.1:49151" }));
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(applicationBootstrap)));
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "What should the agent work on?" })).toBeInTheDocument();
+    expect(connectionRuntimeNative.startLocal).not.toHaveBeenCalled();
+    expect(connectionRuntimeNative.connectSsh).toHaveBeenCalledTimes(selected === "ssh" ? 1 : 0);
+  });
+
+  it("fails closed for Local when native capabilities cannot be read", async () => {
+    platform.native = true;
+    platform.name = "electron";
+    preferences.get.mockResolvedValue({ value: electronPreferencesDocument("local") });
+    connectionRuntimeNative.getCapabilities.mockRejectedValue(new Error("Distribution metadata unavailable."));
+    vi.stubGlobal("fetch", vi.fn());
+    render(<App />);
+    expect(await screen.findByText("Distribution metadata unavailable.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Local" })).not.toBeInTheDocument();
+    expect(connectionRuntimeNative.startLocal).not.toHaveBeenCalled();
+    expect(preferences.set).not.toHaveBeenCalled();
   });
 });
