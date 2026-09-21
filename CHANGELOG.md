@@ -36,6 +36,9 @@
 
 ### Fixed
 
+- Bound changed-file filters so long pasted input cannot interrupt saved Files
+  navigation.
+
 - Keep historical review comments and reviewed flags off replacement comparisons;
   editing a historical comment no longer creates an unrelated current review.
 

@@ -234,6 +234,16 @@ test.describe.serial("workspace files compare", () => {
     await compareSurface.getByRole("button", { name: "Split", exact: true }).click();
     await navigator.getByRole("textbox", { name: "Filter changed files" }).fill("status");
     await navigator.getByRole("treeitem").filter({ hasText: "status.ts" }).click();
+    const changedFileFilter = navigator.getByRole("textbox", { name: "Filter changed files" });
+    await changedFileFilter.fill("x".repeat(1100));
+    await expect(changedFileFilter).toHaveValue("x".repeat(1024));
+    await expect.poll(() => page.evaluate(() => {
+      const key = Object.keys(localStorage).find((key) => key.startsWith("sedes.files-navigation.v1:"));
+      const entry = key && JSON.parse(localStorage.getItem(key)!).entries.find(
+        (entry: { mode: string }) => entry.mode === "compare",
+      );
+      return { filterLength: entry?.navigation?.filter.length, filePath: entry?.navigation?.file?.newPath };
+    })).toEqual({ filterLength: 1024, filePath: "src/status.ts" });
     await navigator.getByRole("textbox", { name: "Filter changed files" }).fill("");
     await capture(page, testInfo, "workspace-files-compare-desktop.png");
     await compareSurface.getByRole("button", { name: "Comments (0)", exact: true }).click();

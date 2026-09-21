@@ -5,6 +5,8 @@ import type {
 } from "../../shared/protocol/workspace-diffs.js";
 import type { WorkspaceComparePreferences } from "./workspace-compare-state.js";
 
+export const WORKSPACE_COMPARE_FILTER_MAX_LENGTH = 1024;
+
 export type WorkspaceCompareEndpointIntent =
   | { readonly kind: "working_tree" }
   | { readonly kind: "index" }

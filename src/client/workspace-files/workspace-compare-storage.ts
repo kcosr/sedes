@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { WorkspaceCompareNavigation } from "./workspace-compare-navigation.js";
+import { WORKSPACE_COMPARE_FILTER_MAX_LENGTH, type WorkspaceCompareNavigation } from "./workspace-compare-navigation.js";
 
 const path = z.string().max(4096);
 const endpoint = z.discriminatedUnion("kind", [
@@ -20,7 +20,7 @@ const navigationSchema = z.strictObject({
   fingerprint: z.string().max(128).optional(),
   file: fileAnchorSchema.optional(),
   returnLocations: z.array(fileAnchorSchema).max(32).optional(),
-  filter: z.string().max(1024), navigatorWidth: z.number().min(160).max(600),
+  filter: z.string().max(WORKSPACE_COMPARE_FILTER_MAX_LENGTH), navigatorWidth: z.number().min(160).max(600),
   collapsedDirectories: z.array(path).max(2000),
   preferences: z.strictObject({ diffStyle: z.enum(["split", "unified"]), overflow: z.enum(["scroll", "wrap"]) }),
 });

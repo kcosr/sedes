@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Search, X } from "lucide-react";
+import { WORKSPACE_COMPARE_FILTER_MAX_LENGTH } from "./workspace-compare-navigation.js";
 import type {
   WorkspaceDiffChangedFileSummary,
   WorkspaceDiffFileId,
@@ -110,9 +111,10 @@ export function WorkspaceChangedFileNavigator({
         <input
           aria-label="Filter changed files"
           placeholder="Filter changed files"
+          maxLength={WORKSPACE_COMPARE_FILTER_MAX_LENGTH}
           value={filter}
           onChange={(event) => {
-            onFilterChange(event.target.value);
+            onFilterChange(event.target.value.slice(0, WORKSPACE_COMPARE_FILTER_MAX_LENGTH));
             setFocused(0);
             setScrollTop(0);
             if (listRef.current) listRef.current.scrollTop = 0;
