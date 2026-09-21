@@ -536,7 +536,8 @@ export class ConversationActor {
       if (
         (this.#awaitingAuthoritativeIdle &&
           (branching.sourceMustBeIdle ||
-            (snapshotBoundary && sourceRunState === "idle"))) ||
+            (snapshotBoundary &&
+              (sourceRunState === "idle" || sourceRunState === "failed")))) ||
         !branchingAllowsSelectedCompletedTurnForSourceState({
           branching,
           sourceRunState,
