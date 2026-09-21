@@ -727,10 +727,13 @@
   width: min(660px, calc(100vw - 16px));
   gap: 0;
   padding: 0;
+  font-size: 12px;
 }
 .workspace-compare-settings-popover button,
 .workspace-compare-settings-popover select {
-  font: inherit;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 400;
 }
 .workspace-compare-settings-popover button:disabled {
   opacity: 0.48;

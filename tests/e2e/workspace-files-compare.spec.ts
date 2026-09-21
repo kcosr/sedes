@@ -194,6 +194,18 @@ test.describe.serial("workspace files compare", () => {
       name: "Compare",
       exact: true,
     });
+    // Portal controls keep the compact Files typography despite the shared popover defaults.
+    for (const control of [
+      runCompare,
+      settings.getByRole("button", { name: "Uncommitted", exact: true }),
+      settings.getByRole("button", { name: "Base revision", exact: true }),
+      settings.getByRole("button", { name: "Compare revision", exact: true }),
+      settings.getByRole("combobox", { name: "Comparison strategy", exact: true }),
+    ]) {
+      await expect(control).toHaveCSS("font-size", "12px");
+      await expect(control).toHaveCSS("font-weight", "400");
+    }
+    await expect(settings.locator(".workspace-revision-label").first()).toHaveCSS("font-size", "11px");
     await expect(runCompare).toBeEnabled();
     await runCompare.click();
     await expect(settings).toBeHidden();
@@ -275,6 +287,7 @@ test.describe.serial("workspace files compare", () => {
     const workspaceBeforeSettings = await compareSurface.locator(".workspace-compare-workspace").boundingBox();
     await settingsToggle.click();
     expect(await compareSurface.locator(".workspace-compare-workspace").boundingBox()).toEqual(workspaceBeforeSettings);
+    await capture(page, testInfo, "workspace-files-comparison-settings.png");
     await settings.getByRole("button", { name: "Base revision", exact: true }).click();
     const revisionDialog = page.getByRole("dialog", { name: "Choose base revision" });
     await expect(revisionDialog.getByText("Seed workspace file fixture", { exact: true })).toBeVisible();

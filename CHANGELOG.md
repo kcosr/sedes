@@ -8,6 +8,7 @@
   diff loading, local reading-position restoration, and separate current/history
   review controls. A compact toolbar opens comparison, View, and Review settings
   without shifting the diff; file counts and navigation sit with the files.
+  Comparison settings use the same compact typography as other Files controls.
   Revision pickers show commit messages and dates, searchable
   branch groups, scoped history, and branch-comparison presets. Requires matching
   clients and managed sidecars with `workspace_files@8`.
