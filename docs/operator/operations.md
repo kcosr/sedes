@@ -399,21 +399,19 @@ directory remains part of native conversation and credential backup authority.
 
 ### Installed user service on Linux
 
-On Linux, an optional installer turns a built checkout into a versioned
-per-user installation with a systemd user service, so the running service no
-longer depends on a git working tree. From the built source checkout:
+On Linux, the optional installer installs a verified slim server package into
+versioned per-user releases with a systemd user service. Build and extract a
+package as described in [Server distribution](server-distribution.md), then:
 
 ```sh
-env -u NODE_ENV npm run build
-env -u NODE_ENV npm run install:server
+npm run install:server -- --package /absolute/extracted-release
 ```
 
-Installation requires the Linux native build tools used by `node-pty`
-(Python, make, and a C/C++ compiler, plus headers for the running Node version).
-The installer installs locked production dependencies with lifecycle scripts
-disabled, explicitly rebuilds the reviewed `node-pty` version, and checks
-SQLite and a real PTY before making the release available for activation.
-A native build or smoke-test failure leaves the active release unchanged.
+Installation is offline and requires Node.js 24.18.0 or newer with the package's
+Node ABI. It never reinstalls the root production dependency graph or compiles
+addons. Integrity, browser/server startup, SQLite migrations, real PTY, and
+module checks must pass before activation. Native compilation happens on the
+target build host during packaging. A failure leaves the active release unchanged.
 
 The installer creates this layout and never touches state or configuration
 beyond seeding a missing `server.json` from `config/server.example.json`:
@@ -445,7 +443,7 @@ version and run the installer again; it stages the new release beside the old
 one and activates it. Restart the service to pick it up:
 
 ```sh
-env -u NODE_ENV npm run install:server
+npm run install:server -- --package /absolute/extracted-release
 systemctl --user restart sedes.service
 ```
 
@@ -467,7 +465,8 @@ absolute `Environment=PATH=...` line to the unit and remove its
 the unit file, `--no-activate` stages a release without switching to it, and
 `--uninstall` removes the releases, links, and installer-managed unit while
 leaving state and configuration in place. The installer refuses to replace the
-active release and refuses to run on a platform other than Linux.
+active release. macOS installations require `--no-systemd`; Windows remains
+outside this package installer.
 
 A release staged with `--no-activate` carries its sample configuration and
 systemd preference. A later `--activate VERSION` completes first-install setup

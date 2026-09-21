@@ -12,3 +12,9 @@ coverage/
 *.db-shm
 *.db-wal
 .DS_Store
+
+# Generated server distributions and native addon binaries
+server-packages/
+sedes_*.tar.gz
+sedes_*.tar.gz.sha256
+*.node

@@ -10,9 +10,11 @@ import { verifyPackageIntegrity } from './server-package-integrity.mjs';
 
 const execute = promisify(execFile);
 const nativeProbe = `
+import {createRequire} from 'node:module';
+const require = createRequire(import.meta.url);
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const {pathToFileURL} = require('node:url');
+const {pathToFileURL, fileURLToPath} = require('node:url');
 const {realpathSync} = require('node:fs');
 const root = process.argv[1];
 const requirePackage = require('node:module').createRequire(path.join(root, 'package.json'));
@@ -20,7 +22,7 @@ const requirePackage = require('node:module').createRequire(path.join(root, 'pac
   const manifest = requirePackage('./package.json');
   const packageModules = path.join(realpathSync(root), 'node_modules') + path.sep;
   const dependencies = Object.keys(manifest.dependencies).map(name => {
-    const resolved = realpathSync(requirePackage.resolve(name));
+    const resolved = realpathSync(fileURLToPath(import.meta.resolve(name)));
     assert.ok(resolved.startsWith(packageModules), 'Dependency resolves outside package: ' + name);
     return resolved;
   });
@@ -37,7 +39,7 @@ const requirePackage = require('node:module').createRequire(path.join(root, 'pac
     await import(pathToFileURL(path.join(root, 'dist/server/backends', name, name + '-backend-module.js')));
   }
   for (const resolved of dependencies) await import(pathToFileURL(resolved));
-  const requirePi = require('node:module').createRequire(requirePackage.resolve('@earendil-works/pi-coding-agent'));
+  const requirePi = require('node:module').createRequire(import.meta.resolve('@earendil-works/pi-coding-agent'));
   const transformed = requirePi('esbuild').transformSync('const answer: number = 42', {loader:'ts'});
   assert.ok(transformed.code.includes('42'), 'Pi esbuild target executable failed');
   await new Promise((resolve, reject) => {
@@ -66,7 +68,7 @@ export async function verifyRuntime(root) {
   try {
     await mkdir(env.APP_STATE_DIR);
     await writeFile(env.SEDES_CONFIG_FILE, JSON.stringify({schemaVersion:11, packagedClients:[], listen:{host:'127.0.0.1', port:0}}));
-    await execute(process.execPath, ['--eval', nativeProbe, root], {cwd:temporary, env, timeout:30_000, maxBuffer:4*1024*1024});
+    await execute(process.execPath, ['--input-type=module', '--eval', nativeProbe, root], {cwd:root, env, timeout:30_000, maxBuffer:4*1024*1024});
     for (const [artifact, args, expected] of [
       ['dist/sidecar/sedes', ['service'], 'sidecar_arguments_invalid'],
       ['dist/pi-sandbox-worker/sedes-pi-sandbox-worker.mjs', [], 'pi_sandbox_worker_arguments_invalid'],
@@ -108,7 +110,7 @@ export async function verifyRuntime(root) {
     server.kill('SIGTERM');
     const exit = await boundedExit(exited, 15_000);
     assert.deepEqual(exit, {code:0, signal:null}, `Server shutdown failed: ${logs}`);
-    return ['sqlite-query-and-migrations', 'real-pty', 'provider-module-imports', 'pi-esbuild-target-binary', 'sidecar-and-worker-argument-guards', 'connector-help', 'isolated-server-startup', 'browser-http-and-static-assets', 'graceful-shutdown'];
+    return ['sqlite-query-and-migrations', 'real-pty', 'pi-esbuild', 'provider-module-imports', 'pi-esbuild-target-binary', 'sidecar-and-worker-argument-guards', 'connector-help', 'isolated-server-startup', 'browser-http-and-static-assets', 'graceful-shutdown'];
   } finally {
     if (server && server.exitCode === null && server.signalCode === null) { server.kill('SIGKILL'); await boundedExit(exited, 5000); }
     await rm(temporary, {recursive:true, force:true});

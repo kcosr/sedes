@@ -27,7 +27,7 @@
     "dev": "concurrently -k -n server,client -c cyan,magenta \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "node scripts/start-dev-server.mjs",
     "dev:client": "vite --host 127.0.0.1",
-    "pretypecheck": "npm run check:docs && npm run check:agent-tool-contracts && npm run check:e2e-timing-baseline",
+    "pretypecheck": "npm run check:docs && npm run check:agent-tool-contracts && npm run check:e2e-timing-baseline && npm run check:server-runtime",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
     "test": "vitest run",
     "test:windows-runtime": "node scripts/test-windows-runtime.mjs",
@@ -109,7 +109,10 @@
     "electron:smoke:prepared": "npm --prefix electron run build && node scripts/run-electron-smoke.mjs",
     "electron:smoke:packaged": "node scripts/run-electron-smoke.mjs --packaged",
     "electron:verify": "npm run electron:sync && node scripts/verify-electron-package.mjs --synced && npm --prefix electron run build && npm --prefix electron run pack:dir && node scripts/verify-electron-package.mjs --packaged && npm run electron:smoke:packaged",
-    "start": "cross-env NODE_ENV=production node dist/server/index.js"
+    "start": "cross-env NODE_ENV=production node dist/server/index.js",
+    "check:server-runtime": "node scripts/check-server-runtime.mjs",
+    "package:server": "node scripts/package-server.mjs",
+    "verify:server-package": "node scripts/verify-server-package.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.3.0",
@@ -178,10 +181,12 @@
     "@types/ws": "8.18.1",
     "@vitejs/plugin-react": "6.0.4",
     "@vitest/coverage-v8": "4.1.10",
+    "acorn": "8.15.0",
     "concurrently": "10.0.4",
     "cross-env": "10.1.0",
     "esbuild": "0.28.1",
     "jsdom": "30.0.1",
+    "node-gyp": "12.3.0",
     "selfsigned": "5.5.0",
     "supertest": "7.2.2",
     "tailwindcss": "4.3.3",

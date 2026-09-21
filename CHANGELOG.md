@@ -4,6 +4,11 @@
 
 ### Changed
 
+- Install standalone servers from verified, target-specific slim runtime packages
+  with an independent dependency lock, external Node 24.18.0+, source-built
+  SQLite/PTY addons, offline activation, and extraction checks. `install:server`
+  now requires an extracted server package instead of a built root checkout.
+
 - Redesign Files Changes with a persistent changed-file navigator, automatic
   diff loading, local reading-position restoration, and separate current/history
   review controls. A compact toolbar opens comparison, View, and Review settings
