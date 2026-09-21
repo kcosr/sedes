@@ -28,15 +28,15 @@ const unitOwnerPrefix = "# Installation prefix: ";
 class InstallerRefusal extends Error {}
 
 export const usage = `Usage:
-  npm run install:server -- --package DIR [--prefix DIR] [--bin-dir DIR] [--no-systemd] [--no-activate] [--force]
-  npm run install:server -- --activate VERSION [--prefix DIR] [--bin-dir DIR] [--no-systemd]
+  npm run install:server -- --package DIR [--prefix DIR] [--bin-dir DIR] [--systemd] [--no-activate] [--force]
+  npm run install:server -- --activate VERSION [--prefix DIR] [--bin-dir DIR] [--systemd]
   npm run install:server -- --list [--prefix DIR]
   npm run install:server -- --uninstall [--prefix DIR] [--bin-dir DIR] [--purge]
 
   --package DIR   extracted server release (defaults to this script's package)
   --prefix DIR    installation root (default \${XDG_DATA_HOME:-$HOME/.local/share}/sedes)
   --bin-dir DIR   directory for the sedes launchers (default $HOME/.local/bin)
-  --no-systemd    do not write ~/.config/systemd/user/sedes.service
+  --systemd       write ~/.config/systemd/user/sedes.service on activation (Linux only; default: no service changes)
   --no-activate   stage the release without switching 'current' to it
   --force         replace an already installed release of the same version
   --purge         accepted by --uninstall; state and configuration are never removed
@@ -123,7 +123,7 @@ function parseArguments(argv) {
     prefix: undefined,
     package: undefined,
     binDir: undefined,
-    systemd: true,
+    systemd: false,
     activate: true,
     force: false,
     purge: false,
@@ -158,9 +158,9 @@ function parseArguments(argv) {
       case "--bin-dir":
         parsed.binDir = value("--bin-dir");
         break;
-      case "--no-systemd":
-        if (inline !== undefined) invalid = "--no-systemd takes no value.";
-        parsed.systemd = false;
+      case "--systemd":
+        if (inline !== undefined) invalid = "--systemd takes no value.";
+        parsed.systemd = true;
         break;
       case "--no-activate":
         if (inline !== undefined) invalid = "--no-activate takes no value.";
@@ -199,7 +199,7 @@ function parseArguments(argv) {
   if (parsed.mode !== "install") {
     if (parsed.force) rejected.push("--force");
     if (parsed.package !== undefined) rejected.push("--package");
-    if (!parsed.systemd && parsed.mode !== "activate") rejected.push("--no-systemd");
+    if (parsed.systemd && parsed.mode !== "activate") rejected.push("--systemd");
     if (!parsed.activate) rejected.push("--no-activate");
   }
   if (parsed.mode !== "uninstall" && parsed.purge) rejected.push("--purge");
@@ -439,7 +439,6 @@ async function stageRelease(context) {
           version,
           commit: info.source.commit,
           target: info.target.label,
-          systemd: parsed.systemd,
           installedAt: (options.now?.() ?? new Date()).toISOString(),
           node: options.nodeVersion ?? process.version,
         },
@@ -472,7 +471,7 @@ async function stageRelease(context) {
   if (!parsed.activate) {
     io.stdout.write(
       `Staged only; ${path.join(prefix, "current")} still points at ${active ?? "nothing"}.\n` +
-        `Activate it with: npm run install:server -- --activate ${version}\n`,
+        `Activate it with: npm run install:server -- --activate ${version}${parsed.systemd ? " --systemd" : ""}\n`,
     );
     return 0;
   }
@@ -501,7 +500,7 @@ async function finishActivation(context, version, systemd) {
     sourceRoot: path.join(prefix, "releases", version), configHome, io,
   });
   const wroteUnit = systemd ? await writeUnitFile({ prefix, configHome, io }) : false;
-  if (!systemd) io.stdout.write("Skipped the systemd unit file (--no-systemd).\n");
+  if (!systemd) io.stdout.write("Left systemd unchanged (pass --systemd on Linux to create or update the unit file).\n");
   // Make the candidate current only after the prerequisites are ready.
   await swapCurrent(prefix, version);
   io.stdout.write(`Activated ${version} (${path.join(prefix, "current")} -> releases/${version})\n`);
@@ -535,15 +534,14 @@ async function activateRelease(context) {
     }
   }
   const release = JSON.parse(await readFile(path.join(releaseDirectory, "RELEASE.json"), "utf8"));
-  if (release.version !== version || typeof release.systemd !== "boolean") {
+  if (release.version !== version) {
     throw new InstallerRefusal(`Invalid release metadata for ${version}.`);
   }
   await verifyRelease(context, releaseDirectory, true);
-  const systemd = parsed.systemd && release.systemd;
   if ((await activeVersion(prefix)) === version) {
     io.stdout.write(`${version} is already the active release; checking installation setup.\n`);
   }
-  return await finishActivation(context, version, systemd);
+  return await finishActivation(context, version, parsed.systemd);
 }
 
 async function listInstalledReleases(context) {
@@ -681,11 +679,12 @@ export async function installServer(options = {}) {
   }
 
   const platform = options.platform ?? process.platform;
-  if (!["linux", "darwin"].includes(platform) || (platform !== "linux" && parsed.systemd && ["install", "activate"].includes(parsed.mode))) {
-    io.stderr.write(
-      `install:server installs a systemd user service and supports Linux only; this host reports ${platform}.\n` +
-        "On macOS pass --no-systemd and manage the server process separately.\n",
-    );
+  if (!["linux", "darwin"].includes(platform)) {
+    io.stderr.write(`install:server supports Linux and macOS; this host reports ${platform}.\n`);
+    return 1;
+  }
+  if (platform !== "linux" && parsed.systemd) {
+    io.stderr.write("--systemd is supported only on Linux. Omit it on macOS and manage the server process separately.\n");
     return 1;
   }
 

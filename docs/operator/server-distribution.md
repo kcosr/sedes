@@ -131,8 +131,13 @@ Or use the installer shipped inside that release:
 node /absolute/extracted-release/scripts/install-server.mjs
 ```
 
-Linux defaults to a per-user systemd unit. On macOS pass `--no-systemd` and
-operate `bin/sedes-server` with your own supervisor. Review the seeded
+Installation and activation leave systemd unchanged by default. On Linux,
+add `--systemd` to the install or `--activate VERSION` command to create or
+update a per-user unit. The flag applies only to that invocation; staging with
+`--no-activate` does not save a service preference for later activation.
+Omitting the flag never removes or disables an existing unit. macOS uses the
+default command; `--systemd` is Linux-only. Without systemd, operate the installed
+`current/bin/sedes-server` with your own supervisor. Review the seeded
 configuration before starting the service. Keep Node on the supervisor PATH.
 The installer never starts or restarts a service.
 

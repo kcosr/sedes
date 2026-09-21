@@ -9,6 +9,9 @@
   releases must be rebuilt as dedicated packages before activation or rollback.
   Packages use an independent dependency lock, external Node 24.18.0+,
   source-built SQLite/PTY addons, offline activation, and extraction checks.
+  Systemd unit creation and updates now require explicit `--systemd` on each
+  install or activation; the former `--no-systemd` option is removed. Linux
+  and macOS default to installation without service integration.
 
 ### Changed
 

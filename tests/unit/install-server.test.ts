@@ -166,7 +166,7 @@ describe("install:server fresh install", () => {
     const sourceRoot = await createSourceRoot("1.2.3");
     const installation = await createInstallation(sourceRoot);
 
-    const result = await installation.run([]);
+    const result = await installation.run(["--systemd"]);
 
     expect(result.stderr).toBe("");
     expect(result.exitCode).toBe(0);
@@ -253,28 +253,30 @@ describe("install:server fresh install", () => {
     expect(result.stderr).toContain("is not on PATH");
   });
 
-  it("skips the unit file with --no-systemd", async () => {
+  it("installs without creating systemd directories or instructions by default", async () => {
     const sourceRoot = await createSourceRoot("1.2.3");
     const installation = await createInstallation(sourceRoot);
 
-    const result = await installation.run(["--no-systemd"]);
+    const result = await installation.run([]);
 
     expect(result.exitCode).toBe(0);
     await expect(readFile(installation.unitFile, "utf8")).rejects.toThrow();
-    expect(result.stdout).toContain("Skipped the systemd unit file");
+    expect(result.stdout).toContain("Left systemd unchanged");
+    expect(result.stdout).not.toContain("systemctl");
+    await expect(stat(path.dirname(installation.unitFile))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 
 describe("install:server refusals", () => {
-  it("refuses a platform other than Linux", async () => {
+  it("refuses a platform other than Linux or macOS", async () => {
     const sourceRoot = await createSourceRoot("1.2.3");
     const installation = await createInstallation(sourceRoot);
 
-    const result = await installation.run([], { platform: "darwin" });
+    const result = await installation.run([], { platform: "win32" });
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("Linux only");
-    expect(result.stderr).toContain("darwin");
+    expect(result.stderr).toContain("supports Linux and macOS");
+    expect(result.stderr).toContain("win32");
     await expect(readdir(installation.prefix)).rejects.toThrow();
   });
 
@@ -395,10 +397,10 @@ describe("install:server staging and activation", () => {
     const sourceRoot = await createSourceRoot("1.2.3");
     const newerSourceRoot = await createSourceRoot("1.3.0");
     const installation = await createInstallation(sourceRoot);
-    expect((await installation.run([])).exitCode).toBe(0);
+    expect((await installation.run(["--systemd"])).exitCode).toBe(0);
     expect((await installation.run(["--no-activate"], { packageRoot: newerSourceRoot })).exitCode).toBe(0);
 
-    const result = await installation.run(["--activate", "1.3.0"]);
+    const result = await installation.run(["--activate", "1.3.0", "--systemd"]);
 
     expect(result.exitCode).toBe(0);
     expect(await readlink(path.join(installation.prefix, "current"))).toBe(path.join("releases", "1.3.0"));
@@ -407,7 +409,7 @@ describe("install:server staging and activation", () => {
     );
     expect(result.stdout).toContain("systemctl --user restart sedes.service");
 
-    const rollback = await installation.run(["--activate", "1.2.3"]);
+    const rollback = await installation.run(["--activate", "1.2.3", "--systemd"]);
     expect(rollback.exitCode).toBe(0);
     expect(await readlink(path.join(installation.prefix, "current"))).toBe(path.join("releases", "1.2.3"));
   });
@@ -438,15 +440,32 @@ describe("install:server staging and activation", () => {
 });
 
 describe("install:server unit file management", () => {
+  it("leaves an existing managed unit unchanged during default upgrade and rollback", async () => {
+    const installation = await createInstallation(await createSourceRoot("1.2.3"));
+    expect((await installation.run(["--systemd"])).exitCode).toBe(0);
+    const unit = (await readFile(installation.unitFile, "utf8")).replace(/^ExecStart=.*$/m, "ExecStart=/operator-command");
+    await writeFile(installation.unitFile, unit);
+
+    const upgrade = await installation.run([], { packageRoot: await createSourceRoot("1.3.0") });
+    expect(upgrade.exitCode).toBe(0);
+    expect(await readFile(installation.unitFile, "utf8")).toBe(unit);
+    expect(upgrade.stdout).not.toContain("systemctl");
+    const rollback = await installation.run(["--activate", "1.2.3"]);
+    expect(rollback.exitCode).toBe(0);
+    expect(await readFile(installation.unitFile, "utf8")).toBe(unit);
+    expect(rollback.stdout).not.toContain("systemctl");
+    expect(await readlink(path.join(installation.prefix, "current"))).toBe("releases/1.2.3");
+  });
+
   it("rewrites an installer-managed unit file but keeps an edited one", async () => {
     const sourceRoot = await createSourceRoot("1.2.3");
     const newerSourceRoot = await createSourceRoot("1.3.0");
     const installation = await createInstallation(sourceRoot);
-    expect((await installation.run([])).exitCode).toBe(0);
+    expect((await installation.run(["--systemd"])).exitCode).toBe(0);
     expect(await readFile(installation.unitFile, "utf8")).toContain(unitMarker);
 
     await writeFile(installation.unitFile, (await readFile(installation.unitFile, "utf8")).replace(/^ExecStart=.*$/m, "ExecStart=/stale"), "utf8");
-    const upgrade = await installation.run([], { packageRoot: newerSourceRoot });
+    const upgrade = await installation.run(["--systemd"], { packageRoot: newerSourceRoot });
     expect(upgrade.exitCode).toBe(0);
     expect(upgrade.stdout).toContain("Updated");
     expect(await readFile(installation.unitFile, "utf8")).toContain(
@@ -456,7 +475,7 @@ describe("install:server unit file management", () => {
 
     const edited = "[Unit]\nDescription=Operator managed sedes\n";
     await writeFile(installation.unitFile, edited, "utf8");
-    const third = await installation.run([], { packageRoot: await createSourceRoot("1.4.0") });
+    const third = await installation.run(["--systemd"], { packageRoot: await createSourceRoot("1.4.0") });
 
     expect(third.exitCode).toBe(0);
     expect(third.stderr).toContain("not installer-managed");
@@ -489,7 +508,7 @@ describe("install:server --uninstall", () => {
   it("removes releases, links, and the managed unit while leaving state and configuration", async () => {
     const sourceRoot = await createSourceRoot("1.2.3");
     const installation = await createInstallation(sourceRoot);
-    expect((await installation.run([])).exitCode).toBe(0);
+    expect((await installation.run(["--systemd"])).exitCode).toBe(0);
     const stateDirectory = path.join(installation.home, ".local", "state", "sedes");
     await mkdir(stateDirectory, { recursive: true });
     await writeFile(path.join(stateDirectory, "overlay.sqlite"), "state\n", "utf8");
@@ -512,7 +531,7 @@ describe("install:server --uninstall", () => {
   it("leaves foreign bin entries and an edited unit file alone", async () => {
     const sourceRoot = await createSourceRoot("1.2.3");
     const installation = await createInstallation(sourceRoot);
-    expect((await installation.run([])).exitCode).toBe(0);
+    expect((await installation.run(["--systemd"])).exitCode).toBe(0);
     await rm(path.join(installation.binDir, "sedes"));
     await writeFile(path.join(installation.binDir, "sedes"), "#!/bin/sh\n# operator script\n", "utf8");
     await writeFile(installation.unitFile, "[Unit]\nDescription=Operator managed\n", "utf8");
@@ -569,7 +588,7 @@ describe("install:server lifecycle regression coverage", () => {
     await expect(stat(installation.unitFile)).rejects.toMatchObject({ code: "ENOENT" });
     await rm(sourceRoot, { recursive: true });
 
-    const result = await installation.run(["--activate", "1.2.3"]);
+    const result = await installation.run(["--activate", "1.2.3", "--systemd"]);
 
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(await readFile(installation.configFile, "utf8"))).toEqual(exampleConfiguration);
@@ -580,31 +599,30 @@ describe("install:server lifecycle regression coverage", () => {
     expect(result.stdout).not.toContain("systemctl --user restart sedes.service");
   });
 
-  it.each(["stored_skip", "activation_override"] as const)(
-    "honors --no-systemd during staged activation (%s)",
-    async (mode) => {
-      const installation = await createInstallation(await createSourceRoot("1.2.3"));
-      const stageArgs = mode === "stored_skip" ? ["--no-activate", "--no-systemd"] : ["--no-activate"];
-      expect((await installation.run(stageArgs)).exitCode).toBe(0);
-      const metadata = JSON.parse(await readFile(path.join(installation.prefix, "releases", "1.2.3", "RELEASE.json"), "utf8"));
-      expect(metadata.systemd).toBe(mode !== "stored_skip");
+  it.each([
+    [false, false], [true, false], [false, true], [true, true],
+  ])("uses the activation's explicit opt-in (staged=%s, activation=%s)", async (stagedSystemd, activationSystemd) => {
+    const installation = await createInstallation(await createSourceRoot("1.2.3"));
+    expect((await installation.run(["--no-activate", ...(stagedSystemd ? ["--systemd"] : [])])).exitCode).toBe(0);
+    await expect(stat(installation.unitFile)).rejects.toMatchObject({ code: "ENOENT" });
 
-      const result = await installation.run([
-        "--activate", "1.2.3", ...(mode === "activation_override" ? ["--no-systemd"] : []),
-      ]);
+    const result = await installation.run(["--activate", "1.2.3", ...(activationSystemd ? ["--systemd"] : [])]);
 
-      expect(result.exitCode).toBe(0);
-      expect(JSON.parse(await readFile(installation.configFile, "utf8"))).toEqual(exampleConfiguration);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(await readFile(installation.configFile, "utf8"))).toEqual(exampleConfiguration);
+    if (activationSystemd) {
+      expect(await readFile(installation.unitFile, "utf8")).toContain(unitMarker);
+      expect(result.stdout).toContain("systemctl --user enable --now");
+    } else {
       await expect(stat(installation.unitFile)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(result.stdout).not.toContain("systemctl --user restart");
-      expect(result.stdout).not.toContain("systemctl --user enable");
-    },
-  );
+      expect(result.stdout).not.toContain("systemctl");
+    }
+  });
 
   it("rejects activation and uninstall while the same prefix has a force install in progress", async () => {
     const installation = await createInstallation(await createSourceRoot("1.2.3"));
-    expect((await installation.run([])).exitCode).toBe(0);
-    expect((await installation.run([], { packageRoot: await createSourceRoot("1.3.0") })).exitCode).toBe(0);
+    expect((await installation.run(["--systemd"])).exitCode).toBe(0);
+    expect((await installation.run(["--systemd"], { packageRoot: await createSourceRoot("1.3.0") })).exitCode).toBe(0);
     let entered!: () => void;
     let release!: () => void;
     const stagingEntered = new Promise<void>((resolve) => { entered = resolve; });
@@ -621,7 +639,7 @@ describe("install:server lifecycle regression coverage", () => {
         stagingEntered,
         staging.then(() => { throw new Error("Staging ended before reaching package verification."); }),
       ]);
-      for (const argv of [["--activate", "1.2.3"], ["--uninstall"]]) {
+      for (const argv of [["--activate", "1.2.3", "--systemd"], ["--uninstall"]]) {
         const blocked = await installation.run(argv);
         expect(blocked.exitCode).toBe(1);
         expect(blocked.stderr).toMatch(/busy/i);
@@ -633,16 +651,16 @@ describe("install:server lifecycle regression coverage", () => {
       await staging;
     }
     expect((await staging).exitCode).toBe(0);
-    expect((await installation.run(["--activate", "1.2.3"])).exitCode).toBe(0);
+    expect((await installation.run(["--activate", "1.2.3", "--systemd"])).exitCode).toBe(0);
     expect(await readFile(path.join(installation.prefix, "current", "node_modules", ".stub"), "utf8")).toBe("stub\n");
   });
 
   it("uninstalls a second prefix without removing the first prefix's managed unit", async () => {
     const installation = await createInstallation(await createSourceRoot("1.2.3"));
-    expect((await installation.run([])).exitCode).toBe(0);
+    expect((await installation.run(["--systemd"])).exitCode).toBe(0);
     const originalUnit = await readFile(installation.unitFile, "utf8");
     const second = { prefix: path.join(installation.home, "second-prefix"), binDir: path.join(installation.home, "second-bin") };
-    expect((await installation.run(["--no-systemd"], second)).exitCode).toBe(0);
+    expect((await installation.run([], second)).exitCode).toBe(0);
 
     const result = await installation.run(["--uninstall"], second);
 
@@ -656,11 +674,11 @@ describe("install:server lifecycle regression coverage", () => {
 
   it("does not replace a service unit owned by another installation prefix", async () => {
     const installation = await createInstallation(await createSourceRoot("1.2.3"));
-    expect((await installation.run([])).exitCode).toBe(0);
+    expect((await installation.run(["--systemd"])).exitCode).toBe(0);
     const originalUnit = await readFile(installation.unitFile, "utf8");
     const second = { prefix: path.join(installation.home, "second-prefix"), binDir: path.join(installation.home, "second-bin") };
 
-    const result = await installation.run([], second);
+    const result = await installation.run(["--systemd"], second);
 
     expect(result.exitCode).toBe(1);
     expect(await readFile(installation.unitFile, "utf8")).toBe(originalUnit);
@@ -673,8 +691,8 @@ describe("install:server lifecycle regression coverage", () => {
 describe("install:server staging failure recovery", () => {
   it("preserves installed releases and releases mutation locks after package verification fails", async () => {
     const installation = await createInstallation(await createSourceRoot("1.2.3"));
-    expect((await installation.run([])).exitCode).toBe(0);
-    expect((await installation.run([], { packageRoot: await createSourceRoot("1.3.0") })).exitCode).toBe(0);
+    expect((await installation.run(["--systemd"])).exitCode).toBe(0);
+    expect((await installation.run(["--systemd"], { packageRoot: await createSourceRoot("1.3.0") })).exitCode).toBe(0);
     const unitBefore = await readFile(installation.unitFile, "utf8");
 
     const result = await installation.run(["--force"], {
@@ -703,10 +721,26 @@ describe("install:server staging failure recovery", () => {
 });
 
 describe("install:server package interface", () => {
+  it.each(["install", "activate"])("rejects --systemd on macOS before %s mutates the installation", async (mode) => {
+    const installation = await createInstallation(await createSourceRoot("1.2.3"));
+    const result = await installation.run(["--systemd", ...(mode === "activate" ? ["--activate", "1.2.3"] : [])], { platform: "darwin" });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--systemd is supported only on Linux");
+    await expect(stat(installation.prefix)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each([
+    ["--no-systemd"], ["--systemd=true"], ["--list", "--systemd"], ["--uninstall", "--systemd"],
+  ])("rejects obsolete or invalid systemd arguments: %s", async (...argv) => {
+    const installation = await createInstallation(await createSourceRoot("1.2.3"));
+    expect((await installation.run(argv)).exitCode).toBe(2);
+    await expect(stat(installation.prefix)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("takes the extracted package explicitly, without using the checkout dependency tree", async () => {
     const installation = await createInstallation(await temporaryDirectory());
     const release = await createSourceRoot("1.2.3");
-    const result = await installation.run(["--package", release, "--no-systemd"]);
+    const result = await installation.run(["--package", release]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Verifying copied server package offline");
     expect(result.stdout).not.toContain("npm ci");
@@ -724,14 +758,14 @@ describe("install:server package interface", () => {
     expect(await readlink(path.join(installation.prefix, "current"))).toBe("releases/1.3.0");
   });
 
-  it("supports macOS packages with explicit --no-systemd", async () => {
+  it("supports macOS packages without service flags", async () => {
     const root = await createSourceRoot("1.2.3");
     const info = JSON.parse(await readFile(path.join(root, "BUILD-INFO.json"), "utf8"));
     info.target = { platform: "darwin", arch: "arm64", label: "macos-arm64" };
     await writeFile(path.join(root, "BUILD-INFO.json"), JSON.stringify(info));
     await writePackageIntegrity(root);
     const installation = await createInstallation(root);
-    expect((await installation.run(["--no-systemd"], { platform: "darwin", arch: "arm64" })).exitCode).toBe(0);
+    expect((await installation.run([], { platform: "darwin", arch: "arm64" })).exitCode).toBe(0);
     await expect(stat(installation.unitFile)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readFile(path.join(installation.prefix, "current", "bin", "sedes"), "utf8")).not.toContain("readlink -f");
   });
@@ -747,8 +781,8 @@ describe("install:server package interface", () => {
 describe("install:server inventory upgrade boundary", () => {
   it.each(["BUILD-INFO.json", "FILES.json", "SHA256SUMS"])("explains that a release missing %s must be rebuilt before activation", async (missing) => {
     const installation = await createInstallation(await createSourceRoot("1.2.3"));
-    expect((await installation.run([])).exitCode).toBe(0);
-    expect((await installation.run([], { packageRoot: await createSourceRoot("1.3.0") })).exitCode).toBe(0);
+    expect((await installation.run(["--systemd"])).exitCode).toBe(0);
+    expect((await installation.run(["--systemd"], { packageRoot: await createSourceRoot("1.3.0") })).exitCode).toBe(0);
     const unit = await readFile(installation.unitFile, "utf8");
     await rm(path.join(installation.prefix, "releases", "1.2.3", missing));
     const result = await installation.run(["--activate", "1.2.3"]);
@@ -769,7 +803,7 @@ describe("install:server verifier completion boundary", () => {
     await mkdir(installation.prefix, { recursive: true });
     const prefix = path.join(await temporaryDirectory(), "prefix-alias");
     await symlink(installation.prefix, prefix);
-    expect((await installation.run([], { prefix })).exitCode).toBe(0);
+    expect((await installation.run(["--systemd"], { prefix })).exitCode).toBe(0);
     const candidate = await createSourceRoot("1.3.0");
     await mkdir(path.join(candidate, "scripts"));
     await writeFile(path.join(candidate, "scripts", "verify-server-package.mjs"), "process.exitCode = 0;\n");
@@ -778,7 +812,7 @@ describe("install:server verifier completion boundary", () => {
     // require the real verifier's completion report.
     expect((await installation.run(["--no-activate"], { prefix, packageRoot: candidate })).exitCode).toBe(0);
     const unit = await readFile(installation.unitFile, "utf8");
-    const result = await installation.run(["--activate", "1.3.0"], { prefix, verifyPackage: verifyServerRelease });
+    const result = await installation.run(["--activate", "1.3.0", "--systemd"], { prefix, verifyPackage: verifyServerRelease });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("server_package_verifier_report_invalid");
     expect(await readlink(path.join(installation.prefix, "current"))).toBe("releases/1.2.3");

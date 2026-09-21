@@ -196,10 +196,11 @@ Provider examples under `config/legacy-import/` are conversion inputs, not
 startup files. Runtime settings thereafter live in SQLite and are edited in
 Settings.
 
-The production server listens on `http://127.0.0.1:4784` by default. On Linux,
+The production server listens on `http://127.0.0.1:4784` by default. On Linux or macOS,
 `npm run install:server -- --package /absolute/extracted-release` installs a
 [slim server distribution](docs/operator/server-distribution.md) as a versioned per-user
-systemd service instead of running it from the checkout. Before running it
+release. Add `--systemd` on Linux to create or update a user service unit;
+service integration is opt-in. Before running it
 under a supervisor, moving its state, upgrading it, or allowing a non-loopback
 client, read [Operations and security](docs/operator/operations.md).
 
