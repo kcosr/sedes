@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "acorn";
 import { transform } from "esbuild";
+import { assertPackageNodeVersion } from './package-node-version.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // `internal` enters the TypeScript output through relative server imports.
@@ -130,6 +131,7 @@ export async function assertServerRuntimeBoundary({ repositoryRoot = root, distR
   return { runtimeManifest, discovered };
 }
 
+assertPackageNodeVersion();
 if (import.meta.main) {
   const args = process.argv.slice(2);
   if (args.length && (args.length !== 1 || args[0] !== "--dist")) throw new Error("Usage: node scripts/check-server-runtime.mjs [--dist]");

@@ -64,7 +64,7 @@ try {
   }
   await cp(path.join(repositoryRoot, 'docs/operator/server-distribution.md'), path.join(stage, 'README.md'));
   await mkdir(path.join(stage, 'scripts'));
-  for (const filename of ['install-server.mjs','install-server-lib.mjs','install-server-runtime.mjs','server-package-integrity.mjs','server-package-payload.mjs','verify-server-package.mjs']) await cp(path.join(repositoryRoot, 'scripts', filename), path.join(stage, 'scripts', filename));
+  for (const filename of ['install-server.mjs','install-server-lib.mjs','install-server-runtime.mjs','server-package-integrity.mjs','server-package-payload.mjs','package-node-version.mjs','verify-server-package.mjs']) await cp(path.join(repositoryRoot, 'scripts', filename), path.join(stage, 'scripts', filename));
   console.log('Installing the locked server graph without lifecycle hooks…');
   await run('npm', ['ci','--omit=dev','--ignore-scripts','--no-audit','--no-fund'], stage);
   const removedPackages = await prunePlatformPackages(path.join(stage, 'node_modules'), target);

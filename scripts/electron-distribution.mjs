@@ -7,6 +7,7 @@ import { cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, wri
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { assertPackageNodeVersion } from './package-node-version.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export function parseElectronDistributionArguments(args) {
@@ -170,4 +171,5 @@ export async function runElectronDistribution(options) {
   console.log(`Electron ${options.profile} output: ${output}`);
 }
 
+assertPackageNodeVersion();
 if (import.meta.main) await runElectronDistribution(parseElectronDistributionArguments(process.argv.slice(2)));

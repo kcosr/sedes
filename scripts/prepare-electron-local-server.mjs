@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { assertServerRuntimeBoundary } from './check-server-runtime.mjs';
 import { prunePlatformPackages } from './server-package-native.mjs';
+import { assertPackageNodeVersion } from './package-node-version.mjs';
 
 const execute = promisify(execFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -97,6 +98,7 @@ export async function prepareElectronLocalServer() {
   await writeFile(path.join(stage, 'native-modules.json'), JSON.stringify({ platform: process.platform, architecture: process.arch, electronVersion, builtFromSource: true, files, removedPackages }, null, 2) + '\n');
 }
 
+assertPackageNodeVersion();
 if (import.meta.main) {
   await prepareElectronLocalServer();
   console.log('Electron full server staged with target runtime dependencies and source-built addons.');

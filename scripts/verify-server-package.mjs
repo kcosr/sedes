@@ -7,6 +7,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { verifyPackageIntegrity } from './server-package-integrity.mjs';
 import { verifyServerPayload } from './server-package-payload.mjs';
+import { assertPackageNodeVersion } from './package-node-version.mjs';
 
 const execute = promisify(execFile);
 const nativeProbe = `
@@ -146,6 +147,7 @@ async function boundedExit(exited, milliseconds) {
   finally { clearTimeout(timer); }
 }
 
+assertPackageNodeVersion();
 if (import.meta.main) {
   const args = process.argv.slice(2);
   if ((args.length !== 2 && !(args.length === 3 && args[2] === '--installed')) || args[0] !== '--package') throw new Error('Usage: node scripts/verify-server-package.mjs --package /extracted/release [--installed]');
