@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parseElectronDistributionArguments, writeElectronDistribution, writeElectronOutputProvenance } from '../../scripts/electron-distribution.mjs';
+import { parseElectronDistributionArguments, prepareElectronOutputDirectory, writeElectronDistribution, writeElectronOutputProvenance } from '../../scripts/electron-distribution.mjs';
 import { electronNativeOutputs, rebuildElectronNativeAddons } from '../../scripts/prepare-electron-local-server.mjs';
 
 const temporary = [];
@@ -48,6 +48,34 @@ describe('Electron distribution profiles', () => {
     const metadata = JSON.parse(await readFile(path.join(root, 'BUILD-INFO.json'), 'utf8'));
     expect(metadata.symlinks).toEqual({ 'linux-unpacked/alias': 'sedes' });
     expect(sums).toContain('  BUILD-INFO.json');
+  });
+  it('preserves old installers without relabeling them during a later directory-only build', async () => {
+    const root = await fixture();
+    await put(root, 'dist/full/sedes-old.AppImage', 'old installer');
+    await put(root, 'dist/full/BUILD-INFO.json', JSON.stringify({ sourceCommit: 'old-commit' }));
+    await put(root, 'dist/full/SHA256SUMS', 'old checksums');
+    await put(root, 'dist/client/keep.txt', 'other profile');
+    const { output, previous } = await prepareElectronOutputDirectory(root, 'full');
+    expect(await readdir(output)).toEqual([]);
+    expect(await readFile(path.join(previous, 'sedes-old.AppImage'), 'utf8')).toBe('old installer');
+    expect(JSON.parse(await readFile(path.join(previous, 'BUILD-INFO.json'), 'utf8')).sourceCommit).toBe('old-commit');
+    expect(await readFile(path.join(previous, 'SHA256SUMS'), 'utf8')).toBe('old checksums');
+    expect(await readFile(path.join(root, 'dist/client/keep.txt'), 'utf8')).toBe('other profile');
+    await put(output, 'linux-unpacked/sedes', 'new executable');
+    await writeElectronOutputProvenance(output, { sourceCommit: 'new-commit', profile: 'full' });
+    const checksums = await readFile(path.join(output, 'SHA256SUMS'), 'utf8');
+    expect(checksums).toContain('linux-unpacked/sedes');
+    expect(checksums).not.toContain('sedes-old.AppImage');
+    expect(JSON.parse(await readFile(path.join(output, 'BUILD-INFO.json'), 'utf8')).sourceCommit).toBe('new-commit');
+  });
+  it('creates fresh profile output and refuses a non-directory output path', async () => {
+    const root = await fixture();
+    const first = await prepareElectronOutputDirectory(root, 'full');
+    expect(first.previous).toBeUndefined();
+    expect(await readdir(first.output)).toEqual([]);
+    await put(root, 'dist/client', 'not a directory');
+    await expect(prepareElectronOutputDirectory(root, 'client')).rejects.toThrow('output_not_directory');
+    expect(await readFile(path.join(root, 'dist/client'), 'utf8')).toBe('not a directory');
   });
 });
 

@@ -3,7 +3,8 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { createRequire } from 'node:module';
-import { cp, mkdir, readFile, readdir, readlink, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -30,6 +31,24 @@ export async function writeElectronDistribution(directory, profile) {
   // build must never retain a prior full runtime, even in the source project.
   await rm(path.join(directory, 'generated/local-server'), { recursive: true, force: true });
   await writeFile(path.join(directory, 'generated/distribution.json'), JSON.stringify({ profile }) + '\n');
+}
+
+/** Never associate an earlier installer with the current build's provenance. */
+export async function prepareElectronOutputDirectory(electronRoot, profile) {
+  if (!['client', 'full'].includes(profile)) throw new Error('electron_distribution_profile_invalid');
+  const dist = path.join(electronRoot, 'dist');
+  const output = path.join(dist, profile);
+  await mkdir(dist, { recursive: true });
+  const existing = await lstat(output).catch(error => { if (error.code === 'ENOENT') return undefined; throw error; });
+  let previous;
+  if (existing) {
+    if (!existing.isDirectory()) throw new Error('electron_distribution_output_not_directory');
+    const preserved = await mkdtemp(path.join(dist, `previous-${profile}-`));
+    previous = path.join(preserved, profile);
+    await rename(output, previous);
+  }
+  await mkdir(output);
+  return { output, previous };
 }
 
 export async function writeElectronOutputProvenance(output, info) {
@@ -86,6 +105,8 @@ export async function runElectronDistribution(options) {
     readFile(path.join(electron, 'package.json'), 'utf8').then(JSON.parse),
   ]);
   const sourceCommit = await run('git', ['rev-parse', 'HEAD'], root, env, { capture: true });
+  const sourceBranch = await run('git', ['branch', '--show-current'], root, env, { capture: true });
+  const sourceCommitTimestamp = await run('git', ['show', '-s', '--format=%cI', 'HEAD'], root, env, { capture: true });
   const dirty = Boolean(await run('git', ['status', '--porcelain'], root, env, { capture: true }));
   const requireElectron = createRequire(path.join(electron, 'package.json'));
   const { getAbi } = await import(pathToFileURL(requireElectron.resolve('node-abi')).href);
@@ -93,7 +114,9 @@ export async function runElectronDistribution(options) {
   for (const filename of ['package-lock.json', 'electron/package-lock.json', 'packages/server-runtime/package-lock.json']) locks[filename] = createHash('sha256').update(await readFile(path.join(root, filename))).digest('hex');
   const info = {
     format: 1, profile: options.profile, version: manifest.version,
-    sourceCommit, dirty, platform: process.platform, architecture: process.arch,
+    sourceCommit, sourceBranch: sourceBranch || null, sourceCommitTimestamp: new Date(sourceCommitTimestamp).toISOString(),
+    dirty, platform: process.platform, architecture: process.arch,
+    host: { platform: os.platform(), architecture: os.arch(), release: os.release(), version: os.version(), glibc: process.report.getReport().header.glibcVersionRuntime ?? null },
     electron: { version: electronManifest.devDependencies.electron, abi: getAbi(electronManifest.devDependencies.electron, 'electron') },
     buildNode: process.version, dependencyLockSha256: locks,
     builtAt: new Date().toISOString(), providerExecutables: 'operator-provided',
@@ -101,9 +124,10 @@ export async function runElectronDistribution(options) {
   await writeFile(path.join(electron, 'generated/BUILD-INFO.json'), JSON.stringify(info, null, 2) + '\n');
   await node(['scripts/verify-electron-package.mjs', '--synced']);
   if (options.command === 'sync') return;
+  const { output, previous } = await prepareElectronOutputDirectory(electron, options.profile);
+  if (previous) console.log(`Preserved previous Electron ${options.profile} output: ${previous}`);
   await npm(['run', options.command === 'verify' || options.directory ? 'pack:dir' : 'pack'], electron);
   await node(['scripts/verify-electron-package.mjs', '--packaged']);
-  const output = path.join(electron, 'dist', options.profile);
   const validation = {
     synchronizedAssets: true, packageContents: true, nativeRuntime: options.profile === 'full',
     runtimeSmoke: false, liveProviders: false,
