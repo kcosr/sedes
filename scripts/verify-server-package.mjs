@@ -4,7 +4,6 @@ import { execFile, fork } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { verifyPackageIntegrity } from './server-package-integrity.mjs';
 import { verifyServerPayload } from './server-package-payload.mjs';
@@ -147,7 +146,7 @@ async function boundedExit(exited, milliseconds) {
   finally { clearTimeout(timer); }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   const args = process.argv.slice(2);
   if ((args.length !== 2 && !(args.length === 3 && args[2] === '--installed')) || args[0] !== '--package') throw new Error('Usage: node scripts/verify-server-package.mjs --package /extracted/release [--installed]');
   const root = path.resolve(args[1]);

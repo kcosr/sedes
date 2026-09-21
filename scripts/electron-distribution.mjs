@@ -170,4 +170,4 @@ export async function runElectronDistribution(options) {
   console.log(`Electron ${options.profile} output: ${output}`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await runElectronDistribution(parseElectronDistributionArguments(process.argv.slice(2)));
+if (import.meta.main) await runElectronDistribution(parseElectronDistributionArguments(process.argv.slice(2)));

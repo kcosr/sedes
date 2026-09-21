@@ -130,7 +130,7 @@ export async function assertServerRuntimeBoundary({ repositoryRoot = root, distR
   return { runtimeManifest, discovered };
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   const args = process.argv.slice(2);
   if (args.length && (args.length !== 1 || args[0] !== "--dist")) throw new Error("Usage: node scripts/check-server-runtime.mjs [--dist]");
   const result = await assertServerRuntimeBoundary({ distRoot: args.length ? path.join(root, "dist") : undefined });

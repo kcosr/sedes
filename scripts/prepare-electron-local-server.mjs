@@ -97,7 +97,7 @@ export async function prepareElectronLocalServer() {
   await writeFile(path.join(stage, 'native-modules.json'), JSON.stringify({ platform: process.platform, architecture: process.arch, electronVersion, builtFromSource: true, files, removedPackages }, null, 2) + '\n');
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   await prepareElectronLocalServer();
   console.log('Electron full server staged with target runtime dependencies and source-built addons.');
 }
