@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cp, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,7 +78,16 @@ try {
   console.log('Checking isolated runtime, browser assets, migrations, providers, and PTY…');
   const checks = await verifyRuntime(stage);
   const nativeLibraries = [];
-  for (const relative of ['node_modules/better-sqlite3/build/Release/better_sqlite3.node','node_modules/node-pty/build/Release/pty.node']) {
+  async function nativeFiles(directory, prefix = '') {
+    const files = [];
+    for (const entry of await readdir(directory, {withFileTypes:true})) {
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) files.push(...await nativeFiles(path.join(directory,entry.name),relative));
+      else if (entry.isFile() && (entry.name.endsWith('.node') || entry.name === 'spawn-helper')) files.push(relative);
+    }
+    return files;
+  }
+  for (const relative of await nativeFiles(stage)) {
     const command = target.platform === 'linux' ? 'ldd' : 'otool';
     const args = target.platform === 'linux' ? [path.join(stage,relative)] : ['-L',path.join(stage,relative)];
     nativeLibraries.push({file:relative, command, output:(await run(command,args)).stdout.replaceAll(stage, '<release>')});
@@ -89,11 +98,11 @@ try {
     format:1, version:manifest.version,
     source:{commit,branch,commitTimestamp,dirty:false}, target,
     node:{minimum:'24.18.0',version:process.version,abi:process.versions.modules},
-    host:{platform:os.platform(),architecture:os.arch(),release:os.release(),glibc:process.report.getReport().header.glibcVersionRuntime ?? null},
+    host:{platform:os.platform(),architecture:os.arch(),release:os.release(),distribution:target.platform === 'linux' ? await readFile('/etc/os-release','utf8').catch(() => null) : await toolVersion('sw_vers',[]),glibc:process.report.getReport().header.glibcVersionRuntime ?? null},
     build:{startedAt:buildStartedAt,completedAt:new Date().toISOString(),command:process.argv, npm:await toolVersion('npm',['--version']),nodeGyp:JSON.parse(await readFile(path.join(repositoryRoot,'node_modules/node-gyp/package.json'),'utf8')).version,compiler:await toolVersion(process.env.CXX ?? 'c++',['--version']),python:await toolVersion(process.env.PYTHON ?? 'python3',['--version']),nativeBuilds},
     lockedDependencies:Object.fromEntries(Object.entries(lock.packages).filter(([key]) => key).map(([key,value]) => [key,{version:value.version,integrity:value.integrity}])),
     removedPackages,nativeLibraries,
-    validation:{checks,liveProviders:false,rocky8:false,limitations:['Validated only on the recorded build host; other distributions and targets require independent validation.','Worker/sidecar probes validate module loading and argument guards; they do not exercise sandbox or remote/provider sessions.']},
+    validation:{checks,liveProviders:false,rocky8Validated:false,limitations:['Validated only on the recorded build host; other distributions and targets require independent validation.','Worker/sidecar probes validate module loading and argument guards; they do not exercise sandbox or remote/provider sessions.']},
     packagedAt:new Date().toISOString(),
   };
   if (await git('rev-parse','HEAD') !== commit || await git('status','--porcelain','--untracked-files=normal')) throw new Error('Source changed during packaging; retry from a clean committed checkout.');
@@ -119,7 +128,9 @@ try {
   complete = true;
   console.log(JSON.stringify({archive:path.join(output,`${name}.tar.gz`),directory:path.join(output,name),sha256,extractionVerified:true},null,2));
 } finally {
-  if (!complete) for (const filename of published.reverse()) await rm(filename,{recursive:true,force:true});
-  if (extractionDirectory) await rm(extractionDirectory,{recursive:true,force:true});
-  await rm(temporary,{recursive:true,force:true});
+  const cleanup = [...(!complete ? published.reverse() : []), ...(extractionDirectory ? [extractionDirectory] : []), temporary];
+  const results = await Promise.allSettled(cleanup.map(filename => rm(filename,{recursive:true,force:true})));
+  for (let index = 0; index < results.length; index++) {
+    if (results[index].status === 'rejected') console.error(`Cleanup failed for ${cleanup[index]}: ${results[index].reason}`);
+  }
 }

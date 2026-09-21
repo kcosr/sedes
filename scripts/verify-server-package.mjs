@@ -112,8 +112,9 @@ export async function verifyRuntime(root) {
     assert.deepEqual(exit, {code:0, signal:null}, `Server shutdown failed: ${logs}`);
     return ['sqlite-query-and-migrations', 'real-pty', 'pi-esbuild', 'provider-module-imports', 'pi-esbuild-target-binary', 'sidecar-and-worker-argument-guards', 'connector-help', 'isolated-server-startup', 'browser-http-and-static-assets', 'graceful-shutdown'];
   } finally {
-    if (server && server.exitCode === null && server.signalCode === null) { server.kill('SIGKILL'); await boundedExit(exited, 5000); }
-    await rm(temporary, {recursive:true, force:true});
+    try {
+      if (server && server.exitCode === null && server.signalCode === null) { server.kill('SIGKILL'); await boundedExit(exited, 5000); }
+    } finally { await rm(temporary, {recursive:true, force:true}); }
   }
 }
 
