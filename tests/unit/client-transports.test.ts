@@ -459,6 +459,20 @@ describe("ApiClient normalized contract", () => {
     });
   });
 
+  it("serializes scoped comparison history and exact restoration queries", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request) => Response.json({ status: "unavailable", diagnosticCode: "workspace_diff_unavailable" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient();
+    await client.listWorkspaceDiffRefs(workspaceId, supplementalRootId, { repositoryId: "repository-1" as never, pageSize: 50, history: "revision:branch-1", resolveRef: "refs/heads/feature/layout" });
+    const namedUrl = new URL(String(fetchMock.mock.calls[0]![0]), "https://localhost");
+    expect(namedUrl.searchParams.get("history")).toBe("revision:branch-1");
+    expect(namedUrl.searchParams.get("resolveRef")).toBe("refs/heads/feature/layout");
+    await client.listWorkspaceDiffRefs(workspaceId, supplementalRootId, { repositoryId: "repository-1" as never, pageSize: 50, history: "all", resolveCommit: "a".repeat(40) });
+    const commitUrl = new URL(String(fetchMock.mock.calls[1]![0]), "https://localhost");
+    expect(commitUrl.searchParams.get("history")).toBe("all");
+    expect(commitUrl.searchParams.get("resolveCommit")).toBe("a".repeat(40));
+  });
+
   it("uses root-qualified strict workspace comparison routes", async () => {
     const fingerprint = "fingerprint-0001";
     const fetchMock = vi.fn(

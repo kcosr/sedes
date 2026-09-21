@@ -10,7 +10,7 @@ export * from "./limits.js";
 export * from "./operation-registry.js";
 export * from "./protocol-peer.js";
 export * from "./sidecar-runtime-version.js";
-export * from "./workspace-files-v7.js";
+export * from "./workspace-files-v8.js";
 export * from "./workspace-tools-shell-v2.js";
 export * from "./workspace-tools-v2.js";
 export * from "./workspace-context-v1.js";

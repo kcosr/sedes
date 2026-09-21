@@ -15,7 +15,7 @@ import {
   registerComposerAttachmentsV1Operations,
   SidecarProtocolDeliveryError,
   registerControlV2Operations,
-  registerWorkspaceFilesV7Operations,
+  registerWorkspaceFilesV8Operations,
   registerWorkspaceToolsV2Operations,
   registerWorkspaceToolsShellV2Operations,
   registerWorkspaceContextV1Operations,
@@ -74,7 +74,7 @@ declare const __SEDES_SIDECAR_BUILD_ID__: string;
 const compiledSidecarCapabilities = Object.freeze([
   Object.freeze({ capabilityId: "environment_variables", majorVersion: 1 }),
   Object.freeze({ capabilityId: "directory_browser", majorVersion: 1 }),
-  Object.freeze({ capabilityId: "workspace_files", majorVersion: 7 }),
+  Object.freeze({ capabilityId: "workspace_files", majorVersion: 8 }),
   Object.freeze({ capabilityId: "workspace_tools", majorVersion: 2 }),
   Object.freeze({ capabilityId: "workspace_context", majorVersion: 1 }),
   Object.freeze({ capabilityId: "workspace_skills", majorVersion: 1 }),
@@ -171,7 +171,7 @@ async function main(): Promise<void> {
       const unsubscribe = attachment.subscribe((event) => {
         if (event === "detached" && attachment.controllerEpoch === controllerEpoch) { detachTui(); detachCodex(); detachClaude(); runtimeChannel.close(); unsubscribe(); }
       });
-  registerWorkspaceFilesV7Operations(registry, workspaceFiles.handlers);
+  registerWorkspaceFilesV8Operations(registry, workspaceFiles.handlers);
   registerWorkspaceToolsV2Operations(registry, workspaceTools.handlers);
   registerWorkspaceToolsShellV2Operations(
     registry,
@@ -292,7 +292,7 @@ async function main(): Promise<void> {
     sendInvalidation: async (subscriptionHandle) => {
       await attachment.sendEvent({
         capabilityId: "workspace_files",
-        majorVersion: 7,
+        majorVersion: 8,
         event: "files.invalidated",
         schema: workspaceFilesInvalidatedEventSchema,
         payload: { subscriptionHandle },
@@ -302,7 +302,7 @@ async function main(): Promise<void> {
       try {
         await attachment.sendEvent({
           capabilityId: "workspace_files",
-          majorVersion: 7,
+          majorVersion: 8,
           event: "files.watch_failed",
           schema: workspaceFilesWatchFailedEventSchema,
           payload: { subscriptionHandle },
@@ -318,7 +318,7 @@ async function main(): Promise<void> {
       currentPeer().openOutgoingStream({
         streamId,
         capabilityId: "workspace_files",
-        majorVersion: 7,
+        majorVersion: 8,
         initialCreditBytes,
       }),
     onDownloadCleanupFailure: () => {

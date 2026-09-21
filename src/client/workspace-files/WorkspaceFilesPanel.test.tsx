@@ -74,6 +74,8 @@ vi.mock("./WorkspaceCompareView.js", () => ({
 }));
 
 import { WorkspaceFilesPanel } from "./WorkspaceFilesPanel.js";
+import { NavigationScopeContext } from "../authentication/AuthenticationGate.js";
+import { workspaceCompareStorage } from "./workspace-compare-storage.js";
 import { TREE_TRUNCATION_CSS } from "./tree-truncation-css.js";
 import {
   createWorkspaceFilesUiStateCache,
@@ -89,6 +91,12 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+async function openReviewMenu(): Promise<void> {
+  const trigger = screen.getByRole("button", { name: "Review controls" });
+  if (trigger.getAttribute("aria-expanded") !== "true") fireEvent.click(trigger);
+  await screen.findByRole("dialog", { name: "Review options" });
 }
 
 function openFileTabs(): HTMLElement[] {
@@ -498,6 +506,48 @@ async function waitForListing(api: WorkspaceFilesApi): Promise<void> {
 }
 
 describe("WorkspaceFilesPanel", () => {
+  it("routes the single Files refresh action to the active mode", async () => {
+    const api = setupApi();
+    const { context } = setupContext();
+    render(<WorkspaceFilesPanel context={context} api={api} />);
+    await waitForListing(api);
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    const refresh = vi.fn();
+    act(() => {
+      (latestCompareProps?.onRefreshControlChange as (control: unknown) => void)({ refresh, disabled: false });
+    });
+    const scans = vi.mocked(api.listWorkspaceFileDirectory).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh comparison" }));
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(api.listWorkspaceFileDirectory).toHaveBeenCalledTimes(scans);
+    expect(screen.queryByRole("button", { name: "Refresh workspace files" })).not.toBeInTheDocument();
+    act(() => {
+      (latestCompareProps?.onRefreshControlChange as (control: unknown) => void)({ refresh, disabled: true });
+    });
+    expect(screen.getByRole("button", { name: "Refresh comparison" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
+    expect(screen.getByRole("button", { name: "Refresh workspace files" })).toBeEnabled();
+  });
+
+  it("explains when a saved root is missing and keeps available roots usable", async () => {
+    const scope = "missing-root-recovery";
+    workspaceCompareStorage.set(scope, "workspace-1", "removed-root", { mode: "compare" });
+    const api = setupApi();
+    const { context } = setupContext();
+    render(
+      <NavigationScopeContext.Provider value={scope}>
+        <WorkspaceFilesPanel context={context} api={api} />
+      </NavigationScopeContext.Provider>,
+    );
+
+    expect(await screen.findByText("The previously selected Files root is unavailable. Choose an available root.")).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
+    await waitForListing(api);
+    expect(screen.getByRole("button", { name: "Refresh workspace files" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss root recovery notice" }));
+    expect(screen.queryByText("The previously selected Files root is unavailable. Choose an available root.")).not.toBeInTheDocument();
+  });
+
   it("can regain a workspace after initially rendering without one", async () => {
     const api = setupApi();
     const first = setupContext();
@@ -879,7 +929,7 @@ describe("WorkspaceFilesPanel", () => {
     act(() => selectPaths(["src/", "src/index.ts"]));
     await screen.findByTestId("file-viewer");
 
-    fireEvent.click(screen.getByRole("tab", { name: "Compare" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
     const compare = screen.getByTestId("compare-view");
     fireEvent.change(screen.getByLabelText("Retained compare filter"), {
       target: { value: "src/" },
@@ -919,7 +969,7 @@ describe("WorkspaceFilesPanel", () => {
     fireEvent.click(treeToggle);
     expect(treeToggle).toHaveAttribute("aria-expanded", "false");
 
-    fireEvent.click(screen.getByRole("tab", { name: "Compare" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
     fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
 
     expect(treeToggle).toHaveAttribute("aria-expanded", "true");
@@ -944,7 +994,7 @@ describe("WorkspaceFilesPanel", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Change draft" }),
     );
-    fireEvent.click(screen.getByRole("tab", { name: "Compare" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
 
     expect(
       screen.getByText(
@@ -959,7 +1009,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Compare" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
 
     const dataSource = latestCompareProps?.dataSource as {
       listRepositories(rootId: string, signal?: AbortSignal): Promise<unknown>;
@@ -1004,7 +1054,7 @@ describe("WorkspaceFilesPanel", () => {
     } as WorkspacePanelContext;
     render(<WorkspaceFilesPanel context={scopedContext} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Compare" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
     const comparison = {
       comparisonId: "comparison_1234567890abcdef",
       repositoryId: "repository_1234567890abcdef",
@@ -1064,12 +1114,78 @@ describe("WorkspaceFilesPanel", () => {
     );
   });
 
+  it.each([["opening", false], ["marking", false], ["opening", true], ["marking", true]] as const)("fences reviewed-file mutations while %s across comparison changes (return=%s)", async (phase, returnToOriginal) => {
+    const pending = deferred<void>();
+    const api = setupApi();
+    const open = api.openWorkspaceDiffReview;
+    const mark = api.setWorkspaceDiffReviewedFile;
+    if (phase === "opening") api.openWorkspaceDiffReview = vi.fn(async (...args: Parameters<WorkspaceFilesApi["openWorkspaceDiffReview"]>) => { const value = await open(...args); await pending.promise; return value; });
+    else api.setWorkspaceDiffReviewedFile = vi.fn(async (...args: Parameters<WorkspaceFilesApi["setWorkspaceDiffReviewedFile"]>) => { const value = await mark(...args); await pending.promise; return value; });
+    const { context } = setupContext();
+    render(<WorkspaceFilesPanel context={context} api={api} />);
+    await waitForListing(api);
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    const comparison = { comparisonId: "comparison-first", repositoryId: "repository-one", mode: "direct", base: { kind: "revision", revisionId: "revision-main", commitHash: "a".repeat(40), label: "main" }, head: { kind: "working_tree" }, fingerprint: "fingerprint-first" };
+    const file = { fileId: "file-first", changeKind: "modified", oldPath: "same.ts", newPath: "same.ts", binary: false };
+    act(() => {
+      (latestCompareProps?.onComparisonChange as (value: unknown) => void)(comparison);
+      (latestCompareProps?.onFilesChange as (value: unknown) => void)([file]);
+    });
+    await openReviewMenu();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled());
+    act(() => { (latestCompareProps?.onReviewedChange as (fileId: string, value: boolean) => void)(file.fileId, true); });
+    await waitFor(() => expect(phase === "opening" ? api.openWorkspaceDiffReview : api.setWorkspaceDiffReviewedFile).toHaveBeenCalledOnce());
+    act(() => {
+      (latestCompareProps?.onComparisonChange as (value: unknown) => void)({ ...comparison, comparisonId: "comparison-second", fingerprint: "fingerprint-second" });
+      (latestCompareProps?.onFilesChange as (value: unknown) => void)([{ ...file, fileId: "file-second" }]);
+    });
+    if (returnToOriginal) act(() => {
+      (latestCompareProps?.onComparisonChange as (value: unknown) => void)(comparison);
+      (latestCompareProps?.onFilesChange as (value: unknown) => void)([file]);
+    });
+    await act(async () => { pending.resolve(); await pending.promise; });
+    expect(latestCompareProps?.reviewedFileIds).toEqual(new Set());
+    expect(latestCompareProps?.annotations).toEqual([]);
+    if (phase === "opening") expect(api.setWorkspaceDiffReviewedFile).not.toHaveBeenCalled();
+    await openReviewMenu();
+    expect(await screen.findByRole("button", { name: "Start review" })).toBeEnabled();
+  });
+
+  it("locks comment edits during save and retains the draft if its comparison changes", async () => {
+    const pending = deferred<void>();
+    const api = setupApi();
+    const create = api.createWorkspaceDiffReviewComment;
+    api.createWorkspaceDiffReviewComment = vi.fn(async (...args: Parameters<WorkspaceFilesApi["createWorkspaceDiffReviewComment"]>) => { const value = await create(...args); await pending.promise; return value; });
+    const { context } = setupContext();
+    render(<WorkspaceFilesPanel context={context} api={api} />);
+    await waitForListing(api);
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    const comparison = { comparisonId: "comparison-first", repositoryId: "repository-one", mode: "direct", base: { kind: "revision", revisionId: "revision-main", commitHash: "a".repeat(40), label: "main" }, head: { kind: "working_tree" }, fingerprint: "fingerprint-first" };
+    const file = { fileId: "file-first", changeKind: "modified", oldPath: "same.ts", newPath: "same.ts", binary: false };
+    act(() => {
+      (latestCompareProps?.onComparisonChange as (value: unknown) => void)(comparison);
+      (latestCompareProps?.onFilesChange as (value: unknown) => void)([file]);
+      (latestCompareProps?.onCreateAnnotation as (value: unknown) => void)({ comparison, file, range: { start: 1, end: 1, side: "additions" } });
+    });
+    const input = await screen.findByLabelText("Workspace diff review comment");
+    fireEvent.change(input, { target: { value: "Keep my draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+    await waitFor(() => expect(api.createWorkspaceDiffReviewComment).toHaveBeenCalledOnce());
+    expect(input).toBeDisabled();
+    expect(screen.getByLabelText("Workspace diff review comment state")).toBeDisabled();
+    act(() => { (latestCompareProps?.onComparisonChange as (value: unknown) => void)({ ...comparison, comparisonId: "comparison-second", fingerprint: "fingerprint-second" }); });
+    await act(async () => { pending.resolve(); await pending.promise; });
+    expect(screen.getByLabelText("Workspace diff review comment")).toHaveValue("Keep my draft");
+    expect(screen.getByLabelText("Workspace diff review comment")).toBeEnabled();
+    expect(latestCompareProps?.annotations).toEqual([]);
+  });
+
   it("starts a compare review, saves a comment, and marks a file reviewed", async () => {
     const api = setupApi();
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Compare" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
 
     const comparison = {
       comparisonId: "comparison_1234567890abcdef",
@@ -1251,7 +1367,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Compare" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
 
     act(() => {
       (latestCompareProps?.onComparisonChange as (value: unknown) => void)(
@@ -1294,6 +1410,29 @@ describe("WorkspaceFilesPanel", () => {
         ),
       ).toBe(true),
     );
+
+    // Same paths in a new comparison must not inherit this historical review.
+    vi.mocked(api.listWorkspaceDiffReviews).mockResolvedValue({ reviews: [] });
+    act(() => {
+      (latestCompareProps?.onComparisonChange as (value: unknown) => void)({
+        ...comparison, comparisonId: "comparison_new1234567890", fingerprint: "fingerprint_new1234567890",
+      });
+    });
+    await openReviewMenu();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled());
+    expect(latestCompareProps?.annotations).toEqual([]);
+    expect((latestCompareProps?.reviewedFileIds as ReadonlySet<string>).size).toBe(0);
+    await openReviewMenu();
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    const historyDialog = await screen.findByRole("dialog", { name: "Review" });
+    await waitFor(() => expect(within(historyDialog).getByText("Looks good")).toBeVisible());
+    fireEvent.click(within(historyDialog).getByRole("button", { name: "Edit" }));
+    fireEvent.change(await screen.findByLabelText("Workspace diff review comment"), { target: { value: "Historical edit" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+    await waitFor(() => expect(api.updateWorkspaceDiffReviewComment).toHaveBeenCalledWith(
+      review.id, "00000000-0000-4000-8000-000000000012", expect.objectContaining({ body: "Historical edit" }),
+    ));
+    expect(api.openWorkspaceDiffReview).not.toHaveBeenCalled();
   });
 
   it("keeps inline annotation actions bound to the current review while viewing history details", async () => {
@@ -1420,7 +1559,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Compare" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
 
     act(() => {
       (latestCompareProps?.onComparisonChange as (value: unknown) => void)(
@@ -1446,8 +1585,10 @@ describe("WorkspaceFilesPanel", () => {
       ]),
     );
 
+    await openReviewMenu();
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
     fireEvent.change(
-      await screen.findByLabelText("Active workspace diff review"),
+      await screen.findByLabelText("Historical workspace diff review"),
       {
         target: { value: historyReview.id },
       },
@@ -1456,7 +1597,7 @@ describe("WorkspaceFilesPanel", () => {
     await waitFor(() =>
       expect(
         screen.getByText(
-          /Viewing history details for Archived review\. Inline comments and reviewed badges stay on the current review\./,
+          /Historical comments belong to their original comparison/,
         ),
       ).toBeVisible(),
     );
@@ -1582,7 +1723,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Compare" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
 
     const file = {
       fileId: "file_1234567890abcdef",
@@ -1606,8 +1747,10 @@ describe("WorkspaceFilesPanel", () => {
       ).toBe(false),
     );
 
+    await openReviewMenu();
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
     fireEvent.change(
-      await screen.findByLabelText("Active workspace diff review"),
+      await screen.findByLabelText("Historical workspace diff review"),
       { target: { value: historyReview.id } },
     );
 
@@ -1739,7 +1882,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Compare" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
 
     act(() => {
       (latestCompareProps?.onComparisonChange as (value: unknown) => void)(
@@ -1765,18 +1908,19 @@ describe("WorkspaceFilesPanel", () => {
       ]),
     );
 
+    await openReviewMenu();
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
     fireEvent.change(
-      await screen.findByLabelText("Active workspace diff review"),
+      await screen.findByLabelText("Historical workspace diff review"),
       { target: { value: historyReview.id } },
     );
 
     await waitFor(() =>
       expect(
-        screen.getByText(/Viewing history details for Archived review\./),
+        screen.getByText(/Historical comments belong to their original comparison/),
       ).toBeVisible(),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Details" }));
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("History body")).toBeVisible();
@@ -1861,7 +2005,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Compare" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
 
     act(() => {
       (latestCompareProps?.onComparisonChange as (value: unknown) => void)(
@@ -1881,7 +2025,8 @@ describe("WorkspaceFilesPanel", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /review/i })).toBeEnabled(),
     );
-    fireEvent.click(screen.getByRole("button", { name: /review/i }));
+    await openReviewMenu();
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
 
     await waitFor(() =>
       expect(api.openWorkspaceDiffReview).toHaveBeenCalledWith(
@@ -1924,9 +2069,8 @@ describe("WorkspaceFilesPanel", () => {
       await opening.promise;
     });
 
-    await waitFor(() =>
-      expect(screen.getByText("No active review")).toBeVisible(),
-    );
+    await openReviewMenu();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled());
     expect(screen.queryByText("First review")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
@@ -1962,7 +2106,7 @@ describe("WorkspaceFilesPanel", () => {
     const { context } = setupContext();
     render(<WorkspaceFilesPanel context={context} api={api} />);
     await waitForListing(api);
-    fireEvent.click(screen.getByRole("tab", { name: "Compare" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
 
     act(() => {
       (latestCompareProps?.onComparisonChange as (value: unknown) => void)(
@@ -1982,7 +2126,8 @@ describe("WorkspaceFilesPanel", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /review/i })).toBeEnabled(),
     );
-    fireEvent.click(screen.getByRole("button", { name: /review/i }));
+    await openReviewMenu();
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     await waitFor(() =>
       expect(api.openWorkspaceDiffReview).toHaveBeenCalledWith(
         "workspace-1",
@@ -3462,7 +3607,7 @@ describe("WorkspaceFilesPanel", () => {
     fireEvent.click(treeToggle);
     expect(fileBrowser()).toHaveClass("workspace-files-tree-open");
 
-    fireEvent.click(screen.getByRole("tab", { name: "Compare" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
     expect(fileBrowser()).toHaveClass("workspace-files-tree-open");
     fireEvent(window, new Event("resize"));
     expect(
@@ -4950,16 +5095,19 @@ describe("WorkspaceFilesPanel", () => {
     act(() => selectPaths(["src/index.ts"]));
     await screen.findByTestId("file-viewer");
     expect(api.readWorkspaceFile).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("tab", { name: "Compare" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
 
     expect(subscribeWorkspaceFiles).not.toHaveBeenCalled();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Refresh workspace files" }),
-    );
+    const refreshComparison = vi.fn();
+    act(() => {
+      (latestCompareProps?.onRefreshControlChange as (control: unknown) => void)({
+        refresh: refreshComparison, disabled: false,
+      });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh comparison" }));
 
-    await waitFor(() =>
-      expect(api.listWorkspaceFiles).toHaveBeenCalledTimes(2),
-    );
+    expect(refreshComparison).toHaveBeenCalledOnce();
+    expect(api.listWorkspaceFiles).toHaveBeenCalledTimes(1);
     expect(api.readWorkspaceFile).toHaveBeenCalledTimes(1);
     expect(subscribeWorkspaceFiles).not.toHaveBeenCalled();
   });

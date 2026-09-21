@@ -30,11 +30,13 @@ export const pairingRequestSchema = z.strictObject({
 export type PairingRequest = z.infer<typeof pairingRequestSchema>;
 export const pairingResponseSchema = z.strictObject({
   client: authenticationClientSchema,
+  navigationNamespace: z.string().regex(/^[0-9a-f]{64}$/u).optional(),
   credential: authenticationTokenSchema.optional(),
 });
 export const authenticationStatusSchema = z.strictObject({
   required: z.boolean(),
   authenticated: z.boolean(),
+  navigationNamespace: z.string().regex(/^[0-9a-f]{64}$/u).optional(),
   client: authenticationClientSchema.optional(),
 });
 export const authenticationClientsResponseSchema = z.strictObject({ clients: z.array(authenticationClientSchema) });

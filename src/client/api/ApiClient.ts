@@ -1229,6 +1229,9 @@ export class ApiClient {
       repositoryId: query.repositoryId,
       pageSize: String(query.pageSize),
     });
+    if (query.history) parameters.set("history", query.history);
+    if (query.resolveRef) parameters.set("resolveRef", query.resolveRef);
+    if (query.resolveCommit) parameters.set("resolveCommit", query.resolveCommit);
     return this.#request(
       `${this.#workspaceDiffUrl(workspaceId, rootId, "refs")}?${parameters.toString()}`,
       { signal },

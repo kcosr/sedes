@@ -33,7 +33,7 @@ the device's **Opening panels** preference; Shift-click temporarily uses the
 opposite presentation without changing the preference.
 
 The tree honors configured roots and Git ignore information when available.
-Git is optional for ordinary browsing, but required for Compare.
+Git is optional for ordinary browsing, but required for Changes.
 
 When Primary belongs to a Git repository, the thread header offers a searchable
 worktree selector. Sedes asks that exact local or SSH environment for Git's
@@ -132,20 +132,54 @@ Supplemental roots do not change:
 
 ## Compare Git changes
 
-Choose the retained **Compare** tab for a root that belongs to a Git
-repository. Select the repository, base, comparison, and strategy to inspect a
-bounded diff.
+Choose **Changes** in Files for a root that belongs to a Git repository.
+Click the source pair in the compact toolbar to open **Comparison settings**.
+**Uncommitted**, **Staged**, and **Branches** set up common comparisons; choose
+the base, comparison source, and strategy there.
+Revision pickers search branch names, commit messages, and hashes. Local
+branches, remote branches, tags, and recent commits have separate groups;
+commits show their message, date, and short hash, newest first. Commit history
+starts at the current branch; choose another branch or **All branches** in the
+picker to change its scope. Search covers the bounded loaded catalog; a notice
+identifies a limited catalog. Remote branches reflect locally available refs;
+comparison does not fetch from the remote.
 
-Compare supports:
+For branch review, choose the target branch as **Base** and your feature branch
+as **Compare**. **Changes introduced by compare branch** compares their common ancestor
+to the feature branch. **Differences between sources** compares their current
+contents directly. **Swap sides** reverses the endpoints. Refresh follows named
+branches and tags, while a selected commit stays pinned. It uses the displayed
+comparison; apply edited source settings with **Compare**.
 
-- file and hunk navigation;
-- exact diff-line context attachment to the active draft; and
-- durable review annotations.
+A persistent, resizable changed-file navigator accompanies the continuous diff
+on wider panels. Filter filenames, expand directory groups, select a file, or
+use previous/next controls in each file header. The file count sits beside the
+filter. **View** contains unified/split and line-wrapping preferences. The Files
+titlebar refresh button refreshes whichever mode is active. Scrolling updates the selected file and loads
+nearby diffs automatically. Binary, oversized, and failed files retain a
+navigation position; failed reads offer Retry. Narrow panels use a file drawer
+and unified diffs, restoring your chosen split layout when widened.
 
-Compare is read-only. It does not stage files, edit the worktree, create
-commits, or rewrite refs. Unsaved editor drafts are excluded and called out
-explicitly. Supplemental roots and the thread's preferred linked worktree use
-their own Git state; they are not compared as though they were Primary.
+**Open file** switches to Browse at the current file. Returning to Changes
+keeps your reading position. Navigation preferences and semantic file/line
+anchors are retained locally for the server, principal, workspace, root, and
+repository. Reloading obtains fresh comparison handles. If the comparison
+changed, Sedes returns to the file header with an explanation; missing
+revisions require selecting endpoints again. Browser storage restrictions can
+limit retention to memory.
+
+Open **Review** to start a review and keep comments and reviewed flags. During
+a review, its toolbar button shows reviewed-file progress. **Comments** opens
+the current review inspector; **History** shows earlier reviews separately.
+Historical comments never annotate the current comparison. A published comment
+is local to Sedes and does not publish to Git hosting. Diff-line context
+attachment continues to target the current conversation draft.
+
+Changes is read-only against Git. It does not stage files, edit the worktree,
+create commits, or rewrite refs. Unsaved Browse drafts are excluded and called
+out explicitly. Supplemental roots and linked worktrees use their own Git
+state. An unsaved comment whose comparison changed cannot be saved onto the
+replacement comparison; copy the draft before selecting new lines.
 
 ## Capture an exact context excerpt
 
@@ -155,7 +189,7 @@ from:
 - a completed ordinary chat message;
 - a read-only source-file selection;
 - visible text in a rendered Markdown preview; or
-- settled lines in a Git Compare diff.
+- settled lines in a Git Changes diff.
 
 Select the text and choose **Add to message** or **Add note**. **Add note** lets
 you attach your own explanation to the quote. The resulting card is part of the

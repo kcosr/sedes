@@ -4,7 +4,7 @@ import { Label } from "../components/ui/label.js";
 import { consumePairingToken } from "./pairing-link.js";
 import { authenticationStatusSchema, authenticationClientsResponseSchema, pairingCodeSchema, pairingResponseSchema, type AuthenticationClient } from "../../shared/authentication.js";
 import { ApiClient } from "../api/ApiClient.js";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { isPackagedClient } from "../app/client-platform.js";
 import { getCredential, setCredential, removeCredential } from "../app/client-credentials.js";
 import type { SedesServerEndpoint } from "../app/server-endpoint.js";
@@ -23,7 +23,9 @@ async function writeCredential(profileId: string, origin: string, current: () =>
   credentialWrites.set(key, pending);
   try { await pending; } finally { if (credentialWrites.get(key) === pending) credentialWrites.delete(key); }
 }
-type Status = { required: boolean; authenticated: boolean; client?: Client };
+export const NavigationScopeContext = createContext<string | undefined>(undefined);
+
+type Status = { navigationNamespace?: string; required: boolean; authenticated: boolean; client?: Client };
 
 export function readPairingToken(input: string, serverOrigin: string): string {
   const value = input.trim();
@@ -167,7 +169,7 @@ export function AuthenticationGate({ endpoint, profileId, children, settings }: 
       operation.scope.epoch += 1;
       operation = ticket();
       if (native) setEndpointCredential(endpoint, result.credential!);
-      setStatus({ required: status?.required ?? true, authenticated: true, client: result.client });
+      setStatus({ required: status?.required ?? true, authenticated: true, client: result.client, navigationNamespace: result.navigationNamespace });
       setOptionalPairing(false);
     } catch (cause) { if (isCurrent(operation)) setError(message(cause)); }
     finally { if (isCurrent(operation)) setBusy(false); }
@@ -222,6 +224,6 @@ export function AuthenticationGate({ endpoint, profileId, children, settings }: 
       </div>
     </main>
   );
-  return <AuthenticationContext.Provider key={status.client?.id ?? "anonymous"} value={controls}>{children}</AuthenticationContext.Provider>;
+  return <AuthenticationContext.Provider key={JSON.stringify([serverOrigin, status.navigationNamespace, status.client?.id ?? "anonymous"])} value={controls}><NavigationScopeContext.Provider value={status.navigationNamespace ? JSON.stringify([serverOrigin, status.navigationNamespace]) : undefined}>{children}</NavigationScopeContext.Provider></AuthenticationContext.Provider>;
 }
 function message(error: unknown): string { return error instanceof Error ? error.message : "The connection could not be authenticated."; }

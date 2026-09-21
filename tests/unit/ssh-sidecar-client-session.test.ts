@@ -15,7 +15,7 @@ import {
   registerControlV2Operations,
   workspaceFilesListOperation,
   workspaceFilesWatchFailedEventSchema,
-  workspaceFilesV7Operations,
+  workspaceFilesV8Operations,
   workspaceContextV1Operations,
   workspaceToolsShellV2Operations,
   workspaceToolsV2Operations,
@@ -56,7 +56,7 @@ const installation = Object.freeze({
 });
 const workspaceCapability = Object.freeze({
   capabilityId: "workspace_files",
-  majorVersion: 7,
+  majorVersion: 8,
 });
 const agentToolsCapability = Object.freeze({
   capabilityId: "agent_tools_cli",
@@ -244,7 +244,7 @@ describe("SidecarClientSession", () => {
     async (variant) => {
       const streams = byteStreamPair();
       const registry = new SidecarOperationRegistry();
-      for (const definition of workspaceFilesV7Operations)
+      for (const definition of workspaceFilesV8Operations)
         registry.register(
           definition as never,
           (() => ({ entries: [], scanTruncated: false })) as never,
@@ -301,7 +301,7 @@ describe("SidecarClientSession", () => {
             : [
                 {
                   ...workspaceCapability,
-                  operations: workspaceFilesV7Operations.map(
+                  operations: workspaceFilesV8Operations.map(
                     (definition) => definition.operation,
                   ),
                 },
@@ -483,7 +483,7 @@ describe("SidecarClientSession", () => {
         stream: streams.right,
       });
       const sidecarOperations = new SidecarOperationRegistry();
-      for (const definition of workspaceFilesV7Operations) {
+      for (const definition of workspaceFilesV8Operations) {
         sidecarOperations.register(
           definition as never,
           (() => {
@@ -600,7 +600,7 @@ describe("SidecarClientSession", () => {
         stream: streams.right,
       });
       const registry = new SidecarOperationRegistry();
-      for (const definition of workspaceFilesV7Operations) {
+      for (const definition of workspaceFilesV8Operations) {
         registry.register(
           definition as never,
           (() => {
@@ -645,7 +645,7 @@ describe("SidecarClientSession", () => {
       const earlyFailureHandle = randomUUID();
       await host.sendEvent({
         capabilityId: "workspace_files",
-        majorVersion: 7,
+        majorVersion: 8,
         event: "files.watch_failed",
         schema: workspaceFilesWatchFailedEventSchema,
         payload: { subscriptionHandle: earlyFailureHandle },
@@ -694,7 +694,7 @@ describe("SidecarClientSession", () => {
         stream: streams.right,
       });
       const registry = new SidecarOperationRegistry();
-      for (const definition of workspaceFilesV7Operations) {
+      for (const definition of workspaceFilesV8Operations) {
         registry.register(
           definition as never,
           (async () => {
@@ -762,7 +762,7 @@ describe("SidecarClientSession", () => {
       stream: streams.right,
     });
     const registry = new SidecarOperationRegistry();
-    for (const definition of workspaceFilesV7Operations) {
+    for (const definition of workspaceFilesV8Operations) {
       registry.register(
         definition as never,
         (() => {
@@ -824,7 +824,7 @@ describe("SidecarClientSession", () => {
       stream: streams.right,
     });
     const registry = new SidecarOperationRegistry();
-    for (const definition of workspaceFilesV7Operations) {
+    for (const definition of workspaceFilesV8Operations) {
       registry.register(
         definition as never,
         (() => {

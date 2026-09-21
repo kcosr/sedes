@@ -301,7 +301,7 @@ describe("bundled sedes sidecar", () => {
           expectedBuildId: buildId,
           expectedArtifactSha256: artifactSha256,
           authorizedSidecarCapabilities: [
-            { capabilityId: "workspace_files", majorVersion: 7 },
+            { capabilityId: "workspace_files", majorVersion: 8 },
             { capabilityId: "workspace_tools", majorVersion: 2 },
             { capabilityId: "workspace_context", majorVersion: 1 },
             { capabilityId: "composer_attachments", majorVersion: 1 },
@@ -316,7 +316,7 @@ describe("bundled sedes sidecar", () => {
         sidecarCapabilities: expect.arrayContaining([
           expect.objectContaining({
             capabilityId: "workspace_files",
-            majorVersion: 7,
+            majorVersion: 8,
           }),
         ]),
       });
@@ -441,7 +441,7 @@ describe("bundled sedes sidecar", () => {
       const incomingDownload = peer.registerIncomingStream({
         streamId: downloadStreamId,
         capabilityId: "workspace_files",
-        majorVersion: 7,
+        majorVersion: 8,
         initialCreditBytes: 512 * 1024,
         terminalSchema: workspaceFilesDownloadTerminalSchema,
         onData: ({ channel, bytes }) => {
@@ -761,7 +761,7 @@ describe("bundled sedes sidecar", () => {
           expectedBuildId: buildId,
           expectedArtifactSha256: artifactSha256,
           authorizedSidecarCapabilities: [
-            { capabilityId: "workspace_files", majorVersion: 7 },
+            { capabilityId: "workspace_files", majorVersion: 8 },
             { capabilityId: "codex_runtime", majorVersion: 1 },
             { capabilityId: "interactive_terminal", majorVersion: 2 },
             { capabilityId: "codex_managed_tui", majorVersion: 1 },
@@ -1017,7 +1017,7 @@ describe("bundled sedes sidecar", () => {
           expectedBuildId: buildId,
           expectedArtifactSha256: artifactSha256,
           authorizedSidecarCapabilities: [
-            { capabilityId: "workspace_files", majorVersion: 7 },
+            { capabilityId: "workspace_files", majorVersion: 8 },
           ],
           offeredSedesCapabilities: [
             {
@@ -1040,7 +1040,7 @@ describe("bundled sedes sidecar", () => {
         sidecarCapabilities: expect.arrayContaining([
           expect.objectContaining({
             capabilityId: "workspace_files",
-            majorVersion: 7,
+            majorVersion: 8,
           }),
         ]),
         sedesCapabilities: [
@@ -1269,7 +1269,7 @@ async function startServiceAttachment(input: {
           expectedBuildId: input.buildId,
           expectedArtifactSha256: input.artifactSha256,
           authorizedSidecarCapabilities: [
-            { capabilityId: "workspace_files", majorVersion: 7 },
+            { capabilityId: "workspace_files", majorVersion: 8 },
             { capabilityId: "workspace_tools", majorVersion: 2 },
             { capabilityId: "workspace_context", majorVersion: 1 },
           ],

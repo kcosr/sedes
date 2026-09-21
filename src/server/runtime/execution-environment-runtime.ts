@@ -405,7 +405,7 @@ export async function createExecutionEnvironmentRuntime(
       authorizedRuntimeCapabilities: input.authorizedRuntimeCapabilities,
       authorizedCapabilities: capabilities.map((capabilityId) =>
         capabilityId === "workspace_files"
-          ? ({ capabilityId, majorVersion: 7 } as const)
+          ? ({ capabilityId, majorVersion: 8 } as const)
           : capabilityId === "agent_tools_cli"
             ? ({ capabilityId, majorVersion: 3 } as const)
             : capabilityId === "workspace_tools"

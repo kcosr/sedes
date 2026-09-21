@@ -11,7 +11,7 @@ describe("automatic recovery preference races", () => {
     const unavailable = vi.fn(async (): Promise<never> => { throw new Error("unexpected_attachment"); });
     const scope = { tenantId: "tenant", principalId: "principal" };
     const owner = new SidecarRuntimeOwner({ scope, executionEnvironmentId: "remote", environmentConfigurationRevision: 1, operationsConfigurationRevision: 1,
-      authorizedCapabilities: [{ capabilityId: "workspace_files", majorVersion: 7 }], authorizedRuntimeCapabilities: [],
+      authorizedCapabilities: [{ capabilityId: "workspace_files", majorVersion: 8 }], authorizedRuntimeCapabilities: [],
       activeEnvironmentConfigurationRevision: async () => { enabled = false; return 1; }, activeOperationsConfigurationRevision: () => 1,
       isAutomaticConnectionEnabled: () => enabled,
       artifact: { artifactId: SIDECAR_ARTIFACT_ID, modes: SIDECAR_ARTIFACT_MODES, executableDirectory: "/fixture", executablePath: "/fixture/sedes",

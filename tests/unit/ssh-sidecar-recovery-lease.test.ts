@@ -7,7 +7,7 @@ const scope = { tenantId: "tenant", principalId: "principal" };
 const configuration = { environmentRevision: 1, operationsRevision: 1 };
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); vi.useRealTimers(); });
-function fixture(authorizedCapabilities: readonly SidecarAuthorizedCapability[] = [{ capabilityId: "workspace_files", majorVersion: 7 }]) {
+function fixture(authorizedCapabilities: readonly SidecarAuthorizedCapability[] = [{ capabilityId: "workspace_files", majorVersion: 8 }]) {
   let enabled = true;
   let environmentRevision = 1;
   let operationsRevision = 1;
@@ -265,7 +265,7 @@ describe("recovery attachment ownership", () => {
     const value = fixture([]); value.disable();
     const signal = new AbortController().signal;
     await expect(value.owner.acquireOperation(scope, "remote", signal)).rejects.toThrow("sidecar_unavailable");
-    const required = [{ capabilityId: "workspace_files", majorVersion: 7 }, { capabilityId: "workspace_tools", majorVersion: 2 },
+    const required = [{ capabilityId: "workspace_files", majorVersion: 8 }, { capabilityId: "workspace_tools", majorVersion: 2 },
       { capabilityId: "workspace_context", majorVersion: 1 }, { capabilityId: "interactive_terminal", majorVersion: 2 }] as const;
     const recovery = await value.owner.acquireRecovery(scope, "remote", signal, required);
     expect(value.negotiated).toEqual([required]);
@@ -279,10 +279,10 @@ describe("recovery attachment ownership", () => {
     const signal = new AbortController().signal;
     const normal = await value.owner.acquireOperation(scope, "remote", signal);
     expect(value.negotiated[0]).toEqual([]);
-    const recovery = await value.owner.acquireRecovery(scope, "remote", signal, [{ capabilityId: "workspace_files", majorVersion: 7 }]);
+    const recovery = await value.owner.acquireRecovery(scope, "remote", signal, [{ capabilityId: "workspace_files", majorVersion: 8 }]);
     expect(recovery.session).not.toBe(normal.session);
     expect(value.attachExisting).toHaveBeenCalledTimes(1);
-    expect(value.negotiated[1]).toEqual([{ capabilityId: "workspace_files", majorVersion: 7 }]);
+    expect(value.negotiated[1]).toEqual([{ capabilityId: "workspace_files", majorVersion: 8 }]);
     expect(recovery.serviceStatus.attachmentMode).toBe("recovery");
     normal.release(); recovery.release();
   });
@@ -291,9 +291,9 @@ describe("recovery attachment ownership", () => {
     const signal = new AbortController().signal;
     const invalid: unknown[] = [[{ capabilityId: "agent_tools_cli", majorVersion: 3 }], [{ capabilityId: "composer_attachments", majorVersion: 1 }],
       [{ capabilityId: "workspace_files", majorVersion: 6 }], [{ capabilityId: "workspace_tools", majorVersion: 2 }],
-      [{ capabilityId: "workspace_context", majorVersion: 1 }], [{ capabilityId: "workspace_files", majorVersion: 7 }, { capabilityId: "workspace_files", majorVersion: 7 }]];
+      [{ capabilityId: "workspace_context", majorVersion: 1 }], [{ capabilityId: "workspace_files", majorVersion: 8 }, { capabilityId: "workspace_files", majorVersion: 8 }]];
     for (const required of invalid) await expect(value.owner.acquireRecovery(scope, "remote", signal, required as readonly SidecarAuthorizedCapability[])).rejects.toThrow("sidecar_recovery_capabilities_invalid");
-    await expect(value.owner.acquireRecovery({ ...scope, principalId: "other" }, "remote", signal, [{ capabilityId: "workspace_files", majorVersion: 7 }])).rejects.toThrow("sidecar_unavailable");
+    await expect(value.owner.acquireRecovery({ ...scope, principalId: "other" }, "remote", signal, [{ capabilityId: "workspace_files", majorVersion: 8 }])).rejects.toThrow("sidecar_unavailable");
     expect(value.install).not.toHaveBeenCalled(); expect(value.attachExisting).not.toHaveBeenCalled(); expect(value.launch).not.toHaveBeenCalled();
   });
 
@@ -342,7 +342,7 @@ it("shares retained recovery with manual inspection without replacing its contro
   const retained = await value.owner.acquireRetainedRecovery(scope, "remote", signal);
   const epoch = retained.serviceStatus.controllerEpoch;
   for (let inspection = 0; inspection < 3; inspection++) {
-    const manual = await value.owner.acquireRecovery(scope, "remote", signal, [{ capabilityId: "workspace_files", majorVersion: 7 }]);
+    const manual = await value.owner.acquireRecovery(scope, "remote", signal, [{ capabilityId: "workspace_files", majorVersion: 8 }]);
     expect(manual.session).toBe(retained.session);
     expect(manual.serviceStatus.controllerEpoch).toBe(epoch);
     manual.release(); manual.release();

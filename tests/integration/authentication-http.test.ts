@@ -6,7 +6,7 @@ import path from "node:path";
 import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AuthenticationAdmission } from "../../src/server/authentication/authentication-admission.js";
+import { AuthenticationAdmission, deriveClientNavigationNamespace } from "../../src/server/authentication/authentication-admission.js";
 import { AuthenticationRepository, PAIRING_MAX_ATTEMPTS, PAIRING_RATE_LIMIT } from "../../src/server/authentication/authentication-repository.js";
 import { loadConfig } from "../../src/server/config/config.js";
 import { errorMiddleware } from "../../src/server/http/errors.js";
@@ -15,10 +15,10 @@ import { csrfGuard, hostOriginGuard, packagedClientCors } from "../../src/server
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
-function fixture(required = true, existingDirectory?: string) {
+function fixture(required = true, existingDirectory?: string, navigationNamespace?: string) {
   const directory = existingDirectory ?? mkdtempSync(path.join(os.tmpdir(), "sedes-auth-http-"));
   const repository = new AuthenticationRepository(directory);
-  const admission = new AuthenticationAdmission(repository, directory, { required });
+  const admission = new AuthenticationAdmission(repository, directory, { required, navigationNamespace });
   cleanups.push(() => { admission.close(); repository.close(); if (!existingDirectory) rmSync(directory, { recursive: true, force: true }); });
   const config = loadConfig({ APP_STATE_DIR: directory }, { schemaVersion: 11, packagedClients: ["android", "electron"] });
   const app = express();
@@ -45,6 +45,33 @@ function fixture(required = true, existingDirectory?: string) {
 }
 
 describe("authentication HTTP admission", () => {
+  it("derives a stable navigation namespace isolated by installation, tenant and principal", () => {
+    const key = Buffer.alloc(32, 1);
+    const scope = { tenantId: "tenant-a", principalId: "principal-a" };
+    const namespace = deriveClientNavigationNamespace(key, scope);
+    expect(namespace).toMatch(/^[0-9a-f]{64}$/u);
+    expect(deriveClientNavigationNamespace(Buffer.from(key), { ...scope })).toBe(namespace);
+    expect(deriveClientNavigationNamespace(Buffer.alloc(32, 2), scope)).not.toBe(namespace);
+    expect(deriveClientNavigationNamespace(key, { ...scope, tenantId: "tenant-b" })).not.toBe(namespace);
+    expect(deriveClientNavigationNamespace(key, { ...scope, principalId: "principal-b" })).not.toBe(namespace);
+    expect(deriveClientNavigationNamespace(key, { tenantId: "a:b", principalId: "c" })).not.toBe(deriveClientNavigationNamespace(key, { tenantId: "a", principalId: "b:c" }));
+  });
+
+  it("exposes the principal navigation namespace only to admitted management clients", async () => {
+    const namespace = "a".repeat(64);
+    const first = fixture(true, undefined, namespace);
+    expect((await first.api.get("/api/auth/status")).body.navigationNamespace).toBeUndefined();
+    const device = (await first.pair("device").expect(200)).body;
+    expect(device.navigationNamespace).toBe(namespace);
+    const status = await first.api.get("/api/auth/status").auth(device.credential, { type: "bearer" }).expect(200);
+    expect(status.body.navigationNamespace).toBe(namespace);
+    const sidecar = (await first.pair("sidecar", "host-one").expect(200)).body;
+    expect(sidecar.navigationNamespace).toBeUndefined();
+    expect((await first.api.get("/api/auth/status").auth(sidecar.credential, { type: "bearer" })).body.navigationNamespace).toBeUndefined();
+    const reopened = fixture(false, first.directory, namespace);
+    expect((await reopened.api.get("/api/auth/status")).body.navigationNamespace).toBe(namespace);
+  });
+
   it("accepts normalized short codes and rejects further guesses after the installation-wide budget", async () => {
     const first = fixture();
     const token = first.repository.createPairing({ kind: "management" }).token;

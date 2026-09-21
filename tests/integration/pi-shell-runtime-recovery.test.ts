@@ -184,7 +184,7 @@ function runtimeFixture() {
     scope, executionEnvironmentId: "remote", environmentConfigurationRevision: 1,
     operationsConfigurationRevision: 1,
     authorizedCapabilities: [
-      { capabilityId: "workspace_files", majorVersion: 7 },
+      { capabilityId: "workspace_files", majorVersion: 8 },
       { capabilityId: "workspace_tools", majorVersion: 2 },
       { capabilityId: "workspace_context", majorVersion: 1 },
     ],

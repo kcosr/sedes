@@ -62,6 +62,7 @@ export const workspaceDiffCommitHashSchema = z
   .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u);
 
 export const workspaceDiffRepositoryDescriptorSchema = z.strictObject({
+  repositoryKey: z.string().min(16).max(128).regex(/^[A-Za-z0-9_-]+$/u),
   repositoryId: workspaceDiffRepositoryIdSchema,
   rootId: workspaceFileRootIdSchema,
   displayName: z.string().min(1).max(240),
@@ -115,6 +116,7 @@ export const workspaceDiffRevisionDescriptorSchema = z.strictObject({
     ),
   commitHash: workspaceDiffCommitHashSchema,
   shortHash: z.string().min(7).max(16),
+  isCurrentBranch: z.boolean().optional(),
   summary: z.string().max(500).optional(),
   committedAt: z.string().datetime().optional(),
 });
@@ -122,7 +124,17 @@ export type WorkspaceDiffRevisionDescriptor = z.infer<
   typeof workspaceDiffRevisionDescriptorSchema
 >;
 
+export const workspaceDiffHistoryScopeSchema = z.union([
+  z.enum(["head", "all"]),
+  z.string().max(137).regex(/^revision:[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/u),
+]);
+
 export const workspaceDiffRefCatalogQuerySchema = z.strictObject({
+  /** Commit history reachable from HEAD by default; IDs must belong to this repository. */
+  history: workspaceDiffHistoryScopeSchema.optional(),
+  /** Exact names only, never revision expressions. Included even outside the bounded catalog. */
+  resolveRef: z.string().refine((value) => hasAtMostBytes(value, WORKSPACE_DIFF_MAX_REF_LABEL_BYTES)).regex(/^refs\/(heads|remotes|tags)\/[^\s~^:?*\[\]\\]+$/u).optional(),
+  resolveCommit: workspaceDiffCommitHashSchema.optional(),
   repositoryId: workspaceDiffRepositoryIdSchema,
   pageSize: z.coerce
     .number()
@@ -130,6 +142,8 @@ export const workspaceDiffRefCatalogQuerySchema = z.strictObject({
     .min(1)
     .max(WORKSPACE_DIFF_MAX_REFS)
     .default(WORKSPACE_DIFF_DEFAULT_REF_PAGE_SIZE),
+}).refine((query) => !(query.resolveRef && query.resolveCommit), {
+  message: "Resolve either a named ref or a pinned commit, not both.",
 });
 export type WorkspaceDiffRefCatalogQuery = z.infer<
   typeof workspaceDiffRefCatalogQuerySchema

@@ -54,7 +54,7 @@ export type SidecarAuthorizedCapability =
     }>
   | Readonly<{
       readonly capabilityId: "workspace_files";
-      readonly majorVersion: 7;
+      readonly majorVersion: 8;
     }>
   | Readonly<{
       readonly capabilityId: "workspace_tools";
@@ -219,7 +219,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
             capabilityId !== "agent_tools_cli") ||
           majorVersion !==
             (capabilityId === "workspace_files"
-              ? 7
+              ? 8
               : capabilityId === "workspace_tools"
                 ? 2
               : capabilityId === "agent_tools_cli"
@@ -465,7 +465,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   }
 
   #recoveryCapabilities(required: readonly SidecarAuthorizedCapability[]): readonly SidecarAuthorizedCapability[] {
-    const allowed = { workspace_files: 7, workspace_tools: 2, workspace_context: 1, interactive_terminal: 2 } as const;
+    const allowed = { workspace_files: 8, workspace_tools: 2, workspace_context: 1, interactive_terminal: 2 } as const;
     if (!Array.isArray(required) || required.length > 4 || required.some((capability) => !capability ||
       Object.keys(capability).length !== 2 || !Object.hasOwn(capability, "capabilityId") || !Object.hasOwn(capability, "majorVersion") || !Object.hasOwn(allowed, capability.capabilityId) ||
       allowed[capability.capabilityId as keyof typeof allowed] !== capability.majorVersion) ||

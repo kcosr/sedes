@@ -13,7 +13,7 @@ import { SIDECAR_WIRE_VERSION } from "../../src/internal/sidecar-protocol/envelo
 import { SidecarClientSession } from "../../src/server/sidecar/sidecar-client-session.js";
 import { loadSidecarArtifactRegistration, type SidecarArtifactRegistration } from "../../src/server/sidecar/sidecar-artifact.js";
 import { SidecarOperationRegistry } from "../../src/internal/sidecar-protocol/operation-registry.js";
-import { workspaceFilesRootOpenOperation, workspaceFilesReadOperation, workspaceFilesWriteOperation, workspaceFilesMutationInspectOperation, workspaceFilesMutationAcknowledgeOperation } from "../../src/internal/sidecar-protocol/workspace-files-v7.js";
+import { workspaceFilesRootOpenOperation, workspaceFilesReadOperation, workspaceFilesWriteOperation, workspaceFilesMutationInspectOperation, workspaceFilesMutationAcknowledgeOperation } from "../../src/internal/sidecar-protocol/workspace-files-v8.js";
 import { terminalPrepareOperation, terminalCreateOperation, terminalAttachOperation, terminalInputOperation, terminalSnapshotChunkOperation, terminalStopOperation, terminalAcknowledgeOperation, terminalForgetOperation } from "../../src/internal/sidecar-protocol/interactive-terminal-v2.js";
 import { SidecarRuntimeOwner } from "../../src/server/sidecar/sidecar-runtime.js";
 import { SshSidecarArtifactInstaller } from "../../src/server/sidecar/ssh-sidecar-artifact-installer.js";
@@ -105,7 +105,7 @@ async function fixture(nativeAssets = false, selectedArtifact = artifact) {
     return await SidecarClientSession.start({ transportKind: "ssh_stdio", stream: response.stream, sessionNonce, carrierGeneration: 1, artifact: selectedArtifact,
       installation: { accountHome: home, stateRoot: paths.stateRoot, nodeExecutable: process.execPath,
         environment: { HOME: home }, executableDirectory: home, executablePath: executable },
-      authorizedCapabilities: [{ capabilityId: "workspace_files", majorVersion: 7 }, ...(nativeAssets ? [{ capabilityId: "interactive_terminal" as const, majorVersion: 2 as const }] : [])], authorizedRuntimeCapabilities: [],
+      authorizedCapabilities: [{ capabilityId: "workspace_files", majorVersion: 8 }, ...(nativeAssets ? [{ capabilityId: "interactive_terminal" as const, majorVersion: 2 as const }] : [])], authorizedRuntimeCapabilities: [],
       sedesOperations: new SidecarOperationRegistry(), signal });
   };
   return { home, scope, paths, request, status, stop, launch, attach };
@@ -203,7 +203,7 @@ describe("bundled persistent sidecar service", () => {
     const authority = { tenantId: service.scope.tenantId, principalId: service.scope.principalId };
     const signal = AbortSignal.timeout(15_000);
     await expect(owner.acquireOperation(authority, service.scope.executionEnvironmentId, signal)).rejects.toThrow("sidecar_unavailable");
-    const recovered = await owner.acquireRecovery(authority, service.scope.executionEnvironmentId, signal, [{ capabilityId: "workspace_files", majorVersion: 7 }]);
+    const recovered = await owner.acquireRecovery(authority, service.scope.executionEnvironmentId, signal, [{ capabilityId: "workspace_files", majorVersion: 8 }]);
     const recovery = recovered.session;
     expect(recovered.serviceStatus.attachmentMode).toBe("recovery");
     expect(await recovery.runtimeChannel.call(workspaceFilesMutationInspectOperation, { operationId })).toMatchObject({ state: "succeeded", result: { path: "note.txt" } });
