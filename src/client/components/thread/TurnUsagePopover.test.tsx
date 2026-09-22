@@ -49,7 +49,7 @@ describe("turn usage popover", () => {
     fireEvent.click(trigger); await waitFor(() => expect(trigger).toHaveAttribute("aria-expanded", "false"));
     expect(getUsage).toHaveBeenCalledOnce();
   });
-  it("keeps the summary compact with optional details and no redundant or unknown fields", () => {
+  it("keeps the summary compact without explanatory paragraphs or redundant fields", () => {
     const report = usageReport();
     for (const [key, value] of Object.entries({input: "20178", output: "249", cacheRead: "18496", cacheWrite: "0", reasoning: "0", total: "20427"})) {
       report.summary.metrics[key as keyof typeof report.summary.metrics] = { value, quality: "partial", basis: ["sdk_normalized"], providerPresence: "unknown" };
@@ -61,9 +61,8 @@ describe("turn usage popover", () => {
     expect(screen.queryByText("Cache write")).toBeNull();
     expect(screen.queryByText("Total tokens")).toBeNull();
     expect(screen.queryByText(/Unknown model|Unknown provider|SDK-normalized/)).toBeNull();
-    expect(screen.getByText("Includes recorded intervals, which may cover only part of this turn.")).not.toBeVisible();
-    fireEvent.click(screen.getByText("About these numbers"));
-    expect(screen.getByText("Includes recorded intervals, which may cover only part of this turn.")).toBeVisible();
+    expect(screen.queryByText("About these numbers")).toBeNull();
+    expect(screen.queryByText(/Includes recorded intervals|Only captured usage|Other agent work/)).toBeNull();
   });
   it("previews on hover without stealing focus and stays open across trigger/content", async () => {
     const { cache } = fixture();

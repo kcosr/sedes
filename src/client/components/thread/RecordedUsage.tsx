@@ -37,17 +37,7 @@ export function UsageDetails({ report }: { report: UsageReport }): React.JSX.Ele
     {report.state === "unavailable" && <p className="recorded-usage-note">{report.turnId ? "No usage recorded for this turn" : "No usage recorded"}</p>}
     <UsageValues summary={summary} />
     {knownModels.length > 0 && <p className="recorded-usage-model" title="Observed model or provider">{knownModels.join(" · ")}</p>}
-    <details className="recorded-usage-details">
-      <summary>About these numbers</summary>
-      {conflict ? <p>Some usage could not be reconciled. Counts show the last valid values.</p> : partial && <p>Only captured usage is shown. Some activity may be missing.</p>}
-      {report.captureState === "failed" && <p>Usage capture failed; recorded values may be incomplete.</p>}
-      {scope && <p>{report.measurementScope === "main_loop" ? "Includes the main agent's work only." : "Includes recorded intervals, which may cover only part of this turn."}</p>}
-      {(summary.metrics.cacheRead.value !== null || summary.metrics.cacheWrite.value !== null) && <p>Cache tokens are included in input. Reasoning tokens, when reported, are included in output.</p>}
-      {summary.reasons.includes("child_coverage_unknown") && <p>Other agent work may not be included.</p>}
-      {summary.costs.length > 0 && <p>Costs are {summary.costs.every(cost => cost.kind === "estimated") ? "estimates" : "reported amounts"}; final billing may differ.</p>}
-      {summary.costQuality === "partial" && <p>The cost covers recorded usage only.</p>}
-      {report.lastRecordedAt && <p>Recorded <time dateTime={report.lastRecordedAt}>{new Date(report.lastRecordedAt).toLocaleString()}</time></p>}
-    </details>
+    {report.turnId === null && report.lastRecordedAt && <p className="recorded-usage-note">Recorded <time dateTime={report.lastRecordedAt}>{new Date(report.lastRecordedAt).toLocaleString()}</time></p>}
     {report.legacy && <section className="recorded-usage-legacy"><h4>Legacy usage</h4><p className="recorded-usage-note">Coverage unknown</p><UsageValues summary={report.legacy} />{report.legacyRecordedAt && <p className="recorded-usage-note">Recorded <time dateTime={report.legacyRecordedAt}>{new Date(report.legacyRecordedAt).toLocaleString()}</time></p>}</section>}
   </>;
 }

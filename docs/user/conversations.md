@@ -21,14 +21,12 @@ The compact summary shows input and output tokens, nonzero cache or reasoning
 counts, and cost/model information when available. **Input** includes cache
 tokens; reasoning is included in output. Do not add every row together. An em
 dash means unavailable, not zero. Cost estimates are not billing receipts;
-missing cost is explicitly unavailable. Expand **About these numbers** for
-coverage explanations and the recording time.
+missing cost is explicitly unavailable. Short status labels indicate partial
+or restricted coverage.
 
 **Thread actions → Session stats** separates durable **Recorded session usage**
 from live context occupancy and transcript counters. Session usage can exceed the
 sum of displayed turns because some work has no reliable turn attribution.
-If a disabled or unavailable backend prevents the conversation from opening,
-the loading/error view still offers **Session stats** for recorded data.
 Small **Partial**, **Main agent only**, **Recorded intervals**, and **Needs
 reconciliation** labels explain restricted coverage or unresolved evidence. Inherited turn
 usage does not charge copied work to the child session. Grok currently reports

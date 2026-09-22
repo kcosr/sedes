@@ -15847,8 +15847,5 @@ tr.diff-hunk td {
 .recorded-usage-costs, .recorded-usage-cost { padding-top: 8px; border-top: 1px solid var(--border); }
 .recorded-usage-note, .recorded-usage-model { color: var(--muted-foreground); font-size: 11px; }
 .recorded-usage-model { overflow-wrap: anywhere; }
-.recorded-usage-details { color: var(--muted-foreground); font-size: 10px; }
-.recorded-usage-details summary { cursor: pointer; width: fit-content; }
-.recorded-usage-details p { margin-top: 6px; }
 .recorded-usage-legacy { display: grid; gap: 7px; border-top: 1px solid var(--border); padding-top: 9px; }
 .session-recorded-usage { padding-block: 12px; }

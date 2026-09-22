@@ -1,5 +1,3 @@
-import type { UsageQueryCache } from "../../stores/UsageQueryCache.js";
-import { RecordedSessionUsageAction } from "./RecordedSessionUsageAction.js";
 import { GitBranch } from "lucide-react";
 import {
   useApplicationStore,
@@ -18,14 +16,10 @@ import { ThreadHeading, useThreadHeaderTint } from "./ThreadHeading.js";
 /** Inventory identifies the selected chat while its provider snapshot loads. */
 export function ThreadLoadingView({
   threadId,
-  usageCache,
-  active,
   applicationStore,
   panelControls,
 }: {
   readonly threadId: string;
-  readonly usageCache: UsageQueryCache;
-  readonly active: boolean;
   readonly applicationStore: ApplicationClientStore;
   readonly panelControls?: PanelChromeControls;
 }): React.JSX.Element {
@@ -79,7 +73,6 @@ export function ThreadLoadingView({
       <div className="runtime-banner" role="status">
         <strong>Loading conversation…</strong>
       </div>
-      <div className="thread-fatal-actions"><RecordedSessionUsageAction cache={usageCache} active={active} /></div>
       <ThreadLoading />
     </section>
   );
