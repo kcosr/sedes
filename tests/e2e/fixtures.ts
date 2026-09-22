@@ -60,6 +60,10 @@ export const test = base.extend<{
           !(
             (request.url().includes("/events") ||
               request.url().includes("/files/download?") ||
+              // Usage availability is a read-only POST batch. Closing or
+              // navigating away from its view deliberately cancels the read.
+              (request.method() === "POST" &&
+                /^\/api\/threads\/[^/]+\/usage\/turn-availability$/u.test(new URL(request.url()).pathname)) ||
               // Settings and variable previews explicitly abort stale reads
               // on close/selection change; mutation failures remain visible.
               (request.method() === "GET" &&
