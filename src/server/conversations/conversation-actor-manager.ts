@@ -104,6 +104,7 @@ interface ActorEntry {
   readonly budgetScope: ConversationRuntimeBudgetScope;
   readonly creationAbort: AbortController;
   references: number;
+  onReferencesReleased?: () => void;
   evictionTimer?: ReturnType<typeof setTimeout>;
   eviction?: Promise<boolean>;
   poisoned?: unknown;
@@ -596,9 +597,10 @@ export class ConversationActorManager {
     entry: ActorEntry,
     idleRelease: AcquireConversationActorOptions["idleRelease"],
   ): void {
-    if (this.#entries.get(key) !== entry || entry.references === 0) return;
+    if (entry.references === 0) return;
     entry.references -= 1;
-    if (entry.references > 0 || this.#closing) return;
+    if (entry.references === 0) entry.onReferencesReleased?.();
+    if (this.#entries.get(key) !== entry || entry.references > 0 || this.#closing) return;
     if (entry.actor?.closed) {
       if (entry.actor.replacementSafe) this.#entries.delete(key);
       else entry.poisoned ??= new Error("conversation_actor_close_unproven");
@@ -804,7 +806,28 @@ export class ConversationActorManager {
         continue;
       }
       if (entry.references > 0) {
-        throw new ConversationActorRetirementBusyError();
+        if (disposition.kind !== "idle" || (entry.actor && !entry.actor.canEvict)) {
+          throw new ConversationActorRetirementBusyError();
+        }
+        // Snapshot readers borrow the same actor as mutations. Once admission
+        // is fenced, let existing borrowers finish before deciding it is busy.
+        // Bound the wait so a stalled borrower cannot hold archive indefinitely;
+        // the idle checks below still reject work admitted before the fence.
+        await new Promise<void>((resolve) => {
+          const finish = () => {
+            clearTimeout(timer);
+            entry.onReferencesReleased = undefined;
+            resolve();
+          };
+          // Keep this awaited deadline referenced so retirement settles even
+          // when no other event-loop handles remain.
+          const timer = setTimeout(finish, 5_000);
+          entry.onReferencesReleased = finish;
+        });
+        if (this.#entries.get(key) === entry && entry.references > 0) {
+          throw new ConversationActorRetirementBusyError();
+        }
+        continue;
       }
       if (entry.evictionTimer) {
         clearTimeout(entry.evictionTimer);
