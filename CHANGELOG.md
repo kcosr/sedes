@@ -24,6 +24,9 @@
 
 ### Fixed
 
+- Preserve the deployed usage-accounting migration checksum and add session-gap
+  scope in a separate migration so existing installations can upgrade.
+
 - Avoid spurious active-thread archive errors when opening the thread menu
   starts a status read or cold runtime attachment. Briefly drain existing
   runtime borrowers under the archive fence, then recheck activity before

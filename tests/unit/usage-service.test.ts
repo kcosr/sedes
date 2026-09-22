@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { durableUsageAccountingMigration } from "../../src/server/db/migrations/110-durable-usage-accounting.js";
+import { usageGapSessionScopeMigration } from "../../src/server/db/migrations/111-usage-gap-session-scope.js";
 import { UsageService, addUsageMoney } from "../../src/server/usage/usage-service.js";
 import type { UsageFact, UsageObservation, UsageSink } from "../../src/server/usage/contracts.js";
 import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
@@ -28,7 +29,8 @@ INSERT INTO application_threads VALUES('tenant','principal','thread','backend','
 INSERT INTO agent_backend_instances VALUES('tenant','backend','claude_agent_sdk');
 INSERT INTO conversation_bindings VALUES('tenant','principal','thread','backend','environment','native-session','connection');`);
   if(legacy)db.exec("INSERT INTO claude_usage_ledgers VALUES('tenant','principal','thread',100,20,30,40,5,1720000000000)");
-  db.exec(durableUsageAccountingMigration.sql); return db;
+  db.exec(durableUsageAccountingMigration.sql);
+  db.exec(usageGapSessionScopeMigration.sql); return db;
 }
 function fact(id: string, input: string, overrides: Partial<UsageFact> = {}): UsageFact {
   return {id, kind: "operation", sessionContribution: "additive", coverageDomain: "main_loop", tokens: {input}, costs: [], models: [{provider: "provider", model: "model"}], basis: ["sdk_normalized"], providerPresence: "unknown", quality: "complete", reasons: [], activity: "model", turn: null, ...overrides};
