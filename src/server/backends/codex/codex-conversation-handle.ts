@@ -3867,6 +3867,11 @@ export class CodexConversationHandle implements ConversationHandle {
       if (notification.nativeThreadId !== this.binding.backendConversationId) {
         return;
       }
+      const lifecycle = this.#client.lifecycleSnapshot();
+      if (lifecycle.state === "ready" && lifecycle.generation === notification.generation &&
+        ["thread/tokenUsage/updated", "turn/started", "turn/completed"].includes(notification.method)) {
+        this.#usageCapture.gap("invalid_evidence");
+      }
       this.#recordMutation(notification.generation, notification.sequence);
       this.#reportError(new Error(notification.code));
       this.#invalidateProjection("contradictory_state");
@@ -3896,6 +3901,7 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#usage = projectCodexUsage(parsed.tokenUsage);
         this.#usageGeneration = notification.generation;
       } catch (error) {
+        this.#usageCapture.gap("invalid_evidence");
         this.#recordMutation(notification.generation, notification.sequence);
         this.#reportError(error);
         if (!this.#establishing) {

@@ -7500,6 +7500,37 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it.each([false, true])("does not allocate usage across a malformed native checkpoint (wire rejection=%s)", async wireRejected => {
+    const observations: UsageObservation[] = [];
+    const gap = vi.fn();
+    const sink: UsageSink = { open: () => ({ registerTurns: vi.fn(),
+      capture: entries => { observations.push(...entries); return true; },
+      reconcile: () => true, gap, seal: vi.fn() }) };
+    const harness = new RpcHarness();
+    const target = driver(harness, connection, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, sink);
+    const handle = await attachIdle(harness, target);
+    await establish(harness, handle);
+    const counts = (inputTokens: number) => ({ inputTokens, totalTokens: inputTokens,
+      outputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 });
+    const notify = (total: number) => harness.notify("thread/tokenUsage/updated", {
+      threadId: "thread-1", turnId: "turn-0",
+      tokenUsage: { total: counts(total), last: counts(7), modelContextWindow: 1000 },
+    });
+    notify(100);
+    if (wireRejected) harness.notifyUndecodable("thread/tokenUsage/updated", "thread-1");
+    else harness.notify("thread/tokenUsage/updated", {
+      threadId: "thread-1", turnId: "turn-0", tokenUsage: { total: { inputTokens: "invalid" } },
+    });
+    notify(150);
+    notify(170);
+    expect(gap).toHaveBeenCalledWith("invalid_evidence");
+    expect(observations.flatMap(observation => observation.facts.filter(fact => fact.kind === "turn_aggregate")
+      .map(fact => fact.tokens.input))).toEqual(["20"]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
   it.each([false, true])("persists the first reply after idle resume replay without reopening (rate-limit replay=%s)", async rateLimitReplay => {
     const database = new Database(":memory:");
     // Minimal application authority plus the actual production usage migrations.
