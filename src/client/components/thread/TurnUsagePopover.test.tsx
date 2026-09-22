@@ -12,7 +12,7 @@ function fixture() {
   const report = usageReport();
   report.summary.metrics.input = { value: "9007199254740993", basis: ["sdk_normalized"], providerPresence: "unknown", quality: "partial" };
   const getUsage = vi.fn().mockResolvedValue(report);
-  const cache = new UsageQueryCache("thread-1", { getUsage }); caches.push(cache);
+  const cache = new UsageQueryCache("thread-1", { getUsage, getUsageAvailability: vi.fn().mockResolvedValue({ threadId: "thread-1", revision: "1", turns: [] }) }); caches.push(cache);
   return { cache, getUsage };
 }
 describe("turn usage popover", () => {
@@ -22,8 +22,8 @@ describe("turn usage popover", () => {
     report.legacy=usageReport().summary;
     report.legacyRecordedAt="2026-09-21T10:00:00Z";
     const {container}=render(<UsageDetails report={report} />);
-    expect(screen.getByText("Usage reconciliation incomplete")).toBeVisible();
-    expect(screen.getByText("10 (last valid)")).toBeVisible();
+    expect(screen.getByText("Needs reconciliation")).toBeVisible();
+    expect(screen.getByText("10")).toHaveAttribute("title", "Last valid count");
     expect(container.querySelector('time[datetime="2026-09-21T10:00:00Z"]')).toBeVisible();
   });
   it("labels unresolved resets and incomplete money as recorded subtotals", () => {
@@ -31,8 +31,9 @@ describe("turn usage popover", () => {
     report.summary.reasons = ["source_reset"];
     report.summary.costs = [{ amount: "0.0002", currency: "USD", kind: "estimated", provenance: "Provider estimate", quality: "partial", billing: "unknown" }];
     render(<UsageDetails report={report} />);
-    expect(screen.getByText("Usage reconciliation incomplete")).toBeVisible();
-    expect(screen.getByText("Estimated cost: 0.0002 USD (known subtotal)")).toBeVisible();
+    expect(screen.getByText("Needs reconciliation")).toBeVisible();
+    expect(screen.getByText("Estimated cost")).toBeVisible();
+    expect(screen.getByText("$0.0002")).toHaveAttribute("title", expect.stringContaining("Known subtotal"));
   });
   it("fetches only on open, retains precise counts and toggles a pinned preview", async () => {
     const { cache, getUsage } = fixture(); const onOpenChange = vi.fn();
@@ -40,12 +41,29 @@ describe("turn usage popover", () => {
     expect(getUsage).not.toHaveBeenCalled();
     const trigger = screen.getByRole("button", { name: "Turn usage and cost" });
     fireEvent.focus(trigger); await screen.findByRole("dialog", { name: "Turn usage" });
-    await screen.findByText("9,007,199,254,740,993 (known subtotal)");
+    await screen.findByText("9,007,199,254,740,993");
     expect(screen.getByText("Cost unavailable")).toBeVisible();
-    expect(screen.getByText(/SDK-normalized/)).toBeVisible();
+    expect(screen.getByText("Partial")).toBeVisible();
+    expect(screen.queryByText(/SDK-normalized/)).toBeNull();
     fireEvent.click(trigger); expect(trigger).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(trigger); await waitFor(() => expect(trigger).toHaveAttribute("aria-expanded", "false"));
     expect(getUsage).toHaveBeenCalledOnce();
+  });
+  it("keeps the summary compact with optional details and no redundant or unknown fields", () => {
+    const report = usageReport();
+    for (const [key, value] of Object.entries({input: "20178", output: "249", cacheRead: "18496", cacheWrite: "0", reasoning: "0", total: "20427"})) {
+      report.summary.metrics[key as keyof typeof report.summary.metrics] = { value, quality: "partial", basis: ["sdk_normalized"], providerPresence: "unknown" };
+    }
+    report.summary.models = [{model: null, provider: null}];
+    render(<UsageDetails report={report} />);
+    expect(screen.getByText("20,178")).toBeVisible();
+    expect(screen.getByText("18,496")).toBeVisible();
+    expect(screen.queryByText("Cache write")).toBeNull();
+    expect(screen.queryByText("Total tokens")).toBeNull();
+    expect(screen.queryByText(/Unknown model|Unknown provider|SDK-normalized/)).toBeNull();
+    expect(screen.getByText("Includes recorded intervals, which may cover only part of this turn.")).not.toBeVisible();
+    fireEvent.click(screen.getByText("About these numbers"));
+    expect(screen.getByText("Includes recorded intervals, which may cover only part of this turn.")).toBeVisible();
   });
   it("previews on hover without stealing focus and stays open across trigger/content", async () => {
     const { cache } = fixture();

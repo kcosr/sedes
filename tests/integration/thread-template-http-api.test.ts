@@ -41,7 +41,7 @@ function httpFixture(
   };
   const createThread = vi.fn(unused);
   const app = createNormalizedApp({
-    usage: {read: () => { throw new Error("usage_not_configured_in_fixture"); }},
+    usage: {availability: () => {throw new Error("usage_not_configured_in_fixture");}, read: () => { throw new Error("usage_not_configured_in_fixture"); }},
     workpads: {} as never,
     questions: {} as never,
     cannedPrompts: {} as never,

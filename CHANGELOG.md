@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fixed Pi turn usage capture at native message persistence; turn usage actions now appear only after a turn ends with recorded data, in a compact mobile-safe overlay.
+
 ### Breaking Changes
 
 - Durable usage accounting replaces accumulated token/cost values in live

@@ -1,3 +1,4 @@
+import { usageAvailabilityRequestSchema } from "../shared/protocol/usage-accounting.js";
 import type { UsageService } from "./usage/usage-service.js";
 import { environmentVariablesPreviewQuerySchema, environmentVariablesPreviewResultSchema, threadEnvironmentVariablesResultSchema } from "../shared/protocol/environment-variables.js";
 import type { EnvironmentVariablesService } from "./environment-variables/environment-variables-service.js";
@@ -342,7 +343,7 @@ import type { SidecarArtifactRegistration } from "./sidecar/sidecar-artifact.js"
 import type { AuthenticationAdmission } from "./authentication/authentication-admission.js";
 
 export interface NormalizedAppDependencies {
-  readonly usage: Pick<UsageService, "read">;
+  readonly usage: Pick<UsageService, "read" | "availability">;
   readonly environmentVariables?: EnvironmentVariablesService;
   /** Production always supplies admission; isolated service fixtures may omit it. */
   readonly authentication?: AuthenticationAdmission;
@@ -1198,6 +1199,14 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       }),
     );
   }
+
+  routes.post("/api/threads/:threadId/usage/turn-availability", async (request, response) => {
+    const requestScope = await scope(request);
+    response.setHeader("Cache-Control", "no-store");
+    const {threadId}=threadRouteParametersSchema.parse(request.params);
+    const {turnIds}=usageAvailabilityRequestSchema.parse(request.body);
+    response.json(dependencies.usage.availability(requestScope,threadId,turnIds));
+  });
 
   routes.get("/api/threads/:threadId/usage", async (request, response) => {
     const requestScope = await scope(request);

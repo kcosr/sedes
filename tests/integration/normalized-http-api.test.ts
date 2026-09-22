@@ -1595,6 +1595,11 @@ describe("normalized HTTP application contract", () => {
       expect(turn.body.turnState).toBe("completed");
       await current.withHost(request(current.app).get(`/api/threads/${threadId}/usage/turns/foreign-turn`)).expect(404);
       await current.withHost(request(current.app).get(`/api/threads/00000000-0000-4000-8000-000000000099/usage`)).expect(404);
+      const availability=await current.mutate(request(current.app).post(`/api/threads/${threadId}/usage/turn-availability`)).send({turnIds:["known-turn","foreign-turn"]}).expect(200);
+      expect(availability.headers["cache-control"]).toBe("no-store");
+      expect(availability.body.turns).toEqual([{turnId:"known-turn",available:false},{turnId:"foreign-turn",available:false}]);
+      await current.mutate(request(current.app).post(`/api/threads/${threadId}/usage/turn-availability`)).send({turnIds:["known-turn"],principalId:"forged"}).expect(400);
+      await current.mutate(request(current.app).post(`/api/threads/00000000-0000-4000-8000-000000000099/usage/turn-availability`)).send({turnIds:["known-turn"]}).expect(404);
       expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
     } finally {await current.close();}
   });

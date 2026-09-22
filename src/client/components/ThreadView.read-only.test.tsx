@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+vi.mock("./thread/TurnUsageAction.js", () => ({ TurnUsageAction: () => null }));
 import { OperationOverlayHost } from "../operations/OperationOverlay.js";
 import { getBlockingOperation } from "../operations/blocking-operation.js";
 vi.mock("../operations/thread-readiness.js", () => ({
@@ -98,7 +99,7 @@ describe("cold offline usage", () => {
       snapshot: undefined, error: "This backend is disabled." });
     const getUsage = vi.fn().mockResolvedValue(usageReport({ threadId: snapshot.thread.id, turnId: null,
       measurementScope: "session", turnState: null, captureState: "disconnected" }));
-    const usage = new UsageQueryCache(snapshot.thread.id, { getUsage });
+    const usage = new UsageQueryCache(snapshot.thread.id, { getUsage, getUsageAvailability: vi.fn().mockResolvedValue({threadId:"thread-1",revision:"1",turns:[]}) });
     Object.defineProperty(state.registry.get(snapshot.thread.id), "usage", { value: usage });
     render(<ThreadView threadId={snapshot.thread.id} visible automationOpen={false} registry={state.registry} applicationStore={state.applicationStore} />);
     expect(screen.getByText("Couldn’t open this thread")).toBeInTheDocument();

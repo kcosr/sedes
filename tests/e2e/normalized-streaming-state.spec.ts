@@ -950,7 +950,7 @@ test.describe.serial("normalized streaming and restored state", () => {
     await expect(stats.getByText("Context used")).toBeVisible();
     await expect(stats.getByText("Compactions")).toBeVisible();
     await expect(stats.getByRole("heading", { name: "Recorded session usage" })).toBeVisible();
-    await expect(stats.getByText(/Estimated cost:/)).toBeVisible();
+    await expect(stats.getByText("Estimated cost")).toBeVisible();
     await expect(stats.getByText(/fixture-model/)).toBeVisible();
     await capture(page, testInfo, "restored-session-stats.png");
     await stats
@@ -961,10 +961,10 @@ test.describe.serial("normalized streaming and restored state", () => {
     await usageButton.hover();
     const turnUsage = page.getByRole("dialog", { name: "Turn usage", exact: true });
     await expect(turnUsage).toBeVisible();
-    await expect(turnUsage.getByText("Input (including cache)")).toBeVisible();
+    await expect(turnUsage.getByText("Input", { exact: true })).toBeVisible();
     await expect(turnUsage.getByText("11", { exact: true })).toBeVisible();
     await expect(turnUsage.getByText("7", { exact: true })).toBeVisible();
-    await expect(turnUsage.getByText(/Estimated cost:.*0\.0002 USD/)).toBeVisible();
+    await expect(turnUsage.getByText("$0.0002", { exact: true })).toBeVisible();
     await usageButton.click();
     await page.getByRole("button", { name: "Thread actions" }).hover();
     await expect(turnUsage).toBeVisible();
@@ -1003,5 +1003,41 @@ test.describe.serial("normalized streaming and restored state", () => {
         .getByText("1", { exact: true }),
     ).toBeVisible();
     await capture(page, testInfo, "restored-compact-dark.png");
+    await page.keyboard.press("Escape");
+
+    // Exercise the compact mobile layout with realistic partial Codex counts.
+    // Availability remains backed by the real fixture's persisted turn usage.
+    await page.route("**/api/threads/*/usage/turns/*", async route => {
+      const response = await route.fetch();
+      const report = await response.json();
+      report.state = "partial";
+      report.measurementScope = "partial_interval";
+      report.summary.models = [{ model: null, provider: null }];
+      report.summary.costs = [];
+      report.summary.costQuality = "unreported";
+      report.summary.reasons = ["unknown_baseline", "model_coverage_unknown", "child_coverage_unknown"];
+      for (const [key, value] of Object.entries({ input: "20178", output: "249", cacheRead: "18496", cacheWrite: "0", reasoning: "0", total: "20427" })) {
+        report.summary.metrics[key] = { value, quality: "partial", basis: ["sdk_normalized", "derived"], providerPresence: "unknown" };
+      }
+      await route.fulfill({ response, json: report });
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.reload();
+    const mobileUsageButton = page.getByRole("button", { name: "Turn usage and cost" }).last();
+    await mobileUsageButton.click();
+    const mobileUsage = page.getByRole("dialog", { name: "Turn usage", exact: true });
+    await expect(mobileUsage.getByText("20,178", { exact: true })).toBeVisible();
+    await expect(mobileUsage.getByText("Partial", { exact: true })).toBeVisible();
+    await expect(mobileUsage.getByText("Cache write")).toHaveCount(0);
+    await expect(mobileUsage.getByText(/SDK-normalized|Unknown model/)).toHaveCount(0);
+    const bounds = await mobileUsage.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(12);
+    expect(bounds!.y).toBeGreaterThanOrEqual(12);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(378);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(832);
+    expect(bounds!.height).toBeLessThan(310);
+    expect(await mobileUsage.evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true);
+    await capture(page, testInfo, "mobile-recorded-turn-usage.png");
   });
 });

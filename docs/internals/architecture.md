@@ -384,6 +384,14 @@ regressions, and gaps remain explicit. Token JSON uses canonical unsigned decima
 strings; money uses decimal strings and currency groups. Browser numbers never
 round durable token counts.
 
+Visible ended turns use a bounded database-only
+`POST /api/threads/:threadId/usage/turn-availability` read (up to 100 IDs) to
+show the action only when recorded metrics or cost exist. The authenticated
+thread cache batches these presence checks; it fetches full reports on open.
+Running and empty turns have no usage action. Pi normal replies are captured
+from the confirmed native-message persistence path, since the SDK does not
+emit `entry_appended` for assistant/tool messages.
+
 The scoped `GET /api/threads/:threadId/usage` and
 `GET /api/threads/:threadId/usage/turns/:turnId` routes read the database without
 opening a backend. Visible history loads register turn stubs. A committed revision

@@ -1,4 +1,4 @@
-import { usageReportSchema, type UsageReport } from "../../shared/protocol/usage-accounting.js";
+import { usageReportSchema, usageAvailabilitySchema, usageAvailabilityRequestSchema, type UsageAvailability, type UsageReport } from "../../shared/protocol/usage-accounting.js";
 import {
   environmentVariablesPreviewQuerySchema,
   environmentVariablesPreviewResultSchema,
@@ -931,6 +931,12 @@ export class ApiClient {
     const parameters = new URLSearchParams({ targetId: query.targetId });
     if (query.agentId) parameters.set("agentId", query.agentId);
     return this.#request(`/api/environment-variables/preview?${parameters}`, { signal }, environmentVariablesPreviewResultSchema);
+  }
+
+  getUsageAvailability(threadId: string, turnIds: readonly string[], signal?: AbortSignal): Promise<UsageAvailability> {
+    const body=usageAvailabilityRequestSchema.parse({turnIds});
+    return this.#mutation(`/api/threads/${encodeURIComponent(threadId)}/usage/turn-availability`,usageAvailabilitySchema,
+      {method:"POST",body:JSON.stringify(body),signal});
   }
 
   getUsage(threadId: string, turnId: string | null = null, signal?: AbortSignal): Promise<UsageReport> {

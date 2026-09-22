@@ -3735,6 +3735,13 @@ class PiConversationHandle implements ConversationHandle {
       this.#emit({ type: "usage_changed", usage: piUsage(this.#session) });
       return;
     }
+    if (event.type === "compaction_end" && event.result !== undefined && !event.aborted) {
+      // Compaction is persisted before this event; it also has no entry_appended notification.
+      const {summary, firstKeptEntryId} = event.result;
+      const entry = this.#session.sessionManager.getEntries().findLast(candidate =>
+        candidate.type === "compaction" && candidate.summary === summary && candidate.firstKeptEntryId === firstKeptEntryId);
+      if (entry) this.#usageAccounting.append(entry);
+    }
     if (
       event.type === "compaction_end" &&
       event.reason !== "manual" &&
@@ -4130,6 +4137,12 @@ class PiConversationHandle implements ConversationHandle {
         reason: "ambiguous_correlation",
       });
       return;
+    }
+    // SDK 0.86.0 emits message_end before appendMessage and does not emit
+    // entry_appended for assistant/tool messages. This existing microtask has
+    // now resolved the exact persisted native entry and its active turn.
+    if (entry.message.role === "assistant" || entry.message.role === "toolResult") {
+      this.#usageAccounting.append(entry, this.#activeTurnId);
     }
     if (entry.message.role === "user") {
       const correlatedSubmission = [

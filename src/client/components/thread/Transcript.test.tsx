@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+vi.mock("./TurnUsageAction.js", () => ({ TurnUsageAction: () => null }));
 import { OperationOverlayHost } from "../../operations/OperationOverlay.js";
 import { getBlockingOperation } from "../../operations/blocking-operation.js";
 vi.mock("../../operations/thread-readiness.js", () => ({
@@ -1237,7 +1238,7 @@ describe("Transcript history positioning", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps an earlier completed fork action and the active turn usage action", () => {
+  it("keeps an earlier completed fork action without a running-turn usage action", () => {
     const snapshot = makeSnapshot(["turn-1", "turn-2"], false);
     snapshot.forkSource = {
       selectedCompletedTurn: { available: true },
@@ -1275,7 +1276,7 @@ describe("Transcript history positioning", () => {
     expect(
       screen.getByRole("button", { name: /Fork from here/ }),
     ).toHaveAttribute("aria-disabled", "false");
-    expect(within(screen.getByTestId("turn-fork-turn-2")).getByRole("button", { name: "Turn usage and cost" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("turn-fork-turn-2")).queryByRole("button", { name: "Turn usage and cost" })).toBeNull();
     expect(within(screen.getByTestId("turn-fork-turn-2")).queryByRole("button", { name: /Fork from here/ })).toBeNull();
   });
 

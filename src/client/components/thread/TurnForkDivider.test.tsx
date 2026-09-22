@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+vi.mock("./TurnUsageAction.js", () => ({ TurnUsageAction: () => null }));
 
 import { OperationOverlayHost } from "../../operations/OperationOverlay.js";
 vi.mock("../../operations/thread-readiness.js", () => ({ waitForOperationThreadReady: vi.fn(async () => undefined), setOperationThreadRegistry: vi.fn() }));
@@ -178,7 +179,7 @@ describe("TurnForkDivider", () => {
         store={store}
       />,
     );
-    expect(screen.getByRole("button", { name: "Turn usage and cost" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Turn usage and cost" })).toBeNull();
 
     // Completing the turn adds fork controls without changing hook order. It must not
     // change the number of hooks the component mounts.
@@ -381,7 +382,7 @@ describe("TurnForkDivider", () => {
         />,
       );
 
-      expect(screen.getByRole("button", { name: "Turn usage and cost" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Turn usage and cost" })).toBeNull();
       expect(
         screen.queryByRole("button", { name: /Fork from here/ }),
       ).toBeNull();

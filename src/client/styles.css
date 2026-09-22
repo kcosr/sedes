@@ -15821,10 +15821,34 @@ tr.diff-hunk td {
 }
 
 /* Persisted accounting uses the same compact overlay as context occupancy. */
-.turn-usage-popover { width: min(340px, calc(100vw - 24px)); }
-.recorded-usage { display: grid; gap: 6px; min-width: 0; }
+.turn-usage-popover {
+  box-sizing: border-box;
+  width: min(264px, calc(100dvw - 24px));
+  max-width: min(calc(100dvw - 24px), var(--radix-popover-content-available-width));
+  max-height: min(calc(100dvh - 24px), var(--radix-popover-content-available-height));
+  overflow: auto;
+  gap: 8px;
+  padding: 12px 14px;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.turn-usage-heading { display: block; }
+.recorded-usage { display: grid; gap: 9px; min-width: 0; font-size: 12px; line-height: 1.4; }
 .recorded-usage p { margin: 0; overflow-wrap: anywhere; }
-.recorded-usage-values { display: grid; gap: 4px; margin: 0; font-variant-numeric: tabular-nums; }
-.recorded-usage-values > div { display: flex; justify-content: space-between; gap: 14px; }
-.recorded-usage-values dd { margin: 0; text-align: end; }
+.recorded-usage-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.recorded-usage .recorded-usage-badge { border-radius: 5px; padding: 2px 6px; background: var(--muted); color: var(--muted-foreground); font-size: 10px; font-weight: 500; white-space: normal; }
+.recorded-usage .recorded-usage-scope { color: var(--muted-foreground); font-size: 10px; white-space: normal; }
+.recorded-usage-values, .recorded-usage-costs { display: grid; gap: 5px; margin: 0; font-variant-numeric: tabular-nums; }
+.recorded-usage-values > div, .recorded-usage-costs > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 12px; }
+.recorded-usage-values dd, .recorded-usage-costs dd { margin: 0; text-align: end; font-weight: 500; }
+.recorded-usage-values > div[data-subset] { color: var(--muted-foreground); font-size: 11px; }
+.recorded-usage-values > div[data-subset] dt { padding-left: 8px; }
+.recorded-usage-costs, .recorded-usage-cost { padding-top: 8px; border-top: 1px solid var(--border); }
+.recorded-usage-note, .recorded-usage-model { color: var(--muted-foreground); font-size: 11px; }
+.recorded-usage-model { overflow-wrap: anywhere; }
+.recorded-usage-details { color: var(--muted-foreground); font-size: 10px; }
+.recorded-usage-details summary { cursor: pointer; width: fit-content; }
+.recorded-usage-details p { margin-top: 6px; }
+.recorded-usage-legacy { display: grid; gap: 7px; border-top: 1px solid var(--border); padding-top: 9px; }
 .session-recorded-usage { padding-block: 12px; }

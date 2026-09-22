@@ -7,47 +7,67 @@ export function RecordedUsage({ cache, turnId, active = true }: { cache: UsageQu
     useCallback(() => cache.getSnapshot(turnId), [cache, turnId]));
   useEffect(() => active ? cache.activate(turnId) : undefined, [cache, turnId, active]);
   return <div className="recorded-usage">
-    {state.loading && <p role="status">Loading recorded usage…</p>}
-    {state.error && <p role="status">{state.error}</p>}
-    {state.missing && <p>No usage recorded for this turn</p>}
+    {state.loading && <p className="recorded-usage-note" role="status">Loading usage…</p>}
+    {state.error && <p className="recorded-usage-note" role="status">{state.error}</p>}
+    {state.missing && <p className="recorded-usage-note">No usage recorded for this turn</p>}
     {state.report && <UsageDetails report={state.report} />}
   </div>;
 }
+
 const labels: Record<UsageTokenKind, string> = {
-  input: "Input (including cache)", uncachedInput: "Uncached input", cacheRead: "Cache read (input subset)",
-  cacheWrite: "Cache write (input subset)", output: "Output", reasoning: "Reasoning (output subset)", total: "Reported total", requests: "Requests",
+  input: "Input", uncachedInput: "Uncached input", cacheRead: "Cache read",
+  cacheWrite: "Cache write", output: "Output", reasoning: "Reasoning", total: "Total tokens", requests: "Requests",
 };
+const subsetFields = new Set<UsageTokenKind>(["cacheRead", "cacheWrite", "reasoning"]);
+
 export function UsageDetails({ report }: { report: UsageReport }): React.JSX.Element {
   const { summary } = report;
   const conflict = Object.values(summary.metrics).some(metric => metric.quality === "conflict") || summary.costQuality === "conflict" || summary.reasons.some(reason => ["counter_regression", "conflicting_evidence", "ordering_unknown", "source_reset"].includes(reason));
-  const sdkNormalized = Object.values(summary.metrics).some(metric => metric.basis.includes("sdk_normalized"));
+  const partial = report.state === "partial" || report.captureState === "failed";
+  const quality = conflict ? "Needs reconciliation" : report.turnState === "in_progress" ? "So far" : partial ? "Partial" : undefined;
+  const scope = report.measurementScope === "main_loop" ? "Main agent only" : report.measurementScope === "partial_interval" ? "Recorded intervals" : undefined;
+  const knownModels = [...new Set(summary.models.map(({ model, provider }) => model ?? provider).filter((value): value is string => value !== null))];
+  if (report.support === "unsupported") return <p className="recorded-usage-note">Usage reporting is not supported</p>;
   return <>
-    {report.inherited && <p>Inherited turn</p>}
-    {report.support === "unsupported" && <p>Usage reporting is not supported</p>}
-    {report.state === "unavailable" && report.support !== "unsupported" && <p>{report.turnId ? "No usage recorded for this turn" : "No usage recorded"}</p>}
-    {report.captureState === "failed" && <p>Usage capture failed; recorded values may be incomplete.</p>}
-    {report.turnState === "in_progress" && <p>Recorded so far</p>}
-    {conflict ? <p>Usage reconciliation incomplete</p> : report.state === "partial" && <p>Usage may be incomplete</p>}
-    {report.measurementScope === "main_loop" && <p>Main-loop usage only</p>}
-    {report.measurementScope === "partial_interval" && <p>Recorded intervals only</p>}
-    {sdkNormalized && <p title="The SDK normalizes these counts. Original provider-field presence is unknown.">SDK-normalized · original provider-field presence unknown</p>}
+    {(quality || report.inherited || scope) && <div className="recorded-usage-badges">
+      {quality && <span className="recorded-usage-badge" title={conflict ? "The last valid counts are shown while conflicting usage is unresolved." : "Only recorded usage is included; totals may be incomplete."}>{quality}</span>}
+      {report.inherited && <span className="recorded-usage-badge">Inherited</span>}
+      {scope && <span className="recorded-usage-scope">{scope}</span>}
+    </div>}
+    {report.state === "unavailable" && <p className="recorded-usage-note">{report.turnId ? "No usage recorded for this turn" : "No usage recorded"}</p>}
     <UsageValues summary={summary} />
-    {summary.models.length > 0 && <p>Model / provider: {summary.models.map(({ model, provider }) => `${model ?? "Unknown model"} / ${provider ?? "Unknown provider"}`).join("; ")}</p>}
-    {summary.reasons.includes("model_coverage_unknown") && <p>Model attribution may be incomplete.</p>}
-    {summary.reasons.includes("child_coverage_unknown") && <p>Child-agent usage coverage is unknown.</p>}
-    {report.lastRecordedAt && <p>Last recorded: <time dateTime={report.lastRecordedAt}>{new Date(report.lastRecordedAt).toLocaleString()}</time></p>}
-    {report.legacy && <section><h4>Legacy usage — coverage unknown</h4><UsageValues summary={report.legacy} />{report.legacyRecordedAt && <p>Legacy recorded: <time dateTime={report.legacyRecordedAt}>{new Date(report.legacyRecordedAt).toLocaleString()}</time></p>}</section>}
+    {knownModels.length > 0 && <p className="recorded-usage-model" title="Observed model or provider">{knownModels.join(" · ")}</p>}
+    <details className="recorded-usage-details">
+      <summary>About these numbers</summary>
+      {conflict ? <p>Some usage could not be reconciled. Counts show the last valid values.</p> : partial && <p>Only captured usage is shown. Some activity may be missing.</p>}
+      {report.captureState === "failed" && <p>Usage capture failed; recorded values may be incomplete.</p>}
+      {scope && <p>{report.measurementScope === "main_loop" ? "Includes the main agent's work only." : "Includes recorded intervals, which may cover only part of this turn."}</p>}
+      {(summary.metrics.cacheRead.value !== null || summary.metrics.cacheWrite.value !== null) && <p>Cache tokens are included in input. Reasoning tokens, when reported, are included in output.</p>}
+      {summary.reasons.includes("child_coverage_unknown") && <p>Other agent work may not be included.</p>}
+      {summary.costs.length > 0 && <p>Costs are {summary.costs.every(cost => cost.kind === "estimated") ? "estimates" : "reported amounts"}; final billing may differ.</p>}
+      {summary.costQuality === "partial" && <p>The cost covers recorded usage only.</p>}
+      {report.lastRecordedAt && <p>Recorded <time dateTime={report.lastRecordedAt}>{new Date(report.lastRecordedAt).toLocaleString()}</time></p>}
+    </details>
+    {report.legacy && <section className="recorded-usage-legacy"><h4>Legacy usage</h4><p className="recorded-usage-note">Coverage unknown</p><UsageValues summary={report.legacy} />{report.legacyRecordedAt && <p className="recorded-usage-note">Recorded <time dateTime={report.legacyRecordedAt}>{new Date(report.legacyRecordedAt).toLocaleString()}</time></p>}</section>}
   </>;
 }
+
 function UsageValues({ summary }: { summary: UsageSummary }): React.JSX.Element {
+  const keys: UsageTokenKind[] = ["input", "output", "cacheRead", "cacheWrite", "reasoning", "requests"];
+  if (summary.metrics.input.value === null && summary.metrics.uncachedInput.value !== null) keys.splice(1, 0, "uncachedInput");
+  if (summary.metrics.input.value === null && summary.metrics.output.value === null && summary.metrics.total.value !== null) keys.push("total");
   return <>
-    <dl className="recorded-usage-values">{Object.entries(summary.metrics).filter(([key, metric]) => metric.value !== null || key === "input" || key === "output").map(([key, metric]) => <div key={key}>
-      <dt>{labels[key as UsageTokenKind]}</dt><dd>{metric.value === null ? "—" : new Intl.NumberFormat().format(BigInt(metric.value))}{metric.quality === "partial" ? " (known subtotal)" : metric.quality === "conflict" ? " (last valid)" : ""}</dd>
-    </div>)}</dl>
-    {summary.costs.length === 0 ? <p>Cost unavailable</p> : <>
-      {summary.costs.map((cost, index) => <p key={index} title={cost.provenance}>{cost.kind === "estimated" ? "Estimated cost" : "Reported cost"}: {cost.amount} {cost.currency}{cost.quality === "partial" ? " (known subtotal)" : ""}</p>)}
-      <p>Billing status unknown</p>
-      {summary.costQuality !== "complete" && <p>Some cost data is unavailable.</p>}
-    </>}
+    <dl className="recorded-usage-values">{keys.filter(key => key === "input" || key === "output" || (summary.metrics[key].value !== null && summary.metrics[key].value !== "0")).map(key => {
+      const metric = summary.metrics[key];
+      const detail = metric.quality === "conflict" ? "Last valid count" : metric.quality === "partial" ? "Known subtotal" : undefined;
+      return <div key={key} data-subset={subsetFields.has(key) || undefined}>
+        <dt title={key === "input" ? "Includes cached input" : subsetFields.has(key) ? `Included in ${key === "reasoning" ? "output" : "input"}` : undefined}>{labels[key]}</dt>
+        <dd title={detail}>{metric.value === null ? "—" : new Intl.NumberFormat().format(BigInt(metric.value))}</dd>
+      </div>;
+    })}</dl>
+    {summary.costs.length === 0 ? <p className="recorded-usage-note recorded-usage-cost">Cost unavailable</p> : <dl className="recorded-usage-costs">{summary.costs.map((cost, index) => <div key={index}>
+      <dt>{cost.kind === "estimated" ? "Estimated cost" : "Reported cost"}</dt>
+      <dd title={`${cost.currency} · ${cost.provenance}${cost.quality === "partial" ? " · Known subtotal" : ""}`}>{cost.currency === "USD" ? `$${cost.amount}` : `${cost.amount} ${cost.currency}`}</dd>
+    </div>)}</dl>}
   </>;
 }

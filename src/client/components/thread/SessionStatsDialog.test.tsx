@@ -9,7 +9,7 @@ import { UsageQueryCache } from "../../stores/UsageQueryCache.js";
 import { usageReport } from "../../stores/usage-test-fixture.js";
 const caches: UsageQueryCache[] = [];
 function cache() {
-  const result = new UsageQueryCache("sedes-thread-1", { getUsage: vi.fn().mockResolvedValue(usageReport({ threadId: "sedes-thread-1", turnId: null, measurementScope: "session", turnState: null, state: "unavailable" })) });
+  const result = new UsageQueryCache("sedes-thread-1", { getUsageAvailability: vi.fn(), getUsage: vi.fn().mockResolvedValue(usageReport({ threadId: "sedes-thread-1", turnId: null, measurementScope: "session", turnState: null, state: "unavailable" })) });
   caches.push(result); return result;
 }
 afterEach(() => { cleanup(); caches.splice(0).forEach(value => value.dispose()); });

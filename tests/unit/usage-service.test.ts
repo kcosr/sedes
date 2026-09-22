@@ -38,6 +38,17 @@ function observation(id: string, facts: readonly UsageFact[], replaceCheckpoint 
 }
 const turnId = applicationTurnIdForBackendTurn({backendInstanceId: "backend", sourceApplicationThreadId: "thread", backendTurnId: "turn"});
 describe("durable scoped usage service", () => {
+  it("reports availability only for ended turns with durable data and enforces owner scope", () => {
+    const service=new UsageService(database()), capture=service.open(source);
+    capture.registerTurns([{backendTurnId:"turn",status:"in_progress",orderedBackendItemIds:[]},{backendTurnId:"empty",status:"completed",orderedBackendItemIds:[]}]);
+    capture.capture([observation("entry",[fact("entry","10",{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})])]);
+    expect(service.availability(scope,"thread",[turnId]).turns).toEqual([{turnId,available:false}]);
+    capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
+    expect(service.availability(scope,"thread",[turnId,"absent"]).turns).toEqual([{turnId,available:true},{turnId:"absent",available:false}]);
+    const empty=applicationTurnIdForBackendTurn({backendInstanceId:"backend",sourceApplicationThreadId:"thread",backendTurnId:"empty"});
+    expect(service.availability(scope,"thread",[empty]).turns[0]?.available).toBe(false);
+    expect(()=>service.availability({...scope,principalId:"other"},"thread",[turnId])).toThrow();
+  });
   it("keeps additive turn conflicts visible on session totals without affecting another turn", () => {
     const service=new UsageService(database()), capture=service.open(source);
     capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]},{backendTurnId:"other",status:"completed",orderedBackendItemIds:[]}]);

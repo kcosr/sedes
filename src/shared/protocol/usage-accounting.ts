@@ -66,3 +66,13 @@ export const usageReportSchema = z.strictObject({
   legacyRecordedAt: z.iso.datetime().nullable(),
 });
 export type UsageReport = z.infer<typeof usageReportSchema>;
+
+export const usageAvailabilityRequestSchema = z.strictObject({
+  turnIds: z.array(z.string().min(1).max(160)).min(1).max(100),
+});
+export const usageAvailabilitySchema = z.strictObject({
+  threadId: z.string().min(1).max(128),
+  revision: usageIntegerSchema,
+  turns: z.array(z.strictObject({turnId: z.string().min(1).max(160), available: z.boolean()})).max(100),
+});
+export type UsageAvailability = z.infer<typeof usageAvailabilitySchema>;

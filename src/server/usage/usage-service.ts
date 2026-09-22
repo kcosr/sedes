@@ -2,7 +2,7 @@ import type { ConversationTurn } from "../../shared/protocol/conversation.js";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { z } from "zod";
-import { USAGE_TOKEN_KINDS, usageIntegerSchema, usageMoneySchema, usageModelSchema, usageBasisSchema, usageReasonSchema, usageReportSchema, type UsageReport, type UsageSummary, type UsageReason, type UsageTokenKind } from "../../shared/protocol/usage-accounting.js";
+import { USAGE_TOKEN_KINDS, usageIntegerSchema, usageMoneySchema, usageModelSchema, usageBasisSchema, usageReasonSchema, usageReportSchema, type UsageAvailability, type UsageReport, type UsageSummary, type UsageReason, type UsageTokenKind } from "../../shared/protocol/usage-accounting.js";
 import type { BackendTurn } from "../../shared/protocol/backend.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { DomainError } from "../domain/errors.js";
@@ -101,6 +101,18 @@ export class UsageService implements UsageSink {
     }
     if (this.#failed.has(hash([scope.tenantId,scope.principalId,threadId]))) { report.captureState="failed";report.state=report.state === "unavailable"?"unavailable":"partial";report.summary.reasons=uniq([...report.summary.reasons,"capture_failed"]); }
     return usageReportSchema.parse(report);
+  }
+  availability(scope:RequestScope,threadId:string,turnIds:readonly string[]):UsageAvailability {
+    this.#authorize(scope,threadId);
+    if(turnIds.length>100)throw new DomainError("bad_request","Too many turns.");
+    const rows=this.database.prepare("SELECT turn_id,status,report_json FROM usage_turn_state WHERE tenant_id=? AND principal_id=? AND thread_id=? AND turn_id IN (SELECT value FROM json_each(?))")
+      .all(scope.tenantId,scope.principalId,threadId,JSON.stringify(turnIds)) as {turn_id:string;status:string;report_json:string|null}[];
+    const available=new Set(rows.filter(row=>{
+      if(row.status==="in_progress" || !row.report_json)return false;
+      const report=usageReportSchema.parse(JSON.parse(row.report_json));
+      return report.support==="supported" && (Object.values(report.summary.metrics).some(metric=>metric.value!==null) || report.summary.costs.length>0);
+    }).map(row=>row.turn_id));
+    return {threadId,revision:String(this.#state(scope,threadId)?.revision??0n),turns:[...new Set(turnIds)].map(turnId=>({turnId,available:available.has(turnId)}))};
   }
   registerVisibleTurns(scope: RequestScope, threadId: string, turns: readonly ConversationTurn[]): void {
     const failedKey=hash([scope.tenantId,scope.principalId,threadId]);
