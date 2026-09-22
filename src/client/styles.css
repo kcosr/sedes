@@ -7087,6 +7087,9 @@ body:has(.thread-settings-sheet[data-state="open"])
   color: var(--muted-foreground-2);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+.turn-fork-time:not(:last-child) {
   margin-inline-end: 7px;
 }
 
@@ -14983,7 +14986,7 @@ tr.diff-hunk td {
     height: 44px;
   }
 
-  .turn-fork-time {
+  .turn-fork-time:not(:last-child) {
     margin-inline-end: 10px;
   }
 

@@ -65,6 +65,17 @@ describe("Codex cumulative accounting capture", () => {
     expect(intervals(f.observations)[0]!.turn?.backendTurnId).toBe(codexBackendTurnId("native-thread", "new-turn"));
   });
 
+  it("keeps an established idle baseline when the same generation resumes without replay", () => {
+    const f = fixture();
+    f.capture.resumed({ generation: 1, sequence: 1, idle: true });
+    f.observe(2, 100, "old-turn");
+    f.capture.resumed({ generation: 1, sequence: 3, idle: true });
+    f.capture.started({ turnId: "new-turn", generation: 1, sequence: 4 });
+    f.observe(5, 120, "new-turn");
+    expect(intervals(f.observations).map(fact => fact.tokens.input)).toEqual(["20"]);
+    expect(intervals(f.observations)[0]!.reasons).not.toContain("unknown_baseline");
+  });
+
   it("does not move a replay baseline past lifecycle notifications deferred during pagination", () => {
     const f = fixture();
     f.observe(2, 100, "old-turn"); // Replay can arrive before the resume promise continues.

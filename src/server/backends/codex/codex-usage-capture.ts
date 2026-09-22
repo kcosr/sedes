@@ -55,8 +55,13 @@ export class CodexUsageCapture {
   /** Pinned resume replies precede restored usage replay, including on cold restart. */
   resumed(event: { generation: number; sequence: number; idle: boolean }): void {
     const lifecycle = this.#lastLifecycle;
-    this.#idleResume = event.idle && !(lifecycle?.generation === event.generation && lifecycle.sequence > event.sequence)
-      ? event : undefined;
+    if (!event.idle || (lifecycle?.generation === event.generation && lifecycle.sequence > event.sequence)) {
+      this.#idleResume = undefined;
+    } else if (this.#idleResume?.generation !== event.generation) {
+      // A same-generation resnapshot need not replay usage again. Preserve the
+      // earlier idle boundary until lifecycle activity or a gap invalidates it.
+      this.#idleResume = event;
+    }
   }
 
   started(event: { turnId: string; generation: number; sequence: number }): void {
