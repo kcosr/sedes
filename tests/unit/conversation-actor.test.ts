@@ -44,6 +44,7 @@ import type {
 } from "../../src/server/execution/contracts.js";
 import { DeferredProductionOperations } from "../../src/server/production-application.js";
 import type { DeliveryInputSnapshotRepository } from "../../src/server/db/repositories/delivery-input-snapshot-repository.js";
+import { ActorBackedThreadApplicationConversationReader } from "../../src/server/conversations/thread-application-service.js";
 
 const scope = {
   tenantId: "tenant-1",
@@ -1739,6 +1740,107 @@ describe("ConversationActorManager", () => {
     await current.manager.close();
   });
 
+  it.each(["idle", "running", "background", "unacknowledged"] as const)(
+    "rechecks %s state after draining an in-flight snapshot read for archive",
+    async (state) => {
+      const current = detachFixture();
+      current.handle.establishmentSnapshots[0] = snapshot();
+      const runtime = await current.coordinator.acquire(scope, binding.applicationThreadId);
+      runtime.release();
+      let finishRead!: () => void;
+      const readGate = new Promise<void>((resolve) => { finishRead = resolve; });
+      const capture = runtime.actor.captureSnapshotState.bind(runtime.actor);
+      const captureSpy = vi.spyOn(runtime.actor, "captureSnapshotState").mockImplementationOnce(async () => {
+        await readGate;
+        return capture();
+      });
+      const reader = new ActorBackedThreadApplicationConversationReader({
+        actors: current.actorManager,
+        targets: { resolve: async () => current.target },
+      });
+      const reading = reader.capture(scope, binding.applicationThreadId);
+      await vi.waitFor(() => expect(captureSpy).toHaveBeenCalledOnce());
+      const operation = vi.fn(async () => "archived");
+      const retiring = current.coordinator.runWithRuntimeRetired(
+        scope, binding.applicationThreadId, operation,
+      );
+      const outcome = retiring.catch((error: unknown) => error);
+      // Let retirement reach the held read, without releasing it in the same
+      // microtask as the maintenance fence is installed.
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(operation).not.toHaveBeenCalled();
+      expect(current.handle.close).not.toHaveBeenCalled();
+      let reopenSettled = false;
+      const reopen = current.manager.acquire(current.target).catch((error: unknown) => error).finally(() => {
+        reopenSettled = true;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(reopenSettled).toBe(false);
+      if (state === "running") {
+        current.handle.emit(0, { type: "run_state_changed", state: "running" }, 0);
+      } else if (state === "background") {
+        current.handle.emit(0, {
+          type: "background_activity_changed",
+          activity: { state: "known", agents: 1, commands: 0, other: 0 },
+        }, 0);
+      } else if (state === "unacknowledged") {
+        current.handle.retirementBlocked = true;
+      }
+      finishRead();
+      await expect(reading).resolves.toMatchObject({ status: "connected" });
+      if (state === "idle") {
+        await expect(outcome).resolves.toBe("archived");
+        expect(current.handle.close).toHaveBeenCalledOnce();
+        expect(operation).toHaveBeenCalledOnce();
+      } else {
+        await expect(outcome).resolves.toBeInstanceOf(ThreadRuntimeNotIdleError);
+        expect(current.handle.close).not.toHaveBeenCalled();
+        expect(operation).not.toHaveBeenCalled();
+      }
+      await expect(reopen).resolves.toMatchObject({ backendCode: "conversation_actor_admission_invalidated" });
+      await current.coordinator.close();
+      await current.manager.close();
+    },
+  );
+
+  it.each(["idle", "running", "attach_failed"] as const)(
+    "drains a cancelled cold menu attachment before checking its %s state for archive",
+    async (state) => {
+      const current = detachFixture();
+      current.handle.establishmentSnapshots[0] = snapshot(state === "attach_failed" ? "idle" : state);
+      let finishAttach!: () => void;
+      const attachGate = new Promise<void>((resolve) => { finishAttach = resolve; });
+      vi.mocked(current.driver.attach).mockImplementationOnce(async () => {
+        await attachGate;
+        if (state === "attach_failed") throw new Error("attachment_failed");
+        return current.handle as unknown as ConversationHandle;
+      });
+      const opening = current.coordinator.acquire(scope, binding.applicationThreadId)
+        .catch((error: unknown) => error);
+      await vi.waitFor(() => expect(current.driver.attach).toHaveBeenCalledOnce());
+      const operation = vi.fn(async () => "archived");
+      const retiring = current.coordinator.runWithRuntimeRetired(
+        scope, binding.applicationThreadId, operation,
+      ).catch((error: unknown) => error);
+      await expect(opening).resolves.toMatchObject({ message: "thread_runtime_maintenance" });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(operation).not.toHaveBeenCalled();
+      expect(current.handle.close).not.toHaveBeenCalled();
+      finishAttach();
+      if (state !== "running") {
+        await expect(retiring).resolves.toBe("archived");
+        expect(current.handle.close).toHaveBeenCalledTimes(state === "idle" ? 1 : 0);
+        expect(operation).toHaveBeenCalledOnce();
+      } else {
+        await expect(retiring).resolves.toBeInstanceOf(ThreadRuntimeNotIdleError);
+        expect(current.handle.close).not.toHaveBeenCalled();
+        expect(operation).not.toHaveBeenCalled();
+      }
+      await current.coordinator.close();
+      await current.manager.close();
+    },
+  );
+
   it("rejects archive retirement while a direct actor borrower is held", async () => {
     const current = fixture(undefined, undefined, 60_000, undefined, 2);
     const target = (threadId: string): AcquireConversationActorInput => ({
@@ -1778,22 +1880,40 @@ describe("ConversationActorManager", () => {
     );
     const operation = vi.fn(async () => undefined);
 
-    await expect(
-      coordinator.runWithRuntimeRetired(
-        scope,
-        "thread-archive-borrowed",
-        operation,
-      ),
-    ).rejects.toBeInstanceOf(ThreadRuntimeNotIdleError);
-    expect(operation).not.toHaveBeenCalled();
-    expect(current.handle.close).not.toHaveBeenCalled();
-    await expect(
-      directBorrower.actor.ensureProjectionCurrent(),
-    ).resolves.toBeUndefined();
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const retirement = coordinator.runWithRuntimeRetired(
+        scope, "thread-archive-borrowed", operation,
+      ).finally(() => { settled = true; });
+      const rejected = expect(retirement).rejects.toBeInstanceOf(ThreadRuntimeNotIdleError);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settled).toBe(false);
+      expect(operation).not.toHaveBeenCalled();
+      expect(current.handle.close).not.toHaveBeenCalled();
 
-    directBorrower.release();
-    await coordinator.close();
-    await current.manager.close();
+      await vi.advanceTimersByTimeAsync(1);
+      await rejected;
+      expect(settled).toBe(true);
+      expect(operation).not.toHaveBeenCalled();
+      expect(current.handle.close).not.toHaveBeenCalled();
+      await expect(
+        directBorrower.actor.ensureProjectionCurrent(),
+      ).resolves.toBeUndefined();
+
+      directBorrower.release();
+      await expect(
+        coordinator.runWithRuntimeRetired(scope, "thread-archive-borrowed", operation),
+      ).resolves.toBeUndefined();
+      expect(operation).toHaveBeenCalledOnce();
+      expect(current.handle.close).toHaveBeenCalledOnce();
+    } finally {
+      directBorrower.release();
+      vi.useRealTimers();
+      await coordinator.close();
+      await current.manager.close();
+    }
   });
 
   it("keeps coordinator and direct admission fenced after owner cleanup is unproven", async () => {
