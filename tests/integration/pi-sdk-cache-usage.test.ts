@@ -84,7 +84,7 @@ async function createSession(topology: Topology, cacheWarming?: CacheMode) {
   sessions.push(session);
   await session.ready();
   const nativeSession = bindExtensions.mock.instances.at(-1)! as AgentSession;
-  return { session, nativeSession };
+  return { session, nativeSession, commandContextActions: bindExtensions.mock.calls.at(-1)![0].commandContextActions };
 }
 
 describe("Pi native cache-warming policy", () => {
@@ -108,6 +108,16 @@ describe("Pi native cache-warming policy", () => {
       );
     },
   );
+});
+
+describe("Pi application-owned tree actions", () => {
+  it("cancels extension-driven native fork and tree navigation without generating summaries", async () => {
+    const {session, commandContextActions}=await createSession("direct", "off");
+    const before=session.sessionManager.getEntries();
+    await expect(commandContextActions!.navigateTree("native-target",{summarize:true})).resolves.toEqual({cancelled:true});
+    await expect(commandContextActions!.fork("native-target")).resolves.toEqual({cancelled:true});
+    expect(session.sessionManager.getEntries()).toEqual(before);
+  });
 });
 
 describe("Pi billed cache-warming usage", () => {

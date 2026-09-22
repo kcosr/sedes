@@ -32,13 +32,15 @@ describe("Pi native usage accounting", () => {
     const user = manager.appendMessage({role: "user", content: "question", timestamp: 1});
     manager.appendMessage(assistant(10)); manager.appendMessage(assistant(20));
     manager.branch(user); manager.appendMessage(assistant(30));
+    manager.branchWithSummary(user, "Imported branch summary", undefined, false, usage);
     const captured: UsageObservation[] = [];
     const sink: UsageSink = {open: () => ({registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: () => {}})};
     new PiUsageAccounting({sink, manager, nativeNamespace: "store", authentication: {conversationId: manager.getSessionId(), installationKey: new Uint8Array(32)},
       binding: {tenantId: "t", ownerPrincipalId: "p", applicationThreadId: "thread", backendInstanceId: "pi", connectionProfileId: "c", executionEnvironmentId: "e", backendConversationId: manager.getSessionId(), createdAt: "2026-09-22T00:00:00Z"}});
-    expect(captured).toHaveLength(3);
-    expect(captured.map((o) => o.facts[0]!.tokens.uncachedInput)).toEqual(["10", "20", "30"]);
-    expect(new Set(captured.map((o) => o.facts[0]!.turn?.backendTurnId))).toEqual(new Set([user]));
+    expect(captured).toHaveLength(4);
+    expect(captured.map((o) => o.facts[0]!.tokens.uncachedInput)).toEqual(["10", "20", "30", "10"]);
+    expect(new Set(captured.slice(0,3).map((o) => o.facts[0]!.turn?.backendTurnId))).toEqual(new Set([user]));
+    expect(captured[3]!.facts[0]).toMatchObject({activity:"branch_summary",sessionContribution:"additive",turn:null,tokens:{input:"80",output:"20",requests:null},costs:[{amount:"0.003"}]});
   });
   it("marks authenticated copied turns as inherited while capturing only new child work", () => {
     const manager=SessionManager.inMemory("/workspace"),key=new Uint8Array(32);
