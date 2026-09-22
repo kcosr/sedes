@@ -38,6 +38,16 @@ function observation(id: string, facts: readonly UsageFact[], replaceCheckpoint 
 }
 const turnId = applicationTurnIdForBackendTurn({backendInstanceId: "backend", sourceApplicationThreadId: "thread", backendTurnId: "turn"});
 describe("durable scoped usage service", () => {
+  it("keeps additive turn conflicts visible on session totals without affecting another turn", () => {
+    const service=new UsageService(database()), capture=service.open(source);
+    capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]},{backendTurnId:"other",status:"completed",orderedBackendItemIds:[]}]);
+    const entry=(input:string)=>observation("entry",[fact("entry",input,{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})]);
+    capture.capture([entry("10"),entry("20"),observation("other",[fact("other","5",{turn:{backendTurnId:"other",scope:"whole_turn",contribution:"additive"}})])]);
+    expect(service.read(scope,"thread").summary.metrics.input).toMatchObject({value:"15",quality:"conflict"});
+    const other=applicationTurnIdForBackendTurn({backendInstanceId:"backend",sourceApplicationThreadId:"thread",backendTurnId:"other"});
+    expect(service.read(scope,"thread",other).summary.metrics.input.quality).toBe("complete");
+  });
+
   it.each([false,true])("keeps one durable Codex series across resume (regression=%s)", regression => {
     const db=database(), service=new UsageService(db);
     const adapter=new CodexUsageCapture({sink:service,binding,nativeNamespace:"native-store",provenZero:false,ancestry:null,onError:vi.fn()});
@@ -90,7 +100,8 @@ describe("durable scoped usage service", () => {
     capture.capture([direct("first","30"),direct("different","10")]);
     capture.capture([observation("pipeline",[fact("counter","100",{sessionContribution:"checkpoint"})],true,"1"),observation("pipeline-next",[fact("counter","120",{sessionContribution:"checkpoint"})],true,"2")]);
     capture.capture([observation("other",[fact("other","5",{sessionContribution:"none",turn:{backendTurnId:"other",scope:"whole_turn",contribution:"additive"}})])]);
-    expect(service.read(scope,"thread").summary.metrics.input.value).toBe("120");
+    expect(service.read(scope,"thread").summary.metrics.input).toMatchObject({value:"120",quality:"complete"});
+    expect(service.read(scope,"thread").summary.reasons).not.toContain("conflicting_evidence");
     expect(service.read(scope,"thread",turnId).summary.metrics.input.quality).toBe("conflict");
     const other=applicationTurnIdForBackendTurn({backendInstanceId:"backend",sourceApplicationThreadId:"thread",backendTurnId:"other"});
     expect(service.read(scope,"thread",other).state).toBe("complete");

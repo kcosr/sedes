@@ -179,7 +179,7 @@ export class UsageService implements UsageSink {
     }
 
   }
-  #gap(sourceId:string,reason:UsageReason,subject=""):void {this.database.prepare("INSERT OR IGNORE INTO usage_gaps(source_id,reason,subject,recorded_at) VALUES(?,?,?,?)").run(sourceId,reason,subject,new Date().toISOString());}
+  #gap(sourceId:string,reason:UsageReason,subject="",affectsSession=true):void {this.database.prepare("INSERT INTO usage_gaps(source_id,reason,subject,affects_session,recorded_at) VALUES(?,?,?,?,?) ON CONFLICT(source_id,reason,subject) DO UPDATE SET affects_session=MAX(usage_gaps.affects_session,excluded.affects_session)").run(sourceId,reason,subject,affectsSession?1:0,new Date().toISOString());}
   #capture(scope:RequestScope,threadId:string,backendId:string,sourceId:string,observation:UsageObservation,normalizationVersion:string):void {
     const semantic={order:observation.order,replaceCheckpoint:observation.replaceCheckpoint,facts:observation.facts};
     const fingerprint=hash(semantic);
@@ -188,7 +188,7 @@ export class UsageService implements UsageSink {
       if(existing.fingerprint!==fingerprint){
         const facts=[...(JSON.parse(existing.evidence_json) as {facts:UsageFact[]}).facts,...observation.facts];
         if(facts.length && facts.every(fact=>fact.turn && fact.sessionContribution!=="checkpoint")){
-          for(const fact of facts)this.#gap(sourceId,"conflicting_evidence",applicationTurnIdForBackendTurn({backendInstanceId:backendId,sourceApplicationThreadId:threadId,backendTurnId:fact.turn!.backendTurnId}));
+          for(const fact of facts)this.#gap(sourceId,"conflicting_evidence",applicationTurnIdForBackendTurn({backendInstanceId:backendId,sourceApplicationThreadId:threadId,backendTurnId:fact.turn!.backendTurnId}),fact.sessionContribution!=="none");
         }else this.#gap(sourceId,"conflicting_evidence");
       }
       return;
@@ -227,9 +227,9 @@ export class UsageService implements UsageSink {
           const oldOrder=previous[oldFacts.indexOf(old)]!.source_order;
           if(observation.order!==null && oldOrder!==null){
             if(BigInt(observation.order)<BigInt(oldOrder))continue;
-            if(BigInt(observation.order)===BigInt(oldOrder)){this.#gap(sourceId,"conflicting_evidence",subject);continue;}
-          }else{this.#gap(sourceId,"conflicting_evidence",subject);continue;}
-        }else if(fact.sessionContribution!=="checkpoint"){this.#gap(sourceId,"conflicting_evidence",subject);continue;}
+            if(BigInt(observation.order)===BigInt(oldOrder)){this.#gap(sourceId,"conflicting_evidence",subject,fact.sessionContribution!=="none");continue;}
+          }else{this.#gap(sourceId,"conflicting_evidence",subject,fact.sessionContribution!=="none");continue;}
+        }else if(fact.sessionContribution!=="checkpoint"){this.#gap(sourceId,"conflicting_evidence",subject,fact.sessionContribution!=="none");continue;}
         else if(USAGE_TOKEN_KINDS.some(key=>old.tokens[key]!=null && (fact.tokens[key]==null || BigInt(fact.tokens[key]!)<BigInt(old.tokens[key]!)))){this.#gap(sourceId,"counter_regression");continue;}
       }
       const turnId=fact.turn?applicationTurnIdForBackendTurn({backendInstanceId:backendId,sourceApplicationThreadId:threadId,backendTurnId:fact.turn.backendTurnId}):null;
@@ -275,7 +275,7 @@ export class UsageService implements UsageSink {
     const revision=state.revision;
     const rows=this.database.prepare("SELECT r.source_id,r.turn_id,r.fact_json,o.received_at FROM usage_records r JOIN usage_sources s ON s.id=r.source_id JOIN usage_observations o ON o.source_id=r.source_id AND o.observation_id=r.observation_id AND o.revision=r.observation_revision WHERE s.tenant_id=? AND s.principal_id=? AND s.thread_id=?").all(...args) as {source_id:string;turn_id:string|null;fact_json:string;received_at:string}[];
     const records=rows.map(row=>({sourceId:row.source_id,turnId:row.turn_id,recordedAt:row.received_at,fact:JSON.parse(row.fact_json) as UsageFact}));
-    const gaps=this.database.prepare("SELECT g.source_id,g.reason,g.subject FROM usage_gaps g JOIN usage_sources s ON s.id=g.source_id WHERE s.tenant_id=? AND s.principal_id=? AND s.thread_id=?").all(...args) as {source_id:string;reason:UsageReason;subject:string}[];
+    const gaps=this.database.prepare("SELECT g.source_id,g.reason,g.subject,g.affects_session FROM usage_gaps g JOIN usage_sources s ON s.id=g.source_id WHERE s.tenant_id=? AND s.principal_id=? AND s.thread_id=?").all(...args) as {source_id:string;reason:UsageReason;subject:string;affects_session:number}[];
     const sources=this.database.prepare("SELECT * FROM usage_sources WHERE tenant_id=? AND principal_id=? AND thread_id=?").all(...args) as Source[];
     const last={time:records.filter(row=>row.fact.sessionContribution!=="none").map(row=>row.recordedAt).sort().at(-1)??null};
     const byTurn=new Map<string,StoredFact[]>();
@@ -283,7 +283,7 @@ export class UsageService implements UsageSink {
     const make=(turnId:string|null,turnState:UsageReport["turnState"]):UsageReport=>{
       const selected=turnId===null?records:byTurn.get(turnId)??[];
       const sourceIds=new Set(selected.map(row=>row.sourceId));
-      const reasons=uniq(gaps.filter(gap=>turnId===null || gap.subject===turnId || (gap.subject==="" && sourceIds.has(gap.source_id))).map(gap=>gap.reason));
+      const reasons=uniq(gaps.filter(gap=>turnId===null ? gap.affects_session===1 : gap.subject===turnId || (gap.subject==="" && sourceIds.has(gap.source_id))).map(gap=>gap.reason));
       const summary=this.#summarize(selected,turnId!==null,reasons);
       const scopes=uniq(selected.flatMap(({fact})=>fact.turn?[fact.turn.scope]:[]));
       const hasValue=Object.values(summary.metrics).some(m=>m.value!==null)||summary.costs.length>0;
