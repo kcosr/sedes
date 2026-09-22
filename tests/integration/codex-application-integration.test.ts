@@ -1,3 +1,4 @@
+import { UsageService } from "../../src/server/usage/usage-service.js";
 import { importLegacyDatabaseConfigurationFixture } from "../support/database-configuration-fixture.js";
 import path from "node:path";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
@@ -615,7 +616,9 @@ describe("Codex production application integration", () => {
     try {
       await acquireBackendNativeStores(prepared.nativeStores, resources);
       const registry = new AgentBackendRegistry();
+      const usage = new UsageService(database);
       const runtimeModules = await initializeBackendModuleRuntimes({
+        usage,
         preparedModules: [prepared],
         database,
         scope,
@@ -797,7 +800,7 @@ describe("Codex production application integration", () => {
       });
       resources.defer("conversation actors", () => actors!.close());
       const threads = new ThreadApplicationService({
-    usage: { registerVisibleTurns: () => undefined },
+    usage,
         inventory: new DatabaseThreadApplicationInventoryReader({
           inventory,
           queue,

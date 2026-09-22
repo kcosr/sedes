@@ -3723,10 +3723,11 @@ class PiConversationHandle implements ConversationHandle {
 
   #consume(event: AgentSessionEvent): void {
     if (this.#closed) return;
-    if (event.type === "agent_settled" || (event.type === "entry_appended" &&
+    if (event.type === "agent_settled") this.#usageAccounting.retryPending();
+    if (event.type === "entry_appended" &&
       (event.entry.type === "usage" || event.entry.type === "compaction" || event.entry.type === "branch_summary" ||
-        (event.entry.type === "message" && (event.entry.message.role === "assistant" || event.entry.message.role === "toolResult"))))) {
-      this.#usageAccounting.reconcile("live");
+        (event.entry.type === "message" && (event.entry.message.role === "assistant" || event.entry.message.role === "toolResult")))) {
+      this.#usageAccounting.append(event.entry, this.#activeTurnId);
     }
     if (event.type === "entry_appended" && event.entry.type === "usage") {
       // Cache warming can bill requests while the conversation is idle, with

@@ -43,7 +43,7 @@ describe("Codex cumulative accounting capture", () => {
   it("does not invent first-turn zero but accepts proven fresh creation", () => {
     const unknown = fixture(); unknown.observe(1, 100);
     expect(intervals(unknown.observations)).toHaveLength(0);
-    const fresh = fixture(true); fresh.capture.started("turn-1"); fresh.observe(1, 100);
+    const fresh = fixture(true); fresh.capture.started({turnId: "turn-1", generation: 1, sequence: 0}); fresh.observe(1, 100);
     expect(intervals(fresh.observations)[0]!.tokens.input).toBe("100");
   });
 
@@ -62,10 +62,53 @@ describe("Codex cumulative accounting capture", () => {
   it("does not treat turn-start as proof that the prior checkpoint was final", () => {
     const f = fixture(); f.observe(1, 100); f.observe(2, 150, "turn-2");
     expect(intervals(f.observations)).toHaveLength(0);
-    f.capture.started("turn-3"); f.observe(3, 180, "turn-3");
+    f.capture.started({turnId: "turn-3", generation: 1, sequence: 2}); f.observe(3, 180, "turn-3");
     expect(intervals(f.observations)).toHaveLength(0);
     f.observe(4, 200, "turn-3");
     expect(intervals(f.observations)[0]!.tokens.input).toBe("20");
+  });
+
+  it("includes the first interval after an ordered completed-to-started boundary", () => {
+    const f = fixture(); f.observe(1, 100, "turn-1");
+    f.capture.completed({turnId: "turn-1", generation: 1, sequence: 2});
+    f.capture.started({turnId: "turn-2", generation: 1, sequence: 3});
+    f.observe(4, 120, "turn-2"); f.observe(5, 150, "turn-2");
+    expect(intervals(f.observations).map(fact => fact.tokens.input)).toEqual(["20", "30"]);
+    expect(intervals(f.observations).every(fact => fact.turn?.scope === "partial_interval")).toBe(true);
+  });
+
+  it.each(["gap", "generation", "late_checkpoint", "wrong_completion", "reordered_start"])(
+    "does not use a completed-to-started boundary after %s", reason => {
+      const f = fixture(); f.observe(1, 100, "turn-1");
+      f.capture.completed({turnId: reason === "wrong_completion" ? "other-turn" : "turn-1", generation: 1, sequence: 2});
+      if (reason === "gap") f.capture.gap("capture_gap");
+      const generation = reason === "generation" ? 2 : 1;
+      f.capture.started({turnId: "turn-2", generation, sequence: reason === "reordered_start" ? 1 : 3});
+      if (reason === "late_checkpoint") f.observe(4, 110, "turn-1");
+      f.observe(5, 120, "turn-2", generation);
+      expect(intervals(f.observations).filter(fact => fact.turn?.backendTurnId === codexBackendTurnId("native-thread", "turn-2"))).toHaveLength(0);
+    },
+  );
+
+  it("keeps restored totals in the same source across an app-server generation change", () => {
+    // Pinned 0.153.0 thread_resume.rs:3502 restores total150 from a saved rollout
+    // in a fresh app-server; session/mod.rs:1450 seeds the cumulative accumulator.
+    const f = fixture(); f.observe(1, 150); f.capture.gap("capture_gap");
+    f.observe(1, 150, "turn-1", 2); f.observe(2, 175, "turn-1", 2);
+    expect(f.open).toHaveBeenCalledOnce();
+    expect(f.observations.map(observation => observation.facts[0]!.tokens.input)).toEqual(["150", "150", "175"]);
+    expect(intervals(f.observations).map(fact => fact.tokens.input)).toEqual(["25"]);
+  });
+
+  it("never creates a reset series just because a resumed generation reports lower totals", () => {
+    const f = fixture(); f.observe(1, 150); f.capture.gap("capture_gap");
+    f.observe(1, 20, "turn-1", 2);
+    expect(f.open).toHaveBeenCalledOnce();
+    expect(f.open.mock.calls[0]![0].epoch).toBe("native-counter-v1");
+    expect(intervals(f.observations)).toHaveLength(0);
+    // The durable receiver compares20 with its preserved150 checkpoint and
+    // holds it as a regression. Adapter-local generation loss cannot erase it.
+    expect(f.observations.at(-1)?.replaceCheckpoint).toBe(true);
   });
 
   it("never treats regression as reset or resumes allocating when counters catch up", () => {

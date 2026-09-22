@@ -16,6 +16,16 @@ function fixture() {
   return { cache, getUsage };
 }
 describe("turn usage popover", () => {
+  it("uses metric conflict quality and displays the legacy snapshot time", () => {
+    const report=usageReport();
+    report.summary.metrics.input={value:"10",quality:"conflict",basis:[],providerPresence:"unknown"};
+    report.legacy=usageReport().summary;
+    report.legacyRecordedAt="2026-09-21T10:00:00Z";
+    const {container}=render(<UsageDetails report={report} />);
+    expect(screen.getByText("Usage reconciliation incomplete")).toBeVisible();
+    expect(screen.getByText("10 (last valid)")).toBeVisible();
+    expect(container.querySelector('time[datetime="2026-09-21T10:00:00Z"]')).toBeVisible();
+  });
   it("labels unresolved resets and incomplete money as recorded subtotals", () => {
     const report = usageReport();
     report.summary.reasons = ["source_reset"];

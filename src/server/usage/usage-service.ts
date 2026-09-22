@@ -90,13 +90,14 @@ export class UsageService implements UsageSink {
     if (turnId !== null && !turn) throw new DomainError("not_found", "The turn was not found.");
     const stored = turnId === null ? state?.report_json : turn?.report_json;
     const report:UsageReport = stored ? usageReportSchema.parse(JSON.parse(stored)) : {
-      threadId,turnId,revision:String(state?.revision ?? 0n),support:target.kind === "grok_build" ? "unsupported" : "supported",state:"unavailable",captureState:"idle",measurementScope:turnId === null ? "session":null,turnState:turn?.status ?? null,lastRecordedAt:null,inherited:false,summary:emptyUsageSummary(),legacy:null,
+      threadId,turnId,revision:String(state?.revision ?? 0n),support:target.kind === "grok_build" ? "unsupported" : "supported",state:"unavailable",captureState:"idle",measurementScope:turnId === null ? "session":null,turnState:turn?.status ?? null,lastRecordedAt:null,inherited:false,summary:emptyUsageSummary(),legacy:null,legacyRecordedAt:null,
     };
     if (turnId === null && state?.legacy_json) {
       const legacy = emptyUsageSummary();
-      const values = JSON.parse(state.legacy_json) as Partial<Record<UsageTokenKind,string>>;
+      const values = JSON.parse(state.legacy_json) as Partial<Record<UsageTokenKind,string>> & {updatedAt?: number};
       for (const key of USAGE_TOKEN_KINDS) if (values[key] !== undefined) legacy.metrics[key] = {value:usageIntegerSchema.parse(values[key]),quality:"partial",basis:["sdk_normalized"],providerPresence:"unknown"};
       legacy.reasons=["legacy_coverage_unknown"]; report.legacy=legacy;
+      report.legacyRecordedAt=values.updatedAt === undefined ? null : new Date(values.updatedAt).toISOString();
     }
     if (this.#failed.has(hash([scope.tenantId,scope.principalId,threadId]))) { report.captureState="failed";report.state=report.state === "unavailable"?"unavailable":"partial";report.summary.reasons=uniq([...report.summary.reasons,"capture_failed"]); }
     return usageReportSchema.parse(report);
@@ -157,6 +158,7 @@ export class UsageService implements UsageSink {
     return {
       registerTurns:(turns, inherited) => run(() => this.#register(scope,threadId,binding.backendInstanceId,turns,inherited)),
       capture:(observations) => run(() => {for (const raw of observations) { const parsed=observationSchema.safeParse(raw);if (!parsed.success || Buffer.byteLength(JSON.stringify(parsed.data), "utf8") > 65_536) {this.#gap(sourceId,"invalid_evidence");continue;} this.#capture(scope,threadId,binding.backendInstanceId,sourceId,parsed.data,input.normalizationVersion); }}),
+      reconcile:() => run(() => {this.database.prepare("DELETE FROM usage_gaps WHERE source_id=? AND reason IN ('capture_gap','capture_failed')").run(sourceId);}),
       gap:(reason) => run(() => this.#gap(sourceId,usageReasonSchema.parse(reason))),
       seal:(reason) => {if (!admitted) return;run(() => {this.database.prepare("UPDATE usage_sources SET capture_state=? WHERE id=?").run(reason === "detached" ? "disconnected":"idle",sourceId);if(reason === "reset")this.#gap(sourceId,"source_reset");});sealed=true;if(this.#incarnations.get(sourceId)===incarnation)this.#incarnations.delete(sourceId);},
     };
@@ -177,19 +179,27 @@ export class UsageService implements UsageSink {
     }
 
   }
-  #gap(sourceId:string,reason:UsageReason):void {this.database.prepare("INSERT OR IGNORE INTO usage_gaps(source_id,reason,recorded_at) VALUES(?,?,?)").run(sourceId,reason,new Date().toISOString());}
+  #gap(sourceId:string,reason:UsageReason,subject=""):void {this.database.prepare("INSERT OR IGNORE INTO usage_gaps(source_id,reason,subject,recorded_at) VALUES(?,?,?,?)").run(sourceId,reason,subject,new Date().toISOString());}
   #capture(scope:RequestScope,threadId:string,backendId:string,sourceId:string,observation:UsageObservation,normalizationVersion:string):void {
     const semantic={order:observation.order,replaceCheckpoint:observation.replaceCheckpoint,facts:observation.facts};
     const fingerprint=hash(semantic);
-    const existing=this.database.prepare("SELECT fingerprint FROM usage_observations WHERE source_id=? AND observation_id=? AND revision=?").get(sourceId,observation.id,observation.revision) as {fingerprint:string}|undefined;
-    if(existing){if(existing.fingerprint!==fingerprint)this.#gap(sourceId,"conflicting_evidence");return;}
+    const existing=this.database.prepare("SELECT fingerprint,evidence_json FROM usage_observations WHERE source_id=? AND observation_id=? AND revision=?").get(sourceId,observation.id,observation.revision) as {fingerprint:string;evidence_json:string}|undefined;
+    if(existing){
+      if(existing.fingerprint!==fingerprint){
+        const facts=[...(JSON.parse(existing.evidence_json) as {facts:UsageFact[]}).facts,...observation.facts];
+        if(facts.length && facts.every(fact=>fact.turn && fact.sessionContribution!=="checkpoint")){
+          for(const fact of facts)this.#gap(sourceId,"conflicting_evidence",applicationTurnIdForBackendTurn({backendInstanceId:backendId,sourceApplicationThreadId:threadId,backendTurnId:fact.turn!.backendTurnId}));
+        }else this.#gap(sourceId,"conflicting_evidence");
+      }
+      return;
+    }
     this.database.prepare("INSERT INTO usage_observations(source_id,observation_id,revision,fingerprint,evidence_json,normalization_version,occurred_at,received_at) VALUES(?,?,?,?,?,?,?,?)").run(sourceId,observation.id,observation.revision,fingerprint,canonical(semantic),normalizationVersion,observation.occurredAt,new Date().toISOString());
     const source=this.database.prepare("SELECT * FROM usage_sources WHERE id=?").get(sourceId) as Source;
     if(observation.replaceCheckpoint && observation.order!==null && source.frontier!==null && BigInt(observation.order)<BigInt(source.frontier)) return;
-    const previous=this.database.prepare("SELECT fact_json FROM usage_records WHERE source_id=?").all(sourceId) as {fact_json:string}[];
+    const previous=this.database.prepare("SELECT r.fact_json, json_extract(o.evidence_json, '$.order') AS source_order FROM usage_records r JOIN usage_observations o ON o.source_id=r.source_id AND o.observation_id=r.observation_id AND o.revision=r.observation_revision WHERE r.source_id=?").all(sourceId) as {fact_json:string;source_order:string|null}[];
     const oldFacts=previous.map(row=>JSON.parse(row.fact_json) as UsageFact);
-    const locked = this.database.prepare("SELECT 1 FROM usage_gaps WHERE source_id=? AND reason IN ('counter_regression','conflicting_evidence')").get(sourceId);
-    if (locked && observation.facts.some(f => f.sessionContribution === "checkpoint" || f.turn?.contribution === "checkpoint")) return;
+    const locked = this.database.prepare("SELECT 1 FROM usage_gaps WHERE source_id=? AND subject='' AND reason IN ('counter_regression','conflicting_evidence')").get(sourceId);
+    if (locked && observation.facts.some(f => f.sessionContribution === "checkpoint")) return;
     if(observation.replaceCheckpoint){
       for(const key of USAGE_TOKEN_KINDS){
         const before=oldFacts.filter(f=>f.sessionContribution==="checkpoint" && f.tokens[key] != null);
@@ -211,9 +221,16 @@ export class UsageService implements UsageSink {
       if(fact.inheritedFrom){this.#gap(sourceId,"inherited_baseline_unknown");continue;}
       const old=oldFacts.find(f=>f.id===fact.id);
       if(old && canonical(old)===canonical(fact))continue;
-      if(old && canonical(old)!==canonical(fact) && !observation.replaceCheckpoint){
-        if(fact.sessionContribution!=="checkpoint" && fact.turn?.contribution!=="checkpoint"){this.#gap(sourceId,"conflicting_evidence");continue;}
-        if(USAGE_TOKEN_KINDS.some(key=>old.tokens[key]!=null && (fact.tokens[key]==null || BigInt(fact.tokens[key]!)<BigInt(old.tokens[key]!)))){this.#gap(sourceId,"counter_regression");continue;}
+      if(old && !observation.replaceCheckpoint){
+        const subject=fact.turn?applicationTurnIdForBackendTurn({backendInstanceId:backendId,sourceApplicationThreadId:threadId,backendTurnId:fact.turn.backendTurnId}):"";
+        if(fact.sessionContribution==="none" && fact.turn?.contribution==="checkpoint"){
+          const oldOrder=previous[oldFacts.indexOf(old)]!.source_order;
+          if(observation.order!==null && oldOrder!==null){
+            if(BigInt(observation.order)<BigInt(oldOrder))continue;
+            if(BigInt(observation.order)===BigInt(oldOrder)){this.#gap(sourceId,"conflicting_evidence",subject);continue;}
+          }else{this.#gap(sourceId,"conflicting_evidence",subject);continue;}
+        }else if(fact.sessionContribution!=="checkpoint"){this.#gap(sourceId,"conflicting_evidence",subject);continue;}
+        else if(USAGE_TOKEN_KINDS.some(key=>old.tokens[key]!=null && (fact.tokens[key]==null || BigInt(fact.tokens[key]!)<BigInt(old.tokens[key]!)))){this.#gap(sourceId,"counter_regression");continue;}
       }
       const turnId=fact.turn?applicationTurnIdForBackendTurn({backendInstanceId:backendId,sourceApplicationThreadId:threadId,backendTurnId:fact.turn.backendTurnId}):null;
       const values=USAGE_TOKEN_KINDS.map(key=>fact.tokens[key]==null?null:BigInt(fact.tokens[key]!));
@@ -233,7 +250,7 @@ export class UsageService implements UsageSink {
     };
     const contributing = [...new Set([...USAGE_TOKEN_KINDS.flatMap(key => select(f => f.tokens[key] != null)), ...select(f => f.costs.length > 0)])];
     summary.reasons = uniq([...reasons, ...contributing.flatMap(({fact}) => fact.reasons)]);
-    const conflict=summary.reasons.some(reason=>["counter_regression","conflicting_evidence","invalid_evidence"].includes(reason));
+    const conflict=summary.reasons.some(reason=>["counter_regression","conflicting_evidence"].includes(reason));
     for(const key of USAGE_TOKEN_KINDS){
       const chosen=select(f=>f.tokens[key]!=null);
       if(!chosen.length)continue;
@@ -258,18 +275,20 @@ export class UsageService implements UsageSink {
     const revision=state.revision;
     const rows=this.database.prepare("SELECT r.source_id,r.turn_id,r.fact_json,o.received_at FROM usage_records r JOIN usage_sources s ON s.id=r.source_id JOIN usage_observations o ON o.source_id=r.source_id AND o.observation_id=r.observation_id AND o.revision=r.observation_revision WHERE s.tenant_id=? AND s.principal_id=? AND s.thread_id=?").all(...args) as {source_id:string;turn_id:string|null;fact_json:string;received_at:string}[];
     const records=rows.map(row=>({sourceId:row.source_id,turnId:row.turn_id,recordedAt:row.received_at,fact:JSON.parse(row.fact_json) as UsageFact}));
-    const reasons=(this.database.prepare("SELECT DISTINCT g.reason FROM usage_gaps g JOIN usage_sources s ON s.id=g.source_id WHERE s.tenant_id=? AND s.principal_id=? AND s.thread_id=?").all(...args) as {reason:UsageReason}[]).map(row=>row.reason);
+    const gaps=this.database.prepare("SELECT g.source_id,g.reason,g.subject FROM usage_gaps g JOIN usage_sources s ON s.id=g.source_id WHERE s.tenant_id=? AND s.principal_id=? AND s.thread_id=?").all(...args) as {source_id:string;reason:UsageReason;subject:string}[];
     const sources=this.database.prepare("SELECT * FROM usage_sources WHERE tenant_id=? AND principal_id=? AND thread_id=?").all(...args) as Source[];
     const last={time:records.filter(row=>row.fact.sessionContribution!=="none").map(row=>row.recordedAt).sort().at(-1)??null};
     const byTurn=new Map<string,StoredFact[]>();
     for(const row of records)if(row.turnId){const entries=byTurn.get(row.turnId)??[];entries.push(row);byTurn.set(row.turnId,entries);}
     const make=(turnId:string|null,turnState:UsageReport["turnState"]):UsageReport=>{
       const selected=turnId===null?records:byTurn.get(turnId)??[];
+      const sourceIds=new Set(selected.map(row=>row.sourceId));
+      const reasons=uniq(gaps.filter(gap=>turnId===null || gap.subject===turnId || (gap.subject==="" && sourceIds.has(gap.source_id))).map(gap=>gap.reason));
       const summary=this.#summarize(selected,turnId!==null,reasons);
       const scopes=uniq(selected.flatMap(({fact})=>fact.turn?[fact.turn.scope]:[]));
       const hasValue=Object.values(summary.metrics).some(m=>m.value!==null)||summary.costs.length>0;
       const complete=hasValue && !summary.reasons.length && Object.values(summary.metrics).every(m=>m.quality==="complete"||m.quality==="unreported") && (turnId===null || (turnState==="completed" && scopes.length===1 && scopes[0]==="whole_turn"));
-      return usageReportSchema.parse({threadId,turnId,revision:String(revision),support:this.#authorize(scope,threadId).kind === "grok_build" ? "unsupported" : "supported",state:hasValue?(complete?"complete":"partial"):"unavailable",captureState:sources.some(s=>s.capture_state==="active")?"active":sources.some(s=>s.capture_state==="disconnected")?"disconnected":"idle",measurementScope:turnId===null?"session":scopes.length===1?scopes[0]:scopes.length?"partial_interval":null,turnState,lastRecordedAt:turnId===null?last.time:selected.map(row=>row.recordedAt).sort().at(-1)??null,inherited:false,summary,legacy:null});
+      return usageReportSchema.parse({threadId,turnId,revision:String(revision),support:this.#authorize(scope,threadId).kind === "grok_build" ? "unsupported" : "supported",state:hasValue?(complete?"complete":"partial"):"unavailable",captureState:sources.some(s=>s.capture_state==="active")?"active":sources.some(s=>s.capture_state==="disconnected")?"disconnected":"idle",measurementScope:turnId===null?"session":scopes.length===1?scopes[0]:scopes.length?"partial_interval":null,turnState,lastRecordedAt:turnId===null?last.time:selected.map(row=>row.recordedAt).sort().at(-1)??null,inherited:false,summary,legacy:null,legacyRecordedAt:null});
     };
     const report=make(null,null);
     const turns=this.database.prepare("SELECT turn_id,status,report_json,origin_thread_id,origin_turn_id FROM usage_turn_state WHERE tenant_id=? AND principal_id=? AND thread_id=?").all(...args) as {turn_id:string;status:UsageReport["turnState"];report_json:string|null;origin_thread_id:string|null;origin_turn_id:string|null}[];

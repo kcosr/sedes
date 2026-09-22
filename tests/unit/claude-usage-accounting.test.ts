@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { NO_USAGE_CAPTURE } from "../../src/server/usage/contracts.js";
+import { usageMoneyAmountSchema } from "../../src/shared/protocol/usage-accounting.js";
+import { describe, expect, it, vi } from "vitest";
 import type { SDKResultMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { claudeMessageObservation, claudePipelineObservation, claudeTurnObservation, ClaudeUsageAccounting } from "../../src/server/backends/claude/claude-usage-accounting.js";
 import type { UsageObservation, UsageSink } from "../../src/server/usage/contracts.js";
@@ -19,7 +21,7 @@ describe("Claude native usage accounting", () => {
   });
   it("reuses actual query epochs and keeps history independent of resumed query checkpoints", () => {
     const epochs: string[] = [], captured: UsageObservation[] = [], sealed: string[] = [];
-    const sink: UsageSink = {open: (source) => {epochs.push(source.epoch); return {registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, seal: (reason) => sealed.push(reason)};}};
+    const sink: UsageSink = {open: (source) => {epochs.push(source.epoch); return {registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: (reason) => sealed.push(reason)};}};
     const accounting = new ClaudeUsageAccounting({sink, nativeNamespace: "native-store", binding: {tenantId: "t", ownerPrincipalId: "p", applicationThreadId: "thread", backendInstanceId: "claude", connectionProfileId: "c", executionEnvironmentId: "e", backendConversationId: "native", createdAt: "2026-09-22T00:00:00Z"}});
     accounting.admitQuery("query-1", false); accounting.admitQuery("query-1", true);
     accounting.pipeline(result(20)); accounting.pipeline(result(30, "next")); accounting.result(result(30), "turn"); accounting.reset();
@@ -27,12 +29,32 @@ describe("Claude native usage accounting", () => {
   });
   it("reports each delivery transaction outcome for existing replay acknowledgement", () => {
     let durable=false;
-    const sink:UsageSink={open:()=>({registerTurns:()=>{},capture:()=>durable,gap:()=>{},seal:()=>{}})};
+    const sink:UsageSink={open:()=>({registerTurns:()=>{},capture:()=>durable,gap:()=>{},reconcile:()=>true,seal:()=>{}})};
     const accounting=new ClaudeUsageAccounting({sink,nativeNamespace:"store",binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"claude",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:"native",createdAt:"2026-09-22T00:00:00Z"}});
     accounting.admitQuery("query",false);accounting.beginDelivery();accounting.pipeline(result(20));
     expect(accounting.deliveryCommitted).toBe(false);
     durable=true;accounting.beginDelivery();accounting.pipeline(result(20));
     expect(accounting.deliveryCommitted).toBe(true);
+  });
+  it("normalizes Claude summed floating-point costs to supported decimal money", () => {
+    const message={...result(20),total_cost_usd:0.0007+0.0002};
+    const observation=claudePipelineObservation(message)!;
+    const amount=observation.facts.find(fact=>fact.id==="query_cost")!.costs[0]!.amount;
+    expect(amount).toBe("0.0009");expect(usageMoneyAmountSchema.safeParse(amount).success).toBe(true);
+  });
+  it("batches history once and caches only successfully committed message revisions", () => {
+    let durable=true;
+    const capture=vi.fn((_observations:readonly UsageObservation[])=>durable);
+    const accounting=new ClaudeUsageAccounting({sink:{open:()=>({...NO_USAGE_CAPTURE,capture})},nativeNamespace:"store",binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"claude",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:"native",createdAt:"2026-09-22T00:00:00Z"}});
+    const message=(id:number)=>({type:"assistant",uuid:`frame-${id}`,parent_tool_use_id:null,message:{id:`message-${id}`,model:"model-a",usage:{input_tokens:id,output_tokens:2,cache_read_input_tokens:0,cache_creation_input_tokens:0}}} as SessionMessage);
+    const history=Array.from({length:130},(_,id)=>({message:message(id),backendTurnId:`turn-${id}`}));
+    accounting.messages(history,"history");expect(capture.mock.calls.map(([batch])=>batch.length)).toEqual([64,64,2]);
+    accounting.messages(history,"history");expect(capture).toHaveBeenCalledTimes(3);
+    durable=false;accounting.beginDelivery();accounting.message(message(131),"turn-131","live");expect(accounting.deliveryCommitted).toBe(false);
+    durable=true;accounting.beginDelivery();accounting.message(message(131),"turn-131","live");expect(accounting.deliveryCommitted).toBe(true);
+    accounting.message(message(131),"turn-131","live");expect(capture).toHaveBeenCalledTimes(5);
+    const corrected=message(131);(corrected.message as {usage:{output_tokens:number}}).usage.output_tokens=3;
+    accounting.message(corrected,"turn-131","live");expect(capture).toHaveBeenCalledTimes(6);
   });
   it("does not replace real counters with synthetic startup failures", () => {
     expect(claudePipelineObservation({...result(0), subtype: "error_during_execution", startup_failure_reason: "cwd_unavailable"} as SDKResultMessage)).toBeUndefined();

@@ -7479,6 +7479,17 @@ describe("CodexConversationHandle", () => {
     expect(observations).toHaveLength(2);
     expect(observations[1]!.facts).toContainEqual(expect.objectContaining({ kind: "turn_aggregate",
       sessionContribution: "none", tokens: expect.objectContaining({ input: "50" }) }));
+    harness.notify("turn/completed", { threadId: "thread-1", turn: nativeTurn(0) });
+    harness.notify("turn/started", { threadId: "thread-1", turn: { ...nativeTurn(1), status: "inProgress", completedAt: null } });
+    for (const total of [170, 200]) harness.notify("thread/tokenUsage/updated", {
+      threadId: "thread-1", turnId: "turn-1", tokenUsage: {
+        total: { inputTokens: total, outputTokens: 0, totalTokens: total, cachedInputTokens: 5, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+        last: { inputTokens: 20, outputTokens: 0, totalTokens: 20, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+        modelContextWindow: 1000,
+      },
+    });
+    await vi.waitFor(() => expect(observations).toHaveLength(4));
+    expect(observations.slice(2).flatMap(observation => observation.facts.filter(fact => fact.kind === "turn_aggregate").map(fact => fact.tokens.input))).toEqual(["20", "30"]);
     expect(await handle.usage()).toEqual({ context: { usedTokens: 20, windowTokens: 1000, percent: 2 } });
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();

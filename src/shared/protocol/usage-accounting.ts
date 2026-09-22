@@ -63,5 +63,6 @@ export const usageReportSchema = z.strictObject({
   inherited: z.boolean(),
   summary: usageSummarySchema,
   legacy: usageSummarySchema.nullable(),
+  legacyRecordedAt: z.iso.datetime().nullable(),
 });
 export type UsageReport = z.infer<typeof usageReportSchema>;

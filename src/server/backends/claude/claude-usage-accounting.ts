@@ -1,3 +1,4 @@
+import { nativeUsageMoney } from "../../usage/native-money.js";
 import { createHash } from "node:crypto";
 import type { SDKResultMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { BackendTurn } from "../../../shared/protocol/backend.js";
@@ -5,15 +6,6 @@ import type { UsageModel } from "../../../shared/protocol/usage-accounting.js";
 import type { ConversationBinding } from "../contracts.js";
 import { usageTokens, type UsageCapture, type UsageFact, type UsageObservation, type UsageSink } from "../../usage/contracts.js";
 
-function decimalAmount(value: number): string {
-  if (!Number.isFinite(value) || value < 0) throw new Error("invalid_native_usage_money");
-  const text = String(value); if (!/[eE]/.test(text)) return text;
-  const [mantissa, exponentText] = text.toLowerCase().split("e");
-  const [whole, fraction = ""] = mantissa!.split(".");
-  const digits = whole! + fraction; const point = whole!.length + Number(exponentText);
-  if (point <= 0) return `0.${"0".repeat(-point)}${digits}`;
-  return point >= digits.length ? digits + "0".repeat(point - digits.length) : `${digits.slice(0, point)}.${digits.slice(point)}`;
-}
 function sum(...values: (number | null | undefined)[]): number | null {
   if (values.some((v) => v === null || v === undefined)) return null;
   return values.reduce<number>((total, value) => total + value!, 0);
@@ -41,12 +33,12 @@ export function claudePipelineObservation(message: SDKResultMessage): UsageObser
       uncachedInput: usage.inputTokens, output: usage.outputTokens, cacheRead: usage.cacheReadInputTokens,
       cacheWrite: usage.cacheCreationInputTokens, reasoning: usage.thinkingTokens}), models: [{provider: usage.provider ?? null, model}],
     pricing: {canonicalModel: usage.canonicalModel ?? null, basis: usage.costBasis ?? null,
-      components: typeof usage.costUSD === "number" ? [{kind: "model_total", amount: decimalAmount(usage.costUSD), currency: "USD"}] : []},
+      components: typeof usage.costUSD === "number" ? [{kind: "model_total", amount: nativeUsageMoney(usage.costUSD), currency: "USD"}] : []},
   }));
   // SDK summary is an alternative to the per-model costs, never their addition.
   facts.push({...baseFact, id: "query_cost", kind: "cumulative", coverageDomain: "claude_query_pipeline",
     sessionContribution: "checkpoint", quality: "complete", reasons: [], tokens: {}, turn: null,
-    costs: [{amount: decimalAmount(message.total_cost_usd), currency: "USD", kind: "estimated", provenance: "Claude Agent SDK 0.3.274 cumulative query estimate"}]});
+    costs: [{amount: nativeUsageMoney(message.total_cost_usd), currency: "USD", kind: "estimated", provenance: "Claude Agent SDK 0.3.274 cumulative query estimate"}]});
   return {id: `${message.uuid}:pipeline`, revision: "1", order: message.result_index === undefined ? null : String(message.result_index),
     provenance: "live", occurredAt: null, replaceCheckpoint: true, facts};
 }
@@ -83,6 +75,7 @@ export class ClaudeUsageAccounting {
   readonly #namespace: string;
   readonly #history: UsageCapture;
   readonly #models = new Map<string, Map<string, UsageModel>>();
+  readonly #committedMessages = new Map<string, string>();
   #query: UsageCapture | undefined;
   #epoch: string | undefined;
   #deliveryCommitted = true;
@@ -102,14 +95,30 @@ export class ClaudeUsageAccounting {
       nativeSession: this.#binding.backendConversationId, normalizationVersion: "claude-agent-sdk-0.3.274/usage-v1", epoch, initialBaseline: retained ? "unknown" : "proven_zero"});
   }
   message(message: SessionMessage, backendTurnId: string, provenance: "live" | "history"): void {
-    try {
-      const observation = claudeMessageObservation(message, backendTurnId, provenance);
-      if (!observation) return;
-      if (!this.#history.capture([observation])) this.#deliveryCommitted = false;
-      let models = this.#models.get(backendTurnId);
-      if (!models) { models = new Map(); this.#models.set(backendTurnId, models); }
-      for (const model of observation.facts[0]!.models) models.set(JSON.stringify(model), model);
-    } catch { this.#history.gap("invalid_evidence"); }
+    this.messages([{message, backendTurnId}], provenance);
+  }
+  messages(messages: readonly {message: SessionMessage; backendTurnId: string}[], provenance: "live" | "history"): void {
+    let batch: UsageObservation[] = [];
+    const flush = (): void => {
+      if (!batch.length) return;
+      if (this.#history.capture(batch)) {
+        for (const observation of batch) this.#committedMessages.set(observation.id, observation.revision);
+      } else this.#deliveryCommitted = false;
+      batch = [];
+    };
+    for (const {message, backendTurnId} of messages) {
+      try {
+        const observation = claudeMessageObservation(message, backendTurnId, provenance);
+        if (!observation) continue;
+        let models = this.#models.get(backendTurnId);
+        if (!models) { models = new Map(); this.#models.set(backendTurnId, models); }
+        for (const model of observation.facts[0]!.models) models.set(JSON.stringify(model), model);
+        if (this.#committedMessages.get(observation.id) === observation.revision) continue;
+        batch.push(observation);
+        if (batch.length === 64) flush();
+      } catch { this.#history.gap("invalid_evidence"); }
+    }
+    flush();
   }
   pipeline(message: SDKResultMessage): void {
     try {

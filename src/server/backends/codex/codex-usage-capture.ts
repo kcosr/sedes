@@ -17,6 +17,8 @@ export class CodexUsageCapture {
   readonly #parentNativeSession: string | null;
   #previous: { generation: number; sequence: number; turnId: string | null; tokens: UsageFact["tokens"] } | undefined;
   #startedTurn: string | undefined;
+  #completed: { turnId: string; generation: number; sequence: number } | undefined;
+  #boundary: { turnId: string; generation: number; sequence: number; baselineSequence: number } | undefined;
   #conflict = false;
   #provenZero: boolean;
   #zeroBasedTurn: string | undefined;
@@ -48,13 +50,30 @@ export class CodexUsageCapture {
     this.#safely(() => this.#capture.registerTurns(turns, inherited));
   }
 
-  started(turnId: string): void { this.#startedTurn = turnId; }
+  started(event: { turnId: string; generation: number; sequence: number }): void {
+    this.#startedTurn = event.turnId;
+    const previous = this.#previous;
+    const completed = this.#completed;
+    this.#boundary = previous && completed && previous.turnId === completed.turnId &&
+      previous.turnId !== event.turnId && previous.generation === event.generation &&
+      completed.generation === event.generation && previous.sequence < completed.sequence &&
+      completed.sequence < event.sequence
+      ? { ...event, baselineSequence: previous.sequence } : undefined;
+    this.#completed = undefined;
+  }
+
+  completed(event: { turnId: string; generation: number; sequence: number }): void {
+    this.#completed = event;
+    this.#boundary = undefined;
+  }
 
   gap(reason: UsageReason): void {
     this.#previous = undefined;
     this.#provenZero = false;
     this.#zeroBasedTurn = undefined;
     this.#startedTurn = undefined;
+    this.#completed = undefined;
+    this.#boundary = undefined;
     this.#safely(() => this.#capture.gap(reason));
   }
 
@@ -86,7 +105,9 @@ export class CodexUsageCapture {
         if (regression) {
           this.#conflict = true;
           this.#capture.gap("counter_regression");
-        } else if (previous.turnId === input.turnId) {
+        } else if (previous.turnId === input.turnId || (this.#boundary?.turnId === input.turnId &&
+          this.#boundary.generation === input.generation && this.#boundary.sequence < input.sequence &&
+          this.#boundary.baselineSequence === previous.sequence)) {
           const delta = Object.fromEntries(Object.entries(tokens).map(([key, value]) => {
             const before = previous.tokens[key as keyof typeof tokens];
             return [key, value === null || before == null ? null : String(BigInt(value) - BigInt(before))];
@@ -101,6 +122,8 @@ export class CodexUsageCapture {
       }
       const accepted = this.#capture.capture([{ id: receipt, revision: "1", order: null, provenance: "live", occurredAt: null,
         replaceCheckpoint: true, facts }]);
+      this.#boundary = undefined;
+      this.#completed = undefined;
       if (!accepted) { this.#previous = undefined; this.#startedTurn = undefined; return; }
       if (!this.#conflict) this.#previous = { generation: input.generation, sequence: input.sequence, turnId: input.turnId, tokens };
       this.#startedTurn = undefined;

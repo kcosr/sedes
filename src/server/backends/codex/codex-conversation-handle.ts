@@ -3873,7 +3873,13 @@ export class CodexConversationHandle implements ConversationHandle {
     const threadId = notificationThreadId(notification.params);
     if (threadId !== this.binding.backendConversationId) return;
     if (notification.method === "turn/started") {
-      try { this.#usageCapture.started(codexC2NotificationSchemas["turn/started"].parse(notification.params).turn.id); }
+      try { this.#usageCapture.started({ turnId: codexC2NotificationSchemas["turn/started"].parse(notification.params).turn.id,
+        generation: notification.generation, sequence: notification.sequence }); }
+      catch { this.#usageCapture.gap("invalid_evidence"); }
+    }
+    if (notification.method === "turn/completed") {
+      try { this.#usageCapture.completed({ turnId: codexC2NotificationSchemas["turn/completed"].parse(notification.params).turn.id,
+        generation: notification.generation, sequence: notification.sequence }); }
       catch { this.#usageCapture.gap("invalid_evidence"); }
     }
     if (notification.method === "thread/tokenUsage/updated") {

@@ -187,6 +187,7 @@ export interface ClaudeConversationHandleInput {
 /** One attached Sedes conversation over one warm official Agent SDK query. */
 export class ClaudeConversationHandle implements ConversationHandle {
   readonly #usageAccounting: ClaudeUsageAccounting;
+  readonly #usageTurnByMessageUuid = new Map<string, string>();
   readonly #usageTurnByInputUuid = new Map<string, string>();
   #inheritedUsage: ClaudeHistoryProjection["inheritedUsage"];
   readonly binding: ConversationBinding;
@@ -1400,12 +1401,17 @@ export class ClaudeConversationHandle implements ConversationHandle {
       this.#projectionMessages.push(sessionMessage);
       this.#refreshProjection();
       this.#usage = mergeUsage(this.#projection.usage ?? {}, this.#usage);
-      this.#captureHistoryUsage("live");
       this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot);
       if (message.type === "user" && [...this.#projection.nativeUserMessageUuidByBackendTurnId.values()].includes(message.uuid!)) {
         this.#setRunState("running");
       }
       this.#emit({ type: "usage_changed", usage: this.#usage });
+    }
+    // Retained replay can repeat an already-projected message whose accounting
+    // transaction failed. Retry just this message before acknowledging delivery.
+    const usageTurnId = this.#usageTurnByMessageUuid.get(sessionMessage.uuid);
+    if (usageTurnId && !this.#inheritedUsage?.turns.some(turn => turn.backendTurnId === usageTurnId)) {
+      this.#usageAccounting.message(sessionMessage, usageTurnId, "live");
     }
     if (message.type === "user" && message.uuid) {
       const submission = this.#submissions.get(message.uuid);
@@ -1502,17 +1508,12 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#runState = this.#projection.snapshot.runState;
   }
 
-  #captureHistoryUsage(provenance: "live" | "history" = "history"): void {
-    this.#inheritedUsage = this.#projection.inheritedUsage ?? this.#inheritedUsage;
-    this.#usageAccounting.registerTurns(this.#projection.usageTurns, this.#inheritedUsage);
-    for (const [turnId, uuid] of this.#projection.nativeUserMessageUuidByBackendTurnId) this.#usageTurnByInputUuid.set(uuid, turnId);
-    for (const turn of this.#projection.usageTurns) {
-      for (const correlation of turn.completionCorrelations ?? []) this.#usageTurnByInputUuid.set(correlation, turn.backendTurnId);
-    }
-    for (const message of this.#messages) {
-      const turnId = this.#projection.backendTurnIdByMessageUuid.get(message.uuid);
-      if (turnId && !this.#inheritedUsage?.turns.some(turn => turn.backendTurnId === turnId)) this.#usageAccounting.message(message, turnId, provenance);
-    }
+  #captureHistoryUsage(): void {
+    this.#usageAccounting.messages(this.#messages.flatMap(message => {
+      const backendTurnId = this.#usageTurnByMessageUuid.get(message.uuid);
+      return backendTurnId && !this.#inheritedUsage?.turns.some(turn => turn.backendTurnId === backendTurnId)
+        ? [{message, backendTurnId}] : [];
+    }), "history");
   }
 
   #invalidateProjection(code: string): BackendError {
@@ -1779,6 +1780,11 @@ export class ClaudeConversationHandle implements ConversationHandle {
     });
     this.#inheritedUsage = this.#projection.inheritedUsage ?? this.#inheritedUsage;
     this.#usageAccounting.registerTurns(this.#projection.usageTurns, this.#inheritedUsage);
+    for (const [uuid, turnId] of this.#projection.backendTurnIdByMessageUuid) this.#usageTurnByMessageUuid.set(uuid, turnId);
+    for (const [turnId, uuid] of this.#projection.nativeUserMessageUuidByBackendTurnId) this.#usageTurnByInputUuid.set(uuid, turnId);
+    for (const turn of this.#projection.usageTurns) {
+      for (const correlation of turn.completionCorrelations ?? []) this.#usageTurnByInputUuid.set(correlation, turn.backendTurnId);
+    }
     const retainedStart =
       this.#projection.window.retainedNativeMessageStartIndex;
     const retainedMessages = messages.slice(retainedStart);

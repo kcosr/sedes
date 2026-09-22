@@ -388,13 +388,23 @@ For contributor-facing protocol and lifecycle contracts, continue with
 
 Codex records cumulative `thread/tokenUsage/updated` observations on main.
 Repeated totals replace checkpoints rather than add another charge. Per-turn
-values are conservative differences between continuous, attributable checkpoints;
-a newly observed turn or completion event alone does not prove a final boundary.
+values are conservative differences between continuous, attributable checkpoints.
+The first interval of a new turn is included when Sedes observed the previous
+turn's checkpoint, its completion, and the new turn's start in that order within
+one uninterrupted runtime generation. A start alone, a reconnect, or a late
+checkpoint cannot establish that boundary. These remain recorded intervals,
+not a claim that all turn or child-agent usage is available.
 The latest-call counter is retained as lower-scope evidence, not the whole turn.
 
-Native history provides no usage backfill. A later checkpoint can recover session
-totals without recovering older turns. Reconnect does not prove a reset; unresolved
-counter regression retains the last valid value and shows reconciliation incomplete.
+Native history provides no per-turn usage backfill. Codex 0.153.0 restores its
+cumulative accumulator from the saved rollout on cold resume, including
+paginated resume. The pinned implementation is
+[`record_initial_history` at revision 41e22fee](https://github.com/openai/codex/blob/41e22fee981a63b3698df7ed36bad393cda24715/codex-rs/core/src/session/mod.rs#L1450),
+with [upstream resume fixtures](https://github.com/openai/codex/blob/41e22fee981a63b3698df7ed36bad393cda24715/codex-rs/app-server/tests/suite/v2/thread_resume.rs#L3502).
+A restored checkpoint can recover session totals without recovering older turns.
+Reconnect and process generation changes therefore preserve the same counter
+series. If resumed totals are lower, Sedes retains the last valid value and shows
+reconciliation incomplete; it does not invent a reset or charge a new series.
 Copied fork baselines are not newly charged. Usage notifications provide no model
 or provider attribution, so those dimensions remain unknown. Native child-thread
 usage is not captured separately and its inclusion in parent totals is unproven.

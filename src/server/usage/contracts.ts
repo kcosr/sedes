@@ -46,6 +46,8 @@ export interface UsageObservation {
 export interface UsageCapture {
   registerTurns(turns: readonly BackendTurn[], inherited?: { readonly turns: readonly { readonly backendTurnId: string; readonly sourceBackendTurnId: string }[] } & ({ readonly nativeSession: string } | { readonly forkOperationId: string })): void;
   capture(observations: readonly UsageObservation[]): boolean;
+  /** Call only after complete authoritative history has been successfully ingested. */
+  reconcile(): boolean;
   gap(reason: UsageReason): void;
   seal(reason: "reset" | "detached" | "closed"): void;
 }
@@ -65,6 +67,7 @@ export interface UsageSink {
 export const NO_USAGE_CAPTURE: UsageCapture = {
   registerTurns: () => undefined,
   capture: () => true,
+  reconcile: () => true,
   gap: () => undefined,
   seal: () => undefined,
 };

@@ -1,3 +1,4 @@
+import { nativeUsageMoney } from "../../usage/native-money.js";
 import { createHash } from "node:crypto";
 import type { SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Usage } from "@earendil-works/pi-ai";
@@ -37,13 +38,13 @@ export function piUsageObservation(entry: SessionEntry, backendTurnId: string | 
   const tokens = usageTokens({input, uncachedInput: usage.input, cacheRead: usage.cacheRead,
     cacheWrite: usage.cacheWrite, output: usage.output, reasoning: usage.reasoning,
     total: usage.totalTokens, requests: request});
-  const cost = decimalAmount(usage.cost.total);
+  const cost = nativeUsageMoney(usage.cost.total);
   const fact: UsageFact = {
     id: `${entry.id}:usage`, kind: activity === "model" ? "operation" : "auxiliary",
     sessionContribution: additive ? "additive" : "none", coverageDomain: "pi_native_entries",
     tokens, costs: [{amount: cost, currency: "USD", kind: "estimated", provenance: "pi-ai 0.86.0 SDK pricing"}],
     pricing: {canonicalModel: null, basis: "sdk_estimate", components: (["input", "output", "cacheRead", "cacheWrite"] as const)
-      .map((kind) => ({kind, amount: decimalAmount(usage.cost[kind]), currency: "USD"}))},
+      .map((kind) => ({kind, amount: nativeUsageMoney(usage.cost[kind]), currency: "USD"}))},
     models: [{provider, model}], basis: ["sdk_normalized"], providerPresence: "unknown",
     quality: additive ? "complete" : "partial", reasons: additive ? [] : ["unknown_attribution"], activity,
     turn: backendTurnId ? {backendTurnId, scope: "whole_turn", contribution: "additive"} : null,
@@ -52,18 +53,6 @@ export function piUsageObservation(entry: SessionEntry, backendTurnId: string | 
     provenance, occurredAt: validTime(entry.timestamp), replaceCheckpoint: false, facts: [fact]};
 }
 
-export function decimalAmount(value: number): string {
-  if (!Number.isFinite(value) || value < 0) throw new Error("invalid_native_usage_money");
-  const text = String(value);
-  if (!/[eE]/.test(text)) return text;
-  const [mantissa, exponentText] = text.toLowerCase().split("e");
-  const exponent = Number(exponentText);
-  const [whole, fraction = ""] = mantissa!.split(".");
-  const digits = whole! + fraction;
-  const point = whole!.length + exponent;
-  if (point <= 0) return `0.${"0".repeat(-point)}${digits}`;
-  return point >= digits.length ? digits + "0".repeat(point - digits.length) : `${digits.slice(0, point)}.${digits.slice(point)}`;
-}
 function validTime(value: string): string | null {
   const date = Date.parse(value); return Number.isFinite(date) ? new Date(date).toISOString() : null;
 }
@@ -75,6 +64,9 @@ export class PiUsageAccounting {
   readonly #authentication: PiToolIdentityAuthentication;
   readonly #inherited = new Set<string>();
   #parentNativeSession: string | undefined;
+  readonly #committed = new Map<string, string>();
+  readonly #pending = new Map<string, UsageObservation>();
+  readonly #turnByEntry = new Map<string, string>();
   constructor(input: {sink: UsageSink; binding: ConversationBinding; nativeNamespace: string; manager: SessionManager; authentication: PiToolIdentityAuthentication}) {
     this.#manager = input.manager; this.#authentication = input.authentication;
     this.#capture = input.sink.open({binding: input.binding, nativeNamespace: input.nativeNamespace,
@@ -97,32 +89,67 @@ export class PiUsageAccounting {
     this.reconcile("history");
   }
   reconcile(provenance: "live" | "history"): void {
+    let complete = true;
     try {
       const entries = this.#manager.getEntries();
       const parents = new Set(entries.map((entry) => entry.parentId));
-      const turnByEntry = new Map<string, string>();
+      const turns = new Map<string, import("../../../shared/protocol/backend.js").BackendTurn>();
+      const inheritedTurnIds = new Set<string>();
       for (const leaf of entries.filter((entry) => !parents.has(entry.id))) {
         const projected = new PiHistoryProjector({toolIdentityAuthentication: this.#authentication}).project(this.#manager.getBranch(leaf.id));
-        const inheritedTurnIds = [...new Set([...projected.backendTurnIdByEntryId]
-          .filter(([id]) => this.#inherited.has(id)).map(([, id]) => id))];
-        this.#capture.registerTurns(Object.values(projected.snapshot.turnsById), this.#parentNativeSession
-          ? {nativeSession: this.#parentNativeSession, turns: inheritedTurnIds.map(backendTurnId => ({backendTurnId, sourceBackendTurnId: backendTurnId}))} : undefined);
-        for (const [id, turn] of projected.backendTurnIdByEntryId) turnByEntry.set(id, turn);
+        for (const turn of Object.values(projected.snapshot.turnsById)) turns.set(turn.backendTurnId, turn);
+        for (const [id, turn] of projected.backendTurnIdByEntryId) {
+          this.#turnByEntry.set(id, turn);
+          if (this.#inherited.has(id)) inheritedTurnIds.add(turn);
+        }
       }
-      const observations: UsageObservation[] = [];
+      this.#capture.registerTurns([...turns.values()], this.#parentNativeSession
+        ? {nativeSession: this.#parentNativeSession, turns: [...inheritedTurnIds].map(backendTurnId => ({backendTurnId, sourceBackendTurnId: backendTurnId}))} : undefined);
       for (const entry of entries) {
-        if (this.#inherited.has(entry.id)) continue;
-        try {
-          const observation = piUsageObservation(entry, turnByEntry.get(entry.id) ?? null, provenance);
-          if (!observation) continue;
-          if (observation.facts.some((fact) => fact.reasons.includes("unknown_attribution"))) this.#capture.gap("unknown_attribution");
-          observations.push(observation);
-          if (observations.length === 64) this.#capture.capture(observations.splice(0));
-
-        } catch { this.#capture.gap("invalid_evidence"); }
+        if (!this.#queue(entry, this.#turnByEntry.get(entry.id) ?? null, provenance)) complete = false;
+        if (this.#pending.size >= 64 && !this.#flush()) complete = false;
       }
-      if (observations.length) this.#capture.capture(observations);
+      if (!this.#flush()) complete = false;
+      if (complete) this.#capture.reconcile();
     } catch { this.#capture.gap("capture_failed"); }
+  }
+  /** Live append already has the driver's authoritative active turn when available. */
+  append(entry: SessionEntry, activeBackendTurnId?: string): void {
+    try {
+      let turnId = activeBackendTurnId ?? this.#turnByEntry.get(entry.id);
+      if (!turnId && entry.type === "message") {
+        const projected = new PiHistoryProjector({toolIdentityAuthentication: this.#authentication}).project(this.#manager.getBranch(entry.id));
+        turnId = projected.backendTurnIdByEntryId.get(entry.id);
+        this.#capture.registerTurns(Object.values(projected.snapshot.turnsById));
+      }
+      this.#queue(entry, turnId ?? null, "live");
+      this.#flush();
+    } catch { this.#capture.gap("capture_failed"); }
+  }
+  retryPending(): void { this.#flush(); }
+  #queue(entry: SessionEntry, backendTurnId: string | null, provenance: "live" | "history"): boolean {
+    if (this.#inherited.has(entry.id)) return true;
+    try {
+      const observation = piUsageObservation(entry, backendTurnId, provenance);
+      if (!observation) return true;
+      if (this.#committed.get(observation.id) === observation.revision) return true;
+      if (observation.facts.some((fact) => fact.reasons.includes("unknown_attribution"))) this.#capture.gap("unknown_attribution");
+      this.#pending.set(observation.id, observation);
+      return true;
+    } catch { this.#capture.gap("invalid_evidence"); return false; }
+  }
+  #flush(): boolean {
+    let committed = true;
+    const pending = [...this.#pending.values()];
+    for (let index = 0; index < pending.length; index += 64) {
+      const batch = pending.slice(index, index + 64);
+      if (!this.#capture.capture(batch)) { committed = false; continue; }
+      for (const observation of batch) {
+        this.#committed.set(observation.id, observation.revision);
+        this.#pending.delete(observation.id);
+      }
+    }
+    return committed;
   }
   registerTurn(turn: import("../../../shared/protocol/backend.js").BackendTurn): void { this.#capture.registerTurns([turn]); }
   close(): void { this.#capture.seal("closed"); }

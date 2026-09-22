@@ -37,6 +37,50 @@ function observation(id: string, facts: readonly UsageFact[], replaceCheckpoint 
 }
 const turnId = applicationTurnIdForBackendTurn({backendInstanceId: "backend", sourceApplicationThreadId: "thread", backendTurnId: "turn"});
 describe("durable scoped usage service", () => {
+  it("repairs interrupted capture only after authoritative history reconciliation and retains conflicts", () => {
+    const db=database(), first=new UsageService(db), capture=first.open(source);
+    capture.capture([observation("entry",[fact("entry","10")])]);
+    const service=new UsageService(db); service.recoverInterruptedCapture();
+    const recovered=service.open(source);
+    expect(service.read(scope,"thread").summary.reasons).toContain("capture_gap");
+    recovered.capture([observation("entry",[fact("entry","10")])]);
+    expect(recovered.reconcile()).toBe(true);
+    expect(service.read(scope,"thread").state).toBe("complete");
+    recovered.capture([observation("entry",[fact("entry","20")])]);
+    recovered.reconcile();
+    expect(service.read(scope,"thread").summary.reasons).toContain("conflicting_evidence");
+  });
+  it("keeps invalid evidence partial without labelling valid tokens conflicting", () => {
+    const service=new UsageService(database()), capture=service.open(source);
+    capture.capture([observation("valid",[fact("valid","10")])]);
+    capture.capture([observation("invalid",[fact("invalid","-1")])]);
+    const report=service.read(scope,"thread");
+    expect(report.summary.metrics.input).toMatchObject({value:"10",quality:"partial"});
+    expect(report.summary.reasons).toContain("invalid_evidence");
+  });
+  it("replaces ordered per-result allocations independently of cumulative regression locks", () => {
+    const service=new UsageService(database()), capture=service.open(source);
+    capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
+    const result=(order:string,input:string)=>observation(`result-${order}`,[fact("turn-result",input,{sessionContribution:"none",kind:"turn_aggregate",turn:{backendTurnId:"turn",scope:"main_loop",contribution:"checkpoint"}})],false,order);
+    capture.capture([result("1","30"), result("3","10"), result("2","20")]);
+    capture.capture([observation("pipeline",[fact("counter","100",{sessionContribution:"checkpoint"})],true,"3")]);
+    expect(service.read(scope,"thread",turnId).summary.metrics.input.value).toBe("10");
+    expect(service.read(scope,"thread").summary.metrics.input.value).toBe("100");
+    expect(service.read(scope,"thread").summary.reasons).not.toContain("counter_regression");
+  });
+  it("scopes ambiguous direct-result conflicts to the affected turn without freezing pipeline totals", () => {
+    const service=new UsageService(database()), capture=service.open(source);
+    capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]},{backendTurnId:"other",status:"completed",orderedBackendItemIds:[]}]);
+    const direct=(id:string,input:string)=>observation(id,[fact("result",input,{sessionContribution:"none",turn:{backendTurnId:"turn",scope:"main_loop",contribution:"checkpoint"}})]);
+    capture.capture([direct("first","30"),direct("different","10")]);
+    capture.capture([observation("pipeline",[fact("counter","100",{sessionContribution:"checkpoint"})],true,"1"),observation("pipeline-next",[fact("counter","120",{sessionContribution:"checkpoint"})],true,"2")]);
+    capture.capture([observation("other",[fact("other","5",{sessionContribution:"none",turn:{backendTurnId:"other",scope:"whole_turn",contribution:"additive"}})])]);
+    expect(service.read(scope,"thread").summary.metrics.input.value).toBe("120");
+    expect(service.read(scope,"thread",turnId).summary.metrics.input.quality).toBe("conflict");
+    const other=applicationTurnIdForBackendTurn({backendInstanceId:"backend",sourceApplicationThreadId:"thread",backendTurnId:"other"});
+    expect(service.read(scope,"thread",other).state).toBe("complete");
+  });
+
   it("persists exact 64-bit counts and decimal money through database reopen without runtime dependencies", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "sedes-usage-")); directories.push(dir);
     const file = path.join(dir,"usage.sqlite"), db = database(file), service = new UsageService(db), capture = service.open(source);
@@ -152,6 +196,7 @@ describe("durable scoped usage service", () => {
     const db=database(":memory:",true),service=new UsageService(db);
     expect(()=>db.prepare("SELECT * FROM claude_usage_ledgers")).toThrow();
     const old=service.read(scope,"thread");expect(old.legacy?.metrics.input.value).toBe("100");
+    expect(old.legacyRecordedAt).toBe(new Date(1720000000000).toISOString());
     expect(old.legacy?.reasons).toEqual(["legacy_coverage_unknown"]);expect(old.summary.metrics.input.value).toBeNull();
     service.open(source).capture([observation("new",[fact("new","2")])]);
     expect(service.read(scope,"thread").summary.metrics.input.value).toBe("2");

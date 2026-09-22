@@ -19,7 +19,7 @@ const labels: Record<UsageTokenKind, string> = {
 };
 export function UsageDetails({ report }: { report: UsageReport }): React.JSX.Element {
   const { summary } = report;
-  const conflict = summary.reasons.some(reason => ["counter_regression", "conflicting_evidence", "ordering_unknown", "source_reset"].includes(reason));
+  const conflict = Object.values(summary.metrics).some(metric => metric.quality === "conflict") || summary.costQuality === "conflict" || summary.reasons.some(reason => ["counter_regression", "conflicting_evidence", "ordering_unknown", "source_reset"].includes(reason));
   const sdkNormalized = Object.values(summary.metrics).some(metric => metric.basis.includes("sdk_normalized"));
   return <>
     {report.inherited && <p>Inherited turn</p>}
@@ -36,7 +36,7 @@ export function UsageDetails({ report }: { report: UsageReport }): React.JSX.Ele
     {summary.reasons.includes("model_coverage_unknown") && <p>Model attribution may be incomplete.</p>}
     {summary.reasons.includes("child_coverage_unknown") && <p>Child-agent usage coverage is unknown.</p>}
     {report.lastRecordedAt && <p>Last recorded: <time dateTime={report.lastRecordedAt}>{new Date(report.lastRecordedAt).toLocaleString()}</time></p>}
-    {report.legacy && <section><h4>Legacy usage — coverage unknown</h4><UsageValues summary={report.legacy} /></section>}
+    {report.legacy && <section><h4>Legacy usage — coverage unknown</h4><UsageValues summary={report.legacy} />{report.legacyRecordedAt && <p>Legacy recorded: <time dateTime={report.legacyRecordedAt}>{new Date(report.legacyRecordedAt).toLocaleString()}</time></p>}</section>}
   </>;
 }
 function UsageValues({ summary }: { summary: UsageSummary }): React.JSX.Element {

@@ -289,7 +289,7 @@ describe.sequential("real Claude subscription driver", () => {
     const settings = new ClaudeThreadRepository(database);
     const usageObservations: UsageObservation[] = [];
     const driver = new ClaudeConversationBackendDriver({
-      usage: {open: () => ({registerTurns: () => {}, capture: (entries) => { usageObservations.push(...entries); return true; }, gap: () => {}, seal: () => {}})},
+      usage: {open: () => ({registerTurns: () => {}, capture: (entries) => { usageObservations.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: () => {}})},
       nativeNamespace: "claude-test-native",
       instance,
       connection,

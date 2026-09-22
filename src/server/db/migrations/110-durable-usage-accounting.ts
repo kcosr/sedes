@@ -62,8 +62,8 @@ CREATE TABLE usage_records (
 ) STRICT;
 CREATE INDEX usage_records_turn ON usage_records(turn_id, source_id);
 CREATE TABLE usage_gaps (
-  source_id TEXT NOT NULL, reason TEXT NOT NULL, recorded_at TEXT NOT NULL,
-  PRIMARY KEY(source_id, reason),
+  source_id TEXT NOT NULL, reason TEXT NOT NULL, subject TEXT NOT NULL DEFAULT '', recorded_at TEXT NOT NULL,
+  PRIMARY KEY(source_id, reason, subject),
   FOREIGN KEY(source_id) REFERENCES usage_sources(id) ON DELETE RESTRICT
 ) STRICT;
 CREATE TRIGGER usage_observations_immutable_update BEFORE UPDATE ON usage_observations
