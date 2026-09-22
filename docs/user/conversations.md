@@ -18,8 +18,8 @@ interrupted turns keep their recorded usage, including while the backend is
 disconnected. Running turns and turns without recorded usage have no icon.
 
 The compact summary shows input and output tokens, nonzero cache or reasoning
-counts, and cost/model information when available. **Input** includes cache
-tokens; reasoning is included in output. Do not add every row together. An em
+counts, and cost/model information when available. **Cached input** and **Cache
+write** are part of **Input**, and reasoning is part of output. Do not add every row together. An em
 dash means unavailable, not zero. Cost estimates are not billing receipts;
 missing cost is explicitly unavailable. Short status labels indicate partial
 or restricted coverage.

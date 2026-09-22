@@ -14979,15 +14979,16 @@ tr.diff-hunk td {
   .turn-fork-controls {
     opacity: 1;
     transform: none;
+    gap: 0;
   }
 
   .turn-fork-action {
-    width: 36px;
+    width: 44px;
     height: 44px;
   }
 
   .turn-fork-time:not(:last-child) {
-    margin-inline-end: 10px;
+    margin-inline-end: 14px;
   }
 
   .fork-provenance-button {

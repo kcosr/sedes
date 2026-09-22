@@ -15,7 +15,8 @@
   Counts retain model/provider attribution, estimates, and incomplete-coverage
   labels; Grok reports accounting as unsupported.
   Turn usage actions appear only after a turn ends with recorded data, in a
-  compact overlay sized for mobile screens, with evenly spaced reply controls.
+  compact overlay sized for mobile screens, with closely spaced 44×44 touch
+  controls and cached input grouped beneath its inclusive input total.
   Session stats stays in the thread menu rather than flashing during loading.
 
 ### Changed

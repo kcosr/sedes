@@ -15,7 +15,7 @@ export function RecordedUsage({ cache, turnId, active = true }: { cache: UsageQu
 }
 
 const labels: Record<UsageTokenKind, string> = {
-  input: "Input", uncachedInput: "Uncached input", cacheRead: "Cache read",
+  input: "Input", uncachedInput: "Uncached input", cacheRead: "Cached input",
   cacheWrite: "Cache write", output: "Output", reasoning: "Reasoning", total: "Total tokens", requests: "Requests",
 };
 const subsetFields = new Set<UsageTokenKind>(["cacheRead", "cacheWrite", "reasoning"]);
@@ -43,7 +43,7 @@ export function UsageDetails({ report }: { report: UsageReport }): React.JSX.Ele
 }
 
 function UsageValues({ summary }: { summary: UsageSummary }): React.JSX.Element {
-  const keys: UsageTokenKind[] = ["input", "output", "cacheRead", "cacheWrite", "reasoning", "requests"];
+  const keys: UsageTokenKind[] = ["input", "cacheRead", "cacheWrite", "output", "reasoning", "requests"];
   if (summary.metrics.input.value === null && summary.metrics.uncachedInput.value !== null) keys.splice(1, 0, "uncachedInput");
   if (summary.metrics.input.value === null && summary.metrics.output.value === null && summary.metrics.total.value !== null) keys.push("total");
   return <>
