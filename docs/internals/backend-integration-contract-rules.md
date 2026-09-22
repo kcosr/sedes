@@ -309,7 +309,15 @@ database mutation. Fence both coordinator acquisition and direct actor-manager
 acquisition so capture, fork, lifecycle, or other direct borrowers cannot
 resurrect a handle during commit. An atomic idle-close race aborts before
 commit; an unproven close fails closed rather than allowing competing
-ownership. Publish only after the commit and fence release. On receipt replay,
+ownership. For idle retirement, allow existing direct borrowers (including
+snapshot readers and cancelled cold attachments) up to five seconds to release
+under the acquisition fence;
+an outstanding read alone is not evidence of new provider work. Recheck idle,
+background activity, and provider cleanup blockers after draining. A borrower
+that remains held at the deadline still blocks retirement. This shared behavior
+is implemented for Pi, Codex, Claude, and Grok; their native close dispositions
+are unchanged. Explicit detach keeps its immediate borrowed-runtime rejection.
+Publish only after the commit and fence release. On receipt replay,
 retire only targets whose current state remains archived before republishing
 the receipted result. Release all generic fences before any
 execution-workspace deletion that takes its own retirement fence. Retirement
