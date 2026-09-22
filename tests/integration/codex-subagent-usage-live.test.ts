@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -8,9 +8,11 @@ import { CodexConversationBackendDriver, CodexConversationOwnershipRegistry } fr
 import { CodexDaemonSupervisor } from "../../src/server/backends/codex/codex-daemon-supervisor.js";
 import { CodexNativeStoreOwnershipGate } from "../../src/server/backends/codex/codex-native-store-ownership.js";
 import { resolveCodexRuntimeConfiguration } from "../../src/server/backends/codex/codex-runtime-config.js";
+import { UnixWebSocketTransportFactory } from "../../src/server/backends/codex/transport/unix-websocket-transport.js";
 import { OwnedStdioTransportFactory } from "../../src/server/backends/codex/transport/owned-stdio-transport.js";
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
 import { CODEX_APP_SERVER_RELEASE } from "../../src/server/backends/codex/codex-release-guard.js";
+import { codexThreadResumeMethod } from "../../src/server/backends/codex/codex-c1-protocol.js";
 import { codexC2NotificationSchemas, codexModelListMethod, codexThreadStartMethod, codexTurnStartMethod } from "../../src/server/backends/codex/codex-c2-protocol.js";
 import { serializeCodexBindingDetail } from "../../src/server/backends/codex/codex-binding-codec.js";
 import { unavailableCodexAgentToolCliEnvironmentProvider } from "../../src/server/backends/codex/codex-agent-tool-cli-environment.js";
@@ -26,6 +28,9 @@ import { pinnedCodexTestExecutable } from "../helpers/pinned-codex-test-executab
 // Never consumes provider capacity in the normal test suite.
 const enabled = process.env.SEDES_REAL_CODEX_SUBAGENTS === "1";
 const model = "gpt-5.6-luna";
+// Explicit opt-in targets an existing operator-owned endpoint. Its global
+// configuration, process and other conversations are never changed.
+const udsSocket = process.env.SEDES_REAL_CODEX_SUBAGENTS_UDS_SOCKET;
 const scope = { tenantId: "tenant-live", principalId: "principal-live" };
 const requestOptions = { timeoutMilliseconds: 15_000 };
 
@@ -58,31 +63,48 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
     let supervisor: CodexDaemonSupervisor | undefined;
     let handle: ConversationHandle | undefined;
     let database: Database.Database | undefined;
+    let environmentChannel: LocalEnvironmentChannelProvider | undefined;
+    if (udsSocket && (!path.isAbsolute(udsSocket) || path.resolve(udsSocket) !== udsSocket)) throw new Error("Expected absolute UDS socket path");
+    const socketBefore = udsSocket ? await lstat(udsSocket, { bigint: true }) : undefined;
+    if (socketBefore) expect(socketBefore.isSocket()).toBe(true);
     try {
       await mkdir(codexHome, { mode: 0o700 });
       await mkdir(workingDirectory);
-      const authSource = path.join(process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"), "auth.json");
-      await copyFile(authSource, path.join(codexHome, "auth.json"));
-      await chmod(path.join(codexHome, "auth.json"), 0o600);
-      await writeFile(path.join(codexHome, "config.toml"), `[features]\nmulti_agent = true\napps = false\nplugins = false\n[features.multi_agent_v2]\nenabled = ${agentVersion === "v2"}\n`, { mode: 0o600 });
+      if (!udsSocket) {
+        const authSource = path.join(process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"), "auth.json");
+        await copyFile(authSource, path.join(codexHome, "auth.json"));
+        await chmod(path.join(codexHome, "auth.json"), 0o600);
+        await writeFile(path.join(codexHome, "config.toml"), `[features]\nmulti_agent = true\napps = false\nplugins = false\n[features.multi_agent_v2]\nenabled = ${agentVersion === "v2"}\n`, { mode: 0o600 });
+      }
       const instance: AgentBackendInstance = { id: "backend-live", tenantId: scope.tenantId, kind: "codex_app_server", label: "Live test", enabled: true, configurationRevision: 1, protocolRelease: CODEX_APP_SERVER_RELEASE };
       const connection: AgentConnectionProfile = { id: "connection-live", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
         templateId: "template-live", kind: "codex_app_server", backendInstanceId: instance.id, executionEnvironmentId: "environment-live", label: "Live test", enabled: true, configurationRevision: 1 };
-      const environmentChannel = new LocalEnvironmentChannelProvider({ scope, executionEnvironmentId: connection.executionEnvironmentId });
-      const resolved = await resolveCodexRuntimeConfiguration({ scope, instance, connections: [connection], connection: {
-        ownership: "owned", channel: { type: "process_stdio", executablePath: pinnedCodexTestExecutable(), workingDirectory, codexHome },
-      }, environmentChannel, environment: { PATH: process.env.PATH ?? "/usr/bin:/bin" } });
-      if (resolved.connection.ownership !== "owned" || !resolved.codexHome || !resolved.nativeStoreHome || !resolved.childEnvironment) throw new Error("Expected isolated owned runtime");
-      const runtimeScope = { ...resolved.scope, backendInstanceId: instance.id, executionEnvironmentId: connection.executionEnvironmentId };
-      const transportFactory = new OwnedStdioTransportFactory({ scope: runtimeScope, channels: environmentChannel,
-        process: resolved.connection.channel.process, environment: resolved.childEnvironment, sqliteHome: resolved.nativeStoreHome });
-      supervisor = new CodexDaemonSupervisor({ scope: runtimeScope, expectedCodexHome: resolved.codexHome, transportFactory,
-        restartDelaysMilliseconds: [25], maximumRestartAttempts: 1, nativeStoreOwnership: new CodexNativeStoreOwnershipGate() });
+      environmentChannel = new LocalEnvironmentChannelProvider({ scope, executionEnvironmentId: connection.executionEnvironmentId });
+      const runtimeScope = { ...scope, backendInstanceId: instance.id, executionEnvironmentId: connection.executionEnvironmentId };
+      const onRuntimeVersionAssessment = (assessment: { version: string; newerThanTested: boolean }) => console.info("Codex subagent live endpoint", {
+        transport: udsSocket ? "external_uds" : "owned_stdio", agentVersion, ...assessment,
+      });
+      if (udsSocket) {
+        supervisor = new CodexDaemonSupervisor({ scope: runtimeScope,
+          transportFactory: new UnixWebSocketTransportFactory({ scope: runtimeScope, channels: environmentChannel, socketPath: udsSocket }),
+          restartDelaysMilliseconds: [25], maximumRestartAttempts: 1, onRuntimeVersionAssessment });
+      } else {
+        const resolved = await resolveCodexRuntimeConfiguration({ scope, instance, connections: [connection], connection: {
+          ownership: "owned", channel: { type: "process_stdio", executablePath: pinnedCodexTestExecutable(), workingDirectory, codexHome },
+        }, environmentChannel, environment: { PATH: process.env.PATH ?? "/usr/bin:/bin" } });
+        if (resolved.connection.ownership !== "owned" || !resolved.codexHome || !resolved.nativeStoreHome || !resolved.childEnvironment) throw new Error("Expected isolated owned runtime");
+        const transportFactory = new OwnedStdioTransportFactory({ scope: runtimeScope, channels: environmentChannel,
+          process: resolved.connection.channel.process, environment: resolved.childEnvironment, sqliteHome: resolved.nativeStoreHome });
+        supervisor = new CodexDaemonSupervisor({ scope: runtimeScope, expectedCodexHome: resolved.codexHome, transportFactory,
+          restartDelaysMilliseconds: [25], maximumRestartAttempts: 1, nativeStoreOwnership: new CodexNativeStoreOwnershipGate(), onRuntimeVersionAssessment });
+      }
       await supervisor.start();
       const client = supervisor.client;
       const catalog = await client.request(codexModelListMethod, { limit: 100, includeHidden: true }, requestOptions);
       expect(catalog.data.some(entry => entry.id === model && entry.supportedReasoningEfforts.some(effort => effort.reasoningEffort === "low"))).toBe(true);
-      const started = await client.request(codexThreadStartMethod, { model, cwd: workingDirectory, sandbox: "read-only", approvalPolicy: "never", ephemeral: false }, requestOptions);
+      const started = await client.request(codexThreadStartMethod, { model, cwd: workingDirectory, sandbox: "read-only", approvalPolicy: "never", ephemeral: false,
+        ...(udsSocket ? { config: { "features.multi_agent": true, "features.multi_agent_v2.enabled": agentVersion === "v2", "features.apps": false, "features.plugins": false }, threadSource: "sedes_subagent_usage_live" } : {}),
+      }, requestOptions);
       const nativeRoot = started.thread.id;
       database = prepareDatabase(databasePath, nativeRoot);
       const usage = new UsageService(database);
@@ -153,14 +175,18 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
         // Continue the same child after the parent presentation unsubscribes.
         // V2 rejects direct child input. Its native parent control prompt is
         // deliberately outside the closed app handle, and asks the supported
-        // followup_task tool to start the child again. Neither path resumes or
-        // reads a child transcript, and the original app turn stays unchanged.
+        // followup_task tool to start the child again. External handle close
+        // unsubscribes the parent, so restore this test connection's native
+        // lifecycle subscription without opening an app handle or history.
+        // Neither path reads a child transcript; the app turn stays unchanged.
+        if (udsSocket && agentVersion === "v2") await client.request(codexThreadResumeMethod, { threadId: nativeRoot, excludeTurns: true }, requestOptions);
         const followup = agentVersion === "v2"
           ? "Use followup_task to tell the existing child to reply READY AGAIN without tools. Do not spawn another agent. Wait for its reply, then say DONE. Do not use tools except followup_task and agent waiting."
           : "Reply READY AGAIN. Do not use any tools.";
         await client.request(codexTurnStartMethod, { threadId: agentVersion === "v2" ? nativeRoot : childId, model, effort: "low", approvalPolicy: "never",
           sandboxPolicy: { type: "readOnly", networkAccess: false }, input: [{ type: "text", text: followup, text_elements: [] }] }, requestOptions);
         await vi.waitFor(() => expect(completed.get(childId)).toBe(2), { timeout: 60_000, interval: 100 });
+        if (agentVersion === "v2") await vi.waitFor(() => expect(completed.get(nativeRoot)).toBe(2), { timeout: 60_000, interval: 100 });
         const updated = usage.read(scope, binding.applicationThreadId);
         expect(Number(updated.breakdown?.subagents.metrics.total.value)).toBeGreaterThan(childTotal);
         expect(updated.breakdown?.main.metrics.total.value).toBe(String(mainTotal));
@@ -178,7 +204,13 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
       await handle?.close().catch(() => undefined);
       await supervisor?.close();
       database?.close();
+      environmentChannel?.close();
       await rm(temporaryRoot, { recursive: true, force: true });
+      if (udsSocket && socketBefore) {
+        const after = await lstat(udsSocket, { bigint: true });
+        expect(after.isSocket()).toBe(true);
+        expect({ device: after.dev, inode: after.ino }).toEqual({ device: socketBefore.dev, inode: socketBefore.ino });
+      }
     }
   }, 210_000);
 });
