@@ -1,3 +1,8 @@
+import Database from "better-sqlite3";
+import { durableUsageAccountingMigration } from "../../src/server/db/migrations/110-durable-usage-accounting.js";
+import { usageGapSessionScopeMigration } from "../../src/server/db/migrations/111-usage-gap-session-scope.js";
+import { UsageService } from "../../src/server/usage/usage-service.js";
+import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
 import { type UsageSink, type UsageObservation, NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { RetainedRuntimeLifecycle } from "../../src/server/backends/retained-runtime-lifecycle.js";
 import { createHash } from "node:crypto";
@@ -7493,6 +7498,95 @@ describe("CodexConversationHandle", () => {
     expect(await handle.usage()).toEqual({ context: { usedTokens: 20, windowTokens: 1000, percent: 2 } });
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
+  });
+
+  it.each([false, true])("persists the first reply after idle resume replay without reopening (rate-limit replay=%s)", async rateLimitReplay => {
+    const database = new Database(":memory:");
+    // Minimal application authority plus the actual production usage migrations.
+    database.exec(`
+      CREATE TABLE application_threads(tenant_id TEXT, owner_principal_id TEXT, id TEXT, backend_instance_id TEXT, environment_id TEXT, workspace_id TEXT, PRIMARY KEY(tenant_id,owner_principal_id,id));
+      CREATE TABLE agent_backend_instances(tenant_id TEXT,id TEXT,kind TEXT);
+      CREATE TABLE conversation_bindings(tenant_id TEXT,owner_principal_id TEXT,application_thread_id TEXT,backend_instance_id TEXT,execution_environment_id TEXT,backend_conversation_id TEXT,connection_profile_id TEXT);
+      CREATE TABLE claude_usage_ledgers(tenant_id TEXT,owner_principal_id TEXT,application_thread_id TEXT,input_tokens INTEGER,output_tokens INTEGER,cache_read_tokens INTEGER,cache_write_tokens INTEGER,request_count INTEGER,updated_at INTEGER);
+      INSERT INTO application_threads VALUES('tenant-1','principal-1','application-profile-1','codex-1','environment-1','workspace-1');
+      INSERT INTO agent_backend_instances VALUES('tenant-1','codex-1','codex_app_server');
+      INSERT INTO conversation_bindings VALUES('tenant-1','principal-1','application-profile-1','codex-1','environment-1','thread-1','profile-1');
+    `);
+    database.exec(durableUsageAccountingMigration.sql);
+    database.exec(usageGapSessionScopeMigration.sql);
+    const usage = new UsageService(database);
+    const harness = new RpcHarness();
+    const target = driver(harness, connection, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, usage);
+    const handle = await attachIdle(harness, target);
+    const counts = (input: number, output: number) => ({ inputTokens: input, outputTokens: output,
+      totalTokens: input + output, cachedInputTokens: 5, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 });
+    const notify = (turnId: string, input: number, output: number) => harness.notify("thread/tokenUsage/updated", {
+      threadId: "thread-1", turnId, tokenUsage: { total: counts(input, output), last: counts(20, 3), modelContextWindow: 1000 },
+    });
+    try {
+      // The pinned app-server replies to resume, then replays restored counters.
+      // The transport delivers replay BEFORE the awaiting resume continuation.
+      harness.after("thread/resume", () => notify("turn-0", 100, 10));
+      const established = await establish(harness, handle);
+      const projector = new ConversationProjector({ backendInstanceId: instance.id, bindingIdentity: binding().applicationThreadId });
+      projector.replace(established.snapshot, established.handleSequence);
+      established.subscribeFromNext(event => {
+        const projected = projector.apply(event);
+        if (projected.kind === "events") for (const changed of projected.events) {
+          if (changed.type === "turn_upsert") usage.registerVisibleTurns(scope, binding().applicationThreadId, [changed.turn]);
+        }
+      });
+      harness.notify("turn/started", { threadId: "thread-1", turn: { ...nativeTurn(1), status: "inProgress", completedAt: null } });
+      if (rateLimitReplay) notify("turn-1", 100, 10); // Rate-limit update repeats the old call under the new turn ID.
+      notify("turn-1", 120, 13);
+      notify("turn-1", 120, 13); // Repeated notifications must not double charge.
+      harness.notify("turn/completed", { threadId: "thread-1", turn: nativeTurn(1) });
+      await vi.waitFor(() => expect(database.prepare("SELECT count(*) AS n FROM usage_observations").get()).toEqual({ n: rateLimitReplay ? 4 : 3 }));
+      const turnId = applicationTurnIdForBackendTurn({ backendInstanceId: instance.id,
+        sourceApplicationThreadId: binding().applicationThreadId, backendTurnId: codexBackendTurnId("thread-1", "turn-1") });
+      const report = usage.read(scope, binding().applicationThreadId, turnId);
+      expect(usage.availability(scope, binding().applicationThreadId, [turnId]).turns).toEqual([{ turnId, available: true }]);
+      expect(report.summary.metrics.input.value).toBe("20");
+      expect(report.summary.metrics.output.value).toBe("3");
+      expect(report.summary.reasons).not.toContain("unknown_baseline");
+      expect(usage.read(scope, binding().applicationThreadId).summary.metrics.input.value).toBe("120");
+      expect(usage.read(scope, binding().applicationThreadId).summary.reasons).not.toContain("capture_failed");
+    } finally {
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+      database.close();
+    }
+  });
+
+  it("keeps warm paginated resume without native replay unallocated rather than charging earlier turns", async () => {
+    const observations: UsageObservation[] = [];
+    const sink: UsageSink = { open: () => ({ registerTurns: () => undefined,
+      capture: entries => { observations.push(...entries); return true; }, reconcile: () => true,
+      gap: () => undefined, seal: () => undefined }) };
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness, driver(harness, connection, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, sink));
+    harness.enqueue("thread/read", { thread: paginatedThread() });
+    harness.enqueue("thread/resume", paginatedResumeResult({ shells: [notLoadedTurn(0)] }));
+    harness.enqueue("thread/items/list", paginatedItems(0));
+    try {
+      await handle.establishProjection({ signal: new AbortController().signal });
+      expect(harness.calls.find(call => call.method === "thread/resume")?.params).toMatchObject({ excludeTurns: true });
+      // Pinned warm metadata-only resume skips token replay even with initialTurnsPage.
+      harness.notify("turn/started", { threadId: "thread-1", turn: { ...nativeTurn(1), status: "inProgress", completedAt: null } });
+      const counts = { inputTokens: 120, outputTokens: 13, totalTokens: 133,
+        cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 };
+      harness.notify("thread/tokenUsage/updated", { threadId: "thread-1", turnId: "turn-1",
+        tokenUsage: { total: counts, last: counts, modelContextWindow: 1000 } });
+      harness.notify("turn/completed", { threadId: "thread-1", turn: nativeTurn(1) });
+      await vi.waitFor(() => expect(observations).toHaveLength(1));
+      expect(observations[0]!.facts[0]!.tokens.input).toBe("120");
+      expect(observations.flatMap(observation => observation.facts).filter(fact => fact.turn !== null)).toEqual([]);
+    } finally {
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+    }
   });
 
   it("retains token usage replayed immediately after the resume response", async () => {

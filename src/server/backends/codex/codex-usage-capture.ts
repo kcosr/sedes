@@ -17,6 +17,8 @@ export class CodexUsageCapture {
   readonly #parentNativeSession: string | null;
   #previous: { generation: number; sequence: number; turnId: string | null; tokens: UsageFact["tokens"] } | undefined;
   #startedTurn: string | undefined;
+  #idleResume: { generation: number; sequence: number } | undefined;
+  #lastLifecycle: { generation: number; sequence: number } | undefined;
   #completed: { turnId: string; generation: number; sequence: number } | undefined;
   #boundary: { turnId: string; generation: number; sequence: number; baselineSequence: number } | undefined;
   #conflict = false;
@@ -33,7 +35,7 @@ export class CodexUsageCapture {
     this.#parentNativeSession = input.ancestry?.forkedFromThreadId ?? null;
     this.#provenZero = input.provenZero;
     this.#capture = input.sink.open({ binding: input.binding, nativeNamespace: input.nativeNamespace,
-      nativeSession: this.#threadId, epoch: "native-counter-v1", normalizationVersion: "codex-app-server-usage-v1",
+      nativeSession: this.#threadId, epoch: "native-counter-v1", normalizationVersion: "codex-app-server-usage-v2",
       initialBaseline: input.provenZero ? "proven_zero" : "unknown" });
     if (this.#inherited) this.gap("inherited_baseline_unknown");
   }
@@ -50,25 +52,40 @@ export class CodexUsageCapture {
     this.#safely(() => this.#capture.registerTurns(turns, inherited));
   }
 
+  /** Pinned resume replies precede restored usage replay, including on cold restart. */
+  resumed(event: { generation: number; sequence: number; idle: boolean }): void {
+    const lifecycle = this.#lastLifecycle;
+    this.#idleResume = event.idle && !(lifecycle?.generation === event.generation && lifecycle.sequence > event.sequence)
+      ? event : undefined;
+  }
+
   started(event: { turnId: string; generation: number; sequence: number }): void {
     this.#startedTurn = event.turnId;
     const previous = this.#previous;
     const completed = this.#completed;
-    this.#boundary = previous && completed && previous.turnId === completed.turnId &&
-      previous.turnId !== event.turnId && previous.generation === event.generation &&
-      completed.generation === event.generation && previous.sequence < completed.sequence &&
-      completed.sequence < event.sequence
-      ? { ...event, baselineSequence: previous.sequence } : undefined;
+    const resume = this.#idleResume;
+    const completedBoundary = previous && completed && previous.turnId === completed.turnId &&
+      completed.generation === event.generation && previous.sequence < completed.sequence && completed.sequence < event.sequence;
+    const resumedBoundary = previous && resume && resume.generation === event.generation &&
+      resume.sequence < previous.sequence && previous.sequence < event.sequence;
+    this.#boundary = previous && previous.turnId !== event.turnId && previous.generation === event.generation &&
+      (completedBoundary || resumedBoundary) ? { ...event, baselineSequence: previous.sequence } : undefined;
+    this.#idleResume = undefined;
+    this.#lastLifecycle = event;
     this.#completed = undefined;
   }
 
   completed(event: { turnId: string; generation: number; sequence: number }): void {
     this.#completed = event;
+    this.#lastLifecycle = event;
+    this.#idleResume = undefined;
     this.#boundary = undefined;
   }
 
   gap(reason: UsageReason): void {
     this.#previous = undefined;
+    this.#idleResume = undefined;
+    this.#lastLifecycle = undefined;
     this.#provenZero = false;
     this.#knownBaselineTurn = undefined;
     this.#startedTurn = undefined;
@@ -126,7 +143,7 @@ export class CodexUsageCapture {
         replaceCheckpoint: true, facts }]);
       this.#boundary = undefined;
       this.#completed = undefined;
-      if (!accepted) { this.#previous = undefined; this.#startedTurn = undefined; this.#knownBaselineTurn = undefined; return; }
+      if (!accepted) { this.#idleResume = undefined; this.#previous = undefined; this.#startedTurn = undefined; this.#knownBaselineTurn = undefined; return; }
       if (!this.#conflict) this.#previous = { generation: input.generation, sequence: input.sequence, turnId: input.turnId, tokens };
       this.#startedTurn = undefined;
     });
@@ -135,6 +152,7 @@ export class CodexUsageCapture {
   #safely(action: () => void): void {
     try { action(); } catch (error) {
       this.#previous = undefined;
+      this.#idleResume = undefined;
       this.#knownBaselineTurn = undefined;
       try { this.#capture.gap("capture_failed"); } catch { /* Diagnostic-only failure; do not retry provider work. */ }
       try { this.#onError(error); } catch { /* Accounting must not break provider delivery. */ }

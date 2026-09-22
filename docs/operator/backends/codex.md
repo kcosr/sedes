@@ -391,10 +391,20 @@ Repeated totals replace checkpoints rather than add another charge. Per-turn
 values are conservative differences between continuous, attributable checkpoints.
 The first interval of a new turn is included when Sedes observed the previous
 turn's checkpoint, its completion, and the new turn's start in that order within
-one uninterrupted runtime generation. A start alone, a reconnect, or a late
-checkpoint cannot establish that boundary. These remain recorded intervals,
+one uninterrupted runtime generation. An idle resume can also establish the
+initial boundary: Sedes validates the resume response and observes the restored
+cumulative checkpoint before the next turn starts in the same generation. This
+lets the first new turn retain its usage when native resume supplies that
+checkpoint. Warm paginated resume and persistent read-only reattachment can omit
+it; a single-update first turn can then have no attributable usage. Saved
+session totals remain intact, but do not prove that no native work occurred
+while Sedes was disconnected. Sedes does not reread full history for accounting.
+A start alone, a reconnect, or a late checkpoint cannot establish that boundary.
+These remain recorded intervals,
 not a claim that all turn or child-agent usage is available.
 The latest-call counter is retained as lower-scope evidence, not the whole turn.
+Codex can repeat an older latest-call value during rate-limit updates, so a new
+turn ID on that notification alone does not make it new turn usage.
 
 Native history provides no per-turn usage backfill. Codex 0.153.0 restores its
 cumulative accumulator from the saved rollout on cold resume, including

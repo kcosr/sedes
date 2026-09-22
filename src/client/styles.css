@@ -7065,7 +7065,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 .turn-fork-controls {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 4px;
   opacity: 0;
   pointer-events: auto;
   transform: translateY(-2px);
@@ -7087,6 +7087,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   color: var(--muted-foreground-2);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+  margin-inline-end: 7px;
 }
 
 .turn-fork-action {
@@ -14978,8 +14979,12 @@ tr.diff-hunk td {
   }
 
   .turn-fork-action {
-    width: 44px;
+    width: 36px;
     height: 44px;
+  }
+
+  .turn-fork-time {
+    margin-inline-end: 10px;
   }
 
   .fork-provenance-button {

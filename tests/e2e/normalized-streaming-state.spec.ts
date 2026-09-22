@@ -1022,7 +1022,10 @@ test.describe.serial("normalized streaming and restored state", () => {
       await route.fulfill({ response, json: report });
     });
     await page.setViewportSize({ width: 390, height: 844 });
+    const touch = await page.context().newCDPSession(page);
+    await touch.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
     await page.reload();
+    expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
     const mobileUsageButton = page.getByRole("button", { name: "Turn usage and cost" }).last();
     await mobileUsageButton.click();
     const mobileUsage = page.getByRole("dialog", { name: "Turn usage", exact: true });
@@ -1039,5 +1042,7 @@ test.describe.serial("normalized streaming and restored state", () => {
     expect(bounds!.height).toBeLessThan(310);
     expect(await mobileUsage.evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true);
     await capture(page, testInfo, "mobile-recorded-turn-usage.png");
+    await page.keyboard.press("Escape");
+    await capture(page, testInfo, "mobile-turn-footer.png");
   });
 });

@@ -2582,6 +2582,7 @@ export class CodexConversationHandle implements ConversationHandle {
           this.#scope(), this.binding.applicationThreadId,
         );
         let resumed;
+        let requestedNativeResume = false;
         try {
           resumed = await this.#client.persistentSessions?.reattachThread(
             this.binding.backendConversationId,
@@ -2611,6 +2612,7 @@ export class CodexConversationHandle implements ConversationHandle {
                 applicationThreadId: this.binding.applicationThreadId,
               },
             );
+            requestedNativeResume = true;
             resumed = await this.#client.requestWithReceipt(
               codexThreadResumeMethod,
               {
@@ -2780,6 +2782,8 @@ export class CodexConversationHandle implements ConversationHandle {
             "codex_history_mode_changed",
           );
         }
+        if (requestedNativeResume) this.#usageCapture.resumed({ generation: resumed.generation, sequence: resumed.inboundSequence,
+          idle: resumed.result.thread.status.type === "idle" });
         let projection: CodexWindowProjection;
         let projectionThread: CodexThread;
         let paginatedInstallation:

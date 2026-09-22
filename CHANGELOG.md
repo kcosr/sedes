@@ -15,7 +15,8 @@
   Counts retain model/provider attribution, estimates, and incomplete-coverage
   labels; Grok reports accounting as unsupported.
   Turn usage actions appear only after a turn ends with recorded data, in a
-  compact overlay sized for mobile screens.
+  compact overlay sized for mobile screens, with evenly spaced reply controls.
+  Session stats stays in the thread menu rather than flashing during loading.
 
 ### Changed
 
@@ -23,6 +24,9 @@
   template choices remain available. (#6)
 
 ### Fixed
+
+- Recover first-turn usage from Codex's restored idle checkpoint when provided,
+  without extra history reads.
 
 - Preserve the deployed usage-accounting migration checksum and add session-gap
   scope in a separate migration so existing installations can upgrade.

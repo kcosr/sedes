@@ -53,6 +53,45 @@ describe("Codex cumulative accounting capture", () => {
     expect(intervals(f.observations)).toHaveLength(0);
   });
 
+  it.each([false, true])("uses an idle resume replay before the first new turn (early replay=%s)", early => {
+    const f = fixture();
+    if (early) f.observe(2, 100, "old-turn");
+    f.capture.resumed({ generation: 1, sequence: 1, idle: true });
+    if (!early) f.observe(2, 100, "old-turn");
+    f.capture.started({ turnId: "new-turn", generation: 1, sequence: 3 });
+    f.observe(4, 120, "new-turn");
+    f.observe(5, 120, "new-turn"); // Rate-limit replay is not another charge.
+    expect(intervals(f.observations).map(fact => fact.tokens.input)).toEqual(["20"]);
+    expect(intervals(f.observations)[0]!.turn?.backendTurnId).toBe(codexBackendTurnId("native-thread", "new-turn"));
+  });
+
+  it("does not move a replay baseline past lifecycle notifications deferred during pagination", () => {
+    const f = fixture();
+    f.observe(2, 100, "old-turn"); // Replay can arrive before the resume promise continues.
+    f.capture.resumed({ generation: 1, sequence: 1, idle: true });
+    f.observe(4, 120, "new-turn"); // Usage bypasses deferred transcript notifications.
+    f.capture.started({ turnId: "new-turn", generation: 1, sequence: 3 });
+    expect(intervals(f.observations)).toHaveLength(0);
+    f.observe(5, 150, "new-turn");
+    expect(intervals(f.observations).map(fact => fact.tokens.input)).toEqual(["30"]);
+    expect(intervals(f.observations)[0]!.reasons).toContain("unknown_baseline");
+  });
+
+  it.each(["active", "gap", "generation", "before_receipt", "started_before_continuation", "missing_replay"])(
+    "does not infer an idle replay baseline with %s", reason => {
+      const f = fixture();
+      if (reason === "before_receipt") f.observe(1, 100, "old-turn");
+      if (reason === "started_before_continuation") f.capture.started({ turnId: "racing-turn", generation: 1, sequence: 3 });
+      f.capture.resumed({ generation: 1, sequence: 2, idle: reason !== "active" });
+      if (!["before_receipt", "missing_replay"].includes(reason)) f.observe(4, 100, "old-turn");
+      if (reason === "gap") f.capture.gap("capture_gap");
+      const generation = reason === "generation" ? 2 : 1;
+      f.capture.started({ turnId: "new-turn", generation, sequence: 5 });
+      f.observe(6, 120, "new-turn", generation);
+      expect(intervals(f.observations)).toHaveLength(0);
+    },
+  );
+
   it("does not assign a counter catch-up across disconnect to the newest turn", () => {
     const f = fixture(); f.observe(1, 100); f.capture.gap("capture_gap"); f.observe(2, 150); f.observe(3, 170);
     expect(intervals(f.observations).map(fact => fact.tokens.input)).toEqual(["20"]);
