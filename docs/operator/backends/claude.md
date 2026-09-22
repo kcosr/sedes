@@ -365,9 +365,13 @@ correlation, agent-tool injection, forks, and recovery, continue with the
 
 Claude records direct main-loop turn usage separately from cumulative usage and
 estimated cost across the actual SDK query lifetime. The reply popover labels
-**Main-loop usage only**; broader query-pipeline/subagent totals and cost stay at
+**Main agent only**; broader query-pipeline/subagent totals and cost stay at
 session scope. Message evidence is replaced by covering result evidence, not
 added twice. Model information is preserved where the source reports it.
+The current normalizer still classifies result facts as partial, although the
+SDK defines their counts as per-turn main-loop usage. Correcting that conservative
+classification is deferred until stable replay receipts can be upgraded without
+conflicting with previously saved evidence; it does not indicate detected loss.
 
 Reattaching the same retained query preserves accounting identity. A new query
 lifetime is a separate epoch, and a recorded conversation reset ends its segment.

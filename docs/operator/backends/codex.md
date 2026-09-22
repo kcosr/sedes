@@ -400,8 +400,13 @@ it; a single-update first turn can then have no attributable usage. Saved
 session totals remain intact, but do not prove that no native work occurred
 while Sedes was disconnected. Sedes does not reread full history for accounting.
 A start alone, a reconnect, or a late checkpoint cannot establish that boundary.
-These remain recorded intervals,
-not a claim that all turn or child-agent usage is available.
+With a proven initial baseline and continuous capture, a completed turn reports
+complete usage at **Main agent only** scope. Missing boundaries remain partial
+recorded intervals. Unknown model attribution does not make token counts partial.
+Capture gaps currently apply to the entire native session. A later disconnect
+gap or recovery of capture left active by a Sedes restart can therefore mark
+earlier completed turns partial too. Codex does not reconcile those gaps through
+history; their saved counts remain available and unchanged.
 The latest-call counter is retained as lower-scope evidence, not the whole turn.
 Codex can repeat an older latest-call value during rate-limit updates, so a new
 turn ID on that notification alone does not make it new turn usage.
@@ -417,7 +422,12 @@ series. If resumed totals are lower, Sedes retains the last valid value and show
 reconciliation incomplete; it does not invent a reset or charge a new series.
 Copied fork baselines are not newly charged. Usage notifications provide no model
 or provider attribution, so those dimensions remain unknown. Native child-thread
-usage is not captured separately and its inclusion in parent totals is unproven.
+usage is not included in the parent's counters and is not captured separately.
+The pinned implementation updates each session's own counters, and the
+[child accounting fixture](https://github.com/openai/codex/blob/41e22fee981a63b3698df7ed36bad393cda24715/codex-rs/core/src/agent/control_tests.rs#L1389)
+verifies independent child usage without inherited parent charges.
+Previously recorded partial allocations retain their original coverage metadata;
+this change does not reconstruct historical turn boundaries.
 No billing cost is fabricated from token counts.
 
 Captured values live in the main Sedes database and remain readable without

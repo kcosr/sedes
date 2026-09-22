@@ -1015,7 +1015,7 @@ test.describe.serial("normalized streaming and restored state", () => {
       report.summary.models = [{ model: null, provider: null }];
       report.summary.costs = [];
       report.summary.costQuality = "unreported";
-      report.summary.reasons = ["unknown_baseline", "model_coverage_unknown", "child_coverage_unknown"];
+      report.summary.reasons = ["unknown_baseline", "model_coverage_unknown", "main_loop_only"];
       for (const [key, value] of Object.entries({ input: "20178", output: "249", cacheRead: "18496", cacheWrite: "0", reasoning: "0", total: "20427" })) {
         report.summary.metrics[key] = { value, quality: "partial", basis: ["sdk_normalized", "derived"], providerPresence: "unknown" };
       }

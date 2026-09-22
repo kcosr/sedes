@@ -1132,6 +1132,14 @@ cost, and request totals come solely from accounting reads. Query-wide cumulativ
 facts cover lower-scope evidence rather than being added to it. Turn allocations
 must establish native identity and attributable intervals; session completeness
 never silently upgrades turn completeness. Copied ancestry requires scoped proof.
+Completeness is relative to the declared measurement scope: complete main-agent
+counts do not imply captured subagents. Keep scope restrictions and unknown model
+metadata distinct from numerical capture gaps; neither alone makes counts partial.
+Explicit partial facts remain authoritative. Claude's current normalizer retains
+its conservative partial result facts pending a replay-safe normalization update:
+reclassifying the same stable result receipt would otherwise conflict with saved
+evidence. This is a deferred classification correction, not an SDK claim of
+missing main-loop tokens.
 
 Register visible normalized turn stubs with ordinary snapshot/page loading.
 Accounting failure must not retry submitted provider work or break an otherwise

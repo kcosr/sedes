@@ -26,6 +26,11 @@
 
 ### Fixed
 
+- Report fully captured Codex turns as complete at main-agent scope; unknown
+  model attribution no longer makes token counts partial. Subagent capture
+  remains outside this phase. Existing session-wide capture gaps, including
+  restart recovery, can still mark earlier turns partial.
+
 - Recover first-turn usage from Codex's restored idle checkpoint when provided,
   without extra history reads.
 

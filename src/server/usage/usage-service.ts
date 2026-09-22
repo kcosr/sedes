@@ -31,6 +31,9 @@ function canonical(value: unknown): string {
 }
 const hash = (value: unknown) => createHash("sha256").update(canonical(value)).digest("hex");
 const uniq = <T>(values: readonly T[]): T[] => [...new Set(values)];
+// Known measurement scope and missing model attribution do not imply missing
+// token or cost measurements. Keep those facts visible without degrading them.
+const hasIncompleteUsage = (reasons: readonly UsageReason[]): boolean => reasons.some(reason => reason !== "main_loop_only" && reason !== "model_coverage_unknown");
 const maximum = 9_223_372_036_854_775_807n;
 export function addUsageMoney(values: readonly string[]): string {
   const scale = Math.max(0, ...values.map(value => value.split(".")[1]?.length ?? 0));
@@ -270,12 +273,12 @@ export class UsageService implements UsageSink {
       if(!chosen.length)continue;
       const total=chosen.reduce((n,{fact})=>n+BigInt(fact.tokens[key]!),0n);
       if(total>maximum){summary.reasons=uniq([...summary.reasons,"invalid_evidence"]);summary.metrics[key].quality="conflict";continue;}
-      summary.metrics[key]={value:String(total),quality:conflict?"conflict":summary.reasons.length || chosen.some(({fact})=>fact.quality!=="complete")?"partial":"complete",basis:uniq(chosen.flatMap(({fact})=>fact.basis)),providerPresence:chosen.every(({fact})=>fact.providerPresence==="reported")?"reported":"unknown"};
+      summary.metrics[key]={value:String(total),quality:conflict?"conflict":hasIncompleteUsage(summary.reasons) || chosen.some(({fact})=>fact.quality!=="complete")?"partial":"complete",basis:uniq(chosen.flatMap(({fact})=>fact.basis)),providerPresence:chosen.every(({fact})=>fact.providerPresence==="reported")?"reported":"unknown"};
     }
     const chosen=select(f=>f.costs.length>0);
     const groups=new Map<string,{money:UsageFact["costs"][number];values:string[]}>();
     for(const {fact} of chosen)for(const money of fact.costs){const key=canonical([money.currency,money.kind,money.provenance]);const group=groups.get(key)??{money,values:[]};group.values.push(money.amount);groups.set(key,group);}
-    summary.costs=[...groups.values()].map(({money,values})=>({...money,amount:addUsageMoney(values),quality:conflict?"conflict":summary.reasons.length || chosen.some(({fact})=>fact.quality==="partial")?"partial":"complete",billing:"unknown"}));
+    summary.costs=[...groups.values()].map(({money,values})=>({...money,amount:addUsageMoney(values),quality:conflict?"conflict":hasIncompleteUsage(summary.reasons) || chosen.some(({fact})=>fact.quality==="partial")?"partial":"complete",billing:"unknown"}));
     summary.costQuality=summary.costs.length?(conflict?"conflict":summary.costs.some(c=>c.quality==="partial")?"partial":"complete"):"unreported";
     summary.models=[...new Map(contributing.flatMap(({fact})=>fact.models).map(model=>[canonical(model),model])).values()];
     if(summary.models.length>64){summary.models=summary.models.slice(0,64);summary.reasons=uniq([...summary.reasons,"model_coverage_unknown"]);}
@@ -301,7 +304,7 @@ export class UsageService implements UsageSink {
       const summary=this.#summarize(selected,turnId!==null,reasons);
       const scopes=uniq(selected.flatMap(({fact})=>fact.turn?[fact.turn.scope]:[]));
       const hasValue=Object.values(summary.metrics).some(m=>m.value!==null)||summary.costs.length>0;
-      const complete=hasValue && !summary.reasons.length && Object.values(summary.metrics).every(m=>m.quality==="complete"||m.quality==="unreported") && (turnId===null || (turnState==="completed" && scopes.length===1 && scopes[0]==="whole_turn"));
+      const complete=hasValue && !hasIncompleteUsage(summary.reasons) && Object.values(summary.metrics).every(m=>m.quality==="complete"||m.quality==="unreported") && (summary.costQuality==="complete"||summary.costQuality==="unreported") && (turnId===null || (turnState==="completed" && scopes.length===1 && (scopes[0]==="whole_turn"||scopes[0]==="main_loop")));
       return usageReportSchema.parse({threadId,turnId,revision:String(revision),support:this.#authorize(scope,threadId).kind === "grok_build" ? "unsupported" : "supported",state:hasValue?(complete?"complete":"partial"):"unavailable",captureState:sources.some(s=>s.capture_state==="active")?"active":sources.some(s=>s.capture_state==="disconnected")?"disconnected":"idle",measurementScope:turnId===null?"session":scopes.length===1?scopes[0]:scopes.length?"partial_interval":null,turnState,lastRecordedAt:turnId===null?last.time:selected.map(row=>row.recordedAt).sort().at(-1)??null,inherited:false,summary,legacy:null,legacyRecordedAt:null});
     };
     const report=make(null,null);

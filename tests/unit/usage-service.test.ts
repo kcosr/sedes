@@ -40,6 +40,58 @@ function observation(id: string, facts: readonly UsageFact[], replaceCheckpoint 
 }
 const turnId = applicationTurnIdForBackendTurn({backendInstanceId: "backend", sourceApplicationThreadId: "thread", backendTurnId: "turn"});
 describe("durable scoped usage service", () => {
+  it("reports complete measurements within main-loop scope despite unknown model attribution", () => {
+    const db=database(), service=new UsageService(db), capture=service.open(source);
+    const reasons=["main_loop_only", "model_coverage_unknown"] as const;
+    capture.registerTurns([{backendTurnId:"turn",status:"in_progress",orderedBackendItemIds:[]}]);
+    capture.capture([observation("main",[fact("main","100",{
+      models:[],reasons, costs:[{amount:"0.25",currency:"USD",kind:"estimated",provenance:"SDK"}],
+      turn:{backendTurnId:"turn",scope:"main_loop",contribution:"additive"},
+    })])]);
+    expect(service.read(scope,"thread",turnId).state).toBe("partial");
+    capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
+    const report=service.read(scope,"thread",turnId);
+    expect(report).toMatchObject({state:"complete",measurementScope:"main_loop",summary:{
+      metrics:{input:{value:"100",quality:"complete"}},costQuality:"complete",models:[],reasons,
+      costs:[{amount:"0.25",quality:"complete"}],
+    }});
+    expect(service.read(scope,"thread").state).toBe("complete");
+    expect(new UsageService(db).read(scope,"thread",turnId)).toEqual(report);
+  });
+  it.each(["capture_gap", "unknown_baseline", "history_partial", "invalid_evidence", "child_coverage_unknown"] as const)("retains incomplete main-loop measurements for %s", reason => {
+    const service=new UsageService(database()), capture=service.open(source);
+    capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
+    capture.capture([observation("main",[fact("main","100",{
+      reasons:["main_loop_only","model_coverage_unknown",reason],
+      turn:{backendTurnId:"turn",scope:"main_loop",contribution:"additive"},
+    })])]);
+    expect(service.read(scope,"thread",turnId)).toMatchObject({state:"partial",summary:{metrics:{input:{value:"100",quality:"partial"}}}});
+  });
+  it.each([false,true])("preserves explicit partial fact quality with informational reasons (costOnly=%s)", costOnly => {
+    const db=database(), service=new UsageService(db), capture=service.open(source);
+    const turn={backendTurnId:"turn",status:"completed" as const,orderedBackendItemIds:[]};
+    capture.registerTurns([turn]);
+    capture.capture([observation("partial",[fact("partial","100",{
+      quality:"partial",reasons:["main_loop_only","model_coverage_unknown"],
+      tokens:costOnly?{}:{input:"100"},costs:[{amount:"0.25",currency:"USD",kind:"estimated",provenance:"SDK"}],
+      turn:{backendTurnId:"turn",scope:"main_loop",contribution:"additive"},
+    })])]);
+    const reopened=new UsageService(db);
+    reopened.registerVisibleTurns(scope,"thread",[{id:turnId,revision:1,status:"completed",orderedItemIds:[]}]);
+    const report=reopened.read(scope,"thread",turnId);
+    expect(report.state).toBe("partial");
+    expect(report.summary.costQuality).toBe("partial");
+    expect(report.summary.metrics.input.quality).toBe(costOnly?"unreported":"partial");
+  });
+  it("keeps a turn partial when known main-loop measurements coexist with a partial interval", () => {
+    const service=new UsageService(database()), capture=service.open(source);
+    capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
+    capture.capture([observation("mixed",[
+      fact("known","100",{turn:{backendTurnId:"turn",scope:"main_loop",contribution:"additive"}}),
+      fact("interval","10",{turn:{backendTurnId:"turn",scope:"partial_interval",contribution:"additive"}}),
+    ])]);
+    expect(service.read(scope,"thread",turnId)).toMatchObject({state:"partial",measurementScope:"partial_interval",summary:{metrics:{input:{value:"110"}}}});
+  });
   it("reports availability only for ended turns with durable data and enforces owner scope", () => {
     const service=new UsageService(database()), capture=service.open(source);
     capture.registerTurns([{backendTurnId:"turn",status:"in_progress",orderedBackendItemIds:[]},{backendTurnId:"empty",status:"completed",orderedBackendItemIds:[]}]);
@@ -83,13 +135,22 @@ describe("durable scoped usage service", () => {
 
   it("repairs interrupted capture only after authoritative history reconciliation and retains conflicts", () => {
     const db=database(), first=new UsageService(db), capture=first.open(source);
-    capture.capture([observation("entry",[fact("entry","10")])]);
+    capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
+    const evidence=observation("entry",[fact("entry","10",{turn:{backendTurnId:"turn",scope:"main_loop",contribution:"additive"}})]);
+    capture.capture([evidence]);
+    expect(first.read(scope,"thread",turnId).state).toBe("complete");
+    capture.gap("capture_gap");
+    expect(first.read(scope,"thread",turnId)).toMatchObject({state:"partial",summary:{metrics:{input:{value:"10"}}}});
+    capture.reconcile();
+    expect(first.read(scope,"thread",turnId).state).toBe("complete");
     const service=new UsageService(db); service.recoverInterruptedCapture();
     const recovered=service.open(source);
     expect(service.read(scope,"thread").summary.reasons).toContain("capture_gap");
-    recovered.capture([observation("entry",[fact("entry","10")])]);
+    expect(service.read(scope,"thread",turnId).state).toBe("partial");
+    recovered.capture([evidence]);
     expect(recovered.reconcile()).toBe(true);
     expect(service.read(scope,"thread").state).toBe("complete");
+    expect(service.read(scope,"thread",turnId).state).toBe("complete");
     recovered.capture([observation("entry",[fact("entry","20")])]);
     recovered.reconcile();
     expect(service.read(scope,"thread").summary.reasons).toContain("conflicting_evidence");

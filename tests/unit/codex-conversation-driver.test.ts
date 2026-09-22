@@ -7581,6 +7581,8 @@ describe("CodexConversationHandle", () => {
       expect(report.summary.metrics.input.value).toBe("20");
       expect(report.summary.metrics.output.value).toBe("3");
       expect(report.summary.reasons).not.toContain("unknown_baseline");
+      expect(report).toMatchObject({state: "complete", measurementScope: "main_loop"});
+      expect(report.summary.metrics.input.quality).toBe("complete");
       expect(usage.read(scope, binding().applicationThreadId).summary.metrics.input.value).toBe("120");
       expect(usage.read(scope, binding().applicationThreadId).summary.reasons).not.toContain("capture_failed");
     } finally {

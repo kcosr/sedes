@@ -23,6 +23,11 @@ write** are part of **Input**, and reasoning is part of output. Do not add every
 dash means unavailable, not zero. Cost estimates are not billing receipts;
 missing cost is explicitly unavailable. Short status labels indicate partial
 or restricted coverage.
+**Main agent only** excludes subagent work; it does not by itself mean tokens are
+missing from the displayed agent's usage. **Partial** indicates incomplete capture
+or allocation within the reported scope.
+Previously saved records and current Claude results can retain a conservative
+partial classification. Session-wide capture gaps can also affect older turns.
 
 **Thread actions → Session stats** separates durable **Recorded session usage**
 from live context occupancy and transcript counters. Session usage can exceed the

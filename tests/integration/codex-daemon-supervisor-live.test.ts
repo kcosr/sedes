@@ -499,6 +499,7 @@ plugins = false
       expect(firstTurnUsage.map(fact => fact.tokens.input)).toEqual(["11"]);
       expect(firstTurnUsage.map(fact => fact.tokens.output)).toEqual(["7"]);
       expect(firstTurnUsage.flatMap(fact => fact.reasons)).not.toContain("unknown_baseline");
+      expect(firstTurnUsage).toEqual([expect.objectContaining({quality: "complete", turn: expect.objectContaining({scope: "main_loop"})})]);
       const firstStreamEvents = handleEvents.slice(streamEventStart);
       const streamedDeltaIndex = firstStreamEvents.findIndex(
         ({ event }) =>

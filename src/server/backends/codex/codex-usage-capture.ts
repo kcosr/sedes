@@ -35,7 +35,7 @@ export class CodexUsageCapture {
     this.#parentNativeSession = input.ancestry?.forkedFromThreadId ?? null;
     this.#provenZero = input.provenZero;
     this.#capture = input.sink.open({ binding: input.binding, nativeNamespace: input.nativeNamespace,
-      nativeSession: this.#threadId, epoch: "native-counter-v1", normalizationVersion: "codex-app-server-usage-v2",
+      nativeSession: this.#threadId, epoch: "native-counter-v1", normalizationVersion: "codex-app-server-usage-v3",
       initialBaseline: input.provenZero ? "proven_zero" : "unknown" });
     if (this.#inherited) this.gap("inherited_baseline_unknown");
   }
@@ -117,7 +117,7 @@ export class CodexUsageCapture {
       const facts: UsageFact[] = [{
         ...baseFact(), id: "session-counter", kind: "cumulative",
         sessionContribution: this.#inherited ? "none" : "checkpoint", tokens,
-        reasons: this.#inherited ? ["inherited_baseline_unknown", "child_coverage_unknown", "model_coverage_unknown"] : ["child_coverage_unknown", "model_coverage_unknown"],
+        reasons: this.#inherited ? ["inherited_baseline_unknown", "main_loop_only", "model_coverage_unknown"] : ["main_loop_only", "model_coverage_unknown"],
       }, {
         ...baseFact(), id: "latest-call", kind: "operation", sessionContribution: "none",
         tokens: normalize(input.usage.last), quality: "partial", reasons: ["unknown_attribution"],
@@ -138,9 +138,10 @@ export class CodexUsageCapture {
           }));
           if (Object.values(delta).some(value => value !== null && value !== "0")) facts.push({
             ...baseFact(), id: `interval:${receipt}`, kind: "turn_aggregate", sessionContribution: this.#inherited ? "additive" : "none",
-            tokens: delta, basis: ["sdk_normalized", "derived"], quality: "partial",
-            reasons: [...(this.#knownBaselineTurn === input.turnId ? [] : ["unknown_baseline" as const]), "model_coverage_unknown", "child_coverage_unknown"],
-            turn: { backendTurnId: codexBackendTurnId(this.#threadId, input.turnId), scope: "partial_interval", contribution: "additive" },
+            tokens: delta, basis: ["sdk_normalized", "derived"], quality: this.#knownBaselineTurn === input.turnId ? "complete" : "partial",
+            reasons: [...(this.#knownBaselineTurn === input.turnId ? [] : ["unknown_baseline" as const]), "model_coverage_unknown", "main_loop_only"],
+            turn: { backendTurnId: codexBackendTurnId(this.#threadId, input.turnId),
+              scope: this.#knownBaselineTurn === input.turnId ? "main_loop" : "partial_interval", contribution: "additive" },
           });
         }
       }

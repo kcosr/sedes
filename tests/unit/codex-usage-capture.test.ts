@@ -45,6 +45,8 @@ describe("Codex cumulative accounting capture", () => {
     expect(intervals(unknown.observations)).toHaveLength(0);
     const fresh = fixture(true); fresh.capture.started({turnId: "turn-1", generation: 1, sequence: 0}); fresh.observe(1, 100);
     expect(intervals(fresh.observations)[0]!.tokens.input).toBe("100");
+    expect(intervals(fresh.observations)[0]).toMatchObject({quality: "complete", turn: {scope: "main_loop"}});
+    expect(intervals(fresh.observations)[0]!.reasons).toEqual(["model_coverage_unknown", "main_loop_only"]);
   });
 
   it("ignores duplicate and stale sequence delivery within one attachment", () => {
@@ -124,7 +126,7 @@ describe("Codex cumulative accounting capture", () => {
     f.capture.started({turnId: "turn-2", generation: 1, sequence: 3});
     f.observe(4, 120, "turn-2"); f.observe(5, 150, "turn-2");
     expect(intervals(f.observations).map(fact => fact.tokens.input)).toEqual(["20", "30"]);
-    expect(intervals(f.observations).every(fact => fact.turn?.scope === "partial_interval")).toBe(true);
+    expect(intervals(f.observations).every(fact => fact.turn?.scope === "main_loop" && fact.quality === "complete")).toBe(true);
     expect(intervals(f.observations).every(fact => !fact.reasons.includes("unknown_baseline"))).toBe(true);
   });
 
@@ -151,6 +153,7 @@ describe("Codex cumulative accounting capture", () => {
     expect(recorded.map(fact => fact.tokens.input)).toEqual(["20", "30"]);
     expect(recorded[0]!.reasons).not.toContain("unknown_baseline");
     expect(recorded[1]!.reasons).toContain("unknown_baseline");
+    expect(recorded[1]).toMatchObject({quality: "partial", turn: {scope: "partial_interval"}});
   });
 
   it("keeps restored totals in the same source across an app-server generation change", () => {
