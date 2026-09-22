@@ -1,4 +1,4 @@
-import { calculateCost, getModel } from "@earendil-works/pi-ai";
+import { calculateCost, type Model } from "@earendil-works/pi-ai";
 import { NO_USAGE_CAPTURE } from "../../src/server/usage/contracts.js";
 import { PiHistoryProjector } from "../../src/server/backends/pi/pi-history-projector.js";
 import { usageMoneyAmountSchema } from "../../src/shared/protocol/usage-accounting.js";
@@ -55,7 +55,8 @@ describe("Pi native usage accounting", () => {
   });
   it("accepts real pi-ai pricing float artifacts without discarding tokens", () => {
     const nativeUsage = {input:17,output:0,cacheRead:0,cacheWrite:0,totalTokens:17,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}};
-    calculateCost({...getModel("openai", "gpt-4o-mini"),cost:{input:0.3,output:0,cacheRead:0,cacheWrite:0}}, nativeUsage);
+    const model: Model<"openai-completions"> = {id:"fixture-model",name:"Fixture",api:"openai-completions",provider:"fixture",baseUrl:"https://example.invalid",reasoning:false,input:["text"],contextWindow:128000,maxTokens:1024,cost:{input:0.3,output:0,cacheRead:0,cacheWrite:0}};
+    calculateCost(model, nativeUsage);
     expect(String(nativeUsage.cost.input).split(".")[1]!.length).toBeGreaterThan(18);
     const observation=piUsageObservation(entry({...assistant(17),usage:nativeUsage}),"turn","live")!;
     expect(observation.facts[0]!.tokens.input).toBe("17");
@@ -78,6 +79,16 @@ describe("Pi native usage accounting", () => {
     expect(projection).not.toHaveBeenCalled();
     accounting.reconcile("history");expect(capture).toHaveBeenCalledTimes(2);expect(reconcile).toHaveBeenCalledTimes(2);
     projection.mockRestore();
+  });
+  it("stops a failed history batch and resumes the full scan when storage recovers", () => {
+    const manager=SessionManager.inMemory("/workspace");manager.appendMessage({role:"user",content:"question",timestamp:1});
+    for(let index=0;index<130;index++)manager.appendMessage(assistant(index));
+    let durable=false;
+    const capture=vi.fn((_observations:readonly UsageObservation[])=>durable),reconcile=vi.fn(()=>true);
+    const accounting=new PiUsageAccounting({sink:{open:()=>({...NO_USAGE_CAPTURE,capture,reconcile})},manager,nativeNamespace:"store",authentication:{conversationId:manager.getSessionId(),installationKey:new Uint8Array(32)},binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"pi",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:manager.getSessionId(),createdAt:"2026-09-22T00:00:00Z"}});
+    expect(capture.mock.calls.map(([batch])=>batch.length)).toEqual([64]);expect(reconcile).not.toHaveBeenCalled();
+    durable=true;accounting.retryPending();
+    expect(capture.mock.calls.slice(1).map(([batch])=>batch.length)).toEqual([64,64,2]);expect(reconcile).toHaveBeenCalledTimes(1);
   });
   it("does not declare native history reconciled after invalid evidence or a failed commit", () => {
     const manager=SessionManager.inMemory("/workspace");manager.appendMessage(assistant(Number.MAX_SAFE_INTEGER+1));

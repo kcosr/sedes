@@ -3421,9 +3421,31 @@ describe("ClaudeConversationHandle", () => {
     await handle.close();
   });
 
+  it("captures only the new live message and retries accounting after duplicate native replay", async () => {
+    const provider = fixture();
+    let durable = true;
+    const batches: readonly UsageObservation[][] = [];
+    const captured = batches as UsageObservation[][];
+    const usage: UsageSink = {open: () => ({registerTurns: () => {}, capture: observations => {captured.push([...observations]);return durable;},gap:()=>{},reconcile:()=>true,seal:()=>{}})};
+    const user:SessionMessage={type:"user",uuid:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",session_id:SESSION_ID,parent_tool_use_id:null,parent_agent_id:null,message:{role:"user",content:"Earlier"}};
+    const assistant=(uuid:string,id:string):SessionMessage=>({type:"assistant",uuid,session_id:SESSION_ID,parent_tool_use_id:null,parent_agent_id:null,message:{id,role:"assistant",content:[{type:"text",text:"Answer"}],stop_reason:"end_turn",usage:{input_tokens:5,output_tokens:2,cache_read_input_tokens:0,cache_creation_input_tokens:0}}});
+    const initial=assistant("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","history");
+    const {handle}=createHandle(provider,vi.fn(),{usage,initialMessages:[user,initial],resumeSession:true});
+    await handle.establishProjection({signal:new AbortController().signal});
+    expect(captured).toHaveLength(1);expect(captured[0]!.map(o=>o.id)).toEqual(["history:message"]);
+    const live=assistant("cccccccc-cccc-4ccc-8ccc-cccccccccccc","live");
+    durable=false;provider.messages.push(live as SDKMessage);
+    await vi.waitFor(()=>expect(captured).toHaveLength(2));
+    expect(captured[1]!.map(o=>o.id)).toEqual(["live:message"]);
+    durable=true;provider.messages.push(live as SDKMessage);
+    await vi.waitFor(()=>expect(captured).toHaveLength(3));
+    expect(captured[2]!.map(o=>o.id)).toEqual(["live:message"]);
+    await handle.close();
+  });
+
   it("captures pipeline results independently of history without transient token authority", async () => {
     const captured: UsageObservation[] = [];
-    const usage: UsageSink = {open: () => ({registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, seal: () => {}})};
+    const usage: UsageSink = {open: () => ({registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: () => {}})};
     const provider = fixture();
     const initialMessages: SessionMessage[] = [
       {

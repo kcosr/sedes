@@ -21,7 +21,7 @@ export class CodexUsageCapture {
   #boundary: { turnId: string; generation: number; sequence: number; baselineSequence: number } | undefined;
   #conflict = false;
   #provenZero: boolean;
-  #zeroBasedTurn: string | undefined;
+  #knownBaselineTurn: string | undefined;
 
   constructor(input: {
     sink: UsageSink; binding: ConversationBinding; nativeNamespace: string;
@@ -70,7 +70,7 @@ export class CodexUsageCapture {
   gap(reason: UsageReason): void {
     this.#previous = undefined;
     this.#provenZero = false;
-    this.#zeroBasedTurn = undefined;
+    this.#knownBaselineTurn = undefined;
     this.#startedTurn = undefined;
     this.#completed = undefined;
     this.#boundary = undefined;
@@ -85,10 +85,11 @@ export class CodexUsageCapture {
   observe(input: { generation: number; sequence: number; turnId: string; usage: CodexThreadTokenUsage }): void {
     this.#safely(() => {
       const tokens = normalize(input.usage.total);
-      if (!this.#previous && this.#provenZero && this.#startedTurn === input.turnId) this.#zeroBasedTurn = input.turnId;
+      if (!this.#previous && this.#provenZero && this.#startedTurn === input.turnId) this.#knownBaselineTurn = input.turnId;
       const previous = this.#previous ?? (this.#provenZero && this.#startedTurn === input.turnId ? { generation: input.generation, sequence: -1, turnId: input.turnId,
         tokens: Object.fromEntries(Object.keys(tokens).map(key => [key, "0"])) } : undefined);
       this.#provenZero = false;
+      if (previous && previous.generation !== input.generation) this.#knownBaselineTurn = undefined;
       if (previous?.generation === input.generation && input.sequence <= previous.sequence) return;
       const receipt = `${this.#incarnation}:${input.generation}:${input.sequence}`;
       const facts: UsageFact[] = [{
@@ -108,6 +109,7 @@ export class CodexUsageCapture {
         } else if (previous.turnId === input.turnId || (this.#boundary?.turnId === input.turnId &&
           this.#boundary.generation === input.generation && this.#boundary.sequence < input.sequence &&
           this.#boundary.baselineSequence === previous.sequence)) {
+          if (previous.turnId !== input.turnId) this.#knownBaselineTurn = input.turnId;
           const delta = Object.fromEntries(Object.entries(tokens).map(([key, value]) => {
             const before = previous.tokens[key as keyof typeof tokens];
             return [key, value === null || before == null ? null : String(BigInt(value) - BigInt(before))];
@@ -115,7 +117,7 @@ export class CodexUsageCapture {
           if (Object.values(delta).some(value => value !== null && value !== "0")) facts.push({
             ...baseFact(), id: `interval:${receipt}`, kind: "turn_aggregate", sessionContribution: this.#inherited ? "additive" : "none",
             tokens: delta, basis: ["sdk_normalized", "derived"], quality: "partial",
-            reasons: [...(this.#zeroBasedTurn === input.turnId ? [] : ["unknown_baseline" as const]), "model_coverage_unknown", "child_coverage_unknown"],
+            reasons: [...(this.#knownBaselineTurn === input.turnId ? [] : ["unknown_baseline" as const]), "model_coverage_unknown", "child_coverage_unknown"],
             turn: { backendTurnId: codexBackendTurnId(this.#threadId, input.turnId), scope: "partial_interval", contribution: "additive" },
           });
         }
@@ -124,7 +126,7 @@ export class CodexUsageCapture {
         replaceCheckpoint: true, facts }]);
       this.#boundary = undefined;
       this.#completed = undefined;
-      if (!accepted) { this.#previous = undefined; this.#startedTurn = undefined; return; }
+      if (!accepted) { this.#previous = undefined; this.#startedTurn = undefined; this.#knownBaselineTurn = undefined; return; }
       if (!this.#conflict) this.#previous = { generation: input.generation, sequence: input.sequence, turnId: input.turnId, tokens };
       this.#startedTurn = undefined;
     });
@@ -133,6 +135,7 @@ export class CodexUsageCapture {
   #safely(action: () => void): void {
     try { action(); } catch (error) {
       this.#previous = undefined;
+      this.#knownBaselineTurn = undefined;
       try { this.#capture.gap("capture_failed"); } catch { /* Diagnostic-only failure; do not retry provider work. */ }
       try { this.#onError(error); } catch { /* Accounting must not break provider delivery. */ }
     }

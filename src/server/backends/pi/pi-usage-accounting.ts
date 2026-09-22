@@ -64,6 +64,7 @@ export class PiUsageAccounting {
   readonly #authentication: PiToolIdentityAuthentication;
   readonly #inherited = new Set<string>();
   #parentNativeSession: string | undefined;
+  #scanIncomplete = false;
   readonly #committed = new Map<string, string>();
   readonly #pending = new Map<string, UsageObservation>();
   readonly #turnByEntry = new Map<string, string>();
@@ -90,6 +91,7 @@ export class PiUsageAccounting {
   }
   reconcile(provenance: "live" | "history"): void {
     let complete = true;
+    this.#scanIncomplete = true;
     try {
       const entries = this.#manager.getEntries();
       const parents = new Set(entries.map((entry) => entry.parentId));
@@ -107,10 +109,11 @@ export class PiUsageAccounting {
         ? {nativeSession: this.#parentNativeSession, turns: [...inheritedTurnIds].map(backendTurnId => ({backendTurnId, sourceBackendTurnId: backendTurnId}))} : undefined);
       for (const entry of entries) {
         if (!this.#queue(entry, this.#turnByEntry.get(entry.id) ?? null, provenance)) complete = false;
-        if (this.#pending.size >= 64 && !this.#flush()) complete = false;
+        if (this.#pending.size >= 64 && !this.#flush()) return;
       }
-      if (!this.#flush()) complete = false;
-      if (complete) this.#capture.reconcile();
+      if (!this.#flush()) return;
+      this.#scanIncomplete = false;
+      if (complete && !this.#capture.reconcile()) this.#scanIncomplete = true;
     } catch { this.#capture.gap("capture_failed"); }
   }
   /** Live append already has the driver's authoritative active turn when available. */
@@ -126,7 +129,10 @@ export class PiUsageAccounting {
       this.#flush();
     } catch { this.#capture.gap("capture_failed"); }
   }
-  retryPending(): void { this.#flush(); }
+  retryPending(): void {
+    if (this.#scanIncomplete) this.reconcile("history");
+    else this.#flush();
+  }
   #queue(entry: SessionEntry, backendTurnId: string | null, provenance: "live" | "history"): boolean {
     if (this.#inherited.has(entry.id)) return true;
     try {
@@ -139,17 +145,16 @@ export class PiUsageAccounting {
     } catch { this.#capture.gap("invalid_evidence"); return false; }
   }
   #flush(): boolean {
-    let committed = true;
     const pending = [...this.#pending.values()];
     for (let index = 0; index < pending.length; index += 64) {
       const batch = pending.slice(index, index + 64);
-      if (!this.#capture.capture(batch)) { committed = false; continue; }
+      if (!this.#capture.capture(batch)) return false;
       for (const observation of batch) {
         this.#committed.set(observation.id, observation.revision);
         this.#pending.delete(observation.id);
       }
     }
-    return committed;
+    return true;
   }
   registerTurn(turn: import("../../../shared/protocol/backend.js").BackendTurn): void { this.#capture.registerTurns([turn]); }
   close(): void { this.#capture.seal("closed"); }

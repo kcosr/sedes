@@ -589,10 +589,14 @@ Durable usage observations and session/turn summaries are also stored in
 `overlay.sqlite`, scoped to the authenticated owner. Backing up main state retains
 captured accounting; it cannot recover unobserved provider work. No usage sidecar
 spool or separate usage service is required. Existing provider replay/history may
-recover some gaps, but capture failures or missing native usage remain visible.
+recover some gaps. A complete successful Pi history reconciliation clears its
+interrupted-capture and storage-failure gaps; unproven coverage and conflicting
+evidence remain visible. SDK numeric cost estimates are rounded to at most 18
+fractional decimal places before storage, then summed with decimal arithmetic.
 
 The durable-accounting migration preserves old Claude ledger totals as a
-separate legacy summary with unknown coverage and removes their old authority.
+separate legacy summary with unknown coverage and its recorded time, and removes
+their old authority.
 Legacy totals are never added to newly selected accounting facts. Opening older
 history registers visible turn identities without performing a global backfill.
 Use the ordinary pre-migration backup and rollback procedure below.

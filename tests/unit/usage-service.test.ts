@@ -1,3 +1,4 @@
+import { CodexUsageCapture } from "../../src/server/backends/codex/codex-usage-capture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -37,6 +38,20 @@ function observation(id: string, facts: readonly UsageFact[], replaceCheckpoint 
 }
 const turnId = applicationTurnIdForBackendTurn({backendInstanceId: "backend", sourceApplicationThreadId: "thread", backendTurnId: "turn"});
 describe("durable scoped usage service", () => {
+  it.each([false,true])("keeps one durable Codex series across resume (regression=%s)", regression => {
+    const db=database(), service=new UsageService(db);
+    const adapter=new CodexUsageCapture({sink:service,binding,nativeNamespace:"native-store",provenZero:false,ancestry:null,onError:vi.fn()});
+    const send=(generation:number,sequence:number,inputTokens:number)=>{
+      const counts={inputTokens,outputTokens:0,totalTokens:inputTokens,cachedInputTokens:0,cacheWriteInputTokens:0,reasoningOutputTokens:0};
+      adapter.observe({generation,sequence,turnId:"turn",usage:{total:counts,last:counts,modelContextWindow:1000}});
+    };
+    send(1,1,150); adapter.gap("capture_gap"); send(2,1,regression?20:150); send(2,2,regression?200:175);
+    const report=service.read(scope,"thread");
+    expect(report.summary.metrics.input.value).toBe(regression?"150":"175");
+    expect(report.summary.reasons.includes("counter_regression")).toBe(regression);
+    expect(db.prepare("SELECT count(*) AS count FROM usage_sources").get()).toEqual({count:1});
+  });
+
   it("repairs interrupted capture only after authoritative history reconciliation and retains conflicts", () => {
     const db=database(), first=new UsageService(db), capture=first.open(source);
     capture.capture([observation("entry",[fact("entry","10")])]);

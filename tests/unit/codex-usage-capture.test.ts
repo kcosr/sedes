@@ -8,7 +8,7 @@ function fixture(provenZero = false, inherited = false) {
   const gap = vi.fn();
   const registerTurns = vi.fn();
   const open = vi.fn<UsageSink["open"]>(() => ({ registerTurns,
-    capture: entries => { observations.push(...entries); return true; }, gap, seal: vi.fn() }));
+    capture: entries => { observations.push(...entries); return true; }, reconcile: () => true, gap, seal: vi.fn() }));
   const capture = new CodexUsageCapture({ sink: { open }, provenZero, ancestry: inherited ? {forkedFromThreadId: "parent-native", sourceTurnId: "turn-1"} : null,
     nativeNamespace: "native-store", onError: vi.fn(), binding: {
       tenantId: "tenant", ownerPrincipalId: "principal", applicationThreadId: "app-thread",
@@ -75,6 +75,7 @@ describe("Codex cumulative accounting capture", () => {
     f.observe(4, 120, "turn-2"); f.observe(5, 150, "turn-2");
     expect(intervals(f.observations).map(fact => fact.tokens.input)).toEqual(["20", "30"]);
     expect(intervals(f.observations).every(fact => fact.turn?.scope === "partial_interval")).toBe(true);
+    expect(intervals(f.observations).every(fact => !fact.reasons.includes("unknown_baseline"))).toBe(true);
   });
 
   it.each(["gap", "generation", "late_checkpoint", "wrong_completion", "reordered_start"])(
@@ -89,6 +90,18 @@ describe("Codex cumulative accounting capture", () => {
       expect(intervals(f.observations).filter(fact => fact.turn?.backendTurnId === codexBackendTurnId("native-thread", "turn-2"))).toHaveLength(0);
     },
   );
+
+  it("loses the proved turn baseline when capture continuity is broken", () => {
+    const f = fixture(); f.observe(1, 100, "turn-1");
+    f.capture.completed({turnId: "turn-1", generation: 1, sequence: 2});
+    f.capture.started({turnId: "turn-2", generation: 1, sequence: 3});
+    f.observe(4, 120, "turn-2"); f.capture.gap("capture_gap");
+    f.observe(5, 150, "turn-2"); f.observe(6, 180, "turn-2");
+    const recorded = intervals(f.observations);
+    expect(recorded.map(fact => fact.tokens.input)).toEqual(["20", "30"]);
+    expect(recorded[0]!.reasons).not.toContain("unknown_baseline");
+    expect(recorded[1]!.reasons).toContain("unknown_baseline");
+  });
 
   it("keeps restored totals in the same source across an app-server generation change", () => {
     // Pinned 0.153.0 thread_resume.rs:3502 restores total150 from a saved rollout

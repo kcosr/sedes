@@ -7458,7 +7458,7 @@ describe("CodexConversationHandle", () => {
     const observations: UsageObservation[] = [];
     const registerTurns = vi.fn();
     const sink: UsageSink = { open: vi.fn(() => ({ registerTurns,
-      capture: (entries: readonly UsageObservation[]) => { observations.push(...entries); return true; }, gap: vi.fn(), seal: vi.fn() })) };
+      capture: (entries: readonly UsageObservation[]) => { observations.push(...entries); return true; }, reconcile: () => true, gap: vi.fn(), seal: vi.fn() })) };
     const harness = new RpcHarness();
     const target = driver(harness, connection, undefined, undefined, undefined, undefined,
       undefined, undefined, undefined, undefined, undefined, undefined, sink);
