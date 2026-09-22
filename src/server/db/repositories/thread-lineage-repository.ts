@@ -835,6 +835,7 @@ export class ThreadLineageRepository {
       if(usageEvidence)throw new DomainError("conflict", "The fork has recorded execution usage and cannot be discarded as uncreated.");
       this.database.prepare(`DELETE FROM usage_gaps WHERE source_id IN (SELECT id FROM usage_sources WHERE tenant_id=? AND principal_id=? AND thread_id=?)`).run(scope.tenantId,scope.principalId,childThreadId);
       this.database.prepare("DELETE FROM usage_sources WHERE tenant_id=? AND principal_id=? AND thread_id=?").run(scope.tenantId,scope.principalId,childThreadId);
+      this.database.prepare("DELETE FROM usage_subagents WHERE tenant_id=? AND principal_id=? AND thread_id=?").run(scope.tenantId,scope.principalId,childThreadId);
       this.database.prepare("DELETE FROM usage_turn_state WHERE tenant_id=? AND principal_id=? AND thread_id=?").run(scope.tenantId,scope.principalId,childThreadId);
       this.database.prepare("DELETE FROM usage_thread_state WHERE tenant_id=? AND principal_id=? AND thread_id=?").run(scope.tenantId,scope.principalId,childThreadId);
       const removed = this.database

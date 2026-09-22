@@ -21,7 +21,7 @@ describe("Claude native usage accounting", () => {
   });
   it("reuses actual query epochs and keeps history independent of resumed query checkpoints", () => {
     const epochs: string[] = [], captured: UsageObservation[] = [], sealed: string[] = [];
-    const sink: UsageSink = {open: (source) => {epochs.push(source.epoch); return {registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: (reason) => sealed.push(reason)};}};
+    const sink: UsageSink = {listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: (source) => {epochs.push(source.epoch); return {registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: (reason) => sealed.push(reason)};}};
     const accounting = new ClaudeUsageAccounting({sink, nativeNamespace: "native-store", binding: {tenantId: "t", ownerPrincipalId: "p", applicationThreadId: "thread", backendInstanceId: "claude", connectionProfileId: "c", executionEnvironmentId: "e", backendConversationId: "native", createdAt: "2026-09-22T00:00:00Z"}});
     accounting.admitQuery("query-1", false); accounting.admitQuery("query-1", true);
     accounting.pipeline(result(20)); accounting.pipeline(result(30, "next")); accounting.result(result(30), "turn"); accounting.reset();
@@ -29,7 +29,7 @@ describe("Claude native usage accounting", () => {
   });
   it("reports each delivery transaction outcome for existing replay acknowledgement", () => {
     let durable=false;
-    const sink:UsageSink={open:()=>({registerTurns:()=>{},capture:()=>durable,gap:()=>{},reconcile:()=>true,seal:()=>{}})};
+    const sink:UsageSink={listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open:()=>({registerTurns:()=>{},capture:()=>durable,gap:()=>{},reconcile:()=>true,seal:()=>{}})};
     const accounting=new ClaudeUsageAccounting({sink,nativeNamespace:"store",binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"claude",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:"native",createdAt:"2026-09-22T00:00:00Z"}});
     accounting.admitQuery("query",false);accounting.beginDelivery();accounting.pipeline(result(20));
     expect(accounting.deliveryCommitted).toBe(false);
@@ -45,7 +45,7 @@ describe("Claude native usage accounting", () => {
   it("batches history once and caches only successfully committed message revisions", () => {
     let durable=true;
     const capture=vi.fn((_observations:readonly UsageObservation[])=>durable);
-    const accounting=new ClaudeUsageAccounting({sink:{open:()=>({...NO_USAGE_CAPTURE,capture})},nativeNamespace:"store",binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"claude",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:"native",createdAt:"2026-09-22T00:00:00Z"}});
+    const accounting=new ClaudeUsageAccounting({sink:{listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open:()=>({...NO_USAGE_CAPTURE,capture})},nativeNamespace:"store",binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"claude",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:"native",createdAt:"2026-09-22T00:00:00Z"}});
     const message=(id:number)=>({type:"assistant",uuid:`frame-${id}`,parent_tool_use_id:null,message:{id:`message-${id}`,model:"model-a",usage:{input_tokens:id,output_tokens:2,cache_read_input_tokens:0,cache_creation_input_tokens:0}}} as SessionMessage);
     const history=Array.from({length:130},(_,id)=>({message:message(id),backendTurnId:`turn-${id}`}));
     accounting.messages(history,"history");expect(capture.mock.calls.map(([batch])=>batch.length)).toEqual([64,64,2]);

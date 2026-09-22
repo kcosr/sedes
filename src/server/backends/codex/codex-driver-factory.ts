@@ -133,6 +133,12 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
     ) {
       throw new Error("codex_driver_factory_configuration_invalid");
     }
+    // Background child accounting must recover when the runtime connects,
+    // even if none of its root conversations has an open presentation actor.
+    // Driver construction only restores scoped accounting subscriptions.
+    for (const connection of input.materializedConnections) {
+      if (connection.enabled && this.#configuredByTemplateId.get(connection.templateId)?.enabled) this.create(connection);
+    }
   }
 
   create(connection: AgentConnectionProfile): ConversationBackendDriver {

@@ -15858,3 +15858,13 @@ tr.diff-hunk td {
 .recorded-usage-model { overflow-wrap: anywhere; }
 .recorded-usage-legacy { display: grid; gap: 7px; border-top: 1px solid var(--border); padding-top: 9px; }
 .session-recorded-usage { padding-block: 12px; }
+.recorded-usage-breakdown { min-width: 0; overflow-x: auto; }
+.recorded-usage-breakdown table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.recorded-usage-breakdown th, .recorded-usage-breakdown td { padding: 5px 6px; text-align: end; }
+.recorded-usage-breakdown th:first-child { padding-left: 0; text-align: start; }
+.recorded-usage-breakdown th:last-child, .recorded-usage-breakdown td:last-child { padding-right: 0; }
+.recorded-usage-breakdown thead { color: var(--muted-foreground); font-size: 11px; border-bottom: 1px solid var(--border); }
+.recorded-usage-breakdown th { font-weight: 500; }
+.recorded-usage-breakdown td { white-space: nowrap; }
+.recorded-usage-breakdown tr[data-subset] { color: var(--muted-foreground); font-size: 11px; }
+.recorded-usage-breakdown tr[data-subset] th { padding-left: 8px; }

@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { durableUsageAccountingMigration } from "../../src/server/db/migrations/110-durable-usage-accounting.js";
+import { usageSubagentsMigration } from "../../src/server/db/migrations/112-usage-subagents.js";
 import { usageGapSessionScopeMigration } from "../../src/server/db/migrations/111-usage-gap-session-scope.js";
 import { UsageService, addUsageMoney } from "../../src/server/usage/usage-service.js";
 import type { UsageFact, UsageObservation, UsageSink } from "../../src/server/usage/contracts.js";
@@ -20,17 +21,17 @@ function database(file = ":memory:", legacy = false): Database.Database {
   db.exec(`
 CREATE TABLE application_threads(tenant_id TEXT NOT NULL,owner_principal_id TEXT NOT NULL,id TEXT NOT NULL,backend_instance_id TEXT NOT NULL,environment_id TEXT NOT NULL,workspace_id TEXT NOT NULL,PRIMARY KEY(tenant_id,owner_principal_id,id));
 CREATE TABLE agent_backend_instances(tenant_id TEXT NOT NULL,id TEXT NOT NULL,kind TEXT NOT NULL,PRIMARY KEY(tenant_id,id));
-CREATE TABLE conversation_bindings(tenant_id TEXT NOT NULL,owner_principal_id TEXT NOT NULL,application_thread_id TEXT NOT NULL,backend_instance_id TEXT NOT NULL,execution_environment_id TEXT NOT NULL,backend_conversation_id TEXT NOT NULL,connection_profile_id TEXT NOT NULL);
+CREATE TABLE conversation_bindings(tenant_id TEXT NOT NULL,owner_principal_id TEXT NOT NULL,application_thread_id TEXT NOT NULL,backend_instance_id TEXT NOT NULL,execution_environment_id TEXT NOT NULL,backend_conversation_id TEXT NOT NULL,connection_profile_id TEXT NOT NULL,created_at INTEGER NOT NULL DEFAULT 1790035200000);
 CREATE TABLE conversation_creation_attempts(tenant_id TEXT,owner_principal_id TEXT,application_thread_id TEXT,backend_instance_id TEXT,connection_profile_id TEXT,execution_environment_id TEXT,provisional_backend_conversation_id TEXT,provisional_opaque_binding_detail TEXT,force_reset_at INTEGER,phase TEXT);
 CREATE TABLE thread_lineage_closure(tenant_id TEXT, owner_principal_id TEXT, ancestor_thread_id TEXT, descendant_thread_id TEXT);
 CREATE TABLE thread_fork_origins(tenant_id TEXT, owner_principal_id TEXT, child_thread_id TEXT, source_thread_id TEXT, creation_operation_id TEXT, source_thread_state TEXT);
 CREATE TABLE claude_usage_ledgers(tenant_id TEXT NOT NULL,owner_principal_id TEXT NOT NULL,application_thread_id TEXT NOT NULL,input_tokens INTEGER NOT NULL,output_tokens INTEGER NOT NULL,cache_read_tokens INTEGER NOT NULL,cache_write_tokens INTEGER NOT NULL,request_count INTEGER NOT NULL,updated_at INTEGER NOT NULL);
 INSERT INTO application_threads VALUES('tenant','principal','thread','backend','environment','workspace');
 INSERT INTO agent_backend_instances VALUES('tenant','backend','claude_agent_sdk');
-INSERT INTO conversation_bindings VALUES('tenant','principal','thread','backend','environment','native-session','connection');`);
+INSERT INTO conversation_bindings(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,execution_environment_id,backend_conversation_id,connection_profile_id) VALUES('tenant','principal','thread','backend','environment','native-session','connection');`);
   if(legacy)db.exec("INSERT INTO claude_usage_ledgers VALUES('tenant','principal','thread',100,20,30,40,5,1720000000000)");
   db.exec(durableUsageAccountingMigration.sql);
-  db.exec(usageGapSessionScopeMigration.sql); return db;
+  db.exec(usageGapSessionScopeMigration.sql); db.exec(usageSubagentsMigration.sql); return db;
 }
 function fact(id: string, input: string, overrides: Partial<UsageFact> = {}): UsageFact {
   return {id, kind: "operation", sessionContribution: "additive", coverageDomain: "main_loop", tokens: {input}, costs: [], models: [{provider: "provider", model: "model"}], basis: ["sdk_normalized"], providerPresence: "unknown", quality: "complete", reasons: [], activity: "model", turn: null, ...overrides};
@@ -270,7 +271,7 @@ describe("durable scoped usage service", () => {
     db.exec("DELETE FROM conversation_bindings; INSERT INTO conversation_creation_attempts VALUES('tenant','principal','thread','backend','connection','environment','native-session','owned-detail',NULL,'conversation_identified')");
     const capture=service.open(source);
     expect(capture.capture([observation("early",[fact("early","11")])])).toBe(true);
-    db.exec("INSERT INTO conversation_bindings VALUES('tenant','principal','thread','backend','environment','native-session','connection'); UPDATE conversation_creation_attempts SET phase='bound'");
+    db.exec("INSERT INTO conversation_bindings(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,execution_environment_id,backend_conversation_id,connection_profile_id) VALUES('tenant','principal','thread','backend','environment','native-session','connection'); UPDATE conversation_creation_attempts SET phase='bound'");
     expect(capture.capture([observation("later",[fact("later","7")])])).toBe(true);
     const report=service.read(scope,"thread");
     expect(report.summary.metrics.input.value).toBe("18");expect(report.summary.reasons).not.toContain("capture_failed");
@@ -336,7 +337,7 @@ describe("durable scoped usage service", () => {
     const db=database(),service=new UsageService(db),parent=service.open(source);
     parent.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
     parent.capture([observation("parent",[fact("parent","30",{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})])]);
-    db.exec("INSERT INTO application_threads VALUES('tenant','principal','child','backend','environment','workspace'); INSERT INTO conversation_bindings VALUES('tenant','principal','child','backend','environment','child-native','connection'); INSERT INTO thread_lineage_closure VALUES('tenant','principal','thread','child');");
+    db.exec("INSERT INTO application_threads VALUES('tenant','principal','child','backend','environment','workspace'); INSERT INTO conversation_bindings(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,execution_environment_id,backend_conversation_id,connection_profile_id) VALUES('tenant','principal','child','backend','environment','child-native','connection'); INSERT INTO thread_lineage_closure VALUES('tenant','principal','thread','child');");
     const child=service.open({...source,binding:{...binding,applicationThreadId:"child",backendConversationId:"child-native"},nativeSession:"child-native"});
     child.registerTurns([{backendTurnId:"child-turn",status:"completed",orderedBackendItemIds:[]}],{nativeSession:"native-session",turns:[{backendTurnId:"child-turn",sourceBackendTurnId:"turn"}]});
     const childTurn=applicationTurnIdForBackendTurn({backendInstanceId:"backend",sourceApplicationThreadId:"child",backendTurnId:"child-turn"});
@@ -345,6 +346,10 @@ describe("durable scoped usage service", () => {
     expect(service.read(scope,"child").summary.metrics.input.value).toBeNull();
     parent.capture([observation("more",[fact("more","5",{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})])]);
     expect(service.read(scope,"child",childTurn).summary.metrics.input.value).toBe("35");
+    db.exec("UPDATE usage_thread_state SET report_json=NULL; UPDATE usage_turn_state SET report_json=NULL;");
+    const reopened=new UsageService(db);
+    expect(reopened.availability(scope,"child",[childTurn]).turns).toEqual([{turnId:childTurn,available:true}]);
+    expect(reopened.read(scope,"child",childTurn).summary.metrics.input.value).toBe("35");
   });
   it("rejects malformed native evidence without turning unreported values into zero", () => {
     const service=new UsageService(database()),capture=service.open(source);
@@ -397,5 +402,158 @@ describe("durable scoped usage service", () => {
   it("preserves zero money and decimal precision", () => {
     expect(addUsageMoney(["0.0","0.00"])).toBe("0");
     expect(addUsageMoney(["999999999999999999.999999999999999999","0.000000000000000001"])).toBe("1000000000000000000");
+  });
+});
+
+describe("Codex subagent accounting", () => {
+  function setup() {
+    const db=database();db.prepare("UPDATE agent_backend_instances SET kind='codex_app_server'").run();
+    return {db,service:new UsageService(db)};
+  }
+  function child(nativeSession="child",nativeParentSession=binding.backendConversationId):Parameters<UsageSink["open"]>[0] {
+    return {...source,nativeSession,epoch:"native-counter-v1",subagent:{nativeParentSession}};
+  }
+  const checkpoint=(id:string,input:string)=>observation(id,[fact("total",input,{kind:"cumulative",sessionContribution:"checkpoint"})],true,input);
+  it("counts each nested child once in session totals and never changes the main turn", () => {
+    const {db,service}=setup(), main=service.open(source);
+    main.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
+    main.capture([observation("main",[fact("main","100",{turn:{backendTurnId:"turn",scope:"main_loop",contribution:"additive"}})])]);
+    main.seal("closed");
+    const before=service.read(scope,"thread",turnId);
+    const first=service.open(child());
+    first.capture([checkpoint("first","30"),checkpoint("first","30")]);
+    first.capture([checkpoint("later","45")]);
+    const nested=service.open(child("nested","child"));nested.capture([checkpoint("nested","5")]);
+    first.gap("capture_gap");
+    const report=service.read(scope,"thread");
+    expect(report.summary.metrics.input.value).toBe("150");
+    expect(report.breakdown?.main.metrics.input).toMatchObject({value:"100",quality:"complete"});
+    expect(report.breakdown?.subagents.metrics.input).toMatchObject({value:"50",quality:"partial"});
+    expect(report.breakdown?.subagents.reasons).toContain("capture_gap");
+    expect({...service.read(scope,"thread",turnId),revision:before.revision}).toEqual(before);
+    expect(before.breakdown).toBeNull();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM usage_turn_state").get()).toEqual({n:1});
+    expect(db.prepare("SELECT COUNT(*) AS n FROM usage_subagents").get()).toEqual({n:2});
+    expect(db.prepare("SELECT COUNT(*) AS n FROM usage_observations").get()).toEqual({n:4});
+    expect(JSON.stringify(report)).not.toContain("native-session");
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+  it("isolates child storage failures from main-turn accounting and retains the session failure until recovery", () => {
+    const {db,service}=setup(), main=service.open(source);vi.spyOn(console,"warn").mockImplementation(()=>undefined);
+    main.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
+    main.capture([observation("main",[fact("main","100",{turn:{backendTurnId:"turn",scope:"main_loop",contribution:"additive"}})])]);
+    const childCapture=service.open(child());
+    db.exec("CREATE TRIGGER fail_child_capture BEFORE INSERT ON usage_observations WHEN NEW.source_id IN (SELECT id FROM usage_sources WHERE agent_role='subagent') BEGIN SELECT RAISE(ABORT, 'fixture'); END;");
+    expect(childCapture.capture([checkpoint("one","10")])).toBe(false);
+    expect(service.read(scope,"thread").captureState).toBe("failed");
+    expect(service.read(scope,"thread",turnId).state).toBe("complete");
+    main.capture([observation("other",[fact("other","1")])]);
+    expect(service.read(scope,"thread").captureState).toBe("failed");
+    db.exec("DROP TRIGGER fail_child_capture");
+    expect(childCapture.capture([checkpoint("one","10")])).toBe(true);childCapture.reconcile();
+    expect(service.read(scope,"thread").summary.reasons).not.toContain("capture_failed");
+    expect(service.read(scope,"thread").summary.metrics.input.value).toBe("111");
+  });
+  it("enumerates only durable child roots in the exact runtime scope with stable pagination", () => {
+    const {db,service}=setup();
+    const query={tenantId:scope.tenantId,principalId:scope.principalId,backendInstanceId:binding.backendInstanceId,executionEnvironmentId:binding.executionEnvironmentId,connectionProfileId:binding.connectionProfileId,nativeNamespace:source.nativeNamespace,cursor:null,limit:1};
+    expect(service.listSubagentRoots(query)).toEqual({bindings:[],nextCursor:null});
+    service.open(child()).capture([checkpoint("one","10")]);
+    service.open(child("nested","child"));
+    db.exec("INSERT INTO application_threads VALUES('tenant','principal','thread-2','backend','environment','workspace'); INSERT INTO conversation_bindings(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,execution_environment_id,backend_conversation_id,connection_profile_id) VALUES('tenant','principal','thread-2','backend','environment','root-2','connection')");
+    const second={...binding,applicationThreadId:"thread-2",backendConversationId:"root-2"};
+    service.open({...child("child-2","root-2"),binding:second});
+    const first=service.listSubagentRoots(query);
+    expect(first.bindings.map(row=>row.applicationThreadId)).toEqual(["thread"]);
+    expect(first.bindings[0]).toEqual({...binding,createdAt:"2026-09-22T00:00:00.000Z"});
+    expect(first.nextCursor).toBe("thread");
+    expect(service.listSubagentRoots({...query,cursor:first.nextCursor})).toMatchObject({bindings:[{applicationThreadId:"thread-2"}],nextCursor:null});
+    for(const wrong of [{tenantId:"other"},{principalId:"other"},{backendInstanceId:"other"},{executionEnvironmentId:"other"},{connectionProfileId:"other"},{nativeNamespace:"other"}]) {
+      expect(service.listSubagentRoots({...query,...wrong})).toEqual({bindings:[],nextCursor:null});
+    }
+    expect(()=>service.listSubagentRoots({...query,limit:129})).toThrow();
+    db.prepare("UPDATE agent_backend_instances SET kind='claude_agent_sdk'").run();
+    expect(service.listSubagentRoots(query)).toEqual({bindings:[],nextCursor:null});
+  });
+  it("restores durable child ownership and cumulative checkpoints without history rereads", () => {
+    const {db,service}=setup(), capture=service.open(child());capture.capture([checkpoint("one","30")]);
+    const restarted=new UsageService(db);restarted.recoverInterruptedCapture();
+    expect(restarted.listSubagents({binding,nativeNamespace:source.nativeNamespace})).toEqual([{
+      nativeSession:"child",nativeParentSession:"native-session",epoch:"native-counter-v1",normalizationVersion:"fixture-v1",captureState:"disconnected",
+    }]);
+    const resumed=restarted.open(child());resumed.capture([checkpoint("two","50")]);resumed.reconcile();
+    expect(restarted.read(scope,"thread").summary.metrics.input).toMatchObject({value:"50",quality:"complete"});
+    expect(restarted.read(scope,"thread").summary.reasons).not.toContain("capture_gap");
+    expect(db.prepare("SELECT COUNT(*) AS n FROM usage_sources").get()).toEqual({n:1});
+    expect(restarted.listSubagents({binding,nativeNamespace:"other"})).toEqual([]);
+  });
+  it("rejects unknown parents, cycles, root aliases, and an existing ordinary conversation", () => {
+    const {db,service}=setup();vi.spyOn(console,"warn").mockImplementation(()=>undefined);
+    db.exec("INSERT INTO application_threads VALUES('tenant','principal','other','backend','environment','workspace'); INSERT INTO conversation_bindings(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,execution_environment_id,backend_conversation_id,connection_profile_id) VALUES('tenant','principal','other','backend','environment','ordinary','connection')");
+    for(const input of [child("orphan","unknown"),child("self","self"),child("native-session"),child("ordinary")]){
+      expect(service.open(input).capture([checkpoint("bad","900")])).toBe(false);
+    }
+    const original=service.open(child());original.capture([checkpoint("one","10")]);
+    service.open(child("nested","child")).capture([checkpoint("nested","5")]);
+    expect(service.open(child("child","nested")).capture([checkpoint("cycle","900")])).toBe(false);
+    // Rejected ownership cannot retire the original authorized capture handle.
+    expect(original.capture([checkpoint("two","20")])).toBe(true);
+    expect(service.read(scope,"thread").summary.metrics.input.value).toBe("25");
+    expect(db.prepare("SELECT COUNT(*) AS n FROM usage_subagents").get()).toEqual({n:2});
+  });
+  it("rejects wrong binding scopes and cross-root claims while preserving the rightful source", () => {
+    const {db,service}=setup();vi.spyOn(console,"warn").mockImplementation(()=>undefined);
+    const original=service.open(child());original.capture([checkpoint("one","10")]);
+    for(const overrides of [{ownerPrincipalId:"other"},{tenantId:"other"},{backendInstanceId:"other"},{executionEnvironmentId:"other"},{connectionProfileId:"other"}]) {
+      const wrong={...binding,...overrides};
+      expect(()=>service.listSubagents({binding:wrong,nativeNamespace:source.nativeNamespace})).toThrow();
+      expect(service.open({...child(),binding:wrong}).capture([checkpoint("foreign","900")])).toBe(false);
+    }
+    db.exec("INSERT INTO application_threads VALUES('tenant','principal','other','backend','environment','workspace'); INSERT INTO conversation_bindings(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,execution_environment_id,backend_conversation_id,connection_profile_id) VALUES('tenant','principal','other','backend','environment','other-native','connection')");
+    const other={...binding,applicationThreadId:"other",backendConversationId:"other-native"};
+    expect(service.listSubagents({binding:other,nativeNamespace:source.nativeNamespace})).toEqual([]);
+    expect(service.open({...child("child","other-native"),binding:other}).capture([checkpoint("stolen","900")])).toBe(false);
+    expect(original.capture([checkpoint("two","20")])).toBe(true);
+    expect(service.read(scope,"thread").summary.metrics.input.value).toBe("20");
+    expect(service.read(scope,"other").summary.metrics.input.value).toBeNull();
+  });
+  it("does not double-charge a registered child if later imported as a main conversation", () => {
+    const {db,service}=setup();vi.spyOn(console,"warn").mockImplementation(()=>undefined);
+    service.open(child()).capture([checkpoint("one","10")]);
+    db.exec("INSERT INTO application_threads VALUES('tenant','principal','imported','backend','environment','workspace'); INSERT INTO conversation_bindings(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,execution_environment_id,backend_conversation_id,connection_profile_id) VALUES('tenant','principal','imported','backend','environment','child','connection')");
+    const imported={...binding,applicationThreadId:"imported",backendConversationId:"child"};
+    expect(service.open({...source,binding:imported,nativeSession:"child"}).capture([checkpoint("double","10")])).toBe(false);
+    expect(service.read(scope,"thread").summary.metrics.input.value).toBe("10");
+    expect(service.read(scope,"imported").summary.metrics.input.value).toBeNull();
+  });
+  it("prevents a second principal claiming a child on the same native endpoint", () => {
+    const {db,service}=setup();vi.spyOn(console,"warn").mockImplementation(()=>undefined);
+    service.open(child()).capture([checkpoint("one","10")]);
+    db.exec("INSERT INTO application_threads VALUES('tenant','second','second-thread','backend','environment','workspace'); INSERT INTO conversation_bindings(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,execution_environment_id,backend_conversation_id,connection_profile_id) VALUES('tenant','second','second-thread','backend','environment','second-native','connection')");
+    const second={...binding,ownerPrincipalId:"second",applicationThreadId:"second-thread",backendConversationId:"second-native"};
+    expect(service.open({...child("child","second-native"),binding:second}).capture([checkpoint("stolen","100")])).toBe(false);
+    expect(service.listSubagents({binding:second,nativeNamespace:source.nativeNamespace})).toEqual([]);
+  });
+  it("rejects child turn allocations and leaves other backends explicitly unsupported for children", () => {
+    const {db,service}=setup(), childCapture=service.open(child());
+    childCapture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
+    childCapture.capture([observation("bad",[fact("bad","10",{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})])]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM usage_turn_state").get()).toEqual({n:0});
+    expect(service.read(scope,"thread").summary.metrics.input.value).toBeNull();
+    for(const kind of ["claude_agent_sdk","pi_sdk","grok_build"]){
+      const other=database();other.prepare("UPDATE agent_backend_instances SET kind=?").run(kind);
+      const receiver=new UsageService(other);vi.spyOn(console,"warn").mockImplementation(()=>undefined);
+      expect(receiver.open(child()).capture([checkpoint("bad","10")])).toBe(false);
+      expect(receiver.read(scope,"thread").breakdown).toBeNull();
+    }
+  });
+  it("rematerializes cleared cached projections from retained evidence after upgrade", () => {
+    const {db,service}=setup(), main=service.open(source);
+    main.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
+    main.capture([observation("one",[fact("one","10",{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})])]);
+    db.exec("UPDATE usage_thread_state SET report_json=NULL; UPDATE usage_turn_state SET report_json=NULL;");
+    const reopened=new UsageService(db);
+    expect(reopened.read(scope,"thread",turnId).summary.metrics.input.value).toBe("10");
+    expect(reopened.read(scope,"thread").breakdown?.main.metrics.input.value).toBe("10");
   });
 });

@@ -957,6 +957,39 @@ test.describe.serial("normalized streaming and restored state", () => {
       .getByRole("button", { name: "Close", exact: true })
       .last()
       .click();
+    // Exercise the normalized Codex session breakdown independently of this
+    // conformance backend's inclusive usage fixture.
+    await page.route("**/api/threads/*/usage", async route => {
+      const response = await route.fetch();
+      const report = await response.json();
+      const part = (input: string, cacheRead: string, output: string, reasoning: string, total: string) => {
+        const summary = structuredClone(report.summary);
+        summary.costs = []; summary.costQuality = "unreported"; summary.models = []; summary.reasons = [];
+        for (const key of Object.keys(summary.metrics)) {
+          const value = ({ input, cacheRead, output, reasoning, total } as Record<string, string>)[key] ?? null;
+          summary.metrics[key] = { value, quality: value === null ? "unreported" : "complete", basis: ["sdk_normalized"], providerPresence: "unknown" };
+        }
+        return summary;
+      };
+      report.breakdown = { main: part("39609", "32000", "243", "108", "39852"), subagents: part("10228", "0", "5", "0", "10233") };
+      report.summary = part("49837", "32000", "248", "108", "50085");
+      report.state = "complete";
+      await route.fulfill({ response, json: report });
+    });
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    await page.getByRole("button", { name: "Session stats" }).click();
+    const breakdown = stats.getByRole("table", { name: "Session usage by agent" });
+    await expect(breakdown.getByRole("row", { name: "Input 39,609 10,228 49,837" })).toBeVisible();
+    await expect(breakdown.getByRole("row", { name: "Output 243 5 248" })).toBeVisible();
+    await capture(page, testInfo, "codex-session-usage-breakdown.png");
+    const statsViewport = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expectNoPageOverflow(page);
+    await expect(breakdown.getByRole("columnheader", { name: "Subagents" })).toBeVisible();
+    await capture(page, testInfo, "codex-session-usage-breakdown-mobile.png");
+    if (statsViewport) await page.setViewportSize(statsViewport);
+    await stats.getByRole("button", { name: "Close", exact: true }).last().click();
+    await page.unroute("**/api/threads/*/usage");
     const usageButton = page.getByRole("button", { name: "Turn usage and cost" }).last();
     await usageButton.hover();
     const turnUsage = page.getByRole("dialog", { name: "Turn usage", exact: true });

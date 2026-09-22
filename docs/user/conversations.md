@@ -32,6 +32,11 @@ partial classification. Session-wide capture gaps can also affect older turns.
 **Thread actions → Session stats** separates durable **Recorded session usage**
 from live context occupancy and transcript counters. Session usage can exceed the
 sum of displayed turns because some work has no reliable turn attribution.
+For Codex, the session table separates **Main agent**, **Subagents** (including
+nested agents), and **Total**. Subagent work belongs to the session rather than
+the turn that launched it; it can continue after that turn finishes. Claude's
+session total already includes its SDK-reported subagent work, without a
+separate subagent subtotal.
 Small **Partial**, **Main agent only**, **Recorded intervals**, and **Needs
 reconciliation** labels explain restricted coverage or unresolved evidence. Inherited turn
 usage does not charge copied work to the child session. Grok currently reports

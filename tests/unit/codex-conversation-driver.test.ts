@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { durableUsageAccountingMigration } from "../../src/server/db/migrations/110-durable-usage-accounting.js";
+import { usageSubagentsMigration } from "../../src/server/db/migrations/112-usage-subagents.js";
 import { usageGapSessionScopeMigration } from "../../src/server/db/migrations/111-usage-gap-session-scope.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
 import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
@@ -7459,10 +7460,33 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it("continues child accounting after the parent handle closes", async () => {
+    const observations = new Map<string, UsageObservation[]>();
+    const sink: UsageSink = { listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: input => ({ registerTurns: () => undefined,
+      capture: entries => { observations.set(input.nativeSession, [...(observations.get(input.nativeSession) ?? []), ...entries]); return true; },
+      reconcile: () => true, gap: () => undefined, seal: () => undefined }) };
+    const harness = new RpcHarness();
+    const target = driver(harness, connection, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, sink);
+    const handle = await attachIdle(harness, target);
+    await establish(harness, handle);
+    harness.notify("thread/started", { thread: nativeThread({ id: "child", source: { subAgent: { thread_spawn: {
+      parent_thread_id: "thread-1", depth: 1, agent_path: null, agent_nickname: null, agent_role: null,
+    } } } }) });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+    harness.notify("thread/tokenUsage/updated", { threadId: "child", turnId: "child-turn", tokenUsage: {
+      total: { inputTokens: 42, outputTokens: 0, totalTokens: 42, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+      last: { inputTokens: 42, outputTokens: 0, totalTokens: 42, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 }, modelContextWindow: 1000,
+    } });
+    expect(observations.get("child")?.[0]?.facts[0]).toMatchObject({ tokens: { input: "42" }, turn: null });
+    expect(observations.get("thread-1")).toBeUndefined();
+  });
+
   it("captures native accounting before presentation and registers visible turns", async () => {
     const observations: UsageObservation[] = [];
     const registerTurns = vi.fn();
-    const sink: UsageSink = { open: vi.fn(() => ({ registerTurns,
+    const sink: UsageSink = { listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: vi.fn(() => ({ registerTurns,
       capture: (entries: readonly UsageObservation[]) => { observations.push(...entries); return true; }, reconcile: () => true, gap: vi.fn(), seal: vi.fn() })) };
     const harness = new RpcHarness();
     const target = driver(harness, connection, undefined, undefined, undefined, undefined,
@@ -7503,7 +7527,7 @@ describe("CodexConversationHandle", () => {
   it.each([false, true])("does not allocate usage across a malformed native checkpoint (wire rejection=%s)", async wireRejected => {
     const observations: UsageObservation[] = [];
     const gap = vi.fn();
-    const sink: UsageSink = { open: () => ({ registerTurns: vi.fn(),
+    const sink: UsageSink = { listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({ registerTurns: vi.fn(),
       capture: entries => { observations.push(...entries); return true; },
       reconcile: () => true, gap, seal: vi.fn() }) };
     const harness = new RpcHarness();
@@ -7537,14 +7561,15 @@ describe("CodexConversationHandle", () => {
     database.exec(`
       CREATE TABLE application_threads(tenant_id TEXT, owner_principal_id TEXT, id TEXT, backend_instance_id TEXT, environment_id TEXT, workspace_id TEXT, PRIMARY KEY(tenant_id,owner_principal_id,id));
       CREATE TABLE agent_backend_instances(tenant_id TEXT,id TEXT,kind TEXT);
-      CREATE TABLE conversation_bindings(tenant_id TEXT,owner_principal_id TEXT,application_thread_id TEXT,backend_instance_id TEXT,execution_environment_id TEXT,backend_conversation_id TEXT,connection_profile_id TEXT);
+      CREATE TABLE conversation_bindings(tenant_id TEXT,owner_principal_id TEXT,application_thread_id TEXT,backend_instance_id TEXT,execution_environment_id TEXT,backend_conversation_id TEXT,connection_profile_id TEXT,created_at INTEGER);
       CREATE TABLE claude_usage_ledgers(tenant_id TEXT,owner_principal_id TEXT,application_thread_id TEXT,input_tokens INTEGER,output_tokens INTEGER,cache_read_tokens INTEGER,cache_write_tokens INTEGER,request_count INTEGER,updated_at INTEGER);
       INSERT INTO application_threads VALUES('tenant-1','principal-1','application-profile-1','codex-1','environment-1','workspace-1');
       INSERT INTO agent_backend_instances VALUES('tenant-1','codex-1','codex_app_server');
-      INSERT INTO conversation_bindings VALUES('tenant-1','principal-1','application-profile-1','codex-1','environment-1','thread-1','profile-1');
+      INSERT INTO conversation_bindings VALUES('tenant-1','principal-1','application-profile-1','codex-1','environment-1','thread-1','profile-1',1790035200000);
     `);
     database.exec(durableUsageAccountingMigration.sql);
     database.exec(usageGapSessionScopeMigration.sql);
+    database.exec(usageSubagentsMigration.sql);
     const usage = new UsageService(database);
     const harness = new RpcHarness();
     const target = driver(harness, connection, undefined, undefined, undefined, undefined,
@@ -7594,7 +7619,7 @@ describe("CodexConversationHandle", () => {
 
   it("keeps warm paginated resume without native replay unallocated rather than charging earlier turns", async () => {
     const observations: UsageObservation[] = [];
-    const sink: UsageSink = { open: () => ({ registerTurns: () => undefined,
+    const sink: UsageSink = { listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({ registerTurns: () => undefined,
       capture: entries => { observations.push(...entries); return true; }, reconcile: () => true,
       gap: () => undefined, seal: () => undefined }) };
     const harness = new RpcHarness();

@@ -62,6 +62,7 @@ export const usageReportSchema = z.strictObject({
   lastRecordedAt: z.iso.datetime().nullable(),
   inherited: z.boolean(),
   summary: usageSummarySchema,
+  breakdown: z.strictObject({ main: usageSummarySchema, subagents: usageSummarySchema }).nullable(),
   legacy: usageSummarySchema.nullable(),
   legacyRecordedAt: z.iso.datetime().nullable(),
 });

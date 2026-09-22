@@ -34,7 +34,7 @@ describe("Pi native usage accounting", () => {
     manager.branch(user); manager.appendMessage(assistant(30));
     manager.branchWithSummary(user, "Imported branch summary", undefined, false, usage);
     const captured: UsageObservation[] = [];
-    const sink: UsageSink = {open: () => ({registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: () => {}})};
+    const sink: UsageSink = {listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: () => {}})};
     new PiUsageAccounting({sink, manager, nativeNamespace: "store", authentication: {conversationId: manager.getSessionId(), installationKey: new Uint8Array(32)},
       binding: {tenantId: "t", ownerPrincipalId: "p", applicationThreadId: "thread", backendInstanceId: "pi", connectionProfileId: "c", executionEnvironmentId: "e", backendConversationId: manager.getSessionId(), createdAt: "2026-09-22T00:00:00Z"}});
     expect(captured).toHaveLength(4);
@@ -50,7 +50,7 @@ describe("Pi native usage accounting", () => {
     manager.appendMessage({role:"user",content:"child",timestamp:2});manager.appendMessage(assistant(20));
     const wrapped=new Proxy(manager,{get(target,key,receiver){if(key==="getHeader")return ()=>({...target.getHeader()!,parentSession:"/admitted-parent"});return Reflect.get(target,key,receiver);}});
     const captured:UsageObservation[]=[],inherited:unknown[]=[];
-    const sink:UsageSink={open:()=>({registerTurns:(_turns,origin)=>{if(origin)inherited.push(origin);},capture:(observations)=>{captured.push(...observations);return true;},gap:()=>{},reconcile:()=>true,seal:()=>{}})};
+    const sink:UsageSink={listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open:()=>({registerTurns:(_turns,origin)=>{if(origin)inherited.push(origin);},capture:(observations)=>{captured.push(...observations);return true;},gap:()=>{},reconcile:()=>true,seal:()=>{}})};
     new PiUsageAccounting({sink,manager:wrapped,nativeNamespace:"store",authentication:{conversationId:manager.getSessionId(),installationKey:key},binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"pi",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:manager.getSessionId(),createdAt:"2026-09-22T00:00:00Z"}});
     expect(captured).toHaveLength(1);expect(captured[0]!.facts[0]!.tokens.uncachedInput).toBe("20");
     expect(inherited).toContainEqual({nativeSession:"parent-native",turns:[{backendTurnId:inheritedUser,sourceBackendTurnId:inheritedUser}]});
@@ -72,7 +72,7 @@ describe("Pi native usage accounting", () => {
     let durable=true;
     const capture=vi.fn(() => durable), reconcile=vi.fn(() => true);
     const projection=vi.spyOn(PiHistoryProjector.prototype,"project");
-    const accounting=new PiUsageAccounting({sink:{open:()=>({...NO_USAGE_CAPTURE,capture,reconcile})},manager,nativeNamespace:"store",authentication:{conversationId:manager.getSessionId(),installationKey:new Uint8Array(32)},binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"pi",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:manager.getSessionId(),createdAt:"2026-09-22T00:00:00Z"}});
+    const accounting=new PiUsageAccounting({sink:{listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open:()=>({...NO_USAGE_CAPTURE,capture,reconcile})},manager,nativeNamespace:"store",authentication:{conversationId:manager.getSessionId(),installationKey:new Uint8Array(32)},binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"pi",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:manager.getSessionId(),createdAt:"2026-09-22T00:00:00Z"}});
     expect(capture).toHaveBeenCalledTimes(1);expect(reconcile).toHaveBeenCalledTimes(1);projection.mockClear();capture.mockClear();
     const nextId=manager.appendMessage(assistant(20)), next=manager.getEntries().find(entry=>entry.id===nextId)!;
     durable=false;accounting.append(next,user);expect(capture).toHaveBeenCalledTimes(1);
@@ -87,7 +87,7 @@ describe("Pi native usage accounting", () => {
     for(let index=0;index<130;index++)manager.appendMessage(assistant(index));
     let durable=false;
     const capture=vi.fn((_observations:readonly UsageObservation[])=>durable),reconcile=vi.fn(()=>true);
-    const accounting=new PiUsageAccounting({sink:{open:()=>({...NO_USAGE_CAPTURE,capture,reconcile})},manager,nativeNamespace:"store",authentication:{conversationId:manager.getSessionId(),installationKey:new Uint8Array(32)},binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"pi",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:manager.getSessionId(),createdAt:"2026-09-22T00:00:00Z"}});
+    const accounting=new PiUsageAccounting({sink:{listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open:()=>({...NO_USAGE_CAPTURE,capture,reconcile})},manager,nativeNamespace:"store",authentication:{conversationId:manager.getSessionId(),installationKey:new Uint8Array(32)},binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"pi",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:manager.getSessionId(),createdAt:"2026-09-22T00:00:00Z"}});
     expect(capture.mock.calls.map(([batch])=>batch.length)).toEqual([64]);expect(reconcile).not.toHaveBeenCalled();
     durable=true;accounting.retryPending();
     expect(capture.mock.calls.slice(1).map(([batch])=>batch.length)).toEqual([64,64,2]);expect(reconcile).toHaveBeenCalledTimes(1);
@@ -95,10 +95,10 @@ describe("Pi native usage accounting", () => {
   it("does not declare native history reconciled after invalid evidence or a failed commit", () => {
     const manager=SessionManager.inMemory("/workspace");manager.appendMessage(assistant(Number.MAX_SAFE_INTEGER+1));
     const reconcile=vi.fn(() => true),gap=vi.fn();
-    const input={sink:{open:()=>({...NO_USAGE_CAPTURE,reconcile,gap})},manager,nativeNamespace:"store",authentication:{conversationId:manager.getSessionId(),installationKey:new Uint8Array(32)},binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"pi",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:manager.getSessionId(),createdAt:"2026-09-22T00:00:00Z"}};
+    const input={sink:{listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open:()=>({...NO_USAGE_CAPTURE,reconcile,gap})},manager,nativeNamespace:"store",authentication:{conversationId:manager.getSessionId(),installationKey:new Uint8Array(32)},binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"pi",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:manager.getSessionId(),createdAt:"2026-09-22T00:00:00Z"}};
     new PiUsageAccounting(input);expect(gap).toHaveBeenCalledWith("invalid_evidence");expect(reconcile).not.toHaveBeenCalled();
     const validManager=SessionManager.inMemory("/workspace");validManager.appendMessage(assistant());
-    new PiUsageAccounting({...input,manager:validManager,sink:{open:()=>({...NO_USAGE_CAPTURE,reconcile,capture:()=>false})}});
+    new PiUsageAccounting({...input,manager:validManager,sink:{listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open:()=>({...NO_USAGE_CAPTURE,reconcile,capture:()=>false})}});
     expect(reconcile).not.toHaveBeenCalled();
   });
   it("rejects unsafe native counts instead of rounding", () => {

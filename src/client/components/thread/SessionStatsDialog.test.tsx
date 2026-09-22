@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 
 import { createRef } from "react";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionStatsDialog } from "./SessionStatsDialog.js";
 
 import { UsageQueryCache } from "../../stores/UsageQueryCache.js";
 import { usageReport } from "../../stores/usage-test-fixture.js";
+import { UsageDetails } from "./RecordedUsage.js";
 const caches: UsageQueryCache[] = [];
 function cache() {
   const result = new UsageQueryCache("sedes-thread-1", { getUsageAvailability: vi.fn(), getUsage: vi.fn().mockResolvedValue(usageReport({ threadId: "sedes-thread-1", turnId: null, measurementScope: "session", turnState: null, state: "unavailable" })) });
@@ -15,6 +16,28 @@ function cache() {
 afterEach(() => { cleanup(); caches.splice(0).forEach(value => value.dispose()); });
 
 describe("SessionStatsDialog", () => {
+  it("compares main and combined subagent usage without adding cached input twice", () => {
+    const main = usageReport().summary;
+    const subagents = usageReport().summary;
+    const total = usageReport().summary;
+    for (const [summary, input, cached, output] of [[main, "1000", "800", "20"], [subagents, "300", "100", "10"], [total, "1300", "900", "30"]] as const) {
+      summary.metrics.input = { value: input, quality: "complete", basis: ["sdk_normalized"], providerPresence: "unknown" };
+      summary.metrics.cacheRead = { ...summary.metrics.input, value: cached };
+      summary.metrics.output = { ...summary.metrics.input, value: output };
+    }
+    const report = usageReport({ turnId: null, turnState: null, measurementScope: "session", state: "complete", summary: total, breakdown: { main, subagents } });
+    const view = render(<UsageDetails report={report} />);
+    const table = screen.getByRole("table", { name: "Session usage by agent" });
+    expect(within(table).getAllByRole("columnheader").map(node => node.textContent)).toEqual(["Tokens", "Main agent", "Subagents", "Total"]);
+    expect(within(table).getByRole("row", { name: "Input 1,000 300 1,300" })).toBeVisible();
+    expect(within(table).getByRole("row", { name: "Cached input 800 100 900" })).toBeVisible();
+    expect(within(table).getByRole("row", { name: "Output 20 10 30" })).toBeVisible();
+    view.rerender(<UsageDetails report={{ ...report, turnId: "turn-1", measurementScope: "main_loop", summary: main }} />);
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.getByText("1,000")).toBeVisible();
+    expect(screen.queryByText("1,300")).not.toBeInTheDocument();
+  });
+
   it("shows Saved Agent origin only in stats and marks a missing Agent deleted", () => {
     const view = render(
       <SessionStatsDialog

@@ -3426,7 +3426,7 @@ describe("ClaudeConversationHandle", () => {
     let durable = true;
     const batches: readonly UsageObservation[][] = [];
     const captured = batches as UsageObservation[][];
-    const usage: UsageSink = {open: () => ({registerTurns: () => {}, capture: observations => {captured.push([...observations]);return durable;},gap:()=>{},reconcile:()=>true,seal:()=>{}})};
+    const usage: UsageSink = {listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({registerTurns: () => {}, capture: observations => {captured.push([...observations]);return durable;},gap:()=>{},reconcile:()=>true,seal:()=>{}})};
     const user:SessionMessage={type:"user",uuid:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",session_id:SESSION_ID,parent_tool_use_id:null,parent_agent_id:null,message:{role:"user",content:"Earlier"}};
     const assistant=(uuid:string,id:string):SessionMessage=>({type:"assistant",uuid,session_id:SESSION_ID,parent_tool_use_id:null,parent_agent_id:null,message:{id,role:"assistant",content:[{type:"text",text:"Answer"}],stop_reason:"end_turn",usage:{input_tokens:5,output_tokens:2,cache_read_input_tokens:0,cache_creation_input_tokens:0}}});
     const initial=assistant("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","history");
@@ -3445,7 +3445,7 @@ describe("ClaudeConversationHandle", () => {
 
   it("captures pipeline results independently of history without transient token authority", async () => {
     const captured: UsageObservation[] = [];
-    const usage: UsageSink = {open: () => ({registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: () => {}})};
+    const usage: UsageSink = {listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: () => {}})};
     const provider = fixture();
     const initialMessages: SessionMessage[] = [
       {

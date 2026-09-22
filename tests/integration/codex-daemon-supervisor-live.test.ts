@@ -370,7 +370,7 @@ plugins = false
       };
       const usageObservations: UsageObservation[] = [];
       const driver = new CodexConversationBackendDriver({
-    usageSink: { open: () => ({ registerTurns: () => undefined, capture: observations => {
+    usageSink: { listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({ registerTurns: () => undefined, capture: observations => {
       usageObservations.push(...observations); return true;
     }, reconcile: () => true, gap: () => undefined, seal: () => undefined }) },
     nativeNamespace: "test-codex-store",

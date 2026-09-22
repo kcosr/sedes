@@ -5,10 +5,15 @@
 ### Breaking Changes
 
 - Durable usage accounting replaces accumulated token/cost values in live
-  snapshots. Requires matching browser and packaged clients using protocol 118.
+  snapshots. Requires matching browser and packaged clients using protocol 119.
   Migration preserves old Claude totals separately with unknown coverage.
 
 ### Added
+
+- Capture Codex subagent usage independently of parent turns, including nested
+  and background agents. Session stats separates main-agent, combined-subagent,
+  and overall token totals. Migration 112 preserves existing accounting and
+  adds durable child ownership; lightweight recovery avoids transcript scans.
 
 - Record Pi, Codex, and Claude usage in the main database, with per-turn
   usage/cost details below replies and offline session totals in Session stats.
@@ -27,8 +32,7 @@
 ### Fixed
 
 - Report fully captured Codex turns as complete at main-agent scope; unknown
-  model attribution no longer makes token counts partial. Subagent capture
-  remains outside this phase. Existing session-wide capture gaps, including
+  model attribution no longer makes token counts partial. Existing session-wide capture gaps, including
   restart recovery, can still mark earlier turns partial.
 
 - Recover first-turn usage from Codex's restored idle checkpoint when provided,

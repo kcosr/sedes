@@ -35,26 +35,36 @@ export function UsageDetails({ report }: { report: UsageReport }): React.JSX.Ele
       {scope && <span className="recorded-usage-scope">{scope}</span>}
     </div>}
     {report.state === "unavailable" && <p className="recorded-usage-note">{report.turnId ? "No usage recorded for this turn" : "No usage recorded"}</p>}
-    <UsageValues summary={summary} />
+    <UsageValues summary={summary} breakdown={report.turnId === null ? report.breakdown : null} />
     {knownModels.length > 0 && <p className="recorded-usage-model" title="Observed model or provider">{knownModels.join(" · ")}</p>}
     {report.turnId === null && report.lastRecordedAt && <p className="recorded-usage-note">Recorded <time dateTime={report.lastRecordedAt}>{new Date(report.lastRecordedAt).toLocaleString()}</time></p>}
     {report.legacy && <section className="recorded-usage-legacy"><h4>Legacy usage</h4><p className="recorded-usage-note">Coverage unknown</p><UsageValues summary={report.legacy} />{report.legacyRecordedAt && <p className="recorded-usage-note">Recorded <time dateTime={report.legacyRecordedAt}>{new Date(report.legacyRecordedAt).toLocaleString()}</time></p>}</section>}
   </>;
 }
 
-function UsageValues({ summary }: { summary: UsageSummary }): React.JSX.Element {
+function UsageValues({ summary, breakdown = null }: { summary: UsageSummary; breakdown?: UsageReport["breakdown"] }): React.JSX.Element {
   const keys: UsageTokenKind[] = ["input", "cacheRead", "cacheWrite", "output", "reasoning", "requests"];
   if (summary.metrics.input.value === null && summary.metrics.uncachedInput.value !== null) keys.splice(1, 0, "uncachedInput");
   if (summary.metrics.input.value === null && summary.metrics.output.value === null && summary.metrics.total.value !== null) keys.push("total");
+  const visibleKeys = keys.filter(key => key === "input" || key === "output" || (summary.metrics[key].value !== null && summary.metrics[key].value !== "0"));
   return <>
-    <dl className="recorded-usage-values">{keys.filter(key => key === "input" || key === "output" || (summary.metrics[key].value !== null && summary.metrics[key].value !== "0")).map(key => {
+    {breakdown ? <div className="recorded-usage-breakdown"><table aria-label="Session usage by agent">
+      <thead><tr><th scope="col">Tokens</th><th scope="col">Main agent</th><th scope="col">Subagents</th><th scope="col">Total</th></tr></thead>
+      <tbody>{visibleKeys.map(key => <tr key={key} data-subset={subsetFields.has(key) || undefined}>
+        <th scope="row" title={key === "input" ? "Includes cached input" : subsetFields.has(key) ? `Included in ${key === "reasoning" ? "output" : "input"}` : undefined}>{labels[key]}</th>
+        {[breakdown.main, breakdown.subagents, summary].map((part, index) => {
+          const metric = part.metrics[key];
+          return <td key={index} title={metric.quality === "conflict" ? "Last valid count" : metric.quality === "partial" ? "Known subtotal" : undefined}>{metric.value === null ? "—" : new Intl.NumberFormat().format(BigInt(metric.value))}</td>;
+        })}
+      </tr>)}</tbody>
+    </table></div> : <dl className="recorded-usage-values">{visibleKeys.map(key => {
       const metric = summary.metrics[key];
       const detail = metric.quality === "conflict" ? "Last valid count" : metric.quality === "partial" ? "Known subtotal" : undefined;
       return <div key={key} data-subset={subsetFields.has(key) || undefined}>
         <dt title={key === "input" ? "Includes cached input" : subsetFields.has(key) ? `Included in ${key === "reasoning" ? "output" : "input"}` : undefined}>{labels[key]}</dt>
         <dd title={detail}>{metric.value === null ? "—" : new Intl.NumberFormat().format(BigInt(metric.value))}</dd>
       </div>;
-    })}</dl>
+    })}</dl>}
     {summary.costs.length === 0 ? <p className="recorded-usage-note recorded-usage-cost">Cost unavailable</p> : <dl className="recorded-usage-costs">{summary.costs.map((cost, index) => <div key={index}>
       <dt>{cost.kind === "estimated" ? "Estimated cost" : "Reported cost"}</dt>
       <dd title={`${cost.currency} · ${cost.provenance}${cost.quality === "partial" ? " · Known subtotal" : ""}`}>{cost.currency === "USD" ? `$${cost.amount}` : `${cost.amount} ${cost.currency}`}</dd>

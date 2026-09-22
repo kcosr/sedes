@@ -47,12 +47,13 @@ export function emptyUsageSummary(): UsageSummary {
 }
 type StoredFact = {sourceId:string; turnId:string|null; recordedAt:string; fact:UsageFact};
 type State = {revision:bigint; report_json:string|null; legacy_json:string|null};
-type Source = {id:string; tenant_id:string; principal_id:string; thread_id:string; capture_state:UsageReport["captureState"]; frontier:string|null};
+type Source = {id:string; tenant_id:string; principal_id:string; thread_id:string; capture_state:UsageReport["captureState"]; frontier:string|null; agent_role:"main"|"subagent"};
 
 /** Database-only scoped reads and nonthrowing provider capture. No transcript or provider IO. */
 export class UsageService implements UsageSink {
   readonly #incarnations = new Map<string, symbol>();
   readonly #failed = new Set<string>();
+  readonly #failedSubagents = new Map<string, Set<string>>();
   readonly #listeners = new Set<(scope:RequestScope, threadId:string, revision:string) => void>();
   constructor(readonly database: Database.Database) {}
   recoverInterruptedCapture(): void {
@@ -63,15 +64,16 @@ export class UsageService implements UsageSink {
     })();
   }
   subscribe(listener:(scope:RequestScope, threadId:string, revision:string) => void): () => void { this.#listeners.add(listener); return () => this.#listeners.delete(listener); }
-  #recordFailure(scope:RequestScope,threadId:string,error:unknown):void {
+  #recordFailure(scope:RequestScope,threadId:string,error:unknown,subagentSourceId?:string):void {
     const key=hash([scope.tenantId,scope.principalId,threadId]);
-    if(!this.#failed.has(key)){
+    if(!(subagentSourceId?this.#failedSubagents.get(key)?.has(subagentSourceId):this.#failed.has(key))){
       const message=error instanceof Error?error.message:"";
       const sqliteCode=typeof error==="object" && error!==null && "code" in error && typeof error.code==="string" && /^SQLITE_[A-Z_]+$/.test(error.code)?error.code:undefined;
       const code=["usage_binding_not_admitted","usage_source_owned_elsewhere"].includes(message)?message:sqliteCode??"accounting_write_failed";
       console.warn("Usage capture failed",{tenantId:scope.tenantId,principalId:scope.principalId,threadId,code});
     }
-    this.#failed.add(key);
+    if(subagentSourceId){const failed=this.#failedSubagents.get(key)??new Set<string>();failed.add(subagentSourceId);this.#failedSubagents.set(key,failed);}
+    else this.#failed.add(key);
   }
   #authorize(scope:RequestScope, threadId:string) {
     const row = this.database.prepare(`SELECT t.backend_instance_id, t.environment_id, t.workspace_id, b.kind
@@ -88,12 +90,13 @@ export class UsageService implements UsageSink {
   }
   read(scope:RequestScope, threadId:string, turnId:string|null = null): UsageReport {
     const target = this.#authorize(scope,threadId);
-    const state = this.#state(scope,threadId);
+    let state = this.#state(scope,threadId);
+    if(state && state.report_json===null){this.database.transaction(()=>this.#materialize(scope,threadId))();state=this.#state(scope,threadId);}
     const turn = turnId === null ? undefined : this.database.prepare("SELECT status, report_json FROM usage_turn_state WHERE tenant_id=? AND principal_id=? AND thread_id=? AND turn_id=?").get(scope.tenantId,scope.principalId,threadId,turnId) as {status:UsageReport["turnState"];report_json:string|null}|undefined;
     if (turnId !== null && !turn) throw new DomainError("not_found", "The turn was not found.");
     const stored = turnId === null ? state?.report_json : turn?.report_json;
     const report:UsageReport = stored ? usageReportSchema.parse(JSON.parse(stored)) : {
-      threadId,turnId,revision:String(state?.revision ?? 0n),support:target.kind === "grok_build" ? "unsupported" : "supported",state:"unavailable",captureState:"idle",measurementScope:turnId === null ? "session":null,turnState:turn?.status ?? null,lastRecordedAt:null,inherited:false,summary:emptyUsageSummary(),legacy:null,legacyRecordedAt:null,
+      threadId,turnId,revision:String(state?.revision ?? 0n),support:target.kind === "grok_build" ? "unsupported" : "supported",state:"unavailable",captureState:"idle",measurementScope:turnId === null ? "session":null,turnState:turn?.status ?? null,lastRecordedAt:null,inherited:false,summary:emptyUsageSummary(),breakdown:turnId===null && target.kind==="codex_app_server"?{main:emptyUsageSummary(),subagents:emptyUsageSummary()}:null,legacy:null,legacyRecordedAt:null,
     };
     if (turnId === null && state?.legacy_json) {
       const legacy = emptyUsageSummary();
@@ -103,11 +106,18 @@ export class UsageService implements UsageSink {
       report.legacyRecordedAt=values.updatedAt === undefined ? null : new Date(values.updatedAt).toISOString();
     }
     if (this.#failed.has(hash([scope.tenantId,scope.principalId,threadId]))) { report.captureState="failed";report.state=report.state === "unavailable"?"unavailable":"partial";report.summary.reasons=uniq([...report.summary.reasons,"capture_failed"]); }
+    if(turnId===null && this.#failedSubagents.has(hash([scope.tenantId,scope.principalId,threadId]))){
+      report.captureState="failed";report.state=report.state==="unavailable"?"unavailable":"partial";
+      report.summary.reasons=uniq([...report.summary.reasons,"capture_failed"]);
+      if(report.breakdown)report.breakdown.subagents.reasons=uniq([...report.breakdown.subagents.reasons,"capture_failed"]);
+    }
     return usageReportSchema.parse(report);
   }
   availability(scope:RequestScope,threadId:string,turnIds:readonly string[]):UsageAvailability {
     this.#authorize(scope,threadId);
     if(turnIds.length>100)throw new DomainError("bad_request","Too many turns.");
+    const state=this.#state(scope,threadId);
+    if(state && state.report_json===null)this.database.transaction(()=>this.#materialize(scope,threadId))();
     // Materialization marks reports unavailable exactly when no metric or cost
     // is recorded. Read that projection without decoding full reports per poll.
     const rows=this.database.prepare(`SELECT turn_id FROM usage_turn_state
@@ -132,49 +142,113 @@ export class UsageService implements UsageSink {
       for(const changed of changes)for(const listener of this.#listeners){try{listener(scope,changed.threadId,changed.revision);}catch{/* Durable reads remain authoritative. */}}
     } catch(error) { this.#recordFailure(scope,threadId,error); }
   }
+  #admitBinding(binding: Parameters<UsageSink["open"]>[0]["binding"]) {
+    const scope={tenantId:binding.tenantId,principalId:binding.ownerPrincipalId};
+    const threadId=binding.applicationThreadId;
+    const target=this.#authorize(scope,threadId);
+    const durableBinding=this.database.prepare("SELECT backend_conversation_id,backend_instance_id,execution_environment_id,connection_profile_id FROM conversation_bindings WHERE tenant_id=? AND owner_principal_id=? AND application_thread_id=?").get(scope.tenantId,scope.principalId,threadId) as {backend_conversation_id:string;backend_instance_id:string;execution_environment_id:string;connection_profile_id:string}|undefined;
+    // First-send actors attach before the accepted binding is finalized.
+    // Their identified native identity is already durably owned by the
+    // scoped active creation attempt; capture must include that early work.
+    const provisional = !durableBinding && this.database.prepare(`SELECT 1 FROM conversation_creation_attempts
+      WHERE tenant_id=? AND owner_principal_id=? AND application_thread_id=? AND backend_instance_id=?
+        AND connection_profile_id=? AND execution_environment_id=? AND provisional_backend_conversation_id=?
+        AND provisional_opaque_binding_detail IS NOT NULL AND force_reset_at IS NULL
+        AND phase IN ('conversation_identified','first_submission_started','accepted_unpersisted','recovery_required')`).get(scope.tenantId,scope.principalId,threadId,binding.backendInstanceId,binding.connectionProfileId,binding.executionEnvironmentId,binding.backendConversationId);
+    const admittedBinding = durableBinding ? durableBinding.backend_conversation_id === binding.backendConversationId && durableBinding.backend_instance_id === binding.backendInstanceId && durableBinding.execution_environment_id === binding.executionEnvironmentId && durableBinding.connection_profile_id === binding.connectionProfileId : Boolean(provisional);
+    if (!admittedBinding || target.backend_instance_id !== binding.backendInstanceId || target.environment_id !== binding.executionEnvironmentId) throw new Error("usage_binding_not_admitted");
+    return target;
+  }
+  listSubagentRoots(input:Parameters<UsageSink["listSubagentRoots"]>[0]):ReturnType<UsageSink["listSubagentRoots"]> {
+    if(!Number.isSafeInteger(input.limit) || input.limit<1 || input.limit>128)throw new DomainError("bad_request","Invalid usage root page size.");
+    const rows=this.database.prepare(`SELECT DISTINCT b.tenant_id AS tenantId,b.owner_principal_id AS ownerPrincipalId,
+      b.application_thread_id AS applicationThreadId,b.backend_instance_id AS backendInstanceId,
+      b.connection_profile_id AS connectionProfileId,b.execution_environment_id AS executionEnvironmentId,
+      b.backend_conversation_id AS backendConversationId,b.created_at AS createdAt
+      FROM usage_subagents c JOIN conversation_bindings b ON b.tenant_id=c.tenant_id AND b.owner_principal_id=c.principal_id
+        AND b.application_thread_id=c.thread_id AND b.backend_instance_id=c.backend_id AND b.execution_environment_id=c.environment_id
+        AND b.backend_conversation_id=c.root_native_session
+      JOIN agent_backend_instances a ON a.tenant_id=b.tenant_id AND a.id=b.backend_instance_id AND a.kind='codex_app_server'
+      WHERE c.tenant_id=? AND c.principal_id=? AND c.backend_id=? AND c.environment_id=? AND c.native_namespace=?
+        AND b.connection_profile_id=? AND b.application_thread_id>?
+      ORDER BY b.application_thread_id LIMIT ?`).all(input.tenantId,input.principalId,input.backendInstanceId,input.executionEnvironmentId,
+        identifier.parse(input.nativeNamespace),input.connectionProfileId,input.cursor??"",input.limit+1) as (Omit<Parameters<UsageSink["open"]>[0]["binding"],"createdAt"> & {createdAt:number})[];
+    const bindings=rows.slice(0,input.limit).map(row=>({...row,createdAt:new Date(row.createdAt).toISOString()}));
+    for(const binding of bindings)this.#admitBinding(binding);
+    return {bindings,nextCursor:rows.length>input.limit?bindings.at(-1)!.applicationThreadId:null};
+  }
+  listSubagents(input:Parameters<UsageSink["listSubagents"]>[0]):ReturnType<UsageSink["listSubagents"]> {
+    this.#admitBinding(input.binding);
+    const b=input.binding;
+    const rows=this.database.prepare(`SELECT c.native_session,c.native_parent_session,s.epoch,s.normalization_version,s.capture_state
+      FROM usage_subagents c JOIN usage_sources s ON s.tenant_id=c.tenant_id AND s.principal_id=c.principal_id
+        AND s.thread_id=c.thread_id AND s.backend_id=c.backend_id AND s.environment_id=c.environment_id
+        AND s.native_namespace=c.native_namespace AND s.native_session=c.native_session AND s.agent_role='subagent'
+      WHERE c.tenant_id=? AND c.principal_id=? AND c.thread_id=? AND c.backend_id=? AND c.environment_id=?
+        AND c.native_namespace=? AND c.root_native_session=? ORDER BY s.rowid DESC`)
+      .all(b.tenantId,b.ownerPrincipalId,b.applicationThreadId,b.backendInstanceId,b.executionEnvironmentId,identifier.parse(input.nativeNamespace),b.backendConversationId) as {
+        native_session:string;native_parent_session:string;epoch:string;normalization_version:string;capture_state:UsageReport["captureState"]}[];
+    const seen=new Set<string>();
+    return rows.filter(row=>!seen.has(row.native_session) && Boolean(seen.add(row.native_session))).map(row=>({
+      nativeSession:row.native_session,nativeParentSession:row.native_parent_session,epoch:row.epoch,
+      normalizationVersion:row.normalization_version,captureState:row.capture_state,
+    }));
+  }
+  #admitSubagent(input:Parameters<UsageSink["open"]>[0]):void {
+    const b=input.binding, child=identifier.parse(input.nativeSession), parent=identifier.parse(input.subagent!.nativeParentSession);
+    const key=[b.tenantId,b.ownerPrincipalId,b.backendInstanceId,b.executionEnvironmentId,identifier.parse(input.nativeNamespace)];
+    if(child===parent || child===b.backendConversationId)throw new Error("usage_subagent_invalid_parent");
+    if(parent!==b.backendConversationId && !this.database.prepare(`SELECT 1 FROM usage_subagents WHERE tenant_id=? AND principal_id=? AND backend_id=? AND environment_id=? AND native_namespace=? AND native_session=? AND thread_id=? AND root_native_session=?`)
+      .get(...key,parent,b.applicationThreadId,b.backendConversationId))throw new Error("usage_subagent_invalid_parent");
+    // A normal application conversation can never be charged as somebody else's child.
+    if(this.database.prepare(`SELECT 1 FROM conversation_bindings WHERE tenant_id=? AND backend_instance_id=? AND execution_environment_id=? AND backend_conversation_id=?`)
+      .get(b.tenantId,b.backendInstanceId,b.executionEnvironmentId,child))throw new Error("usage_source_owned_elsewhere");
+    if(this.database.prepare(`SELECT 1 FROM usage_sources WHERE tenant_id=? AND backend_id=? AND environment_id=? AND native_namespace=? AND native_session=? AND (principal_id<>? OR thread_id<>? OR agent_role<>'subagent')`)
+      .get(b.tenantId,b.backendInstanceId,b.executionEnvironmentId,input.nativeNamespace,child,b.ownerPrincipalId,b.applicationThreadId))throw new Error("usage_source_owned_elsewhere");
+    this.database.prepare(`INSERT OR IGNORE INTO usage_subagents(tenant_id,principal_id,backend_id,environment_id,native_namespace,native_session,native_parent_session,thread_id,root_native_session) VALUES(?,?,?,?,?,?,?,?,?)`)
+      .run(...key,child,parent,b.applicationThreadId,b.backendConversationId);
+    const owned=this.database.prepare(`SELECT 1 FROM usage_subagents WHERE tenant_id=? AND principal_id=? AND backend_id=? AND environment_id=? AND native_namespace=? AND native_session=? AND native_parent_session=? AND thread_id=? AND root_native_session=?`)
+      .get(...key,child,parent,b.applicationThreadId,b.backendConversationId);
+    if(!owned)throw new Error("usage_source_owned_elsewhere");
+  }
   open(input:Parameters<UsageSink["open"]>[0]): UsageCapture {
     const {binding} = input;
     const scope = {tenantId:binding.tenantId,principalId:binding.ownerPrincipalId} as RequestScope;
     const threadId=binding.applicationThreadId;
-    const sourceId=hash([binding.tenantId,binding.ownerPrincipalId,input.nativeNamespace,input.nativeSession,input.epoch]);
+    const sourceId=hash(input.subagent ? ["subagent",binding.tenantId,binding.ownerPrincipalId,binding.backendInstanceId,binding.executionEnvironmentId,input.nativeNamespace,input.nativeSession,input.epoch] : [binding.tenantId,binding.ownerPrincipalId,input.nativeNamespace,input.nativeSession,input.epoch]);
     const failedKey=hash([scope.tenantId,scope.principalId,threadId]);
     let admitted=false;
     let sealed=false;
-    const incarnation=Symbol(); this.#incarnations.set(sourceId,incarnation);
+    const incarnation=Symbol();
     const run = (action:()=>void):boolean => {
-      if(sealed || this.#incarnations.get(sourceId)!==incarnation)return false;
+      if(sealed || (admitted && this.#incarnations.get(sourceId)!==incarnation))return false;
       try {
         let changes:{threadId:string;revision:string}[]=[];
         this.database.transaction(() => {
-          const target=this.#authorize(scope,threadId);
-          const durableBinding=this.database.prepare("SELECT backend_conversation_id,backend_instance_id,execution_environment_id,connection_profile_id FROM conversation_bindings WHERE tenant_id=? AND owner_principal_id=? AND application_thread_id=?").get(scope.tenantId,scope.principalId,threadId) as {backend_conversation_id:string;backend_instance_id:string;execution_environment_id:string;connection_profile_id:string}|undefined;
-          // First-send actors attach before the accepted binding is finalized.
-          // Their identified native identity is already durably owned by the
-          // scoped active creation attempt; capture must include that early work.
-          const provisional = !durableBinding && this.database.prepare(`SELECT 1 FROM conversation_creation_attempts
-            WHERE tenant_id=? AND owner_principal_id=? AND application_thread_id=? AND backend_instance_id=?
-              AND connection_profile_id=? AND execution_environment_id=? AND provisional_backend_conversation_id=?
-              AND provisional_opaque_binding_detail IS NOT NULL AND force_reset_at IS NULL
-              AND phase IN ('conversation_identified','first_submission_started','accepted_unpersisted','recovery_required')`).get(scope.tenantId,scope.principalId,threadId,binding.backendInstanceId,binding.connectionProfileId,binding.executionEnvironmentId,binding.backendConversationId);
-          const admittedBinding = durableBinding ? durableBinding.backend_conversation_id === binding.backendConversationId && durableBinding.backend_instance_id === binding.backendInstanceId && durableBinding.execution_environment_id === binding.executionEnvironmentId && durableBinding.connection_profile_id === binding.connectionProfileId : Boolean(provisional);
-          if (!admittedBinding || input.nativeSession !== binding.backendConversationId) throw new Error("usage_binding_not_admitted");
+          const target=this.#admitBinding(binding);
+          if (input.subagent ? target.kind !== "codex_app_server" : input.nativeSession !== binding.backendConversationId) throw new Error("usage_binding_not_admitted");
           this.#ensure(scope,threadId);
-          this.database.prepare(`INSERT OR IGNORE INTO usage_sources(id,tenant_id,principal_id,thread_id,backend_id,environment_id,workspace_id,native_namespace,native_session,epoch,normalization_version,baseline,capture_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active')`).run(sourceId,scope.tenantId,scope.principalId,threadId,binding.backendInstanceId,target.environment_id,target.workspace_id,identifier.parse(input.nativeNamespace),identifier.parse(input.nativeSession),identifier.parse(input.epoch),identifier.parse(input.normalizationVersion),input.initialBaseline);
+          if(input.subagent)this.#admitSubagent(input);
+          else if(this.database.prepare(`SELECT 1 FROM usage_subagents WHERE tenant_id=? AND backend_id=? AND environment_id=? AND native_namespace=? AND native_session=?`)
+            .get(scope.tenantId,binding.backendInstanceId,binding.executionEnvironmentId,input.nativeNamespace,input.nativeSession))throw new Error("usage_source_owned_elsewhere");
+          this.database.prepare(`INSERT OR IGNORE INTO usage_sources(id,tenant_id,principal_id,thread_id,backend_id,environment_id,workspace_id,native_namespace,native_session,epoch,normalization_version,baseline,capture_state,agent_role) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active',?)`).run(sourceId,scope.tenantId,scope.principalId,threadId,binding.backendInstanceId,target.environment_id,target.workspace_id,identifier.parse(input.nativeNamespace),identifier.parse(input.nativeSession),identifier.parse(input.epoch),identifier.parse(input.normalizationVersion),input.initialBaseline,input.subagent?"subagent":"main");
           const source=this.database.prepare("SELECT * FROM usage_sources WHERE id=?").get(sourceId) as Source;
           if (source.thread_id !== threadId || source.tenant_id !== scope.tenantId || source.principal_id !== scope.principalId) throw new Error("usage_source_owned_elsewhere");
-          if (this.#failed.has(failedKey)) this.#gap(sourceId,"capture_failed");
+          if (input.subagent ? this.#failedSubagents.get(failedKey)?.has(sourceId) : this.#failed.has(failedKey)) this.#gap(sourceId,"capture_failed");
           action();
           changes=this.#materialize(scope,threadId);
         })();
-        admitted=true; this.#failed.delete(failedKey);
+        admitted=true; this.#incarnations.set(sourceId,incarnation);
+        if(input.subagent){const failed=this.#failedSubagents.get(failedKey);failed?.delete(sourceId);if(failed?.size===0)this.#failedSubagents.delete(failedKey);}
+        else this.#failed.delete(failedKey);
         for(const changed of changes)for (const listener of this.#listeners) { try { listener(scope,changed.threadId,changed.revision); } catch { /* Durable reads remain authoritative. */ } }
         return true;
-      } catch(error) { this.#recordFailure(scope,threadId,error); return false; }
+      } catch(error) { this.#recordFailure(scope,threadId,error,input.subagent?sourceId:undefined); return false; }
     };
     run(() => {this.database.prepare("UPDATE usage_sources SET capture_state='active' WHERE id=?").run(sourceId);});
     return {
-      registerTurns:(turns, inherited) => run(() => this.#register(scope,threadId,binding.backendInstanceId,turns,inherited)),
-      capture:(observations) => run(() => {for (const raw of observations) { const parsed=observationSchema.safeParse(raw);if (!parsed.success || Buffer.byteLength(JSON.stringify(parsed.data), "utf8") > 65_536) {this.#gap(sourceId,"invalid_evidence");continue;} this.#capture(scope,threadId,binding.backendInstanceId,sourceId,parsed.data,input.normalizationVersion); }}),
+      registerTurns:(turns, inherited) => run(() => {if(input.subagent) {if(turns.length)this.#gap(sourceId,"invalid_evidence");return;} this.#register(scope,threadId,binding.backendInstanceId,turns,inherited);}),
+      capture:(observations) => run(() => {for (const raw of observations) { const parsed=observationSchema.safeParse(raw);if (!parsed.success || (input.subagent && parsed.data.facts.some(fact=>fact.turn!==null || fact.inheritedFrom!==undefined)) || Buffer.byteLength(JSON.stringify(parsed.data), "utf8") > 65_536) {this.#gap(sourceId,"invalid_evidence");continue;} this.#capture(scope,threadId,binding.backendInstanceId,sourceId,parsed.data,input.normalizationVersion); }}),
       reconcile:() => run(() => {this.database.prepare("DELETE FROM usage_gaps WHERE source_id=? AND reason IN ('capture_gap','capture_failed')").run(sourceId);}),
       gap:(reason) => run(() => this.#gap(sourceId,usageReasonSchema.parse(reason))),
       seal:(reason) => {if (!admitted) return;run(() => {this.database.prepare("UPDATE usage_sources SET capture_state=? WHERE id=?").run(reason === "detached" ? "disconnected":"idle",sourceId);if(reason === "reset")this.#gap(sourceId,"source_reset");});sealed=true;if(this.#incarnations.get(sourceId)===incarnation)this.#incarnations.delete(sourceId);},
@@ -288,24 +362,36 @@ export class UsageService implements UsageSink {
   }
   #materialize(scope:RequestScope,threadId:string):{threadId:string;revision:string}[] {
     const args=[scope.tenantId,scope.principalId,threadId];
+    // A projection-shape migration invalidates both roots and inherited turn
+    // reports. Rebuild ancestor reports before copying their turn summaries.
+    const staleOrigins=this.database.prepare(`SELECT DISTINCT t.origin_thread_id FROM usage_turn_state t
+      JOIN usage_thread_state s ON s.tenant_id=t.tenant_id AND s.principal_id=t.principal_id AND s.thread_id=t.origin_thread_id
+      WHERE t.tenant_id=? AND t.principal_id=? AND t.thread_id=? AND s.report_json IS NULL`).all(...args) as {origin_thread_id:string}[];
+    for(const origin of staleOrigins)this.#materialize(scope,origin.origin_thread_id);
     const state=this.#state(scope,threadId)!;
     const revision=state.revision;
     const rows=this.database.prepare("SELECT r.source_id,r.turn_id,r.fact_json,o.received_at FROM usage_records r JOIN usage_sources s ON s.id=r.source_id JOIN usage_observations o ON o.source_id=r.source_id AND o.observation_id=r.observation_id AND o.revision=r.observation_revision WHERE s.tenant_id=? AND s.principal_id=? AND s.thread_id=?").all(...args) as {source_id:string;turn_id:string|null;fact_json:string;received_at:string}[];
     const records=rows.map(row=>({sourceId:row.source_id,turnId:row.turn_id,recordedAt:row.received_at,fact:JSON.parse(row.fact_json) as UsageFact}));
     const gaps=this.database.prepare("SELECT g.source_id,g.reason,g.subject,g.affects_session FROM usage_gaps g JOIN usage_sources s ON s.id=g.source_id WHERE s.tenant_id=? AND s.principal_id=? AND s.thread_id=?").all(...args) as {source_id:string;reason:UsageReason;subject:string;affects_session:number}[];
     const sources=this.database.prepare("SELECT * FROM usage_sources WHERE tenant_id=? AND principal_id=? AND thread_id=?").all(...args) as Source[];
+    const childIds=new Set(sources.filter(source=>source.agent_role==="subagent").map(source=>source.id));
     const last={time:records.filter(row=>row.fact.sessionContribution!=="none").map(row=>row.recordedAt).sort().at(-1)??null};
     const byTurn=new Map<string,StoredFact[]>();
-    for(const row of records)if(row.turnId){const entries=byTurn.get(row.turnId)??[];entries.push(row);byTurn.set(row.turnId,entries);}
+    for(const row of records)if(row.turnId && !childIds.has(row.sourceId)){const entries=byTurn.get(row.turnId)??[];entries.push(row);byTurn.set(row.turnId,entries);}
     const make=(turnId:string|null,turnState:UsageReport["turnState"]):UsageReport=>{
       const selected=turnId===null?records:byTurn.get(turnId)??[];
+      const reportSources=turnId===null?sources:sources.filter(source=>source.agent_role==="main");
       const sourceIds=new Set(selected.map(row=>row.sourceId));
       const reasons=uniq(gaps.filter(gap=>turnId===null ? gap.affects_session===1 : gap.subject===turnId || (gap.subject==="" && sourceIds.has(gap.source_id))).map(gap=>gap.reason));
       const summary=this.#summarize(selected,turnId!==null,reasons);
+      const breakdown=turnId===null && this.#authorize(scope,threadId).kind==="codex_app_server" ? {
+        main:this.#summarize(records.filter(row=>!childIds.has(row.sourceId)),false,uniq(gaps.filter(gap=>gap.affects_session===1 && !childIds.has(gap.source_id)).map(gap=>gap.reason))),
+        subagents:this.#summarize(records.filter(row=>childIds.has(row.sourceId)),false,uniq(gaps.filter(gap=>gap.affects_session===1 && childIds.has(gap.source_id)).map(gap=>gap.reason))),
+      }:null;
       const scopes=uniq(selected.flatMap(({fact})=>fact.turn?[fact.turn.scope]:[]));
       const hasValue=Object.values(summary.metrics).some(m=>m.value!==null)||summary.costs.length>0;
       const complete=hasValue && !hasIncompleteUsage(summary.reasons) && Object.values(summary.metrics).every(m=>m.quality==="complete"||m.quality==="unreported") && (summary.costQuality==="complete"||summary.costQuality==="unreported") && (turnId===null || (turnState==="completed" && scopes.length===1 && (scopes[0]==="whole_turn"||scopes[0]==="main_loop")));
-      return usageReportSchema.parse({threadId,turnId,revision:String(revision),support:this.#authorize(scope,threadId).kind === "grok_build" ? "unsupported" : "supported",state:hasValue?(complete?"complete":"partial"):"unavailable",captureState:sources.some(s=>s.capture_state==="active")?"active":sources.some(s=>s.capture_state==="disconnected")?"disconnected":"idle",measurementScope:turnId===null?"session":scopes.length===1?scopes[0]:scopes.length?"partial_interval":null,turnState,lastRecordedAt:turnId===null?last.time:selected.map(row=>row.recordedAt).sort().at(-1)??null,inherited:false,summary,legacy:null,legacyRecordedAt:null});
+      return usageReportSchema.parse({threadId,turnId,revision:String(revision),support:this.#authorize(scope,threadId).kind === "grok_build" ? "unsupported" : "supported",state:hasValue?(complete?"complete":"partial"):"unavailable",captureState:reportSources.some(s=>s.capture_state==="active")?"active":reportSources.some(s=>s.capture_state==="disconnected")?"disconnected":"idle",measurementScope:turnId===null?"session":scopes.length===1?scopes[0]:scopes.length?"partial_interval":null,turnState,lastRecordedAt:turnId===null?last.time:selected.map(row=>row.recordedAt).sort().at(-1)??null,inherited:false,summary,breakdown,legacy:null,legacyRecordedAt:null});
     };
     const report=make(null,null);
     const turns=this.database.prepare("SELECT turn_id,status,report_json,origin_thread_id,origin_turn_id FROM usage_turn_state WHERE tenant_id=? AND principal_id=? AND thread_id=?").all(...args) as {turn_id:string;status:UsageReport["turnState"];report_json:string|null;origin_thread_id:string|null;origin_turn_id:string|null}[];

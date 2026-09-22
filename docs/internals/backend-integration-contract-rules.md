@@ -1141,6 +1141,17 @@ reclassifying the same stable result receipt would otherwise conflict with saved
 evidence. This is a deferred classification correction, not an SDK claim of
 missing main-loop tokens.
 
+Codex child capture uses native spawn ancestry under an admitted root binding,
+with independent lifetime counters and durable parent/root ownership. Children
+are accounting sources, not fork ancestors or fabricated application turns.
+Main-agent turn summaries exclude child measurements and child-only gaps.
+Session reports include each child's checkpoint once and expose a normalized
+main/subagent breakdown. Capture and runtime residency outlive presentation
+handles. Reconnect recovery only subscribes known loaded children, does not read
+full history, and retains gaps until a new cumulative snapshot proves recovery.
+Pi's capture is unchanged; Claude retains its inclusive query-pipeline totals
+without adding child counters a second time; Grok remains unsupported.
+
 Register visible normalized turn stubs with ordinary snapshot/page loading.
 Accounting failure must not retry submitted provider work or break an otherwise
 valid transcript read. Retained native replay/history may repair evidence; do not

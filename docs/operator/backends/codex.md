@@ -422,13 +422,31 @@ series. If resumed totals are lower, Sedes retains the last valid value and show
 reconciliation incomplete; it does not invent a reset or charge a new series.
 Copied fork baselines are not newly charged. Usage notifications provide no model
 or provider attribution, so those dimensions remain unknown. Native child-thread
-usage is not included in the parent's counters and is not captured separately.
+usage is not included in the parent's counters. Sedes captures child lifetime
+counters separately and includes them once in the owning conversation's session
+total, with a main/subagent breakdown. Child counters do not affect parent-turn
+allocations, even when a child spans several turns.
 The pinned implementation updates each session's own counters, and the
 [child accounting fixture](https://github.com/openai/codex/blob/41e22fee981a63b3698df7ed36bad393cda24715/codex-rs/core/src/agent/control_tests.rs#L1389)
 verifies independent child usage without inherited parent charges.
 Previously recorded partial allocations retain their original coverage metadata;
 this change does not reconstruct historical turn boundaries.
 No billing cost is fabricated from token counts.
+
+Native spawn relationships establish child ownership; unrelated thread events
+and ordinary send/wait recipients do not. New children are automatically
+subscribed by the shared app-server. Capture follows the admitted runtime
+rather than the parent chat handle and retains residency while children run.
+Nested children accumulate under the same root conversation.
+
+After a restart, a scoped database query restores known child relationships
+when the matching runtime connects, without opening the parent conversation.
+Recovery checks loaded threads and uses `thread/resume` with
+`excludeTurns: true` only for known loaded children; it does not scan transcripts
+or start old unloaded threads. This path does not replay usage. A later cumulative
+update recovers the child's session counter; a child that completed during the
+disconnection can remain incomplete. Previously undiscovered children and work
+done while the runtime is disconnected are not guaranteed to be recovered.
 
 Captured values live in the main Sedes database and remain readable without
 opening a provider session. See [recorded usage](../../user/conversations.md#view-recorded-usage)
