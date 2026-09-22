@@ -201,6 +201,73 @@ describe("Codex subagent usage coordinator", () => {
     expect(f.captures.get("child")?.reconcile).not.toHaveBeenCalled();
   });
 
+  it("keeps completed child capture idle through reconnect and accepts a late final counter", async () => {
+    const f=fixture();f.coordinator.registerRoot(binding);f.spawn("child");f.usage("child",10);
+    const first=f.captures.get("child")!;
+    const ended={threadId:"child",turn:{id:"done",items:[],itemsView:"full",status:"completed",error:null,startedAt:1700000000,completedAt:1700000001,durationMs:1000}};
+    f.notify("turn/completed",ended);
+    expect(first.seal).toHaveBeenCalledWith("closed");
+    f.usage("child",12);
+    const final=f.captures.get("child")!;
+    expect(final).not.toBe(first);expect(final.seal).toHaveBeenCalledWith("closed");
+    expect(f.observations.get("child")?.at(-1)?.facts[0]?.tokens.input).toBe("12");
+    f.reconnect();await vi.waitFor(()=>expect(f.request).toHaveBeenCalledOnce());
+    expect(first.gap).not.toHaveBeenCalled();expect(final.gap).not.toHaveBeenCalled();
+  });
+
+  it("does not manufacture a gap for persisted idle children and gaps active children that are now unloaded", async () => {
+    const restored=[{nativeSession:"idle-child",nativeParentSession:"root",epoch:"native-counter-v1",normalizationVersion:"v1",captureState:"idle" as const},
+      {nativeSession:"active-child",nativeParentSession:"root",epoch:"native-counter-v1",normalizationVersion:"v1",captureState:"disconnected" as const}];
+    const f=fixture(restored,undefined,[binding]);
+    await vi.waitFor(()=>expect(f.captures.get("active-child")?.seal).toHaveBeenCalledWith("detached"));
+    expect(f.captures.get("idle-child")?.gap).not.toHaveBeenCalled();
+    expect(f.captures.get("idle-child")?.seal).toHaveBeenCalledWith("closed");
+    expect(f.captures.get("active-child")?.gap).toHaveBeenCalledWith("capture_gap");
+    expect(f.captures.get("active-child")?.reconcile).not.toHaveBeenCalled();
+  });
+
+  it("does not retain unproven restored children when loaded-list recovery fails", async () => {
+    const retire=vi.fn(async()=>undefined),residency=new RetainedRuntimeLifecycle({wake:()=>undefined,retire}),rootLease=residency.retain();
+    const f=fixture([{nativeSession:"child",nativeParentSession:"root",epoch:"native-counter-v1",normalizationVersion:"v1",captureState:"disconnected"}],residency);
+    f.request.mockRejectedValueOnce(new Error("loaded_list_failed"));f.coordinator.registerRoot(binding);
+    await vi.waitFor(()=>expect(f.onError).toHaveBeenCalledOnce());
+    await rootLease.release(true);expect(retire).toHaveBeenCalledOnce();
+  });
+
+  it("does not resume already recovered children again when another root is registered", async () => {
+    const restored=[{nativeSession:"child",nativeParentSession:"root",epoch:"native-counter-v1",normalizationVersion:"v1",captureState:"idle" as const}];
+    const f=fixture(restored,undefined,[binding],["child"]);
+    await vi.waitFor(()=>expect(f.request).toHaveBeenCalledTimes(2));
+    vi.mocked(f.sink.listSubagents).mockReturnValueOnce([{...restored[0]!,nativeSession:"child-2",nativeParentSession:"root-2"}]);
+    f.loaded(["child","child-2"]);
+    f.coordinator.registerRoot({...binding,applicationThreadId:"app-2",backendConversationId:"root-2"});
+    await vi.waitFor(()=>expect(f.request).toHaveBeenCalledTimes(4));
+    expect(f.request.mock.calls.filter(([method,params])=>method.method==="thread/resume" && params.threadId==="child")).toHaveLength(1);
+  });
+
+  it("uses a newer resumed status when the streamed completion preceded the response fence", async () => {
+    const retire=vi.fn(async()=>undefined),residency=new RetainedRuntimeLifecycle({wake:()=>undefined,retire}),rootLease=residency.retain();
+    const f=fixture([{nativeSession:"child",nativeParentSession:"root",epoch:"native-counter-v1",normalizationVersion:"v1",captureState:"idle"}],residency);
+    const completed={threadId:"child",turn:{id:"done",items:[],itemsView:"full",status:"completed",error:null,startedAt:1700000000,completedAt:1700000001,durationMs:1000}};
+    f.request.mockImplementationOnce(async()=>({result:{data:["child"],nextCursor:null},generation:1,inboundSequence:1}))
+      .mockImplementationOnce(async()=>{f.notify("turn/completed",completed,2);return {result:{thread:{id:"child",status:{type:"active"}}},generation:1,inboundSequence:3};});
+    f.coordinator.registerRoot(binding);
+    await vi.waitFor(()=>expect(f.captures.get("child")?.gap).toHaveBeenCalledWith("capture_gap"));
+    await rootLease.release(true);expect(retire).not.toHaveBeenCalled();
+    f.notify("turn/completed",completed,4);
+    await vi.waitFor(()=>expect(retire).toHaveBeenCalledOnce());
+  });
+
+  it("prunes closed leaves and then closed ancestors while retaining nested ancestry until closure", () => {
+    const f=fixture();f.coordinator.registerRoot(binding);f.spawn("child");f.spawn("nested","child");
+    const close=(threadId:string,sequence:number)=>f.client.forwardNotification(1,{kind:"decoded_notification",method:"thread/closed",params:{threadId},generation:1,sequence});
+    close("child",100);f.spawn("more","child");
+    expect(f.open.mock.calls.at(-1)?.[0].nativeSession).toBe("more");
+    close("nested",101);close("more",102);
+    f.spawn("child");
+    expect(f.open.mock.calls.filter(([input])=>input.nativeSession==="child")).toHaveLength(2);
+  });
+
   it("rejects conflicting ancestry diagnostically without interrupting existing capture", () => {
     const f = fixture(); f.coordinator.registerRoot(binding); f.spawn("child"); f.spawn("child", "foreign"); f.usage("child", 7);
     expect(f.onError).toHaveBeenCalledOnce(); expect(f.observations.get("child")).toHaveLength(1);

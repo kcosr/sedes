@@ -445,7 +445,9 @@ Recovery checks loaded threads and uses `thread/resume` with
 `excludeTurns: true` only for known loaded children; it does not scan transcripts
 or start old unloaded threads. This path does not replay usage. A later cumulative
 update recovers the child's session counter; a child that completed during the
-disconnection can remain incomplete. Previously undiscovered children and work
+disconnection can remain incomplete. Children confirmed idle before disconnect
+retain their recorded completeness; a restart alone does not create a gap.
+Previously undiscovered children and work
 done while the runtime is disconnected are not guaranteed to be recovered.
 
 Captured values live in the main Sedes database and remain readable without

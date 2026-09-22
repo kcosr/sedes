@@ -15,7 +15,7 @@ const MAX_CHILDREN = 4096;
 const EPOCH = "native-counter-v1";
 const NORMALIZER = "codex-subagent-usage-v1";
 type Counter = { generation: number; sequence: number; usage: CodexThreadTokenUsage };
-type Child = { lease: { release(evicted?: boolean): Promise<void> } | undefined; binding: ConversationBinding; parent: string; capture: UsageCapture; generation: number; sequence: number };
+type Child = { id:string; closed:boolean; activitySequence:number; subscribedGeneration:number|null; lease: { release(evicted?: boolean): Promise<void> } | undefined; binding: ConversationBinding; parent: string; capture: UsageCapture; captureOpen: boolean; active: boolean; generation: number; sequence: number };
 
 /** Runtime-owned observer: child accounting outlives the root's presentation handle.
  * Only native spawn evidence descending from an admitted binding grants ownership.
@@ -52,7 +52,7 @@ export class CodexSubagentUsageCoordinator {
       for (const row of restored) {
         if (!this.#children.has(row.nativeSession)) this.#pendingParents.set(row.nativeSession, row.nativeParentSession);
       }
-      this.#resolvePending(new Set(restored.map(row => row.nativeSession)));
+      this.#resolvePending(new Map(restored.map(row => [row.nativeSession,row.captureState])));
       if (restored.length && this.#ready && !this.#restoringRoots) this.#scheduleRecovery();
     });
   }
@@ -62,8 +62,11 @@ export class CodexSubagentUsageCoordinator {
     const changed = snapshot.generation !== this.#generation;
     if ((!ready && this.#ready) || changed) {
       for (const child of this.#children.values()) {
-        child.capture.gap("capture_gap");
-        child.capture.seal("detached");
+        if (child.active && child.captureOpen) {
+          child.capture.gap("capture_gap");
+          child.capture.seal("detached");
+          child.captureOpen = false;
+        }
       }
       this.#pendingCounters.clear();
       this.#pendingParents.clear();
@@ -78,9 +81,11 @@ export class CodexSubagentUsageCoordinator {
       this.#children.clear();
     } else if (recovered) {
       for (const [id, child] of this.#children) {
-        child.capture = this.#open(child.binding, id, child.parent);
+        if (child.active) this.#ensureCapture(id,child);
         child.generation = this.#generation;
         child.sequence = -1;
+        child.activitySequence = -1;
+        child.subscribedGeneration = null;
       }
       this.#restoreRoots();
       if (this.#children.size) this.#scheduleRecovery();
@@ -109,7 +114,8 @@ export class CodexSubagentUsageCoordinator {
   #notification(notification: CodexRpcNotification): void {
     if (!this.#ready || notification.generation !== this.#generation) return;
     if (notification.kind === "undecodable_notification") {
-      this.#children.get(notification.nativeThreadId)?.capture.gap("invalid_evidence");
+      const child=this.#children.get(notification.nativeThreadId);
+      if(child){this.#ensureCapture(child.id,child);child.capture.gap("invalid_evidence");if(!child.active)this.#idle(child);}
       return;
     }
     if (notification.method === "thread/started") {
@@ -130,26 +136,27 @@ export class CodexSubagentUsageCoordinator {
       // against its official schema before producing decoded_notification.
       const event = notification.params as ThreadClosedNotification;
       const child = this.#children.get(event.threadId);
-      if (child) { child.capture.seal("closed"); this.#release(child); }
+      if (child) {child.activitySequence=notification.sequence;this.#idle(child,true);}
       else if (!this.#roots.has(event.threadId)) this.#boundedSet(this.#pendingActivity, event.threadId, false);
     } else if (notification.method === "thread/status/changed") {
       const event = codexC2NotificationSchemas["thread/status/changed"].parse(notification.params);
       const child = this.#children.get(event.threadId);
       if (child) {
-        if (event.status.type === "active") child.lease ??= this.input.client.residency?.retain();
-        else if (event.status.type === "idle") this.#release(child);
-        else { child.capture.gap("capture_gap"); this.#release(child); }
+        child.activitySequence=notification.sequence;
+        if (event.status.type === "active") this.#activate(event.threadId,child);
+        else if (event.status.type === "idle") this.#idle(child);
+        else { this.#ensureCapture(event.threadId,child);child.capture.gap("capture_gap");this.#idle(child); }
       }
       else if (!this.#roots.has(event.threadId)) this.#boundedSet(this.#pendingActivity, event.threadId, event.status.type === "active");
     } else if (notification.method === "turn/started" || notification.method === "turn/completed") {
       const event = codexC2NotificationSchemas[notification.method].parse(notification.params);
       const child = this.#children.get(event.threadId);
       if (child) {
+        child.activitySequence=notification.sequence;
         if (notification.method === "turn/started") {
-          child.capture = this.#open(child.binding, event.threadId, child.parent);
-          child.lease ??= this.input.client.residency?.retain();
+          this.#activate(event.threadId,child);
         }
-        else this.#release(child);
+        else this.#idle(child);
       }
       else if (!this.#roots.has(event.threadId)) this.#boundedSet(this.#pendingActivity, event.threadId, notification.method === "turn/started");
     } else if (notification.method === "thread/tokenUsage/updated") {
@@ -174,19 +181,27 @@ export class CodexSubagentUsageCoordinator {
     this.#resolvePending();
   }
 
-  #resolvePending(restored: ReadonlySet<string> = new Set()): void {
+  #resolvePending(restored: ReadonlyMap<string, "active" | "idle" | "disconnected" | "failed"> = new Map()): void {
     let changed = true;
     while (changed) {
       changed = false;
       for (const [id, parent] of this.#pendingParents) {
         const binding = this.#roots.get(parent) ?? this.#children.get(parent)?.binding;
         if (!binding) continue;
-        if (this.#children.size >= MAX_CHILDREN) throw new Error("codex_subagent_capture_limit");
+        if (this.#children.size >= MAX_CHILDREN) {
+          const rejected=this.#open(binding,id,parent);
+          rejected.gap("capture_gap");rejected.seal("detached");
+          throw new Error("codex_subagent_capture_limit");
+        }
         const capture = this.#open(binding, id, parent);
-        const child: Child = { lease: this.#pendingActivity.get(id) === false ? undefined : this.input.client.residency?.retain(), binding, parent, capture, generation: this.#generation, sequence: -1 };
+        const active = this.#pendingActivity.get(id) ?? restored.get(id) !== "idle";
+        const child: Child = { id,closed:false,activitySequence:-1,subscribedGeneration:restored.has(id)?null:this.#generation,
+          lease: active && !restored.has(id) ? this.input.client.residency?.retain() : undefined, binding, parent, capture,
+          captureOpen:true,active,generation:this.#generation,sequence:-1 };
         this.#children.set(id, child);
         this.#pendingActivity.delete(id);
-        if (restored.has(id)) child.capture.gap("capture_gap");
+        if (restored.has(id) && restored.get(id) !== "idle") child.capture.gap("capture_gap");
+        if (!active) this.#idle(child);
         this.#pendingParents.delete(id);
         const counter = this.#pendingCounters.get(id);
         this.#pendingCounters.delete(id);
@@ -203,6 +218,9 @@ export class CodexSubagentUsageCoordinator {
 
   #capture(id: string, child: Child, counter: Counter): void {
     if (counter.generation !== this.#generation || (child.generation === counter.generation && counter.sequence <= child.sequence)) return;
+    // Final usage can arrive after an idle/completed notification. Temporarily
+    // reopen that source so sealing completion never drops the final counter.
+    this.#ensureCapture(id,child);
     const total = counter.usage.total;
     const accepted = child.capture.capture([{ id: `${this.#incarnation}:${counter.generation}:${counter.sequence}`, revision: "1", order: null,
       provenance: "live", occurredAt: null, replaceCheckpoint: true, facts: [{ id: "session-counter", kind: "cumulative", sessionContribution: "checkpoint",
@@ -216,6 +234,41 @@ export class CodexSubagentUsageCoordinator {
       // This source contains only an authoritative lifetime counter, so its next
       // snapshot recovers missed observations without replaying any transcript.
       child.capture.reconcile();
+    }
+    if (!child.active) this.#idle(child);
+  }
+
+  #ensureCapture(id:string,child:Child):void {
+    if(child.captureOpen)return;
+    child.capture=this.#open(child.binding,id,child.parent);
+    child.captureOpen=true;
+  }
+
+  #activate(id:string,child:Child):void {
+    this.#ensureCapture(id,child);
+    child.active=true;
+    child.closed=false;
+    child.lease ??= this.input.client.residency?.retain();
+  }
+
+  #idle(child:Child,closed=false):void {
+    child.active=false;
+    child.closed ||= closed;
+    if(child.captureOpen){child.capture.seal("closed");child.captureOpen=false;}
+    this.#release(child);
+    if(closed)this.#pruneClosed();
+  }
+
+  #pruneClosed():void {
+    // Native closed threads are rediscovered by thread/started when resumed.
+    // Keep ancestors while any tracked descendant still needs their identity.
+    let changed=true;
+    while(changed){
+      changed=false;
+      const parents=new Set([...this.#children.values()].map(child=>child.parent));
+      for(const [id,child] of this.#children)if(child.closed && !parents.has(id)){
+        this.#children.delete(id);changed=true;
+      }
     }
   }
 
@@ -246,16 +299,35 @@ export class CodexSubagentUsageCoordinator {
     }
     for (const [id, child] of this.#children) {
       if (!current()) return;
-      if (!loaded.has(id)) { this.#release(child); continue; } // Never load an old completed thread to recover accounting.
+      if(child.subscribedGeneration===generation)continue;
+      if (!loaded.has(id)) {
+        // No native load for accounting. Retain the genuine gap and an honest
+        // disconnected capture state for work whose completion was not seen.
+        if(child.active && child.captureOpen){child.capture.seal("detached");child.captureOpen=false;}
+        this.#release(child);continue;
+      }
       try {
         const receipt = await this.input.client.requestWithReceipt(codexThreadResumeMethod, { threadId: id, excludeTurns: true }, { timeoutMilliseconds: 10_000 });
         if (!current() || receipt.generation !== generation) return;
         if (receipt.result.thread.id !== id) throw new Error("codex_subagent_resume_identity_mismatch");
-        if (receipt.result.thread.status.type === "idle") this.#release(child);
-        else child.lease ??= this.input.client.residency?.retain();
+        child.subscribedGeneration=generation;
+        if(child.activitySequence>receipt.inboundSequence){
+          // Newer streamed lifecycle evidence wins over the resumed snapshot.
+          // Re-evict after resume since the host clears its eviction flag when
+          // it admits that response, potentially after our earlier idle event.
+          if(!child.active)this.#idle(child);
+          continue;
+        }
+        if (receipt.result.thread.status.type === "idle") this.#idle(child);
+        else {
+          const wasIdle=!child.active;
+          this.#activate(id,child);
+          if(wasIdle && child.sequence<0)child.capture.gap("capture_gap");
+        }
       } catch (error) {
         if (!current()) return;
-        child.capture.gap("capture_gap");
+        if(child.active){this.#ensureCapture(id,child);child.capture.gap("capture_gap");}
+        if(!child.lease)this.#release(child);
         this.#diagnose(error);
       }
     }
@@ -264,7 +336,11 @@ export class CodexSubagentUsageCoordinator {
   #release(child: Child): void {
     const lease = child.lease;
     child.lease = undefined;
-    void lease?.release().catch(error => { try { this.input.onError(error); } catch { /* Diagnostic only. */ } });
+    const generation=child.generation;
+    // Persistent hosts retain a session independently of the local runtime
+    // lease. Eviction releases that host record without native unsubscribe.
+    const detached=this.input.client.persistentSessions?.detachThread(child.id,generation,true) ?? Promise.resolve();
+    void detached.catch(error=>this.#diagnose(error)).then(()=>lease?.release()).catch(error=>this.#diagnose(error));
   }
 
   #boundedSet<T>(map: Map<string, T>, id: string, value: T): void {

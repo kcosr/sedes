@@ -9,6 +9,12 @@ import { codexRuntimeMethod } from "./codex-runtime-protocol.js";
 
 type Resume = OfficialCodexClientRequestResult<"thread/resume">;
 type Metadata = Omit<Resume, "thread" | "initialTurnsPage" | "turnsBackwardsCursor" | "itemsBackwardsCursor">;
+type ResumeActivity = {
+  generation: number;
+  activity?: { sequence: number; active: boolean; turnId: string | null; known: boolean };
+  goal?: { sequence: number; active: boolean };
+  closedSequence?: number;
+};
 type Session = { generation: number; metadata: Metadata; active: boolean; activeTurnId: string | null; activeGoal: boolean; known: boolean };
 const readMethod = defineCodexAppServerMethod({ method: "thread/read", refineParams: value => value, refineResult: value => value });
 const turnsMethod = defineCodexAppServerMethod({ method: "thread/turns/list", refineParams: value => value, refineResult: value => value });
@@ -19,11 +25,42 @@ const itemsMethod = defineCodexAppServerMethod({ method: "thread/items/list", re
  * than executing thread/resume with new CLI credentials/settings. */
 export class CodexRuntimeSessions {
   readonly #sessions = new Map<string, Session>();
+  readonly #pendingResumes = new Map<string, ResumeActivity>();
   #inventory: ReadonlyMap<string, { active: boolean; activeGoal: boolean }> = new Map();
   readonly #evicted = new Set<string>();
   #inventoryKnown = false;
   #trackingFailed = false;
   constructor(readonly client: CodexSharedClientFacade) {}
+
+  /** Only retain activity facts while a resume result can race newer native
+   * notifications. A response is not permitted to rewind a completed child. */
+  trackResume(threadId: string, generation: number): { apply(receipt: CodexRpcRequestReceipt<unknown>): void; close(): void } {
+    if (this.#pendingResumes.has(threadId)) throw new Error("codex_runtime_resume_already_pending");
+    const pending: ResumeActivity = { generation };
+    this.#pendingResumes.set(threadId, pending);
+    return {
+      apply: receipt => {
+        if (receipt.generation !== generation || this.client.lifecycleSnapshot().generation !== generation) return;
+        if ((receipt.result as Resume).thread.id !== threadId) throw new Error("codex_runtime_session_identity_mismatch");
+        this.observeResult("thread/resume", receipt.result, generation);
+        const session = this.#sessions.get(threadId);
+        if (!session || session.generation !== generation) throw new Error("codex_runtime_session_identity_mismatch");
+        const activity = pending.activity;
+        if (activity && activity.sequence > receipt.inboundSequence) {
+          session.active = activity.active;
+          session.activeTurnId = activity.turnId;
+          session.known = activity.known;
+        }
+        const goal = pending.goal;
+        if (goal && goal.sequence > receipt.inboundSequence) session.activeGoal = goal.active;
+        if (pending.closedSequence !== undefined && pending.closedSequence > Math.max(receipt.inboundSequence, activity?.sequence ?? -1, goal?.sequence ?? -1)) {
+          this.#sessions.delete(threadId);
+          this.#evicted.delete(threadId);
+        }
+      },
+      close: () => { if (this.#pendingResumes.get(threadId) === pending) this.#pendingResumes.delete(threadId); },
+    };
+  }
 
   observeResult(method: string, result: unknown, generation: number): void {
     if (method !== "thread/start" && method !== "thread/resume" && method !== "thread/fork") return;
@@ -36,12 +73,34 @@ export class CodexRuntimeSessions {
   observeNotification(notification: CodexRpcNotification): void {
     if (notification.kind !== "decoded_notification") {
       this.#inventoryKnown = false;
+      for (const pending of this.#pendingResumes.values()) if (pending.generation === notification.generation) {
+        pending.activity = { sequence: notification.sequence, active: true, turnId: null, known: false };
+      }
       for (const session of this.#sessions.values()) session.known = false;
       return;
     }
     const params = notification.params as { threadId?: string };
     if (notification.method === "thread/started") this.#inventoryKnown = false;
     if (!params.threadId) return;
+    const pending = this.#pendingResumes.get(params.threadId);
+    if (pending?.generation === notification.generation) {
+      if (notification.method === "turn/started" || notification.method === "turn/completed") {
+        if ((pending.activity?.sequence ?? -1) < notification.sequence) pending.activity = {
+          sequence: notification.sequence, active: notification.method === "turn/started",
+          turnId: notification.method === "turn/started" ? (notification.params as { turn: { id: string } }).turn.id : null, known: true,
+        };
+      } else if (notification.method === "thread/status/changed") {
+        const status = (notification.params as OfficialCodexServerNotificationParams<"thread/status/changed">).status.type;
+        if ((pending.activity?.sequence ?? -1) < notification.sequence) pending.activity = {
+          sequence: notification.sequence, active: status === "active", turnId: null, known: status === "active" || status === "idle",
+        };
+      } else if (notification.method === "thread/goal/updated" || notification.method === "thread/goal/cleared") {
+        if ((pending.goal?.sequence ?? -1) < notification.sequence) pending.goal = { sequence: notification.sequence,
+          active: notification.method === "thread/goal/updated" && (notification.params as { goal: { status: string } }).goal.status === "active" };
+      } else if (notification.method === "thread/closed" || notification.method === "thread/deleted") {
+        pending.closedSequence = Math.max(pending.closedSequence ?? -1, notification.sequence);
+      }
+    }
     const inventoried = this.#inventory.get(params.threadId);
     if (inventoried) {
       if (notification.method === "turn/started") inventoried.active = true;
@@ -83,7 +142,7 @@ export class CodexRuntimeSessions {
     return !this.#trackingFailed && [...this.#sessions].every(([id, session]) =>
       this.#evicted.has(id) && session.known && !session.active && !session.activeGoal);
   }
-  invalidate(): void { this.#evicted.clear(); this.#sessions.clear(); this.#trackingFailed = false; this.#inventoryKnown = false; this.#inventory = new Map(); }
+  invalidate(): void { this.#pendingResumes.clear(); this.#evicted.clear(); this.#sessions.clear(); this.#trackingFailed = false; this.#inventoryKnown = false; this.#inventory = new Map(); }
   markUnknown(): void { this.#trackingFailed = true; }
   activity(): "active" | "idle" | "unknown" {
     if (this.#trackingFailed || !this.#inventoryKnown) return "unknown";

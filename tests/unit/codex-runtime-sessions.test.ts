@@ -36,6 +36,75 @@ function fixture(answer: (method: string, params: Record<string, unknown>) => un
 }
 
 describe("persistent Codex native session recovery", () => {
+  it.each(["turn/started", "turn/completed"] as const)("applies newer %s evidence after an in-flight resume response", method => {
+    const f = fixture(() => ({}));
+    const pending = f.sessions.trackResume("thread", 1);
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 11,
+      method, params: { threadId: "thread", turn: { id: "newer-turn" } } });
+    pending.apply({ result: { ...resumed(), thread: thread("thread", method === "turn/completed") }, generation: 1, inboundSequence: 10 });
+    pending.close();
+    f.sessions.evict("thread", 1);
+    expect(f.sessions.canIdle()).toBe(method === "turn/completed");
+  });
+
+  it("does not override a resume response with older activity or a stale generation", () => {
+    const f = fixture(() => ({}));
+    const pending = f.sessions.trackResume("thread", 1);
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 9,
+      method: "turn/completed", params: { threadId: "thread", turn: { id: "old-turn" } } });
+    pending.apply({ result: { ...resumed(), thread: thread("thread", true) }, generation: 1, inboundSequence: 10 });
+    pending.close();
+    f.sessions.evict("thread", 1);
+    expect(f.sessions.canIdle()).toBe(false);
+    const stale = f.sessions.trackResume("stale", 1);
+    f.client.updateLifecycle({ state: "ready", generation: 2 });
+    f.sessions.invalidate();
+    stale.apply({ result: { ...resumed(), thread: thread("stale", true) }, generation: 1, inboundSequence: 12 });
+    stale.close();
+    expect(f.sessions.hasCurrent("stale")).toBe(false);
+    const fresh = f.sessions.trackResume("stale", 2);
+    fresh.close();
+  });
+
+  it("does not resurrect a child closed after the native resume response", () => {
+    const f = fixture(() => ({}));
+    const pending = f.sessions.trackResume("thread", 1);
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 11,
+      method: "thread/closed", params: { threadId: "thread" } });
+    pending.apply({ result: { ...resumed(), thread: thread("thread", true) }, generation: 1, inboundSequence: 10 });
+    pending.close();
+    expect(f.sessions.hasCurrent("thread")).toBe(false);
+    expect(f.sessions.canIdle()).toBe(true);
+  });
+
+  it("rejects mismatched resume identity before mutating the registry", () => {
+    const f = fixture(() => ({}));
+    const pending = f.sessions.trackResume("expected", 1);
+    expect(() => pending.apply({ result: { ...resumed(), thread: thread("foreign", true) }, generation: 1, inboundSequence: 10 })).toThrow("codex_runtime_session_identity_mismatch");
+    pending.close();
+    expect(f.sessions.hasCurrent("foreign")).toBe(false);
+    expect(f.sessions.hasCurrent("expected")).toBe(false);
+    expect(f.sessions.canIdle()).toBe(true);
+  });
+
+  it("preserves unknown activity and active goals observed during a resume", () => {
+    const f = fixture(() => ({}));
+    const pending = f.sessions.trackResume("thread", 1);
+    f.sessions.observeNotification({ kind: "undecodable_notification", generation: 1, sequence: 11,
+      method: "turn/completed", nativeThreadId: "thread", code: "codex_rpc_notification_params_undecodable" });
+    pending.apply({ result: resumed(), generation: 1, inboundSequence: 10 });
+    pending.close();
+    f.sessions.evict("thread", 1);
+    expect(f.sessions.canIdle()).toBe(false);
+    const goal = f.sessions.trackResume("thread", 1);
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 21,
+      method: "thread/goal/updated", params: { threadId: "thread", goal: { status: "active" } } });
+    goal.apply({ result: resumed(), generation: 1, inboundSequence: 20 });
+    goal.close();
+    f.sessions.evict("thread", 1);
+    expect(f.sessions.canIdle()).toBe(false);
+  });
+
   it("requires every retained thread to be evicted and idle before retiring the shared process", () => {
     const f = fixture(() => ({}));
     f.sessions.observeResult("thread/resume", { ...resumed(), thread: thread("a") }, 1);

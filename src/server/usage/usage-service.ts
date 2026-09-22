@@ -169,6 +169,9 @@ export class UsageService implements UsageSink {
         AND b.application_thread_id=c.thread_id AND b.backend_instance_id=c.backend_id AND b.execution_environment_id=c.environment_id
         AND b.backend_conversation_id=c.root_native_session
       JOIN agent_backend_instances a ON a.tenant_id=b.tenant_id AND a.id=b.backend_instance_id AND a.kind='codex_app_server'
+      JOIN application_threads t ON t.tenant_id=b.tenant_id AND t.owner_principal_id=b.owner_principal_id
+        AND t.id=b.application_thread_id AND t.backend_instance_id=b.backend_instance_id
+        AND t.environment_id=b.execution_environment_id
       WHERE c.tenant_id=? AND c.principal_id=? AND c.backend_id=? AND c.environment_id=? AND c.native_namespace=?
         AND b.connection_profile_id=? AND b.application_thread_id>?
       ORDER BY b.application_thread_id LIMIT ?`).all(input.tenantId,input.principalId,input.backendInstanceId,input.executionEnvironmentId,

@@ -171,10 +171,20 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
         throw new CodexRpcDeliveryError({ code: "codex_runtime_dispatch_unavailable", delivery: "not_sent", generation: input.generation, method: input.method });
       }
       operation.dispatched = true;
-      return await client.requestWithReceipt(method, params, { timeoutMilliseconds: remaining });
+      const resume = input.method === "thread/resume"
+        ? this.#sessions!.trackResume((params as { threadId: string }).threadId, input.generation) : undefined;
+      try {
+        const receipt = await client.requestWithReceipt(method, params, { timeoutMilliseconds: remaining });
+        if (!this.#abandoning) {
+          try {
+            if (resume) resume.apply(receipt);
+            else this.#sessions!.observeResult(input.method, receipt.result, receipt.generation);
+          } catch { this.#sessions!.markUnknown(); }
+        }
+        return receipt;
+      } finally { resume?.close(); }
     }).then(receipt => {
       if (this.#abandoning) return;
-      try { this.#sessions!.observeResult(input.method, receipt.result, receipt.generation); } catch { this.#sessions!.markUnknown(); }
       this.#settle(operation, { status: "completed", operationId: input.operationId, method: input.method, receipt });
     }, error => {
       const failure = error instanceof CodexRpcRemoteError

@@ -472,6 +472,11 @@ describe("Codex subagent accounting", () => {
       expect(service.listSubagentRoots({...query,...wrong})).toEqual({bindings:[],nextCursor:null});
     }
     expect(()=>service.listSubagentRoots({...query,limit:129})).toThrow();
+    // A stale binding must not abort enumeration of unrelated admitted roots.
+    // Filter it before pagination so a full page of stale rows cannot hide
+    // valid roots that follow it.
+    db.prepare("UPDATE application_threads SET environment_id='retargeted' WHERE id='thread'").run();
+    expect(service.listSubagentRoots(query)).toMatchObject({bindings:[{applicationThreadId:"thread-2"}],nextCursor:null});
     db.prepare("UPDATE agent_backend_instances SET kind='claude_agent_sdk'").run();
     expect(service.listSubagentRoots(query)).toEqual({bindings:[],nextCursor:null});
   });
