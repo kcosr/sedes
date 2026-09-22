@@ -51,6 +51,12 @@ describe("durable scoped usage service", () => {
     expect(service.availability(scope,"thread",[empty]).turns[0]?.available).toBe(false);
     expect(()=>service.availability({...scope,principalId:"other"},"thread",[turnId])).toThrow();
   });
+  it.each(["completed", "failed", "interrupted"] as const)("keeps recorded zero usage available for a %s turn", status => {
+    const service=new UsageService(database()), capture=service.open(source);
+    capture.registerTurns([{backendTurnId:"turn",status,orderedBackendItemIds:[]}]);
+    capture.capture([observation("zero",[fact("zero","0",{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})])]);
+    expect(service.availability(scope,"thread",[turnId]).turns).toEqual([{turnId,available:true}]);
+  });
   it("keeps additive turn conflicts visible on session totals without affecting another turn", () => {
     const service=new UsageService(database()), capture=service.open(source);
     capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]},{backendTurnId:"other",status:"completed",orderedBackendItemIds:[]}]);
@@ -274,6 +280,7 @@ describe("durable scoped usage service", () => {
     child.registerTurns([{backendTurnId:"child-turn",status:"completed",orderedBackendItemIds:[]}],{nativeSession:"native-session",turns:[{backendTurnId:"child-turn",sourceBackendTurnId:"turn"}]});
     const childTurn=applicationTurnIdForBackendTurn({backendInstanceId:"backend",sourceApplicationThreadId:"child",backendTurnId:"child-turn"});
     const report=service.read(scope,"child",childTurn);expect(report.inherited).toBe(true);expect(report.summary.metrics.input.value).toBe("30");
+    expect(service.availability(scope,"child",[childTurn]).turns).toEqual([{turnId:childTurn,available:true}]);
     expect(service.read(scope,"child").summary.metrics.input.value).toBeNull();
     parent.capture([observation("more",[fact("more","5",{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})])]);
     expect(service.read(scope,"child",childTurn).summary.metrics.input.value).toBe("35");

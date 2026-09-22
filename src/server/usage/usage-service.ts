@@ -105,13 +105,15 @@ export class UsageService implements UsageSink {
   availability(scope:RequestScope,threadId:string,turnIds:readonly string[]):UsageAvailability {
     this.#authorize(scope,threadId);
     if(turnIds.length>100)throw new DomainError("bad_request","Too many turns.");
-    const rows=this.database.prepare("SELECT turn_id,status,report_json FROM usage_turn_state WHERE tenant_id=? AND principal_id=? AND thread_id=? AND turn_id IN (SELECT value FROM json_each(?))")
-      .all(scope.tenantId,scope.principalId,threadId,JSON.stringify(turnIds)) as {turn_id:string;status:string;report_json:string|null}[];
-    const available=new Set(rows.filter(row=>{
-      if(row.status==="in_progress" || !row.report_json)return false;
-      const report=usageReportSchema.parse(JSON.parse(row.report_json));
-      return report.support==="supported" && (Object.values(report.summary.metrics).some(metric=>metric.value!==null) || report.summary.costs.length>0);
-    }).map(row=>row.turn_id));
+    // Materialization marks reports unavailable exactly when no metric or cost
+    // is recorded. Read that projection without decoding full reports per poll.
+    const rows=this.database.prepare(`SELECT turn_id FROM usage_turn_state
+      WHERE tenant_id=? AND principal_id=? AND thread_id=?
+      AND turn_id IN (SELECT value FROM json_each(?)) AND status<>'in_progress'
+      AND json_extract(report_json,'$.support')='supported'
+      AND json_extract(report_json,'$.state')<>'unavailable'`)
+      .all(scope.tenantId,scope.principalId,threadId,JSON.stringify(turnIds)) as {turn_id:string}[];
+    const available=new Set(rows.map(row=>row.turn_id));
     return {threadId,revision:String(this.#state(scope,threadId)?.revision??0n),turns:[...new Set(turnIds)].map(turnId=>({turnId,available:available.has(turnId)}))};
   }
   registerVisibleTurns(scope: RequestScope, threadId: string, turns: readonly ConversationTurn[]): void {

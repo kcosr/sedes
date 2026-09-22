@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-- Fixed Pi turn usage capture at native message persistence; turn usage actions now appear only after a turn ends with recorded data, in a compact mobile-safe overlay.
-
 ### Breaking Changes
 
 - Durable usage accounting replaces accumulated token/cost values in live
@@ -16,6 +14,8 @@
   usage/cost details below replies and offline session totals in Session stats.
   Counts retain model/provider attribution, estimates, and incomplete-coverage
   labels; Grok reports accounting as unsupported.
+  Turn usage actions appear only after a turn ends with recorded data, in a
+  compact overlay sized for mobile screens.
 
 ### Changed
 

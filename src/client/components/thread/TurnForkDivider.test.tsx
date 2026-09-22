@@ -179,7 +179,7 @@ describe("TurnForkDivider", () => {
         store={store}
       />,
     );
-    expect(screen.queryByRole("button", { name: "Turn usage and cost" })).toBeNull();
+    expect(view.container).toBeEmptyDOMElement();
 
     // Completing the turn adds fork controls without changing hook order. It must not
     // change the number of hooks the component mounts.
@@ -387,6 +387,8 @@ describe("TurnForkDivider", () => {
         screen.queryByRole("button", { name: /Fork from here/ }),
       ).toBeNull();
       expect(forkTurn).not.toHaveBeenCalled();
+      if (status === "in_progress") expect(container).toBeEmptyDOMElement();
+      else expect(container.querySelector("footer")).toBeInTheDocument();
     },
   );
 

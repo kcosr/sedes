@@ -100,6 +100,8 @@ export const TurnForkDivider = memo(function TurnForkDivider({
     [completedAt, status, turnNumber],
   );
 
+  if (status === "in_progress") return null;
+
   const copyResponse = async () => {
     if (!copyText) return;
     try {
