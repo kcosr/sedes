@@ -16,7 +16,7 @@
 - Avoid spurious active-thread archive errors when opening the thread menu
   starts a status read or cold runtime attachment. Briefly drain existing
   runtime borrowers under the archive fence, then recheck activity before
-  committing.
+  committing. (#7)
 
 - Show Pi, Codex, and Claude turn failure details with the current failed state,
   and retain quiet details on historical turns. Clear the current explanation
