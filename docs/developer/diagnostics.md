@@ -63,6 +63,9 @@ are:
   `frame_byte_limit_exceeded`, `stream_error`, `overflow`, `client_closed`,
   `load_error`, or `unexpected_error`) plus live state and pending counts;
 - `[delivery-rpc]` — Codex RPC method, duration, and outcome;
+- `[delivery-attachment]` event `codex_backend_observer_failed` — bounded
+  Codex observer errors, including subagent discovery and root admission
+  failures; contains backend identity and sanitized error classes/codes only;
 - `[delivery-lifecycle]` — Codex client-generation transitions and bounded
   machine closure classifications for an unexpectedly closed shared
   generation; and

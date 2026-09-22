@@ -31,6 +31,9 @@
 
 ### Fixed
 
+- Capture Codex multi-agent v2 spawn events as well as legacy collaboration
+  events, so both modes contribute to the session's subagent totals.
+
 - Report fully captured Codex turns as complete at main-agent scope; unknown
   model attribution no longer makes token counts partial. Existing session-wide capture gaps, including
   restart recovery, can still mark earlier turns partial.

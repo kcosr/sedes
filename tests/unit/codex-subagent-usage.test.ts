@@ -62,6 +62,24 @@ describe("Codex subagent usage coordinator", () => {
     expect(f.onError).not.toHaveBeenCalled();
   });
 
+  it("retries transient root admission on child spawn without reattaching the root", () => {
+    const f=fixture();vi.mocked(f.sink.listSubagents).mockImplementationOnce(()=>{throw new Error("SQLITE_BUSY");});
+    f.coordinator.registerRoot(binding);
+    expect(f.onError).toHaveBeenCalledOnce();
+    f.spawn("child");f.usage("child",20);
+    expect(f.sink.listSubagents).toHaveBeenCalledTimes(2);
+    expect(f.observations.get("child")?.[0]?.facts[0]?.tokens.input).toBe("20");
+  });
+
+  it("retries unadmitted roots on reconnect without inventing a durable child relationship", () => {
+    const f=fixture();vi.mocked(f.sink.listSubagents).mockImplementationOnce(()=>{throw new Error("SQLITE_BUSY");});
+    f.coordinator.registerRoot(binding);f.reconnect();
+    expect(f.sink.listSubagents).toHaveBeenCalledTimes(2);
+    expect(f.open).not.toHaveBeenCalled();
+    f.spawn("child");f.usage("child",20);
+    expect(f.observations.get("child")).toHaveLength(1);
+  });
+
   it("retains only the latest out-of-order counter until ancestry and the root are admitted", () => {
     const f = fixture(); f.usage("nested", 10); f.usage("nested", 30); f.spawn("nested", "child"); f.spawn("child");
     expect(f.open).not.toHaveBeenCalled();

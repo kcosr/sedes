@@ -22,6 +22,7 @@ type Child = { id:string; closed:boolean; activitySequence:number; subscribedGen
  */
 export class CodexSubagentUsageCoordinator {
   readonly #roots = new Map<string, ConversationBinding>();
+  readonly #pendingRoots = new Map<string, ConversationBinding>();
   readonly #children = new Map<string, Child>();
   readonly #pendingParents = new Map<string, string>();
   readonly #pendingCounters = new Map<string, Counter>();
@@ -40,15 +41,19 @@ export class CodexSubagentUsageCoordinator {
 
   registerRoot(binding: ConversationBinding): void {
     this.#safe(() => {
-      const existing = this.#roots.get(binding.backendConversationId);
+      const existing = this.#roots.get(binding.backendConversationId) ?? this.#pendingRoots.get(binding.backendConversationId);
       if (existing && (["tenantId","ownerPrincipalId","applicationThreadId","backendInstanceId","executionEnvironmentId","connectionProfileId","backendConversationId"] as const)
         .some(key => existing[key] !== binding[key])) throw new Error("codex_subagent_root_conflict");
-      if (existing) return;
+      if (this.#roots.has(binding.backendConversationId)) return;
       if (this.#children.has(binding.backendConversationId)) throw new Error("codex_subagent_root_is_child");
-      const restored = this.input.sink.listSubagents({ binding, nativeNamespace: this.input.nativeNamespace });
-      // Admission can fail transiently. Do not poison subsequent attachment
-      // attempts by remembering a root whose durable recovery was never read.
+      // Remember trusted attachment identity without admitting it. A transient
+      // database failure can be retried by later spawn evidence or reconnect.
+      this.#pendingRoots.set(binding.backendConversationId, binding);
+      let restored: ReturnType<UsageSink["listSubagents"]>;
+      try { restored = this.input.sink.listSubagents({ binding, nativeNamespace: this.input.nativeNamespace }); }
+      catch (cause) { throw new Error("codex_subagent_root_admission_failed", { cause }); }
       this.#roots.set(binding.backendConversationId, binding);
+      this.#pendingRoots.delete(binding.backendConversationId);
       for (const row of restored) {
         if (!this.#children.has(row.nativeSession)) this.#pendingParents.set(row.nativeSession, row.nativeParentSession);
       }
@@ -81,6 +86,7 @@ export class CodexSubagentUsageCoordinator {
     if (snapshot.state === "closed") {
       for (const child of this.#children.values()) this.#release(child);
       this.#roots.clear();
+      this.#pendingRoots.clear();
       this.#children.clear();
     } else if (recovered) {
       for (const [id, child] of this.#children) {
@@ -90,6 +96,7 @@ export class CodexSubagentUsageCoordinator {
         child.activitySequence = -1;
         child.subscribedGeneration = null;
       }
+      for (const binding of [...this.#pendingRoots.values()]) this.registerRoot(binding);
       this.#restoreRoots();
       if (this.#children.size) this.#scheduleRecovery();
     }
@@ -133,6 +140,10 @@ export class CodexSubagentUsageCoordinator {
       // send/wait/resume operations do not prove ancestry. Only the spawn result does.
       if (item.type === "collabAgentToolCall" && item.tool === "spawnAgent" && item.status === "completed" && item.senderThreadId === event.threadId) {
         for (const id of item.receiverThreadIds) this.#discover(id, event.threadId);
+      } else if (item.type === "subAgentActivity" && item.kind === "started") {
+        // Multi-agent v2 emits this public spawn record; its v1 collaboration
+        // record is analytics-only. Other activity kinds do not prove ancestry.
+        this.#discover(item.agentThreadId, event.threadId);
       }
     } else if (notification.method === "thread/closed") {
       // The shared RPC decoder validates this stable lifecycle notification
@@ -172,7 +183,7 @@ export class CodexSubagentUsageCoordinator {
   }
 
   #discover(id: string, parent: string): void {
-    if (id === parent || this.#roots.has(id)) throw new Error("codex_subagent_identity_conflict");
+    if (id === parent || this.#roots.has(id) || this.#pendingRoots.has(id)) throw new Error("codex_subagent_identity_conflict");
     const child = this.#children.get(id);
     if (child) {
       if (child.parent !== parent) throw new Error("codex_subagent_parent_conflict");
@@ -181,6 +192,8 @@ export class CodexSubagentUsageCoordinator {
     const pending = this.#pendingParents.get(id);
     if (pending && pending !== parent) throw new Error("codex_subagent_parent_conflict");
     this.#boundedSet(this.#pendingParents, id, parent);
+    const pendingRoot = this.#pendingRoots.get(parent);
+    if (pendingRoot) this.registerRoot(pendingRoot);
     this.#resolvePending();
   }
 

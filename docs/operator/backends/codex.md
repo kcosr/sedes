@@ -434,7 +434,9 @@ this change does not reconstruct historical turn boundaries.
 No billing cost is fabricated from token counts.
 
 Native spawn relationships establish child ownership; unrelated thread events
-and ordinary send/wait recipients do not. New children are automatically
+and ordinary send/wait recipients do not. Both Codex collaboration spawn items
+and multi-agent v2 `subAgentActivity` start items establish those relationships.
+New children are automatically
 subscribed by the shared app-server. Capture follows the admitted runtime
 rather than the parent chat handle and retains residency while children run.
 Nested children accumulate under the same root conversation.

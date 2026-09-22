@@ -48,7 +48,7 @@ function prepareDatabase(file: string, nativeRoot: string): Database.Database {
 }
 
 describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
-  it("captures automatic child events, aggregates separately, and continues after the parent handle closes", async () => {
+  it.each(["v1", "v2"] as const)("%s captures automatic child events, aggregates separately, and continues after the parent handle closes", async (agentVersion) => {
     // Codex rejects helper aliases beneath OS tmp; keep the disposable store
     // under the user-owned home, as the existing native supervisor suite does.
     const temporaryRoot = await mkdtemp(path.join(os.homedir(), ".sedes-subagent-live-"));
@@ -64,7 +64,7 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
       const authSource = path.join(process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"), "auth.json");
       await copyFile(authSource, path.join(codexHome, "auth.json"));
       await chmod(path.join(codexHome, "auth.json"), 0o600);
-      await writeFile(path.join(codexHome, "config.toml"), '[features]\nmulti_agent = true\napps = false\nplugins = false\n', { mode: 0o600 });
+      await writeFile(path.join(codexHome, "config.toml"), `[features]\nmulti_agent = true\napps = false\nplugins = false\n[features.multi_agent_v2]\nenabled = ${agentVersion === "v2"}\n`, { mode: 0o600 });
       const instance: AgentBackendInstance = { id: "backend-live", tenantId: scope.tenantId, kind: "codex_app_server", label: "Live test", enabled: true, configurationRevision: 1, protocolRelease: CODEX_APP_SERVER_RELEASE };
       const connection: AgentConnectionProfile = { id: "connection-live", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
         templateId: "template-live", kind: "codex_app_server", backendInstanceId: instance.id, executionEnvironmentId: "environment-live", label: "Live test", enabled: true, configurationRevision: 1 };
@@ -105,11 +105,20 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
       await handle.establishProjection({ signal: new AbortController().signal });
       const nativeCounters = new Map<string, number>();
       const completed = new Map<string, number>();
+      const discovered = new Set<string>();
       const stopObserver = client.subscribeNotifications(notification => {
         if (notification.kind !== "decoded_notification") return;
         if (notification.method === "thread/tokenUsage/updated") {
           const event = codexC2NotificationSchemas["thread/tokenUsage/updated"].parse(notification.params);
           nativeCounters.set(event.threadId, event.tokenUsage.total.totalTokens);
+        } else if (notification.method === "item/completed") {
+          const event = codexC2NotificationSchemas["item/completed"].parse(notification.params);
+          if (event.threadId === nativeRoot) {
+            if (agentVersion === "v2" && event.item.type === "subAgentActivity" && event.item.kind === "started") discovered.add(event.item.agentThreadId);
+            if (agentVersion === "v1" && event.item.type === "collabAgentToolCall" && event.item.tool === "spawnAgent" && event.item.status === "completed") {
+              for (const id of event.item.receiverThreadIds) discovered.add(id);
+            }
+          }
         } else if (notification.method === "turn/completed") {
           const event = codexC2NotificationSchemas["turn/completed"].parse(notification.params);
           completed.set(event.threadId, (completed.get(event.threadId) ?? 0) + 1);
@@ -123,6 +132,7 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
         const children = usage.listSubagents({ binding, nativeNamespace: "disposable-codex-store" });
         expect(children).toHaveLength(1);
         const childId = children[0]!.nativeSession;
+        expect([...discovered]).toEqual([childId]);
         await vi.waitFor(() => expect(completed.get(childId)).toBe(1), { timeout: 30_000, interval: 100 });
         const initial = usage.read(scope, binding.applicationThreadId);
         const mainTotal = nativeCounters.get(nativeRoot)!;
@@ -140,10 +150,16 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
           .map(row => ({turnId: row.turn_id, report: {...JSON.parse(row.report_json), revision: "ignored"}}));
         const mainTurns = readMainTurns();
         expect(mainTurns.length).toBeGreaterThan(0);
-        // Continue the same native child after the parent presentation unsubscribes.
-        // There is deliberately no thread/resume or child transcript read.
-        await client.request(codexTurnStartMethod, { threadId: childId, model, effort: "low", approvalPolicy: "never",
-          sandboxPolicy: { type: "readOnly", networkAccess: false }, input: [{ type: "text", text: "Reply READY AGAIN. Do not use any tools.", text_elements: [] }] }, requestOptions);
+        // Continue the same child after the parent presentation unsubscribes.
+        // V2 rejects direct child input. Its native parent control prompt is
+        // deliberately outside the closed app handle, and asks the supported
+        // followup_task tool to start the child again. Neither path resumes or
+        // reads a child transcript, and the original app turn stays unchanged.
+        const followup = agentVersion === "v2"
+          ? "Use followup_task to tell the existing child to reply READY AGAIN without tools. Do not spawn another agent. Wait for its reply, then say DONE. Do not use tools except followup_task and agent waiting."
+          : "Reply READY AGAIN. Do not use any tools.";
+        await client.request(codexTurnStartMethod, { threadId: agentVersion === "v2" ? nativeRoot : childId, model, effort: "low", approvalPolicy: "never",
+          sandboxPolicy: { type: "readOnly", networkAccess: false }, input: [{ type: "text", text: followup, text_elements: [] }] }, requestOptions);
         await vi.waitFor(() => expect(completed.get(childId)).toBe(2), { timeout: 60_000, interval: 100 });
         const updated = usage.read(scope, binding.applicationThreadId);
         expect(Number(updated.breakdown?.subagents.metrics.total.value)).toBeGreaterThan(childTotal);
