@@ -1,3 +1,4 @@
+import { UsageService } from "../../src/server/usage/usage-service.js";
 import { ScopedThreadEventHubRegistry } from "../../src/server/events/thread-runtime-coordinator.js";
 import { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
 import { NotificationService } from "../../src/server/domain/notification-service.js";
@@ -1118,6 +1119,7 @@ async function fixture(
     onOpened: () => undefined,
   });
   const app = createNormalizedApp({
+    usage: new UsageService(database),
     workpads: {} as never,
     questions,
     cannedPrompts: new CannedPromptService(
@@ -1577,6 +1579,26 @@ async function fixture(
 }
 
 describe("normalized HTTP application contract", () => {
+  it("reads durable usage and known empty turns without acquiring a provider", async () => {
+    const current=await fixture();
+    try {
+      const workspace=await current.mutate(request(current.app).post("/api/workspaces/open")).send({environmentId:current.environmentId,path:current.workspacePath}).expect(201);
+      const created=await current.mutate(request(current.app).post("/api/threads")).send({workspaceId:workspace.body.id,configuration:{kind:"custom",targetId:current.profile.id},executionWorkspace:{kind:"direct"},title:"Usage"}).expect(201);
+      const threadId=created.body.threadId;
+      const usage=new UsageService(current.database);
+      usage.registerVisibleTurns(current.owner,threadId,[{id:"known-turn",revision:1,status:"completed",orderedItemIds:[]}]);
+      const session=await current.withHost(request(current.app).get(`/api/threads/${threadId}/usage`)).expect(200);
+      expect(session.headers["cache-control"]).toBe("no-store");
+      expect(session.body.state).toBe("unavailable");
+      expect(session.body.summary.metrics.input.value).toBeNull();
+      const turn=await current.withHost(request(current.app).get(`/api/threads/${threadId}/usage/turns/known-turn`)).expect(200);
+      expect(turn.body.turnState).toBe("completed");
+      await current.withHost(request(current.app).get(`/api/threads/${threadId}/usage/turns/foreign-turn`)).expect(404);
+      await current.withHost(request(current.app).get(`/api/threads/00000000-0000-4000-8000-000000000099/usage`)).expect(404);
+      expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
+    } finally {await current.close();}
+  });
+
   it("manages retained projects and restores the same identity through Add project", async () => {
     const current = await fixture();
     try {

@@ -9,6 +9,36 @@ the containing history page must also fit its limit.
 This guide covers the full conversation workflow, from an empty draft through
 running, queued, completed, and forked work.
 
+## View recorded usage
+
+The **Turn usage and cost** icon below each reply opens that application's turn
+usage. Hover or focus previews the details; click or tap pins them. Click again,
+press Escape, tap outside, or use mobile Back to close. The action remains
+available on failed, interrupted, and running turns, including while the backend
+is disconnected. Running values are labelled **Recorded so far**.
+
+The details show recorded tokens, available model/provider attribution, and
+estimated or reported cost. **Input (including cache)** already includes cache
+subsets; reasoning is an output subset. Do not add every displayed row together.
+An em dash means unavailable, not zero. **SDK-normalized** means the SDK supplied
+normalized counts without proving which original provider fields were present.
+Cost estimates are not billing receipts; missing cost is explicitly unavailable.
+
+**Thread actions → Session stats** separates durable **Recorded session usage**
+from live context occupancy and transcript counters. Session usage can exceed the
+sum of displayed turns because some work has no reliable turn attribution.
+If a disabled or unavailable backend prevents the conversation from opening,
+the loading/error view still offers **Session stats** for recorded data.
+**Main-loop usage only**, **Usage may be incomplete**, and **Usage reconciliation
+incomplete** explain restricted coverage or unresolved evidence. Inherited turn
+usage does not charge copied work to the child session. Grok currently reports
+usage as unsupported.
+
+Sedes records on the main server independently of an open browser. Open usage
+views refresh periodically; closing them stops those reads. Previously recorded
+values remain available offline from the provider, and a refresh failure retains
+the last successful display. Older turns may have no recoverable accounting.
+
 ## Create a thread
 
 Choose **New thread** from the sidebar or landing page. On desktop the form

@@ -1,3 +1,4 @@
+import type { UsageService } from "../usage/usage-service.js";
 import { createHash } from "node:crypto";
 import type { BackendCapabilityDocument } from "../../shared/protocol/backend.js";
 import type { BackendEffectiveSettings } from "../../shared/protocol/backend.js";
@@ -238,7 +239,8 @@ const emptyBackendCapabilities: BackendCapabilityDocument = {
     reason: { text: "This thread has no backend conversation to fork." },
   },
   interactionKinds: [],
-  usageSections: [],
+  usageAccounting: "unsupported",
+      usageSections: [],
   effectiveSettings: {},
 };
 
@@ -260,7 +262,9 @@ export class ThreadApplicationService {
   #mutations?: ThreadApplicationMutationGateway;
   #history?: ThreadApplicationHistoryBoundary;
 
+  readonly #usage: Pick<UsageService, "registerVisibleTurns">;
   constructor(input: {
+    readonly usage: Pick<UsageService, "registerVisibleTurns">;
     readonly inventory: ThreadApplicationInventoryReader;
     readonly conversations: ThreadApplicationConversationReader;
     readonly queue: ThreadApplicationQueueReader;
@@ -277,6 +281,7 @@ export class ThreadApplicationService {
     >;
     readonly mutations?: ThreadApplicationMutationGateway;
   }) {
+    this.#usage = input.usage;
     this.#inventory = input.inventory;
     this.#conversations = input.conversations;
     this.#queue = input.queue;
@@ -648,6 +653,7 @@ export class ThreadApplicationService {
       ...(recovery ? { recovery } : {}),
       attention: inventory.attention,
     });
+    this.#usage.registerVisibleTurns(scope, applicationThreadId, Object.values(snapshotWithoutHistory.turnsById));
     if (!historyOperational) return snapshotWithoutHistory;
     return normalizedThreadSnapshotSchema.parse({
       ...snapshotWithoutHistory,

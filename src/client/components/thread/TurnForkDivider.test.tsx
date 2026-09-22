@@ -178,9 +178,9 @@ describe("TurnForkDivider", () => {
         store={store}
       />,
     );
-    expect(view.container).toBeEmptyDOMElement();
+    expect(screen.getByRole("button", { name: "Turn usage and cost" })).toBeInTheDocument();
 
-    // The in-progress render returns null; completing the turn must not
+    // Completing the turn adds fork controls without changing hook order. It must not
     // change the number of hooks the component mounts.
     view.rerender(
       <TurnForkDivider
@@ -381,7 +381,7 @@ describe("TurnForkDivider", () => {
         />,
       );
 
-      expect(container).toBeEmptyDOMElement();
+      expect(screen.getByRole("button", { name: "Turn usage and cost" })).toBeInTheDocument();
       expect(
         screen.queryByRole("button", { name: /Fork from here/ }),
       ).toBeNull();

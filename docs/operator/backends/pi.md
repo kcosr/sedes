@@ -136,10 +136,9 @@ in the service account's **global Pi settings**, not project settings. Sedes
 preserves that global choice for direct, SSH, and isolated sessions and does
 not enable idle warming itself. Remote settings are read on the Sedes host.
 
-Refresh tokens and costs contribute to session usage, including updates while
-idle. The request counter counts assistant responses plus recorded cache-warm
-requests; it is omitted if another native usage category makes that count
-unknown. It is not a count of every nested summarization or tool model call.
+Refresh tokens and estimated costs contribute to recorded session usage, including
+updates while idle. Request counts appear only where native usage establishes
+request cardinality; transcript message counters remain a separate live view.
 Cache-warming records do not appear as assistant messages. In idle mode,
 ending a turn does not disable the operator's idle-warming policy; disposing
 the Pi session cancels warming.
@@ -307,3 +306,17 @@ SEDES_RUN_REAL_PI_CLI=1 env -u NODE_ENV npm run test:real-pi-cli
 Run either only after deliberate approval and only when its provider/model and
 tool-policy preflight are expected to pass. Contributor verification and
 backend audit requirements are in the [Pi internal contract](../../internals/backends/pi.md#verification-and-change-contract).
+
+## Recorded usage
+
+Pi records distinct usage-bearing native entries, including available auxiliary
+and cache-warming work, and reuses their identities when ordinary history is
+loaded. Available model/provider dimensions come from each source entry. Token
+buckets are SDK-normalized; SDK pricing is an estimate. A proven copied fork
+entry retains its origin rather than becoming new spend. Unproven ancestry stays
+outside selected totals with an incomplete-coverage explanation. Native entry
+counts are not automatically billed request counts.
+
+Captured values live in the main Sedes database and remain readable without
+opening a provider session. See [recorded usage](../../user/conversations.md#view-recorded-usage)
+for the UI and [backups](../operations.md#state-upgrades-and-backups) for retention.

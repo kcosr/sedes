@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { BackendConversationEvent } from "../../shared/protocol/backend.js";
 import type {
+  ConversationTurn,
   NormalizedThreadEvent,
   NormalizedThreadSnapshot,
   ThreadCapabilityDocument,
@@ -90,6 +91,7 @@ export interface ConversationEventBridgeBinding
  */
 export class ConversationEventBridge {
   readonly #projection: ConversationEventBridgeProjection;
+  readonly #registerUsageTurns: (scope: RequestScope, threadId: string, turns: readonly ConversationTurn[]) => void;
   /**
    * The runtime coordinator owns exactly one binding per process-wide actor,
    * but its release path drains asynchronously: an evicted binding's queued
@@ -104,8 +106,12 @@ export class ConversationEventBridge {
     ConversationEventBridgeBinding
   >();
 
-  constructor(projection: ConversationEventBridgeProjection) {
+  constructor(
+    projection: ConversationEventBridgeProjection,
+    registerUsageTurns: (scope: RequestScope, threadId: string, turns: readonly ConversationTurn[]) => void,
+  ) {
     this.#projection = projection;
+    this.#registerUsageTurns = registerUsageTurns;
   }
 
   bind(input: {
@@ -254,6 +260,10 @@ export class ConversationEventBridge {
                 throw new Error("conversation_event_bridge_snapshot_missing");
               }
               if (normalizedEvent.type === "turn_upsert") {
+                if (input.hub.projectionGeneration !== normalizedEvent.generation) {
+                  throw new Error("conversation_event_bridge_generation_mismatch");
+                }
+                this.#registerUsageTurns(input.scope, input.applicationThreadId, [normalizedEvent.turn]);
                 input.hub.publish({
                   ...normalizedEvent,
                   fork: clampTurnFork(normalizedEvent.fork, currentForkSource),

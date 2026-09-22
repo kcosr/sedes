@@ -587,6 +587,7 @@ describe("Claude production application integration", () => {
 
       const queue = new QueuedInputRepository(database);
       const threads = new ThreadApplicationService({
+    usage: { registerVisibleTurns: () => undefined },
         inventory: new DatabaseThreadApplicationInventoryReader({
           inventory,
           queue,

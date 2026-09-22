@@ -96,6 +96,7 @@ export function assertClaudeMessageItemPayload(item: BackendItem): void {
 }
 
 export interface ClaudeHistoryProjection {
+  readonly usageTurns: readonly BackendTurn[];
   readonly snapshot: BackendConversationSnapshot;
   readonly history: {
     readonly operational: true;
@@ -103,6 +104,8 @@ export interface ClaudeHistoryProjection {
   };
   readonly usage?: UsageSnapshot;
   /** Application operation identities accepted as main-thread user UUIDs. */
+  readonly backendTurnIdByMessageUuid: ReadonlyMap<string, string>;
+  readonly inheritedUsage?: {readonly forkOperationId: string; readonly turns: readonly {readonly backendTurnId: string; readonly sourceBackendTurnId: string}[]};
   readonly nativeUserMessageUuidByBackendTurnId: ReadonlyMap<string, string>;
   /** Main-thread tool calls in the entire supplied transcript, including older pages. */
   readonly nativeToolUseIds: ReadonlySet<string>;
@@ -173,6 +176,8 @@ interface ProjectedTimeline {
   readonly turnsById: Readonly<Record<string, BackendTurn>>;
   readonly itemsById: Readonly<Record<string, BackendItem>>;
   readonly usage?: UsageSnapshot;
+  readonly backendTurnIdByMessageUuid: ReadonlyMap<string, string>;
+  readonly inheritedUsage?: {readonly forkOperationId: string; readonly turns: readonly {readonly backendTurnId: string; readonly sourceBackendTurnId: string}[]};
   readonly nativeUserMessageUuidByBackendTurnId: ReadonlyMap<string, string>;
   /** Main-thread tool calls in the entire supplied transcript, including older pages. */
   readonly nativeToolUseIds: ReadonlySet<string>;
@@ -299,11 +304,14 @@ export function projectClaudeLatestSnapshot(
   const retainedTurnId = timeline.orderedBackendTurnIds[retainedStart];
   return {
     snapshot,
+    usageTurns: Object.values(timeline.turnsById),
     history: {
       operational: true,
       ...(previousCursor ? { previousCursor } : {}),
     },
     ...(timeline.usage ? { usage: timeline.usage } : {}),
+    backendTurnIdByMessageUuid: timeline.backendTurnIdByMessageUuid,
+    ...(timeline.inheritedUsage ? {inheritedUsage: timeline.inheritedUsage} : {}),
     nativeUserMessageUuidByBackendTurnId:
       timeline.nativeUserMessageUuidByBackendTurnId,
     nativeToolUseIds: timeline.nativeToolUseIds,
@@ -503,12 +511,10 @@ function buildTimeline(
   const userMessageOrdinalByBackendTurnId = new Map<string, number>();
   const seenTurnIds = new Set<string>();
   let current: MutableTurn | undefined;
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let cacheReadTokens = 0;
-  let cacheWriteTokens = 0;
   let assistantMessages = 0;
   const assistantMessageIds = new Set<string>();
+  const backendTurnIdByMessageUuid = new Map<string, string>();
+  let inheritedUsage: {readonly forkOperationId: string; readonly turns: readonly {readonly backendTurnId: string; readonly sourceBackendTurnId: string}[]} | undefined;
   let userMessages = 0;
   let userMessageOrdinal = userMessageOrdinalBase;
   let toolCalls = 0;
@@ -616,6 +622,7 @@ function buildTimeline(
     if (message.type === "user" && forkBoundaryOperationId !== undefined) {
       finishTurn();
       authenticatedForkContextBoundaryOperationIds.add(forkBoundaryOperationId);
+      inheritedUsage = {forkOperationId: forkBoundaryOperationId, turns: orderedBackendTurnIds.map(backendTurnId => ({backendTurnId,sourceBackendTurnId:backendTurnId}))};
       continue;
     }
     // Retained native enqueue echoes are not consumption evidence. A scoped
@@ -789,13 +796,8 @@ function buildTimeline(
           assistantBlockBase + content.length,
         );
       }
-      if (message.assistantStopReason !== null) {
-        const usage = parseUsage(message.message);
-        inputTokens = safeAdd(inputTokens, usage.input);
-        outputTokens = safeAdd(outputTokens, usage.output);
-        cacheReadTokens = safeAdd(cacheReadTokens, usage.cacheRead);
-        cacheWriteTokens = safeAdd(cacheWriteTokens, usage.cacheWrite);
-      }
+      backendTurnIdByMessageUuid.set(message.uuid, current.backendTurnId);
+
     }
   }
   finishTurn();
@@ -817,18 +819,7 @@ function buildTimeline(
   applyTaskLifecycleReceipts(authentication?.taskLifecycleReceipts ?? [], toolItemsByNativeId, turnsById, itemsById);
 
   const usage = usageSnapshotSchema.parse({
-    tokens: {
-      input: inputTokens,
-      output: outputTokens,
-      cacheRead: cacheReadTokens,
-      cacheWrite: cacheWriteTokens,
-      total: safeAdd(
-        safeAdd(inputTokens, outputTokens),
-        safeAdd(cacheReadTokens, cacheWriteTokens),
-      ),
-    },
     counters: {
-      requests: assistantMessages,
       userMessages,
       assistantMessages,
       toolCalls,
@@ -852,6 +843,8 @@ function buildTimeline(
     itemsById,
     usage,
     nativeUserMessageUuidByBackendTurnId,
+    backendTurnIdByMessageUuid,
+    ...(inheritedUsage ? {inheritedUsage} : {}),
     nativeToolUseIds: new Set(toolItemsByNativeId.keys()),
     terminalAssistantUuidByBackendTurnId,
     terminalCheckpointUuidByBackendTurnId,
@@ -1621,23 +1614,6 @@ function inferRunState(
       : "idle";
 }
 
-function parseUsage(message: unknown): {
-  readonly input: number;
-  readonly output: number;
-  readonly cacheRead: number;
-  readonly cacheWrite: number;
-} {
-  if (!isPlainRecord(message) || !isPlainRecord(message.usage)) {
-    return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  }
-  return {
-    input: safeCount(message.usage.input_tokens),
-    output: safeCount(message.usage.output_tokens),
-    cacheRead: safeCount(message.usage.cache_read_input_tokens),
-    cacheWrite: safeCount(message.usage.cache_creation_input_tokens),
-  };
-}
-
 function historyCursor(fingerprint: string, before: number): string {
   return `claude-history:v1:${fingerprint}:${before}`;
 }
@@ -1664,12 +1640,6 @@ function parseHistoryCursor(
 
 function stableId(prefix: string, input: string): string {
   return `${prefix}:${createHash("sha256").update(input).digest("base64url")}`;
-}
-
-function safeCount(value: unknown): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : 0;
 }
 
 function safeAdd(left: number, right: number): number {

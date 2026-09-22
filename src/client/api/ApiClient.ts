@@ -1,3 +1,4 @@
+import { usageReportSchema, type UsageReport } from "../../shared/protocol/usage-accounting.js";
 import {
   environmentVariablesPreviewQuerySchema,
   environmentVariablesPreviewResultSchema,
@@ -930,6 +931,11 @@ export class ApiClient {
     const parameters = new URLSearchParams({ targetId: query.targetId });
     if (query.agentId) parameters.set("agentId", query.agentId);
     return this.#request(`/api/environment-variables/preview?${parameters}`, { signal }, environmentVariablesPreviewResultSchema);
+  }
+
+  getUsage(threadId: string, turnId: string | null = null, signal?: AbortSignal): Promise<UsageReport> {
+    const suffix = turnId === null ? "" : `/turns/${encodeURIComponent(turnId)}`;
+    return this.#request(`/api/threads/${encodeURIComponent(threadId)}/usage${suffix}`, { signal }, usageReportSchema);
   }
 
   getThreadEnvironmentVariables(threadId: string, signal?: AbortSignal): Promise<ThreadEnvironmentVariablesResult> {

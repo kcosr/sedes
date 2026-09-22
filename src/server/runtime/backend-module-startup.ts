@@ -1,3 +1,4 @@
+import { UsageService } from "../usage/usage-service.js";
 import type {
   AgentToolCliAvailability,
   BackendModuleRuntime,
@@ -274,6 +275,7 @@ export async function initializeBackendModuleRuntimes(input: {
   }> = [];
   for (const plan of validatedPlans) {
     const runtime = plan.prepared.createRuntime({
+      usage: new UsageService(input.database),
       database: input.database,
       scope: input.scope,
       instance: plan.instance,

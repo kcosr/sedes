@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
@@ -259,6 +260,9 @@ describe.runIf(tmuxAvailable)("Codex TUI remote live compatibility", () => {
         createdAt: new Date().toISOString(),
       });
       const normalizedHandle = new CodexConversationHandle({
+    usageSink: NO_USAGE_SINK,
+    nativeNamespace: "test-codex-store",
+    usageProvenZero: false,
         binding,
         canonicalWorkspacePath: workspace,
         workspaceId: "workspace-feature-033-normalized-live",
@@ -342,7 +346,7 @@ describe.runIf(tmuxAvailable)("Codex TUI remote live compatibility", () => {
         }),
         forkSource: async () => normalizedFixtureSnapshot("unused").forkSource,
         ancillary: async () => [],
-      });
+      }, () => undefined);
       sedesBridgeBinding = normalizedBridge.bind({
         scope: sedesScope,
         applicationThreadId,
@@ -1659,6 +1663,9 @@ async function startNormalizedLiveProjection(input: {
     createdAt: new Date().toISOString(),
   });
   const handle = new CodexConversationHandle({
+    usageSink: NO_USAGE_SINK,
+    nativeNamespace: "test-codex-store",
+    usageProvenZero: false,
     binding: conversationBinding,
     canonicalWorkspacePath: input.workspace,
     workspaceId: input.workspaceId,
@@ -1738,7 +1745,7 @@ async function startNormalizedLiveProjection(input: {
     }),
     forkSource: async () => normalizedFixtureSnapshot("unused").forkSource,
     ancillary: async () => [],
-  });
+  }, () => undefined);
   const binding = bridge.bind({
     scope: input.scope,
     applicationThreadId: input.applicationThreadId,

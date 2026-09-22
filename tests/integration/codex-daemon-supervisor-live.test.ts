@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { createServer, type Server } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -368,6 +369,8 @@ plugins = false
         ...readOnlyPolicy,
       };
       const driver = new CodexConversationBackendDriver({
+    usageSink: NO_USAGE_SINK,
+    nativeNamespace: "test-codex-store",
         instance,
         connection,
         client: supervisor.client,
@@ -862,6 +865,8 @@ plugins = false
         ...readOnlyPolicy,
       };
       const driver = new CodexConversationBackendDriver({
+    usageSink: NO_USAGE_SINK,
+    nativeNamespace: "test-codex-store",
         instance,
         connection,
         client: supervisor.client,

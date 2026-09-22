@@ -1169,6 +1169,8 @@ export const ThreadHeader = memo(function ThreadHeader({
         createdWithAgent={snapshot.createdWithAgent}
         executionWorkspace={snapshot.executionWorkspace}
         environmentKind={snapshot.environment.kind}
+        usageCache={store.usage}
+        liveAvailable={connection === "connected" && authoritative}
         usage={snapshot.usage}
         returnFocusRef={actionsTrigger}
       />

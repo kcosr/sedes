@@ -1,3 +1,4 @@
+import { UsageQueryCache } from "./UsageQueryCache.js";
 import type { EnvironmentVariableOverrides } from "../../shared/protocol/environment-variables.js";
 import type {
   QuestionRequest,
@@ -293,6 +294,7 @@ export interface SetAgentToolPolicyInput {
 export class ThreadClientStore {
   readonly threadId: string;
   readonly normalized = new NormalizedThreadStore();
+  readonly usage: UsageQueryCache;
   readonly #api: ApiClient;
   readonly #transport: EventStreamTransport;
   #state = initialState;
@@ -358,6 +360,7 @@ export class ThreadClientStore {
   ) {
     this.threadId = threadId;
     this.#api = api;
+    this.usage = new UsageQueryCache(threadId, api);
     this.#transport = transport;
     this.#activityDetail = activityDetail;
     this.#normalizedUnsubscribe = this.normalized.subscribe(() => {
@@ -550,6 +553,7 @@ export class ThreadClientStore {
 
   dispose(): void {
     this.#disposed = true;
+    this.usage.dispose();
     this.#subscriptionEpoch += 1;
     this.#cancelEnvelopeFlush();
     this.#pendingEnvelopes = [];
@@ -2317,6 +2321,7 @@ export class ThreadClientStore {
           });
           return;
         }
+        this.usage.invalidate();
         this.normalized.confirmReplayCaughtUp();
         this.#replaceState({ ...this.#state, connection });
       },
@@ -2637,6 +2642,8 @@ export class ThreadClientStore {
           if (envelope === diagnosticSnapshot) {
             diagnosticSnapshotApplied = true;
           }
+          if (envelope.event.type === "usage_revision_changed") this.usage.invalidate(envelope.event.revision);
+          if (envelope.event.type === "snapshot") this.usage.invalidate();
           if (envelope.event.type === "questions_changed") {
             this.#applyQuestionRequests(envelope.event);
           } else if (envelope.event.type === "snapshot") {
@@ -2732,6 +2739,7 @@ export class ThreadClientStore {
       }
       result = this.normalized.applyCheckpoint(checkpoint);
       if (result.kind === "applied") {
+        this.usage.invalidate();
         this.#capabilityThreadRevision = this.normalized.capabilityThreadRevision;
         this.#questionStatusProjectionKey = "";
         void this.loadQuestionRequests();

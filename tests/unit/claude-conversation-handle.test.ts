@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK, type UsageSink, type UsageObservation } from "../../src/server/usage/contracts.js";
 import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
 import { claudeSteerOperationsMigration } from "../../src/server/db/migrations/102-claude-steer-operations.js";
 import { claudeTaskLifecycleMigration } from "../../src/server/db/migrations/100-claude-task-lifecycle.js";
@@ -354,6 +355,7 @@ function createHandle(
   input: ReturnType<typeof fixture>,
   release = vi.fn(),
   options: {
+    readonly usage?: UsageSink;
     readonly runtimeClient?: ClaudeRuntimeClient;
     readonly agentToolCliClosed?: Promise<unknown>;
     readonly agentToolCli?: import("../../src/server/backends/module.js").AgentToolCliAvailability;
@@ -394,6 +396,8 @@ function createHandle(
     release,
     settings,
     handle: new ClaudeConversationHandle({
+      usage: options.usage ?? NO_USAGE_SINK,
+      nativeNamespace: "claude-test-native",
       binding: BINDING,
       canonicalWorkspacePath: "/workspace",
       workspaceId: "workspace-a",
@@ -963,10 +967,8 @@ describe("ClaudeConversationHandle", () => {
       session_id: SESSION_ID,
     });
     await vi.waitFor(async () => {
-      expect((await handle.usage()).tokens).toMatchObject({
-        input: 3,
-        output: 2,
-      });
+      expect(projected).toEqual(expect.arrayContaining([expect.objectContaining({event: expect.objectContaining({type: "turn_completed"})})]));
+      expect(await handle.usage()).not.toHaveProperty("tokens");
     });
     const history = await handle.history({ limit: 10 });
     expect(history.orderedBackendTurnIds).toHaveLength(1);
@@ -2500,13 +2502,7 @@ describe("ClaudeConversationHandle", () => {
       session_id: SESSION_ID,
     });
     await vi.waitFor(async () => {
-      expect((await handle.usage()).tokens).toEqual({
-        input: 11,
-        output: 7,
-        cacheRead: 3,
-        cacheWrite: 2,
-        total: 23,
-      });
+      expect(await handle.usage()).not.toHaveProperty("tokens");
       expect(projected).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -3425,7 +3421,9 @@ describe("ClaudeConversationHandle", () => {
     await handle.close();
   });
 
-  it("uses an immutable resume baseline plus latest cumulative model usage", async () => {
+  it("captures pipeline results independently of history without transient token authority", async () => {
+    const captured: UsageObservation[] = [];
+    const usage: UsageSink = {open: () => ({registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, seal: () => {}})};
     const provider = fixture();
     const initialMessages: SessionMessage[] = [
       {
@@ -3455,6 +3453,7 @@ describe("ClaudeConversationHandle", () => {
       return initialMessages.slice(offset, offset + limit);
     });
     const { handle, settings } = createHandle(provider, vi.fn(), {
+      usage,
       initialMessages,
       resumeSession: true,
     });
@@ -3496,39 +3495,32 @@ describe("ClaudeConversationHandle", () => {
     };
     pushUsage(10, 4, 1);
     await vi.waitFor(async () => {
-      expect(await handle.usage()).toMatchObject({
-        tokens: { input: 15, output: 6, total: 21 },
-        counters: { requests: 2 },
-      });
+      expect(await handle.usage()).not.toHaveProperty("tokens");
+      expect(captured.filter((o) => o.replaceCheckpoint)).toHaveLength(1);
     });
     pushUsage(15, 6, 2);
     await vi.waitFor(async () => {
-      expect(await handle.usage()).toMatchObject({
-        tokens: { input: 20, output: 8, total: 28 },
-        counters: { requests: 3 },
-      });
+      expect(await handle.usage()).not.toHaveProperty("tokens");
+      expect(captured.filter((o) => o.replaceCheckpoint)).toHaveLength(2);
     });
     pushUsage(12, 5, 1);
     await vi.waitFor(async () => {
-      expect(await handle.usage()).toMatchObject({
-        tokens: { input: 20, output: 8, total: 28 },
-        counters: { requests: 3 },
-      });
+      expect(await handle.usage()).not.toHaveProperty("tokens");
+      expect(captured.filter((o) => o.replaceCheckpoint)).toHaveLength(3);
     });
     await handle.close();
 
     const resumed = createHandle(fixture(), vi.fn(), {
       settings,
+      usage,
       initialMessages,
       resumeSession: true,
     }).handle;
     await resumed.establishProjection({
       signal: new AbortController().signal,
     });
-    expect(await resumed.usage()).toMatchObject({
-      tokens: { input: 20, output: 8, total: 28 },
-      counters: { requests: 3 },
-    });
+    expect(await resumed.usage()).not.toHaveProperty("tokens");
+    expect(captured.filter((o) => o.replaceCheckpoint).map((o) => o.facts[0]!.tokens.uncachedInput)).toEqual(["10", "15", "12"]);
     await resumed.close();
   });
 
@@ -3659,8 +3651,8 @@ describe("Claude retained remote handle recovery", () => {
     }).handle;
     await first.establishProjection({ signal: new AbortController().signal });
     const usage = await first.usage();
-    expect(usage.tokens).toMatchObject({ input: 4, output: 5 });
-    expect(usage.counters?.requests).toBe(1);
+    expect(usage).not.toHaveProperty("tokens");
+    expect(usage.counters).not.toHaveProperty("requests");
     await first.close();
     const replacementProvider = fixture();
     const replacementRuntime = retainedRuntime(replacementProvider, [

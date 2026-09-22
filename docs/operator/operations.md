@@ -585,6 +585,18 @@ with the installation backup. Remote sidecar state and provider-native stores
 are separate backup units on their hosts; main state alone cannot restore a
 remote terminal's newest offline output or reconcile its active runtime.
 
+Durable usage observations and session/turn summaries are also stored in
+`overlay.sqlite`, scoped to the authenticated owner. Backing up main state retains
+captured accounting; it cannot recover unobserved provider work. No usage sidecar
+spool or separate usage service is required. Existing provider replay/history may
+recover some gaps, but capture failures or missing native usage remain visible.
+
+The durable-accounting migration preserves old Claude ledger totals as a
+separate legacy summary with unknown coverage and removes their old authority.
+Legacy totals are never added to newly selected accounting facts. Opening older
+history registers visible turn identities without performing a global backfill.
+Use the ordinary pre-migration backup and rollback procedure below.
+
 Before an upgrade:
 
 1. Settle active work and resolve or explicitly review uncertain creation,

@@ -752,9 +752,7 @@ describe("Claude history projection", () => {
       "private subagent",
     );
     expect(projection.usage).toMatchObject({
-      tokens: { input: 17, output: 9, cacheRead: 3, cacheWrite: 2, total: 31 },
       counters: {
-        requests: 2,
         userMessages: 1,
         assistantMessages: 2,
         toolCalls: 1,

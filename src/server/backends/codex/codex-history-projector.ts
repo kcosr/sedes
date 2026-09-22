@@ -804,13 +804,6 @@ export function projectCodexUsage(value: CodexThreadTokenUsage): UsageSnapshot {
         };
   return {
     ...(context ? { context } : {}),
-    tokens: {
-      input: usage.total.inputTokens,
-      output: usage.total.outputTokens,
-      cacheRead: usage.total.cachedInputTokens,
-      cacheWrite: usage.total.cacheWriteInputTokens,
-      total: usage.total.totalTokens,
-    },
   };
 }
 

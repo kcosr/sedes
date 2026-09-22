@@ -1237,7 +1237,7 @@ describe("Transcript history positioning", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps an earlier completed fork action while hiding the active turn footer", () => {
+  it("keeps an earlier completed fork action and the active turn usage action", () => {
     const snapshot = makeSnapshot(["turn-1", "turn-2"], false);
     snapshot.forkSource = {
       selectedCompletedTurn: { available: true },
@@ -1275,7 +1275,8 @@ describe("Transcript history positioning", () => {
     expect(
       screen.getByRole("button", { name: /Fork from here/ }),
     ).toHaveAttribute("aria-disabled", "false");
-    expect(screen.queryByTestId("turn-fork-turn-2")).toBeNull();
+    expect(within(screen.getByTestId("turn-fork-turn-2")).getByRole("button", { name: "Turn usage and cost" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("turn-fork-turn-2")).queryByRole("button", { name: /Fork from here/ })).toBeNull();
   });
 
   it("does not present an uncertain creation as ready", () => {

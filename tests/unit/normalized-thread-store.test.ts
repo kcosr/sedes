@@ -239,6 +239,16 @@ function applicationState(
 }
 
 describe("NormalizedThreadStore", () => {
+  it("applies accounting invalidations without rebuilding transcript state and rejects stale generations", () => {
+    const store=new NormalizedThreadStore();
+    store.apply(envelope(0,{type:"snapshot",generation:"one",snapshot:snapshot()}));
+    const original=store.state.snapshot,bytes=store.snapshotSerializedBytes;
+    expect(store.apply(envelope(1,{type:"usage_revision_changed",generation:"one",revision:"9007199254740993"}))).toEqual({kind:"applied"});
+    expect(store.state.snapshot).toBe(original);expect(store.snapshotSerializedBytes).toBe(bytes);
+    store.apply(envelope(2,{type:"snapshot",generation:"two",snapshot:snapshot()}));
+    expect(store.apply(envelope(3,{type:"usage_revision_changed",generation:"one",revision:"2"})).kind).not.toBe("applied");
+  });
+
   it("tracks background work independently of main run state and replaces it with checkpoints", () => {
     const store = new NormalizedThreadStore();
     store.apply(envelope(0, { type: "snapshot", generation: "projection-1", snapshot: snapshot() }));
@@ -1243,7 +1253,7 @@ describe("NormalizedThreadStore", () => {
     });
     applyMetadata({
       type: "usage_changed", generation: "projection-1",
-      usage: { context: { usedTokens: 99, windowTokens: 100_000 }, tokens: { output: 999 } },
+      usage: { context: { usedTokens: 99, windowTokens: 100_000 }, counters: { assistantMessages: 999 } },
     });
     applyMetadata({ type: "usage_changed", generation: "projection-1", usage: {} });
     applyMetadata({
@@ -2474,7 +2484,7 @@ describe("NormalizedThreadStore", () => {
         envelope(4, {
           type: "usage_changed",
           generation: "projection-1",
-          usage: { tokens: { total: 10 } },
+          usage: { counters: { totalMessages: 10 } },
         }),
       ),
     ).toEqual({ kind: "ignored" });

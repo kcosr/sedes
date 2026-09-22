@@ -1,3 +1,4 @@
+import type { UsageSink } from "../../usage/contracts.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import type {
@@ -39,6 +40,8 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
   readonly creationIdentity = PROVIDER_ASSIGNED_CREATION_IDENTITY;
   readonly ownership = new CodexConversationOwnershipRegistry();
   readonly #resolveThreadEnvironment: ThreadEnvironmentResolver;
+  readonly #usageSink: UsageSink;
+  readonly #nativeNamespace: string;
   readonly #client: CodexSharedClientFacade;
   readonly #serverRequests: CodexServerRequestRouter;
   readonly #toolProvenanceKey: Uint8Array;
@@ -62,6 +65,8 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
   readonly #onError: (error: unknown) => void;
 
   constructor(input: {
+    readonly usageSink: UsageSink;
+    readonly nativeNamespace: string;
     readonly scope: RequestScope;
     readonly resolveThreadEnvironment?: ThreadEnvironmentResolver;
     readonly instance: AgentBackendInstance;
@@ -84,6 +89,8 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
     this.scope = Object.freeze({ ...input.scope });
     this.#resolveThreadEnvironment = input.resolveThreadEnvironment ?? (async () => Object.freeze({}));
     this.instance = input.instance;
+    this.#usageSink = input.usageSink;
+    this.#nativeNamespace = input.nativeNamespace;
     this.#client = input.client;
     this.#serverRequests = input.serverRequests;
     this.#toolProvenanceKey = copyCodexSubmissionCorrelationKey(
@@ -147,6 +154,8 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
     let driver = this.#drivers.get(connection.id);
     if (!driver) {
       driver = new CodexConversationBackendDriver({
+        usageSink: this.#usageSink,
+        nativeNamespace: this.#nativeNamespace,
         resolveThreadEnvironment: this.#resolveThreadEnvironment,
         instance: this.instance,
         connection,

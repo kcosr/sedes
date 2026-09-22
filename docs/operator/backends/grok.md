@@ -193,3 +193,14 @@ The suite retains the native session and does not use a disposable Grok home.
 Lifecycle, image input, and generated-image output have distinct focused
 surfaces; passing one does not live-verify the others. Maintainers should use
 the [Grok contract and verification map](../../internals/backends/grok.md).
+
+## Recorded usage
+
+The current integration supplies no usable usage accounting. The turn usage
+action and Session stats explain **Usage reporting is not supported**, rather
+than displaying zero tokens or cost. Their database-only read path remains
+available while the backend is offline.
+
+Captured values live in the main Sedes database and remain readable without
+opening a provider session. See [recorded usage](../../user/conversations.md#view-recorded-usage)
+for the UI and [backups](../operations.md#state-upgrades-and-backups) for retention.

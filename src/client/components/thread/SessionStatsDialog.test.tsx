@@ -5,12 +5,20 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionStatsDialog } from "./SessionStatsDialog.js";
 
-afterEach(cleanup);
+import { UsageQueryCache } from "../../stores/UsageQueryCache.js";
+import { usageReport } from "../../stores/usage-test-fixture.js";
+const caches: UsageQueryCache[] = [];
+function cache() {
+  const result = new UsageQueryCache("sedes-thread-1", { getUsage: vi.fn().mockResolvedValue(usageReport({ threadId: "sedes-thread-1", turnId: null, measurementScope: "session", turnState: null, state: "unavailable" })) });
+  caches.push(result); return result;
+}
+afterEach(() => { cleanup(); caches.splice(0).forEach(value => value.dispose()); });
 
 describe("SessionStatsDialog", () => {
   it("shows Saved Agent origin only in stats and marks a missing Agent deleted", () => {
     const view = render(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"
@@ -32,6 +40,7 @@ describe("SessionStatsDialog", () => {
 
     view.rerender(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"
@@ -54,6 +63,7 @@ describe("SessionStatsDialog", () => {
   it("renders only normalized usage values that were reported", () => {
     render(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"
@@ -61,25 +71,22 @@ describe("SessionStatsDialog", () => {
         executionWorkspace={{ kind: "direct" }}
         environmentKind="local"
         usage={{
-          tokens: { input: 1_200, output: 345, total: 1_545 },
           context: { usedTokens: 2_000, windowTokens: 10_000, percent: 20 },
-          cost: { amount: 0.125, currency: "EUR" },
           counters: { userMessages: 2, assistantMessages: 3, toolCalls: 4 },
         }}
       />,
     );
 
-    expect(screen.getByText("1,545")).toBeVisible();
     expect(screen.getByText("2,000 / 10,000")).toBeVisible();
     expect(screen.getByText("20.00%")).toBeVisible();
-    expect(screen.getByText(/€|EUR/)).toBeVisible();
     expect(screen.queryByText("Cache read")).not.toBeInTheDocument();
-    expect(screen.queryByText("Unavailable")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Recorded session usage" })).toBeVisible();
   });
 
   it("shows an explicit empty state instead of fabricated zeroes", () => {
     render(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"
@@ -89,27 +96,28 @@ describe("SessionStatsDialog", () => {
       />,
     );
     expect(
-      screen.getByText("This agent has not reported session usage yet."),
+      screen.getByText("Live context and transcript counters are unavailable."),
     ).toBeVisible();
     expect(screen.queryByText("0")).not.toBeInTheDocument();
   });
 
-  it("renders request-only counters and omits an undefined zero-window percentage", () => {
+  it("renders transcript counters and omits an undefined zero-window percentage", () => {
     render(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"
         executionWorkspace={{ kind: "direct" }}
         environmentKind="local"
         usage={{
-          counters: { requests: 3 },
+          counters: { userMessages: 3 },
           context: { usedTokens: 0, windowTokens: 0 },
         }}
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "Requests" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Messages" })).toBeVisible();
     expect(screen.getByText("3")).toBeVisible();
     expect(screen.queryByText(/NaN|Infinity/)).not.toBeInTheDocument();
     expect(screen.queryByText("Context used")).not.toBeInTheDocument();
@@ -125,6 +133,7 @@ describe("SessionStatsDialog", () => {
           Thread actions
         </button>
         <SessionStatsDialog
+        usageCache={cache()}
           open={open}
           onOpenChange={vi.fn()}
           sedesThreadId="sedes-thread-1"
@@ -149,6 +158,7 @@ describe("SessionStatsDialog", () => {
     });
     render(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"
@@ -177,6 +187,7 @@ describe("SessionStatsDialog", () => {
     });
     render(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"
@@ -223,6 +234,7 @@ describe("SessionStatsDialog", () => {
     });
     render(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"

@@ -15819,3 +15819,12 @@ tr.diff-hunk td {
 @container settings (max-width: 380px) {
   .settings-view-heading { display: none; }
 }
+
+/* Persisted accounting uses the same compact overlay as context occupancy. */
+.turn-usage-popover { width: min(340px, calc(100vw - 24px)); }
+.recorded-usage { display: grid; gap: 6px; min-width: 0; }
+.recorded-usage p { margin: 0; overflow-wrap: anywhere; }
+.recorded-usage-values { display: grid; gap: 4px; margin: 0; font-variant-numeric: tabular-nums; }
+.recorded-usage-values > div { display: flex; justify-content: space-between; gap: 14px; }
+.recorded-usage-values dd { margin: 0; text-align: end; }
+.session-recorded-usage { padding-block: 12px; }

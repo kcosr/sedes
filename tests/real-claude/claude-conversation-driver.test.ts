@@ -1,3 +1,4 @@
+import { type UsageObservation } from "../../src/server/usage/contracts.js";
 import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
 import { claudeResultUserMessageIds } from "../../src/server/backends/claude/claude-result-lifecycle.js";
 import { claudeSteerOperationsMigration } from "../../src/server/db/migrations/102-claude-steer-operations.js";
@@ -286,7 +287,10 @@ describe.sequential("real Claude subscription driver", () => {
     database.exec(claudeTaskLifecycleMigration.sql);
   database.exec(claudeSteerOperationsMigration.sql);
     const settings = new ClaudeThreadRepository(database);
+    const usageObservations: UsageObservation[] = [];
     const driver = new ClaudeConversationBackendDriver({
+      usage: {open: () => ({registerTurns: () => {}, capture: (entries) => { usageObservations.push(...entries); return true; }, gap: () => {}, seal: () => {}})},
+      nativeNamespace: "claude-test-native",
       instance,
       connection,
       runtimeClient: new ClaudeSdkRuntimeAdapter(sdk),
@@ -492,8 +496,8 @@ describe.sequential("real Claude subscription driver", () => {
         finalAssistantText(settled.snapshot.itemsById),
       );
       const usage = await firstHandle.usage();
-      expect(usage.tokens?.input).toBeGreaterThan(0);
-      expect(usage.tokens?.output).toBeGreaterThan(0);
+      expect(usageObservations.some((observation) => observation.facts.some((fact) => BigInt(fact.tokens.input ?? "0") > 0n))).toBe(true);
+      expect(usageObservations.some((observation) => observation.facts.some((fact) => BigInt(fact.tokens.output ?? "0") > 0n))).toBe(true);
       expect(usage.counters?.assistantMessages).toBeGreaterThan(0);
       expect(sdk.persistentQueryOptions).not.toHaveLength(0);
       expect(
@@ -543,7 +547,7 @@ describe.sequential("real Claude subscription driver", () => {
       expect(finalAssistantText(reopened.snapshot.itemsById)).toBe(
         finalAssistantText(afterSteer.snapshot.itemsById),
       );
-      expect((await reopenedHandle.usage()).tokens?.output).toBeGreaterThan(0);
+      expect((await reopenedHandle.usage()).counters?.assistantMessages).toBeGreaterThan(0);
       expect(Object.values(reopened.snapshot.turnsById).find(turn => turn.completionCorrelations?.includes(steerId))?.status).toBe("completed");
     } finally {
       await firstHandle?.close();

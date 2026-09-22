@@ -1109,15 +1109,32 @@ scrubbing, not raw errors, provider payloads, stacks, or stderr. This is not a
 claim that arbitrary provider text is secret-free. Failed-turn diagnostics remain
 visible in both activity modes without exposing hidden operation details.
 
-Provider-billed work outside an assistant response must update normalized
-usage without fabricating a message or changing conversation run state.
-Preserve the provider's accounting scope across live updates and snapshots;
-omit request counts when native records do not establish their cardinality.
-Pi implements this for native usage entries, including idle cache warming.
-Codex, Claude, and Grok keep their existing native usage projections and do
-not interpret Pi usage entries or expose Pi cache-warming policy. Provider
-system prompts and tool declarations remain private even when stored in the
-native transcript.
+Provider-billed work outside an assistant response must enter the normalized
+[`UsageSink`](../../src/server/usage/contracts.ts) without fabricating a message
+or changing run state. Capture native evidence before lossy presentation, under
+admitted tenant/principal/thread ownership and a native namespace independent of
+connection aliases. A reconnect is not a new accounting epoch. Retain metric
+presence, normalization version, model/provider dimensions, and coverage; absent
+values are not zero and native correlations do not prove request cardinality.
+
+Pi, Codex, and Claude implement durable capture through this boundary. Grok
+explicitly declares `usageAccounting: "unsupported"`. Live `UsageSnapshot` and
+`usage_changed` contain only context occupancy and transcript counters; token,
+cost, and request totals come solely from accounting reads. Query-wide cumulative
+facts cover lower-scope evidence rather than being added to it. Turn allocations
+must establish native identity and attributable intervals; session completeness
+never silently upgrades turn completeness. Copied ancestry requires scoped proof.
+
+Register visible normalized turn stubs with ordinary snapshot/page loading.
+Accounting failure must not retry submitted provider work or break an otherwise
+valid transcript read. Retained native replay/history may repair evidence; do not
+add an accounting sidecar spool or silently scan private rollout logs. Generation-
+bound `usage_revision_changed` is a transcript no-op and only a refetch hint for
+visible usage views. Never create or wait for an actor solely to publish it.
+
+Provider system prompts and tool declarations remain private even when stored
+in the native transcript. Accounting retains bounded normalized measurements and
+provenance, not raw transcript, request bodies, credentials, or tool output.
 
 Ordinary user and assistant text is authoritative conversation content. Preserve
 it exactly with the message-text contract in history, live deltas, terminal

@@ -1,3 +1,4 @@
+import { UsageService } from "../../src/server/usage/usage-service.js";
 import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
@@ -15,6 +16,7 @@ function fixture() {
     throw new Error("route_not_configured_for_test");
   };
   const app = createNormalizedApp({
+    usage: new UsageService(database),
     workpads: {} as never,
     questions: {} as never,
     cannedPrompts: new CannedPromptService(

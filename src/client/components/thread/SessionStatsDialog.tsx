@@ -1,3 +1,5 @@
+import { RecordedUsage } from "./RecordedUsage.js";
+import type { UsageQueryCache } from "../../stores/UsageQueryCache.js";
 import * as Dialog from "@radix-ui/react-dialog";
 import type {
   NormalizedThreadExecutionWorkspace,
@@ -16,6 +18,8 @@ export function SessionStatsDialog({
   executionWorkspace,
   environmentKind,
   usage,
+  usageCache,
+  liveAvailable = true,
   returnFocusRef,
 }: {
   open: boolean;
@@ -26,6 +30,8 @@ export function SessionStatsDialog({
   executionWorkspace: NormalizedThreadExecutionWorkspace;
   environmentKind: "local" | "ssh" | "outbound";
   usage: UsageSnapshot;
+  usageCache: UsageQueryCache;
+  liveAvailable?: boolean;
   /**
    * Radix returns dialog focus to `Dialog.Trigger`; this dialog is controlled
    * (opened from a menu row that unmounts with its menu), so without an
@@ -52,7 +58,7 @@ export function SessionStatsDialog({
         >
           <Dialog.Title>Session stats</Dialog.Title>
           <Dialog.Description id="session-stats-description">
-            Session identifiers and current totals reported by this agent.
+            Session identifiers, recorded usage, and live context.
           </Dialog.Description>
           <Dialog.Close asChild>
             <Button
@@ -109,7 +115,12 @@ export function SessionStatsDialog({
               />
             </section>
           )}
-          <StatsGrid usage={usage} />
+          <section className="session-recorded-usage"><h3>Recorded session usage</h3>
+            {open && <RecordedUsage cache={usageCache} turnId={null} />}
+          </section>
+          <section><h3>Live context and transcript</h3>
+            {liveAvailable ? <StatsGrid usage={usage} /> : <p>Live context and transcript counters are unavailable while disconnected.</p>}
+          </section>
           <div className="dialog-actions">
             <Dialog.Close asChild>
               <Button variant="secondary">Close</Button>
@@ -184,28 +195,21 @@ function StatsGrid({ usage }: { usage: UsageSnapshot }): React.JSX.Element {
     isReported(counters?.totalMessages) ||
     isReported(counters?.userMessages) ||
     isReported(counters?.assistantMessages);
-  const hasTokens =
-    usage.tokens !== undefined && Object.values(usage.tokens).some(isReported);
-  const hasUsage = usage.cost !== undefined || usage.context !== undefined;
+  const hasUsage = usage.context !== undefined;
   const contextPercent =
     usage.context?.percent ??
     (usage.context?.usedTokens === undefined || usage.context.windowTokens === 0
       ? undefined
       : (usage.context.usedTokens / usage.context.windowTokens) * 100);
-  if (!hasCounters && !hasTokens && !hasUsage) {
+  if (!hasCounters && !hasUsage) {
     return (
       <p className="session-stats-empty">
-        This agent has not reported session usage yet.
+        Live context and transcript counters are unavailable.
       </p>
     );
   }
   return (
     <div className="session-stats-grid">
-      {isReported(counters?.requests) && (
-        <StatGroup title="Requests">
-          <OptionalStat label="Total" value={counters?.requests} />
-        </StatGroup>
-      )}
       {hasMessages && (
         <StatGroup title="Messages">
           <OptionalStat label="Total" value={counters?.totalMessages} />
@@ -220,23 +224,8 @@ function StatsGrid({ usage }: { usage: UsageSnapshot }): React.JSX.Element {
           <OptionalStat label="Compactions" value={counters?.compactions} />
         </StatGroup>
       )}
-      {hasTokens && (
-        <StatGroup title="Tokens">
-          <OptionalStat label="Total" value={usage.tokens?.total} />
-          <OptionalStat label="Input" value={usage.tokens?.input} />
-          <OptionalStat label="Output" value={usage.tokens?.output} />
-          <OptionalStat label="Cache read" value={usage.tokens?.cacheRead} />
-          <OptionalStat label="Cache write" value={usage.tokens?.cacheWrite} />
-        </StatGroup>
-      )}
       {hasUsage && (
         <StatGroup title="Usage">
-          {usage.cost && (
-            <Stat
-              label="Cost"
-              value={currency(usage.cost.amount, usage.cost.currency)}
-            />
-          )}
           {usage.context && (
             <Stat
               label="Context"
@@ -301,13 +290,4 @@ function number(value: number | undefined): string {
   return value === undefined
     ? "Unavailable"
     : new Intl.NumberFormat().format(value);
-}
-
-function currency(value: number, currencyCode: string): string {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: currencyCode,
-    minimumFractionDigits: 4,
-    maximumFractionDigits: 6,
-  }).format(value);
 }

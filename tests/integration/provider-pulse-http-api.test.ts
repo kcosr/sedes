@@ -17,6 +17,7 @@ function fixture(
     throw new Error("route_not_configured_for_test");
   };
   const app = createNormalizedApp({
+    usage: {read: () => { throw new Error("usage_not_configured_in_fixture"); }},
     workpads: {} as never,
     questions: {} as never,
     cannedPrompts: {} as never,

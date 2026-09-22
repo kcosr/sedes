@@ -27,12 +27,15 @@ import type { PiIsolatedWorkspaceResolver } from "./pi-isolated-workspace.js";
  * registry resolution must share the handle ownership map; constructing a new
  * driver per request would permit two writers for one native session.
  */
+import type { UsageSink } from "../../usage/contracts.js";
+
 export class PiBackendDriverFactory implements BackendDriverFactory {
   readonly scope: RequestScope;
   readonly instance: AgentBackendInstance;
   readonly connectionKinds = ["pi_sdk"] as const;
   readonly supportsConversationCreation = true;
   readonly creationIdentity = APPLICATION_ASSIGNED_CREATION_IDENTITY;
+  readonly #usage: UsageSink;
   readonly #resolveThreadEnvironment: ThreadEnvironmentResolver;
   readonly #store: PiSessionStore;
   readonly #sessionFactory: PiSdkSessionFactory;
@@ -50,6 +53,7 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
   readonly #modelPolicy: CompiledBackendModelPolicy;
 
   constructor(input: {
+    readonly usage: UsageSink;
     readonly resolveThreadEnvironment?: ThreadEnvironmentResolver;
     readonly instance: AgentBackendInstance;
     readonly scope: RequestScope;
@@ -69,6 +73,7 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
     readonly now?: PiDriverOptions["now"];
     readonly modelPolicy: CompiledBackendModelPolicy;
   }) {
+    this.#usage = input.usage;
     this.scope = input.scope;
     this.#resolveThreadEnvironment = input.resolveThreadEnvironment ?? (async () => Object.freeze({}));
     this.instance = input.instance;
@@ -111,6 +116,7 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
     let driver = this.#drivers.get(connection.id);
     if (!driver) {
       driver = new PiConversationBackendDriver({
+        usage: this.#usage,
         resolveThreadEnvironment: this.#resolveThreadEnvironment,
         instance: this.instance,
         connection,

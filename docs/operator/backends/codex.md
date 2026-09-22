@@ -383,3 +383,23 @@ transport, generated-image path, or TUI.
 
 For contributor-facing protocol and lifecycle contracts, continue with
 [Codex backend internals](../../internals/backends/codex.md).
+
+## Recorded usage
+
+Codex records cumulative `thread/tokenUsage/updated` observations on main.
+Repeated totals replace checkpoints rather than add another charge. Per-turn
+values are conservative differences between continuous, attributable checkpoints;
+a newly observed turn or completion event alone does not prove a final boundary.
+The latest-call counter is retained as lower-scope evidence, not the whole turn.
+
+Native history provides no usage backfill. A later checkpoint can recover session
+totals without recovering older turns. Reconnect does not prove a reset; unresolved
+counter regression retains the last valid value and shows reconciliation incomplete.
+Copied fork baselines are not newly charged. Usage notifications provide no model
+or provider attribution, so those dimensions remain unknown. Native child-thread
+usage is not captured separately and its inclusion in parent totals is unproven.
+No billing cost is fabricated from token counts.
+
+Captured values live in the main Sedes database and remain readable without
+opening a provider session. See [recorded usage](../../user/conversations.md#view-recorded-usage)
+for the UI and [backups](../operations.md#state-upgrades-and-backups) for retention.

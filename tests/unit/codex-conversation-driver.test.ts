@@ -1,3 +1,4 @@
+import { type UsageSink, type UsageObservation, NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { RetainedRuntimeLifecycle } from "../../src/server/backends/retained-runtime-lifecycle.js";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
@@ -795,8 +796,11 @@ function driver(
   composerSkillPreferences?: CodexComposerSkillPreferenceReader,
   onError?: (error: unknown) => void,
   outputArtifacts = createInMemoryOutputArtifactPublisher(),
+  usageSink: UsageSink = NO_USAGE_SINK,
 ) {
   return new CodexConversationBackendDriver({
+    usageSink,
+    nativeNamespace: "test-codex-store",
     instance,
     connection: profile,
     client: harness.facade,
@@ -7450,6 +7454,36 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it("captures native accounting before presentation and registers visible turns", async () => {
+    const observations: UsageObservation[] = [];
+    const registerTurns = vi.fn();
+    const sink: UsageSink = { open: vi.fn(() => ({ registerTurns,
+      capture: (entries: readonly UsageObservation[]) => { observations.push(...entries); return true; }, gap: vi.fn(), seal: vi.fn() })) };
+    const harness = new RpcHarness();
+    const target = driver(harness, connection, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, sink);
+    const handle = await attachIdle(harness, target);
+    await establish(harness, handle);
+    for (const total of [100, 150]) {
+      harness.notify("thread/tokenUsage/updated", {
+        threadId: "thread-1", turnId: "turn-0", tokenUsage: {
+          total: { inputTokens: total, outputTokens: 0, totalTokens: total,
+            cachedInputTokens: 5, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+          last: { inputTokens: 20, outputTokens: 0, totalTokens: 20,
+            cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+          modelContextWindow: 1000,
+        },
+      });
+    }
+    expect(registerTurns).toHaveBeenCalled();
+    expect(observations).toHaveLength(2);
+    expect(observations[1]!.facts).toContainEqual(expect.objectContaining({ kind: "turn_aggregate",
+      sessionContribution: "none", tokens: expect.objectContaining({ input: "50" }) }));
+    expect(await handle.usage()).toEqual({ context: { usedTokens: 20, windowTokens: 1000, percent: 2 } });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
   it("retains token usage replayed immediately after the resume response", async () => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
@@ -7488,7 +7522,6 @@ describe("CodexConversationHandle", () => {
     ).toHaveLength(1);
     const expectedUsage = {
       context: { usedTokens: 12, windowTokens: 100, percent: 12 },
-      tokens: { input: 20, output: 10, total: 30 },
     };
     expect((await handle.readCurrent()).usage).toMatchObject(expectedUsage);
     expect(await handle.usage()).toMatchObject(expectedUsage);
@@ -15642,6 +15675,8 @@ describe("CodexBackendDriverFactory", () => {
       reattachThread: async () => undefined, detachThread,
     } : undefined, residency);
     const factory = new CodexBackendDriverFactory({
+    usageSink: NO_USAGE_SINK,
+    nativeNamespace: "test-codex-store",
       scope,
       instance,
       client: harness.facade,
@@ -15753,6 +15788,8 @@ describe("CodexBackendDriverFactory", () => {
     const harness = new RpcHarness();
     const allowed = [{ modelIds: ["gpt-5.6"] }];
     const factory = new CodexBackendDriverFactory({
+    usageSink: NO_USAGE_SINK,
+    nativeNamespace: "test-codex-store",
       scope,
       instance,
       client: harness.facade,

@@ -564,6 +564,9 @@ function applyIncremental(
         ),
       };
       break;
+    case "usage_revision_changed":
+      next = snapshot;
+      break;
     case "usage_changed":
       next = { ...snapshot, usage: event.usage };
       break;

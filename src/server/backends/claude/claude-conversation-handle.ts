@@ -1,3 +1,5 @@
+import { ClaudeUsageAccounting } from "./claude-usage-accounting.js";
+import type { UsageSink } from "../../usage/contracts.js";
 import { turnFailure } from "../turn-failure.js";
 import type { ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { claudeMessageIsChildOwned } from "./claude-message-scope.js";
@@ -73,7 +75,6 @@ import { claudeSubmissionContent } from "./claude-native-images.js";
 import type {
   ClaudeTerminalStatus,
   ClaudeThreadRepository,
-  ClaudeUsageLedger,
 } from "./claude-thread-repository.js";
 import type { AgentToolCliAvailability } from "../module.js";
 import type { AgentToolPresentationMode } from "../../../shared/protocol/conversation.js";
@@ -133,6 +134,8 @@ export interface ClaudeEffortEvidence {
 }
 
 export interface ClaudeConversationHandleInput {
+  readonly usage: UsageSink;
+  readonly nativeNamespace: string;
   readonly binding: ConversationBinding;
   readonly canonicalWorkspacePath: string;
   readonly workspaceId: string;
@@ -183,6 +186,9 @@ export interface ClaudeConversationHandleInput {
 
 /** One attached Sedes conversation over one warm official Agent SDK query. */
 export class ClaudeConversationHandle implements ConversationHandle {
+  readonly #usageAccounting: ClaudeUsageAccounting;
+  readonly #usageTurnByInputUuid = new Map<string, string>();
+  #inheritedUsage: ClaudeHistoryProjection["inheritedUsage"];
   readonly binding: ConversationBinding;
   readonly #canonicalWorkspacePath: string;
   readonly #workspaceId: string;
@@ -240,7 +246,6 @@ export class ClaudeConversationHandle implements ConversationHandle {
   #projectionTurnOffset = 0;
   #projectionUserMessageOrdinalBase = 0;
   #historyCursorNonce = randomBytes(16).toString("base64url");
-  #baselineUsage: UsageSnapshot;
   #usage: UsageSnapshot;
   #runState: BackendConversationSnapshot["runState"];
   #effectiveModel: string | undefined;
@@ -266,6 +271,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   constructor(input: ClaudeConversationHandleInput) {
     this.binding = input.binding;
+    this.#usageAccounting = new ClaudeUsageAccounting({sink: input.usage, binding: input.binding, nativeNamespace: input.nativeNamespace});
     this.#canonicalWorkspacePath = input.canonicalWorkspacePath;
     this.#workspaceId = input.workspaceId;
     this.#opaqueBindingDetail = input.opaqueBindingDetail;
@@ -307,16 +313,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#messages = [];
     this.#projectionMessages = [];
     this.#projection = this.#projectLatest(this.#messages);
-    this.#baselineUsage = mergeUsage(
-      usageLedgerSnapshot(
-        this.#settings.findUsageLedger(
-          this.#scope,
-          input.binding.applicationThreadId,
-        ),
-      ),
-      this.#projection.usage ?? {},
-    );
-    this.#usage = this.#baselineUsage;
+    this.#usage = this.#projection.usage ?? {};
     this.#runState = this.#projection.snapshot.runState;
     this.#operationalNotices = new ClaudeOperationalNoticeProjector(
       input.binding.backendConversationId,
@@ -390,7 +387,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
             this.#emitProjectionDelta(previous, this.#projection.snapshot);
           }
         }
+        this.#usageAccounting.beginDelivery();
         await this.#consume(message);
+        return this.#usageAccounting.deliveryCommitted ? undefined : false;
       },
       onFailure: (error) => {
         if (
@@ -404,6 +403,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       },
     });
     this.#ready = this.#session.start().then(async (initialization) => {
+      this.#usageAccounting.admitQuery(this.#session.startupProbeUuid, this.#session.reattached === true);
       if (this.#session.backgroundActivity) {
         if (this.#session.pendingBackgroundTaskIds === undefined) throw new Error("claude_background_attachment_state_incomplete");
         this.#backgroundActivity.restore(this.#session.backgroundActivity, this.#session.pendingBackgroundTaskIds);
@@ -549,6 +549,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
               ...selectionInput,
               terminalReceipts,
             });
+      this.#usageAccounting.registerTurns(Object.values(selected.page.turnsById));
       return {
         ...selected.page,
         ...(selected.previousTurnIndex !== undefined
@@ -684,7 +685,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
       interactionKinds: ["confirmation", "decision", "questionnaire"],
       // The SDK's dollar estimate is API-equivalent telemetry, not a charge
       // against the externally authenticated subscription plan.
-      usageSections: ["tokens", "counters"],
+      usageSections: ["counters"],
+      usageAccounting: "supported",
       effectiveSettings: {
         ...(this.#effectiveModel
           ? {
@@ -1226,6 +1228,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   async close(options?: { readonly reason: "evicted" }): Promise<void> {
     if (this.#closed) return this.#closePromise;
     this.#closed = true;
+    this.#usageAccounting.close();
     // Detaching first fences remote permission callbacks before the local
     // interaction bridge settles its waiters during main-server shutdown.
     // Projection invalidation may already have detached the runtime; local
@@ -1296,6 +1299,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       this.#emit({ type: "notice", notice: operationalNotice });
     }
     if (message.type === "conversation_reset") {
+      this.#usageAccounting.reset();
       this.#invalidateProjection("claude_conversation_reset_unsupported");
       return;
     }
@@ -1396,6 +1400,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       this.#projectionMessages.push(sessionMessage);
       this.#refreshProjection();
       this.#usage = mergeUsage(this.#projection.usage ?? {}, this.#usage);
+      this.#captureHistoryUsage("live");
       this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot);
       if (message.type === "user" && [...this.#projection.nativeUserMessageUuidByBackendTurnId.values()].includes(message.uuid!)) {
         this.#setRunState("running");
@@ -1492,17 +1497,22 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#startupSupersededMessageUuids.clear();
     this.#initialHistoryLoaded = true;
     this.#refreshProjection(true);
-    this.#baselineUsage = mergeUsage(
-      this.#projection.usage ?? {},
-      usageLedgerSnapshot(
-        this.#settings.findUsageLedger(
-          this.#scope,
-          this.binding.applicationThreadId,
-        ),
-      ),
-    );
-    this.#usage = mergeUsage(this.#baselineUsage, this.#usage);
+    this.#usage = this.#projection.usage ?? {};
+    this.#captureHistoryUsage();
     this.#runState = this.#projection.snapshot.runState;
+  }
+
+  #captureHistoryUsage(provenance: "live" | "history" = "history"): void {
+    this.#inheritedUsage = this.#projection.inheritedUsage ?? this.#inheritedUsage;
+    this.#usageAccounting.registerTurns(this.#projection.usageTurns, this.#inheritedUsage);
+    for (const [turnId, uuid] of this.#projection.nativeUserMessageUuidByBackendTurnId) this.#usageTurnByInputUuid.set(uuid, turnId);
+    for (const turn of this.#projection.usageTurns) {
+      for (const correlation of turn.completionCorrelations ?? []) this.#usageTurnByInputUuid.set(correlation, turn.backendTurnId);
+    }
+    for (const message of this.#messages) {
+      const turnId = this.#projection.backendTurnIdByMessageUuid.get(message.uuid);
+      if (turnId && !this.#inheritedUsage?.turns.some(turn => turn.backendTurnId === turnId)) this.#usageAccounting.message(message, turnId, provenance);
+    }
   }
 
   #invalidateProjection(code: string): BackendError {
@@ -1519,6 +1529,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#partialMessageId = undefined;
     this.#partialMessageSourceOrderBase = undefined;
     this.#projectionInvalidated = true;
+    this.#usageAccounting.close();
     this.#invalidateBackgroundActivity();
     this.#emit({
       type: "resnapshot_required",
@@ -1540,7 +1551,23 @@ export class ClaudeConversationHandle implements ConversationHandle {
     return error;
   }
 
+  #captureResultUsage(message: SDKResultMessage): void {
+    this.#inheritedUsage = this.#projection.inheritedUsage ?? this.#inheritedUsage;
+    this.#usageAccounting.registerTurns(this.#projection.usageTurns, this.#inheritedUsage);
+    for (const [turnId, uuid] of this.#projection.nativeUserMessageUuidByBackendTurnId) this.#usageTurnByInputUuid.set(uuid, turnId);
+    for (const turn of this.#projection.usageTurns) {
+      for (const correlation of turn.completionCorrelations ?? []) this.#usageTurnByInputUuid.set(correlation, turn.backendTurnId);
+    }
+    const turns = new Set(claudeResultUserMessageIds(message).flatMap((uuid) => {
+      const id = this.#usageTurnByInputUuid.get(uuid); return id ? [id] : [];
+    }));
+    if (turns.size === 1) this.#usageAccounting.result(message, [...turns][0]!);
+  }
+
   #consumeResult(message: SDKResultMessage): void {
+    this.#usageAccounting.admitQuery(this.#session.startupProbeUuid, this.#session.reattached === true);
+    this.#usageAccounting.pipeline(message);
+    this.#captureResultUsage(message);
     const activeId = this.#activeBackendTurnId();
     // Persistent output is correlated by the owner's exact user-message event.
     // A send awaiting admission must not hide a terminal result for older work.
@@ -1553,6 +1580,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const operationId = this.#resultSubmissionOperationId(message);
     if (operationId) this.#materializePendingUser(operationId);
     const backendTurnId = this.#activeBackendTurnId();
+    this.#captureResultUsage(message);
     const priorReceipt = backendTurnId
       ? this.#settings.findTerminalReceipt(this.#scope, {
           applicationThreadId: this.binding.applicationThreadId,
@@ -1566,36 +1594,6 @@ export class ClaudeConversationHandle implements ConversationHandle {
       this.#setRunState(priorReceipt.status === "failed" ? "failed" : "idle");
       return;
     }
-    const projected = this.#projection.usage ?? {};
-    const modelUsage = aggregateModelUsage(message.modelUsage);
-    this.#usage = mergeUsage(
-      usageSnapshotSchema.parse({
-        ...projected,
-        tokens: addTokenUsage(this.#baselineUsage.tokens, modelUsage),
-        counters: {
-          ...projected.counters,
-          requests: safeUsageAdd(
-            this.#baselineUsage.counters?.requests ?? 0,
-            message.num_turns,
-          ),
-        },
-      }),
-      this.#usage,
-    );
-    const persistedUsage = this.#settings.writeUsageLedger(
-      this.#scope,
-      this.binding.applicationThreadId,
-      {
-        inputTokens: this.#usage.tokens?.input ?? 0,
-        outputTokens: this.#usage.tokens?.output ?? 0,
-        cacheReadTokens: this.#usage.tokens?.cacheRead ?? 0,
-        cacheWriteTokens: this.#usage.tokens?.cacheWrite ?? 0,
-        requestCount: this.#usage.counters?.requests ?? 0,
-        now: this.#now(),
-      },
-    );
-    this.#usage = mergeUsage(usageLedgerSnapshot(persistedUsage), this.#usage);
-    this.#emit({ type: "usage_changed", usage: this.#usage });
     const terminalStatus = terminalReceiptStatus(message);
     if (terminalStatus) {
       this.#terminalResultRevision++;
@@ -1779,6 +1777,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
       turnOffset,
       userMessageOrdinalBase,
     });
+    this.#inheritedUsage = this.#projection.inheritedUsage ?? this.#inheritedUsage;
+    this.#usageAccounting.registerTurns(this.#projection.usageTurns, this.#inheritedUsage);
     const retainedStart =
       this.#projection.window.retainedNativeMessageStartIndex;
     const retainedMessages = messages.slice(retainedStart);
@@ -2265,6 +2265,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   #fail(error: unknown): void {
     if (this.#closed || this.#projectionInvalidated) return;
+    this.#usageAccounting.close();
     this.#invalidateBackgroundActivity();
     this.#setRunState("disconnected");
     this.#emit({
@@ -2470,7 +2471,6 @@ function mergeUsage(
   prior: UsageSnapshot,
 ): UsageSnapshot {
   const counterKeys = [
-    "requests",
     "userMessages",
     "assistantMessages",
     "toolCalls",
@@ -2481,11 +2481,6 @@ function mergeUsage(
   return usageSnapshotSchema.parse({
     ...((projected.context ?? prior.context)
       ? { context: projected.context ?? prior.context }
-      : {}),
-    ...((projected.tokens ?? prior.tokens)
-      ? {
-          tokens: mergeTokenUsage(projected.tokens, prior.tokens),
-        }
       : {}),
     ...((projected.counters ?? prior.counters)
       ? {
@@ -2500,88 +2495,8 @@ function mergeUsage(
           ),
         }
       : {}),
-    ...(projected.cost || prior.cost
-      ? {
-          cost:
-            projected.cost &&
-            prior.cost &&
-            projected.cost.currency === prior.cost.currency
-              ? projected.cost.amount >= prior.cost.amount
-                ? projected.cost
-                : prior.cost
-              : (projected.cost ?? prior.cost),
-        }
-      : {}),
+
   });
-}
-
-function usageLedgerSnapshot(
-  ledger: ClaudeUsageLedger | undefined,
-): UsageSnapshot {
-  if (!ledger) return {};
-  const total = safeUsageAdd(
-    safeUsageAdd(ledger.inputTokens, ledger.outputTokens),
-    safeUsageAdd(ledger.cacheReadTokens, ledger.cacheWriteTokens),
-  );
-  return usageSnapshotSchema.parse({
-    tokens: {
-      input: ledger.inputTokens,
-      output: ledger.outputTokens,
-      cacheRead: ledger.cacheReadTokens,
-      cacheWrite: ledger.cacheWriteTokens,
-      total,
-    },
-    counters: { requests: ledger.requestCount },
-  });
-}
-
-function mergeTokenUsage(
-  left: UsageSnapshot["tokens"],
-  right: UsageSnapshot["tokens"],
-): NonNullable<UsageSnapshot["tokens"]> {
-  const input = Math.max(left?.input ?? 0, right?.input ?? 0);
-  const output = Math.max(left?.output ?? 0, right?.output ?? 0);
-  const cacheRead = Math.max(left?.cacheRead ?? 0, right?.cacheRead ?? 0);
-  const cacheWrite = Math.max(left?.cacheWrite ?? 0, right?.cacheWrite ?? 0);
-  return {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    total: Math.max(
-      left?.total ?? 0,
-      right?.total ?? 0,
-      safeUsageAdd(
-        safeUsageAdd(input, output),
-        safeUsageAdd(cacheRead, cacheWrite),
-      ),
-    ),
-  };
-}
-
-function aggregateModelUsage(
-  usage: SDKResultMessage["modelUsage"],
-): NonNullable<UsageSnapshot["tokens"]> {
-  let input = 0;
-  let output = 0;
-  let cacheRead = 0;
-  let cacheWrite = 0;
-  for (const model of Object.values(usage)) {
-    input = safeUsageAdd(input, model.inputTokens);
-    output = safeUsageAdd(output, model.outputTokens);
-    cacheRead = safeUsageAdd(cacheRead, model.cacheReadInputTokens);
-    cacheWrite = safeUsageAdd(cacheWrite, model.cacheCreationInputTokens);
-  }
-  return {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    total: safeUsageAdd(
-      safeUsageAdd(input, output),
-      safeUsageAdd(cacheRead, cacheWrite),
-    ),
-  };
 }
 
 const startupFailureMessages: Record<SDKStartupFailureReason, string> = {
@@ -2637,37 +2552,6 @@ function terminalReceiptStatus(
     return "interrupted";
   }
   return message.is_error ? "failed" : "completed";
-}
-
-function addTokenUsage(
-  baseline: UsageSnapshot["tokens"],
-  current: NonNullable<UsageSnapshot["tokens"]>,
-): NonNullable<UsageSnapshot["tokens"]> {
-  const input = safeUsageAdd(baseline?.input ?? 0, current.input ?? 0);
-  const output = safeUsageAdd(baseline?.output ?? 0, current.output ?? 0);
-  const cacheRead = safeUsageAdd(
-    baseline?.cacheRead ?? 0,
-    current.cacheRead ?? 0,
-  );
-  const cacheWrite = safeUsageAdd(
-    baseline?.cacheWrite ?? 0,
-    current.cacheWrite ?? 0,
-  );
-  return {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    total: safeUsageAdd(
-      safeUsageAdd(input, output),
-      safeUsageAdd(cacheRead, cacheWrite),
-    ),
-  };
-}
-
-function safeUsageAdd(left: number, right: number): number {
-  if (!Number.isFinite(right) || right < 0) return left;
-  return Math.min(Number.MAX_SAFE_INTEGER, left + Math.floor(right));
 }
 
 function rememberBounded<K, V>(map: Map<K, V>, key: K, value: V): void {

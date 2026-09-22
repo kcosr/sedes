@@ -4,7 +4,16 @@
 
 ### Breaking Changes
 
+- Durable usage accounting replaces accumulated token/cost values in live
+  snapshots. Requires matching browser and packaged clients using protocol 118.
+  Migration preserves old Claude totals separately with unknown coverage.
+
 ### Added
+
+- Record Pi, Codex, and Claude usage in the main database, with per-turn
+  usage/cost details below replies and offline session totals in Session stats.
+  Counts retain model/provider attribution, estimates, and incomplete-coverage
+  labels; Grok reports accounting as unsupported.
 
 ### Changed
 

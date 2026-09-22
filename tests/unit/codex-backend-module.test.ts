@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import path from "node:path";
 import { lstat, mkdir, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -230,7 +231,7 @@ function context(
     }),
     toolProvenanceKey: new Uint8Array(32),
     agentTools: new LateBoundBackendAgentToolFacade(),
-    outputArtifacts: createInMemoryOutputArtifactPublisher(),
+    usage: NO_USAGE_SINK, outputArtifacts: createInMemoryOutputArtifactPublisher(),
     agentToolSourceCapabilities,
     agentToolCli: {
       availability: "available",

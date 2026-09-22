@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { describe, expect, it, vi } from "vitest";
+import { UsageService } from "../../src/server/usage/usage-service.js";
 import { NormalizedThreadStore } from "../../src/client/stores/NormalizedThreadStore.js";
 import {
   APPLICATION_ASSIGNED_CREATION_IDENTITY,
@@ -197,7 +198,7 @@ const presentationProvider: ThreadBackendPresentationProvider = {
           reason: { text: "Branching is unavailable in this fixture." },
         },
         interactionKinds: [],
-        usageSections: [],
+        usageAccounting: "supported" as const, usageSections: [],
         effectiveSettings: {},
       },
       settings: { revision: 0, values: [] },
@@ -256,7 +257,9 @@ describe("in-memory canonical thread stream", () => {
       ...profile,
       enabled: profile.enabled === 1,
     };
+    const usage = new UsageService(database);
     const driver = new InMemoryConformanceDriver({
+      usage,
       instance,
       connection,
       scriptedResponses: { stepDelayMilliseconds: 10 },
@@ -395,6 +398,7 @@ describe("in-memory canonical thread stream", () => {
       applicationRunStates.set(applicationThreadId, states);
     };
     const threads = new ThreadApplicationService({
+      usage,
       inventory: new DatabaseThreadApplicationInventoryReader({
         inventory: inventoryRepository,
         queue: queueRepository,
@@ -426,7 +430,7 @@ describe("in-memory canonical thread stream", () => {
     runtimes = new ThreadRuntimeCoordinator({
       actors,
       targets: actorTargets,
-      bridge: new ConversationEventBridge(new ThreadEventPresentation(threads)),
+      bridge: new ConversationEventBridge(new ThreadEventPresentation(threads), (eventScope, threadId, turns) => usage.registerVisibleTurns(eventScope, threadId, turns)),
       interactions,
       hubs: threadHubs,
       retentionMilliseconds: 0,
@@ -434,6 +438,7 @@ describe("in-memory canonical thread stream", () => {
       onAuthoritativeSettled: (eventScope, applicationThreadId) =>
         queueDispatcher.onAuthoritativeSettled(eventScope, applicationThreadId),
     });
+    const unsubscribeUsage = usage.subscribe((eventScope, threadId, revision) => runtimes.publishUsageRevisionIfLoaded(eventScope, threadId, revision));
     const queueGateway = new RuntimeBackedQueuedInputConversationGateway({
       runtimes,
       targets: actorTargets,
@@ -562,6 +567,12 @@ describe("in-memory canonical thread stream", () => {
           ).toContain("idle"),
         { timeout: 15_000 },
       );
+
+      const backgroundUsage = usage.read(scope, agentCreated.applicationThreadId);
+      expect(backgroundUsage.summary.reasons).not.toContain("capture_failed");
+      expect(backgroundUsage.state).toBe("complete");
+      expect(backgroundUsage.summary.metrics.input.value).toBe("11");
+      expect(backgroundUsage.summary.metrics.output.value).toBe("7");
 
       const created = await lifecycle.createServerDraft(scope, {
         workspaceId: workspaceRecord.id,
@@ -808,6 +819,9 @@ describe("in-memory canonical thread stream", () => {
         const finalSnapshot = browserStore.state.snapshot!;
         const finalTurn =
           finalSnapshot.turnsById[finalSnapshot.orderedTurnIds.at(-1)!]!;
+        const finalUsage = usage.read(scope, threadId, finalTurn.id);
+        expect(finalUsage).toMatchObject({state:"complete",turnState:"completed",measurementScope:"whole_turn",summary:{reasons:[],metrics:{input:{value:"11"},output:{value:"7"}},costs:[{amount:"0.0002",currency:"USD"}]}});
+        expect(usage.read(scope,threadId).summary.metrics.input.value).toBe("22");
         const finalItems = finalTurn.orderedItemIds.map(
           (itemId) => finalSnapshot.itemsById[itemId]!,
         );
@@ -851,6 +865,7 @@ describe("in-memory canonical thread stream", () => {
         hubHandle.release();
       }
     } finally {
+      unsubscribeUsage();
       await mutations.close();
       await queueDispatcher.close();
       await runtimes.close();

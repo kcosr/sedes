@@ -144,7 +144,7 @@ function selectedBranchingCapabilities(
       creationRecovery: "idempotent",
     },
     interactionKinds: [],
-    usageSections: [],
+    usageAccounting: "supported" as const, usageSections: [],
     effectiveSettings: { toolAccess: "read_only" },
   };
 }
@@ -203,7 +203,7 @@ class FakeHandle {
         reason: { text: "Branching is unavailable in this fixture." },
       },
       interactionKinds: [],
-      usageSections: [],
+      usageAccounting: "supported" as const, usageSections: [],
       effectiveSettings: {},
     }),
   );
@@ -2308,7 +2308,7 @@ describe("ConversationActorManager", () => {
         creationRecovery: "idempotent",
       },
       interactionKinds: [],
-      usageSections: [],
+      usageAccounting: "supported" as const, usageSections: [],
       effectiveSettings: {
         model: { provider: "test", id: "model" },
         thinkingLevel: "low",
@@ -2910,7 +2910,7 @@ describe("ConversationActorManager", () => {
         creationRecovery: "idempotent",
       },
       interactionKinds: [],
-      usageSections: [],
+      usageAccounting: "supported" as const, usageSections: [],
       effectiveSettings: { toolAccess: "read_only" },
     });
     const acquired = await manager.acquire({
@@ -3046,7 +3046,7 @@ describe("ConversationActorManager", () => {
           creationRecovery: "idempotent",
         },
         interactionKinds: [],
-        usageSections: [],
+        usageAccounting: "supported" as const, usageSections: [],
         effectiveSettings: { toolAccess: "read_only" },
       });
       handle.establishmentHistories[0] = {

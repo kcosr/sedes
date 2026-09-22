@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AgentBackendInstance,
@@ -97,6 +98,8 @@ describe("ClaudeBackendDriverFactory", () => {
     const firstConnection = connection("claude-first");
     const secondConnection = connection("claude-second");
     const factory = new ClaudeBackendDriverFactory({
+      usage: NO_USAGE_SINK,
+      nativeNamespace: "claude-test-native",
       scope,
       instance,
       runtimeClient,

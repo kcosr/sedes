@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { SEDES_VERSION } from "../../src/shared/version.js";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
@@ -95,6 +96,9 @@ describe.sequential("production-composed TCP interaction authority", () => {
       });
 
       handle = new CodexConversationHandle({
+    usageSink: NO_USAGE_SINK,
+    nativeNamespace: "test-codex-store",
+    usageProvenZero: false,
         binding: binding(),
         canonicalWorkspacePath: "/workspace",
         workspaceId: "workspace-one",

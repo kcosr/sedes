@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { randomUUID } from "node:crypto";
 import { unavailableTurnBookmarks } from "../support/unavailable-turn-bookmarks.js";
 import { cp, mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
@@ -640,6 +641,7 @@ describeRealPiCli("real Pi repository-skill CLI verification", () => {
       const options: PiDriverOptions = {
         instance,
         connection,
+        usage: NO_USAGE_SINK,
         nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
         toolProvenanceKey,
         agentTools: scopedTools,

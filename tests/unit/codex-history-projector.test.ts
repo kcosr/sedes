@@ -3503,13 +3503,6 @@ describe("Codex 0.153.0 C1 history projector", () => {
         windowTokens: 100,
         percent: 20,
       },
-      tokens: {
-        input: 70,
-        output: 30,
-        cacheRead: 10,
-        cacheWrite: 5,
-        total: 100,
-      },
     });
   });
 

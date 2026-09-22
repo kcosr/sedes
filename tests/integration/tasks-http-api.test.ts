@@ -1,3 +1,4 @@
+import { UsageService } from "../../src/server/usage/usage-service.js";
 import { randomUUID } from "node:crypto";
 import type { Request as ExpressRequest } from "express";
 import request from "supertest";
@@ -127,6 +128,7 @@ function fixture() {
     requireSelectable: async () => undefined,
   };
   const app = createNormalizedApp({
+    usage: new UsageService(database),
     workpads: {} as never,
     questions: {} as never,
     cannedPrompts: {} as never,

@@ -1,3 +1,4 @@
+import { RecordedSessionUsageAction } from "./thread/RecordedSessionUsageAction.js";
 import {
   useCallback,
   useEffect,
@@ -230,6 +231,8 @@ export function ThreadView({
   if (state.status === "loading") return (
     <ThreadLoadingView
       threadId={threadId}
+      usageCache={store.usage}
+      active={visible}
       applicationStore={applicationStore}
       panelControls={panelControls}
     />
@@ -246,6 +249,7 @@ export function ThreadView({
           </small>
         )}
         <div className="thread-fatal-actions">
+          <RecordedSessionUsageAction cache={store.usage} active={visible} />
           <Button onClick={() => store.retryLoad()}>Try again</Button>
           <Button variant="outline" onClick={() => navigate("/")}>
             Back to threads

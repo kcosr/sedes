@@ -797,6 +797,7 @@ describe("Codex production application integration", () => {
       });
       resources.defer("conversation actors", () => actors!.close());
       const threads = new ThreadApplicationService({
+    usage: { registerVisibleTurns: () => undefined },
         inventory: new DatabaseThreadApplicationInventoryReader({
           inventory,
           queue,
@@ -980,7 +981,7 @@ describe("Codex production application integration", () => {
         actors,
         targets: new DatabaseActorTargetResolver(targets),
         bridge: new ConversationEventBridge(
-          new ThreadEventPresentation(threads),
+          new ThreadEventPresentation(threads), () => undefined
         ),
         interactions,
         hubs: new ScopedThreadEventHubRegistry(),

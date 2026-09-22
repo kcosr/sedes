@@ -949,13 +949,29 @@ test.describe.serial("normalized streaming and restored state", () => {
     await expect(stats).toBeVisible();
     await expect(stats.getByText("Context used")).toBeVisible();
     await expect(stats.getByText("Compactions")).toBeVisible();
-    await expect(stats.getByText("Cost")).toBeVisible();
-    await expect(stats.getByText("$0.0000", { exact: true })).toBeVisible();
+    await expect(stats.getByRole("heading", { name: "Recorded session usage" })).toBeVisible();
+    await expect(stats.getByText(/Estimated cost:/)).toBeVisible();
+    await expect(stats.getByText(/fixture-model/)).toBeVisible();
     await capture(page, testInfo, "restored-session-stats.png");
     await stats
       .getByRole("button", { name: "Close", exact: true })
       .last()
       .click();
+    const usageButton = page.getByRole("button", { name: "Turn usage and cost" }).last();
+    await usageButton.hover();
+    const turnUsage = page.getByRole("dialog", { name: "Turn usage", exact: true });
+    await expect(turnUsage).toBeVisible();
+    await expect(turnUsage.getByText("Input (including cache)")).toBeVisible();
+    await expect(turnUsage.getByText("11", { exact: true })).toBeVisible();
+    await expect(turnUsage.getByText("7", { exact: true })).toBeVisible();
+    await expect(turnUsage.getByText(/Estimated cost:.*0\.0002 USD/)).toBeVisible();
+    await usageButton.click();
+    await page.getByRole("button", { name: "Thread actions" }).hover();
+    await expect(turnUsage).toBeVisible();
+    await capture(page, testInfo, "recorded-turn-usage.png");
+    await page.keyboard.press("Escape");
+    await expect(turnUsage).toHaveCount(0);
+    await expect(usageButton).toBeFocused();
 
     await openSettingsPage(page, "appearance");
     await page.getByRole("radio", { name: "Dark" }).click();

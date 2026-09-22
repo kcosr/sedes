@@ -1,3 +1,5 @@
+import { PiUsageAccounting } from "./pi-usage-accounting.js";
+import type { UsageSink } from "../../usage/contracts.js";
 import { turnFailure } from "../turn-failure.js";
 import { cancelledPiRetryEntries, createPiCancelledRetryMarker, piCancelledRetryMarkerType } from "./pi-cancelled-retry-marker.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
@@ -191,6 +193,7 @@ interface RetryAnchor {
 }
 
 export interface PiDriverOptions extends PiSessionStoreOptions {
+  readonly usage: UsageSink;
   readonly resolveThreadEnvironment?: ThreadEnvironmentResolver;
   readonly instance: AgentBackendInstance;
   readonly connection: AgentConnectionProfile;
@@ -668,7 +671,8 @@ function capabilities(
       "editor",
       "decision",
     ],
-    usageSections: ["context", "tokens", "cost", "counters"],
+    usageSections: ["context", "counters"],
+    usageAccounting: "supported",
     effectiveSettings: {
       ...(session.model
         ? {
@@ -1236,6 +1240,7 @@ function contentText(message: unknown): string {
 export class PiConversationBackendDriver implements ConversationBackendDriver {
   readonly instance: AgentBackendInstance;
   readonly connection: AgentConnectionProfile;
+  readonly #usage: UsageSink;
   readonly #resolveThreadEnvironment: ThreadEnvironmentResolver;
   readonly #store: PiSessionStore;
   readonly #sessionFactory: PiSdkSessionFactory;
@@ -1256,6 +1261,7 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
   readonly #modelPolicy: CompiledBackendModelPolicy;
 
   constructor(options: PiDriverOptions) {
+    this.#usage = options.usage;
     this.#resolveThreadEnvironment = options.resolveThreadEnvironment ?? (async () => Object.freeze({}));
     this.instance = options.instance;
     this.connection = options.connection;
@@ -1696,6 +1702,8 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
       );
       let handle!: PiConversationHandle;
       handle = new PiConversationHandle({
+        usage: this.#usage,
+        nativeNamespace: this.#nativeDiscoveryNamespaceKey,
         binding: input.binding,
         scope: input.scope,
         session,
@@ -2363,6 +2371,8 @@ class PiAgentToolTurnCorrelation {
 }
 
 interface PiConversationHandleOptions {
+  readonly usage: UsageSink;
+  readonly nativeNamespace: string;
   readonly binding: ConversationBinding;
   readonly scope: ExecutionScope;
   readonly session: PiSdkSession;
@@ -2381,6 +2391,7 @@ interface PiConversationHandleOptions {
 }
 
 class PiConversationHandle implements ConversationHandle {
+  readonly #usageAccounting: PiUsageAccounting;
   static readonly #assistantSourceOrderStride = 1_000;
 
   readonly binding: ConversationBinding;
@@ -2505,6 +2516,8 @@ class PiConversationHandle implements ConversationHandle {
       identities: this.#identities,
       now: this.#now,
     });
+    this.#usageAccounting = new PiUsageAccounting({sink: options.usage, binding: this.binding,
+      nativeNamespace: options.nativeNamespace, manager: this.#session.sessionManager, authentication: this.#toolIdentityAuthentication});
     const initial = this.#authoritativeProjectionSeed();
     this.#projection = new PiProjectionEstablisher({
       initialSnapshot: initial.snapshot,
@@ -3683,6 +3696,8 @@ class PiConversationHandle implements ConversationHandle {
       captureFailure(cause);
     }
     try {
+      this.#usageAccounting.reconcile("live");
+      this.#usageAccounting.close();
       this.#unsubscribeSession();
     } catch (cause) {
       captureFailure(cause);
@@ -3708,6 +3723,11 @@ class PiConversationHandle implements ConversationHandle {
 
   #consume(event: AgentSessionEvent): void {
     if (this.#closed) return;
+    if (event.type === "agent_settled" || (event.type === "entry_appended" &&
+      (event.entry.type === "usage" || event.entry.type === "compaction" || event.entry.type === "branch_summary" ||
+        (event.entry.type === "message" && (event.entry.message.role === "assistant" || event.entry.message.role === "toolResult"))))) {
+      this.#usageAccounting.reconcile("live");
+    }
     if (event.type === "entry_appended" && event.entry.type === "usage") {
       // Cache warming can bill requests while the conversation is idle, with
       // no agent settlement to trigger the usual usage refresh.
@@ -4379,6 +4399,7 @@ class PiConversationHandle implements ConversationHandle {
       parsed.type === "turn_updated" ||
       parsed.type === "turn_completed"
     ) {
+      this.#usageAccounting.registerTurn(parsed.turn);
       this.#emittedTurns.set(parsed.turn.backendTurnId, parsed.turn);
     } else if (
       parsed.type === "item_started" ||

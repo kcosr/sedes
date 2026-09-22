@@ -201,7 +201,7 @@ class NeutralDriver {
           reason: { text: "Branching is unavailable in this fixture." },
         },
         interactionKinds: [],
-        usageSections: [],
+        usageAccounting: "supported" as const, usageSections: [],
         effectiveSettings: {},
       }),
       usage: async () => ({}),

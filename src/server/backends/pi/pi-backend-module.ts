@@ -95,6 +95,7 @@ class PiBackendModuleRuntime implements BackendModuleRuntime {
         ? remoteServiceCwd
         : undefined;
     this.driverFactory = new PiBackendDriverFactory({
+      usage: context.usage,
       resolveThreadEnvironment: createThreadEnvironmentResolver(context),
       scope: context.scope,
       instance: context.instance,

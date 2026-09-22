@@ -6,7 +6,7 @@ worker or persistent SSH/outbound sidecar and an operator-selected Claude Code
 executable. Claude Code owns authentication and native conversation history; Sedes provides its normalized thread workflow, durable controls, and
 recovery records.
 
-Choose Claude when you want to use a Claude Code subscription on the local, SSH, or outbound execution host, permission modes and prompts, native skills, token and request usage, and image
+Choose Claude when you want to use a Claude Code subscription on the local, SSH, or outbound execution host, permission modes and prompts, native skills, recorded token usage, and image
 input in Sedes. Compare it with the other integrations in the
 [backend support matrix](index.md). Backend maintainers should also read the
 [Claude integration contract](../../internals/backends/claude.md).
@@ -230,7 +230,7 @@ The Claude backend can:
 - use Tasks, Saved Agents, and eligible automations;
 - expose eligible Sedes agent tools in Progressive or Individual mode through
   the generated local CLI or admitted SSH/outbound sidecar CLI relay;
-- report provider-complete token and request counts; and
+- retain direct main-loop turn usage and separate cumulative pipeline totals; and
 - fork an idle thread at its latest successfully completed ordinary turn or an
   exact successfully completed ordinary turn.
 
@@ -360,3 +360,23 @@ path.
 For implementation ownership, history projection, terminal receipts, input
 correlation, agent-tool injection, forks, and recovery, continue with the
 [Claude integration contract](../../internals/backends/claude.md).
+
+## Recorded usage
+
+Claude records direct main-loop turn usage separately from cumulative usage and
+estimated cost across the actual SDK query lifetime. The reply popover labels
+**Main-loop usage only**; broader query-pipeline/subagent totals and cost stay at
+session scope. Message evidence is replaced by covering result evidence, not
+added twice. Model information is preserved where the source reports it.
+
+Reattaching the same retained query preserves accounting identity. A new query
+lifetime is a separate epoch, and a recorded conversation reset ends its segment.
+A decrease without proven reset stays a conflict. Existing retained replay and
+ordinary history can reconcile available evidence; unrecoverable gaps remain
+labelled. Legacy Claude ledger totals have unknown coverage and appear separately
+from newly recorded totals. Request counts remain unavailable when native fields
+count model rounds or messages instead of requests.
+
+Captured values live in the main Sedes database and remain readable without
+opening a provider session. See [recorded usage](../../user/conversations.md#view-recorded-usage)
+for the UI and [backups](../operations.md#state-upgrades-and-backups) for retention.

@@ -40,6 +40,8 @@ import {
   beginThreadLoadAttempt,
   resetThreadLoadAttemptsForTests,
 } from "../app/thread-load-diagnostics.js";
+import { UsageQueryCache } from "../stores/UsageQueryCache.js";
+import { usageReport } from "../stores/usage-test-fixture.js";
 import { ThreadView } from "./ThreadView.js";
 import {
   handleTaskDragStart,
@@ -87,6 +89,27 @@ afterEach(() => {
   localStorage.clear();
   vi.unstubAllGlobals();
   window.history.replaceState(null, "", "/");
+});
+
+describe("cold offline usage", () => {
+  it("opens database-only session usage when a disabled backend has no snapshot", async () => {
+    const snapshot = makeSnapshot("interactive", "disconnected");
+    const state = fixture(snapshot, [], { status: "error", connection: "disconnected", authoritative: false,
+      snapshot: undefined, error: "This backend is disabled." });
+    const getUsage = vi.fn().mockResolvedValue(usageReport({ threadId: snapshot.thread.id, turnId: null,
+      measurementScope: "session", turnState: null, captureState: "disconnected" }));
+    const usage = new UsageQueryCache(snapshot.thread.id, { getUsage });
+    Object.defineProperty(state.registry.get(snapshot.thread.id), "usage", { value: usage });
+    render(<ThreadView threadId={snapshot.thread.id} visible automationOpen={false} registry={state.registry} applicationStore={state.applicationStore} />);
+    expect(screen.getByText("Couldn’t open this thread")).toBeInTheDocument();
+    expect(getUsage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Session stats" }));
+    await screen.findByText("Cost unavailable");
+    expect(screen.getByRole("heading", { name: "Recorded session usage" })).toBeVisible();
+    expect(getUsage).toHaveBeenCalledWith(snapshot.thread.id, null, expect.any(AbortSignal));
+    expect(state.registry.get(snapshot.thread.id).getSnapshot().snapshot).toBeUndefined();
+    cleanup(); usage.dispose();
+  });
 });
 
 describe("ThreadView loading header", () => {

@@ -164,6 +164,18 @@ function applicationState(
 }
 
 describe("ThreadEventHub", () => {
+  it("publishes accounting invalidations as generation-fenced transcript no-ops", () => {
+    const hub = new ThreadEventHub();
+    expect(() => hub.publish({type:"usage_revision_changed",generation:"one",revision:"1"})).toThrow("thread_projection_snapshot_required");
+    hub.publish(replacement("one"));const original=hub.snapshot;
+    const envelope=hub.publish({type:"usage_revision_changed",generation:"one",revision:"9007199254740993"});
+    expect(envelope.event).toEqual({type:"usage_revision_changed",generation:"one",revision:"9007199254740993"});
+    expect(hub.snapshot).toBe(original);
+    hub.publish(replacement("two"));const next=hub.snapshot;
+    expect(()=>hub.publish({type:"usage_revision_changed",generation:"one",revision:"2"})).toThrow("thread_projection_snapshot_required");
+    expect(hub.snapshot).toBe(next);
+  });
+
   it("retains background work in checkpoints while ordinary turn state stays idle", () => {
     const hub = new ThreadEventHub();
     hub.publish(replacement("generation-1"));
@@ -695,11 +707,11 @@ describe("ThreadEventHub", () => {
   it("retains exact current state after its event suffix is evicted", () => {
     const hub = new ThreadEventHub({ replayLimit: 2 });
     const anchor = hub.publish(replacement("projection-1"));
-    for (let requests = 1; requests <= 3; requests += 1) {
+    for (let userMessages = 1; userMessages <= 3; userMessages += 1) {
       hub.publish({
         type: "usage_changed",
         generation: "projection-1",
-        usage: { counters: { requests } },
+        usage: { counters: { userMessages } },
       });
     }
 
@@ -707,7 +719,7 @@ describe("ThreadEventHub", () => {
     const subscription = hub.subscribeFromCurrentSnapshot(vi.fn());
     expect(subscription.checkpoint).toMatchObject({
       eventId: hub.eventIdAt(4),
-      snapshot: { usage: { counters: { requests: 3 } } },
+      snapshot: { usage: { counters: { userMessages: 3 } } },
     });
     expect(subscription.replay).toEqual([]);
     subscription.close();
@@ -724,7 +736,7 @@ describe("ThreadEventHub", () => {
         hub.publish(kind === "replacement" ? replacement("projection-2") : {
           type: "usage_changed",
           generation: "projection-1",
-          usage: { counters: { requests: 7 } },
+          usage: { counters: { userMessages: 7 } },
         });
       });
       const subscription = hub.subscribeFromCurrentSnapshot(listener);
@@ -840,8 +852,8 @@ describe("ThreadEventHub", () => {
   it("stops projected replay cost measurement as soon as the budget is exceeded", () => {
     const hub = new ThreadEventHub();
     const anchor = hub.publish(replacement("projection-1"));
-    for (let requests = 1; requests <= 10; requests += 1) {
-      hub.publish({ type: "usage_changed", generation: "projection-1", usage: { counters: { requests } } });
+    for (let userMessages = 1; userMessages <= 10; userMessages += 1) {
+      hub.publish({ type: "usage_changed", generation: "projection-1", usage: { counters: { userMessages } } });
     }
     const cost = vi.fn((_event: ThreadEventEnvelope) => 100);
     expect(hub.replayCostExceeds(anchor.eventId, 250, cost)).toBe(true);

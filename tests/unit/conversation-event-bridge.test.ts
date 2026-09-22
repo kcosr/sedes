@@ -62,7 +62,7 @@ function actorState(generation: string) {
         reason: { text: "Branching is unavailable in this fixture." },
       },
       interactionKinds: [],
-      usageSections: [],
+      usageAccounting: "supported" as const, usageSections: [],
       effectiveSettings: {},
     },
     usage: {},
@@ -229,6 +229,30 @@ class Source implements ConversationEventBridgeSource {
 }
 
 describe("ConversationEventBridge", () => {
+  it("registers live usage turn stubs before fanout and rejects stale generations before registration", async () => {
+    const source = new Source();
+    const hub = new ThreadEventHub();
+    const publications: string[] = [];
+    hub.subscribe(({event}) => { if(event.type === "turn_upsert") publications.push("fanout"); });
+    const registrar = vi.fn(() => { publications.push("register"); });
+    const failure = vi.fn();
+    const bridge = new ConversationEventBridge({
+      ...targetedProjection,
+      snapshot: async (_scope, _threadId, current) => snapshot(current.timeline.generation),
+      ancillary: async () => [],
+    }, registrar);
+    const binding = bridge.bind({scope,applicationThreadId:"thread-1",actor:source,hub,onFailure:failure});
+    await binding.ready;
+    const turn = {id:"live-turn",revision:1,status:"in_progress" as const,orderedItemIds:[]};
+    const event = {type:"turn_upsert" as const,generation:"generation-1",turn,fork:{sourceTurnId:turn.id,expectedTurnRevision:1,available:false as const,unavailableReason:{text:"In progress."}}};
+    source.emit({type:"projection_events",generation:"generation-1",events:[event]});
+    source.emit({type:"projection_events",generation:"stale",events:[{...event,generation:"stale"}]});
+    await binding.release();
+    expect(publications).toEqual(["register","fanout"]);
+    expect(registrar).toHaveBeenCalledExactlyOnceWith(scope,"thread-1",[turn]);
+    expect(failure).toHaveBeenCalledWith(expect.objectContaining({message:"conversation_event_bridge_generation_mismatch"}));
+  });
+
   it("publishes the complete snapshot before ordered incrementals", async () => {
     const source = new Source();
     const hub = new ThreadEventHub();
@@ -239,7 +263,7 @@ describe("ConversationEventBridge", () => {
       snapshot: async (_scope, _threadId, current) =>
         snapshot(current.timeline.generation),
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -283,7 +307,7 @@ describe("ConversationEventBridge", () => {
         return snapshot(current.timeline.generation);
       },
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -355,7 +379,7 @@ describe("ConversationEventBridge", () => {
         interactions: [interaction],
       }),
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -394,7 +418,7 @@ describe("ConversationEventBridge", () => {
       snapshot: async (_scope, _threadId, current) =>
         snapshot(current.timeline.generation),
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -430,7 +454,7 @@ describe("ConversationEventBridge", () => {
         forkSource: async () =>
           snapshot("generation-1", forkUnavailableReason).forkSource,
         ancillary: async () => [],
-      });
+      }, () => undefined);
       const binding = bridge.bind({
         scope,
         applicationThreadId: "thread-1",
@@ -511,7 +535,7 @@ describe("ConversationEventBridge", () => {
           ? availableForkSource()
           : unavailableForkSource("The source thread must be idle."),
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -566,7 +590,7 @@ describe("ConversationEventBridge", () => {
           "Resolve the thread's uncertain operation before forking.",
         ),
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -639,7 +663,7 @@ describe("ConversationEventBridge", () => {
         snapshot(current.timeline.generation),
       capabilitiesAndProviderFeatures: composeTargeted,
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -711,7 +735,7 @@ describe("ConversationEventBridge", () => {
       snapshot: projectSnapshot,
       capabilitiesAndProviderFeatures: composeTargeted,
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -796,7 +820,7 @@ describe("ConversationEventBridge", () => {
       snapshot: async () => baseSnapshot,
       capabilitiesAndProviderFeatures: composeTargeted,
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -876,7 +900,7 @@ describe("ConversationEventBridge", () => {
       snapshot: async () => baseSnapshot,
       capabilitiesAndProviderFeatures: composeTargeted,
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -917,7 +941,7 @@ describe("ConversationEventBridge", () => {
         snapshot(current.timeline.generation),
       capabilitiesAndProviderFeatures: composeTargeted,
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -960,7 +984,7 @@ describe("ConversationEventBridge", () => {
               },
             ]
           : [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -973,14 +997,14 @@ describe("ConversationEventBridge", () => {
       generation: "generation-1",
       event: {
         type: "usage_changed",
-        usage: { counters: { requests: 1 } },
+        usage: { counters: { userMessages: 1 } },
       },
     });
     await binding.release();
 
     expect(listener.mock.calls.at(-1)?.[0].event).toMatchObject({
       type: "usage_changed",
-      usage: { counters: { requests: 1 } },
+      usage: { counters: { userMessages: 1 } },
     });
   });
 
@@ -992,7 +1016,7 @@ describe("ConversationEventBridge", () => {
       snapshot: async (_scope, _threadId, current) =>
         snapshot(current.timeline.generation),
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -1025,7 +1049,7 @@ describe("ConversationEventBridge", () => {
         return snapshot(current.timeline.generation);
       },
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -1067,7 +1091,7 @@ describe("ConversationEventBridge", () => {
         return snapshot(current.timeline.generation);
       },
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -1104,7 +1128,7 @@ describe("ConversationEventBridge", () => {
       ancillary: vi.fn(async () => []),
     };
     const hub = new ThreadEventHub();
-    const bridge = new ConversationEventBridge(projection);
+    const bridge = new ConversationEventBridge(projection, () => undefined);
 
     expect(() =>
       bridge.bind({
@@ -1137,7 +1161,7 @@ describe("ConversationEventBridge", () => {
               },
             ]
           : [],
-    });
+    }, () => undefined);
     const binding = bridge.bind({
       scope,
       applicationThreadId: "thread-1",
@@ -1162,7 +1186,7 @@ describe("ConversationEventBridge", () => {
       generation: "generation-1",
       event: {
         type: "usage_changed",
-        usage: { counters: { requests: 1 } },
+        usage: { counters: { userMessages: 1 } },
       },
     });
     await binding.release();
@@ -1188,7 +1212,7 @@ describe("ConversationEventBridge", () => {
           throw new Error("projection failed");
         },
         ancillary: async () => [],
-      });
+      }, () => undefined);
       const binding = bridge.bind({
         scope,
         applicationThreadId: "thread-1",
@@ -1237,7 +1261,7 @@ describe("ConversationEventBridge", () => {
         };
       },
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const input = {
       scope,
       applicationThreadId: "thread-1",
@@ -1271,7 +1295,7 @@ describe("ConversationEventBridge", () => {
       snapshot: async (_scope, _threadId, current) =>
         snapshot(current.timeline.generation),
       ancillary: async () => [],
-    });
+    }, () => undefined);
     const first = bridge.bind({
       scope,
       applicationThreadId: "thread-1",

@@ -18,6 +18,7 @@ This document is the system map. Detailed subsystem invariants live in the
 - [Mutations and recovery](#mutations-and-recovery)
 - [Execution environments](#execution-environments)
 - [Persistence](#persistence)
+- [Durable usage accounting](#durable-usage-accounting)
 - [Agent tools and terminals](#agent-tools-and-terminals)
 - [Client ownership](#client-ownership)
 - [Security boundary](#security-boundary)
@@ -365,6 +366,36 @@ recognizes one reviewed native result and hands the common artifact service a
 bounded byte source. Normalized history contains descriptor metadata, never
 provider paths, URLs, base64, or storage paths. See
 [provider output artifacts](output-artifacts.md).
+
+## Durable usage accounting
+
+[`UsageService`](../../src/server/usage/usage-service.ts) stores normalized
+accounting on main, independently of transcript delivery. Six scoped logical
+tables retain source identity, immutable observations, canonical selected facts,
+turn/session projections, and capture gaps. Evidence references and ownership use
+restrictive foreign keys; ordinary thread archive leaves captured evidence intact.
+A single per-thread monotonic revision advances atomically with changed totals.
+
+Backend adapters capture before lossy presentation. Pi entries are additive;
+Codex native-thread checkpoints and Claude query-pipeline checkpoints replace
+covered values. Derived turn allocations do not add another session charge.
+Missing metrics, SDK normalization, unknown model attribution, cost estimates,
+regressions, and gaps remain explicit. Token JSON uses canonical unsigned decimal
+strings; money uses decimal strings and currency groups. Browser numbers never
+round durable token counts.
+
+The scoped `GET /api/threads/:threadId/usage` and
+`GET /api/threads/:threadId/usage/turns/:turnId` routes read the database without
+opening a backend. Visible history loads register turn stubs. A committed revision
+can invalidate an already-loaded actor's usage cache under its current projection
+generation; this ancillary event does not mutate the transcript or create actors.
+Visible client views use single-flight reads, five-second polling, and
+focus/reconnect refresh; closed transcript rows never poll.
+
+Captured environment, workspace, backend, model/provider, turn, time quality, and
+cost provenance provide dimensions for later analytical queries. No dashboard,
+charts, pricing service, or request drilldown is implemented. Unknown attribution
+remains unknown rather than being copied from current composer settings.
 
 ## Agent tools and terminals
 

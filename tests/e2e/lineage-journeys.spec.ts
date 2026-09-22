@@ -139,9 +139,15 @@ test.describe.serial("normalized lineage browser journeys", () => {
     await expect(
       page.getByRole("button", { name: /Fork from here/ }),
     ).toHaveCount(1);
-    await expect(
-      page.locator('[data-turn-status="in_progress"] .turn-fork-footer'),
-    ).toHaveCount(0);
+    const runningUsageButton = page.locator('[data-turn-status="in_progress"]')
+      .getByRole("button", { name: "Turn usage and cost" });
+    await expect(runningUsageButton).toHaveCount(1);
+    await runningUsageButton.click();
+    const runningUsage = page.getByRole("dialog", { name: "Turn usage", exact: true });
+    await expect(runningUsage.getByText("Recorded so far")).toBeVisible();
+    await capture(page, testInfo, "running-turn-usage.png");
+    await page.keyboard.press("Escape");
+    await expect(runningUsage).toHaveCount(0);
 
     await page.getByRole("button", { name: "Thread actions" }).click();
     await expect(

@@ -9,6 +9,7 @@ import {
   piUsage,
   type PiSdkSession,
 } from "../../src/server/backends/pi/pi-sdk-session.js";
+import { piUsageObservation } from "../../src/server/backends/pi/pi-usage-accounting.js";
 import type { ValidatedWorkspace } from "../../src/server/execution/contracts.js";
 import type { PiExecutorWorkspaceServices } from "../../src/server/backends/pi/pi-remote-workspace.js";
 
@@ -143,23 +144,28 @@ describe("Pi billed cache-warming usage", () => {
       manager.getBranch().filter((entry) => entry.type === "usage"),
     ).toHaveLength(1);
     expect(piUsage(session)).toMatchObject({
-      tokens: { input: 6, output: 3, cacheRead: 300, total: 309 },
-      cost: { amount: 1.5, currency: "USD" },
-      counters: {
-        requests: 3,
-        assistantMessages: 1,
-        userMessages: 1,
-        totalMessages: 2,
-      },
+      counters: {assistantMessages: 1, userMessages: 1, totalMessages: 2},
     });
+    expect(piUsage(session)).not.toHaveProperty("tokens");
+    expect(piUsage(session)).not.toHaveProperty("cost");
+    expect(piUsage(session).counters).not.toHaveProperty("requests");
+    const observations = manager.getEntries().flatMap((entry) => {
+      const observation = piUsageObservation(entry, null, "history");
+      return observation ? [observation] : [];
+    });
+    const facts = observations.flatMap((observation) => observation.facts);
+    const sum = (metric: "input" | "uncachedInput" | "output" | "cacheRead" | "total" | "requests") =>
+      facts.reduce((total, fact) => total + BigInt(fact.tokens[metric] ?? "0"), 0n).toString();
+    expect(facts).toHaveLength(3);
+    expect(facts.map((fact) => fact.sessionContribution)).toEqual(["additive", "additive", "additive"]);
+    expect({input: sum("input"), uncachedInput: sum("uncachedInput"), output: sum("output"), cacheRead: sum("cacheRead"), total: sum("total"), requests: sum("requests")})
+      .toEqual({input:"306",uncachedInput:"6",output:"3",cacheRead:"300",total:"309",requests:"3"});
+    expect(facts.map((fact) => fact.costs)).toEqual(Array.from({length:3}, () => [{amount:"0.5",currency:"USD",kind:"estimated",provenance:"pi-ai 0.86.0 SDK pricing"}]));
 
-    manager.appendUsage("extension_aggregate", "test", "model", usage);
-    const aggregate = piUsage(session);
-    expect(aggregate).toMatchObject({
-      tokens: { total: 412 },
-      cost: { amount: 2, currency: "USD" },
-      counters: { assistantMessages: 1, userMessages: 1, totalMessages: 2 },
-    });
-    expect(aggregate.counters).not.toHaveProperty("requests");
+    const extension = manager.appendUsage("extension_aggregate", "test", "model", usage);
+    const unproven = piUsageObservation(extension, null, "history")!;
+    expect(unproven.facts[0]).toMatchObject({sessionContribution:"none",reasons:["unknown_attribution"]});
+    expect(unproven.facts[0]!.tokens.requests).toBeNull();
+    expect(piUsage(session).counters).toEqual({assistantMessages:1,userMessages:1,totalMessages:2,toolCalls:0,toolResults:0,compactions:0});
   });
 });

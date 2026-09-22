@@ -815,40 +815,4 @@ describe("Claude thread repository", () => {
     ).toThrow("claude_terminal_receipt_provider_terminal_reason_invalid");
   });
 
-  it("persists a monotonic provider-complete usage ledger per principal and thread", () => {
-    const settings = repository();
-    expect(
-      settings.writeUsageLedger(scope, "thread", {
-        inputTokens: 10,
-        outputTokens: 4,
-        cacheReadTokens: 3,
-        cacheWriteTokens: 2,
-        requestCount: 1,
-        now: 100,
-      }),
-    ).toMatchObject({ inputTokens: 10, outputTokens: 4, requestCount: 1 });
-    expect(
-      settings.writeUsageLedger(scope, "thread", {
-        inputTokens: 8,
-        outputTokens: 9,
-        cacheReadTokens: 1,
-        cacheWriteTokens: 5,
-        requestCount: 2,
-        now: 200,
-      }),
-    ).toMatchObject({
-      inputTokens: 10,
-      outputTokens: 9,
-      cacheReadTokens: 3,
-      cacheWriteTokens: 5,
-      requestCount: 2,
-      updatedAt: 200,
-    });
-    expect(
-      settings.findUsageLedger(
-        { tenantId: scope.tenantId, principalId: "different" },
-        "thread",
-      ),
-    ).toBeUndefined();
-  });
 });

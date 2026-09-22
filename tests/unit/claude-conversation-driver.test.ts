@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import type { ClaudeConversationHandle } from "../../src/server/backends/claude/claude-conversation-handle.js";
 import type {
   EffortLevel,
@@ -1481,6 +1482,8 @@ function createDriver(
     effectivePermissionGeneration: null,
   };
   return new ClaudeConversationBackendDriver({
+      usage: NO_USAGE_SINK,
+      nativeNamespace: "claude-test-native",
     instance,
     connection,
     runtimeClient: Object.assign(new ClaudeSdkRuntimeAdapter(sdk), {

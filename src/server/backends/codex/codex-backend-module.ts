@@ -326,6 +326,8 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
     });
     this.managedProviderTerminals = this.#managedTui;
     this.driverFactory = new CodexBackendDriverFactory({
+      usageSink: input.context.usage,
+      nativeNamespace: input.namespaceKey,
       resolveThreadEnvironment: createThreadEnvironmentResolver(input.context),
       scope: input.context.scope,
       instance: input.context.instance,
