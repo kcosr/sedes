@@ -18,7 +18,9 @@ import {
 import type { PanelPresentation } from "../../workspace-panels/panel-presentation.js";
 
 function completionLabel(
-  turn: Pick<ConversationTurn, "completedAt" | "status">,
+  turn: Pick<ConversationTurn, "completedAt"> & {
+    readonly status: Exclude<ConversationTurn["status"], "in_progress">;
+  },
   turnNumber?: number,
 ): {
   readonly short: string;
@@ -27,13 +29,11 @@ function completionLabel(
   if (!turn.completedAt) {
     if (turnNumber === undefined) {
       const status =
-        turn.status === "in_progress"
-          ? "Current turn"
-          : turn.status === "interrupted"
-            ? "Interrupted turn"
-            : turn.status === "failed"
-              ? "Failed turn"
-              : "Completed turn";
+        turn.status === "interrupted"
+          ? "Interrupted turn"
+          : turn.status === "failed"
+            ? "Failed turn"
+            : "Completed turn";
       return { short: status, full: status.toLocaleLowerCase() };
     }
     return {
@@ -96,11 +96,13 @@ export const TurnForkDivider = memo(function TurnForkDivider({
   // Their timestamps still need formatting only when the label inputs change.
   const { completedAt, status } = turn;
   const time = useMemo(
-    () => completionLabel({ completedAt, status }, turnNumber),
+    () => status === "in_progress"
+      ? undefined
+      : completionLabel({ completedAt, status }, turnNumber),
     [completedAt, status, turnNumber],
   );
 
-  if (status === "in_progress") return null;
+  if (!time) return null;
 
   const copyResponse = async () => {
     if (!copyText) return;
