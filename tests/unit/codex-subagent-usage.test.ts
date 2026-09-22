@@ -234,6 +234,37 @@ describe("Codex subagent usage coordinator", () => {
     await rootLease.release(true);expect(retire).toHaveBeenCalledOnce();
   });
 
+  it("releases old-generation child leases even when replacement inventory fails", async () => {
+    const retire=vi.fn(async()=>undefined),residency=new RetainedRuntimeLifecycle({wake:()=>undefined,retire}),rootLease=residency.retain();
+    const f=fixture([],residency);f.coordinator.registerRoot(binding);f.spawn("child");
+    f.request.mockRejectedValueOnce(new Error("loaded_list_failed"));f.reconnect();
+    await vi.waitFor(()=>expect(f.onError).toHaveBeenCalledOnce());
+    await rootLease.release(true);expect(retire).toHaveBeenCalledOnce();
+  });
+
+  it.each(["systemError","notLoaded"])("does not retain an unhealthy recovered child with status %s", async status => {
+    const retire=vi.fn(async()=>undefined),residency=new RetainedRuntimeLifecycle({wake:()=>undefined,retire}),rootLease=residency.retain();
+    const f=fixture([{nativeSession:"child",nativeParentSession:"root",epoch:"native-counter-v1",normalizationVersion:"v1",captureState:"disconnected"}],residency);
+    f.request.mockResolvedValueOnce({result:{data:["child"],nextCursor:null},generation:1,inboundSequence:1})
+      .mockResolvedValueOnce({result:{thread:{id:"child",status:{type:status}}},generation:1,inboundSequence:2});
+    f.coordinator.registerRoot(binding);
+    await vi.waitFor(()=>expect(f.captures.get("child")?.seal).toHaveBeenCalledWith("closed"));
+    expect(f.captures.get("child")?.gap).toHaveBeenCalledWith("capture_gap");
+    await rootLease.release(true);expect(retire).toHaveBeenCalledOnce();
+  });
+
+  it("records capacity gaps once without letting a rejected pending child block later entries", () => {
+    const f=fixture();f.coordinator.registerRoot(binding);
+    for(let index=0;index<4096;index++)f.spawn(`child-${index}`);
+    f.spawn("rejected-a");f.spawn("rejected-b");
+    expect(f.open.mock.calls.filter(([input])=>input.nativeSession==="rejected-a")).toHaveLength(1);
+    expect(f.captures.get("rejected-b")?.gap).toHaveBeenCalledWith("capture_gap");
+    f.client.forwardNotification(1,{kind:"decoded_notification",method:"thread/closed",params:{threadId:"child-0"},generation:1,sequence:5000});
+    f.spawn("admitted-after-close");f.usage("admitted-after-close",10);
+    expect(f.observations.get("admitted-after-close")).toHaveLength(1);
+    expect(f.captures.get("admitted-after-close")?.gap).not.toHaveBeenCalled();
+  });
+
   it("does not resume already recovered children again when another root is registered", async () => {
     const restored=[{nativeSession:"child",nativeParentSession:"root",epoch:"native-counter-v1",normalizationVersion:"v1",captureState:"idle" as const}];
     const f=fixture(restored,undefined,[binding],["child"]);

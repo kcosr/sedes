@@ -170,9 +170,16 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
       if (this.#abandoning || remaining <= 0 || client.lifecycleSnapshot().generation !== input.generation || client.lifecycleSnapshot().state !== "ready" || this.#retainedBytes + this.#pendingBytes > this.#maximumBytes) {
         throw new CodexRpcDeliveryError({ code: "codex_runtime_dispatch_unavailable", delivery: "not_sent", generation: input.generation, method: input.method });
       }
+      let resume: ReturnType<CodexRuntimeSessions["trackResume"]> | undefined;
+      try {
+        if (input.method === "thread/resume") resume = this.#sessions!.trackResume((params as { threadId: string }).threadId, input.generation);
+      } catch (error) {
+        if (error instanceof Error && error.message === "codex_runtime_resume_already_pending") {
+          throw new CodexRpcDeliveryError({ code: "codex_runtime_resume_already_pending", delivery: "not_sent", generation: input.generation, method: input.method, cause: error });
+        }
+        throw error;
+      }
       operation.dispatched = true;
-      const resume = input.method === "thread/resume"
-        ? this.#sessions!.trackResume((params as { threadId: string }).threadId, input.generation) : undefined;
       try {
         const receipt = await client.requestWithReceipt(method, params, { timeoutMilliseconds: remaining });
         if (!this.#abandoning) {

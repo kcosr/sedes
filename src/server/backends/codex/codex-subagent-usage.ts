@@ -62,6 +62,9 @@ export class CodexSubagentUsageCoordinator {
     const changed = snapshot.generation !== this.#generation;
     if ((!ready && this.#ready) || changed) {
       for (const child of this.#children.values()) {
+        // A replacement process has no work protected by the old lease.
+        // Do not send an eviction carrying the old generation to the new host.
+        if (changed) this.#release(child, false);
         if (child.active && child.captureOpen) {
           child.capture.gap("capture_gap");
           child.capture.seal("detached");
@@ -189,9 +192,13 @@ export class CodexSubagentUsageCoordinator {
         const binding = this.#roots.get(parent) ?? this.#children.get(parent)?.binding;
         if (!binding) continue;
         if (this.#children.size >= MAX_CHILDREN) {
+          this.#pendingParents.delete(id);
+          this.#pendingCounters.delete(id);
+          this.#pendingActivity.delete(id);
           const rejected=this.#open(binding,id,parent);
           rejected.gap("capture_gap");rejected.seal("detached");
-          throw new Error("codex_subagent_capture_limit");
+          this.#diagnose(new Error("codex_subagent_capture_limit"));
+          continue;
         }
         const capture = this.#open(binding, id, parent);
         const active = this.#pendingActivity.get(id) ?? restored.get(id) !== "idle";
@@ -319,10 +326,14 @@ export class CodexSubagentUsageCoordinator {
           continue;
         }
         if (receipt.result.thread.status.type === "idle") this.#idle(child);
-        else {
+        else if (receipt.result.thread.status.type === "active") {
           const wasIdle=!child.active;
           this.#activate(id,child);
           if(wasIdle && child.sequence<0)child.capture.gap("capture_gap");
+        } else {
+          this.#ensureCapture(id,child);
+          child.capture.gap("capture_gap");
+          this.#idle(child);
         }
       } catch (error) {
         if (!current()) return;
@@ -333,13 +344,13 @@ export class CodexSubagentUsageCoordinator {
     }
   }
 
-  #release(child: Child): void {
+  #release(child: Child, detach = true): void {
     const lease = child.lease;
     child.lease = undefined;
     const generation=child.generation;
     // Persistent hosts retain a session independently of the local runtime
     // lease. Eviction releases that host record without native unsubscribe.
-    const detached=this.input.client.persistentSessions?.detachThread(child.id,generation,true) ?? Promise.resolve();
+    const detached=(detach ? this.input.client.persistentSessions?.detachThread(child.id,generation,true) : undefined) ?? Promise.resolve();
     void detached.catch(error=>this.#diagnose(error)).then(()=>lease?.release()).catch(error=>this.#diagnose(error));
   }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-runtime-host.js";
+import { CodexRuntimeSessions } from "../../src/server/backends/codex/runtime/codex-runtime-sessions.js";
 import { CodexRuntimeClient } from "../../src/server/backends/codex/runtime/codex-runtime-client.js";
 import { CodexSharedClientFacade } from "../../src/server/backends/codex/codex-client-facade.js";
 import { codexRuntimeMethod, type CodexRuntimeAuthority, type CodexRuntimeEvent } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
@@ -28,6 +29,21 @@ function fixture() {
 const sink: CodexRuntimeReceiptSink = { reserve: () => { throw new Error("not used"); }, recordOutcome: () => "untracked", pending: () => [], reconcileRecordedApplicationState: () => 0, releaseRejected: () => false, compactRetiredRuntime: () => 0 };
 
 describe("persistent Codex runtime ownership", () => {
+  it("reports a refused resume tracker allocation as not sent without dispatching native work", async () => {
+    const f = fixture();
+    await f.connect();
+    const tracker = vi.spyOn(CodexRuntimeSessions.prototype, "trackResume").mockImplementationOnce(() => {
+      throw new Error("codex_runtime_resume_already_pending");
+    });
+    try {
+      await f.host.submit(authority, { ...request, method: "thread/resume", params: { threadId: "thread", excludeTurns: true } });
+      await vi.waitFor(() => expect(f.host.readRetainedOutcome(request.operationId)).toMatchObject({ status: "failed", method: "thread/resume",
+        failure: { kind: "delivery", code: "codex_runtime_resume_already_pending", delivery: "not_sent", generation: 1, method: "thread/resume" } }));
+      expect(f.dispatch).not.toHaveBeenCalled();
+      await f.host.acknowledge(authority, request.operationId);
+    } finally { tracker.mockRestore(); }
+  });
+
   it("uses definitions identity rather than resolved environment values for replay", async () => {
     const f = fixture(); await f.connect();
     const input = { ...request, method: "thread/start" as const,
