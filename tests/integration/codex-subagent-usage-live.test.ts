@@ -135,7 +135,8 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
         await handle.close(); handle = undefined;
         // Revisions belong to the whole conversation and advance on child
         // updates. All actual main-turn accounting must remain identical.
-        const readMainTurns = () => (database.prepare("SELECT turn_id,report_json FROM usage_turn_state ORDER BY turn_id").all() as {turn_id:string;report_json:string}[])
+        const turnDatabase = database;
+        const readMainTurns = () => (turnDatabase.prepare("SELECT turn_id,report_json FROM usage_turn_state ORDER BY turn_id").all() as {turn_id:string;report_json:string}[])
           .map(row => ({turnId: row.turn_id, report: {...JSON.parse(row.report_json), revision: "ignored"}}));
         const mainTurns = readMainTurns();
         expect(mainTurns.length).toBeGreaterThan(0);
