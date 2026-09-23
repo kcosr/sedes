@@ -1166,7 +1166,7 @@ Backends that cannot establish a value pass `null`. Audit per backend:
 | Backend | Attribution |
 | --- | --- |
 | Pi | Thinking level from the latest `thinking_level_change` ancestor on the entry's native branch; model and provider stay fact-reported. |
-| Codex | The generation-fenced, provider-confirmed `#model` tuple. A `turn/start` whose delivery outcome is unknown suppresses it until a new confirmation. Subagent counters carry none. |
+| Codex | The generation-fenced, provider-confirmed `#model` tuple. Attribution is withheld while a `turn/start` that changes the tuple awaits its receipt, and after one whose delivery outcome is unknown until a new confirmation. Subagent counters carry none. |
 | Claude | The effort applied and confirmed before the result arrives, for the confirmed model's `modelUsage` row only; helper and subagent models in the same delta keep none. |
 | Grok | Unsupported; no usage is captured. |
 

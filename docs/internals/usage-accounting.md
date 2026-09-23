@@ -260,7 +260,7 @@ clients; it advances atomically with changed reports.
 | Backend | Evidence captured | Session scope | Turn scope | Model and cost | Attribution |
 | --- | --- | --- | --- | --- | --- |
 | Pi | Each usage-bearing native entry: assistant messages (one request each), tool results, compaction and branch summaries, and built-in cache warming. Other extension usage entries are retained without being added. | Additive entries, including inactive branches and idle work | Sum of the turn's entries (`whole_turn`) | Reported per entry; SDK cost estimate per entry | Thinking level from the entry's native branch |
-| Codex | Cumulative `thread/tokenUsage/updated` totals as a session checkpoint, the latest call as lower-scope evidence, and derived turn intervals | Latest valid checkpoint of one native counter series across reconnects | Differences between continuous, owned checkpoints (`main_loop`, or `partial_interval` without a proven baseline) | Not reported; no cost | Provider-confirmed effective model, provider, and effort for the current runtime generation |
+| Codex | Cumulative `thread/tokenUsage/updated` totals as a session checkpoint, the latest call as lower-scope evidence, and derived turn intervals | Latest valid checkpoint of one native counter series across reconnects | Differences between continuous, owned checkpoints (`main_loop`, or `partial_interval` without a proven baseline) | Not reported; no cost | Provider-confirmed effective model, provider, and effort for the current runtime generation, withheld while a tuple-changing `turn/start` awaits its receipt |
 | Codex subagents | Each child's cumulative lifetime counter under the root thread | Included once in the root session with a main/subagent breakdown | Never allocated to parent turns | Not reported; no cost | None |
 | Claude | Per-query cumulative `modelUsage` checkpoints and the query cost estimate; per-turn result usage; main-loop assistant messages | Sum of disjoint query epochs' latest checkpoints | Result `usage` as `main_loop`; messages until the result arrives | Reported per model; SDK cumulative estimate | Applied effort for the confirmed model's row |
 | Grok | None; declares `usageAccounting: "unsupported"` | Unsupported | Unsupported | — | — |
@@ -340,9 +340,10 @@ increase of a source's selected session totals.
 - A checkpoint fact contributes its difference from the previous accepted
   value of the same fact in the same source. A fact first seen after the
   series began started from zero within it.
-- A replaced snapshot that drops a member, or shrinks one while its total
-  grows, is written as one model-less snapshot row for the whole delta, so rows
-  still sum to the selected totals.
+- A replaced snapshot that drops a member, shrinks one, or stops reporting one
+  of its metrics or its cost while the total still grows is written as one
+  model-less snapshot row for the whole delta, so rows still sum to the selected
+  totals.
 - `none` facts, legacy snapshots, inherited facts, and ignored, locked, or
   regressing evidence contribute nothing.
 
@@ -366,7 +367,9 @@ counted as unpriced.
 
 Continuity belongs to one `open()` incarnation. The first checkpoint is
 continuous only for a proven-zero source with no accepted checkpoint yet. A
-`gap()`, seal, or failed write breaks continuity. A checkpoint that passes the
+`gap()`, seal, failed write, observation dropped as invalid evidence, or
+rejected checkpoint breaks continuity, since the next delta may then cover an
+unobserved checkpoint. A checkpoint that passes the
 frontier, lock, and regression checks restores it, even when no value changed,
 and `usage_sources.timeline_receipt` records its receipt as the start of any
 later interval. Members of one snapshot share the continuity in force before
@@ -384,8 +387,13 @@ it, and an accepted snapshot continues the next one in the same batch.
   such as `[1m]`). Helper and subagent models in the same Claude delta receive
   none.
 - A Claude query-cost summary is split across per-model rows only when the
-  supplied per-model totals add up to it within 10⁻⁹ per row. Otherwise the
-  cost delta is recorded on a model-less row.
+  supplied per-model totals add up to it within 10⁻⁹ per row, and the previous
+  snapshot of the series was split the same way (or there was none). Otherwise
+  the summary's cost delta is recorded on a model-less row, so a series that
+  starts reporting per-model totals is never charged twice.
+- Codex attributes nothing while a `turn/start` that changes the model or
+  effort awaits its receipt, since that turn's usage can arrive before the
+  receipt confirms the new tuple.
 
 ### Rebuilds
 
@@ -441,7 +449,11 @@ The response contains:
 - **Breakdowns** for every dimension (top `breakdownLimit` rows, Other, and a
   distinct count), an optional **matrix** of `groupBy` × `crossBy` (up to 2,000
   cells), and optional **facets** (up to 60 choices per dimension, each ranked
-  under every other dimension's filter but not its own).
+  under every other dimension's filter but not its own). `facetSearch` narrows
+  one dimension's choices by ID, model name, or the principal's own thread
+  title, project name or path, environment label, or backend label, so values
+  outside the top 60 stay reachable. Other dimensions have few values and are
+  searched in the client.
 - **Heatmap** of local weekday by hour from `reported` and `observed` rows,
   aggregated at 15-minute resolution so every zone offset maps exactly.
 - **Placement**: reported, observed, placed intervals, intervals spanning more
@@ -536,8 +548,8 @@ explicit null-aware predicates so unknown keys fold into Other correctly.
 - Analytics aggregates are computed on each request (roughly thirty indexed
   range scans). Very large all-time ranges are the most expensive reads.
 - Series show seven keys plus Other; breakdowns at most 100 rows; the matrix at
-  most 2,000 cells; facets 60 choices; filters 50 values per dimension; charts
-  500 buckets. Only the most common currency is charted.
+  most 2,000 cells; facets 60 choices per search; filters 50 values per
+  dimension; charts 500 buckets. Only the most common currency is charted.
 - Per-request drilldown, a pricing engine, provider invoice reconciliation, and
   multi-principal administration are not implemented. Production exposes one
   local principal.

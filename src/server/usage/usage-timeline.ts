@@ -51,8 +51,15 @@ function modelTotal(fact: UsageFact | undefined, currency: string): bigint | nul
  * A cost-only checkpoint member may be split across the token-bearing members
  * of the same snapshot when their supplied per-model totals add up to it.
  * The split is an attribution of the same charge, never an additional one.
+ * Per-model deltas are exact only against a previous snapshot that split the
+ * same way (or an empty one); otherwise the summary delta stays model-less.
  */
-export function costSplit(facts: readonly UsageFact[]): {summaryIds: Set<string>; currency: string; kind: Cost["kind"]} | null {
+export function costSplit(facts: readonly UsageFact[], previous: readonly UsageFact[] = []): {summaryIds: Set<string>; currency: string; kind: Cost["kind"]} | null {
+  const current = splitOf(facts);
+  if (!current || !previous.some((fact) => fact.sessionContribution === "checkpoint")) return current;
+  return splitOf(previous)?.currency === current.currency ? current : null;
+}
+function splitOf(facts: readonly UsageFact[]): {summaryIds: Set<string>; currency: string; kind: Cost["kind"]} | null {
   const checkpoints = facts.filter((fact) => fact.sessionContribution === "checkpoint");
   const summaries = checkpoints.filter((fact) => fact.costs.length > 0 && Object.values(fact.tokens).every((value) => value == null));
   const parts = checkpoints.filter((fact) => Object.values(fact.tokens).some((value) => value != null));
@@ -145,9 +152,10 @@ export function snapshotReshaped(before: readonly UsageFact[], after: readonly U
   return before.some((old) => {
     const fact = next.get(old.id);
     if (!fact) return true;
-    const shrank = TOKEN_COLUMNS.some(([key]) => old.tokens[key] != null && fact.tokens[key] != null && BigInt(fact.tokens[key]!) < BigInt(old.tokens[key]!));
+    // A known metric that disappears is reshaped too: its earlier rows would otherwise stay counted.
+    const shrank = TOKEN_COLUMNS.some(([key]) => old.tokens[key] != null && (fact.tokens[key] == null || BigInt(fact.tokens[key]!) < BigInt(old.tokens[key]!)));
     const oldCost = factCost(old), newCost = factCost(fact);
-    return shrank || (oldCost !== null && newCost !== null && oldCost.currency === newCost.currency && newCost.units < oldCost.units);
+    return shrank || (oldCost !== null && (newCost === null || (oldCost.currency === newCost.currency && newCost.units < oldCost.units)));
   });
 }
 /** Sum a snapshot's members into one model-less fact for a snapshot-level delta. */
@@ -242,7 +250,7 @@ export function backfillUsageTimeline(database: Database.Database, source: Timel
       return old.length > 0 && (!now.length || now.reduce((n, f) => n + BigInt(f.tokens[key]!), 0n) < old.reduce((n, f) => n + BigInt(f.tokens[key]!), 0n));
     });
     if (regressed) break;
-    const split = costSplit(checkpoints);
+    const split = costSplit(checkpoints, before);
     const summaryCost = checkpoints.some((fact) => fact.costs.length > 0);
     const receipt = timelineInstant(row.received_at);
     const time: TimelineTime = previousReceipt !== null

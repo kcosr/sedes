@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ArrowUpRight, ListFilter, Search } from "lucide-react";
 import type { UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
 import { openThreadRoute, pointerPanelPresentation } from "../workspace-panels/thread-panel-navigation.js";
-import { dimensionLabel, formatCount, formatCost, formatMetric, formatPercent, metricValue, toNumber, type UsageMetric } from "./usage-format.js";
+import { dimensionLabel, formatCount, formatCost, formatMetric, formatPercent, metricReported, metricValue, toNumber, type UsageMetric } from "./usage-format.js";
 import { toggleFilter, type UsageFilterState } from "./usage-settings.js";
 import { DimensionIcon, MenuSelect, UsageCard } from "./usage-ui.js";
 
@@ -41,8 +41,9 @@ export function UsageThreads({ data, filters, onFilters }: {
         <ol className="usage-thread-list">
           {rows.map(({ row, label }) => {
             const value = metricValue(row.totals, sort, currency);
+            const reported = metricReported(row.totals, sort);
             const input = toNumber(row.totals.input);
-            const cached = input > 0 ? toNumber(row.totals.cacheRead) / input : null;
+            const cached = input > 0 && metricReported(row.totals, "cacheRead") ? toNumber(row.totals.cacheRead) / input : null;
             const cost = row.totals.costs.find((entry) => entry.currency === currency);
             const filtered = filters.thread?.includes(row.key) ?? false;
             return (
@@ -62,7 +63,7 @@ export function UsageThreads({ data, filters, onFilters }: {
                 </button>
                 <dl className="usage-thread-figures">
                   <div><dt>{sort === "cost" ? "Cost" : sort === "tokens" ? "Tokens" : sort.charAt(0).toUpperCase() + sort.slice(1)}</dt>
-                    <dd><strong>{formatMetric(value, sort, currency, true)}</strong><small>{total > 0 ? formatPercent(value / total) : "–"}</small></dd></div>
+                    <dd><strong>{reported ? formatMetric(value, sort, currency, true) : "—"}</strong><small>{reported && total > 0 ? formatPercent(value / total) : "–"}</small></dd></div>
                   {sort !== "cost" ? <div><dt>Cost</dt><dd>{cost ? formatCost(cost.amount, currency) : "—"}</dd></div> : <div><dt>Tokens</dt><dd>{formatCount(row.totals.tokens)}</dd></div>}
                   <div><dt>Cached</dt><dd>{cached === null ? "—" : formatPercent(cached)}</dd></div>
                 </dl>

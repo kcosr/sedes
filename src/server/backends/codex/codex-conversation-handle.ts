@@ -452,6 +452,9 @@ export class CodexConversationHandle implements ConversationHandle {
   // A turn/start with an unknown outcome may have replaced this confirmed
   // tuple. It attributes no usage until a provider observation replaces it.
   #unconfirmedUsageModel: object | undefined;
+  // A turn/start in flight may run a different tuple before its receipt
+  // updates #model; usage in that window attributes nothing unless unchanged.
+  #pendingUsageTuple: { readonly model: string; readonly reasoningEffort: string | null } | undefined;
   #modelInputModalities: readonly ("text" | "image")[] = ["text"];
   #closing = false;
   #closed = false;
@@ -1337,6 +1340,7 @@ export class CodexConversationHandle implements ConversationHandle {
           this.#establishedGeneration
             ? this.#lastSettingsObservationInboundSequence
             : 0;
+        this.#pendingUsageTuple = { model: executionSettings.model, reasoningEffort: executionSettings.reasoningEffort ?? null };
         const response = await this.#client.requestWithReceipt(
           codexTurnStartMethod,
           {
@@ -1407,6 +1411,7 @@ export class CodexConversationHandle implements ConversationHandle {
           { timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS, runtimeCorrelation: { kind: "start", applicationOperationId: input.applicationOperationId, applicationThreadId: this.binding.applicationThreadId } },
         );
         submissionBoundaryCrossed = true;
+        this.#pendingUsageTuple = undefined;
         this.#assertMutationReceipt(response.generation);
         if (
           this.#lastSettingsObservationGeneration !== response.generation ||
@@ -1503,6 +1508,7 @@ export class CodexConversationHandle implements ConversationHandle {
         });
         return result;
       } catch (error) {
+        this.#pendingUsageTuple = undefined;
         if (
           !submissionBoundaryCrossed &&
           error instanceof CodexRpcDeliveryError &&
@@ -3908,8 +3914,11 @@ export class CodexConversationHandle implements ConversationHandle {
         ].parse(notification.params);
         // #model holds only provider-confirmed tuples (turn/start receipt,
         // resume reply, settings notification) for the established generation.
+        const pending = this.#pendingUsageTuple;
         const model = notification.generation === this.#establishedGeneration &&
-          this.#model !== this.#unconfirmedUsageModel ? this.#model : undefined;
+          this.#model !== this.#unconfirmedUsageModel &&
+          (!pending || (pending.model === this.#model?.id && pending.reasoningEffort === (this.#model?.reasoningEffort ?? null)))
+          ? this.#model : undefined;
         this.#usageCapture.observe({ generation: notification.generation, sequence: notification.sequence,
           turnId: parsed.turnId, usage: parsed.tokenUsage,
           attribution: model ? { model: { provider: model.provider ?? null, model: model.id }, reasoningEffort: model.reasoningEffort ?? null }

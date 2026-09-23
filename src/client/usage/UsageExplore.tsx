@@ -26,6 +26,32 @@ export function csvCell(value: string): string {
   return /[",\n\r]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
 }
 
+/**
+ * CSV for what Explore shows: the row table, or the split matrix in long form.
+ * Blank cells mean "not reported"; zero is exported only when a record reported it.
+ */
+export function exploreCsv(data: UsageAnalyticsResponse, dimension: UsageAnalyticsDimension, columns: UsageAnalyticsDimension | null,
+  rows: readonly { readonly label: DimensionLabel; readonly totals: UsageAnalyticsAggregate }[]): string {
+  const currency = data.costCurrency;
+  const metrics = (totals: UsageAnalyticsAggregate): string[] => {
+    const known = (metric: string, value: string) => metricReported(totals, metric) ? value : "";
+    return [metricReported(totals, "input") || metricReported(totals, "output") ? totals.tokens : "",
+      known("input", totals.input), known("input", totals.uncachedInput), known("cacheRead", totals.cacheRead), known("cacheWrite", totals.cacheWrite),
+      known("output", totals.output), known("reasoning", totals.reasoning), known("requests", totals.requests),
+      totals.costs.find((cost) => cost.currency === currency)?.amount ?? "", totals.threads];
+  };
+  const header = ["Tokens", "Input", "Uncached input", "Cache read", "Cache write", "Output", "Reasoning", "Requests", `Estimated cost (${currency})`, "Threads"];
+  const split = columns && data.matrix ? data.matrix : null;
+  const lines = split
+    ? [[DIMENSION_META[dimension].label, "Detail", DIMENSION_META[split.columns].label, ...header],
+      ...split.cells.map((cell) => {
+        const row = dimensionLabel(data.labels, dimension, cell.row), column = dimensionLabel(data.labels, split.columns, cell.column);
+        return [row.label, row.detail ?? "", column.label, ...metrics(cell.totals)];
+      })]
+    : [[DIMENSION_META[dimension].label, "Detail", ...header], ...rows.map((row) => [row.label.label, row.label.detail ?? "", ...metrics(row.totals)])];
+  return lines.map((line) => line.map(csvCell).join(",")).join("\n");
+}
+
 function columnValue(row: ExploreRow, column: Column, currency: string, total: number): number {
   if (column === "share") return total > 0 ? toNumber(row.totals.tokens) / total : 0;
   if (column === "threads") return toNumber(row.totals.threads);
@@ -69,15 +95,10 @@ export function UsageExplore({ data, settings, onSettings, filters, onFilters }:
   };
 
   const exportCsv = () => {
-    const header = [DIMENSION_META[dimension].label, "Detail", "Tokens", "Input", "Uncached input", "Cache read", "Cache write", "Output", "Reasoning", "Requests", `Estimated cost (${currency})`, "Threads"];
-    const lines = [header, ...sorted.map((row) => [row.label.label, row.label.detail ?? "", row.totals.tokens, row.totals.input, row.totals.uncachedInput,
-      row.totals.cacheRead, row.totals.cacheWrite, row.totals.output, row.totals.reasoning, row.totals.requests,
-      row.totals.costs.find((cost) => cost.currency === currency)?.amount ?? "", row.totals.threads])];
-    const csv = lines.map((line) => line.map(csvCell).join(",")).join("\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const url = URL.createObjectURL(new Blob([exploreCsv(data, dimension, settings.exploreColumns, sorted)], { type: "text/csv" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `sedes-usage-by-${dimension}-${data.from.slice(0, 10)}-${data.to.slice(0, 10)}.csv`;
+    link.download = `sedes-usage-by-${dimension}${settings.exploreColumns && data.matrix ? `-and-${settings.exploreColumns}` : ""}-${data.from.slice(0, 10)}-${data.to.slice(0, 10)}.csv`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };

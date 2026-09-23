@@ -298,6 +298,66 @@ describe("usage timeline review regressions", () => {
   });
 });
 
+describe("usage timeline second review regressions", () => {
+  it("does not recount cost when a later snapshot first allows a per-model split", () => {
+    const db = database("claude_agent_sdk"), service = new UsageService(db), capture = service.open(source());
+    const model = (name: string, input: string, cost?: string) => fact(`model:${name}`, {input, output: "0"}, {kind: "cumulative", sessionContribution: "checkpoint",
+      models: [{provider: null, model: name}], ...(cost ? {pricing: {canonicalModel: null, basis: null, components: [{kind: "model_total" as const, amount: cost, currency: "USD"}]}} : {})});
+    const summary = (amount: string) => fact("query_cost", {}, {kind: "cumulative", sessionContribution: "checkpoint", models: [], costs: [{amount, currency: "USD", kind: "estimated", provenance: "sdk"}]});
+    at("2026-09-02T10:00:00Z"); capture.capture([{...counter("a", {}), facts: [model("opus", "100"), summary("0.5")]}]);
+    at("2026-09-02T10:05:00Z"); capture.capture([{...counter("b", {}), facts: [model("opus", "150", "0.7"), summary("0.7")]}]);
+    at("2026-09-02T10:10:00Z"); capture.capture([{...counter("c", {}), facts: [model("opus", "180", "0.9"), summary("0.9")]}]);
+    expect(service.analytics(scope, request()).totals.costs[0]?.amount).toBe("0.9");
+    expect(service.read(scope, "thread").summary.costs[0]?.amount).toBe("0.9");
+  });
+
+  it("treats a member metric that stops being reported as a reshaped snapshot", () => {
+    const db = database("claude_agent_sdk"), service = new UsageService(db), capture = service.open(source());
+    const model = (name: string, tokens: UsageFact["tokens"]) => fact(`model:${name}`, tokens, {kind: "cumulative", sessionContribution: "checkpoint", models: [{provider: null, model: name}]});
+    at("2026-09-02T10:00:00Z"); capture.capture([{...counter("a", {}), facts: [model("opus", {input: "100", output: "1"}), model("haiku", {output: "1"})]}]);
+    at("2026-09-02T10:05:00Z"); capture.capture([{...counter("b", {}), facts: [model("opus", {input: null, output: "1"}), model("haiku", {input: "120", output: "1"})]}]);
+    const session = service.read(scope, "thread").summary.metrics.input.value;
+    expect(session).toBe("120");
+    expect(service.analytics(scope, request()).totals.input).toBe(session);
+  });
+
+  it("keeps the repeated daylight-saving hour in its own bucket", () => {
+    const {buckets} = zonedBuckets(Date.parse("2026-11-01T06:30:00Z"), Date.parse("2026-11-01T08:00:00Z"), "hour", "America/New_York");
+    expect(buckets.map((bucket) => new Date(bucket.start).toISOString())).toEqual(["2026-11-01T06:00:00.000Z", "2026-11-01T07:00:00.000Z"]);
+    const kathmandu = zonedBuckets(Date.parse("2026-09-01T18:20:00Z"), Date.parse("2026-09-01T19:00:00Z"), "hour", "Asia/Kathmandu");
+    expect(new Date(kathmandu.buckets[0]!.start).toISOString()).toBe("2026-09-01T18:15:00.000Z");
+  });
+
+  it("searches facet choices beyond the top ranked values by ID or name", () => {
+    const db = database("pi"), service = new UsageService(db), capture = service.open(source());
+    addThread(db, "quiet", "Quiet 100% thread");
+    at("2026-09-06T00:00:00Z");
+    capture.capture(Array.from({length: 65}, (_, index) => ({...counter(`m${index}`, {}), id: `m${index}`, replaceCheckpoint: false,
+      occurredAt: "2026-09-02T08:00:00.000Z", facts: [fact(`m${index}`, {input: String(1000 - index), output: "0"}, {models: [{provider: null, model: `model_${index}`}]})]})));
+    service.open(source("quiet")).capture([{...counter("q", {}), id: "q", replaceCheckpoint: false, occurredAt: "2026-09-02T09:00:00.000Z",
+      facts: [fact("q", {input: "1", output: "0"}, {models: [{provider: null, model: "model_0"}]})]}]);
+    const ranked = service.analytics(scope, request({facets: true}));
+    expect(ranked.facets?.model).toHaveLength(60);
+    expect(ranked.facets?.model.some((row) => row.key === "model_64")).toBe(false);
+    const found = service.analytics(scope, request({facets: true, facetSearch: {dimension: "model", text: "_64"}}));
+    expect(found.facets?.model.map((row) => row.key)).toEqual(["model_64"]);
+    const titled = service.analytics(scope, request({facets: true, facetSearch: {dimension: "thread", text: "100%"}}));
+    expect(titled.facets?.thread.map((row) => row.key)).toEqual(["quiet"]);
+    expect(titled.labels.thread.quiet?.label).toBe("Quiet 100% thread");
+    expect(service.analytics(scope, request({facets: true, facetSearch: {dimension: "thread", text: "%"}})).facets?.thread.map((row) => row.key)).toEqual(["quiet"]);
+  });
+
+  it("breaks continuity when evidence is dropped as invalid", () => {
+    const db = database(), service = new UsageService(db), capture = service.open(source());
+    at("2026-09-02T10:00:00Z"); capture.capture([counter("a", {input: "100", output: "0"})]);
+    at("2026-09-02T10:01:00Z"); capture.capture([{...counter("bad", {input: "120", output: "0"}), revision: ""}]);
+    at("2026-09-02T10:02:00Z"); capture.capture([counter("c", {input: "150", output: "0"})]);
+    expect(rows(db)).toMatchObject([{placement: "observed", input: 100}, {placement: "interval", input: 50, interval_start: "2026-09-02T10:00:00.000Z"}]);
+    at("2026-09-02T10:03:00Z"); capture.capture([counter("d", {input: "160", output: "0"})]);
+    expect(rows(db).at(-1)).toMatchObject({placement: "observed", input: 10});
+  });
+});
+
 describe("usage analytics reads", () => {
   it("scopes every aggregate to the requesting principal", () => {
     const db = database(), service = new UsageService(db);

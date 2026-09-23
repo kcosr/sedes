@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UsageAnalyticsAggregate, UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
-import { csvCell } from "./UsageExplore.js";
+import { csvCell, exploreCsv } from "./UsageExplore.js";
 import { dimensionLabel, formatCost, formatCount, metricReported, relativeChange, tokenMix } from "./usage-format.js";
 
 const aggregate = (overrides: Partial<UsageAnalyticsAggregate> = {}): UsageAnalyticsAggregate => ({
@@ -55,6 +55,18 @@ describe("usage presentation", () => {
     expect(csvCell("-1+2")).toBe("'-1+2");
     expect(csvCell("plain, with comma")).toBe("\"plain, with comma\"");
     expect(csvCell("12345")).toBe("12345");
+  });
+
+  it("exports unreported metrics as blank and follows an active split", () => {
+    const totals = aggregate({ tokens: "30", input: "30", output: "0", requests: "0", costs: [{ currency: "USD", amount: "0.5", kind: "estimated" }],
+      missing: { ...aggregate().missing, output: "2", requests: "2", cacheRead: "2" } });
+    const data = { costCurrency: "USD", labels, matrix: { rows: "model", columns: "effort", cells: [{ row: "opus", column: "high", totals }] } } as unknown as UsageAnalyticsResponse;
+    const rows = exploreCsv(data, "model", null, [{ label: dimensionLabel(labels, "model", "opus"), totals }]).split("\n");
+    expect(rows[0]).toBe("Model,Detail,Tokens,Input,Uncached input,Cache read,Cache write,Output,Reasoning,Requests,Estimated cost (USD),Threads");
+    expect(rows[1]).toBe("opus,,30,30,0,,0,,0,,0.5,1");
+    const split = exploreCsv(data, "model", "effort", []).split("\n");
+    expect(split[0]!.startsWith("Model,Detail,Reasoning effort,Tokens")).toBe(true);
+    expect(split[1]).toBe("opus,,High,30,30,0,,0,,0,,0.5,1");
   });
 
   it("reports change only against a nonzero previous period", () => {

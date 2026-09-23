@@ -48,7 +48,9 @@ export function zonedInstant(year: number, month: number, day: number, hour: num
 
 function startOf(bucket: UsageAnalyticsBucket, instant: number, timeZone: string): number {
   const local = localTime(instant, timeZone);
-  if (bucket === "hour") return zonedInstant(local.year, local.month, local.day, local.hour, timeZone);
+  // Subtract the local minutes rather than resolving the wall hour: the second
+  // occurrence of a repeated daylight-saving hour must not map to the first.
+  if (bucket === "hour") return instant - local.minute * 60_000 - (((instant % 60_000) + 60_000) % 60_000);
   if (bucket === "day") return zonedInstant(local.year, local.month, local.day, 0, timeZone);
   if (bucket === "month") return zonedInstant(local.year, local.month, 1, 0, timeZone);
   const date = new Date(Date.UTC(local.year, local.month - 1, local.day - local.weekday));

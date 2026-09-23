@@ -16,6 +16,13 @@ const COLUMN: Record<UsageAnalyticsDimension, string> = {
 const PLACED = "placement IN ('reported','observed','interval')";
 /** Unqualified columns are unambiguous against the bucket table `b(i,s,e)`. */
 const IN_BUCKET = "occurred_at >= b.s AND occurred_at < b.e AND (interval_start IS NULL OR interval_start >= b.s)";
+/** Name matches for searchable facets, scoped to the requesting principal's own rows. */
+const FACET_NAMES: Partial<Record<UsageAnalyticsDimension, string>> = {
+  thread: " OR thread_id IN (SELECT id FROM application_threads WHERE tenant_id=@tenant AND owner_principal_id=@principal AND title LIKE @facetLike ESCAPE '\\')",
+  workspace: " OR workspace_id IN (SELECT id FROM workspaces WHERE tenant_id=@tenant AND owner_principal_id=@principal AND (display_name LIKE @facetLike ESCAPE '\\' OR canonical_path LIKE @facetLike ESCAPE '\\'))",
+  environment: " OR environment_id IN (SELECT id FROM execution_environments WHERE tenant_id=@tenant AND owner_principal_id=@principal AND label LIKE @facetLike ESCAPE '\\')",
+  backend: " OR backend_id IN (SELECT id FROM agent_backend_instances WHERE tenant_id=@tenant AND (owner_principal_id IS NULL OR owner_principal_id=@principal) AND label LIKE @facetLike ESCAPE '\\')",
+};
 /** Rows outside a shown key list; unknown (NULL) keys fold into Other unless shown. */
 const outside = (column: string, list: string, includesNull: boolean) => includesNull
   ? `(${column} IS NOT NULL AND ${column} NOT IN (SELECT value FROM json_each(${list})))`
@@ -195,9 +202,12 @@ export class UsageAnalyticsService {
       // Each dimension's choices ignore only its own selection.
       const others = this.#filters(request, dimension);
       const column = COLUMN[dimension];
+      const search = request.facetSearch?.dimension === dimension ? request.facetSearch.text : null;
+      const matching = search === null ? "" : ` AND ${column} IS NOT NULL AND (${column} LIKE @facetLike ESCAPE '\\'${FACET_NAMES[dimension] ?? ""})`;
       return [dimension, (this.database.prepare(`SELECT ${column} AS key, SUM(COALESCE(input,0)+COALESCE(output,0)) AS tokens FROM usage_increments
-        WHERE ${scoped.sql}${others.sql} AND ${PLACED} AND ${within("@from", "@to")} GROUP BY ${column} ORDER BY tokens DESC, ${column} LIMIT ${USAGE_ANALYTICS_MAX_FACETS}`)
-        .safeIntegers().all({...base, ...others.values, from: iso(from), to: iso(to)}) as {key: string | null; tokens: bigint}[])
+        WHERE ${scoped.sql}${others.sql}${matching} AND ${PLACED} AND ${within("@from", "@to")} GROUP BY ${column} ORDER BY tokens DESC, ${column} LIMIT ${USAGE_ANALYTICS_MAX_FACETS}`)
+        .safeIntegers().all({...base, ...others.values, from: iso(from), to: iso(to),
+          ...(search === null ? {} : {facetLike: `%${search.replace(/[\\%_]/g, (character) => `\\${character}`)}%`})}) as {key: string | null; tokens: bigint}[])
         .map((row) => ({key: row.key === null ? null : String(row.key), tokens: String(row.tokens)}))];
     })) as NonNullable<UsageAnalyticsResponse["facets"]> : null;
     const coverage = this.#coverage(scope, where, values, request);

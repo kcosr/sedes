@@ -7527,6 +7527,36 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it("attributes nothing to usage processed before a changed turn tuple is confirmed", async () => {
+    const observations: UsageObservation[] = [];
+    const sink: UsageSink = { listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: vi.fn(() => ({ registerTurns: vi.fn(),
+      capture: (entries: readonly UsageObservation[]) => { observations.push(...entries); return true; }, reconcile: () => true, gap: vi.fn(), seal: vi.fn() })) };
+    const harness = new RpcHarness();
+    const settings = executionSettingsProvider({ freezeOperationSnapshot: () => ({ settings: executionSettingsTuple({ reasoningEffort: "high" }) }) });
+    const target = driver(harness, connection, undefined, undefined, settings, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, sink);
+    const handle = await attachIdle(harness, target);
+    await establish(harness, handle);
+    const usage = (total: number) => ({ threadId: "thread-1", turnId: "turn-1", tokenUsage: {
+      total: { inputTokens: total, outputTokens: 0, totalTokens: total, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+      last: { inputTokens: 10, outputTokens: 0, totalTokens: 10, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+      modelContextWindow: 1000 } });
+    harness.enqueue("turn/start", async (_params: unknown, current: RpcHarness) => {
+      // The new turn reports usage before the start receipt confirms its tuple.
+      current.notify("thread/tokenUsage/updated", usage(100));
+      await vi.waitFor(() => expect(observations).toHaveLength(1));
+      return { turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null } };
+    });
+    await handle.submit({ applicationOperationId: "tuple-change", source: { kind: "user" }, mutationId: "tuple-change-mutation",
+      reconciliationToken: "tuple-change-token", taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
+    harness.notify("thread/tokenUsage/updated", usage(150));
+    await vi.waitFor(() => expect(observations).toHaveLength(2));
+    expect(observations[0]!.attribution).toEqual({ model: null, reasoningEffort: null });
+    expect(observations[1]!.attribution).toEqual({ model: { provider: "openai", model: "gpt-5.6" }, reasoningEffort: "high" });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
   it.each([false, true])("does not allocate usage across a malformed native checkpoint (wire rejection=%s)", async wireRejected => {
     const observations: UsageObservation[] = [];
     const gap = vi.fn();

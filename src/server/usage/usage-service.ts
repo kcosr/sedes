@@ -272,7 +272,7 @@ export class UsageService implements UsageSink {
           changes=this.#materialize(scope,threadId);
         })();
         admitted=true; this.#incarnations.set(sourceId,incarnation);
-        if(context?.acceptedCheckpoint)continuous=true;
+        if(context)continuous=context.continuous;
         if(input.subagent){const failed=this.#failedSubagents.get(failedKey);failed?.delete(sourceId);if(failed?.size===0)this.#failedSubagents.delete(failedKey);}
         else this.#failed.delete(failedKey);
         for(const changed of changes)for (const listener of this.#listeners) { try { listener(scope,changed.threadId,changed.revision); } catch { /* Durable reads remain authoritative. */ } }
@@ -286,7 +286,9 @@ export class UsageService implements UsageSink {
         // Invalid attribution is dropped on its own; it never invalidates accounting evidence.
         const {attribution: rawAttribution, ...evidence}=raw;
         const attribution=rawAttribution===undefined ? undefined : attributionSchema.safeParse(rawAttribution).data;
-        const parsed=observationSchema.safeParse(evidence);if (!parsed.success || (input.subagent && parsed.data.facts.some(fact=>fact.turn!==null || fact.inheritedFrom!==undefined)) || Buffer.byteLength(JSON.stringify(parsed.data), "utf8") > 65_536) {this.#gap(sourceId,"invalid_evidence");continue;} this.#capture(scope,threadId,binding.backendInstanceId,sourceId,{...parsed.data,...(attribution ? {attribution} : {})},input.normalizationVersion,context); }}),
+        const parsed=observationSchema.safeParse(evidence);if (!parsed.success || (input.subagent && parsed.data.facts.some(fact=>fact.turn!==null || fact.inheritedFrom!==undefined)) || Buffer.byteLength(JSON.stringify(parsed.data), "utf8") > 65_536) {
+          // Dropped evidence may have been a checkpoint, so the next delta covers an unknown interval.
+          this.#gap(sourceId,"invalid_evidence");context.continuous=false;continue;} this.#capture(scope,threadId,binding.backendInstanceId,sourceId,{...parsed.data,...(attribution ? {attribution} : {})},input.normalizationVersion,context); }}),
       reconcile:() => run(() => {this.database.prepare("DELETE FROM usage_gaps WHERE source_id=? AND reason IN ('capture_gap','capture_failed')").run(sourceId);}),
       // A recorded gap means the next checkpoint may cover unobserved work.
       gap:(reason) => {continuous=false;return run(() => this.#gap(sourceId,usageReasonSchema.parse(reason)));},
@@ -334,7 +336,7 @@ export class UsageService implements UsageSink {
     const previousReceipt=source.timeline_receipt;
     const checkpoints=observation.facts.filter(f=>f.sessionContribution==="checkpoint" && !f.inheritedFrom);
     const snapshot=observation.replaceCheckpoint && checkpoints.length>0 && snapshotReshaped(oldFacts.filter(f=>f.sessionContribution==="checkpoint"),checkpoints);
-    const split=costSplit(observation.facts);
+    const split=costSplit(observation.facts,oldFacts.filter(f=>f.sessionContribution==="checkpoint"));
     // A cost-only checkpoint member prices the snapshot's token members even when it cannot be split by model.
     const summaryCost=observation.facts.some(f=>f.sessionContribution==="checkpoint" && f.costs.length>0);
     const siblingTurn=observation.facts.find(f=>f.turn)?.turn ?? null;
@@ -403,7 +405,8 @@ export class UsageService implements UsageSink {
       turnId:null,time:timeFor(checkpoints[0]!),attribution:observation.attribution,split:null,observationCosted:summaryCost}));
     // An accepted or identical checkpoint confirms the series up to this receipt,
     // so a later snapshot, in this batch or after a reopen, continues from it.
-    if(checkpoints.length && !rejected){
+    if(rejected)context.continuous=false;
+    else if(checkpoints.length){
       context.acceptedCheckpoint=true;context.continuous=true;
       this.database.prepare("UPDATE usage_sources SET timeline_receipt=? WHERE id=? AND (timeline_receipt IS NULL OR timeline_receipt<?)").run(receivedAt,sourceId,receivedAt);
     }

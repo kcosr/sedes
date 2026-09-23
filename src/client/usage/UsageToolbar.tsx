@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CalendarRange, ChevronDown, ListFilter, Search, X } from "lucide-react";
 import { Button } from "@client/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@client/components/ui/popover";
 import type { ApiClient } from "../api/ApiClient.js";
 import {
-  USAGE_ANALYTICS_MAX_FILTER_VALUES,
+  USAGE_ANALYTICS_MAX_FACETS, USAGE_ANALYTICS_MAX_FILTER_VALUES, USAGE_ANALYTICS_SEARCHABLE_FACETS,
   type UsageAnalyticsBucket, type UsageAnalyticsDimension, type UsageAnalyticsRequest, type UsageAnalyticsResponse,
 } from "../../shared/protocol/usage-analytics.js";
 import { useUsageAnalytics } from "./use-usage-analytics.js";
@@ -90,8 +90,16 @@ export function FilterPicker({ api, filters, onChange, buildRequest, requestKey,
   const [open, setOpen] = useState(false);
   const [dimension, setDimension] = useState<UsageAnalyticsDimension>("model");
   const [query, setQuery] = useState("");
-  const facets = useUsageAnalytics(api, open ? `facets:${requestKey}` : null,
-    () => ({ ...buildRequest(), groupBy: null, crossBy: null, breakdownLimit: 1, facets: true }));
+  // Choices beyond the top-ranked values are found by a debounced server search.
+  const [search, setSearch] = useState("");
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearch(query.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+  const searchable = (USAGE_ANALYTICS_SEARCHABLE_FACETS as readonly string[]).includes(dimension);
+  const facetSearch = searchable && search ? { dimension: dimension as (typeof USAGE_ANALYTICS_SEARCHABLE_FACETS)[number], text: search.slice(0, 120) } : undefined;
+  const facets = useUsageAnalytics(api, open ? `facets:${requestKey}:${facetSearch ? `${facetSearch.dimension}:${facetSearch.text}` : ""}` : null,
+    () => ({ ...buildRequest(), groupBy: null, crossBy: null, breakdownLimit: 1, facets: true, ...(facetSearch ? { facetSearch } : {}) }));
   const known = facets.data?.labels ?? labels;
   const count = activeFilterCount(filters);
   const selected = filters[dimension] ?? [];
@@ -133,7 +141,7 @@ export function FilterPicker({ api, filters, onChange, buildRequest, requestKey,
               aria-label={`Search ${DIMENSION_META[dimension].plural}`} />
           </label>
           <div className="usage-filter-options" role="group" aria-label={DIMENSION_META[dimension].plural} data-loading={facets.loading ? "true" : undefined}>
-            {choices.length === 0 ? <p className="usage-empty-note">{facets.loading ? "Loading…" : facets.error ? "Choices are unavailable." : "No values in this range"}</p> : null}
+            {choices.length === 0 ? <p className="usage-empty-note">{facets.loading ? "Loading…" : facets.error ? "Choices are unavailable." : query.trim() ? "No matching values in this range" : "No values in this range"}</p> : null}
             {choices.map((choice) => {
               const checked = selected.includes(choice.key);
               return (
@@ -149,6 +157,8 @@ export function FilterPicker({ api, filters, onChange, buildRequest, requestKey,
               );
             })}
           </div>
+          {!query.trim() && (facets.data?.facets?.[dimension].length ?? 0) >= USAGE_ANALYTICS_MAX_FACETS
+            ? <p className="usage-footnote">Showing the {USAGE_ANALYTICS_MAX_FACETS} largest. {searchable ? "Search to find others." : ""}</p> : null}
           {atLimit ? <p className="usage-footnote">Up to {USAGE_ANALYTICS_MAX_FILTER_VALUES} values can be selected per filter.</p> : null}
           <div className="usage-filter-actions">
             <Button variant="ghost" size="sm" disabled={!selected.length}

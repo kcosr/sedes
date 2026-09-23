@@ -8,7 +8,7 @@ import { TimeSeriesChart } from "./charts/TimeSeriesChart.js";
 import { seriesColor } from "./charts/chart-kit.js";
 import {
   GRANULARITY_LABEL, GRANULARITY_NOUN, TOKEN_MIX_LABELS, TOKEN_MIX_ORDER, bucketLabel, formatCost, formatCount, formatCountPrecise,
-  formatPercent, formatWholePercent, toNumber, tokenMix,
+  formatPercent, formatWholePercent, metricReported, toNumber, tokenMix,
 } from "./usage-format.js";
 import { Segmented, StatTile, UsageCard } from "./usage-ui.js";
 import { SeriesTable } from "./UsageOverview.js";
@@ -28,6 +28,9 @@ export function UsagePatterns({ data }: { readonly data: UsageAnalyticsResponse 
   const tokens = overall.tokens.map(toNumber);
   const busiest = tokens.reduce((best, value, index) => (value > (tokens[best] ?? 0) ? index : best), 0);
   const active = tokens.filter((value) => value > 0).length;
+  // Only drawn usage belongs to a bucket; recovered work spanning buckets is not averaged in.
+  const plotted = tokens.reduce((sum, value) => sum + value, 0);
+  const cacheReported = metricReported(data.totals, "cacheRead"), reasoningReported = metricReported(data.totals, "reasoning");
   const peak = [...data.heatmap].sort((a, b) => toNumber(b.tokens) - toNumber(a.tokens))[0];
   const input = toNumber(data.totals.input), output = toNumber(data.totals.output);
 
@@ -39,12 +42,13 @@ export function UsagePatterns({ data }: { readonly data: UsageAnalyticsResponse 
     return TOKEN_MIX_ORDER.map((part, slot) => ({ id: part, label: TOKEN_MIX_LABELS[part], color: seriesColor(slot), values: perBucket.map((mix) => mix[part]) }));
   }, [data.buckets, overall]);
   const totalMix = tokenMix({ input, cacheRead: toNumber(data.totals.cacheRead), cacheWrite: toNumber(data.totals.cacheWrite), output, reasoning: toNumber(data.totals.reasoning) });
+  // A ratio whose part was never reported is unknown, so its line is omitted rather than drawn at zero.
   const ratios = useMemo(() => [
-    { id: "cache", label: "Input read from cache", color: seriesColor(0),
-      values: data.buckets.map((_, index) => { const value = toNumber(overall.input[index]); return value > 0 ? toNumber(overall.cacheRead[index]) / value : 0; }) },
-    { id: "reasoning", label: "Output spent reasoning", color: seriesColor(1),
-      values: data.buckets.map((_, index) => { const value = toNumber(overall.output[index]); return value > 0 ? toNumber(overall.reasoning[index]) / value : 0; }) },
-  ], [data.buckets, overall]);
+    ...(cacheReported ? [{ id: "cache", label: "Input read from cache", color: seriesColor(0),
+      values: data.buckets.map((_, index) => { const value = toNumber(overall.input[index]); return value > 0 ? toNumber(overall.cacheRead[index]) / value : 0; }) }] : []),
+    ...(reasoningReported ? [{ id: "reasoning", label: "Output spent reasoning", color: seriesColor(1),
+      values: data.buckets.map((_, index) => { const value = toNumber(overall.output[index]); return value > 0 ? toNumber(overall.reasoning[index]) / value : 0; }) }] : []),
+  ], [data.buckets, overall, cacheReported, reasoningReported]);
   const missingCache = toNumber(data.totals.missing.cacheRead), missingReasoning = toNumber(data.totals.missing.reasoning);
   const records = toNumber(data.totals.increments);
 
@@ -55,10 +59,10 @@ export function UsagePatterns({ data }: { readonly data: UsageAnalyticsResponse 
           detail={tokens[busiest] ? bucketLabel(data.buckets[busiest]!, data.bucket) : "No usage"} />
         <StatTile label="Peak hour of the week" value={peak ? `${WEEKDAY_NAMES[peak.weekday]!.slice(0, 3)} ${formatHour(peak.hour)}` : "—"}
           detail={peak ? `${formatCount(peak.tokens)} tokens` : "No timed usage"} />
-        <StatTile label={`Average per active ${GRANULARITY_NOUN[data.bucket]}`} value={active ? formatCountPrecise(toNumber(data.totals.tokens) / active) : "—"}
+        <StatTile label={`Average per active ${GRANULARITY_NOUN[data.bucket]}`} value={active ? formatCountPrecise(plotted / active) : "—"}
           detail={`${active} of ${data.buckets.length} ${GRANULARITY_NOUN[data.bucket]}s active`} />
-        <StatTile label="Cache reuse" value={input > 0 ? formatWholePercent(toNumber(data.totals.cacheRead) / input) : "—"}
-          detail="of input read from cache" />
+        <StatTile label="Cache reuse" value={input > 0 && cacheReported ? formatWholePercent(toNumber(data.totals.cacheRead) / input) : "—"}
+          detail={cacheReported ? "of input read from cache" : "Cache reads not reported"} />
       </div>
 
       <UsageCard className="usage-card-wide" title="When usage happens"
@@ -89,7 +93,8 @@ export function UsagePatterns({ data }: { readonly data: UsageAnalyticsResponse 
         </UsageCard>
         <UsageCard title="Efficiency over time" subtitle={`${GRANULARITY_LABEL[data.bucket]} cache reuse and reasoning share`}
           actions={<TableToggle pressed={tables.has("ratios")} onToggle={() => toggleTable("ratios")} />}>
-          {tables.has("ratios") ? <SeriesTable data={data} series={ratios} format={formatPercent} /> : (
+          {ratios.length === 0 ? <p className="usage-empty-note">Cache reads and reasoning were not reported in this range.</p>
+            : tables.has("ratios") ? <SeriesTable data={data} series={ratios} format={formatPercent} /> : (
             <TimeSeriesChart buckets={data.buckets} granularity={data.bucket} series={ratios} mode="lines" maximum={1} height={180}
               format={formatWholePercent} formatTooltip={formatPercent} ariaLabel="Cache reuse and reasoning share over time" />
           )}

@@ -15,6 +15,8 @@ export const USAGE_ANALYTICS_MAX_BUCKETS = 500;
 export const USAGE_ANALYTICS_MAX_FILTER_VALUES = 50;
 export const USAGE_ANALYTICS_MAX_BREAKDOWN = 100;
 export const USAGE_ANALYTICS_MAX_FACETS = 60;
+/** Dimensions whose facet choices can be searched on the server. Others are few and labelled in the client. */
+export const USAGE_ANALYTICS_SEARCHABLE_FACETS = ["model", "backend", "environment", "workspace", "thread"] as const;
 /** Seven named series plus Other keep the categorical palette within eight slots. */
 export const USAGE_ANALYTICS_SERIES_LIMIT = 7;
 
@@ -38,6 +40,11 @@ export const usageAnalyticsRequestSchema = z.strictObject({
   breakdownLimit: z.number().int().min(1).max(USAGE_ANALYTICS_MAX_BREAKDOWN),
   /** Filter choices: each dimension ranked under every other dimension's filter. */
   facets: z.boolean(),
+  /**
+   * Narrow one dimension's facet choices by ID or name, so values outside the
+   * top-ranked choices stay reachable. Only ID-labelled dimensions and models search.
+   */
+  facetSearch: z.strictObject({ dimension: z.enum(USAGE_ANALYTICS_SEARCHABLE_FACETS), text: z.string().trim().min(1).max(120) }).optional(),
 });
 export type UsageAnalyticsRequest = z.infer<typeof usageAnalyticsRequestSchema>;
 

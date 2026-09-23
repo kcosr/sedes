@@ -20,8 +20,10 @@ The toolbar applies to everything on the page.
   daylight-saving changes; weeks start on Monday.
 - **Filter** narrows the page by model, provider, reasoning effort, backend,
   backend type, environment, project, thread, agent, or activity. The count
-  beside each choice already reflects your other filters. **Unknown model**,
-  **Not recorded**, and similar choices select usage without that detail.
+  beside each choice already reflects your other filters. The list shows the
+  60 largest values; type in its search box to find others by name. **Unknown
+  model**, **Not recorded**, and similar choices select usage without that
+  detail. Up to 50 values can be selected per filter.
 
 Select a row in any breakdown to filter to it, and select it again to remove
 the filter. Active filters appear as chips beside the toolbar. Filters last for
@@ -38,7 +40,8 @@ remembered in this browser.
   project, agent, and activity.
 - **Explore** is a sortable table of any dimension with every metric. Choose
   **Split** to compare two dimensions, such as model by reasoning effort.
-  **Export CSV** downloads the rows as shown.
+  **Export CSV** downloads what is shown: the table, or every combination of
+  the split. Blank cells mean the value was not reported.
 - **Threads** ranks threads by tokens, cost, input, output, or reasoning.
   Select a thread to open it.
 - **Patterns** shows when usage happens by weekday and hour, the token mix,

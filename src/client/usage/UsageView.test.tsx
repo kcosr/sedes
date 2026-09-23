@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   USAGE_ANALYTICS_DIMENSIONS, usageAnalyticsResponseSchema,
@@ -23,9 +24,11 @@ function response(request: UsageAnalyticsRequest, overrides: Partial<UsageAnalyt
   const empty: UsageAnalyticsResponse["breakdowns"]["model"] = { rows: [], other: null, distinct: "0" };
   const breakdowns = Object.fromEntries(USAGE_ANALYTICS_DIMENSIONS.map((dimension) => [dimension, empty])) as UsageAnalyticsResponse["breakdowns"];
   breakdowns.model = { rows: [{ key: "opus", totals: aggregate(2_000_000) }, { key: null, totals: aggregate(500_000, { costs: [] }) }], other: null, distinct: "2" };
-  breakdowns.thread = { rows: [{ key: "thread-1", totals: aggregate(2_500_000) }], other: null, distinct: "1" };
+  breakdowns.thread = { rows: [{ key: "thread-1", totals: aggregate(2_500_000) },
+    { key: "thread-2", totals: aggregate(400_000, { costs: [], uncostedTokens: "400000", missing: { ...aggregate(0).missing, cost: "4" } }) }], other: null, distinct: "2" };
   const labels = Object.fromEntries(USAGE_ANALYTICS_DIMENSIONS.map((dimension) => [dimension, {}])) as UsageAnalyticsResponse["labels"];
-  labels.thread = { "thread-1": { label: "Ship usage page", detail: null, kind: "pi", retired: false, workspaceId: null } };
+  labels.thread = { "thread-1": { label: "Ship usage page", detail: null, kind: "pi", retired: false, workspaceId: null },
+    "thread-2": { label: "Unpriced codex work", detail: null, kind: "codex_app_server", retired: false, workspaceId: null } };
   return usageAnalyticsResponseSchema.parse({
     generatedAt: "2026-09-23T12:00:00.000Z", timeZone: request.timeZone, from: "2026-09-21T00:00:00.000Z", to: "2026-09-23T12:00:00.000Z",
     firstRecordedAt: "2026-09-01T00:00:00.000Z", bucket: "day",
@@ -96,6 +99,40 @@ describe("UsageView", () => {
     const open = await screen.findByRole("button", { name: /^Ship usage page/ });
     fireEvent.click(open);
     expect(window.location.pathname).toBe("/threads/thread-1");
+  });
+
+  it("shows an unpriced thread's cost as unknown when sorted by cost", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByText("2.5M");
+    await user.click(screen.getByRole("tab", { name: "Threads" }));
+    await user.click(await screen.findByRole("button", { name: /Sort threads by/ }));
+    await user.click(await screen.findByRole("menuitemradio", { name: "Cost" }));
+    const row = (await screen.findByText("Unpriced codex work")).closest("li")!;
+    expect(within(row as HTMLElement).getByText("—")).toBeVisible();
+    expect(within(row as HTMLElement).queryByText("$0.00")).toBeNull();
+  });
+
+  it("keeps unreported cache reuse unknown and averages only drawn usage", async () => {
+    mount(async (request) => response(request, {
+      totals: aggregate(9_000_000, { missing: { ...aggregate(0).missing, cacheRead: "4" } }),
+    }));
+    await screen.findByText("9M");
+    fireEvent.click(screen.getByRole("tab", { name: "Patterns" }));
+    const tile = (label: string) => screen.getByText(label).closest(".usage-stat") as HTMLElement;
+    expect(within(await waitFor(() => tile("Cache reuse"))).getByText("—")).toBeVisible();
+    expect(within(tile("Cache reuse")).getByText("Cache reads not reported")).toBeVisible();
+    expect(within(tile("Average per active day")).getByText("1.25M")).toBeVisible();
+  });
+
+  it("searches filter choices on the server for values outside the top ranked", async () => {
+    const user = userEvent.setup();
+    const api = mount();
+    await screen.findByText("2.5M");
+    await user.click(screen.getByRole("button", { name: /^Filter/ }));
+    await user.click(await screen.findByRole("button", { name: "Thread" }));
+    await user.type(screen.getByRole("textbox", { name: "Search Threads" }), "ship");
+    await waitFor(() => expect(api).toHaveBeenCalledWith(expect.objectContaining({ facets: true, facetSearch: { dimension: "thread", text: "ship" } }), expect.any(AbortSignal)));
   });
 
   it("keeps the last successful read when a refresh fails", async () => {
