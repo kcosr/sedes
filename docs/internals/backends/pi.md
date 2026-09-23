@@ -171,7 +171,7 @@ facts on main, including while idle, without changing run state or projecting
 transcript content. Request counts use only native records that establish
 cardinality; unproven extension overlap remains unallocated. Live usage events
 retain context occupancy and transcript counters, not accumulated token/cost
-authority. See [durable accounting](../architecture.md#durable-usage-accounting).
+authority. See [usage accounting](../usage-accounting.md).
 
 Pi 0.86.0 can compact automatically after a tool result and then resume the
 same provider run. Sedes therefore keeps the current live projection open

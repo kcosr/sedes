@@ -369,90 +369,27 @@ provider paths, URLs, base64, or storage paths. See
 
 ## Durable usage accounting
 
-[`UsageService`](../../src/server/usage/usage-service.ts) stores normalized
-accounting on main, independently of transcript delivery. Six scoped logical
-tables retain source identity, immutable observations, canonical selected facts,
-turn/session projections, and capture gaps. Evidence references and ownership use
-restrictive foreign keys; ordinary thread archive leaves captured evidence intact.
-A single per-thread monotonic revision advances atomically with changed totals.
+[`UsageService`](../../src/server/usage/usage-service.ts) records provider-reported
+tokens and cost estimates on main, independently of transcript delivery and of
+any browser. Backend adapters normalize native evidence before lossy
+presentation and hand it to a scoped sink; the service stores immutable
+observations, selects canonical facts (additive entries sum, cumulative
+checkpoints replace their series, turn allocations never add a second charge),
+records gaps and conflicts explicitly, and advances one monotonic revision per
+thread. Live `UsageSnapshot` values carry only context occupancy and transcript
+counters.
 
-Backend adapters capture before lossy presentation. Pi entries are additive;
-Codex native-thread checkpoints and Claude query-pipeline checkpoints replace
-covered values. Derived turn allocations do not add another session charge.
-Missing metrics, SDK normalization, unknown model attribution, cost estimates,
-regressions, and gaps remain explicit. Token JSON uses canonical unsigned decimal
-strings; money uses decimal strings and currency groups. Browser numbers never
-round durable token counts.
+Session and turn reports, turn-availability checks, and the principal-wide
+`POST /api/usage/analytics` read are database-only and never open a backend. A
+derived `usage_increments` timeline, written in the capture transaction,
+records each accepted increase with its dimensions and how its time is known,
+so the Usage page charts only provable times. A committed revision can publish
+a generation-bound `usage_revision_changed` hint to an already-loaded actor
+without mutating the transcript or creating actors.
 
-Visible ended turns use a bounded database-only
-`POST /api/threads/:threadId/usage/turn-availability` read (up to 100 IDs) to
-show the action only when recorded metrics or cost exist. The authenticated
-thread cache batches these presence checks; it fetches full reports on open.
-Running and empty turns have no usage action. Pi normal replies are captured
-from the confirmed native-message persistence path, since the SDK does not
-emit `entry_appended` for assistant/tool messages.
-
-The scoped `GET /api/threads/:threadId/usage` and
-`GET /api/threads/:threadId/usage/turns/:turnId` routes read the database without
-opening a backend. Visible history loads register turn stubs. A committed revision
-can invalidate an already-loaded actor's usage cache under its current projection
-generation; this ancillary event does not mutate the transcript or create actors.
-Visible client views use single-flight reads, five-second polling, and
-focus/reconnect refresh; closed transcript rows never poll.
-
-### Usage timeline and analytics
-
-[`usage-timeline.ts`](../../src/server/usage/usage-timeline.ts) maintains
-`usage_increments`, a derived projection with one row per accepted increase of
-a source's canonical session selection. It is written in the capture
-transaction: an additive fact contributes its values, and a checkpoint fact
-contributes the difference from its previous accepted value in the same
-source. `none` facts, legacy snapshots, inherited facts, and rejected or
-regressing evidence contribute nothing, so a source's rows sum to its selected
-session totals. Each row records scope, thread, source, turn when proven,
-backend instance and kind, environment, workspace, agent role, activity,
-provider, model, reasoning effort, token columns, and cost. Cost is an integer
-in 10⁻¹² currency units rounded half up; session and turn reports keep exact
-decimals.
-
-Each row also records how its time is known. `reported` uses a source
-occurrence time. `observed` is a receipt within one continuous capture
-incarnation (a `UsageSink.open()` with no intervening `gap()`, seal, or failed
-capture write). A checkpoint that passes the frontier, lock, and regression
-checks restores continuity even when unchanged, and `usage_sources.timeline_receipt`
-keeps its receipt. `interval` is a delta across a gap, restart, or
-reattachment and starts at that receipt. `unplaced` is a first checkpoint with
-an unknown baseline. Analytics places an interval only when both ends fall in
-one bucket, reports intervals that began before the range separately, and
-never puts `unplaced` usage in a time range. When a replaced snapshot loses or
-shrinks a member while its total grows, one model-less snapshot row records the
-delta so rows keep summing to the selected totals.
-
-A backend may attach an observation `attribution` with the effective model and
-reasoning effort confirmed at capture. It is excluded from the evidence
-fingerprint and stored evidence, and applies only to `reported` and
-`observed` rows; a reported fact model always wins. Claude splits its
-query-cost checkpoint across per-model rows only when the supplied per-model
-totals add up to it. Unknown attribution stays unknown and is never copied from
-current settings. Sources that predate migration 113 are rebuilt once by a
-conservative replay: later checkpoint deltas become intervals, and a replay
-that cannot reproduce the current records falls back to `unplaced` rows. A
-background task rebuilds pending sources one per macrotask after startup, and a
-read finishes what remains for its scope within a bounded observation budget.
-Projection failures fall back to conservative rows or schedule a rebuild; they
-never roll back accounting.
-
-[`UsageAnalyticsService`](../../src/server/usage/usage-analytics-service.ts)
-serves the principal-scoped, database-only `POST /api/usage/analytics`. It
-buckets by calendar hour, day, week (starting Monday), or month in the
-requested IANA zone, including daylight-saving transitions, and allows at most
-500 buckets. The response carries totals, the previous equal-length period, a
-series grouped by one dimension (seven plus Other, with a filter-independent
-color order), per-dimension breakdowns, an optional two-dimension matrix,
-faceted filter choices on request, a weekday-by-hour heatmap, placement and
-coverage totals, and labels resolved from the principal's own rows. Every
-aggregate reads one snapshot. The browser page lives in
-[`src/client/usage`](../../src/client/usage/UsageView.tsx).
+The store, capture transaction, selection rules, backend dispositions, forks
+and subagents, reads, timeline, analytics, recovery, and limitations are
+specified in [Usage accounting](usage-accounting.md).
 
 ## Agent tools and terminals
 

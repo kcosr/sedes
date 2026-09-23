@@ -41,6 +41,7 @@ native authority begins and ends.
 | [Managed Codex TUI](codex-managed-tui.md) | TUI eligibility, admission, transport, lifecycle, and terminal security. |
 | [Provider output artifacts](output-artifacts.md) | Durable provider-generated images, byte authority, storage, and retrieval. |
 | [Thread templates](thread-templates.md) | Template ownership, persistence, drift, repair, and thread-origin capture. |
+| [Usage accounting](usage-accounting.md) | Recorded tokens and cost: evidence capture, selection, reports, backend dispositions, the analytics timeline, recovery, and limitations. |
 
 ## Context, files, and tools
 

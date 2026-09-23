@@ -1117,6 +1117,9 @@ scrubbing, not raw errors, provider payloads, stacks, or stderr. This is not a
 claim that arbitrary provider text is secret-free. Failed-turn diagnostics remain
 visible in both activity modes without exposing hidden operation details.
 
+The store, selection rules, and timeline behind these rules are described in
+[Usage accounting](usage-accounting.md).
+
 Provider-billed work outside an assistant response must enter the normalized
 [`UsageSink`](../../src/server/usage/contracts.ts) without fabricating a message
 or changing run state. Capture native evidence before lossy presentation, under
