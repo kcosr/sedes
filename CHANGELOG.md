@@ -5,7 +5,7 @@
 ### Breaking Changes
 
 - Durable usage accounting replaces accumulated token/cost values in live
-  snapshots. Requires matching browser and packaged clients using protocol 120.
+  snapshots. Requires matching browser and packaged clients using protocol 121.
   Migration preserves old Claude totals separately with unknown coverage.
 
 ### Added
