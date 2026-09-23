@@ -18,7 +18,7 @@
   token mix, and a coverage view. Charts place usage only where its time is
   known. Migration 113 adds a derived usage timeline and rebuilds existing
   accounting once on first read. Pi, Codex, and Claude record the
-  provider-confirmed model and reasoning effort for new usage.
+  provider-confirmed model and reasoning effort for new usage. (#8)
 
 - Capture Codex subagent usage independently of parent turns, including nested
   and background agents. Session stats separates main-agent, combined-subagent,
@@ -36,7 +36,7 @@
 
 ### Changed
 
-- Rename the sidebar Provider Pulse quota entry from **Usage** to **Accounts**.
+- Rename the sidebar Provider Pulse quota entry from **Usage** to **Accounts**. (#8)
 
 - New thread creation selects Custom by default, while explicit saved-Agent and
   template choices remain available. (#6)
