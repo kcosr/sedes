@@ -43,6 +43,19 @@
 
 ### Fixed
 
+- Speed up Usage timeline queries by scanning the time index per bucket instead
+  of repeatedly scanning a principal's history; totals, filters, and interval
+  placement remain unchanged.
+
+- Accept owned final symlinks to private Codex Unix sockets, including daemon
+  socket aliases on remote hosts, while preserving owner/mode checks and
+  detecting alias or target replacement without changing accounting identity.
+
+- Keep historical Codex subagent accounting out of reconnect monitoring and
+  release only acquired attachments, preventing imported history from flooding
+  remote sidecars with cleanup requests and disconnecting sessions. Migration
+  114 adds recovery indexes while preserving recorded usage.
+
 - Capture Codex multi-agent v2 spawn events as well as legacy collaboration
   events, so both modes contribute to the session's subagent totals.
 

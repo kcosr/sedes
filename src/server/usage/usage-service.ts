@@ -188,14 +188,24 @@ export class UsageService implements UsageSink {
       b.application_thread_id AS applicationThreadId,b.backend_instance_id AS backendInstanceId,
       b.connection_profile_id AS connectionProfileId,b.execution_environment_id AS executionEnvironmentId,
       b.backend_conversation_id AS backendConversationId,b.created_at AS createdAt
-      FROM usage_subagents c JOIN conversation_bindings b ON b.tenant_id=c.tenant_id AND b.owner_principal_id=c.principal_id
+      FROM usage_sources s INDEXED BY usage_sources_subagent_recovery
+      JOIN usage_subagents c ON c.tenant_id=s.tenant_id AND c.principal_id=s.principal_id
+        AND c.backend_id=s.backend_id AND c.environment_id=s.environment_id AND c.native_namespace=s.native_namespace
+        AND c.native_session=s.native_session AND c.thread_id=s.thread_id
+      JOIN conversation_bindings b ON b.tenant_id=c.tenant_id AND b.owner_principal_id=c.principal_id
         AND b.application_thread_id=c.thread_id AND b.backend_instance_id=c.backend_id AND b.execution_environment_id=c.environment_id
         AND b.backend_conversation_id=c.root_native_session
       JOIN agent_backend_instances a ON a.tenant_id=b.tenant_id AND a.id=b.backend_instance_id AND a.kind='codex_app_server'
       JOIN application_threads t ON t.tenant_id=b.tenant_id AND t.owner_principal_id=b.owner_principal_id
         AND t.id=b.application_thread_id AND t.backend_instance_id=b.backend_instance_id
         AND t.environment_id=b.execution_environment_id
-      WHERE c.tenant_id=? AND c.principal_id=? AND c.backend_id=? AND c.environment_id=? AND c.native_namespace=?
+      WHERE s.tenant_id=? AND s.principal_id=? AND s.backend_id=? AND s.environment_id=? AND s.native_namespace=?
+        AND s.agent_role='subagent' AND s.capture_state IN ('active','disconnected','failed')
+        AND NOT EXISTS (SELECT 1 FROM usage_sources newer WHERE newer.tenant_id=s.tenant_id
+          AND newer.principal_id=s.principal_id AND newer.backend_id=s.backend_id
+          AND newer.environment_id=s.environment_id AND newer.native_namespace=s.native_namespace
+          AND newer.native_session=s.native_session AND newer.thread_id=s.thread_id
+          AND newer.agent_role='subagent' AND newer.rowid>s.rowid)
         AND b.connection_profile_id=? AND b.application_thread_id>?
       ORDER BY b.application_thread_id LIMIT ?`).all(input.tenantId,input.principalId,input.backendInstanceId,input.executionEnvironmentId,
         identifier.parse(input.nativeNamespace),input.connectionProfileId,input.cursor??"",input.limit+1) as (Omit<Parameters<UsageSink["open"]>[0]["binding"],"createdAt"> & {createdAt:number})[];
@@ -207,18 +217,50 @@ export class UsageService implements UsageSink {
     this.#admitBinding(input.binding);
     const b=input.binding;
     const rows=this.database.prepare(`SELECT c.native_session,c.native_parent_session,s.epoch,s.normalization_version,s.capture_state
-      FROM usage_subagents c JOIN usage_sources s ON s.tenant_id=c.tenant_id AND s.principal_id=c.principal_id
+      FROM usage_sources s INDEXED BY usage_sources_subagent_recovery
+      JOIN usage_subagents c ON s.tenant_id=c.tenant_id AND s.principal_id=c.principal_id
         AND s.thread_id=c.thread_id AND s.backend_id=c.backend_id AND s.environment_id=c.environment_id
         AND s.native_namespace=c.native_namespace AND s.native_session=c.native_session AND s.agent_role='subagent'
-      WHERE c.tenant_id=? AND c.principal_id=? AND c.thread_id=? AND c.backend_id=? AND c.environment_id=?
-        AND c.native_namespace=? AND c.root_native_session=? ORDER BY s.rowid DESC`)
+      WHERE s.tenant_id=? AND s.principal_id=? AND s.thread_id=? AND s.backend_id=? AND s.environment_id=?
+        AND s.native_namespace=? AND c.root_native_session=?
+        AND s.capture_state IN ('active','disconnected','failed')
+        AND NOT EXISTS (SELECT 1 FROM usage_sources newer WHERE newer.tenant_id=s.tenant_id
+          AND newer.principal_id=s.principal_id AND newer.backend_id=s.backend_id
+          AND newer.environment_id=s.environment_id AND newer.native_namespace=s.native_namespace
+          AND newer.native_session=s.native_session AND newer.thread_id=s.thread_id
+          AND newer.agent_role='subagent' AND newer.rowid>s.rowid)
+      ORDER BY s.rowid DESC`)
       .all(b.tenantId,b.ownerPrincipalId,b.applicationThreadId,b.backendInstanceId,b.executionEnvironmentId,identifier.parse(input.nativeNamespace),b.backendConversationId) as {
         native_session:string;native_parent_session:string;epoch:string;normalization_version:string;capture_state:UsageReport["captureState"]}[];
-    const seen=new Set<string>();
-    return rows.filter(row=>!seen.has(row.native_session) && Boolean(seen.add(row.native_session))).map(row=>({
+    return rows.map(row=>({
       nativeSession:row.native_session,nativeParentSession:row.native_parent_session,epoch:row.epoch,
       normalizationVersion:row.normalization_version,captureState:row.capture_state,
     }));
+  }
+  findSubagent(input:Parameters<UsageSink["findSubagent"]>[0]):ReturnType<UsageSink["findSubagent"]> {
+    const row=this.database.prepare(`SELECT b.tenant_id AS tenantId,b.owner_principal_id AS ownerPrincipalId,
+      b.application_thread_id AS applicationThreadId,b.backend_instance_id AS backendInstanceId,
+      b.connection_profile_id AS connectionProfileId,b.execution_environment_id AS executionEnvironmentId,
+      b.backend_conversation_id AS backendConversationId,b.created_at AS createdAt,
+      c.native_parent_session AS nativeParentSession
+      FROM usage_subagents c JOIN conversation_bindings b ON b.tenant_id=c.tenant_id
+        AND b.owner_principal_id=c.principal_id AND b.application_thread_id=c.thread_id
+        AND b.backend_instance_id=c.backend_id AND b.execution_environment_id=c.environment_id
+        AND b.backend_conversation_id=c.root_native_session
+      JOIN agent_backend_instances a ON a.tenant_id=b.tenant_id AND a.id=b.backend_instance_id AND a.kind='codex_app_server'
+      JOIN application_threads t ON t.tenant_id=b.tenant_id AND t.owner_principal_id=b.owner_principal_id
+        AND t.id=b.application_thread_id AND t.backend_instance_id=b.backend_instance_id
+        AND t.environment_id=b.execution_environment_id
+      WHERE c.tenant_id=? AND c.principal_id=? AND c.backend_id=? AND c.environment_id=?
+        AND c.native_namespace=? AND c.native_session=? AND b.connection_profile_id=?`)
+      .get(input.tenantId,input.principalId,input.backendInstanceId,input.executionEnvironmentId,
+        identifier.parse(input.nativeNamespace),identifier.parse(input.nativeSession),input.connectionProfileId) as
+        (Omit<Parameters<UsageSink["open"]>[0]["binding"],"createdAt"> & {createdAt:number;nativeParentSession:string})|undefined;
+    if(!row)return null;
+    const {nativeParentSession,createdAt,...identity}=row;
+    const binding={...identity,createdAt:new Date(createdAt).toISOString()};
+    this.#admitBinding(binding);
+    return {binding,nativeParentSession};
   }
   #admitSubagent(input:Parameters<UsageSink["open"]>[0]):void {
     const b=input.binding, child=identifier.parse(input.nativeSession), parent=identifier.parse(input.subagent!.nativeParentSession);

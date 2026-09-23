@@ -72,12 +72,17 @@ export interface UsageSubagentRootScope {
   readonly nativeNamespace: string;
 }
 export interface UsageSink {
-  /** Only roots with recorded descendants, paginated within an admitted runtime scope. */
+  /** Only roots with unresolved descendant capture, paginated within an admitted runtime scope. */
   listSubagentRoots(input: UsageSubagentRootScope & {readonly cursor: string | null; readonly limit: number}): {
     readonly bindings: readonly ConversationBinding[];
     readonly nextCursor: string | null;
   };
-  /** Backend-private descendants of this admitted root; never application threads. */
+  /** Exact historical ownership lookup triggered by current provider activity, not reconnect inventory. */
+  findSubagent(input: UsageSubagentRootScope & {readonly nativeSession: string}): {
+    readonly binding: ConversationBinding;
+    readonly nativeParentSession: string;
+  } | null;
+  /** Latest non-idle captures under this admitted root; idle ancestry remains durable, not monitored. */
   listSubagents(input: { readonly binding: ConversationBinding; readonly nativeNamespace: string }): readonly {
     readonly nativeSession: string;
     readonly nativeParentSession: string;
@@ -106,7 +111,7 @@ export const NO_USAGE_CAPTURE: UsageCapture = {
   gap: () => undefined,
   seal: () => undefined,
 };
-export const NO_USAGE_SINK: UsageSink = { open: () => NO_USAGE_CAPTURE, listSubagents: () => [], listSubagentRoots: () => ({bindings:[],nextCursor:null}) };
+export const NO_USAGE_SINK: UsageSink = { open: () => NO_USAGE_CAPTURE, listSubagents: () => [], listSubagentRoots: () => ({bindings:[],nextCursor:null}), findSubagent: () => null };
 
 /** Native numbers must still be exact before normalization; strings are not a second native shape. */
 export function usageCount(value: number | null | undefined): string | null {

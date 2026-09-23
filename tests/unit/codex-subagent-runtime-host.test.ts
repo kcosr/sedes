@@ -67,7 +67,7 @@ async function fixture(active: boolean, completedBeforeResumeContinuation = fals
   remote.client.subscribeNotifications(notification => presentation.forwardNotification(notification.generation, notification));
   const gap = vi.fn(), seal = vi.fn();
   const open = vi.fn(() => ({ ...NO_USAGE_CAPTURE, gap, seal }));
-  const sink: UsageSink = { open, listSubagentRoots: () => ({ bindings: [binding], nextCursor: null }),
+  const sink: UsageSink = { open, findSubagent: () => null, listSubagentRoots: () => ({ bindings: [binding], nextCursor: null }),
     listSubagents: () => [{ nativeSession: "child", nativeParentSession: "root", epoch: "native-counter-v1", normalizationVersion: "codex-subagent-usage-v1", captureState: options.persistedIdle ? "idle" : "disconnected" }] };
   new CodexSubagentUsageCoordinator({ client: presentation, sink, nativeNamespace: "native-store", runtimeScope: { ...scope, connectionProfileId: binding.connectionProfileId },
     onError: error => errors.push(error) });
@@ -93,16 +93,17 @@ describe("Codex subagent accounting on the persistent runtime host", () => {
   it("keeps a durably completed child idle across reconnect without reopening capture or inventing a gap", async () => {
     const f = await fixture(false, false, { persistedIdle: true });
     try {
-      await vi.waitFor(() => expect(f.evict).toHaveBeenCalled());
-      await vi.waitFor(() => expect(f.dispatch).toHaveBeenCalledTimes(2));
-      const firstEvictions = f.evict.mock.calls.length;
+      await new Promise(done=>setImmediate(done));
+      expect(f.evict).not.toHaveBeenCalled();
+      expect(f.dispatch).not.toHaveBeenCalled();
       f.native.updateLifecycle({ state: "unavailable", generation: 1 });
       f.native.updateLifecycle({ state: "ready", generation: 1 });
-      await vi.waitFor(() => expect(f.dispatch).toHaveBeenCalledTimes(4));
-      await vi.waitFor(() => expect(f.evict.mock.calls.length).toBeGreaterThan(firstEvictions));
+      await new Promise(done=>setImmediate(done));
+      expect(f.dispatch).not.toHaveBeenCalled();
+      expect(f.evict).not.toHaveBeenCalled();
       await vi.waitFor(() => expect(f.host.unsettledCount()).toBe(0));
-      expect(f.open).toHaveBeenCalledOnce();
-      expect(f.seal).toHaveBeenCalledWith("closed");
+      expect(f.open).not.toHaveBeenCalled();
+      expect(f.seal).not.toHaveBeenCalled();
       expect(f.gap).not.toHaveBeenCalled();
       await f.rootLease.release(true);
       expect(await f.retire.mock.results.at(-1)!.value).toBe(true);
@@ -148,6 +149,9 @@ describe("Codex subagent accounting on the persistent runtime host", () => {
       f.complete();
       await vi.waitFor(() => expect(f.evict).toHaveBeenCalledWith(authority, "child", 1));
       await vi.waitFor(() => expect(retire).toHaveBeenCalledOnce());
+      // The queued eviction finishes after the native completion callback.
+      // It must wake idle retirement without another provider request/event.
+      expect(f.dispatch).toHaveBeenCalledTimes(2);
       expect(f.errors).toEqual([]);
     } finally { await f.remote.close(); }
   });

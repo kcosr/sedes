@@ -1,3 +1,4 @@
+import { usageSubagentRecoveryIndexesMigration } from "../../src/server/db/migrations/114-usage-subagent-recovery-indexes.js";
 import Database from "better-sqlite3";
 import { durableUsageAccountingMigration } from "../../src/server/db/migrations/110-durable-usage-accounting.js";
 import { usageSubagentsMigration } from "../../src/server/db/migrations/112-usage-subagents.js";
@@ -7463,7 +7464,7 @@ describe("CodexConversationHandle", () => {
 
   it("continues child accounting after the parent handle closes", async () => {
     const observations = new Map<string, UsageObservation[]>();
-    const sink: UsageSink = { listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: input => ({ registerTurns: () => undefined,
+    const sink: UsageSink = { findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: input => ({ registerTurns: () => undefined,
       capture: entries => { observations.set(input.nativeSession, [...(observations.get(input.nativeSession) ?? []), ...entries]); return true; },
       reconcile: () => true, gap: () => undefined, seal: () => undefined }) };
     const harness = new RpcHarness();
@@ -7487,7 +7488,7 @@ describe("CodexConversationHandle", () => {
   it("captures native accounting before presentation and registers visible turns", async () => {
     const observations: UsageObservation[] = [];
     const registerTurns = vi.fn();
-    const sink: UsageSink = { listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: vi.fn(() => ({ registerTurns,
+    const sink: UsageSink = { findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: vi.fn(() => ({ registerTurns,
       capture: (entries: readonly UsageObservation[]) => { observations.push(...entries); return true; }, reconcile: () => true, gap: vi.fn(), seal: vi.fn() })) };
     const harness = new RpcHarness();
     const target = driver(harness, connection, undefined, undefined, undefined, undefined,
@@ -7529,7 +7530,7 @@ describe("CodexConversationHandle", () => {
 
   it("attributes nothing to usage processed before a changed turn tuple is confirmed", async () => {
     const observations: UsageObservation[] = [];
-    const sink: UsageSink = { listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: vi.fn(() => ({ registerTurns: vi.fn(),
+    const sink: UsageSink = { findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: vi.fn(() => ({ registerTurns: vi.fn(),
       capture: (entries: readonly UsageObservation[]) => { observations.push(...entries); return true; }, reconcile: () => true, gap: vi.fn(), seal: vi.fn() })) };
     const harness = new RpcHarness();
     const settings = executionSettingsProvider({ freezeOperationSnapshot: () => ({ settings: executionSettingsTuple({ reasoningEffort: "high" }) }) });
@@ -7560,7 +7561,7 @@ describe("CodexConversationHandle", () => {
   it.each([false, true])("does not allocate usage across a malformed native checkpoint (wire rejection=%s)", async wireRejected => {
     const observations: UsageObservation[] = [];
     const gap = vi.fn();
-    const sink: UsageSink = { listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({ registerTurns: vi.fn(),
+    const sink: UsageSink = { findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({ registerTurns: vi.fn(),
       capture: entries => { observations.push(...entries); return true; },
       reconcile: () => true, gap, seal: vi.fn() }) };
     const harness = new RpcHarness();
@@ -7603,7 +7604,7 @@ describe("CodexConversationHandle", () => {
     database.exec(durableUsageAccountingMigration.sql);
     database.exec(usageGapSessionScopeMigration.sql);
     database.exec(usageSubagentsMigration.sql);
-    database.exec(usageTimelineMigration.sql);
+    database.exec(usageTimelineMigration.sql); database.exec(usageSubagentRecoveryIndexesMigration.sql);
     const usage = new UsageService(database);
     const harness = new RpcHarness();
     const target = driver(harness, connection, undefined, undefined, undefined, undefined,
@@ -7653,7 +7654,7 @@ describe("CodexConversationHandle", () => {
 
   it("keeps warm paginated resume without native replay unallocated rather than charging earlier turns", async () => {
     const observations: UsageObservation[] = [];
-    const sink: UsageSink = { listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({ registerTurns: () => undefined,
+    const sink: UsageSink = { findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({ registerTurns: () => undefined,
       capture: entries => { observations.push(...entries); return true; }, reconcile: () => true,
       gap: () => undefined, seal: () => undefined }) };
     const harness = new RpcHarness();

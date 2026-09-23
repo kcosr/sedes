@@ -36,7 +36,7 @@ function fixture(restored: ReturnType<UsageSink["listSubagents"]> = [], residenc
     captures.set(input.nativeSession, capture);
     return capture;
   });
-  const sink: UsageSink = { open, listSubagentRoots: vi.fn(() => ({bindings:roots,nextCursor:null})), listSubagents: vi.fn(() => restored) };
+  const sink: UsageSink = { open, findSubagent: vi.fn(() => null), listSubagentRoots: vi.fn(() => ({bindings:roots,nextCursor:null})), listSubagents: vi.fn(() => restored) };
   const onError = vi.fn();
   const coordinator = new CodexSubagentUsageCoordinator({ client, sink, nativeNamespace: "store", runtimeScope:{tenantId:binding.tenantId,principalId:binding.ownerPrincipalId,backendInstanceId:binding.backendInstanceId,executionEnvironmentId:binding.executionEnvironmentId,connectionProfileId:binding.connectionProfileId}, onError });
   const notify = (method: "thread/started" | "thread/tokenUsage/updated" | "turn/started" | "turn/completed" | "item/completed", params: unknown, receiptSequence = ++sequence, receiptGeneration = generation) => client.forwardNotification(generation, {
@@ -229,7 +229,7 @@ describe("Codex subagent usage coordinator", () => {
     const final=f.captures.get("child")!;
     expect(final).not.toBe(first);expect(final.seal).toHaveBeenCalledWith("closed");
     expect(f.observations.get("child")?.at(-1)?.facts[0]?.tokens.input).toBe("12");
-    f.reconnect();await vi.waitFor(()=>expect(f.request).toHaveBeenCalledOnce());
+    f.reconnect();await new Promise(done=>setImmediate(done));expect(f.request).not.toHaveBeenCalled();
     expect(first.gap).not.toHaveBeenCalled();expect(final.gap).not.toHaveBeenCalled();
   });
 
@@ -237,9 +237,8 @@ describe("Codex subagent usage coordinator", () => {
     const restored=[{nativeSession:"idle-child",nativeParentSession:"root",epoch:"native-counter-v1",normalizationVersion:"v1",captureState:"idle" as const},
       {nativeSession:"active-child",nativeParentSession:"root",epoch:"native-counter-v1",normalizationVersion:"v1",captureState:"disconnected" as const}];
     const f=fixture(restored,undefined,[binding]);
-    await vi.waitFor(()=>expect(f.captures.get("active-child")?.seal).toHaveBeenCalledWith("detached"));
-    expect(f.captures.get("idle-child")?.gap).not.toHaveBeenCalled();
-    expect(f.captures.get("idle-child")?.seal).toHaveBeenCalledWith("closed");
+    await vi.waitFor(()=>expect(f.captures.get("active-child")?.seal).toHaveBeenCalledWith("closed"));
+    expect(f.captures.has("idle-child")).toBe(false);
     expect(f.captures.get("active-child")?.gap).toHaveBeenCalledWith("capture_gap");
     expect(f.captures.get("active-child")?.reconcile).not.toHaveBeenCalled();
   });
@@ -284,7 +283,7 @@ describe("Codex subagent usage coordinator", () => {
   });
 
   it("does not resume already recovered children again when another root is registered", async () => {
-    const restored=[{nativeSession:"child",nativeParentSession:"root",epoch:"native-counter-v1",normalizationVersion:"v1",captureState:"idle" as const}];
+    const restored=[{nativeSession:"child",nativeParentSession:"root",epoch:"native-counter-v1",normalizationVersion:"v1",captureState:"disconnected" as const}];
     const f=fixture(restored,undefined,[binding],["child"]);
     await vi.waitFor(()=>expect(f.request).toHaveBeenCalledTimes(2));
     vi.mocked(f.sink.listSubagents).mockReturnValueOnce([{...restored[0]!,nativeSession:"child-2",nativeParentSession:"root-2"}]);
@@ -296,7 +295,7 @@ describe("Codex subagent usage coordinator", () => {
 
   it("uses a newer resumed status when the streamed completion preceded the response fence", async () => {
     const retire=vi.fn(async()=>undefined),residency=new RetainedRuntimeLifecycle({wake:()=>undefined,retire}),rootLease=residency.retain();
-    const f=fixture([{nativeSession:"child",nativeParentSession:"root",epoch:"native-counter-v1",normalizationVersion:"v1",captureState:"idle"}],residency);
+    const f=fixture([{nativeSession:"child",nativeParentSession:"root",epoch:"native-counter-v1",normalizationVersion:"v1",captureState:"disconnected"}],residency);
     const completed={threadId:"child",turn:{id:"done",items:[],itemsView:"full",status:"completed",error:null,startedAt:1700000000,completedAt:1700000001,durationMs:1000}};
     f.request.mockImplementationOnce(async()=>({result:{data:["child"],nextCursor:null},generation:1,inboundSequence:1}))
       .mockImplementationOnce(async()=>{f.notify("turn/completed",completed,2);return {result:{thread:{id:"child",status:{type:"active"}}},generation:1,inboundSequence:3};});

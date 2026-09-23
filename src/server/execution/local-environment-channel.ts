@@ -6,6 +6,7 @@ import {
   access,
   lstat,
   open as openFile,
+  readlink,
   realpath,
   stat,
 } from "node:fs/promises";
@@ -145,6 +146,7 @@ function throwIfAborted(signal: AbortSignal): void {
 }
 
 type PrivateUnixFilesystemSnapshot = Readonly<{
+  readonly resolvedPath: string;
   readonly socketIdentity: string;
   readonly parentDevice: bigint;
   readonly parentInode: bigint;
@@ -167,8 +169,10 @@ async function inspectPrivateUnixSocket(
   let canonicalSocket: string;
   let parentMetadata: BigIntStats;
   let socketMetadata: BigIntStats;
+  let configuredMetadata: BigIntStats;
+  let configuredParentMetadata: BigIntStats;
   try {
-    [canonicalParent, canonicalSocket, parentMetadata, socketMetadata] =
+    [canonicalParent, canonicalSocket, configuredParentMetadata, configuredMetadata] =
       await Promise.all([
         realpath(parentPath),
         realpath(configuredPath),
@@ -180,9 +184,34 @@ async function inspectPrivateUnixSocket(
   }
   if (
     canonicalParent !== parentPath ||
-    canonicalSocket !== configuredPath ||
-    !parentMetadata.isDirectory()
+    !configuredParentMetadata.isDirectory()
   ) {
+    throw new Error("environment_private_unix_stream_path_unsafe");
+  }
+  // An operator-configured final alias may name a daemon's private socket.
+  // Do not expand this into arbitrary symlinked directories or alias chains.
+  if (configuredMetadata.isSymbolicLink()) {
+    let linkTarget: string;
+    try { linkTarget = await readlink(configuredPath); }
+    catch { throw new Error("environment_private_unix_stream_identity_unavailable"); }
+    if (path.resolve(parentPath, linkTarget) !== canonicalSocket) {
+      throw new Error("environment_private_unix_stream_path_unsafe");
+    }
+  } else if (canonicalSocket !== configuredPath) {
+    throw new Error("environment_private_unix_stream_path_unsafe");
+  }
+  if (Buffer.byteLength(canonicalSocket, "utf8") > 107) {
+    throw new Error("environment_private_unix_stream_path_unsafe");
+  }
+  try {
+    [parentMetadata, socketMetadata] = await Promise.all([
+      lstat(path.dirname(canonicalSocket), { bigint: true }),
+      lstat(canonicalSocket, { bigint: true }),
+    ]);
+  } catch {
+    throw new Error("environment_private_unix_stream_identity_unavailable");
+  }
+  if (!parentMetadata.isDirectory()) {
     throw new Error("environment_private_unix_stream_path_unsafe");
   }
   if (!socketMetadata.isSocket()) {
@@ -193,19 +222,40 @@ async function inspectPrivateUnixSocket(
   );
   if (
     effectiveUserId < 0n ||
+    configuredParentMetadata.uid !== effectiveUserId ||
+    configuredMetadata.uid !== effectiveUserId ||
     parentMetadata.uid !== effectiveUserId ||
     socketMetadata.uid !== effectiveUserId
   ) {
     throw new Error("environment_private_unix_stream_owner_invalid");
   }
-  if ((parentMetadata.mode & 0o777n) !== 0o700n) {
+  if ((parentMetadata.mode & 0o777n) !== 0o700n ||
+      (configuredParentMetadata.mode & 0o777n) !== 0o700n) {
     throw new Error("environment_private_unix_stream_parent_mode_invalid");
   }
   if ((socketMetadata.mode & 0o777n) !== 0o600n) {
     throw new Error("environment_private_unix_stream_socket_mode_invalid");
   }
+  // Fence alias replacement during inspection, as well as the checks around
+  // connect and WebSocket Upgrade. Connect uses this inspected target path.
+  let currentConfigured: BigIntStats;
+  let currentResolved: string;
+  try {
+    [currentConfigured, currentResolved] = await Promise.all([
+      lstat(configuredPath, { bigint: true }), realpath(configuredPath),
+    ]);
+  } catch { throw new Error("environment_private_unix_stream_identity_replaced"); }
+  if (currentResolved !== canonicalSocket || currentConfigured.dev !== configuredMetadata.dev ||
+      currentConfigured.ino !== configuredMetadata.ino || currentConfigured.ctimeNs !== configuredMetadata.ctimeNs) {
+    throw new Error("environment_private_unix_stream_identity_replaced");
+  }
   const socketIdentity = createHash("sha256")
     .update(configuredPath)
+    .update("\0")
+    .update(canonicalSocket)
+    .update("\0")
+    .update([configuredParentMetadata, configuredMetadata].map(metadata =>
+      `${metadata.dev}:${metadata.ino}:${metadata.ctimeNs}`).join(":"))
     .update("\0")
     .update(parentMetadata.dev.toString())
     .update(":")
@@ -220,6 +270,7 @@ async function inspectPrivateUnixSocket(
     .update(socketMetadata.ctimeNs.toString())
     .digest("base64url");
   return Object.freeze({
+    resolvedPath: canonicalSocket,
     socketIdentity,
     parentDevice: parentMetadata.dev,
     parentInode: parentMetadata.ino,
@@ -386,7 +437,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
       throwIfAborted(signal);
       return Object.freeze({
         kind: "managed_process_endpoint" as const,
-        processAddress: `unix://${request.socketPath}`,
+        processAddress: `unix://${snapshot.resolvedPath}`,
         endpointIdentity: `unix:${snapshot.socketIdentity}`,
       });
     }
@@ -566,7 +617,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
     if (signal.aborted) throw signal.reason;
     const before = await inspectPrivateUnixSocket(configuredPath);
     if (signal.aborted) throw signal.reason;
-    const socket = createConnection({ path: configuredPath });
+    const socket = createConnection({ path: before.resolvedPath });
     try {
       await waitForPrivateUnixConnect(
         socket,

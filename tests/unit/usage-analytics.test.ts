@@ -1,3 +1,4 @@
+import { usageSubagentRecoveryIndexesMigration } from "../../src/server/db/migrations/114-usage-subagent-recovery-indexes.js";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { durableUsageAccountingMigration } from "../../src/server/db/migrations/110-durable-usage-accounting.js";
@@ -30,7 +31,7 @@ CREATE TABLE claude_usage_ledgers(tenant_id TEXT NOT NULL,owner_principal_id TEX
 INSERT INTO agent_backend_instances(tenant_id,id,kind,label) VALUES('tenant','backend','${kind}','Primary');
 INSERT INTO execution_environments VALUES('tenant','principal','environment','local','Laptop');
 INSERT INTO workspaces VALUES('tenant','principal','environment','workspace','/src/app','App',NULL);`);
-  for (const migration of [durableUsageAccountingMigration, usageGapSessionScopeMigration, usageSubagentsMigration, usageTimelineMigration]) db.exec(migration.sql);
+  for (const migration of [durableUsageAccountingMigration, usageGapSessionScopeMigration, usageSubagentsMigration, usageTimelineMigration, usageSubagentRecoveryIndexesMigration]) db.exec(migration.sql);
   addThread(db, "thread", "First thread");
   return db;
 }
@@ -57,6 +58,83 @@ function request(overrides: Partial<UsageAnalyticsRequest> = {}): UsageAnalytics
 }
 const at = (value: string) => { vi.useFakeTimers({toFake: ["Date"]}); vi.setSystemTime(new Date(value)); };
 const rows = (db: Database.Database) => db.prepare("SELECT fact_id,placement,occurred_at,interval_start,input,output,model,effort,cost_units FROM usage_increments ORDER BY id").safeIntegers(false).all();
+
+describe("bucket time-index query plan", () => {
+  function fixture() {
+    const db = database("pi"), service = new UsageService(db), capture = service.open(source());
+    at("2026-11-02T00:00:00Z");
+    const entry = (id: string, time: string, input: string, model: string | null = "known") => ({
+      ...counter(id, {}), replaceCheckpoint: false, occurredAt: `2026-11-01T${time}.000Z`,
+      facts: [fact(id, {input, output: "0"}, {models: [{provider: "provider", model}],
+        costs: [{amount: "0.1", currency: "USD", kind: "reported" as const, provenance: "fixture"}]})],
+    });
+    capture.capture([
+      entry("before", "04:59:59", "1"), entry("start", "05:00:00", "2"),
+      entry("repeated-hour", "06:00:00", "3", null), entry("last-bucket", "07:00:00", "5"),
+      entry("exclusive-end", "07:30:00", "7"), entry("contained", "05:20:00", "11"),
+      entry("spanning", "06:05:00", "13"), entry("straddling", "05:10:00", "17"),
+    ]);
+    // Seed exact interval projections so this regression isolates read planning.
+    for (const [id, start] of [["contained", "05:10:00"], ["spanning", "05:55:00"], ["straddling", "04:50:00"]]) {
+      db.prepare("UPDATE usage_increments SET placement='interval',interval_start=? WHERE fact_id=?")
+        .run(`2026-11-01T${start}.000Z`, id);
+    }
+    addThread(db, "foreign", "Other principal", "other");
+    service.open(source("foreign", "proven_zero", "other")).capture([entry("foreign", "05:00:00", "1000")]);
+    const query = request({from: "2026-11-01T05:00:00.000Z", to: "2026-11-01T07:30:00.000Z",
+      timeZone: "America/New_York", bucket: "hour", groupBy: "model", crossBy: "provider", breakdownLimit: 1});
+    return {db, service, query};
+  }
+
+  it.each([
+    {}, {model: [null]}, {model: ["known", null], thread: ["thread"]},
+    {model: ["known"], provider: ["provider"], environment: ["environment"]}, {workspace: ["missing"]},
+  ])("preserves exact filtered, grouped DST and interval results (%j)", filters => {
+    const {db, service, query} = fixture();
+    const optimized = service.analytics(scope, {...query, filters});
+    const prepare = db.prepare.bind(db);
+    const spy = vi.spyOn(db, "prepare").mockImplementation(sql => prepare(sql.replaceAll(
+      "FROM b CROSS JOIN usage_increments INDEXED BY usage_increments_time ON", "FROM b JOIN usage_increments ON")));
+    try { expect(service.analytics(scope, {...query, filters})).toEqual(optimized); }
+    finally { spy.mockRestore(); }
+    if (Object.keys(filters).length === 0) {
+      expect(optimized.buckets.map(bucket => bucket.start)).toEqual([
+        "2026-11-01T05:00:00.000Z", "2026-11-01T06:00:00.000Z", "2026-11-01T07:00:00.000Z",
+      ]);
+      expect(optimized.totals.tokens).toBe("34");
+      expect(optimized.timeline.overall.tokens).toEqual(["13", "3", "5"]);
+      expect(optimized.placement).toMatchObject({interval: "11", spanning: "13", straddling: "17"});
+      expect(optimized.timeline.series.find(series => series.key === null)?.points.tokens).toEqual(["0", "3", "0"]);
+    }
+  });
+
+  it("range-scans the scoped time index inside buckets for overall, grouped and interval queries", () => {
+    const {db, service, query} = fixture();
+    const prepare = db.prepare.bind(db);
+    const plans: {detail: string}[][] = [];
+    const spy = vi.spyOn(db, "prepare").mockImplementation(sql => {
+      const statement = prepare(sql);
+      if (sql.includes("WITH b(i,s,e)")) {
+        const all = statement.all.bind(statement);
+        vi.spyOn(statement, "all").mockImplementation((...parameters) => {
+          plans.push(prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...parameters) as {detail: string}[]);
+          return all(...parameters);
+        });
+      }
+      return statement;
+    });
+    try { service.analytics(scope, query); }
+    finally { spy.mockRestore(); }
+    expect(plans).toHaveLength(3);
+    for (const plan of plans) {
+      const buckets = plan.findIndex(row => row.detail.includes("SCAN json_each"));
+      const increments = plan.findIndex(row => row.detail.includes("SEARCH usage_increments USING INDEX usage_increments_time") &&
+        row.detail.includes("tenant_id=? AND principal_id=? AND occurred_at>? AND occurred_at<?"));
+      expect(buckets).toBeGreaterThanOrEqual(0);
+      expect(increments).toBeGreaterThan(buckets);
+    }
+  });
+});
 
 describe("usage timeline projection", () => {
   it("records checkpoint increases so their sum equals the selected session total", () => {

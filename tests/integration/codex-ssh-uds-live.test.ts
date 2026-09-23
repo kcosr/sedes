@@ -88,7 +88,9 @@ describe.sequential("Codex over a real SSH UDS carrier", () => {
           {
             model: configured.model,
             cwd: configured.workspace,
-            approvalPolicy: "never",
+            // Force a settings transition; unchanged values may emit no event.
+            // The never/low/read-only gate below still runs before any prompt.
+            approvalPolicy: "on-request",
             sandbox: "read-only",
             ephemeral: true,
             threadSource: "sedes_ssh_uds_real_luna_live",

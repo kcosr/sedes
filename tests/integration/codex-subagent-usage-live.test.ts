@@ -1,3 +1,4 @@
+import { usageSubagentRecoveryIndexesMigration } from "../../src/server/db/migrations/114-usage-subagent-recovery-indexes.js";
 import Database from "better-sqlite3";
 import { chmod, copyFile, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -50,7 +51,7 @@ function prepareDatabase(file: string, nativeRoot: string): Database.Database {
   database.exec(durableUsageAccountingMigration.sql);
   database.exec(usageGapSessionScopeMigration.sql);
   database.exec(usageSubagentsMigration.sql);
-  database.exec(usageTimelineMigration.sql);
+  database.exec(usageTimelineMigration.sql); database.exec(usageSubagentRecoveryIndexesMigration.sql);
   return database;
 }
 
@@ -153,11 +154,15 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
           reconciliationToken: "live-subagent-token", contextExcerpts: [], taskContexts: [], attachments: [],
           text: "This is an authorized subagent accounting test. Use spawn_agent exactly once to delegate: 'Reply with the word READY. Do not use tools.' Use gpt-5.6-luna with low reasoning if selectable. Wait for the child to finish, then reply DONE. Do not use shell, filesystem, network, or any tools except agent spawning and waiting." });
         await vi.waitFor(() => expect(completed.get(nativeRoot)).toBe(1), { timeout: 90_000, interval: 100 });
-        const children = usage.listSubagents({ binding, nativeNamespace: "disposable-codex-store" });
-        expect(children).toHaveLength(1);
-        const childId = children[0]!.nativeSession;
-        expect([...discovered]).toEqual([childId]);
+        expect(discovered.size).toBe(1);
+        const childId = [...discovered][0]!;
+        expect(usage.findSubagent({ ...runtimeScope, connectionProfileId: connection.id,
+          nativeNamespace: "disposable-codex-store", nativeSession: childId })).toMatchObject({
+          binding: {applicationThreadId: binding.applicationThreadId, backendConversationId: nativeRoot},
+          nativeParentSession: nativeRoot,
+        });
         await vi.waitFor(() => expect(completed.get(childId)).toBe(1), { timeout: 30_000, interval: 100 });
+        expect(usage.listSubagents({ binding, nativeNamespace: "disposable-codex-store" })).toEqual([]);
         const initial = usage.read(scope, binding.applicationThreadId);
         const mainTotal = nativeCounters.get(nativeRoot)!;
         const childTotal = nativeCounters.get(childId)!;
@@ -177,11 +182,11 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
         // Continue the same child after the parent presentation unsubscribes.
         // V2 rejects direct child input. Its native parent control prompt is
         // deliberately outside the closed app handle, and asks the supported
-        // followup_task tool to start the child again. External handle close
+        // followup_task tool to start the child again. Handle close
         // unsubscribes the parent, so restore this test connection's native
         // lifecycle subscription without opening an app handle or history.
         // Neither path reads a child transcript; the app turn stays unchanged.
-        if (udsSocket && agentVersion === "v2") await client.request(codexThreadResumeMethod, { threadId: nativeRoot, excludeTurns: true }, requestOptions);
+        if (agentVersion === "v2") await client.request(codexThreadResumeMethod, { threadId: nativeRoot, excludeTurns: true }, requestOptions);
         const followup = agentVersion === "v2"
           ? "Use followup_task to tell the existing child to reply READY AGAIN without tools. Do not spawn another agent. Wait for its reply, then say DONE. Do not use tools except followup_task and agent waiting."
           : "Reply READY AGAIN. Do not use any tools.";

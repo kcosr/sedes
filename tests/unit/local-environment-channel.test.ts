@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants as fsConstants, unlinkSync } from "node:fs";
+import { constants as fsConstants, symlinkSync, unlinkSync } from "node:fs";
 import {
   chmod,
   link,
@@ -1298,7 +1298,43 @@ describe("LocalEnvironmentChannelProvider", () => {
     ).rejects.toThrow("environment_private_unix_stream_owner_invalid");
   });
 
-  it("rejects wrong types, final symlinks, ancestor symlinks, and noncanonical paths", async () => {
+  it.each([false, true])("accepts a private final socket alias (relative=%s)", async relative => {
+    const fixture = await privateUnixFixture();
+    const aliasParent = await privateDirectory();
+    const alias = path.join(aliasParent, "configured.sock");
+    await symlink(relative ? path.relative(aliasParent, fixture.socketPath) : fixture.socketPath, alias);
+    const provider = providerFor(scope);
+    await expect(provider.prepareManagedProcessEndpoint(scope,
+      {kind: "private_unix_websocket", socketPath: alias}, 1, new AbortController().signal))
+      .resolves.toMatchObject({processAddress: `unix://${fixture.socketPath}`});
+    const channel = await provider.openPrivateUnixStream(scope, alias, new AbortController().signal);
+    privateUnixChannels.push(channel);
+    await expect(channel.revalidateIdentity()).resolves.toBeUndefined();
+    expect(isValidEnvironmentPrivateUnixStreamIdentity(channel.identity)).toBe(true);
+    expect(channel.identity.filesystemIdentity).toEqual({ownerVerified: true, parentMode: "0700", socketMode: "0600"});
+    await channel.write(new Uint8Array([65]));
+    const echoed = await channel.bytes[Symbol.asyncIterator]().next();
+    expect(echoed.value).toEqual(new Uint8Array([65]));
+  });
+
+  it("requires private modes on both alias and target parents and the target socket", async () => {
+    const fixture = await privateUnixFixture();
+    const aliasParent = await privateDirectory();
+    const alias = path.join(aliasParent, "configured.sock");
+    await symlink(fixture.socketPath, alias);
+    const provider = providerFor(scope);
+    for (const directory of [aliasParent, fixture.directory]) {
+      await chmod(directory, 0o750);
+      await expect(provider.openPrivateUnixStream(scope, alias, new AbortController().signal))
+        .rejects.toThrow("environment_private_unix_stream_parent_mode_invalid");
+      await chmod(directory, 0o700);
+    }
+    await chmod(fixture.socketPath, 0o660);
+    await expect(provider.openPrivateUnixStream(scope, alias, new AbortController().signal))
+      .rejects.toThrow("environment_private_unix_stream_socket_mode_invalid");
+  });
+
+  it("rejects wrong types, alias chains, ancestor symlinks, and noncanonical paths", async () => {
     const provider = providerFor(scope);
     const wrongTypeDirectory = await privateDirectory();
     const wrongTypePath = path.join(wrongTypeDirectory, "not-a-socket");
@@ -1317,10 +1353,12 @@ describe("LocalEnvironmentChannelProvider", () => {
       "alias.sock",
     );
     await symlink(finalSymlinkFixture.socketPath, finalSymlinkPath);
+    const chainedAliasPath = path.join(finalSymlinkFixture.directory, "chained.sock");
+    await symlink(finalSymlinkPath, chainedAliasPath);
     await expect(
       provider.openPrivateUnixStream(
         scope,
-        finalSymlinkPath,
+        chainedAliasPath,
         new AbortController().signal,
       ),
     ).rejects.toThrow("environment_private_unix_stream_path_unsafe");
@@ -1345,6 +1383,38 @@ describe("LocalEnvironmentChannelProvider", () => {
         new AbortController().signal,
       ),
     ).rejects.toThrow("environment_channel_path_invalid");
+  });
+
+  it("rejects a final alias retargeted during connection", async () => {
+    const fixture = await privateUnixFixture();
+    const replacement = await privateUnixFixture();
+    const aliasParent = await privateDirectory();
+    const alias = path.join(aliasParent, "configured.sock");
+    await symlink(fixture.socketPath, alias);
+    fixture.server.once("connection", () => {
+      unlinkSync(alias);
+      symlinkSync(replacement.socketPath, alias);
+    });
+    await expect(providerFor(scope).openPrivateUnixStream(scope, alias, new AbortController().signal))
+      .rejects.toThrow("environment_private_unix_stream_identity_replaced");
+  });
+
+  it.each(["retarget", "same-target", "target-removed"] as const)("invalidates a connected socket alias after %s", async change => {
+    const fixture = await privateUnixFixture();
+    const replacement = await privateUnixFixture();
+    const aliasParent = await privateDirectory();
+    const alias = path.join(aliasParent, "configured.sock");
+    await symlink(fixture.socketPath, alias);
+    const channel = await providerFor(scope).openPrivateUnixStream(scope, alias, new AbortController().signal);
+    privateUnixChannels.push(channel);
+    if (change === "target-removed") unlinkSync(fixture.socketPath);
+    else {
+      unlinkSync(alias);
+      symlinkSync(change === "retarget" ? replacement.socketPath : fixture.socketPath, alias);
+    }
+    await expect(channel.revalidateIdentity()).rejects.toThrow("environment_private_unix_stream_identity_replaced");
+    await expect(channel.closed).resolves.toEqual({reason: "client_closed"});
+    expect(isValidEnvironmentPrivateUnixStreamIdentity(channel.identity)).toBe(false);
   });
 
   it("rejects a socket path replaced between the pre-connect and post-connect checks", async () => {

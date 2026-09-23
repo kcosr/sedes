@@ -97,6 +97,9 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
     this.#assertAuthority(authority);
     this.#sessions?.evict(threadId, generation);
     this.#revision++;
+    // Explicit eviction may finish after the final native idle notification.
+    // Revisit a pending idle request when that last retention blocker clears.
+    this.#retryIdle();
   }
 
   cancelIdle(): void { this.#idleRequest = undefined; }

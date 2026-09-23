@@ -124,11 +124,12 @@ export class UsageAnalyticsService {
     const previousFrom = from - (to - from);
     const previous = request.from === null ? null : {from: iso(previousFrom), to: iso(from), totals: total({from: iso(previousFrom), to: iso(from)})};
 
-    // Buckets are bound as a JSON table so SQLite range-scans the time index per bucket.
+    // Keep the small bucket table outermost and require the scoped time index.
+    // An ordinary JOIN can instead scan all principal history once per bucket.
     const bucketJson = JSON.stringify(buckets.map((b) => [iso(b.start), iso(Math.min(b.end, to))]));
     const bucketed = (groupExpression: string | null, extra: Record<string, unknown> = {}) => this.database.prepare(`WITH b(i,s,e) AS (SELECT key, json_extract(value,'$[0]'), json_extract(value,'$[1]') FROM json_each(@buckets))
       SELECT b.i AS bucketIndex${groupExpression ? `, ${groupExpression}` : ""}, ${aggregateSelect()}
-      FROM b JOIN usage_increments ON ${where} AND ${PLACED} AND ${IN_BUCKET}
+      FROM b CROSS JOIN usage_increments INDEXED BY usage_increments_time ON ${where} AND ${PLACED} AND ${IN_BUCKET}
       GROUP BY b.i${groupExpression ? ", folded, groupKey" : ""}`).safeIntegers().all({...values, ...extra, buckets: bucketJson}) as AggregateRow[];
     const overall = emptyPoints(buckets.length);
     let placedIntervals = 0n;
@@ -164,7 +165,7 @@ export class UsageAnalyticsService {
         ORDER BY SUM(COALESCE(input,0)+COALESCE(output,0)) DESC, ${column} LIMIT 8`).all(base) as {key: string | null}[]).map((row) => row.key);
     }
     for (const row of this.database.prepare(`WITH b(i,s,e) AS (SELECT key, json_extract(value,'$[0]'), json_extract(value,'$[1]') FROM json_each(@buckets))
-      SELECT SUM(COALESCE(input,0)+COALESCE(output,0)) AS tokens FROM b JOIN usage_increments ON ${where} AND placement='interval' AND ${IN_BUCKET}`)
+      SELECT SUM(COALESCE(input,0)+COALESCE(output,0)) AS tokens FROM b CROSS JOIN usage_increments INDEXED BY usage_increments_time ON ${where} AND placement='interval' AND ${IN_BUCKET}`)
       .safeIntegers().all({...values, buckets: bucketJson}) as {tokens: bigint | null}[]) placedIntervals += row.tokens ?? 0n;
 
     let matrix: UsageAnalyticsResponse["matrix"] = null;

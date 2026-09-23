@@ -159,9 +159,15 @@ Remote eviction requires sidecar runtime protocol 8.
 ### Local Unix WebSocket
 
 The socket modes are a capability boundary. Sedes requires a canonical,
-owner-only parent (`0700`) and owned socket (`0600`), captures the socket
-identity, connects, and fences a replacement generation. The external
-app-server remains alive when Sedes stops or reconnects.
+owner-only parent (`0700`) and owned socket (`0600`). The configured final path
+may also be an owned symlink in a canonical owner-only directory, pointing
+directly to such a socket; directory symlinks and alias chains remain rejected.
+This supports daemon-managed socket aliases without changing the configured
+path or its accounting namespace. Sedes captures and rechecks both alias and
+target identities around connection and WebSocket Upgrade, and fences a
+replacement or retargeted alias. The same validation runs on a sidecar host for
+its external Unix endpoint. The external app-server remains alive when Sedes
+stops or reconnects.
 
 ### Local TCP and WSS
 

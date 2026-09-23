@@ -15,7 +15,7 @@ const MAX_CHILDREN = 4096;
 const EPOCH = "native-counter-v1";
 const NORMALIZER = "codex-subagent-usage-v1";
 type Counter = { generation: number; sequence: number; usage: CodexThreadTokenUsage };
-type Child = { id:string; closed:boolean; activitySequence:number; subscribedGeneration:number|null; lease: { release(evicted?: boolean): Promise<void> } | undefined; binding: ConversationBinding; parent: string; capture: UsageCapture; captureOpen: boolean; active: boolean; generation: number; sequence: number };
+type Child = { id:string; closed:boolean; activitySequence:number; subscribedGeneration:number|null; attachedGeneration:number|null; attachmentRevision:number; pendingRelease:{revision:number;promise:Promise<void>}|undefined; lease: { release(evicted?: boolean): Promise<void> } | undefined; binding: ConversationBinding; parent: string; capture: UsageCapture; captureOpen: boolean; active: boolean; generation: number; sequence: number };
 
 /** Runtime-owned observer: child accounting outlives the root's presentation handle.
  * Only native spawn evidence descending from an admitted binding grants ownership.
@@ -33,6 +33,7 @@ export class CodexSubagentUsageCoordinator {
   #recovery: Promise<void> | undefined;
   #recoverAgain = false;
   #restoringRoots = false;
+  #releaseTail: Promise<void> = Promise.resolve();
 
   constructor(readonly input: { client: CodexSharedClientFacade; sink: UsageSink; nativeNamespace: string; runtimeScope: Omit<UsageSubagentRootScope,"nativeNamespace">; onError: (error: unknown) => void }) {
     input.client.subscribeNotifications(notification => this.#safe(() => this.#notification(notification)));
@@ -57,8 +58,8 @@ export class CodexSubagentUsageCoordinator {
       for (const row of restored) {
         if (!this.#children.has(row.nativeSession)) this.#pendingParents.set(row.nativeSession, row.nativeParentSession);
       }
-      this.#resolvePending(new Map(restored.map(row => [row.nativeSession,row.captureState])));
-      if (restored.length && this.#ready && !this.#restoringRoots) this.#scheduleRecovery();
+      this.#resolvePending(new Map(restored.map(row => [row.nativeSession,row.captureState])), binding);
+      if (restored.some(row=>row.captureState!=="idle") && this.#ready && !this.#restoringRoots) this.#scheduleRecovery();
     });
   }
 
@@ -67,6 +68,7 @@ export class CodexSubagentUsageCoordinator {
     const changed = snapshot.generation !== this.#generation;
     if ((!ready && this.#ready) || changed) {
       for (const child of this.#children.values()) {
+        child.attachedGeneration = null;
         // A replacement process has no work protected by the old lease.
         // Do not send an eviction carrying the old generation to the new host.
         if (changed) this.#release(child, false);
@@ -90,6 +92,9 @@ export class CodexSubagentUsageCoordinator {
       this.#children.clear();
     } else if (recovered) {
       for (const [id, child] of this.#children) {
+        // Idle identities remain in the accounting registry. Actual new native
+        // activity can look one up; reconnect does not revisit their history.
+        if (!child.active) { this.#children.delete(id); continue; }
         if (child.active) this.#ensureCapture(id,child);
         child.generation = this.#generation;
         child.sequence = -1;
@@ -98,7 +103,7 @@ export class CodexSubagentUsageCoordinator {
       }
       for (const binding of [...this.#pendingRoots.values()]) this.registerRoot(binding);
       this.#restoreRoots();
-      if (this.#children.size) this.#scheduleRecovery();
+      if ([...this.#children.values()].some(child=>child.active)) this.#scheduleRecovery();
     }
   }
 
@@ -154,7 +159,7 @@ export class CodexSubagentUsageCoordinator {
       else if (!this.#roots.has(event.threadId)) this.#boundedSet(this.#pendingActivity, event.threadId, false);
     } else if (notification.method === "thread/status/changed") {
       const event = codexC2NotificationSchemas["thread/status/changed"].parse(notification.params);
-      const child = this.#children.get(event.threadId);
+      const child = this.#children.get(event.threadId) ?? (event.status.type === "active" ? this.#restoreKnownChild(event.threadId) : undefined);
       if (child) {
         child.activitySequence=notification.sequence;
         if (event.status.type === "active") this.#activate(event.threadId,child);
@@ -164,7 +169,7 @@ export class CodexSubagentUsageCoordinator {
       else if (!this.#roots.has(event.threadId)) this.#boundedSet(this.#pendingActivity, event.threadId, event.status.type === "active");
     } else if (notification.method === "turn/started" || notification.method === "turn/completed") {
       const event = codexC2NotificationSchemas[notification.method].parse(notification.params);
-      const child = this.#children.get(event.threadId);
+      const child = this.#children.get(event.threadId) ?? (notification.method === "turn/started" ? this.#restoreKnownChild(event.threadId) : undefined);
       if (child) {
         child.activitySequence=notification.sequence;
         if (notification.method === "turn/started") {
@@ -176,7 +181,7 @@ export class CodexSubagentUsageCoordinator {
     } else if (notification.method === "thread/tokenUsage/updated") {
       const event = codexC2NotificationSchemas["thread/tokenUsage/updated"].parse(notification.params);
       const counter = { generation: notification.generation, sequence: notification.sequence, usage: event.tokenUsage };
-      const child = this.#children.get(event.threadId);
+      const child = this.#children.get(event.threadId) ?? this.#restoreKnownChild(event.threadId);
       if (child) this.#capture(event.threadId, child, counter);
       else if (!this.#roots.has(event.threadId) && (this.#pendingCounters.get(event.threadId)?.sequence ?? -1) < counter.sequence) this.#boundedSet(this.#pendingCounters, event.threadId, counter);
     }
@@ -197,12 +202,25 @@ export class CodexSubagentUsageCoordinator {
     this.#resolvePending();
   }
 
-  #resolvePending(restored: ReadonlyMap<string, "active" | "idle" | "disconnected" | "failed"> = new Map()): void {
+  #restoreKnownChild(id: string): Child | undefined {
+    if (this.#roots.has(id) || this.#pendingRoots.has(id)) return undefined;
+    const stored = this.input.sink.findSubagent({ ...this.input.runtimeScope, nativeNamespace: this.input.nativeNamespace, nativeSession: id });
+    if (!stored) return undefined;
+    this.#boundedSet(this.#pendingParents, id, stored.nativeParentSession);
+    // A targeted live event proves this identity is relevant now. Start idle;
+    // the calling event, not historical accounting, determines activity.
+    this.#resolvePending(new Map([[id, "idle"]]), stored.binding, true);
+    return this.#children.get(id);
+  }
+
+  #resolvePending(restored: ReadonlyMap<string, "active" | "idle" | "disconnected" | "failed"> = new Map(), restoredBinding?: ConversationBinding, liveEvent = false): void {
     let changed = true;
     while (changed) {
       changed = false;
       for (const [id, parent] of this.#pendingParents) {
-        const binding = this.#roots.get(parent) ?? this.#children.get(parent)?.binding;
+        if (restored.get(id) === "idle" && !liveEvent) { this.#pendingParents.delete(id); continue; }
+        const binding = (restored.has(id) ? restoredBinding : undefined) ?? this.#roots.get(parent) ?? this.#children.get(parent)?.binding
+          ?? this.input.sink.findSubagent({ ...this.input.runtimeScope, nativeNamespace: this.input.nativeNamespace, nativeSession: parent })?.binding;
         if (!binding) continue;
         if (this.#children.size >= MAX_CHILDREN) {
           this.#pendingParents.delete(id);
@@ -215,7 +233,7 @@ export class CodexSubagentUsageCoordinator {
         }
         const capture = this.#open(binding, id, parent);
         const active = this.#pendingActivity.get(id) ?? restored.get(id) !== "idle";
-        const child: Child = { id,closed:false,activitySequence:-1,subscribedGeneration:restored.has(id)?null:this.#generation,
+        const child: Child = { id,closed:false,activitySequence:-1,subscribedGeneration:restored.has(id)?null:this.#generation,attachedGeneration:null,attachmentRevision:0,pendingRelease:undefined,
           lease: active && !restored.has(id) ? this.input.client.residency?.retain() : undefined, binding, parent, capture,
           captureOpen:true,active,generation:this.#generation,sequence:-1 };
         this.#children.set(id, child);
@@ -303,12 +321,16 @@ export class CodexSubagentUsageCoordinator {
   async #recover(): Promise<void> {
     const generation = this.#generation;
     const current = () => this.#ready && this.#generation === generation;
+    const candidates = [...this.#children.values()].filter(child=>child.active && child.subscribedGeneration!==generation);
+    if (!candidates.length) return;
     const loaded = new Set<string>();
     const cursors = new Set<string>();
     let cursor: string | null = null;
+    let inventorySequence: number | undefined;
     for (let page = 0; page < 64; page++) {
       const receipt = await this.input.client.requestWithReceipt(codexRuntimeMethod("thread/loaded/list"), { cursor, limit: 100 }, { timeoutMilliseconds: 10_000 });
       if (!current() || receipt.generation !== generation) return;
+      inventorySequence ??= receipt.inboundSequence;
       const result = receipt.result as OfficialCodexClientRequestResult<"thread/loaded/list">;
       for (const id of result.data) loaded.add(id);
       if (loaded.size > MAX_CHILDREN) throw new Error("codex_subagent_inventory_limit");
@@ -317,20 +339,25 @@ export class CodexSubagentUsageCoordinator {
       if (cursors.has(cursor) || page === 63) throw new Error("codex_subagent_inventory_incomplete");
       cursors.add(cursor);
     }
-    for (const [id, child] of this.#children) {
+    for (const child of candidates) {
+      const id = child.id;
       if (!current()) return;
-      if(child.subscribedGeneration===generation)continue;
+      if(!child.active || child.subscribedGeneration===generation)continue;
       if (!loaded.has(id)) {
-        // No native load for accounting. Retain the genuine gap and an honest
-        // disconnected capture state for work whose completion was not seen.
-        if(child.active && child.captureOpen){child.capture.seal("detached");child.captureOpen=false;}
-        this.#release(child);continue;
+        // Activity received after inventory started outranks its absence.
+        if (child.activitySequence > inventorySequence!) continue;
+        // Authoritative absence ends monitoring, without claiming that missing
+        // final usage was recovered. The accounting gap remains durable.
+        this.#ensureCapture(id,child);child.capture.gap("capture_gap");
+        this.#idle(child,true);continue;
       }
       try {
         const receipt = await this.input.client.requestWithReceipt(codexThreadResumeMethod, { threadId: id, excludeTurns: true }, { timeoutMilliseconds: 10_000 });
         if (!current() || receipt.generation !== generation) return;
         if (receipt.result.thread.id !== id) throw new Error("codex_subagent_resume_identity_mismatch");
         child.subscribedGeneration=generation;
+        child.attachedGeneration=generation;
+        child.attachmentRevision++;
         if(child.activitySequence>receipt.inboundSequence){
           // Newer streamed lifecycle evidence wins over the resumed snapshot.
           // Re-evict after resume since the host clears its eviction flag when
@@ -360,11 +387,28 @@ export class CodexSubagentUsageCoordinator {
   #release(child: Child, detach = true): void {
     const lease = child.lease;
     child.lease = undefined;
-    const generation=child.generation;
-    // Persistent hosts retain a session independently of the local runtime
-    // lease. Eviction releases that host record without native unsubscribe.
-    const detached=(detach ? this.input.client.persistentSessions?.detachThread(child.id,generation,true) : undefined) ?? Promise.resolve();
-    void detached.catch(error=>this.#diagnose(error)).then(()=>lease?.release()).catch(error=>this.#diagnose(error));
+    const generation=child.attachedGeneration;
+    let detached=Promise.resolve();
+    if (detach && generation!==null && generation===this.#generation && this.#ready) {
+      const revision=child.attachmentRevision;
+      if (child.pendingRelease?.revision!==revision) {
+        // Only real host attachments enter this single background lane. It
+        // leaves transport capacity available to interactive requests.
+        const release=this.#releaseTail.then(async()=>{
+          const successor=this.#children.get(child.id);
+          if (!this.#ready || generation!==this.#generation || child.active ||
+            child.attachedGeneration!==generation || child.attachmentRevision!==revision ||
+            (successor && successor!==child)) return;
+          child.attachedGeneration=null;
+          await this.input.client.persistentSessions?.detachThread(child.id,generation,true);
+        }).catch(error=>this.#diagnose(error));
+        child.pendingRelease={revision,promise:release};
+        this.#releaseTail=release;
+        void release.then(()=>{if(child.pendingRelease?.revision===revision)child.pendingRelease=undefined;});
+      }
+      detached=child.pendingRelease.promise;
+    } else if (!detach || generation!==this.#generation || !this.#ready) child.attachedGeneration=null;
+    void detached.then(()=>lease?.release()).catch(error=>this.#diagnose(error));
   }
 
   #boundedSet<T>(map: Map<string, T>, id: string, value: T): void {

@@ -1,3 +1,4 @@
+import { usageSubagentRecoveryIndexesMigration } from "../../src/server/db/migrations/114-usage-subagent-recovery-indexes.js";
 import { CodexUsageCapture } from "../../src/server/backends/codex/codex-usage-capture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
@@ -32,7 +33,7 @@ INSERT INTO agent_backend_instances VALUES('tenant','backend','claude_agent_sdk'
 INSERT INTO conversation_bindings(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,execution_environment_id,backend_conversation_id,connection_profile_id) VALUES('tenant','principal','thread','backend','environment','native-session','connection');`);
   if(legacy)db.exec("INSERT INTO claude_usage_ledgers VALUES('tenant','principal','thread',100,20,30,40,5,1720000000000)");
   db.exec(durableUsageAccountingMigration.sql);
-  db.exec(usageGapSessionScopeMigration.sql); db.exec(usageSubagentsMigration.sql); db.exec(usageTimelineMigration.sql); return db;
+  db.exec(usageGapSessionScopeMigration.sql); db.exec(usageSubagentsMigration.sql); db.exec(usageTimelineMigration.sql); db.exec(usageSubagentRecoveryIndexesMigration.sql); return db;
 }
 function fact(id: string, input: string, overrides: Partial<UsageFact> = {}): UsageFact {
   return {id, kind: "operation", sessionContribution: "additive", coverageDomain: "main_loop", tokens: {input}, costs: [], models: [{provider: "provider", model: "model"}], basis: ["sdk_normalized"], providerPresence: "unknown", quality: "complete", reasons: [], activity: "model", turn: null, ...overrides};
@@ -492,6 +493,64 @@ describe("Codex subagent accounting", () => {
     expect(restarted.read(scope,"thread").summary.reasons).not.toContain("capture_gap");
     expect(db.prepare("SELECT COUNT(*) AS n FROM usage_sources").get()).toEqual({n:1});
     expect(restarted.listSubagents({binding,nativeNamespace:"other"})).toEqual([]);
+  });
+  it("recovers only latest unresolved child captures and preserves idle accounting", () => {
+    const {db,service}=setup();
+    const query={tenantId:scope.tenantId,principalId:scope.principalId,backendInstanceId:binding.backendInstanceId,executionEnvironmentId:binding.executionEnvironmentId,connectionProfileId:binding.connectionProfileId,nativeNamespace:source.nativeNamespace,cursor:null,limit:128};
+    const completed=service.open(child("completed"));completed.capture([checkpoint("done","30")]);completed.seal("closed");
+    service.open(child("superseded"));
+    service.open({...child("superseded"),epoch:"new-epoch"}).seal("closed");
+    expect(service.listSubagentRoots(query)).toEqual({bindings:[],nextCursor:null});
+    expect(service.listSubagents({binding,nativeNamespace:source.nativeNamespace})).toEqual([]);
+    const live=service.open(child("live","completed"));live.capture([checkpoint("live","10")]);live.seal("detached");
+    service.open(child("failed"));
+    db.prepare("UPDATE usage_sources SET capture_state='failed' WHERE native_session='failed'").run();
+    const restarted=new UsageService(db);restarted.recoverInterruptedCapture();
+    expect(restarted.listSubagentRoots(query).bindings).toHaveLength(1);
+    expect(restarted.listSubagents({binding,nativeNamespace:source.nativeNamespace})).toEqual([
+      expect.objectContaining({nativeSession:"failed",captureState:"failed"}),
+      expect.objectContaining({nativeSession:"live",nativeParentSession:"completed",captureState:"disconnected"}),
+    ]);
+    expect(restarted.read(scope,"thread").summary.metrics.input.value).toBe("40");
+    expect(db.prepare("SELECT count(*) AS n FROM usage_observations").get()).toEqual({n:2});
+    expect(db.prepare("SELECT count(*) AS n FROM usage_subagents").get()).toEqual({n:4});
+  });
+  it("finds historical ownership by exact scope without recovering idle or ancestry-only children", () => {
+    const {db,service}=setup();
+    const query={tenantId:scope.tenantId,principalId:scope.principalId,backendInstanceId:binding.backendInstanceId,executionEnvironmentId:binding.executionEnvironmentId,connectionProfileId:binding.connectionProfileId,nativeNamespace:source.nativeNamespace,nativeSession:"child"};
+    service.open(child()).seal("closed");
+    expect(service.listSubagents({binding,nativeNamespace:source.nativeNamespace})).toEqual([]);
+    expect(service.findSubagent(query)).toEqual({binding:{...binding,createdAt:"2026-09-22T00:00:00.000Z"},nativeParentSession:binding.backendConversationId});
+    // Historical imports can retain a verified parent edge without a source.
+    db.prepare("DELETE FROM usage_sources WHERE native_session='child'").run();
+    expect(service.findSubagent(query)?.nativeParentSession).toBe(binding.backendConversationId);
+    for(const wrong of [{tenantId:"other"},{principalId:"other"},{backendInstanceId:"other"},{executionEnvironmentId:"other"},{connectionProfileId:"other"},{nativeNamespace:"other"},{nativeSession:"other"}]) {
+      expect(service.findSubagent({...query,...wrong})).toBeNull();
+    }
+    db.prepare("UPDATE application_threads SET environment_id='retargeted'").run();
+    expect(service.findSubagent(query)).toBeNull();
+  });
+  it("uses an unresolved-source index instead of scanning the historical child registry", () => {
+    const {db,service}=setup();
+    db.transaction(()=>{for(let i=0;i<229;i++)service.open(child(`historical-${i}`)).seal("closed");})();
+    service.open(child("live"));
+    const prepare=vi.spyOn(db,"prepare");
+    const query={tenantId:scope.tenantId,principalId:scope.principalId,backendInstanceId:binding.backendInstanceId,executionEnvironmentId:binding.executionEnvironmentId,connectionProfileId:binding.connectionProfileId,nativeNamespace:source.nativeNamespace,cursor:null,limit:128};
+    expect(service.listSubagentRoots(query).bindings).toHaveLength(1);
+    expect(service.listSubagents({binding,nativeNamespace:source.nativeNamespace}).map(row=>row.nativeSession)).toEqual(["live"]);
+    const sql=prepare.mock.calls.map(([statement])=>statement).filter(statement=>statement.includes("INDEXED BY usage_sources_subagent_recovery"));
+    prepare.mockRestore();
+    expect(sql).toHaveLength(2);
+    const parameters=[
+      [scope.tenantId,scope.principalId,binding.backendInstanceId,binding.executionEnvironmentId,source.nativeNamespace,binding.connectionProfileId,"",129],
+      [scope.tenantId,scope.principalId,binding.applicationThreadId,binding.backendInstanceId,binding.executionEnvironmentId,source.nativeNamespace,binding.backendConversationId],
+    ];
+    for(let i=0;i<sql.length;i++) {
+      const plan=db.prepare(`EXPLAIN QUERY PLAN ${sql[i]}`).all(...parameters[i]!) as {detail:string}[];
+      expect(plan.some(row=>row.detail.includes("SEARCH s USING INDEX usage_sources_subagent_recovery"))).toBe(true);
+      expect(plan.some(row=>row.detail.includes("SEARCH newer USING") && row.detail.includes("usage_sources_subagent_identity"))).toBe(true);
+      expect(plan.some(row=>row.detail==="SCAN c")).toBe(false);
+    }
   });
   it("rejects unknown parents, cycles, root aliases, and an existing ordinary conversation", () => {
     const {db,service}=setup();vi.spyOn(console,"warn").mockImplementation(()=>undefined);

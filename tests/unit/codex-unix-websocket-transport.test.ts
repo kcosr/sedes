@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -378,6 +378,43 @@ describe.sequential("UnixWebSocketTransport", () => {
       code: "codex_unix_websocket_identity_invalid",
       permanent: true,
     });
+  });
+
+  it("completes Upgrade through an owned private socket alias", async () => {
+    const fixture = await createFixture();
+    const alias = path.join(fixture.root, "configured.sock");
+    await symlink(fixture.peer.socketPath, alias);
+    const factory = new UnixWebSocketTransportFactory({scope, channels: fixture.channels, socketPath: alias});
+    const transport = await factory.open(scope, 1, new AbortController().signal);
+    fixture.transports.push(transport);
+    expect(fixture.peer.requests).toHaveLength(1);
+    expect(isValidFramedTransportAssurance(transport.assurance)).toBe(true);
+    expect(transport.assurance).toMatchObject({websocketUpgradeVerified: true});
+  });
+
+  it("rejects a real alias retarget after Upgrade and allows a fresh generation", async () => {
+    const fixture = await createFixture();
+    const replacement = await createFixture();
+    const alias = path.join(fixture.root, "configured.sock");
+    await symlink(fixture.peer.socketPath, alias);
+    const factory = new UnixWebSocketTransportFactory({scope, socketPath: alias,
+      channels: wrappingProvider(fixture.channels, channel => wrappedChannel(channel, {
+        revalidateIdentity: async () => {
+          expect(fixture.peer.requests).toHaveLength(1);
+          await rm(alias);
+          await symlink(replacement.peer.socketPath, alias);
+          await channel.revalidateIdentity();
+        },
+      })),
+    });
+    await expect(factory.open(scope, 1, new AbortController().signal)).rejects.toMatchObject({
+      code: "codex_unix_websocket_unavailable", permanent: false,
+    });
+    const freshFactory = new UnixWebSocketTransportFactory({scope, channels: fixture.channels, socketPath: alias});
+    const transport = await freshFactory.open(scope, 2, new AbortController().signal);
+    fixture.transports.push(transport);
+    expect(replacement.peer.requests).toHaveLength(1);
+    expect(isValidFramedTransportAssurance(transport.assurance)).toBe(true);
   });
 
   it("retries a socket replacement detected after Upgrade with a fresh generation", async () => {

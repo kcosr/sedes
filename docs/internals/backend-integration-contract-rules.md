@@ -586,6 +586,16 @@ Characterize an existing backend before extracting common infrastructure,
 migrate it without semantic changes, and verify it independently before making
 a new backend the next consumer of the extraction.
 
+Private Unix channel assurance may admit a final owned symlink only when its
+canonical parent and the resolved socket's canonical parent are owned `0700`
+directories and the socket is owned `0600`. Reject directory symlinks and alias
+chains; retain both alias and target filesystem identities across inspection,
+connection, and Upgrade, and connect to the inspected target. Keep the configured
+selector stable for backend identity and accounting rather than persisting a
+daemon's changing resolved path. Codex consumes this channel locally and on
+sidecar hosts; SSH tunnel delegates also retain its socket validation. Pi,
+Claude, and Grok do not expose external Unix endpoints through this primitive.
+
 ## Compose one coherent module
 
 A compiled backend module owns its configuration parser, preparation,
@@ -1150,10 +1160,19 @@ are accounting sources, not fork ancestors or fabricated application turns.
 Main-agent turn summaries exclude child measurements and child-only gaps.
 Session reports include each child's checkpoint once and expose a normalized
 main/subagent breakdown. Capture and runtime residency outlive presentation
-handles. Reconnect recovery only subscribes known loaded children, does not read
-full history, and retains gaps until a new cumulative snapshot proves recovery.
-Pi's capture is unchanged; Claude retains its inclusive query-pipeline totals
-without adding child counters a second time; Grok remains unsupported.
+handles. Durable historical ownership must not imply live monitoring work.
+Reconnect recovery uses indexed latest-source eligibility (`active`,
+`disconnected`, or `failed`), excluding idle children and roots with no unresolved
+children. It only subscribes eligible loaded children, does not read full history,
+and ends monitoring for unloaded children while retaining gaps until a new
+cumulative snapshot proves recovery. Current native activity may rediscover an
+existing child through an exact scoped ownership lookup; idle or source-less
+ancestors remain valid ownership metadata without being monitored themselves.
+Release only attachments actually acquired by the coordinator in the current
+connection generation; never send cleanup for historical registry entries alone.
+Codex implements this child lifecycle. Pi's capture is unchanged; Claude retains
+its inclusive query-pipeline totals without adding child counters a second time;
+Grok remains unsupported.
 
 An observation may carry `attribution`: the effective model and reasoning
 effort in force when the evidence was produced, as confirmed by the backend at

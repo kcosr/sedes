@@ -308,6 +308,6 @@ describe("composer attachment protocol", () => {
   });
 
   it("advances the strict client protocol", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(120);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(121);
   });
 });

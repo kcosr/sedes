@@ -115,7 +115,8 @@ through module composition and never touch the tables directly.
 | `reconcile()` | Called only after authoritative history or a cumulative child snapshot was fully ingested; clears `capture_gap` and `capture_failed` for the source. |
 | `gap(reason)` | Records a known gap or limitation for the source. |
 | `seal(reason)` | Ends the incarnation: `detached` marks the source disconnected, `closed` idle, and `reset` records `source_reset`. |
-| `listSubagents` / `listSubagentRoots` | Scoped registry reads used by Codex child recovery. |
+| `listSubagents` / `listSubagentRoots` | Indexed reads of latest unresolved child captures and their roots, used by Codex recovery. |
+| `findSubagent` | Exact scoped historical ownership lookup when current provider activity identifies a child; no historical enumeration. |
 
 An observation has an ID, a revision, an optional source-proven `order`,
 `live` or `history` provenance, an optional reported `occurredAt`, a
@@ -294,11 +295,26 @@ collaboration spawn or a multi-agent v2 `subAgentActivity` start. Send, wait,
 and unrelated thread events never establish ownership, and a native session
 bound to an ordinary Sedes thread can never become a child. Child capture is
 owned by the runtime rather than the parent's presentation handle, so it
-continues after the parent handle closes. After a restart, recovery enumerates
-only the scoped registry for the connected runtime and resumes known loaded
-children with `excludeTurns`; it never reads transcripts or starts unloaded
-threads. Claude pipeline totals already include SDK subagent work and are not
-broken down.
+continues after the parent handle closes. Historical ownership remains durable
+without creating a live monitoring obligation. On restart or reconnect, indexed
+queries select only children whose latest source is `active`, `disconnected`, or
+`failed`, and only roots with such children. A later idle source supersedes an
+older unresolved source. Recovery does not scan every historical child.
+
+Recovery resumes eligible loaded children with `excludeTurns`; it never reads
+transcripts or starts unloaded threads. Absence from the loaded inventory ends
+monitoring while retaining any accounting gap. Idle ancestors need no capture
+or attachment for an unresolved descendant's durable ownership to remain valid.
+Current native activity can rediscover a historical child through an exact
+tenant/principal/backend/environment/namespace/profile-scoped lookup, including
+ownership retained without a usage source. That lookup reuses existing ancestry;
+it does not turn unrelated native events into new ownership evidence. Cleanup
+releases only an attachment the coordinator actually acquired in the current
+connection generation. Idle historical children cause no remote cleanup work.
+
+This monitoring lifecycle is implemented by Codex. Pi retains its native-entry
+capture, Claude pipeline totals already include SDK subagent work without a
+separate child monitor, and Grok usage accounting remains unsupported.
 
 ## Reads and live updates
 
@@ -493,8 +509,10 @@ explicit null-aware predicates so unknown keys fold into Other correctly.
   timeline.
 - **Migrations.** 110 creates the store, 111 adds session-scope gap flags, 112
   adds Codex child ownership and clears cached reports for rebuild, and 113 adds
-  the timeline projection and marks existing sources for rebuild. Applied
-  migrations are checksummed and never edited.
+  the timeline projection and marks existing sources for rebuild. Migration 114
+  adds indexes for unresolved child recovery and latest-source selection without
+  changing accounting evidence or totals. Applied migrations are checksummed
+  and never edited.
 - **Retention.** There is no automatic purge. Archive, restore, rename,
   environment disablement, provider disconnection, and native history pruning
   keep recorded usage. The only deletion path is aborting a proven-uncreated
