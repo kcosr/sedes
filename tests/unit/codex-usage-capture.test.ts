@@ -201,6 +201,22 @@ describe("Codex cumulative accounting capture", () => {
     }] });
   });
 
+  it("carries the supplied effective tuple without changing measurements", () => {
+    const f = fixture();
+    const usage = { total: { inputTokens: 100, outputTokens: 0, totalTokens: 100, cachedInputTokens: 2, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+      last: { inputTokens: 7, outputTokens: 0, totalTokens: 7, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 }, modelContextWindow: 100 };
+    f.observe(1, 100);
+    f.capture.observe({ generation: 1, sequence: 2, turnId: "turn-1", usage,
+      attribution: { model: { provider: "openai", model: "gpt-5.6" }, reasoningEffort: "high" } });
+    f.capture.observe({ generation: 1, sequence: 3, turnId: "turn-1", usage: { ...usage, total: { ...usage.total, inputTokens: 101 } },
+      attribution: { model: { provider: "", model: "m".repeat(241) }, reasoningEffort: "x".repeat(65) } });
+    expect(f.observations.map(observation => observation.attribution)).toEqual([undefined,
+      { model: { provider: "openai", model: "gpt-5.6" }, reasoningEffort: "high" }, { model: null, reasoningEffort: null }]);
+    expect(f.observations.flatMap(observation => observation.facts.map(fact => fact.models)))
+      .toEqual(Array(f.observations.flatMap(observation => observation.facts).length).fill([{ provider: null, model: null }]));
+    expect(f.gap).not.toHaveBeenCalled();
+  });
+
   it("rejects unsafe integers without retrying provider work", () => {
     const f = fixture(); f.observe(1, Number.MAX_SAFE_INTEGER + 1);
     expect(f.observations).toHaveLength(0);

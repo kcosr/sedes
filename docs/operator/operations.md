@@ -1120,7 +1120,7 @@ does.
   cleartext LAN listener exposes pairing codes, credentials, and application
   traffic to network observers even though API authentication is required.
 
-### Usage observations are unavailable
+### Accounts quota observations are unavailable
 
 - Confirm `SEDES_PROVIDER_PULSE_URL` is not `off`, `0`, or empty and points to
   one loopback `http://` origin with an explicit port and no path.

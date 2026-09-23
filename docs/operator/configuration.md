@@ -232,13 +232,13 @@ database files to `0600`; it leaves existing state-directory permissions intact.
 
 | Variable                   | Default                 | Contract                                                                                           |
 | -------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------- |
-| `SEDES_PROVIDER_PULSE_URL` | `http://127.0.0.1:4317` | Loopback `http://` origin with an explicit port for Provider Pulse. Set to `off` to disable Usage. |
+| `SEDES_PROVIDER_PULSE_URL` | `http://127.0.0.1:4317` | Loopback `http://` origin with an explicit port for Provider Pulse. Set to `off` to disable Accounts. |
 
 Provider Pulse is installation-owned, not tied to one environment, workspace,
 or thread. Sedes contacts it server-to-server on loopback and exposes only
 provider-neutral observations and admitted usage-check actions; the browser
 never receives its native account or reset-credit authority. When disabled,
-the client omits Usage rather than presenting a nonfunctional control.
+the client omits Accounts rather than presenting a nonfunctional control.
 
 For Provider Pulse, `off` is the recommended explicit disabled value. Empty or
 whitespace-only input and `0` are also accepted as disabled for service

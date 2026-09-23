@@ -46,6 +46,7 @@ Sedes records on the main server independently of an open browser. Open usage
 views refresh periodically; closing them stops those reads. Previously recorded
 values remain available offline from the provider, and a refresh failure retains
 the last successful display. Older turns may have no recoverable accounting.
+For totals across threads over time, open the [Usage page](usage.md).
 
 ## Create a thread
 

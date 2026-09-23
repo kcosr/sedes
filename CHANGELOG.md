@@ -5,10 +5,20 @@
 ### Breaking Changes
 
 - Durable usage accounting replaces accumulated token/cost values in live
-  snapshots. Requires matching browser and packaged clients using protocol 119.
+  snapshots. Requires matching browser and packaged clients using protocol 120.
   Migration preserves old Claude totals separately with unknown coverage.
 
 ### Added
+
+- Add a **Usage** page (sidebar **More** → **Usage**) with tokens and
+  estimated cost over time for every thread, filterable and groupable by
+  model, provider, reasoning effort, backend, environment, project, thread,
+  agent, and activity. It includes period comparison, an explorer with CSV
+  export and two-dimension splits, a thread ranking, weekday-by-hour patterns,
+  token mix, and a coverage view. Charts place usage only where its time is
+  known. Migration 113 adds a derived usage timeline and rebuilds existing
+  accounting once on first read. Pi, Codex, and Claude record the
+  provider-confirmed model and reasoning effort for new usage.
 
 - Capture Codex subagent usage independently of parent turns, including nested
   and background agents. Session stats separates main-agent, combined-subagent,
@@ -25,6 +35,8 @@
   Session stats stays in the thread menu rather than flashing during loading.
 
 ### Changed
+
+- Rename the sidebar Provider Pulse quota entry from **Usage** to **Accounts**.
 
 - New thread creation selects Custom by default, while explicit saved-Agent and
   template choices remain available. (#6)

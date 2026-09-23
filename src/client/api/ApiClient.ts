@@ -1,4 +1,5 @@
 import { usageReportSchema, usageAvailabilitySchema, usageAvailabilityRequestSchema, type UsageAvailability, type UsageReport } from "../../shared/protocol/usage-accounting.js";
+import { usageAnalyticsRequestSchema, usageAnalyticsResponseSchema, type UsageAnalyticsRequest, type UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
 import {
   environmentVariablesPreviewQuerySchema,
   environmentVariablesPreviewResultSchema,
@@ -942,6 +943,12 @@ export class ApiClient {
   getUsage(threadId: string, turnId: string | null = null, signal?: AbortSignal): Promise<UsageReport> {
     const suffix = turnId === null ? "" : `/turns/${encodeURIComponent(turnId)}`;
     return this.#request(`/api/threads/${encodeURIComponent(threadId)}/usage${suffix}`, { signal }, usageReportSchema);
+  }
+
+  /** Principal-wide usage aggregates; a database-only read sent as POST for its bounded body. */
+  getUsageAnalytics(request: UsageAnalyticsRequest, signal?: AbortSignal): Promise<UsageAnalyticsResponse> {
+    const body = usageAnalyticsRequestSchema.parse(request);
+    return this.#mutation("/api/usage/analytics", usageAnalyticsResponseSchema, {method: "POST", body: JSON.stringify(body), signal});
   }
 
   getThreadEnvironmentVariables(threadId: string, signal?: AbortSignal): Promise<ThreadEnvironmentVariablesResult> {

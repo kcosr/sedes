@@ -1567,7 +1567,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   #consumeResult(message: SDKResultMessage): void {
     this.#usageAccounting.admitQuery(this.#session.startupProbeUuid, this.#session.reattached === true);
-    this.#usageAccounting.pipeline(message);
+    // Only an applied or reattach-confirmed effort attributes usage, and only to
+    // the confirmed model's row; unknown stays null.
+    this.#usageAccounting.pipeline(message, this.#effectiveEffort ?? null, this.#effectiveModel ?? null);
     this.#captureResultUsage(message);
     const activeId = this.#activeBackendTurnId();
     // Persistent output is correlated by the owner's exact user-message event.

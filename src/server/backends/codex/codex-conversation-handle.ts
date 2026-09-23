@@ -449,6 +449,9 @@ export class CodexConversationHandle implements ConversationHandle {
         readonly reasoningEffort?: string;
       }
     | undefined;
+  // A turn/start with an unknown outcome may have replaced this confirmed
+  // tuple. It attributes no usage until a provider observation replaces it.
+  #unconfirmedUsageModel: object | undefined;
   #modelInputModalities: readonly ("text" | "image")[] = ["text"];
   #closing = false;
   #closed = false;
@@ -1500,6 +1503,13 @@ export class CodexConversationHandle implements ConversationHandle {
         });
         return result;
       } catch (error) {
+        if (
+          !submissionBoundaryCrossed &&
+          error instanceof CodexRpcDeliveryError &&
+          error.delivery === "sent_outcome_unknown"
+        ) {
+          this.#unconfirmedUsageModel = this.#model;
+        }
         if (
           submissionBoundaryCrossed ||
           (error instanceof CodexRpcDeliveryError &&
@@ -3896,8 +3906,14 @@ export class CodexConversationHandle implements ConversationHandle {
         const parsed = codexC2NotificationSchemas[
           "thread/tokenUsage/updated"
         ].parse(notification.params);
+        // #model holds only provider-confirmed tuples (turn/start receipt,
+        // resume reply, settings notification) for the established generation.
+        const model = notification.generation === this.#establishedGeneration &&
+          this.#model !== this.#unconfirmedUsageModel ? this.#model : undefined;
         this.#usageCapture.observe({ generation: notification.generation, sequence: notification.sequence,
-          turnId: parsed.turnId, usage: parsed.tokenUsage });
+          turnId: parsed.turnId, usage: parsed.tokenUsage,
+          attribution: model ? { model: { provider: model.provider ?? null, model: model.id }, reasoningEffort: model.reasoningEffort ?? null }
+            : { model: null, reasoningEffort: null } });
         this.#usage = projectCodexUsage(parsed.tokenUsage);
         this.#usageGeneration = notification.generation;
       } catch (error) {

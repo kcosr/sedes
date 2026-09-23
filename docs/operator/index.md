@@ -146,8 +146,8 @@ installations or accounts.
 Optional components should fail closed and remain inside the same trusted
 installation boundary:
 
-- **Provider Pulse** supplies sidebar usage observations through a loopback
-  server-to-server proxy. Configure `SEDES_PROVIDER_PULSE_URL`, or set it to
+- **Provider Pulse** supplies the sidebar **Accounts** quota observations
+  through a loopback server-to-server proxy. Configure `SEDES_PROVIDER_PULSE_URL`, or set it to
   `off`. The browser does not contact Pulse directly.
 - **Web search** exposes the provider-neutral `research.web_search` agent tool
   through a local Grok CLI. Configure the server JSON `webSearch` block and

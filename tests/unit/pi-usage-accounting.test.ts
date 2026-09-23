@@ -101,6 +101,24 @@ describe("Pi native usage accounting", () => {
     new PiUsageAccounting({...input,manager:validManager,sink:{listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open:()=>({...NO_USAGE_CAPTURE,reconcile,capture:()=>false})}});
     expect(reconcile).not.toHaveBeenCalled();
   });
+  it("attributes the thinking level of the entry's own native branch without changing the revision", () => {
+    const plain = piUsageObservation(entry(), "turn", "history")!, attributed = piUsageObservation(entry(), "turn", "history", "high")!;
+    expect(attributed.attribution).toEqual({model: null, reasoningEffort: "high"});
+    expect(plain.attribution).toEqual({model: null, reasoningEffort: null});
+    expect(attributed.revision).toBe(plain.revision);expect(attributed.facts).toEqual(plain.facts);
+    const manager=SessionManager.inMemory("/workspace");
+    const user=manager.appendMessage({role:"user",content:"question",timestamp:1});
+    const before=manager.appendMessage(assistant(10));
+    manager.appendThinkingLevelChange("high");const after=manager.appendMessage(assistant(20));
+    manager.branch(user);const sibling=manager.appendMessage(assistant(30));
+    const captured:UsageObservation[]=[];
+    const accounting=new PiUsageAccounting({sink:{listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open:()=>({...NO_USAGE_CAPTURE,capture:(observations)=>{captured.push(...observations);return true;}})},manager,nativeNamespace:"store",authentication:{conversationId:manager.getSessionId(),installationKey:new Uint8Array(32)},binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"pi",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:manager.getSessionId(),createdAt:"2026-09-22T00:00:00Z"}});
+    const effort=(id:string)=>captured.find(observation=>observation.id===`${id}:usage`)!.attribution;
+    expect([effort(before),effort(after),effort(sibling)]).toEqual([{model:null,reasoningEffort:null},{model:null,reasoningEffort:"high"},{model:null,reasoningEffort:null}]);
+    manager.appendThinkingLevelChange("low");const liveId=manager.appendMessage(assistant(40));
+    accounting.append(manager.getEntries().find(candidate=>candidate.id===liveId)!,user);
+    expect(captured.at(-1)).toMatchObject({id:`${liveId}:usage`,attribution:{model:null,reasoningEffort:"low"}});
+  });
   it("rejects unsafe native counts instead of rounding", () => {
     expect(() => piUsageObservation(entry(assistant(Number.MAX_SAFE_INTEGER + 1)), "turn", "live")).toThrow("invalid_native_usage_count");
   });

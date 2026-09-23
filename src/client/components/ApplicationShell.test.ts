@@ -263,6 +263,7 @@ describe("workspace panel navigation policy", () => {
   it.each([
     ["home", { name: "home" as const }],
     ["archived", { name: "archived" as const }],
+    ["usage", { name: "usage" as const }],
   ])("blocks leaving a dirty workspace for %s until confirmed", (_label, destination) => {
     const store = {
       hasDirtyWorkspacePanels: vi.fn(() => true),

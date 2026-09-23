@@ -1604,6 +1604,41 @@ describe("normalized HTTP application contract", () => {
     } finally {await current.close();}
   });
 
+  it("aggregates principal usage analytics with labels from the real schema", async () => {
+    const current=await fixture();
+    try {
+      const workspace=await current.mutate(request(current.app).post("/api/workspaces/open")).send({environmentId:current.environmentId,path:current.workspacePath}).expect(201);
+      const created=await current.mutate(request(current.app).post("/api/threads")).send({workspaceId:workspace.body.id,configuration:{kind:"custom",targetId:current.profile.id},executionWorkspace:{kind:"direct"},title:"Analytics"}).expect(201);
+      const threadId=created.body.threadId as string;
+      const thread=current.database.prepare("SELECT backend_instance_id AS backend, environment_id AS environment FROM application_threads WHERE id=?").get(threadId) as {backend:string;environment:string};
+      const db=current.database;
+      db.prepare("INSERT INTO usage_thread_state(tenant_id,principal_id,thread_id) VALUES(?,?,?)").run(current.owner.tenantId,current.owner.principalId,threadId);
+      db.prepare(`INSERT INTO usage_sources(id,tenant_id,principal_id,thread_id,backend_id,environment_id,workspace_id,native_namespace,native_session,epoch,normalization_version,baseline,capture_state)
+        VALUES('analytics-source',?,?,?,?,?,?,'store','native','epoch','v1','unknown','idle')`).run(current.owner.tenantId,current.owner.principalId,threadId,thread.backend,thread.environment,workspace.body.id);
+      db.prepare(`INSERT INTO usage_observations(source_id,observation_id,revision,fingerprint,evidence_json,normalization_version,occurred_at,received_at)
+        VALUES('analytics-source','entry','1','fingerprint','{"facts":[]}','v1','2026-09-02T12:00:00.000Z','2026-09-02T12:00:01.000Z')`).run();
+      db.prepare(`INSERT INTO usage_increments(tenant_id,principal_id,thread_id,source_id,fact_id,observation_id,observation_revision,backend_id,backend_kind,environment_id,workspace_id,
+          agent_role,activity,provider,model,effort,placement,occurred_at,input,output,cost_units,currency,cost_kind,costed)
+        VALUES(?,?,?,'analytics-source','fact','entry','1',?,'pi',?,?,'main','model','anthropic','claude','high','reported','2026-09-02T12:00:00.000Z',120,30,2500000000000,'USD','estimated',1)`)
+        .run(current.owner.tenantId,current.owner.principalId,threadId,thread.backend,thread.environment,workspace.body.id);
+      const body={from:"2026-09-01T00:00:00.000Z",to:"2026-09-03T00:00:00.000Z",timeZone:"America/Chicago",bucket:"auto",filters:{effort:["high"]},groupBy:"thread",crossBy:"model",breakdownLimit:10,facets:true};
+      await current.withHost(request(current.app).post("/api/usage/analytics")).send(body).expect(403);
+      const response=await current.mutate(request(current.app).post("/api/usage/analytics")).send(body).expect(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.body).toMatchObject({bucket:"hour",totals:{tokens:"150",costs:[{currency:"USD",amount:"2.5",kind:"estimated"}]},
+        timeline:{series:[{key:threadId,totals:{input:"120"}}]},matrix:{cells:[{row:threadId,column:"claude"}]}});
+      expect(response.body.labels.thread[threadId]).toMatchObject({label:"Analytics",kind:"pi",retired:false,workspaceId:workspace.body.id});
+      expect(response.body.labels.workspace[workspace.body.id].label).toBe(db.prepare("SELECT display_name FROM workspaces WHERE id=?").pluck().get(workspace.body.id));
+      expect(response.body.labels.environment[thread.environment].label).toBeTruthy();
+      expect(response.body.labels.backend[thread.backend]).toMatchObject({kind:"pi"});
+      const filtered=await current.mutate(request(current.app).post("/api/usage/analytics")).send({...body,filters:{effort:[null]}}).expect(200);
+      expect(filtered.body.totals.increments).toBe("0");
+      await current.mutate(request(current.app).post("/api/usage/analytics")).send({...body,principalId:"forged"}).expect(400);
+      await current.mutate(request(current.app).post("/api/usage/analytics")).send({...body,timeZone:"Nowhere/Invalid"}).expect(400);
+      expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
+    } finally {await current.close();}
+  });
+
   it("manages retained projects and restores the same identity through Add project", async () => {
     const current = await fixture();
     try {

@@ -8,8 +8,12 @@ import { PiHistoryProjector } from "./pi-history-projector.js";
 import type { PiToolIdentityAuthentication } from "./pi-tool-identity-marker.js";
 import { readPiBranchMarker } from "./pi-branch-marker.js";
 
-/** SDK 0.86.0 terminal usage buckets are disjoint; reasoning is an output subset. */
-export function piUsageObservation(entry: SessionEntry, backendTurnId: string | null, provenance: "live" | "history"): UsageObservation | undefined {
+/**
+ * SDK 0.86.0 terminal usage buckets are disjoint; reasoning is an output subset.
+ * `thinkingLevel` is the level on the entry's native branch; it is attribution,
+ * not evidence, so the revision hashes only the fact.
+ */
+export function piUsageObservation(entry: SessionEntry, backendTurnId: string | null, provenance: "live" | "history", thinkingLevel: string | null = null): UsageObservation | undefined {
   let usage: Usage | undefined;
   let provider: string | null = null;
   let model: string | null = null;
@@ -50,7 +54,18 @@ export function piUsageObservation(entry: SessionEntry, backendTurnId: string | 
     turn: backendTurnId ? {backendTurnId, scope: "whole_turn", contribution: "additive"} : null,
   };
   return {id: `${entry.id}:usage`, revision: createHash("sha256").update(JSON.stringify(fact)).digest("hex"), order: null,
-    provenance, occurredAt: validTime(entry.timestamp), replaceCheckpoint: false, facts: [fact]};
+    provenance, occurredAt: validTime(entry.timestamp), replaceCheckpoint: false, facts: [fact],
+    attribution: {model: null, reasoningEffort: thinkingLevel}};
+}
+
+/**
+ * Pi appends the effective (model-clamped) level whenever it changes. With no
+ * change among an entry's ancestors the level is unknown, not Pi's default.
+ */
+function piThinkingLevel(entry: SessionEntry, current: string | null): string | null {
+  if (entry.type !== "thinking_level_change") return current;
+  const level: unknown = entry.thinkingLevel;
+  return typeof level === "string" && level.length > 0 && level.length <= 64 ? level : null;
 }
 
 function validTime(value: string): string | null {
@@ -97,8 +112,13 @@ export class PiUsageAccounting {
       const parents = new Set(entries.map((entry) => entry.parentId));
       const turns = new Map<string, import("../../../shared/protocol/backend.js").BackendTurn>();
       const inheritedTurnIds = new Set<string>();
+      // Every entry lies on some leaf branch, and its root path is unique.
+      const thinkingLevels = new Map<string, string | null>();
       for (const leaf of entries.filter((entry) => !parents.has(entry.id))) {
-        const projected = new PiHistoryProjector({toolIdentityAuthentication: this.#authentication}).project(this.#manager.getBranch(leaf.id));
+        const branch = this.#manager.getBranch(leaf.id);
+        let level: string | null = null;
+        for (const entry of branch) { thinkingLevels.set(entry.id, level); level = piThinkingLevel(entry, level); }
+        const projected = new PiHistoryProjector({toolIdentityAuthentication: this.#authentication}).project(branch);
         for (const turn of Object.values(projected.snapshot.turnsById)) turns.set(turn.backendTurnId, turn);
         for (const [id, turn] of projected.backendTurnIdByEntryId) {
           this.#turnByEntry.set(id, turn);
@@ -108,7 +128,7 @@ export class PiUsageAccounting {
       this.#capture.registerTurns([...turns.values()], this.#parentNativeSession
         ? {nativeSession: this.#parentNativeSession, turns: [...inheritedTurnIds].map(backendTurnId => ({backendTurnId, sourceBackendTurnId: backendTurnId}))} : undefined);
       for (const entry of entries) {
-        if (!this.#queue(entry, this.#turnByEntry.get(entry.id) ?? null, provenance)) complete = false;
+        if (!this.#queue(entry, this.#turnByEntry.get(entry.id) ?? null, provenance, thinkingLevels.get(entry.id) ?? null)) complete = false;
         if (this.#pending.size >= 64 && !this.#flush()) return;
       }
       if (!this.#flush()) return;
@@ -119,13 +139,16 @@ export class PiUsageAccounting {
   /** Live append already has the driver's authoritative active turn when available. */
   append(entry: SessionEntry, activeBackendTurnId?: string): void {
     try {
+      const branch = this.#manager.getBranch(entry.id);
+      let level: string | null = null;
+      for (const ancestor of branch) if (ancestor.id !== entry.id) level = piThinkingLevel(ancestor, level);
       let turnId = activeBackendTurnId ?? this.#turnByEntry.get(entry.id);
       if (!turnId && entry.type === "message") {
-        const projected = new PiHistoryProjector({toolIdentityAuthentication: this.#authentication}).project(this.#manager.getBranch(entry.id));
+        const projected = new PiHistoryProjector({toolIdentityAuthentication: this.#authentication}).project(branch);
         turnId = projected.backendTurnIdByEntryId.get(entry.id);
         this.#capture.registerTurns(Object.values(projected.snapshot.turnsById));
       }
-      this.#queue(entry, turnId ?? null, "live");
+      this.#queue(entry, turnId ?? null, "live", level);
       this.#flush();
     } catch { this.#capture.gap("capture_failed"); }
   }
@@ -133,10 +156,10 @@ export class PiUsageAccounting {
     if (this.#scanIncomplete) this.reconcile("history");
     else this.#flush();
   }
-  #queue(entry: SessionEntry, backendTurnId: string | null, provenance: "live" | "history"): boolean {
+  #queue(entry: SessionEntry, backendTurnId: string | null, provenance: "live" | "history", thinkingLevel: string | null): boolean {
     if (this.#inherited.has(entry.id)) return true;
     try {
-      const observation = piUsageObservation(entry, backendTurnId, provenance);
+      const observation = piUsageObservation(entry, backendTurnId, provenance, thinkingLevel);
       if (!observation) return true;
       if (this.#committed.get(observation.id) === observation.revision) return true;
       if (observation.facts.some((fact) => fact.reasons.includes("unknown_attribution"))) this.#capture.gap("unknown_attribution");

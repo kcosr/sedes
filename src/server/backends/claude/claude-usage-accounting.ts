@@ -23,8 +23,13 @@ const baseFact = {
   quality: "partial", reasons: ["main_loop_only"], activity: "model",
 } as const;
 
-/** SDK 0.3.274 pipeline totals replace a complete map for one query incarnation. */
-export function claudePipelineObservation(message: SDKResultMessage): UsageObservation | undefined {
+/**
+ * SDK 0.3.274 pipeline totals replace a complete map for one query incarnation.
+ * `reasoningEffort` is the handle-confirmed effort when the result arrived, for
+ * the confirmed `model`; other models in the pipeline (helpers, subagents) are
+ * not attributed that effort.
+ */
+export function claudePipelineObservation(message: SDKResultMessage, reasoningEffort: string | null = null, model: string | null = null): UsageObservation | undefined {
   if ("startup_failure_reason" in message && message.startup_failure_reason) return;
   const facts: UsageFact[] = Object.entries(message.modelUsage).map(([model, usage]) => ({
     ...baseFact, id: `model:${model}`, kind: "cumulative", coverageDomain: "claude_query_pipeline",
@@ -40,7 +45,7 @@ export function claudePipelineObservation(message: SDKResultMessage): UsageObser
     sessionContribution: "checkpoint", quality: "complete", reasons: [], tokens: {}, turn: null,
     costs: [{amount: nativeUsageMoney(message.total_cost_usd), currency: "USD", kind: "estimated", provenance: "Claude Agent SDK 0.3.274 cumulative query estimate"}]});
   return {id: `${message.uuid}:pipeline`, revision: "1", order: message.result_index === undefined ? null : String(message.result_index),
-    provenance: "live", occurredAt: null, replaceCheckpoint: true, facts};
+    provenance: "live", occurredAt: null, replaceCheckpoint: true, facts, attribution: {model: model ? {provider: null, model} : null, reasoningEffort}};
 }
 export function claudeTurnObservation(message: SDKResultMessage, backendTurnId: string, models: readonly UsageModel[] = []): UsageObservation | undefined {
   if ("startup_failure_reason" in message && message.startup_failure_reason) return;
@@ -120,9 +125,9 @@ export class ClaudeUsageAccounting {
     }
     flush();
   }
-  pipeline(message: SDKResultMessage): void {
+  pipeline(message: SDKResultMessage, reasoningEffort: string | null = null, model: string | null = null): void {
     try {
-      const observation = claudePipelineObservation(message);
+      const observation = claudePipelineObservation(message, reasoningEffort, model);
       if (!observation) { this.#query?.gap("capture_gap"); return; }
       if (!this.#query) { this.#history.gap("unknown_baseline"); return; }
       if (!this.#query.capture([observation])) this.#deliveryCommitted = false;

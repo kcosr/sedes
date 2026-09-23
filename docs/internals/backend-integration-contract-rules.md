@@ -1152,6 +1152,21 @@ full history, and retains gaps until a new cumulative snapshot proves recovery.
 Pi's capture is unchanged; Claude retains its inclusive query-pipeline totals
 without adding child counters a second time; Grok remains unsupported.
 
+An observation may carry `attribution`: the effective model and reasoning
+effort in force when the evidence was produced, as confirmed by the backend at
+capture. Never copy it from desired, draft, or current composer settings, and
+never put it into the fact or its revision hash; replayed evidence must stay a
+no-op. The timeline applies attribution only to source-timestamped or
+continuously observed increments, and a fact-reported model always wins.
+Backends that cannot establish a value pass `null`. Audit per backend:
+
+| Backend | Attribution |
+| --- | --- |
+| Pi | Thinking level from the latest `thinking_level_change` ancestor on the entry's native branch; model and provider stay fact-reported. |
+| Codex | The generation-fenced, provider-confirmed `#model` tuple. A `turn/start` whose delivery outcome is unknown suppresses it until a new confirmation. Subagent counters carry none. |
+| Claude | The effort applied and confirmed before the result arrives, for the confirmed model's `modelUsage` row only; helper and subagent models in the same delta keep none. |
+| Grok | Unsupported; no usage is captured. |
+
 Register visible normalized turn stubs with ordinary snapshot/page loading.
 Accounting failure must not retry submitted provider work or break an otherwise
 valid transcript read. Retained native replay/history may repair evidence; do not

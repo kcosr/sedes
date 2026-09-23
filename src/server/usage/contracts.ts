@@ -42,6 +42,18 @@ export interface UsageObservation {
   /** One cumulative snapshot replaces all prior checkpoint members atomically. */
   readonly replaceCheckpoint: boolean;
   readonly facts: readonly UsageFact[];
+  /**
+   * Settings in effect when this evidence was produced, as confirmed by the
+   * backend at capture. Analytics applies it only to continuously observed
+   * increments; it never changes accounting or the evidence fingerprint.
+   */
+  readonly attribution?: UsageAttribution;
+}
+export interface UsageAttribution {
+  /** Provider-confirmed effective model when facts do not report one. */
+  readonly model: UsageModel | null;
+  /** Native reasoning effort or thinking level; null when not established. */
+  readonly reasoningEffort: string | null;
 }
 export interface UsageCapture {
   registerTurns(turns: readonly BackendTurn[], inherited?: { readonly turns: readonly { readonly backendTurnId: string; readonly sourceBackendTurnId: string }[] } & ({ readonly nativeSession: string } | { readonly forkOperationId: string })): void;

@@ -18,6 +18,7 @@ import {
   threadAutomationPath,
   threadPath,
   threadTurnPath,
+  usagePath,
 } from "./router";
 import { clearDiagnostics, readDiagnostics } from "./diagnostics.js";
 import { setDiagnosticCategoryEnabled } from "./settings.js";
@@ -97,6 +98,7 @@ describe("automation routes", () => {
     expect(parseRoute("/threads/%E0%A4%A/automation")).toEqual({ name: "home" });
     expect(parseRoute("/agents/one/extra")).toEqual({ name: "home" });
     expect(parseRoute("/agents/%E0%A4%A")).toEqual({ name: "home" });
+    expect(parseRoute("/usage/extra")).toEqual({ name: "home" });
   });
 });
 
@@ -104,6 +106,9 @@ describe("routePath", () => {
   it("round-trips the routes navigate understands", () => {
     expect(routePath({ name: "home" })).toBe("/");
     expect(routePath({ name: "archived" })).toBe("/archived");
+    expect(usagePath()).toBe("/usage");
+    expect(routePath({ name: "usage" })).toBe(usagePath());
+    expect(parseRoute(usagePath())).toEqual({ name: "usage" });
     expect(routePath({ name: "agents", create: false })).toBe(agentsPath());
     expect(routePath({ name: "agents", create: true })).toBe(newAgentPath());
     expect(

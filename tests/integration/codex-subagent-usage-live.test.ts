@@ -21,6 +21,7 @@ import { compileBackendModelPolicy } from "../../src/server/backends/model-polic
 import { durableUsageAccountingMigration } from "../../src/server/db/migrations/110-durable-usage-accounting.js";
 import { usageGapSessionScopeMigration } from "../../src/server/db/migrations/111-usage-gap-session-scope.js";
 import { usageSubagentsMigration } from "../../src/server/db/migrations/112-usage-subagents.js";
+import { usageTimelineMigration } from "../../src/server/db/migrations/113-usage-timeline.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import { pinnedCodexTestExecutable } from "../helpers/pinned-codex-test-executable.js";
@@ -49,6 +50,7 @@ function prepareDatabase(file: string, nativeRoot: string): Database.Database {
   database.exec(durableUsageAccountingMigration.sql);
   database.exec(usageGapSessionScopeMigration.sql);
   database.exec(usageSubagentsMigration.sql);
+  database.exec(usageTimelineMigration.sql);
   return database;
 }
 

@@ -20,6 +20,7 @@ import {
 } from "../workspace-files/workspace-file-link-routing";
 import { AgentClientStore } from "../agents/AgentClientStore";
 import { AgentsView } from "./agents/AgentsView";
+import { UsageView } from "../usage/UsageView";
 import { useSidebarViewPreferences } from "../app/sidebar-view-store";
 import { useEnvironmentColorsEnabled } from "../app/use-environment-colors-enabled";
 import {
@@ -140,6 +141,21 @@ export function Workbench({
             <TasksPanelToggle />
           </div>
           <ArchivedView store={applicationStore} />
+        </div>
+      </main>
+    );
+  }
+  if (route.name === "usage") {
+    return (
+      <main className="workbench">
+        <div className="pane-host pane-host-nav-header">
+          <div className="pane-nav-header">
+            <SidebarNavTrigger />
+          </div>
+          <div className="tasks-corner-controls">
+            <TasksPanelToggle />
+          </div>
+          <UsageView store={applicationStore} />
         </div>
       </main>
     );

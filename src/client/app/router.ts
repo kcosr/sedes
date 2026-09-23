@@ -12,6 +12,7 @@ export type Route =
       focusTurnId?: string;
     }
   | { name: "archived" }
+  | { name: "usage" }
   | { name: "settings"; page?: SettingsPage };
 
 let currentRoute = parseRoute(window.location.pathname, window.location.hash);
@@ -47,6 +48,7 @@ export function parseRoute(pathname: string, hash = ""): Route {
     .find(page => pathname === `/settings/${settingsPageSlugs[page]}`);
   if (settingsPage) return { name: "settings", page: settingsPage };
   if (pathname === "/archived") return { name: "archived" };
+  if (pathname === "/usage") return { name: "usage" };
   if (pathname === "/agents") return { name: "agents", create: false };
   if (pathname === "/agents/new") return { name: "agents", create: true };
   const agentMatch = /^\/agents\/([^/]+)$/.exec(pathname);
@@ -251,6 +253,10 @@ export function agentPath(agentId: string): string {
   return `/agents/${encodeURIComponent(agentId)}`;
 }
 
+export function usagePath(): string {
+  return "/usage";
+}
+
 export function threadTurnPath(threadId: string, turnId: string): string {
   return `${threadPath(threadId)}#turn=${encodeURIComponent(turnId)}`;
 }
@@ -263,6 +269,7 @@ export function threadAutomationPath(threadId: string): string {
 export function routePath(route: Route): string {
   if (route.name === "home") return "/";
   if (route.name === "archived") return "/archived";
+  if (route.name === "usage") return usagePath();
   if (route.name === "settings") return settingsPath(route.page);
   if (route.name === "agents") {
     if (route.create) return newAgentPath();

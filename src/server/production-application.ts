@@ -406,6 +406,7 @@ export async function startProductionApplication(
     const scope = identity.getScope();
     const usage = new UsageService(database);
     usage.recoverInterruptedCapture();
+    resources.defer("usage timeline backfill", usage.startTimelineBackfill());
     resources.defer("usage revision subscription", usage.subscribe((scope, threadId, revision) => runtimes?.publishUsageRevisionIfLoaded(scope, threadId, revision)));
     const authenticationRepository = new AuthenticationRepository(config.stateDirectory);
     resources.defer("authentication database", () => authenticationRepository.close());

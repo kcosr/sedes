@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Archive, Bot, ChevronUp, Settings } from "lucide-react";
+import { Archive, Bot, ChartColumnBig, ChevronUp, Settings } from "lucide-react";
 import { Button } from "@client/components/ui/button";
 import {
   DropdownMenu,
@@ -22,6 +22,7 @@ import {
 
 export interface SidebarFooterActionsProps {
   readonly onOpenSettings: (trigger: HTMLButtonElement) => void;
+  readonly onOpenUsage: () => void;
   readonly onOpenAgents: () => void;
   readonly onOpenArchivedThreads: () => void;
   readonly connection?: ConnectionState;
@@ -33,6 +34,7 @@ export interface SidebarFooterActionsProps {
 /** Compact navigation and settings controls for the bottom of the sidebar. */
 export function SidebarFooterActions({
   onOpenSettings,
+  onOpenUsage,
   onOpenAgents,
   onOpenArchivedThreads,
   connection,
@@ -60,16 +62,18 @@ export function SidebarFooterActions({
           sideOffset={6}
           collisionPadding={8}
         >
+          <DropdownMenuItem onSelect={onOpenUsage}>
+            <ChartColumnBig aria-hidden="true" />
+            Usage
+          </DropdownMenuItem>
           {usageApi ? (
-            <>
-              {useSheet ? (
-                <SidebarUsageSheetItem onOpen={() => setUsageSheetOpen(true)} />
-              ) : (
-                <SidebarUsageMenu api={usageApi} />
-              )}
-              <DropdownMenuSeparator />
-            </>
+            useSheet ? (
+              <SidebarUsageSheetItem onOpen={() => setUsageSheetOpen(true)} />
+            ) : (
+              <SidebarUsageMenu api={usageApi} />
+            )
           ) : null}
+          <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={onOpenAgents}>
             <Bot aria-hidden="true" />
             Agents

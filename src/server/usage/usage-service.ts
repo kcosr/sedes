@@ -8,6 +8,9 @@ import type { RequestScope } from "../identity/identity-provider.js";
 import { DomainError } from "../domain/errors.js";
 import { applicationTurnIdForBackendTurn } from "../conversations/conversation-projector.js";
 import type { UsageCapture, UsageFact, UsageObservation, UsageSink } from "./contracts.js";
+import type { UsageAnalyticsRequest, UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
+import { UsageAnalyticsService } from "./usage-analytics-service.js";
+import { costSplit, rebuildUsageTimeline, snapshotFact, snapshotReshaped, timelineInstant, writeUsageIncrement, type TimelineSource, type TimelineTime } from "./usage-timeline.js";
 
 const identifier = z.string().min(1).max(2048);
 const factSchema = z.strictObject({
@@ -23,6 +26,7 @@ const factSchema = z.strictObject({
   turn: z.strictObject({backendTurnId: identifier, scope: z.enum(["whole_turn", "main_loop", "partial_interval"]), contribution: z.enum(["additive", "checkpoint"])}).nullable(),
   inheritedFrom: z.strictObject({applicationThreadId: identifier, factId: identifier}).optional(),
 });
+const attributionSchema = z.strictObject({model: usageModelSchema.nullable(), reasoningEffort: z.string().min(1).max(64).nullable()});
 const observationSchema = z.strictObject({id: identifier, revision: identifier, order: usageIntegerSchema.nullable(), provenance: z.enum(["live", "history"]), occurredAt: z.iso.datetime().nullable(), replaceCheckpoint: z.boolean(), facts: z.array(factSchema).max(10000)});
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -47,7 +51,9 @@ export function emptyUsageSummary(): UsageSummary {
 }
 type StoredFact = {sourceId:string; turnId:string|null; recordedAt:string; fact:UsageFact};
 type State = {revision:bigint; report_json:string|null; legacy_json:string|null};
-type Source = {id:string; tenant_id:string; principal_id:string; thread_id:string; capture_state:UsageReport["captureState"]; frontier:string|null; agent_role:"main"|"subagent"};
+type Source = TimelineSource & {capture_state:UsageReport["captureState"]; frontier:string|null; timeline_state:"current"|"backfill"; timeline_receipt:string|null};
+/** One capture transaction: whether the next checkpoint continues an observed series. */
+type CaptureContext = {continuous:boolean; acceptedCheckpoint:boolean; backendKind:string};
 
 /** Database-only scoped reads and nonthrowing provider capture. No transcript or provider IO. */
 export class UsageService implements UsageSink {
@@ -55,7 +61,24 @@ export class UsageService implements UsageSink {
   readonly #failed = new Set<string>();
   readonly #failedSubagents = new Map<string, Set<string>>();
   readonly #listeners = new Set<(scope:RequestScope, threadId:string, revision:string) => void>();
-  constructor(readonly database: Database.Database) {}
+  readonly #analytics: UsageAnalyticsService;
+  constructor(readonly database: Database.Database) { this.#analytics = new UsageAnalyticsService(database); }
+  /** Principal-wide aggregates over the timeline projection; database-only. */
+  analytics(scope:RequestScope, request:UsageAnalyticsRequest): UsageAnalyticsResponse { return this.#analytics.query(scope,request); }
+  /** Rebuild pre-projection timelines one source per macrotask; returns a stop function. */
+  startTimelineBackfill(): () => void {
+    let stopped=false;
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    const step=():void=>{
+      if(stopped)return;
+      let more=false;
+      try{more=this.#analytics.backfillStep()!==null;}
+      catch(error){console.warn("Usage timeline backfill paused",{code:error instanceof Error?error.message.slice(0,120):"unknown"});}
+      if(more && !stopped)timer=setTimeout(step,0);
+    };
+    timer=setTimeout(step,0);
+    return ()=>{stopped=true;if(timer)clearTimeout(timer);};
+  }
   recoverInterruptedCapture(): void {
     this.database.transaction(() => {
       const active=this.database.prepare("SELECT id,tenant_id,principal_id,thread_id FROM usage_sources WHERE capture_state='active'").all() as Source[];
@@ -222,11 +245,14 @@ export class UsageService implements UsageSink {
     const failedKey=hash([scope.tenantId,scope.principalId,threadId]);
     let admitted=false;
     let sealed=false;
+    // Only a newly created empty series is continuous before its first checkpoint.
+    let continuous=input.initialBaseline==="proven_zero";
     const incarnation=Symbol();
-    const run = (action:()=>void):boolean => {
+    const run = (action:(context:CaptureContext)=>void):boolean => {
       if(sealed || (admitted && this.#incarnations.get(sourceId)!==incarnation))return false;
       try {
         let changes:{threadId:string;revision:string}[]=[];
+        let context:CaptureContext|undefined;
         this.database.transaction(() => {
           const target=this.#admitBinding(binding);
           if (input.subagent ? target.kind !== "codex_app_server" : input.nativeSession !== binding.backendConversationId) throw new Error("usage_binding_not_admitted");
@@ -237,24 +263,34 @@ export class UsageService implements UsageSink {
           this.database.prepare(`INSERT OR IGNORE INTO usage_sources(id,tenant_id,principal_id,thread_id,backend_id,environment_id,workspace_id,native_namespace,native_session,epoch,normalization_version,baseline,capture_state,agent_role) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active',?)`).run(sourceId,scope.tenantId,scope.principalId,threadId,binding.backendInstanceId,target.environment_id,target.workspace_id,identifier.parse(input.nativeNamespace),identifier.parse(input.nativeSession),identifier.parse(input.epoch),identifier.parse(input.normalizationVersion),input.initialBaseline,input.subagent?"subagent":"main");
           const source=this.database.prepare("SELECT * FROM usage_sources WHERE id=?").get(sourceId) as Source;
           if (source.thread_id !== threadId || source.tenant_id !== scope.tenantId || source.principal_id !== scope.principalId) throw new Error("usage_source_owned_elsewhere");
-          if (input.subagent ? this.#failedSubagents.get(failedKey)?.has(sourceId) : this.#failed.has(failedKey)) this.#gap(sourceId,"capture_failed");
-          action();
+          if (input.subagent ? this.#failedSubagents.get(failedKey)?.has(sourceId) : this.#failed.has(failedKey)) {this.#gap(sourceId,"capture_failed");continuous=false;}
+          // A proven-zero open continues only a series that has no accepted checkpoint yet.
+          if (!admitted && source.timeline_receipt!==null) continuous=false;
+          if (source.timeline_state==="backfill") rebuildUsageTimeline(this.database,source,target.kind);
+          context={continuous,acceptedCheckpoint:false,backendKind:target.kind};
+          action(context);
           changes=this.#materialize(scope,threadId);
         })();
         admitted=true; this.#incarnations.set(sourceId,incarnation);
+        if(context?.acceptedCheckpoint)continuous=true;
         if(input.subagent){const failed=this.#failedSubagents.get(failedKey);failed?.delete(sourceId);if(failed?.size===0)this.#failedSubagents.delete(failedKey);}
         else this.#failed.delete(failedKey);
         for(const changed of changes)for (const listener of this.#listeners) { try { listener(scope,changed.threadId,changed.revision); } catch { /* Durable reads remain authoritative. */ } }
         return true;
-      } catch(error) { this.#recordFailure(scope,threadId,error,input.subagent?sourceId:undefined); return false; }
+      } catch(error) { continuous=false; this.#recordFailure(scope,threadId,error,input.subagent?sourceId:undefined); return false; }
     };
     run(() => {this.database.prepare("UPDATE usage_sources SET capture_state='active' WHERE id=?").run(sourceId);});
     return {
       registerTurns:(turns, inherited) => run(() => {if(input.subagent) {if(turns.length)this.#gap(sourceId,"invalid_evidence");return;} this.#register(scope,threadId,binding.backendInstanceId,turns,inherited);}),
-      capture:(observations) => run(() => {for (const raw of observations) { const parsed=observationSchema.safeParse(raw);if (!parsed.success || (input.subagent && parsed.data.facts.some(fact=>fact.turn!==null || fact.inheritedFrom!==undefined)) || Buffer.byteLength(JSON.stringify(parsed.data), "utf8") > 65_536) {this.#gap(sourceId,"invalid_evidence");continue;} this.#capture(scope,threadId,binding.backendInstanceId,sourceId,parsed.data,input.normalizationVersion); }}),
+      capture:(observations) => run((context) => {for (const raw of observations) {
+        // Invalid attribution is dropped on its own; it never invalidates accounting evidence.
+        const {attribution: rawAttribution, ...evidence}=raw;
+        const attribution=rawAttribution===undefined ? undefined : attributionSchema.safeParse(rawAttribution).data;
+        const parsed=observationSchema.safeParse(evidence);if (!parsed.success || (input.subagent && parsed.data.facts.some(fact=>fact.turn!==null || fact.inheritedFrom!==undefined)) || Buffer.byteLength(JSON.stringify(parsed.data), "utf8") > 65_536) {this.#gap(sourceId,"invalid_evidence");continue;} this.#capture(scope,threadId,binding.backendInstanceId,sourceId,{...parsed.data,...(attribution ? {attribution} : {})},input.normalizationVersion,context); }}),
       reconcile:() => run(() => {this.database.prepare("DELETE FROM usage_gaps WHERE source_id=? AND reason IN ('capture_gap','capture_failed')").run(sourceId);}),
-      gap:(reason) => run(() => this.#gap(sourceId,usageReasonSchema.parse(reason))),
-      seal:(reason) => {if (!admitted) return;run(() => {this.database.prepare("UPDATE usage_sources SET capture_state=? WHERE id=?").run(reason === "detached" ? "disconnected":"idle",sourceId);if(reason === "reset")this.#gap(sourceId,"source_reset");});sealed=true;if(this.#incarnations.get(sourceId)===incarnation)this.#incarnations.delete(sourceId);},
+      // A recorded gap means the next checkpoint may cover unobserved work.
+      gap:(reason) => {continuous=false;return run(() => this.#gap(sourceId,usageReasonSchema.parse(reason)));},
+      seal:(reason) => {continuous=false;if (!admitted) return;run(() => {this.database.prepare("UPDATE usage_sources SET capture_state=? WHERE id=?").run(reason === "detached" ? "disconnected":"idle",sourceId);if(reason === "reset")this.#gap(sourceId,"source_reset");});sealed=true;if(this.#incarnations.get(sourceId)===incarnation)this.#incarnations.delete(sourceId);},
     };
   }
   #register(scope:RequestScope,threadId:string,backendId:string,turns:readonly BackendTurn[], inherited?: Parameters<UsageCapture["registerTurns"]>[1]):void {
@@ -274,7 +310,8 @@ export class UsageService implements UsageSink {
 
   }
   #gap(sourceId:string,reason:UsageReason,subject="",affectsSession=true):void {this.database.prepare("INSERT INTO usage_gaps(source_id,reason,subject,affects_session,recorded_at) VALUES(?,?,?,?,?) ON CONFLICT(source_id,reason,subject) DO UPDATE SET affects_session=MAX(usage_gaps.affects_session,excluded.affects_session)").run(sourceId,reason,subject,affectsSession?1:0,new Date().toISOString());}
-  #capture(scope:RequestScope,threadId:string,backendId:string,sourceId:string,observation:UsageObservation,normalizationVersion:string):void {
+  #capture(scope:RequestScope,threadId:string,backendId:string,sourceId:string,observation:UsageObservation,normalizationVersion:string,context:CaptureContext):void {
+    // Attribution describes settings in effect, not accounting evidence; replay stays a no-op.
     const semantic={order:observation.order,replaceCheckpoint:observation.replaceCheckpoint,facts:observation.facts};
     const fingerprint=hash(semantic);
     const existing=this.database.prepare("SELECT fingerprint,evidence_json FROM usage_observations WHERE source_id=? AND observation_id=? AND revision=?").get(sourceId,observation.id,observation.revision) as {fingerprint:string;evidence_json:string}|undefined;
@@ -287,11 +324,36 @@ export class UsageService implements UsageSink {
       }
       return;
     }
-    this.database.prepare("INSERT INTO usage_observations(source_id,observation_id,revision,fingerprint,evidence_json,normalization_version,occurred_at,received_at) VALUES(?,?,?,?,?,?,?,?)").run(sourceId,observation.id,observation.revision,fingerprint,canonical(semantic),normalizationVersion,observation.occurredAt,new Date().toISOString());
+    const receivedAt=new Date().toISOString();
+    this.database.prepare("INSERT INTO usage_observations(source_id,observation_id,revision,fingerprint,evidence_json,normalization_version,occurred_at,received_at) VALUES(?,?,?,?,?,?,?,?)").run(sourceId,observation.id,observation.revision,fingerprint,canonical(semantic),normalizationVersion,observation.occurredAt,receivedAt);
     const source=this.database.prepare("SELECT * FROM usage_sources WHERE id=?").get(sourceId) as Source;
     if(observation.replaceCheckpoint && observation.order!==null && source.frontier!==null && BigInt(observation.order)<BigInt(source.frontier)) return;
     const previous=this.database.prepare("SELECT r.fact_json, json_extract(o.evidence_json, '$.order') AS source_order FROM usage_records r JOIN usage_observations o ON o.source_id=r.source_id AND o.observation_id=r.observation_id AND o.revision=r.observation_revision WHERE r.source_id=?").all(sourceId) as {fact_json:string;source_order:string|null}[];
     const oldFacts=previous.map(row=>JSON.parse(row.fact_json) as UsageFact);
+    // The latest accepted or confirmed checkpoint receipt bounds an unobserved interval.
+    const previousReceipt=source.timeline_receipt;
+    const checkpoints=observation.facts.filter(f=>f.sessionContribution==="checkpoint" && !f.inheritedFrom);
+    const snapshot=observation.replaceCheckpoint && checkpoints.length>0 && snapshotReshaped(oldFacts.filter(f=>f.sessionContribution==="checkpoint"),checkpoints);
+    const split=costSplit(observation.facts);
+    // A cost-only checkpoint member prices the snapshot's token members even when it cannot be split by model.
+    const summaryCost=observation.facts.some(f=>f.sessionContribution==="checkpoint" && f.costs.length>0);
+    const siblingTurn=observation.facts.find(f=>f.turn)?.turn ?? null;
+    // Every member of one snapshot shares the continuity in force before it.
+    const continuous=context.continuous;
+    const at=observation.occurredAt ? timelineInstant(observation.occurredAt) : receivedAt;
+    const point:TimelineTime={placement:observation.occurredAt?"reported":"observed",occurredAt:at,intervalStart:null};
+    const timeFor=(fact:UsageFact):TimelineTime=>{
+      if(fact.sessionContribution!=="checkpoint")return point;
+      if(previousReceipt===null)return source.baseline==="proven_zero" && continuous ? point : {placement:"unplaced",occurredAt:at,intervalStart:null};
+      if(continuous)return point;
+      const start=timelineInstant(previousReceipt);
+      return {placement:"interval",occurredAt:at,intervalStart:start>at?at:start};
+    };
+    const record=(write:()=>void)=>{
+      // The projection never rolls back accounting; a failed row schedules a conservative rebuild.
+      try{write();}catch{this.database.prepare("UPDATE usage_sources SET timeline_state='backfill' WHERE id=?").run(sourceId);}
+    };
+    let rejected=false;
     const locked = this.database.prepare("SELECT 1 FROM usage_gaps WHERE source_id=? AND subject='' AND reason IN ('counter_regression','conflicting_evidence')").get(sourceId);
     if (locked && observation.facts.some(f => f.sessionContribution === "checkpoint")) return;
     if(observation.replaceCheckpoint){
@@ -324,11 +386,26 @@ export class UsageService implements UsageSink {
             if(BigInt(observation.order)===BigInt(oldOrder)){this.#gap(sourceId,"conflicting_evidence",subject,fact.sessionContribution!=="none");continue;}
           }else{this.#gap(sourceId,"conflicting_evidence",subject,fact.sessionContribution!=="none");continue;}
         }else if(fact.sessionContribution!=="checkpoint"){this.#gap(sourceId,"conflicting_evidence",subject,fact.sessionContribution!=="none");continue;}
-        else if(USAGE_TOKEN_KINDS.some(key=>old.tokens[key]!=null && (fact.tokens[key]==null || BigInt(fact.tokens[key]!)<BigInt(old.tokens[key]!)))){this.#gap(sourceId,"counter_regression");continue;}
+        else if(USAGE_TOKEN_KINDS.some(key=>old.tokens[key]!=null && (fact.tokens[key]==null || BigInt(fact.tokens[key]!)<BigInt(old.tokens[key]!)))){this.#gap(sourceId,"counter_regression");rejected=true;continue;}
       }
       const turnId=fact.turn?applicationTurnIdForBackendTurn({backendInstanceId:backendId,sourceApplicationThreadId:threadId,backendTurnId:fact.turn.backendTurnId}):null;
       const values=USAGE_TOKEN_KINDS.map(key=>fact.tokens[key]==null?null:BigInt(fact.tokens[key]!));
       this.database.prepare(`INSERT INTO usage_records(source_id,fact_id,observation_id,observation_revision,turn_id,fact_json,${USAGE_TOKEN_KINDS.join(",")}) VALUES(${Array(14).fill("?").join(",")}) ON CONFLICT(source_id,fact_id) DO UPDATE SET observation_id=excluded.observation_id,observation_revision=excluded.observation_revision,turn_id=excluded.turn_id,fact_json=excluded.fact_json,${USAGE_TOKEN_KINDS.map(key=>`${key}=excluded.${key}`).join(",")}`).run(sourceId,fact.id,observation.id,observation.revision,turnId,canonical(fact),...values);
+      if(fact.sessionContribution!=="none" && !(snapshot && fact.sessionContribution==="checkpoint")){
+        const time=timeFor(fact);
+        const incrementTurn=turnId ?? (siblingTurn && time.placement!=="interval" && time.placement!=="unplaced" ? applicationTurnIdForBackendTurn({backendInstanceId:backendId,sourceApplicationThreadId:threadId,backendTurnId:siblingTurn.backendTurnId}) : null);
+        record(()=>writeUsageIncrement(this.database,{source,backendKind:context.backendKind,fact,previous:old,observationId:observation.id,observationRevision:observation.revision,
+          turnId:incrementTurn,time,attribution:observation.attribution,split,observationCosted:fact.sessionContribution==="checkpoint" && summaryCost}));
+      }
+    }
+    if(snapshot)record(()=>writeUsageIncrement(this.database,{source,backendKind:context.backendKind,fact:snapshotFact(checkpoints),
+      previous:snapshotFact(oldFacts.filter(f=>f.sessionContribution==="checkpoint")),observationId:observation.id,observationRevision:observation.revision,
+      turnId:null,time:timeFor(checkpoints[0]!),attribution:observation.attribution,split:null,observationCosted:summaryCost}));
+    // An accepted or identical checkpoint confirms the series up to this receipt,
+    // so a later snapshot, in this batch or after a reopen, continues from it.
+    if(checkpoints.length && !rejected){
+      context.acceptedCheckpoint=true;context.continuous=true;
+      this.database.prepare("UPDATE usage_sources SET timeline_receipt=? WHERE id=? AND (timeline_receipt IS NULL OR timeline_receipt<?)").run(receivedAt,sourceId,receivedAt);
     }
     if(observation.replaceCheckpoint && observation.order!==null && (source.frontier===null || BigInt(observation.order)>BigInt(source.frontier)))this.database.prepare("UPDATE usage_sources SET frontier=? WHERE id=?").run(observation.order,sourceId);
   }

@@ -1,6 +1,7 @@
 import { durableUsageAccountingMigration } from "./migrations/110-durable-usage-accounting.js";
 import { usageGapSessionScopeMigration } from "./migrations/111-usage-gap-session-scope.js";
 import { usageSubagentsMigration } from "./migrations/112-usage-subagents.js";
+import { usageTimelineMigration } from "./migrations/113-usage-timeline.js";
 import { claudeTurnFailureDetailsMigration } from "./migrations/109-claude-turn-failure-details.js";
 import { forkEnvironmentFingerprintsMigration } from "./migrations/108-fork-environment-fingerprints.js";
 import { scopedEnvironmentVariablesMigration } from "./migrations/107-scoped-environment-variables.js";
@@ -238,6 +239,7 @@ export const backendNormalizedMigrations = [
   durableUsageAccountingMigration,
   usageGapSessionScopeMigration,
   usageSubagentsMigration,
+  usageTimelineMigration,
 ] as const;
 
 export type DatabaseMigration = {

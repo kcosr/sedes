@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { BackendTurn } from "../../../shared/protocol/backend.js";
 import type { UsageReason } from "../../../shared/protocol/usage-accounting.js";
 import type { ConversationBinding } from "../contracts.js";
-import { usageTokens, type UsageCapture, type UsageFact, type UsageSink } from "../../usage/contracts.js";
+import { usageTokens, type UsageAttribution, type UsageCapture, type UsageFact, type UsageSink } from "../../usage/contracts.js";
 import type { CodexThreadTokenUsage } from "./codex-c1-protocol.js";
 import { codexBackendTurnId } from "./codex-history-projector.js";
 
@@ -104,7 +104,8 @@ export class CodexUsageCapture {
     this.#safely(() => this.#capture.seal("detached"));
   }
 
-  observe(input: { generation: number; sequence: number; turnId: string; usage: CodexThreadTokenUsage }): void {
+  /** `attribution` is the provider-confirmed effective tuple; it never changes accounting. */
+  observe(input: { generation: number; sequence: number; turnId: string; usage: CodexThreadTokenUsage; attribution?: UsageAttribution }): void {
     this.#safely(() => {
       const tokens = normalize(input.usage.total);
       if (!this.#previous && this.#provenZero && this.#startedTurn === input.turnId) this.#knownBaselineTurn = input.turnId;
@@ -146,7 +147,7 @@ export class CodexUsageCapture {
         }
       }
       const accepted = this.#capture.capture([{ id: receipt, revision: "1", order: null, provenance: "live", occurredAt: null,
-        replaceCheckpoint: true, facts }]);
+        replaceCheckpoint: true, facts, ...(input.attribution ? { attribution: bounded(input.attribution) } : {}) }]);
       this.#boundary = undefined;
       this.#completed = undefined;
       if (!accepted) { this.#idleResume = undefined; this.#previous = undefined; this.#startedTurn = undefined; this.#knownBaselineTurn = undefined; return; }
@@ -169,6 +170,13 @@ export class CodexUsageCapture {
 function baseFact(): Omit<UsageFact, "id" | "kind" | "sessionContribution" | "tokens"> {
   return { coverageDomain: "native-counter", costs: [], models: [{ provider: null, model: null }],
     basis: ["sdk_normalized"], providerPresence: "unknown", quality: "complete", reasons: [], activity: "model", turn: null };
+}
+
+/** Out-of-range native labels become unknown instead of invalidating the evidence. */
+function bounded(attribution: UsageAttribution): UsageAttribution {
+  const text = (value: string | null | undefined, maximum: number) => value && value.length <= maximum ? value : null;
+  const provider = text(attribution.model?.provider, 240), model = text(attribution.model?.model, 240);
+  return { model: provider || model ? { provider, model } : null, reasoningEffort: text(attribution.reasoningEffort, 64) };
 }
 
 function normalize(usage: CodexThreadTokenUsage["total"]): UsageFact["tokens"] {

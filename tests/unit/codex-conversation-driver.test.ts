@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { durableUsageAccountingMigration } from "../../src/server/db/migrations/110-durable-usage-accounting.js";
 import { usageSubagentsMigration } from "../../src/server/db/migrations/112-usage-subagents.js";
+import { usageTimelineMigration } from "../../src/server/db/migrations/113-usage-timeline.js";
 import { usageGapSessionScopeMigration } from "../../src/server/db/migrations/111-usage-gap-session-scope.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
 import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
@@ -7506,6 +7507,8 @@ describe("CodexConversationHandle", () => {
     }
     expect(registerTurns).toHaveBeenCalled();
     expect(observations).toHaveLength(2);
+    // The resume reply confirmed the effective tuple for this generation.
+    expect(observations[1]!.attribution).toEqual({ model: { provider: "openai", model: "gpt-5.6" }, reasoningEffort: "low" });
     expect(observations[1]!.facts).toContainEqual(expect.objectContaining({ kind: "turn_aggregate",
       sessionContribution: "none", tokens: expect.objectContaining({ input: "50" }) }));
     harness.notify("turn/completed", { threadId: "thread-1", turn: nativeTurn(0) });
@@ -7570,6 +7573,7 @@ describe("CodexConversationHandle", () => {
     database.exec(durableUsageAccountingMigration.sql);
     database.exec(usageGapSessionScopeMigration.sql);
     database.exec(usageSubagentsMigration.sql);
+    database.exec(usageTimelineMigration.sql);
     const usage = new UsageService(database);
     const harness = new RpcHarness();
     const target = driver(harness, connection, undefined, undefined, undefined, undefined,

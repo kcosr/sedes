@@ -56,6 +56,13 @@ describe("Claude native usage accounting", () => {
     const corrected=message(131);(corrected.message as {usage:{output_tokens:number}}).usage.output_tokens=3;
     accounting.message(corrected,"turn-131","live");expect(capture).toHaveBeenCalledTimes(6);
   });
+  it("attributes the confirmed effort to the pipeline checkpoint only", () => {
+    const captured: UsageObservation[] = [];
+    const accounting=new ClaudeUsageAccounting({sink:{listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open:()=>({...NO_USAGE_CAPTURE,capture:(observations)=>{captured.push(...observations);return true;}})},nativeNamespace:"store",binding:{tenantId:"t",ownerPrincipalId:"p",applicationThreadId:"thread",backendInstanceId:"claude",connectionProfileId:"c",executionEnvironmentId:"e",backendConversationId:"native",createdAt:"2026-09-22T00:00:00Z"}});
+    accounting.admitQuery("query",false);accounting.pipeline(result(20),"xhigh");accounting.pipeline(result(30,"next"));accounting.result(result(30),"turn");
+    expect(captured.map(observation=>observation.attribution)).toEqual([{model:null,reasoningEffort:"xhigh"},{model:null,reasoningEffort:null},undefined]);
+    expect(claudePipelineObservation(result(20),"high")!.facts).toEqual(claudePipelineObservation(result(20))!.facts);
+  });
   it("does not replace real counters with synthetic startup failures", () => {
     expect(claudePipelineObservation({...result(0), subtype: "error_during_execution", startup_failure_reason: "cwd_unavailable"} as SDKResultMessage)).toBeUndefined();
   });

@@ -5178,7 +5178,8 @@ body:has(.thread-settings-sheet[data-state="open"])
 }
 
 .pane-host-nav-header > .welcome,
-.pane-host-nav-header > .archive-view {
+.pane-host-nav-header > .archive-view,
+.pane-host-nav-header > .usage-view {
   height: auto;
   min-height: 0;
   flex: 1 1 auto;

@@ -487,6 +487,32 @@ describe("sidebar disclosure persistence", () => {
   });
 });
 
+describe("sidebar footer destinations", () => {
+  it("opens the Usage page and closes the drawer without Provider Pulse", async () => {
+    window.history.replaceState({}, "", "/");
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    const threads = [makeThread("thread-1", "Thread")];
+    const view = renderSidebar(threads);
+    view.rerender(
+      <InventorySidebar
+        state={makeState(threads)}
+        store={view.store}
+        onNavigate={onNavigate}
+        onOpenSettings={() => undefined}
+        peekEnabled
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "More" }));
+    expect(screen.queryByRole("menuitem", { name: "Accounts" })).toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: "Usage" }));
+
+    expect(window.location.pathname).toBe("/usage");
+    expect(onNavigate).toHaveBeenCalledOnce();
+  });
+});
+
 describe("InventorySidebar view modes", () => {
   const groupId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const group = {
