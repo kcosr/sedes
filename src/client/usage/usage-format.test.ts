@@ -6,7 +6,7 @@ import { dimensionLabel, formatCost, formatCount, metricReported, relativeChange
 const aggregate = (overrides: Partial<UsageAnalyticsAggregate> = {}): UsageAnalyticsAggregate => ({
   tokens: "0", input: "0", uncachedInput: "0", cacheRead: "0", cacheWrite: "0", output: "0", reasoning: "0", requests: "0",
   costs: [], increments: "2", threads: "1", uncostedTokens: "0",
-  missing: { input: "0", output: "0", cacheRead: "0", cacheWrite: "0", reasoning: "0", requests: "0", cost: "0" }, ...overrides,
+  missing: { input: "0", uncachedInput: "0", output: "0", cacheRead: "0", cacheWrite: "0", reasoning: "0", requests: "0", cost: "0" }, ...overrides,
 });
 const labels = {
   environment: {}, backend: { b1: { label: "Primary Pi", detail: null, kind: "pi", retired: false, workspaceId: null } }, backendKind: {},
@@ -59,14 +59,15 @@ describe("usage presentation", () => {
 
   it("exports unreported metrics as blank and follows an active split", () => {
     const totals = aggregate({ tokens: "30", input: "30", output: "0", requests: "0", costs: [{ currency: "USD", amount: "0.5", kind: "estimated" }],
-      missing: { ...aggregate().missing, output: "2", requests: "2", cacheRead: "2" } });
+      missing: { ...aggregate().missing, uncachedInput: "2", output: "2", requests: "2", cacheRead: "2" } });
     const data = { costCurrency: "USD", labels, matrix: { rows: "model", columns: "effort", cells: [{ row: "opus", column: "high", totals }] } } as unknown as UsageAnalyticsResponse;
     const rows = exploreCsv(data, "model", null, [{ label: dimensionLabel(labels, "model", "opus"), totals }]).split("\n");
     expect(rows[0]).toBe("Model,Detail,Tokens,Input,Uncached input,Cache read,Cache write,Output,Reasoning,Requests,Estimated cost (USD),Threads");
-    expect(rows[1]).toBe("opus,,30,30,0,,0,,0,,0.5,1");
+    // Input is reported but its uncached share is not, so that cell stays blank rather than zero.
+    expect(rows[1]).toBe("opus,,30,30,,,0,,0,,0.5,1");
     const split = exploreCsv(data, "model", "effort", []).split("\n");
     expect(split[0]!.startsWith("Model,Detail,Reasoning effort,Tokens")).toBe(true);
-    expect(split[1]).toBe("opus,,High,30,30,0,,0,,0,,0.5,1");
+    expect(split[1]).toBe("opus,,High,30,30,,,0,,0,,0.5,1");
   });
 
   it("reports change only against a nonzero previous period", () => {

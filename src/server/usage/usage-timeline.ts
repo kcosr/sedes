@@ -57,7 +57,14 @@ function modelTotal(fact: UsageFact | undefined, currency: string): bigint | nul
 export function costSplit(facts: readonly UsageFact[], previous: readonly UsageFact[] = []): {summaryIds: Set<string>; currency: string; kind: Cost["kind"]} | null {
   const current = splitOf(facts);
   if (!current || !previous.some((fact) => fact.sessionContribution === "checkpoint")) return current;
-  return splitOf(previous)?.currency === current.currency ? current : null;
+  if (splitOf(previous)?.currency !== current.currency) return null;
+  // A model whose running estimate falls would lose its negative delta while
+  // another model's rise is kept; charge that correction to the summary instead.
+  const before = new Map(previous.map((fact) => [fact.id, modelTotal(fact, current.currency)]));
+  return facts.every((fact) => {
+    const was = before.get(fact.id), now = modelTotal(fact, current.currency);
+    return was === undefined || was === null || now === null || now >= was;
+  }) ? current : null;
 }
 function splitOf(facts: readonly UsageFact[]): {summaryIds: Set<string>; currency: string; kind: Cost["kind"]} | null {
   const checkpoints = facts.filter((fact) => fact.sessionContribution === "checkpoint");

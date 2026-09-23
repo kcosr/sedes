@@ -39,7 +39,7 @@ function aggregateSelect(): string {
     SUM(cache_write) AS cacheWrite, SUM(output) AS output, SUM(reasoning) AS reasoning, SUM(requests) AS requests,
     COUNT(*) AS increments, COUNT(DISTINCT thread_id) AS threads,
     SUM(CASE WHEN costed=0 THEN ${tokens} ELSE 0 END) AS uncostedTokens,
-    SUM(input IS NULL) AS missingInput, SUM(output IS NULL) AS missingOutput, SUM(cache_read IS NULL) AS missingCacheRead,
+    SUM(input IS NULL) AS missingInput, SUM(uncached_input IS NULL) AS missingUncachedInput, SUM(output IS NULL) AS missingOutput, SUM(cache_read IS NULL) AS missingCacheRead,
     SUM(cache_write IS NULL) AS missingCacheWrite, SUM(reasoning IS NULL) AS missingReasoning, SUM(requests IS NULL) AS missingRequests,
     SUM(costed=0) AS missingCost,
     SUM(CASE WHEN currency=@currency THEN cost_units END) AS costUnits,
@@ -55,7 +55,7 @@ function aggregate(row: AggregateRow | undefined, currency: string): UsageAnalyt
     costs: r.costUnits === null || r.costUnits === undefined ? [] : [{currency, amount: usageCostAmount(BigInt(r.costUnits)),
       kind: reported === 0n ? "estimated" : estimated === 0n ? "reported" : "mixed"}],
     increments: text(r.increments), threads: text(r.threads), uncostedTokens: text(r.uncostedTokens),
-    missing: {input: text(r.missingInput), output: text(r.missingOutput), cacheRead: text(r.missingCacheRead), cacheWrite: text(r.missingCacheWrite),
+    missing: {input: text(r.missingInput), uncachedInput: text(r.missingUncachedInput), output: text(r.missingOutput), cacheRead: text(r.missingCacheRead), cacheWrite: text(r.missingCacheWrite),
       reasoning: text(r.missingReasoning), requests: text(r.missingRequests), cost: text(r.missingCost)},
   };
 }

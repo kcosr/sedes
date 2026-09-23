@@ -387,10 +387,12 @@ it, and an accepted snapshot continues the next one in the same batch.
   such as `[1m]`). Helper and subagent models in the same Claude delta receive
   none.
 - A Claude query-cost summary is split across per-model rows only when the
-  supplied per-model totals add up to it within 10⁻⁹ per row, and the previous
-  snapshot of the series was split the same way (or there was none). Otherwise
-  the summary's cost delta is recorded on a model-less row, so a series that
-  starts reporting per-model totals is never charged twice.
+  supplied per-model totals add up to it within 10⁻⁹ per row, the previous
+  snapshot of the series was split the same way (or there was none), and no
+  model's total fell since that snapshot. Otherwise the summary's cost delta is
+  recorded on a model-less row, so a series that starts reporting per-model
+  totals is never charged twice, and a correction that lowers one model's
+  estimate while raising another's nets out instead of keeping only the rise.
 - Codex attributes nothing while a `turn/start` that changes the model or
   effort awaits its receipt, since that turn's usage can arrive before the
   receipt confirms the new tuple.
@@ -432,6 +434,9 @@ transaction. The strict request contains:
 
 Buckets are calendar hours, days, Monday-start weeks, or months in the
 requested zone, computed on the server across daylight-saving transitions.
+An hour bucket starts at each local :00 and at each wall-clock jump, so a
+repeated hour is its own bucket and a 30-minute shift (Lord Howe Island)
+leaves a half-hour bucket before the next local :00.
 Automatic granularity is hourly up to 3 days, daily up to 93 days, weekly up to
 two years, and monthly beyond; any request is coarsened to stay within 500
 buckets. The resolved `from` is the first bucket's start; the previous period
@@ -441,7 +446,9 @@ The response contains:
 
 - **Totals and previous-period totals** of placed usage whose whole interval
   falls in the range. "Tokens" is input plus output per row; missing
-  components count as missing, never zero, in `missing` per metric.
+  components count as missing, never zero, in `missing` per metric
+  (including `uncachedInput`, which is unknown whenever a reported input's
+  cache components are).
   `uncostedTokens` sums tokens with no recorded cost.
 - **Timeline**: ungrouped points per bucket and, with `groupBy`, the top seven
   keys plus Other with per-bucket points, and a filter-independent all-time

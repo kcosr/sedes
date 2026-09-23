@@ -21,7 +21,7 @@ The toolbar applies to everything on the page.
 - **Filter** narrows the page by model, provider, reasoning effort, backend,
   backend type, environment, project, thread, agent, or activity. The count
   beside each choice already reflects your other filters. The list shows the
-  60 largest values; type in its search box to find others by name. **Unknown
+  60 largest values; type in its search box to find others by name or ID. **Unknown
   model**, **Not recorded**, and similar choices select usage without that
   detail. Up to 50 values can be selected per filter.
 

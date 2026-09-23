@@ -14,7 +14,7 @@ const aggregate = (tokens: number, overrides: Partial<UsageAnalyticsAggregate> =
   tokens: String(tokens), input: String(Math.round(tokens * 0.9)), uncachedInput: "0", cacheRead: String(Math.round(tokens * 0.6)), cacheWrite: "0",
   output: String(tokens - Math.round(tokens * 0.9)), reasoning: "0", requests: "0",
   costs: [{ currency: "USD", amount: (tokens / 1_000_000).toFixed(2), kind: "estimated" }], increments: "4", threads: "2", uncostedTokens: "0",
-  missing: { input: "0", output: "0", cacheRead: "0", cacheWrite: "0", reasoning: "0", requests: "4", cost: "0" }, ...overrides,
+  missing: { input: "0", uncachedInput: "0", output: "0", cacheRead: "0", cacheWrite: "0", reasoning: "0", requests: "4", cost: "0" }, ...overrides,
 });
 const points = (values: number[]) => ({
   tokens: values.map(String), input: values.map(String), output: values.map(() => "0"), cacheRead: values.map(() => "0"),
@@ -133,6 +133,18 @@ describe("UsageView", () => {
     await user.click(await screen.findByRole("button", { name: "Thread" }));
     await user.type(screen.getByRole("textbox", { name: "Search Threads" }), "ship");
     await waitFor(() => expect(api).toHaveBeenCalledWith(expect.objectContaining({ facets: true, facetSearch: { dimension: "thread", text: "ship" } }), expect.any(AbortSignal)));
+  });
+
+  it("offers every server match even when its visible label does not contain the search", async () => {
+    const user = userEvent.setup();
+    // The server matched "c0ffee" in a thread ID that the choice label does not show.
+    const facets = Object.fromEntries(USAGE_ANALYTICS_DIMENSIONS.map((dimension) => [dimension, []])) as unknown as NonNullable<UsageAnalyticsResponse["facets"]>;
+    mount(async (request) => response(request, request.facetSearch?.text === "c0ffee" ? { facets: { ...facets, thread: [{ key: "thread-1", tokens: "2500000" }] } } : {}));
+    await screen.findByText("2.5M");
+    await user.click(screen.getByRole("button", { name: /^Filter/ }));
+    await user.click(await screen.findByRole("button", { name: "Thread" }));
+    await user.type(screen.getByRole("textbox", { name: "Search Threads" }), "c0ffee");
+    expect(await screen.findByRole("checkbox", { name: /Ship usage page/ })).toBeEnabled();
   });
 
   it("keeps the last successful read when a refresh fails", async () => {

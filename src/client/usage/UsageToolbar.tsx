@@ -109,9 +109,14 @@ export function FilterPicker({ api, filters, onChange, buildRequest, requestKey,
     const keys = new Set(rows.map((row) => row.key));
     const extra = selected.filter((key) => !keys.has(key)).map((key) => ({ key, tokens: "0" }));
     const needle = query.trim().toLocaleLowerCase();
-    return [...rows, ...extra].map((row) => ({ ...row, label: dimensionLabel(known, dimension, row.key) }))
-      .filter((row) => !needle || `${row.label.label} ${row.label.detail ?? ""}`.toLocaleLowerCase().includes(needle));
-  }, [facets.data, dimension, selected, query, known]);
+    // The server also matches IDs and full paths that labels may not show, so
+    // keep every row it returned for the current text; filter the rest locally.
+    const answered = facetSearch !== undefined && facetSearch.text === query.trim() && !facets.stale;
+    const labelled = <Row extends { key: string | null }>(row: Row) => ({ ...row, label: dimensionLabel(known, dimension, row.key) });
+    const matches = (row: ReturnType<typeof labelled<{ key: string | null }>>) =>
+      !needle || `${row.key ?? ""} ${row.label.label} ${row.label.detail ?? ""}`.toLocaleLowerCase().includes(needle);
+    return [...rows.map(labelled).filter((row) => answered || matches(row)), ...extra.map(labelled).filter(matches)];
+  }, [facets.data, facets.stale, facetSearch?.text, dimension, selected, query, known]);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>

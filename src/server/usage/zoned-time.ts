@@ -46,22 +46,38 @@ export function zonedInstant(year: number, month: number, day: number, hour: num
   return guess;
 }
 
-function startOf(bucket: UsageAnalyticsBucket, instant: number, timeZone: string): number {
+const QUARTER = 900_000;
+const wallMinutes = (local: LocalTime) => Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute) / 60_000;
+/**
+ * Hour buckets start at each local :00 and at each wall-clock discontinuity.
+ * Every zone offset is a multiple of 15 minutes, so both fall on the UTC
+ * quarter-hour grid. A repeated daylight-saving hour stays a separate bucket,
+ * and a 30-minute jump starts a partial hour where the new wall time begins.
+ */
+function hourBoundary(instant: number, timeZone: string): boolean {
   const local = localTime(instant, timeZone);
-  // Subtract the local minutes rather than resolving the wall hour: the second
-  // occurrence of a repeated daylight-saving hour must not map to the first.
-  if (bucket === "hour") return instant - local.minute * 60_000 - (((instant % 60_000) + 60_000) % 60_000);
+  return local.minute === 0 || wallMinutes(localTime(instant - QUARTER, timeZone)) + 15 !== wallMinutes(local);
+}
+
+function startOf(bucket: UsageAnalyticsBucket, instant: number, timeZone: string): number {
+  if (bucket === "hour") {
+    let start = instant - (((instant % QUARTER) + QUARTER) % QUARTER);
+    for (let step = 0; step < 8 && !hourBoundary(start, timeZone); step += 1) start -= QUARTER;
+    return start;
+  }
+  const local = localTime(instant, timeZone);
   if (bucket === "day") return zonedInstant(local.year, local.month, local.day, 0, timeZone);
   if (bucket === "month") return zonedInstant(local.year, local.month, 1, 0, timeZone);
   const date = new Date(Date.UTC(local.year, local.month - 1, local.day - local.weekday));
   return zonedInstant(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate(), 0, timeZone);
 }
 function next(bucket: UsageAnalyticsBucket, start: number, timeZone: string): number {
-  const local = localTime(start, timeZone);
   if (bucket === "hour") {
-    // Step in UTC so repeated fall-back hours remain distinct buckets.
-    return start + 3_600_000;
+    let end = start + QUARTER;
+    for (let step = 0; step < 8 && !hourBoundary(end, timeZone); step += 1) end += QUARTER;
+    return end;
   }
+  const local = localTime(start, timeZone);
   const date = new Date(Date.UTC(local.year, local.month - 1, local.day));
   if (bucket === "day") date.setUTCDate(date.getUTCDate() + 1);
   else if (bucket === "week") date.setUTCDate(date.getUTCDate() + 7);

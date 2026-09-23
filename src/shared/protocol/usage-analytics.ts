@@ -70,7 +70,7 @@ export const usageAnalyticsAggregateSchema = z.strictObject({
   threads: count,
   uncostedTokens: count,
   missing: z.strictObject({
-    input: count, output: count, cacheRead: count, cacheWrite: count, reasoning: count, requests: count, cost: count,
+    input: count, uncachedInput: count, output: count, cacheRead: count, cacheWrite: count, reasoning: count, requests: count, cost: count,
   }),
 });
 export type UsageAnalyticsAggregate = z.infer<typeof usageAnalyticsAggregateSchema>;

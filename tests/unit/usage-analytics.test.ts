@@ -138,7 +138,7 @@ describe("usage timeline projection", () => {
     const result = service.analytics(scope, request({groupBy: "model", timeZone: "America/Los_Angeles"}));
     expect(result.placement.reported).toBe("60");
     expect(result.totals).toMatchObject({tokens: "60", requests: "1", uncachedInput: "10", costs: [{currency: "USD", amount: "0.0004", kind: "estimated"}]});
-    expect(result.totals.missing).toMatchObject({requests: "1", cacheRead: "1"});
+    expect(result.totals.missing).toMatchObject({requests: "1", cacheRead: "1", uncachedInput: "1"});
     expect(result.timeline.series.map((entry) => entry.key)).toEqual(["claude", "gpt"]);
     expect(result.labels.thread.thread).toMatchObject({label: "First thread", kind: "pi", workspaceId: "workspace"});
     expect(result.labels.workspace.workspace).toMatchObject({label: "App", detail: "Laptop · /src/app"});
@@ -326,6 +326,35 @@ describe("usage timeline second review regressions", () => {
     expect(buckets.map((bucket) => new Date(bucket.start).toISOString())).toEqual(["2026-11-01T06:00:00.000Z", "2026-11-01T07:00:00.000Z"]);
     const kathmandu = zonedBuckets(Date.parse("2026-09-01T18:20:00Z"), Date.parse("2026-09-01T19:00:00Z"), "hour", "Asia/Kathmandu");
     expect(new Date(kathmandu.buckets[0]!.start).toISOString()).toBe("2026-09-01T18:15:00.000Z");
+  });
+
+  it("starts an hour where a 30-minute daylight-saving jump begins and realigns after it", () => {
+    const iso = (buckets: {start: number; end: number}[]) => buckets.map((bucket) => [new Date(bucket.start).toISOString(), new Date(bucket.end).toISOString()]);
+    // Lord Howe springs from 02:00 (+10:30) to 02:30 (+11:00) at 15:30Z.
+    expect(iso(zonedBuckets(Date.parse("2026-10-03T15:40:00Z"), Date.parse("2026-10-03T17:00:00Z"), "hour", "Australia/Lord_Howe").buckets)).toEqual([
+      ["2026-10-03T15:30:00.000Z", "2026-10-03T16:00:00.000Z"], ["2026-10-03T16:00:00.000Z", "2026-10-03T17:00:00.000Z"]]);
+    expect(iso(zonedBuckets(Date.parse("2026-10-03T15:10:00Z"), Date.parse("2026-10-03T15:40:00Z"), "hour", "Australia/Lord_Howe").buckets)).toEqual([
+      ["2026-10-03T14:30:00.000Z", "2026-10-03T15:30:00.000Z"], ["2026-10-03T15:30:00.000Z", "2026-10-03T16:00:00.000Z"]]);
+    // It falls back from 02:00 (+11:00) to 01:30 (+10:30) at 15:00Z; the repeated half-hour stays separate.
+    expect(iso(zonedBuckets(Date.parse("2026-04-04T14:10:00Z"), Date.parse("2026-04-04T15:40:00Z"), "hour", "Australia/Lord_Howe").buckets)).toEqual([
+      ["2026-04-04T14:00:00.000Z", "2026-04-04T15:00:00.000Z"], ["2026-04-04T15:00:00.000Z", "2026-04-04T15:30:00.000Z"],
+      ["2026-04-04T15:30:00.000Z", "2026-04-04T16:30:00.000Z"]]);
+  });
+
+  it("charges a falling per-model estimate to the summary instead of dropping it", () => {
+    const db = database("claude_agent_sdk"), service = new UsageService(db), capture = service.open(source());
+    const model = (name: string, input: string, cost: string) => fact(`model:${name}`, {input, output: "0"}, {kind: "cumulative", sessionContribution: "checkpoint",
+      models: [{provider: null, model: name}], pricing: {canonicalModel: null, basis: null, components: [{kind: "model_total" as const, amount: cost, currency: "USD"}]}});
+    const summary = (amount: string) => fact("query_cost", {}, {kind: "cumulative", sessionContribution: "checkpoint", models: [], costs: [{amount, currency: "USD", kind: "estimated", provenance: "sdk"}]});
+    at("2026-09-02T10:00:00Z"); capture.capture([{...counter("a", {}), facts: [model("opus", "100", "1.0"), model("haiku", "50", "0.3"), summary("1.3")]}]);
+    at("2026-09-02T10:05:00Z"); capture.capture([{...counter("b", {}), facts: [model("opus", "120", "0.8"), model("haiku", "90", "0.7"), summary("1.5")]}]);
+    at("2026-09-02T10:10:00Z"); capture.capture([{...counter("c", {}), facts: [model("opus", "130", "0.9"), model("haiku", "90", "0.7"), summary("1.6")]}]);
+    const result = service.analytics(scope, request());
+    const cost = (key: string | null) => result.breakdowns.model.rows.find((row) => row.key === key)?.totals.costs[0]?.amount;
+    expect(result.totals.costs[0]?.amount).toBe("1.6");
+    expect(service.read(scope, "thread").summary.costs[0]?.amount).toBe("1.6");
+    // The first split and the one after the correction stay per model; the correction is model-less.
+    expect([cost("opus"), cost("haiku"), cost(null)]).toEqual(["1.1", "0.3", "0.2"]);
   });
 
   it("searches facet choices beyond the top ranked values by ID or name", () => {

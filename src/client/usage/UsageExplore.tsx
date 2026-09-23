@@ -36,7 +36,7 @@ export function exploreCsv(data: UsageAnalyticsResponse, dimension: UsageAnalyti
   const metrics = (totals: UsageAnalyticsAggregate): string[] => {
     const known = (metric: string, value: string) => metricReported(totals, metric) ? value : "";
     return [metricReported(totals, "input") || metricReported(totals, "output") ? totals.tokens : "",
-      known("input", totals.input), known("input", totals.uncachedInput), known("cacheRead", totals.cacheRead), known("cacheWrite", totals.cacheWrite),
+      known("input", totals.input), known("uncachedInput", totals.uncachedInput), known("cacheRead", totals.cacheRead), known("cacheWrite", totals.cacheWrite),
       known("output", totals.output), known("reasoning", totals.reasoning), known("requests", totals.requests),
       totals.costs.find((cost) => cost.currency === currency)?.amount ?? "", totals.threads];
   };
