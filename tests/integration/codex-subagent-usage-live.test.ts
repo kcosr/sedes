@@ -110,7 +110,7 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
       }, requestOptions);
       const nativeRoot = started.thread.id;
       database = prepareDatabase(databasePath, nativeRoot);
-      const usage = new UsageService(database);
+      const usage = new UsageService(database, {enabled: true});
       const binding: ConversationBinding = { tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, applicationThreadId: "application-live",
         backendInstanceId: instance.id, connectionProfileId: connection.id, executionEnvironmentId: connection.executionEnvironmentId,
         backendConversationId: nativeRoot, createdAt: new Date().toISOString() };
@@ -203,7 +203,7 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
         expect(diagnostics).toEqual([]);
         await supervisor.close(); supervisor = undefined;
         database.close(); database = new Database(databasePath);
-        const restored = new UsageService(database).read(scope, binding.applicationThreadId);
+        const restored = new UsageService(database, {enabled: true}).read(scope, binding.applicationThreadId);
         expect(restored.summary.metrics.total.value).toBe(updated.summary.metrics.total.value);
         expect(restored.breakdown?.subagents.metrics.total.value).toBe(updated.breakdown?.subagents.metrics.total.value);
       } finally { stopObserver(); }

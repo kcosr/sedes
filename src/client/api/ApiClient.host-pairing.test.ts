@@ -24,7 +24,7 @@ describe("host pairing API", () => {
   });
   it("uses HTTP endpoint routing, server session CSRF, strict requests and normalized responses for every decision", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      if (String(url).endsWith("/api/application/session")) return Response.json({ clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION, version: SEDES_VERSION, csrfToken: "a".repeat(32), providerPulseEnabled: false });
+      if (String(url).endsWith("/api/application/session")) return Response.json({ clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION, version: SEDES_VERSION, csrfToken: "a".repeat(32), providerPulseEnabled: false, experimentalUsageEnabled: false });
       if (String(url).endsWith("/api/host-registrations")) return Response.json({ registrations: [{ ...registration, connected: true }], pairings: [{ ...pairing, connected: false }] });
       expect(init).toMatchObject({ method: "POST", headers: expect.objectContaining({ "X-CSRF-Token": "a".repeat(32) }) });
       expect(JSON.parse(String(init?.body))).toMatchObject({ mutationId: id });

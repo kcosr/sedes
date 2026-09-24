@@ -23,7 +23,7 @@ test("recorded turn usage appears on the Usage page with filters and thread link
   const firstRead = page.waitForResponse((response) =>
     response.request().method() === "POST" && response.url().endsWith("/api/usage/analytics") && response.ok());
   await page.getByTestId("desktop-sidebar").getByRole("button", { name: "More" }).click();
-  await page.getByRole("menuitem", { name: "Usage", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Usage (Experimental)", exact: true }).click();
   await expect(page).toHaveURL(/\/usage$/);
   await firstRead;
 

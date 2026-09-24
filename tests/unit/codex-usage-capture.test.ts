@@ -9,7 +9,7 @@ function fixture(provenZero = false, inherited = false) {
   const registerTurns = vi.fn();
   const open = vi.fn<UsageSink["open"]>(() => ({ registerTurns,
     capture: entries => { observations.push(...entries); return true; }, reconcile: () => true, gap, seal: vi.fn() }));
-  const capture = new CodexUsageCapture({ sink: { open, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [] }, provenZero, ancestry: inherited ? {forkedFromThreadId: "parent-native", sourceTurnId: "turn-1"} : null,
+  const capture = new CodexUsageCapture({ sink: { open, enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [] }, provenZero, ancestry: inherited ? {forkedFromThreadId: "parent-native", sourceTurnId: "turn-1"} : null,
     nativeNamespace: "native-store", onError: vi.fn(), binding: {
       tenantId: "tenant", ownerPrincipalId: "principal", applicationThreadId: "app-thread",
       backendConversationId: "native-thread", backendInstanceId: "backend", connectionProfileId: "connection",

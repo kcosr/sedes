@@ -137,7 +137,7 @@ const applicationSession = {
   clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION,
   version: SEDES_VERSION,
   csrfToken: "a".repeat(32),
-  providerPulseEnabled: true,
+  providerPulseEnabled: true, experimentalUsageEnabled: false,
 };
 // Kept as a local test-fixture alias while endpoint-focused cases below are
 // migrated from the former inventory-bearing bootstrap response.

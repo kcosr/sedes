@@ -3421,12 +3421,40 @@ describe("ClaudeConversationHandle", () => {
     await handle.close();
   });
 
+  it("acknowledges provider delivery and skips history accounting when disabled", async () => {
+    const provider = fixture();
+    const runtime = new ClaudeSdkRuntimeAdapter(provider.sdk);
+    const create = runtime.createSession.bind(runtime);
+    let consume!: ClaudeRuntimeSessionOptions["onMessage"];
+    const createSession = vi.spyOn(runtime, "createSession").mockImplementation(options => {
+      consume = options.onMessage;
+      return create(options);
+    });
+    const open = vi.fn(() => { throw new Error("disabled accounting opened"); });
+    const user: SessionMessage = {type:"user",uuid:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",session_id:SESSION_ID,
+      parent_tool_use_id:null,parent_agent_id:null,message:{role:"user",content:"Earlier"}};
+    const assistant: SessionMessage = {type:"assistant",uuid:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",session_id:SESSION_ID,
+      parent_tool_use_id:null,parent_agent_id:null,message:{id:"history",role:"assistant",content:[{type:"text",text:"Answer"}],
+        stop_reason:"end_turn",usage:{input_tokens:5,output_tokens:2,cache_read_input_tokens:0,cache_creation_input_tokens:0}}};
+    const {handle} = createHandle(provider, vi.fn(), {runtimeClient:runtime,usage:{...NO_USAGE_SINK,open},
+      initialMessages:[user,assistant],resumeSession:true});
+    try {
+      await handle.establishProjection({signal:new AbortController().signal});
+      const live = {...assistant,uuid:"cccccccc-cccc-4ccc-8ccc-cccccccccccc"} as SDKMessage;
+      await expect(consume(live)).resolves.toBeUndefined();
+      await expect(consume(live)).resolves.toBeUndefined();
+      expect(open).not.toHaveBeenCalled();
+      expect(await handle.usage()).not.toHaveProperty("tokens");
+    } finally { await handle.close(); createSession.mockRestore(); }
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it("captures only the new live message and retries accounting after duplicate native replay", async () => {
     const provider = fixture();
     let durable = true;
     const batches: readonly UsageObservation[][] = [];
     const captured = batches as UsageObservation[][];
-    const usage: UsageSink = {findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({registerTurns: () => {}, capture: observations => {captured.push([...observations]);return durable;},gap:()=>{},reconcile:()=>true,seal:()=>{}})};
+    const usage: UsageSink = {enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({registerTurns: () => {}, capture: observations => {captured.push([...observations]);return durable;},gap:()=>{},reconcile:()=>true,seal:()=>{}})};
     const user:SessionMessage={type:"user",uuid:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",session_id:SESSION_ID,parent_tool_use_id:null,parent_agent_id:null,message:{role:"user",content:"Earlier"}};
     const assistant=(uuid:string,id:string):SessionMessage=>({type:"assistant",uuid,session_id:SESSION_ID,parent_tool_use_id:null,parent_agent_id:null,message:{id,role:"assistant",content:[{type:"text",text:"Answer"}],stop_reason:"end_turn",usage:{input_tokens:5,output_tokens:2,cache_read_input_tokens:0,cache_creation_input_tokens:0}}});
     const initial=assistant("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","history");
@@ -3445,7 +3473,7 @@ describe("ClaudeConversationHandle", () => {
 
   it("captures pipeline results independently of history without transient token authority", async () => {
     const captured: UsageObservation[] = [];
-    const usage: UsageSink = {findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: () => {}})};
+    const usage: UsageSink = {enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: () => {}})};
     const provider = fixture();
     const initialMessages: SessionMessage[] = [
       {

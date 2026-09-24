@@ -122,6 +122,7 @@ function session(providerPulseEnabled = true): NormalizedApplicationSession {
     clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION,
     version: SEDES_VERSION,
     csrfToken: "csrf",
+    experimentalUsageEnabled: false,
     providerPulseEnabled,
   };
 }

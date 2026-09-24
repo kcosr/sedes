@@ -237,7 +237,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
   readonly instance: AgentBackendInstance;
   readonly connection: AgentConnectionProfile;
   readonly #usageSink: UsageSink;
-  readonly #subagentUsage: CodexSubagentUsageCoordinator;
+  readonly #subagentUsage: CodexSubagentUsageCoordinator | undefined;
   readonly #nativeNamespace: string;
   readonly #client: CodexSharedClientFacade;
   readonly #serverRequests: CodexServerRequestRouter;
@@ -316,9 +316,9 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     ) {
       throw new Error("codex_driver_configuration_invalid");
     }
-    this.#subagentUsage = new CodexSubagentUsageCoordinator({ client: this.#client, sink: this.#usageSink, nativeNamespace: this.#nativeNamespace,
+    this.#subagentUsage = input.usageSink.enabled ? new CodexSubagentUsageCoordinator({ client: this.#client, sink: this.#usageSink, nativeNamespace: this.#nativeNamespace,
       runtimeScope:{tenantId:this.connection.tenantId,principalId:this.connection.ownerPrincipalId,backendInstanceId:this.instance.id,
-        executionEnvironmentId:this.connection.executionEnvironmentId,connectionProfileId:this.connection.id},onError:this.#onError });
+        executionEnvironmentId:this.connection.executionEnvironmentId,connectionProfileId:this.connection.id},onError:this.#onError }) : undefined;
     this.#client.subscribeNotifications((notification) => {
       if (
         notification.kind !== "decoded_notification" ||
@@ -1162,7 +1162,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       });
       this.#newUsageCounters.delete(input.binding.backendConversationId);
       ownership.install(handle);
-      this.#subagentUsage.registerRoot(input.binding);
+      this.#subagentUsage?.registerRoot(input.binding);
       return handle;
     } catch (error) {
       ownership.release();

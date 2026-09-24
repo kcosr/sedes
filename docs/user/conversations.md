@@ -11,6 +11,10 @@ running, queued, completed, and forked work.
 
 ## View recorded usage
 
+Recorded usage is **Experimental**. The views below require the server
+operator's `SEDES_EXPERIMENTAL_USAGE=1` opt-in. When it is off, Session stats
+still shows live context occupancy and transcript counters.
+
 The **Turn usage and cost** icon appears below a finished turn when it has
 recorded usage. Hover or focus previews the summary; click or tap pins it.
 Click again, press Escape, tap outside, or use mobile Back to close. Failed and

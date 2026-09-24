@@ -257,7 +257,7 @@ describe("in-memory canonical thread stream", () => {
       ...profile,
       enabled: profile.enabled === 1,
     };
-    const usage = new UsageService(database);
+    const usage = new UsageService(database, {enabled: true});
     const driver = new InMemoryConformanceDriver({
       usage,
       instance,

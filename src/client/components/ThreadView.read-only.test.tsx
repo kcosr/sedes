@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 vi.mock("./thread/TurnUsageAction.js", () => ({ TurnUsageAction: () => null }));
+import { UsageQueryCache } from "../stores/UsageQueryCache.js";
 import { OperationOverlayHost } from "../operations/OperationOverlay.js";
 import { getBlockingOperation } from "../operations/blocking-operation.js";
 vi.mock("../operations/thread-readiness.js", () => ({
@@ -1487,6 +1488,7 @@ function fixture(
   let activityDetail: ActivityDetailMode = "full";
   let projectionViewportAnchor: ThreadProjectionViewportAnchor | undefined;
   const threadStore = {
+    usage: new UsageQueryCache(snapshot.thread.id, {getUsage:vi.fn(),getUsageAvailability:vi.fn()}),
     get activityDetail() {
       return activityDetail;
     },
@@ -1537,7 +1539,7 @@ function fixture(
     status: "ready",
     connection: "connected",
     authoritative: true,
-    providerPulseEnabled: false,
+    providerPulseEnabled: false, experimentalUsageEnabled: false,
     search: "",
     descendantPages: {},
     pendingThreadConfigurationCopySourceIds: [],

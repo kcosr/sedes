@@ -2100,6 +2100,7 @@ export function InventorySidebar({
           <SidebarFooterActions
             api={store.api}
             providerPulseEnabled={state.providerPulseEnabled}
+            experimentalUsageEnabled={state.experimentalUsageEnabled}
             advisories={snapshot?.advisories}
             connection={
               showFooterConnectionStatus ? state.connection : undefined

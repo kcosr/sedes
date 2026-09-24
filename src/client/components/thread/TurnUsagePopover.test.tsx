@@ -12,7 +12,7 @@ function fixture() {
   const report = usageReport();
   report.summary.metrics.input = { value: "9007199254740993", basis: ["sdk_normalized"], providerPresence: "unknown", quality: "partial" };
   const getUsage = vi.fn().mockResolvedValue(report);
-  const cache = new UsageQueryCache("thread-1", { getUsage, getUsageAvailability: vi.fn().mockResolvedValue({ threadId: "thread-1", revision: "1", turns: [] }) }); caches.push(cache);
+  const cache = new UsageQueryCache("thread-1", { getUsage, getUsageAvailability: vi.fn().mockResolvedValue({ threadId: "thread-1", revision: "1", turns: [] }) }); cache.setEnabled(true);caches.push(cache);
   return { cache, getUsage };
 }
 describe("turn usage popover", () => {

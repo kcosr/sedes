@@ -404,10 +404,12 @@ export async function startProductionApplication(
 
     const identity = new SingleUserIdentityProvider<ExpressRequest>(database);
     const scope = identity.getScope();
-    const usage = new UsageService(database);
-    usage.recoverInterruptedCapture();
-    resources.defer("usage timeline backfill", usage.startTimelineBackfill());
-    resources.defer("usage revision subscription", usage.subscribe((scope, threadId, revision) => runtimes?.publishUsageRevisionIfLoaded(scope, threadId, revision)));
+    const usage = new UsageService(database, { enabled: config.experimentalUsageEnabled });
+    if (usage.enabled) {
+      usage.recoverInterruptedCapture();
+      resources.defer("usage timeline backfill", usage.startTimelineBackfill());
+      resources.defer("usage revision subscription", usage.subscribe((scope, threadId, revision) => runtimes?.publishUsageRevisionIfLoaded(scope, threadId, revision)));
+    }
     const authenticationRepository = new AuthenticationRepository(config.stateDirectory);
     resources.defer("authentication database", () => authenticationRepository.close());
     const csrfToken = createCsrfToken();

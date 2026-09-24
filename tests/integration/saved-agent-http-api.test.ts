@@ -114,6 +114,7 @@ function fixture() {
     workspaceDiffReviews: {} as never,
     config: {
       authenticationRequired: true,
+      experimentalUsageEnabled: false,
       host: "127.0.0.1",
       port: 4783,
       stateDirectory: "/tmp/saved-agent-http-test",

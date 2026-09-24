@@ -16,7 +16,7 @@ function thread(id: string, parent: string) {
       depth: 1, agent_path: null, agent_nickname: null, agent_role: null } } }, canAcceptDirectInput: true, threadSource: null,
     agentNickname: null, agentRole: null, gitInfo: null, name: null, turns: [] };
 }
-function fixture(restored: ReturnType<UsageSink["listSubagents"]> = [], residency?: RetainedRuntimeLifecycle, roots: readonly ConversationBinding[] = [], initiallyLoaded: readonly string[] = []) {
+function fixture(restored: ReturnType<UsageSink["listSubagents"]> = [], residency?: RetainedRuntimeLifecycle, roots: readonly ConversationBinding[] = [], initiallyLoaded: readonly string[] = [], enabled = true) {
   let generation = 1;
   let sequence = 0;
   let loaded: string[] = [...initiallyLoaded];
@@ -36,7 +36,7 @@ function fixture(restored: ReturnType<UsageSink["listSubagents"]> = [], residenc
     captures.set(input.nativeSession, capture);
     return capture;
   });
-  const sink: UsageSink = { open, findSubagent: vi.fn(() => null), listSubagentRoots: vi.fn(() => ({bindings:roots,nextCursor:null})), listSubagents: vi.fn(() => restored) };
+  const sink: UsageSink = { open, enabled, findSubagent: vi.fn(() => null), listSubagentRoots: vi.fn(() => ({bindings:roots,nextCursor:null})), listSubagents: vi.fn(() => restored) };
   const onError = vi.fn();
   const coordinator = new CodexSubagentUsageCoordinator({ client, sink, nativeNamespace: "store", runtimeScope:{tenantId:binding.tenantId,principalId:binding.ownerPrincipalId,backendInstanceId:binding.backendInstanceId,executionEnvironmentId:binding.executionEnvironmentId,connectionProfileId:binding.connectionProfileId}, onError });
   const notify = (method: "thread/started" | "thread/tokenUsage/updated" | "turn/started" | "turn/completed" | "item/completed", params: unknown, receiptSequence = ++sequence, receiptGeneration = generation) => client.forwardNotification(generation, {
@@ -52,6 +52,23 @@ function fixture(restored: ReturnType<UsageSink["listSubagents"]> = [], residenc
 }
 
 describe("Codex subagent usage coordinator", () => {
+  it("does not recover, observe children or retain runtime work when disabled", async () => {
+    const residency = new RetainedRuntimeLifecycle({wake: vi.fn(), retire: vi.fn(async () => undefined)});
+    const retain = vi.spyOn(residency, "retain");
+    const f = fixture([{nativeSession:"old-child",nativeParentSession:"root",epoch:"native-counter-v1",
+      normalizationVersion:"test",captureState:"disconnected"}], residency, [binding], ["old-child"], false);
+    f.coordinator.registerRoot(binding);
+    f.spawn("child"); f.usage("child", 42); f.spawn("nested", "child");
+    f.reconnect();
+    await Promise.resolve();
+    expect(f.open).not.toHaveBeenCalled();
+    expect(f.sink.listSubagentRoots).not.toHaveBeenCalled();
+    expect(f.sink.listSubagents).not.toHaveBeenCalled();
+    expect(f.sink.findSubagent).not.toHaveBeenCalled();
+    expect(f.request).not.toHaveBeenCalled();
+    expect(retain).not.toHaveBeenCalled();
+    expect(f.onError).not.toHaveBeenCalled();
+  });
   it("captures separate cumulative lifetime checkpoints and nested descendants without parent turn allocations", () => {
     const f = fixture(); f.coordinator.registerRoot(binding);
     f.spawn("child"); f.usage("child", 100); f.usage("child", 180);

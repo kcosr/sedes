@@ -23,6 +23,7 @@ export type PackagedClientOrigin =
 
 export interface AppConfig {
   readonly authenticationRequired: boolean;
+  readonly experimentalUsageEnabled: boolean;
   readonly host: "127.0.0.1" | "0.0.0.0";
   readonly trustedLanHost?: string;
   readonly port: number;
@@ -38,6 +39,12 @@ function parseAuthenticationRequired(value: string | undefined): boolean {
   if (value === undefined || value === "true") return true;
   if (value === "false") return false;
   throw new Error("SEDES_AUTH_REQUIRED must be exactly true or false.");
+}
+
+function parseExperimentalUsage(value: string | undefined): boolean {
+  if (value === undefined || value === "0") return false;
+  if (value === "1") return true;
+  throw new Error("SEDES_EXPERIMENTAL_USAGE must be exactly 0 or 1.");
 }
 
 function absolutePath(value: string, name: string): string {
@@ -178,6 +185,7 @@ export function loadConfig(
   return {
     ...bind,
     authenticationRequired: parseAuthenticationRequired(environment.SEDES_AUTH_REQUIRED),
+    experimentalUsageEnabled: parseExperimentalUsage(environment.SEDES_EXPERIMENTAL_USAGE),
     port: portSchema.parse(environment.PORT ?? String(installation?.listen?.port ?? 4784)),
     stateDirectory,
     allowedTailscaleHosts: parseTailscaleHosts(

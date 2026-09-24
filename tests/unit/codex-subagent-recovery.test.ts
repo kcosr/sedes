@@ -44,7 +44,7 @@ function fixture(rows: StoredChild[], loaded: string[] = [], loadedResponse?: Pr
     const row = stored.get(input.nativeSession);
     return row ? { binding, nativeParentSession: row.parent } : null;
   });
-  const sink: UsageSink = { open, listSubagentRoots, listSubagents, findSubagent };
+  const sink: UsageSink = { enabled: true, open, listSubagentRoots, listSubagents, findSubagent };
   const onError = vi.fn();
   const coordinator = new CodexSubagentUsageCoordinator({ client, sink, nativeNamespace: "store", runtimeScope: scope, onError });
   const status = (id: string, active: boolean) => client.forwardNotification(generation, {

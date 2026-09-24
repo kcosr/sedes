@@ -72,7 +72,7 @@ let applicationState = {
   status: "loading" as const,
   connection: "reconnecting",
   authoritative: false,
-  providerPulseEnabled: false,
+  providerPulseEnabled: false, experimentalUsageEnabled: false,
   search: "",
   visibleThreads: [],
   descendantPages: {},

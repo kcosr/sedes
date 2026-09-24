@@ -33,7 +33,7 @@ const state: ApplicationClientState = {
   status: "ready",
   connection: "connected",
   authoritative: true,
-  providerPulseEnabled: false,
+  providerPulseEnabled: false, experimentalUsageEnabled: false,
   search: "",
   visibleThreads: [],
   descendantPages: {},

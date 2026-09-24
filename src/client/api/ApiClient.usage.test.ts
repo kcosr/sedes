@@ -2,7 +2,21 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { ApiClient } from "./ApiClient.js";
 import { usageReport } from "../stores/usage-test-fixture.js";
+import { SEDES_CLIENT_PROTOCOL_VERSION } from "../../shared/protocol/application.js";
 afterEach(() => vi.unstubAllGlobals());
+it("retains the newest session CSRF token when reconnect refreshes finish out of order", async () => {
+  let resolveOld!: (response: Response) => void;
+  const session = (csrfToken: string) => ({clientProtocolVersion:SEDES_CLIENT_PROTOCOL_VERSION,version:"0.1.1",csrfToken,providerPulseEnabled:false,experimentalUsageEnabled:false});
+  const fetch = vi.fn().mockImplementationOnce(()=>new Promise(done=>{resolveOld=done;}))
+    .mockResolvedValueOnce(Response.json(session("new-token")))
+    .mockResolvedValueOnce(Response.json({threadId:"thread",revision:"0",turns:[{turnId:"turn",available:false}]}));
+  vi.stubGlobal("fetch",fetch);
+  const api = new ApiClient();
+  const old = api.session(); await api.session({refresh:true});
+  resolveOld(Response.json(session("old-token"))); await old;
+  await api.getUsageAvailability("thread",["turn"]);
+  expect(new Headers(fetch.mock.calls[2]![1].headers).get("X-CSRF-Token")).toBe("new-token");
+});
 it("reads scoped session and turn accounting without a provider endpoint", async () => {
   const fetch = vi.fn().mockResolvedValue(Response.json(usageReport())); vi.stubGlobal("fetch", fetch);
   const api = new ApiClient(); await api.getUsage("thread/1", "turn:1");

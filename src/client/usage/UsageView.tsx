@@ -66,7 +66,7 @@ export function UsageView({ store }: { store: ApplicationClientStore }) {
       <div className="usage-page">
         <header className="usage-header">
           <div>
-            <p className="eyebrow">Recorded usage</p>
+            <p className="eyebrow">Recorded usage · Experimental</p>
             <h1 id="usage-view-title">Usage</h1>
             <p>Tokens and estimated spend recorded across your threads.</p>
           </div>

@@ -13,7 +13,7 @@ const applicationSession = {
   clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION,
   version: SEDES_VERSION,
   csrfToken: "a".repeat(32),
-  providerPulseEnabled: true,
+  providerPulseEnabled: true, experimentalUsageEnabled: false,
 };
 const applicationSnapshot = {
   advisories: [],
@@ -61,6 +61,60 @@ function applicationTransport() {
 }
 
 describe("ApplicationClientStore session and inventory lifecycle", () => {
+  it("fences a pending old session and follows up when another SSE reconnect arrives", async () => {
+    let resolveOld!: (session: typeof applicationSession) => void;
+    let resolveNew!: (session: typeof applicationSession) => void;
+    const session = vi.fn().mockResolvedValueOnce({...applicationSession,experimentalUsageEnabled:true})
+      .mockImplementationOnce(()=>new Promise(done=>{resolveOld=done;}))
+      .mockImplementationOnce(()=>new Promise(done=>{resolveNew=done;}));
+    const {transport,subscriptions} = applicationTransport();
+    const store = new ApplicationClientStore({session} as unknown as ApiClient,transport);
+    await store.initialize();
+    const stream = subscriptions[0]!;
+    stream.onEnvelope(applicationSnapshotEnvelope()); stream.onConnection("connected");
+    stream.onConnection("reconnecting"); stream.onConnection("connected");
+    stream.onConnection("reconnecting"); stream.onConnection("connected");
+    expect(session).toHaveBeenCalledTimes(2);
+    resolveOld({...applicationSession,experimentalUsageEnabled:false});
+    for(let index=0;index<5;index++) await Promise.resolve();
+    expect(store.getSnapshot().experimentalUsageEnabled).toBe(true);
+    expect(session).toHaveBeenCalledTimes(3);
+    resolveNew({...applicationSession,experimentalUsageEnabled:false});
+    for(let index=0;index<5;index++) await Promise.resolve();
+    expect(store.getSnapshot().experimentalUsageEnabled).toBe(false);
+    store.dispose();
+  });
+  it("refreshes installation flags on ordinary SSE reconnect without reconnecting again", async () => {
+    const session = vi.fn().mockResolvedValue({...applicationSession,experimentalUsageEnabled:true});
+    const {transport,subscriptions} = applicationTransport();
+    const store = new ApplicationClientStore({session} as unknown as ApiClient,transport);
+    await store.initialize();
+    const stream = subscriptions[0]!;
+    stream.onEnvelope(applicationSnapshotEnvelope()); stream.onConnection("connected");
+    expect(session).toHaveBeenCalledOnce();
+    session.mockResolvedValue({...applicationSession,experimentalUsageEnabled:false});
+    stream.onConnection("reconnecting"); stream.onConnection("connected"); stream.onConnection("connected");
+    await Promise.resolve(); await Promise.resolve();
+    expect(session).toHaveBeenCalledTimes(2);
+    expect(session).toHaveBeenLastCalledWith({refresh:true});
+    expect(store.getSnapshot().experimentalUsageEnabled).toBe(false);
+    expect(transport.reconnectAll).not.toHaveBeenCalled();
+    store.dispose();
+  });
+  it("defaults usage off, preserves the server flag across inventory replacement, and refreshes it on resume", async () => {
+    const session = vi.fn().mockResolvedValue({...applicationSession,experimentalUsageEnabled:true});
+    const {transport,subscriptions} = applicationTransport();
+    const store = new ApplicationClientStore({session} as unknown as ApiClient,transport);
+    expect(store.getSnapshot().experimentalUsageEnabled).toBe(false);
+    await store.initialize();
+    expect(store.getSnapshot().experimentalUsageEnabled).toBe(true);
+    subscriptions[0]?.onEnvelope(applicationSnapshotEnvelope());
+    expect(store.getSnapshot().experimentalUsageEnabled).toBe(true);
+    session.mockResolvedValue({...applicationSession,experimentalUsageEnabled:false});
+    await store.resume();
+    expect(store.getSnapshot().experimentalUsageEnabled).toBe(false);
+    store.dispose();
+  });
   it("resynchronizes Workpads when a live replay reconnects without a snapshot", async () => {
     const api = { session: vi.fn().mockResolvedValue(applicationSession) } as unknown as ApiClient;
     const { transport, subscriptions } = applicationTransport();
@@ -110,7 +164,7 @@ describe("ApplicationClientStore session and inventory lifecycle", () => {
     expect(store.getSnapshot()).toMatchObject({
       status: "ready",
       authoritative: true,
-      providerPulseEnabled: true,
+      providerPulseEnabled: true, experimentalUsageEnabled: false,
     });
     expect(subscriptions[0]?.getReplayCursor?.()).toBe(`${applicationHubId}.0`);
   });
@@ -336,7 +390,7 @@ describe("ApplicationClientStore session and inventory lifecycle", () => {
     expect(store.getSnapshot()).toMatchObject({
       status: "ready",
       authoritative: true,
-      providerPulseEnabled: true,
+      providerPulseEnabled: true, experimentalUsageEnabled: false,
     });
   });
 

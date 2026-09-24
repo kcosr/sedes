@@ -616,7 +616,7 @@ describe("Codex production application integration", () => {
     try {
       await acquireBackendNativeStores(prepared.nativeStores, resources);
       const registry = new AgentBackendRegistry();
-      const usage = new UsageService(database);
+      const usage = new UsageService(database, {enabled: true});
       const runtimeModules = await initializeBackendModuleRuntimes({
         usage,
         preparedModules: [prepared],

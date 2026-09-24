@@ -456,7 +456,7 @@ describe("Claude production application integration", () => {
           currentEnvironment.configurationRevision,
       });
       const registry = new AgentBackendRegistry();
-      const usage = new UsageService(database);
+      const usage = new UsageService(database, {enabled: true});
       const runtimeModules = await initializeBackendModuleRuntimes({
         usage,
         preparedModules: [prepared],

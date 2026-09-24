@@ -7,6 +7,7 @@ import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { type UsageObservation } from "../../src/server/usage/contracts.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
+import { PiUsageAccounting } from "../../src/server/backends/pi/pi-usage-accounting.js";
 import {
   chmod,
   mkdir,
@@ -1685,10 +1686,10 @@ describe("Pi conversation backend driver", () => {
     const dbWorkspace=new InventoryRepository(database).upsertWorkspace(owner,{environmentId:profile.executionEnvironmentId,canonicalPath:fixture.workspace.canonicalPath,displayName:"Usage fixture",available:true,trustState:"trusted",environmentConfigurationRevision:0,now:1});
     const thread=new ConversationBindingRepository(database).createUnboundThread(owner,{workspaceId:dbWorkspace.id,connectionProfileId:profile.id,title:"Usage fixture",now:1});
     const sdkWorkspace={...fixture.workspace,summary:{...fixture.workspace.summary,id:dbWorkspace.id,environmentId:profile.executionEnvironmentId}};
-    const usage=new UsageService(database), observations:UsageObservation[]=[];
+    const usage=new UsageService(database, {enabled: true}), observations:UsageObservation[]=[];
     const fixtureInstance={...instance,tenantId:owner.tenantId,id:profile.backendInstanceId};
     const fixtureConnection={...profile,enabled:profile.enabled===1};
-    const driver=new PiConversationBackendDriver({instance:fixtureInstance,connection:fixtureConnection,usage:{findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: input => usage.listSubagents(input), open:source=>{const capture=usage.open(source);return {...capture,capture:batch=>{observations.push(...batch);return capture.capture(batch);}};}},nativeDiscoveryNamespaceKey:"pi-test-native-namespace",toolProvenanceKey,agentTools:noAgentTools,toolAccessPolicy:fullToolAccessPolicy,sessionDirectory:fixture.sessions,sessionFactory:new DefaultPiSdkSessionFactory({agentDir})});
+    const driver=new PiConversationBackendDriver({instance:fixtureInstance,connection:fixtureConnection,usage:{enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: input => usage.listSubagents(input), open:source=>{const capture=usage.open(source);return {...capture,capture:batch=>{observations.push(...batch);return capture.capture(batch);}};}},nativeDiscoveryNamespaceKey:"pi-test-native-namespace",toolProvenanceKey,agentTools:noAgentTools,toolAccessPolicy:fullToolAccessPolicy,sessionDirectory:fixture.sessions,sessionFactory:new DefaultPiSdkSessionFactory({agentDir})});
     const created=await driver.create({scope:owner,workspace:sdkWorkspace,applicationThreadId:thread.id,applicationOperationId:"sdk-usage-create",source:{kind:"user"}});
     database.prepare("UPDATE application_threads SET backing_state='bound' WHERE id=?").run(thread.id);
     database.prepare("INSERT INTO conversation_bindings(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,connection_profile_id,execution_environment_id,backend_conversation_id,created_at) VALUES(?,?,?,?,?,?,?,?)").run(owner.tenantId,owner.principalId,thread.id,profile.backendInstanceId,profile.id,profile.executionEnvironmentId,created.backendConversationId,1);
@@ -1737,8 +1738,10 @@ describe("Pi conversation backend driver", () => {
     { kind: "cache_warm", running: false },
     { kind: "cache_warm", running: true },
     { kind: "extension_aggregate", running: false },
-  ])("publishes $kind usage while running=$running without changing conversation state", async ({ kind, running }) => {
+  ])("publishes $kind context while running=$running with accounting disabled", async ({ kind, running }) => {
     const fixture = await workspace();
+    const reconcile = vi.spyOn(PiUsageAccounting.prototype, "reconcile");
+    const append = vi.spyOn(PiUsageAccounting.prototype, "append");
     const baseFactory = fakeSessionFactory();
     let nativeListener!: Parameters<PiSdkSession["subscribe"]>[0];
     let manager!: PiSdkSession["sessionManager"];
@@ -1837,8 +1840,11 @@ describe("Pi conversation backend driver", () => {
       const afterClose = events.length;
       nativeListener({ type: "entry_appended", entry });
       expect(events).toHaveLength(afterClose);
+      expect(reconcile).not.toHaveBeenCalled();
+      expect(append).not.toHaveBeenCalled();
     } finally {
       await handle.close();
+      reconcile.mockRestore(); append.mockRestore();
     }
   });
 
@@ -3987,10 +3993,10 @@ describe("Pi conversation backend driver", () => {
     await handle.establishProjection({
       signal: new AbortController().signal,
     });
-    expect(project).toHaveBeenCalledTimes(2);
+    expect(project).toHaveBeenCalledTimes(1);
     await handle.history({ limit: 1 });
 
-    expect(project).toHaveBeenCalledTimes(3);
+    expect(project).toHaveBeenCalledTimes(2);
     await handle.close();
     project.mockRestore();
   });

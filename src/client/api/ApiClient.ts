@@ -449,6 +449,7 @@ export class ApiClient {
   readonly #endpoint: SedesServerEndpoint;
   readonly #credentialOverride: string | null | undefined;
   #csrfToken = "";
+  #sessionSequence = 0;
   #sessionPromise?: Promise<NormalizedApplicationSession>;
 
   constructor(endpoint: SedesServerEndpoint = sameOriginSedesServer, credentialOverride?: string | null) {
@@ -465,12 +466,13 @@ export class ApiClient {
     signal?: AbortSignal;
   }): Promise<NormalizedApplicationSession> {
     if (options?.refresh || !this.#sessionPromise) {
+      const sequence = ++this.#sessionSequence;
       this.#sessionPromise = this.#request(
         "/api/application/session",
         { signal: options?.signal },
         normalizedApplicationSessionSchema,
       ).then((session) => {
-        this.#csrfToken = session.csrfToken;
+        if (sequence === this.#sessionSequence) this.#csrfToken = session.csrfToken;
         return session;
       });
     }

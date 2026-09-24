@@ -602,6 +602,7 @@ describeRealPiCli("real Pi repository-skill CLI verification", () => {
       );
       const appConfig: AppConfig = {
         authenticationRequired: true,
+        experimentalUsageEnabled: false,
         host: "127.0.0.1",
         port: 4784,
         stateDirectory,

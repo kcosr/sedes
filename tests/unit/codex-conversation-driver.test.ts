@@ -7462,9 +7462,31 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it("keeps native context updates without starting main or child accounting when disabled", async () => {
+    const open = vi.fn(() => { throw new Error("disabled accounting opened"); });
+    const sink: UsageSink = {...NO_USAGE_SINK, open};
+    const harness = new RpcHarness();
+    const target = driver(harness, connection, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, sink);
+    const handle = await attachIdle(harness, target);
+    await establish(harness, handle);
+    harness.notify("thread/started", {thread: nativeThread({id:"child",source:{subAgent:{thread_spawn:{
+      parent_thread_id:"thread-1",depth:1,agent_path:null,agent_nickname:null,agent_role:null,
+    }}}})});
+    const total = {inputTokens:42,outputTokens:0,totalTokens:42,cachedInputTokens:0,cacheWriteInputTokens:0,reasoningOutputTokens:0};
+    for (const threadId of ["thread-1", "child"]) harness.notify("thread/tokenUsage/updated", {
+      threadId,turnId:"turn-0",tokenUsage:{total,last:total,modelContextWindow:1000},
+    });
+    expect(await handle.usage()).toEqual({context:{usedTokens:42,windowTokens:1000,percent:4.2}});
+    expect(open).not.toHaveBeenCalled();
+    harness.enqueue("thread/unsubscribe", {status:"unsubscribed"});
+    await handle.close();
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it("continues child accounting after the parent handle closes", async () => {
     const observations = new Map<string, UsageObservation[]>();
-    const sink: UsageSink = { findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: input => ({ registerTurns: () => undefined,
+    const sink: UsageSink = { enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: input => ({ registerTurns: () => undefined,
       capture: entries => { observations.set(input.nativeSession, [...(observations.get(input.nativeSession) ?? []), ...entries]); return true; },
       reconcile: () => true, gap: () => undefined, seal: () => undefined }) };
     const harness = new RpcHarness();
@@ -7488,7 +7510,7 @@ describe("CodexConversationHandle", () => {
   it("captures native accounting before presentation and registers visible turns", async () => {
     const observations: UsageObservation[] = [];
     const registerTurns = vi.fn();
-    const sink: UsageSink = { findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: vi.fn(() => ({ registerTurns,
+    const sink: UsageSink = { enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: vi.fn(() => ({ registerTurns,
       capture: (entries: readonly UsageObservation[]) => { observations.push(...entries); return true; }, reconcile: () => true, gap: vi.fn(), seal: vi.fn() })) };
     const harness = new RpcHarness();
     const target = driver(harness, connection, undefined, undefined, undefined, undefined,
@@ -7530,7 +7552,7 @@ describe("CodexConversationHandle", () => {
 
   it("attributes nothing to usage processed before a changed turn tuple is confirmed", async () => {
     const observations: UsageObservation[] = [];
-    const sink: UsageSink = { findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: vi.fn(() => ({ registerTurns: vi.fn(),
+    const sink: UsageSink = { enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: vi.fn(() => ({ registerTurns: vi.fn(),
       capture: (entries: readonly UsageObservation[]) => { observations.push(...entries); return true; }, reconcile: () => true, gap: vi.fn(), seal: vi.fn() })) };
     const harness = new RpcHarness();
     const settings = executionSettingsProvider({ freezeOperationSnapshot: () => ({ settings: executionSettingsTuple({ reasoningEffort: "high" }) }) });
@@ -7561,7 +7583,7 @@ describe("CodexConversationHandle", () => {
   it.each([false, true])("does not allocate usage across a malformed native checkpoint (wire rejection=%s)", async wireRejected => {
     const observations: UsageObservation[] = [];
     const gap = vi.fn();
-    const sink: UsageSink = { findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({ registerTurns: vi.fn(),
+    const sink: UsageSink = { enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({ registerTurns: vi.fn(),
       capture: entries => { observations.push(...entries); return true; },
       reconcile: () => true, gap, seal: vi.fn() }) };
     const harness = new RpcHarness();
@@ -7605,7 +7627,7 @@ describe("CodexConversationHandle", () => {
     database.exec(usageGapSessionScopeMigration.sql);
     database.exec(usageSubagentsMigration.sql);
     database.exec(usageTimelineMigration.sql); database.exec(usageSubagentRecoveryIndexesMigration.sql);
-    const usage = new UsageService(database);
+    const usage = new UsageService(database, {enabled: true});
     const harness = new RpcHarness();
     const target = driver(harness, connection, undefined, undefined, undefined, undefined,
       undefined, undefined, undefined, undefined, undefined, undefined, usage);
@@ -7654,7 +7676,7 @@ describe("CodexConversationHandle", () => {
 
   it("keeps warm paginated resume without native replay unallocated rather than charging earlier turns", async () => {
     const observations: UsageObservation[] = [];
-    const sink: UsageSink = { findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({ registerTurns: () => undefined,
+    const sink: UsageSink = { enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({ registerTurns: () => undefined,
       capture: entries => { observations.push(...entries); return true; }, reconcile: () => true,
       gap: () => undefined, seal: () => undefined }) };
     const harness = new RpcHarness();

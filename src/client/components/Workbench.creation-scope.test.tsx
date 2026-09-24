@@ -36,6 +36,15 @@ afterEach(() => {
 });
 
 describe("Workbench new-thread creation scope", () => {
+  it("does not mount the analytics query for a disabled direct Usage route", () => {
+    const state = {experimentalUsageEnabled:false};
+    const getUsageAnalytics = vi.fn();
+    const applicationStore = {api:{getUsageAnalytics},subscribe:()=>()=>undefined,getSnapshot:()=>state,workspaceIdForThread:()=>undefined};
+    render(<Workbench route={{name:"usage"}} applicationStore={applicationStore as never} threadRegistry={{} as never} panelLayoutStore={{} as never} panelTenants={{} as never}/>);
+    expect(screen.getByText("Experimental usage accounting is disabled on this server.")).toBeVisible();
+    expect(screen.queryByRole("region",{name:"Usage"})).toBeNull();
+    expect(getUsageAnalytics).not.toHaveBeenCalled();
+  });
   it("passes every workspace and the persisted sidebar scope to the shared control", () => {
     window.localStorage.setItem(
       SIDEBAR_VIEW_STORAGE_KEY,

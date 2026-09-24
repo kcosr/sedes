@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import { RecordedUsage } from "./RecordedUsage.js";
 import type { UsageQueryCache } from "../../stores/UsageQueryCache.js";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -39,6 +40,7 @@ export function SessionStatsDialog({
    */
   returnFocusRef?: React.RefObject<HTMLElement | null>;
 }): React.JSX.Element {
+  const usageEnabled = useSyncExternalStore(usageCache.subscribeEnabled, usageCache.getEnabled);
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -115,9 +117,9 @@ export function SessionStatsDialog({
               />
             </section>
           )}
-          <section className="session-recorded-usage"><h3>Recorded session usage</h3>
+          {usageEnabled && <section className="session-recorded-usage"><h3>Recorded session usage (Experimental)</h3>
             {open && <RecordedUsage cache={usageCache} turnId={null} />}
-          </section>
+          </section>}
           <section><h3>Live context and transcript</h3>
             {liveAvailable ? <StatsGrid usage={usage} /> : <p>Live context and transcript counters are unavailable while disconnected.</p>}
           </section>

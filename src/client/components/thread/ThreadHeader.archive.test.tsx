@@ -16,6 +16,7 @@ import type {
   ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
 import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
+import { UsageQueryCache } from "../../stores/UsageQueryCache.js";
 import { ThreadHeader } from "./ThreadHeader.js";
 import { NavigationControlsContext } from "../../app/navigation-controls.js";
 
@@ -207,6 +208,7 @@ function fixture(descendantCount: number): {
     getThreadArchiveImpact: ReturnType<typeof vi.fn>;
   };
   const threadStore = {
+    usage: new UsageQueryCache("thread", {getUsage: vi.fn(), getUsageAvailability: vi.fn()}),
     subscribe: () => () => undefined,
     getSnapshot: () => undefined,
     perform: vi.fn(async () => undefined),

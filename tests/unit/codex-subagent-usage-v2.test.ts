@@ -18,7 +18,7 @@ function fixture() {
     observations.set(input.nativeSession, entries);
     return { registerTurns: vi.fn(), capture: vi.fn(items => { entries.push(...items); return true; }), gap: vi.fn(), seal: vi.fn(), reconcile: vi.fn(() => true) };
   });
-  const sink: UsageSink = { open, findSubagent: () => null, listSubagentRoots: () => ({ bindings: [], nextCursor: null }), listSubagents: () => [] };
+  const sink: UsageSink = { open, enabled: true, findSubagent: () => null, listSubagentRoots: () => ({ bindings: [], nextCursor: null }), listSubagents: () => [] };
   const onError = vi.fn();
   const coordinator = new CodexSubagentUsageCoordinator({ client, sink, nativeNamespace: "store", runtimeScope: {
     tenantId: binding.tenantId, principalId: binding.ownerPrincipalId, backendInstanceId: binding.backendInstanceId,

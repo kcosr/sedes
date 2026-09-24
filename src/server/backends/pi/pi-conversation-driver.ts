@@ -2391,7 +2391,7 @@ interface PiConversationHandleOptions {
 }
 
 class PiConversationHandle implements ConversationHandle {
-  readonly #usageAccounting: PiUsageAccounting;
+  readonly #usageAccounting: PiUsageAccounting | undefined;
   static readonly #assistantSourceOrderStride = 1_000;
 
   readonly binding: ConversationBinding;
@@ -2516,8 +2516,8 @@ class PiConversationHandle implements ConversationHandle {
       identities: this.#identities,
       now: this.#now,
     });
-    this.#usageAccounting = new PiUsageAccounting({sink: options.usage, binding: this.binding,
-      nativeNamespace: options.nativeNamespace, manager: this.#session.sessionManager, authentication: this.#toolIdentityAuthentication});
+    this.#usageAccounting = options.usage.enabled ? new PiUsageAccounting({sink: options.usage, binding: this.binding,
+      nativeNamespace: options.nativeNamespace, manager: this.#session.sessionManager, authentication: this.#toolIdentityAuthentication}) : undefined;
     const initial = this.#authoritativeProjectionSeed();
     this.#projection = new PiProjectionEstablisher({
       initialSnapshot: initial.snapshot,
@@ -3696,8 +3696,8 @@ class PiConversationHandle implements ConversationHandle {
       captureFailure(cause);
     }
     try {
-      this.#usageAccounting.reconcile("live");
-      this.#usageAccounting.close();
+      this.#usageAccounting?.reconcile("live");
+      this.#usageAccounting?.close();
       this.#unsubscribeSession();
     } catch (cause) {
       captureFailure(cause);
@@ -3723,11 +3723,11 @@ class PiConversationHandle implements ConversationHandle {
 
   #consume(event: AgentSessionEvent): void {
     if (this.#closed) return;
-    if (event.type === "agent_settled") this.#usageAccounting.retryPending();
+    if (event.type === "agent_settled") this.#usageAccounting?.retryPending();
     if (event.type === "entry_appended" &&
       (event.entry.type === "usage" || event.entry.type === "compaction" || event.entry.type === "branch_summary" ||
         (event.entry.type === "message" && (event.entry.message.role === "assistant" || event.entry.message.role === "toolResult")))) {
-      this.#usageAccounting.append(event.entry, this.#activeTurnId);
+      this.#usageAccounting?.append(event.entry, this.#activeTurnId);
     }
     if (event.type === "entry_appended" && event.entry.type === "usage") {
       // Cache warming can bill requests while the conversation is idle, with
@@ -3735,12 +3735,12 @@ class PiConversationHandle implements ConversationHandle {
       this.#emit({ type: "usage_changed", usage: piUsage(this.#session) });
       return;
     }
-    if (event.type === "compaction_end" && event.result !== undefined && !event.aborted) {
+    if (this.#usageAccounting && event.type === "compaction_end" && event.result !== undefined && !event.aborted) {
       // Compaction is persisted before this event; it also has no entry_appended notification.
       const {summary, firstKeptEntryId} = event.result;
       const entry = this.#session.sessionManager.getEntries().findLast(candidate =>
         candidate.type === "compaction" && candidate.summary === summary && candidate.firstKeptEntryId === firstKeptEntryId);
-      if (entry) this.#usageAccounting.append(entry);
+      if (entry) this.#usageAccounting?.append(entry);
     }
     if (
       event.type === "compaction_end" &&
@@ -4142,7 +4142,7 @@ class PiConversationHandle implements ConversationHandle {
     // entry_appended for assistant/tool messages. This existing microtask has
     // now resolved the exact persisted native entry and its active turn.
     if (entry.message.role === "assistant" || entry.message.role === "toolResult") {
-      this.#usageAccounting.append(entry, this.#activeTurnId);
+      this.#usageAccounting?.append(entry, this.#activeTurnId);
     }
     if (entry.message.role === "user") {
       const correlatedSubmission = [
@@ -4413,7 +4413,7 @@ class PiConversationHandle implements ConversationHandle {
       parsed.type === "turn_updated" ||
       parsed.type === "turn_completed"
     ) {
-      this.#usageAccounting.registerTurn(parsed.turn);
+      this.#usageAccounting?.registerTurn(parsed.turn);
       this.#emittedTurns.set(parsed.turn.backendTurnId, parsed.turn);
     } else if (
       parsed.type === "item_started" ||

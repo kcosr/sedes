@@ -16,7 +16,7 @@ function fixture() {
     throw new Error("route_not_configured_for_test");
   };
   const app = createNormalizedApp({
-    usage: new UsageService(database),
+    usage: new UsageService(database, {enabled: true}),
     workpads: {} as never,
     questions: {} as never,
     cannedPrompts: new CannedPromptService(
@@ -26,6 +26,7 @@ function fixture() {
     workspaceDiffReviews: {} as never,
     config: {
       authenticationRequired: true,
+      experimentalUsageEnabled: false,
       host: "127.0.0.1",
       port: 4783,
       stateDirectory: "/tmp/canned-prompts-http-test",

@@ -61,7 +61,7 @@ const rows = (db: Database.Database) => db.prepare("SELECT fact_id,placement,occ
 
 describe("bucket time-index query plan", () => {
   function fixture() {
-    const db = database("pi"), service = new UsageService(db), capture = service.open(source());
+    const db = database("pi"), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     at("2026-11-02T00:00:00Z");
     const entry = (id: string, time: string, input: string, model: string | null = "known") => ({
       ...counter(id, {}), replaceCheckpoint: false, occurredAt: `2026-11-01T${time}.000Z`,
@@ -138,7 +138,7 @@ describe("bucket time-index query plan", () => {
 
 describe("usage timeline projection", () => {
   it("records checkpoint increases so their sum equals the selected session total", () => {
-    const db = database(), service = new UsageService(db), capture = service.open(source());
+    const db = database(), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     at("2026-09-02T10:00:00Z"); capture.capture([counter("a", {input: "100", output: "10"})]);
     at("2026-09-02T10:05:00Z"); capture.capture([counter("b", {input: "150", output: "30"})]);
     capture.capture([counter("b", {input: "150", output: "30"})]);
@@ -153,7 +153,7 @@ describe("usage timeline projection", () => {
   });
 
   it("places deltas across a capture gap only when the whole interval fits one bucket", () => {
-    const db = database(), service = new UsageService(db), capture = service.open(source());
+    const db = database(), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     at("2026-09-02T10:00:00Z"); capture.capture([counter("a", {input: "100", output: "0"})]);
     capture.gap("capture_gap");
     at("2026-09-02T18:00:00Z"); capture.capture([counter("b", {input: "300", output: "0"})]);
@@ -170,14 +170,14 @@ describe("usage timeline projection", () => {
   });
 
   it("continues an observed series across checkpoints delivered in one batch", () => {
-    const db = database(), service = new UsageService(db), capture = service.open(source("thread", "unknown"));
+    const db = database(), service = new UsageService(db, {enabled: true}), capture = service.open(source("thread", "unknown"));
     at("2026-09-02T10:00:00Z");
     capture.capture([counter("a", {input: "100", output: "0"}), counter("b", {input: "140", output: "0"})]);
     expect(rows(db)).toMatchObject([{placement: "unplaced", input: 100}, {placement: "observed", input: 40}]);
   });
 
   it("keeps an unknown-baseline checkpoint out of every time range", () => {
-    const db = database(), service = new UsageService(db), capture = service.open(source("thread", "unknown"));
+    const db = database(), service = new UsageService(db, {enabled: true}), capture = service.open(source("thread", "unknown"));
     at("2026-09-03T12:00:00Z"); capture.capture([counter("a", {input: "900", output: "100"})]);
     at("2026-09-03T12:01:00Z"); capture.capture([counter("b", {input: "950", output: "110"})]);
     const result = service.analytics(scope, request());
@@ -187,7 +187,7 @@ describe("usage timeline projection", () => {
   });
 
   it("applies backend attribution only to observed increments and never to the evidence fingerprint", () => {
-    const db = database(), service = new UsageService(db), capture = service.open(source());
+    const db = database(), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     const attribution = {model: {provider: "openai", model: "gpt-5.5"}, reasoningEffort: "high"};
     at("2026-09-02T10:00:00Z"); capture.capture([counter("a", {input: "100", output: "0"}, {attribution})]);
     capture.capture([counter("a", {input: "100", output: "0"}, {attribution: {model: null, reasoningEffort: "low"}})]);
@@ -205,7 +205,7 @@ describe("usage timeline projection", () => {
   });
 
   it("uses reported occurrence time and fact models for additive evidence", () => {
-    const db = database("pi"), service = new UsageService(db), capture = service.open(source());
+    const db = database("pi"), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     at("2026-09-06T00:00:00Z");
     capture.capture([
       {...counter("x", {}), id: "x", replaceCheckpoint: false, occurredAt: "2026-09-02T08:30:00.000Z",
@@ -227,7 +227,7 @@ describe("usage timeline projection", () => {
   });
 
   it("splits a cumulative cost summary by model only when supplied model totals add up", () => {
-    const db = database("claude_agent_sdk"), service = new UsageService(db), capture = service.open(source());
+    const db = database("claude_agent_sdk"), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     const model = (name: string, input: string, cost: string) => fact(`model:${name}`, {input, output: "0"}, {kind: "cumulative", sessionContribution: "checkpoint",
       models: [{provider: "firstParty", model: name}], pricing: {canonicalModel: null, basis: null, components: [{kind: "model_total", amount: cost, currency: "USD"}]}});
     const summary = (amount: string) => fact("query_cost", {}, {kind: "cumulative", sessionContribution: "checkpoint", models: [], costs: [{amount, currency: "USD", kind: "estimated", provenance: "sdk"}]});
@@ -242,12 +242,12 @@ describe("usage timeline projection", () => {
   });
 
   it("rebuilds sources captured before the projection with conservative placement", () => {
-    const db = database(), service = new UsageService(db), capture = service.open(source());
+    const db = database(), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     at("2026-09-02T10:00:00Z"); capture.capture([counter("a", {input: "100", output: "0"})]);
     at("2026-09-02T10:05:00Z"); capture.capture([counter("b", {input: "160", output: "0"})]);
     at("2026-09-02T10:06:00Z"); capture.capture([counter("c", {input: "150", output: "0"})]);
     db.exec("DELETE FROM usage_increments; UPDATE usage_sources SET timeline_state='backfill'");
-    const rebuilt = new UsageService(db).analytics(scope, request());
+    const rebuilt = new UsageService(db, {enabled: true}).analytics(scope, request());
     expect(rows(db)).toMatchObject([
       {placement: "observed", input: 100, interval_start: null},
       {placement: "interval", input: 60, interval_start: "2026-09-02T10:00:00.000Z"},
@@ -256,12 +256,12 @@ describe("usage timeline projection", () => {
     expect(db.prepare("SELECT timeline_state FROM usage_sources").pluck().get()).toBe("current");
     db.exec("DELETE FROM usage_increments; UPDATE usage_sources SET timeline_state='backfill'");
     db.exec("UPDATE usage_records SET fact_json=json_set(fact_json,'$.tokens.input','170'), input=170");
-    new UsageService(db).analytics(scope, request());
+    new UsageService(db, {enabled: true}).analytics(scope, request());
     expect(rows(db)).toMatchObject([{placement: "unplaced", input: 170}]);
   });
 
   it("backfills before live capture continues a pending source", () => {
-    const db = database(), service = new UsageService(db);
+    const db = database(), service = new UsageService(db, {enabled: true});
     at("2026-09-02T10:00:00Z"); service.open(source()).capture([counter("a", {input: "100", output: "0"})]);
     db.exec("DELETE FROM usage_increments; UPDATE usage_sources SET timeline_state='backfill'");
     at("2026-09-02T10:05:00Z"); service.open(source("thread", "unknown")).capture([counter("b", {input: "130", output: "0"})]);
@@ -271,7 +271,7 @@ describe("usage timeline projection", () => {
 
 describe("usage timeline review regressions", () => {
   it("restores continuity when a reopened series replays its last checkpoint unchanged", () => {
-    const db = database(), service = new UsageService(db);
+    const db = database(), service = new UsageService(db, {enabled: true});
     at("2026-09-01T10:00:00Z"); service.open(source()).capture([counter("a", {input: "100", output: "0"})]);
     const reopened = service.open(source("thread", "unknown"));
     at("2026-09-05T09:00:00Z"); reopened.capture([counter("replay", {input: "100", output: "0"})]);
@@ -282,7 +282,7 @@ describe("usage timeline review regressions", () => {
   });
 
   it("breaks continuity after a failed capture write", () => {
-    const db = database(), service = new UsageService(db), capture = service.open(source());
+    const db = database(), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     db.exec("CREATE TRIGGER fail_boom BEFORE INSERT ON usage_observations WHEN NEW.observation_id='boom' BEGIN SELECT RAISE(ABORT, 'boom'); END;");
     at("2026-09-02T10:00:00Z"); capture.capture([counter("a", {input: "100", output: "0"})]);
     at("2026-09-02T12:00:00Z"); capture.capture([counter("boom", {input: "500", output: "0"})]);
@@ -291,14 +291,14 @@ describe("usage timeline review regressions", () => {
   });
 
   it("keeps a proven-zero reopen of a recorded series from claiming continuity", () => {
-    const db = database(), service = new UsageService(db);
+    const db = database(), service = new UsageService(db, {enabled: true});
     at("2026-09-02T10:00:00Z"); service.open(source()).capture([counter("a", {input: "100", output: "0"})]);
     at("2026-09-03T10:00:00Z"); service.open(source()).capture([counter("b", {input: "160", output: "0"})]);
     expect(rows(db)).toMatchObject([{placement: "observed"}, {placement: "interval", input: 60}]);
   });
 
   it("extends all time to interval starts and reports intervals that straddle a range start", () => {
-    const db = database(), service = new UsageService(db), capture = service.open(source("thread", "unknown"));
+    const db = database(), service = new UsageService(db, {enabled: true}), capture = service.open(source("thread", "unknown"));
     at("2026-09-01T10:00:00Z"); capture.capture([counter("a", {input: "100", output: "0"})]);
     capture.gap("capture_gap");
     at("2026-09-03T10:00:00Z"); capture.capture([counter("b", {input: "300", output: "0"})]);
@@ -313,7 +313,7 @@ describe("usage timeline review regressions", () => {
   });
 
   it("writes one snapshot delta when a replaced checkpoint member vanishes or shrinks", () => {
-    const db = database("claude_agent_sdk"), service = new UsageService(db), capture = service.open(source());
+    const db = database("claude_agent_sdk"), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     const model = (name: string, input: string) => fact(`model:${name}`, {input, output: "0"}, {kind: "cumulative", sessionContribution: "checkpoint", models: [{provider: null, model: name}]});
     at("2026-09-02T10:00:00Z"); capture.capture([{...counter("a", {}), facts: [model("opus", "100"), model("haiku", "50")]}]);
     at("2026-09-02T10:05:00Z"); capture.capture([{...counter("b", {}), facts: [model("opus", "90"), model("sonnet", "80")]}]);
@@ -324,7 +324,7 @@ describe("usage timeline review regressions", () => {
   });
 
   it("drops only an invalid attribution and never the evidence it came with", () => {
-    const db = database(), service = new UsageService(db), capture = service.open(source());
+    const db = database(), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     at("2026-09-02T10:00:00Z");
     capture.capture([{...counter("a", {input: "100", output: "0"}), attribution: {model: null, reasoningEffort: "x".repeat(65)}}]);
     expect(rows(db)).toMatchObject([{input: 100, effort: null}]);
@@ -332,7 +332,7 @@ describe("usage timeline review regressions", () => {
   });
 
   it("attributes effort only to the confirmed model's rows", () => {
-    const db = database("claude_agent_sdk"), service = new UsageService(db), capture = service.open(source());
+    const db = database("claude_agent_sdk"), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     const model = (name: string, input: string) => fact(`model:${name}`, {input, output: "0"}, {kind: "cumulative", sessionContribution: "checkpoint", models: [{provider: null, model: name}]});
     at("2026-09-02T10:00:00Z");
     capture.capture([{...counter("a", {}), facts: [model("claude-opus-5-5", "100"), model("claude-haiku-4-5", "10")],
@@ -341,12 +341,12 @@ describe("usage timeline review regressions", () => {
   });
 
   it("falls back to unplaced rows when a pending source cannot be replayed", async () => {
-    const db = database(), service = new UsageService(db);
+    const db = database(), service = new UsageService(db, {enabled: true});
     at("2026-09-02T10:00:00Z"); service.open(source()).capture([counter("a", {input: "100", output: "0"})]);
     const sourceId = db.prepare("SELECT id FROM usage_sources").pluck().get() as string;
     db.prepare("INSERT INTO usage_observations(source_id,observation_id,revision,fingerprint,evidence_json,normalization_version,received_at) VALUES(?,'broken','1','x','{not json','v1','2026-09-02T11:00:00.000Z')").run(sourceId);
     db.exec("DELETE FROM usage_increments; UPDATE usage_sources SET timeline_state='backfill'");
-    const stop = new UsageService(db).startTimelineBackfill();
+    const stop = new UsageService(db, {enabled: true}).startTimelineBackfill();
     await vi.waitFor(() => expect(db.prepare("SELECT timeline_state FROM usage_sources").pluck().get()).toBe("current"));
     stop();
     expect(rows(db)).toMatchObject([{placement: "unplaced", input: 100}]);
@@ -354,7 +354,7 @@ describe("usage timeline review regressions", () => {
   });
 
   it("folds unknown keys into Other when unknown is not a named series", () => {
-    const db = database("pi"), service = new UsageService(db), capture = service.open(source());
+    const db = database("pi"), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     at("2026-09-06T00:00:00Z");
     capture.capture(Array.from({length: 9}, (_, index) => ({...counter(`m${index}`, {}), id: `m${index}`, replaceCheckpoint: false,
       occurredAt: "2026-09-02T08:00:00.000Z", facts: [fact(`m${index}`, {input: String(index === 8 ? 5 : (index + 1) * 100), output: "0"}, {models: [{provider: null, model: index === 8 ? null : `model-${index}`}]})]})));
@@ -366,7 +366,7 @@ describe("usage timeline review regressions", () => {
   });
 
   it("counts no unsupported threads when a filter needs recorded usage details", () => {
-    const db = database(), service = new UsageService(db);
+    const db = database(), service = new UsageService(db, {enabled: true});
     db.exec("INSERT INTO agent_backend_instances(tenant_id,id,kind,label) VALUES('tenant','grok','grok_build','Grok')");
     db.prepare("INSERT INTO application_threads(tenant_id,owner_principal_id,id,backend_instance_id,environment_id,workspace_id,title,last_activity_at) VALUES('tenant','principal','g1','grok','environment','workspace','Grok',?)").run(Date.parse("2026-09-03T00:00:00Z"));
     at("2026-09-06T00:00:00Z");
@@ -378,7 +378,7 @@ describe("usage timeline review regressions", () => {
 
 describe("usage timeline second review regressions", () => {
   it("does not recount cost when a later snapshot first allows a per-model split", () => {
-    const db = database("claude_agent_sdk"), service = new UsageService(db), capture = service.open(source());
+    const db = database("claude_agent_sdk"), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     const model = (name: string, input: string, cost?: string) => fact(`model:${name}`, {input, output: "0"}, {kind: "cumulative", sessionContribution: "checkpoint",
       models: [{provider: null, model: name}], ...(cost ? {pricing: {canonicalModel: null, basis: null, components: [{kind: "model_total" as const, amount: cost, currency: "USD"}]}} : {})});
     const summary = (amount: string) => fact("query_cost", {}, {kind: "cumulative", sessionContribution: "checkpoint", models: [], costs: [{amount, currency: "USD", kind: "estimated", provenance: "sdk"}]});
@@ -390,7 +390,7 @@ describe("usage timeline second review regressions", () => {
   });
 
   it("treats a member metric that stops being reported as a reshaped snapshot", () => {
-    const db = database("claude_agent_sdk"), service = new UsageService(db), capture = service.open(source());
+    const db = database("claude_agent_sdk"), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     const model = (name: string, tokens: UsageFact["tokens"]) => fact(`model:${name}`, tokens, {kind: "cumulative", sessionContribution: "checkpoint", models: [{provider: null, model: name}]});
     at("2026-09-02T10:00:00Z"); capture.capture([{...counter("a", {}), facts: [model("opus", {input: "100", output: "1"}), model("haiku", {output: "1"})]}]);
     at("2026-09-02T10:05:00Z"); capture.capture([{...counter("b", {}), facts: [model("opus", {input: null, output: "1"}), model("haiku", {input: "120", output: "1"})]}]);
@@ -420,7 +420,7 @@ describe("usage timeline second review regressions", () => {
   });
 
   it("charges a falling per-model estimate to the summary instead of dropping it", () => {
-    const db = database("claude_agent_sdk"), service = new UsageService(db), capture = service.open(source());
+    const db = database("claude_agent_sdk"), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     const model = (name: string, input: string, cost: string) => fact(`model:${name}`, {input, output: "0"}, {kind: "cumulative", sessionContribution: "checkpoint",
       models: [{provider: null, model: name}], pricing: {canonicalModel: null, basis: null, components: [{kind: "model_total" as const, amount: cost, currency: "USD"}]}});
     const summary = (amount: string) => fact("query_cost", {}, {kind: "cumulative", sessionContribution: "checkpoint", models: [], costs: [{amount, currency: "USD", kind: "estimated", provenance: "sdk"}]});
@@ -436,7 +436,7 @@ describe("usage timeline second review regressions", () => {
   });
 
   it("searches facet choices beyond the top ranked values by ID or name", () => {
-    const db = database("pi"), service = new UsageService(db), capture = service.open(source());
+    const db = database("pi"), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     addThread(db, "quiet", "Quiet 100% thread");
     at("2026-09-06T00:00:00Z");
     capture.capture(Array.from({length: 65}, (_, index) => ({...counter(`m${index}`, {}), id: `m${index}`, replaceCheckpoint: false,
@@ -455,7 +455,7 @@ describe("usage timeline second review regressions", () => {
   });
 
   it("breaks continuity when evidence is dropped as invalid", () => {
-    const db = database(), service = new UsageService(db), capture = service.open(source());
+    const db = database(), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     at("2026-09-02T10:00:00Z"); capture.capture([counter("a", {input: "100", output: "0"})]);
     at("2026-09-02T10:01:00Z"); capture.capture([{...counter("bad", {input: "120", output: "0"}), revision: ""}]);
     at("2026-09-02T10:02:00Z"); capture.capture([counter("c", {input: "150", output: "0"})]);
@@ -467,7 +467,7 @@ describe("usage timeline second review regressions", () => {
 
 describe("usage analytics reads", () => {
   it("scopes every aggregate to the requesting principal", () => {
-    const db = database(), service = new UsageService(db);
+    const db = database(), service = new UsageService(db, {enabled: true});
     addThread(db, "foreign", "Foreign", "other");
     at("2026-09-02T10:00:00Z");
     service.open(source()).capture([counter("a", {input: "5", output: "0"})]);
@@ -480,7 +480,7 @@ describe("usage analytics reads", () => {
   });
 
   it("filters, folds series beyond seven into Other, and keeps a filter-independent color order", () => {
-    const db = database("pi"), service = new UsageService(db), capture = service.open(source());
+    const db = database("pi"), service = new UsageService(db, {enabled: true}), capture = service.open(source());
     at("2026-09-06T00:00:00Z");
     capture.capture(Array.from({length: 9}, (_, index) => ({...counter(`m${index}`, {}), id: `m${index}`, replaceCheckpoint: false,
       occurredAt: "2026-09-02T08:00:00.000Z", facts: [fact(`m${index}`, {input: String((index + 1) * 10), output: "0"}, {models: [{provider: null, model: index === 8 ? null : `model-${index}`}]})]})));
@@ -503,7 +503,7 @@ describe("usage analytics reads", () => {
   });
 
   it("rejects unknown time zones and empty ranges", () => {
-    const service = new UsageService(database());
+    const service = new UsageService(database(), {enabled: true});
     expect(() => service.analytics(scope, request({timeZone: "Mars/Olympus"}))).toThrow(/time zone/);
     expect(() => service.analytics(scope, request({from: "2026-09-08T00:00:00.000Z"}))).toThrow(/range/);
   });

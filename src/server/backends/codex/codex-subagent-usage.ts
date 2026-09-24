@@ -36,11 +36,13 @@ export class CodexSubagentUsageCoordinator {
   #releaseTail: Promise<void> = Promise.resolve();
 
   constructor(readonly input: { client: CodexSharedClientFacade; sink: UsageSink; nativeNamespace: string; runtimeScope: Omit<UsageSubagentRootScope,"nativeNamespace">; onError: (error: unknown) => void }) {
+    if (!input.sink.enabled) return;
     input.client.subscribeNotifications(notification => this.#safe(() => this.#notification(notification)));
     input.client.subscribeLifecycle(snapshot => this.#safe(() => this.#lifecycle(snapshot)));
   }
 
   registerRoot(binding: ConversationBinding): void {
+    if (!this.input.sink.enabled) return;
     this.#safe(() => {
       const existing = this.#roots.get(binding.backendConversationId) ?? this.#pendingRoots.get(binding.backendConversationId);
       if (existing && (["tenantId","ownerPrincipalId","applicationThreadId","backendInstanceId","executionEnvironmentId","connectionProfileId","backendConversationId"] as const)

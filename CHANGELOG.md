@@ -5,7 +5,7 @@
 ### Breaking Changes
 
 - Durable usage accounting replaces accumulated token/cost values in live
-  snapshots. Requires matching browser and packaged clients using protocol 121.
+  snapshots. Requires matching browser and packaged clients using protocol 122.
   Migration preserves old Claude totals separately with unknown coverage.
 
 ### Added
@@ -35,6 +35,11 @@
   Session stats stays in the thread menu rather than flashing during loading.
 
 ### Changed
+
+- Make recorded usage accounting experimental and disabled by default. Set
+  `SEDES_EXPERIMENTAL_USAGE=1` on the main server and restart to enable capture,
+  recovery, report APIs, and UI. Existing records are preserved; context meters
+  and Accounts remain available. No sidecar protocol update is required. (#8)
 
 - Rename the sidebar Provider Pulse quota entry from **Usage** to **Accounts**. (#8)
 

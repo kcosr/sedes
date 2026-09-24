@@ -186,7 +186,7 @@ export interface ClaudeConversationHandleInput {
 
 /** One attached Sedes conversation over one warm official Agent SDK query. */
 export class ClaudeConversationHandle implements ConversationHandle {
-  readonly #usageAccounting: ClaudeUsageAccounting;
+  readonly #usageAccounting: ClaudeUsageAccounting | undefined;
   readonly #usageTurnByMessageUuid = new Map<string, string>();
   readonly #usageTurnByInputUuid = new Map<string, string>();
   #inheritedUsage: ClaudeHistoryProjection["inheritedUsage"];
@@ -272,7 +272,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   constructor(input: ClaudeConversationHandleInput) {
     this.binding = input.binding;
-    this.#usageAccounting = new ClaudeUsageAccounting({sink: input.usage, binding: input.binding, nativeNamespace: input.nativeNamespace});
+    this.#usageAccounting = input.usage.enabled ? new ClaudeUsageAccounting({sink: input.usage, binding: input.binding, nativeNamespace: input.nativeNamespace}) : undefined;
     this.#canonicalWorkspacePath = input.canonicalWorkspacePath;
     this.#workspaceId = input.workspaceId;
     this.#opaqueBindingDetail = input.opaqueBindingDetail;
@@ -388,9 +388,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
             this.#emitProjectionDelta(previous, this.#projection.snapshot);
           }
         }
-        this.#usageAccounting.beginDelivery();
+        this.#usageAccounting?.beginDelivery();
         await this.#consume(message);
-        return this.#usageAccounting.deliveryCommitted ? undefined : false;
+        return this.#usageAccounting?.deliveryCommitted === false ? false : undefined;
       },
       onFailure: (error) => {
         if (
@@ -404,7 +404,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       },
     });
     this.#ready = this.#session.start().then(async (initialization) => {
-      this.#usageAccounting.admitQuery(this.#session.startupProbeUuid, this.#session.reattached === true);
+      this.#usageAccounting?.admitQuery(this.#session.startupProbeUuid, this.#session.reattached === true);
       if (this.#session.backgroundActivity) {
         if (this.#session.pendingBackgroundTaskIds === undefined) throw new Error("claude_background_attachment_state_incomplete");
         this.#backgroundActivity.restore(this.#session.backgroundActivity, this.#session.pendingBackgroundTaskIds);
@@ -550,7 +550,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
               ...selectionInput,
               terminalReceipts,
             });
-      this.#usageAccounting.registerTurns(Object.values(selected.page.turnsById));
+      this.#usageAccounting?.registerTurns(Object.values(selected.page.turnsById));
       return {
         ...selected.page,
         ...(selected.previousTurnIndex !== undefined
@@ -1229,7 +1229,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   async close(options?: { readonly reason: "evicted" }): Promise<void> {
     if (this.#closed) return this.#closePromise;
     this.#closed = true;
-    this.#usageAccounting.close();
+    this.#usageAccounting?.close();
     // Detaching first fences remote permission callbacks before the local
     // interaction bridge settles its waiters during main-server shutdown.
     // Projection invalidation may already have detached the runtime; local
@@ -1300,7 +1300,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       this.#emit({ type: "notice", notice: operationalNotice });
     }
     if (message.type === "conversation_reset") {
-      this.#usageAccounting.reset();
+      this.#usageAccounting?.reset();
       this.#invalidateProjection("claude_conversation_reset_unsupported");
       return;
     }
@@ -1411,7 +1411,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     // transaction failed. Retry just this message before acknowledging delivery.
     const usageTurnId = this.#usageTurnByMessageUuid.get(sessionMessage.uuid);
     if (usageTurnId && !this.#inheritedUsage?.turns.some(turn => turn.backendTurnId === usageTurnId)) {
-      this.#usageAccounting.message(sessionMessage, usageTurnId, "live");
+      this.#usageAccounting?.message(sessionMessage, usageTurnId, "live");
     }
     if (message.type === "user" && message.uuid) {
       const submission = this.#submissions.get(message.uuid);
@@ -1509,7 +1509,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   }
 
   #captureHistoryUsage(): void {
-    this.#usageAccounting.messages(this.#messages.flatMap(message => {
+    this.#usageAccounting?.messages(this.#messages.flatMap(message => {
       const backendTurnId = this.#usageTurnByMessageUuid.get(message.uuid);
       return backendTurnId && !this.#inheritedUsage?.turns.some(turn => turn.backendTurnId === backendTurnId)
         ? [{message, backendTurnId}] : [];
@@ -1530,7 +1530,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#partialMessageId = undefined;
     this.#partialMessageSourceOrderBase = undefined;
     this.#projectionInvalidated = true;
-    this.#usageAccounting.close();
+    this.#usageAccounting?.close();
     this.#invalidateBackgroundActivity();
     this.#emit({
       type: "resnapshot_required",
@@ -1553,8 +1553,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
   }
 
   #captureResultUsage(message: SDKResultMessage): void {
+    if (!this.#usageAccounting) return;
     this.#inheritedUsage = this.#projection.inheritedUsage ?? this.#inheritedUsage;
-    this.#usageAccounting.registerTurns(this.#projection.usageTurns, this.#inheritedUsage);
+    this.#usageAccounting?.registerTurns(this.#projection.usageTurns, this.#inheritedUsage);
     for (const [turnId, uuid] of this.#projection.nativeUserMessageUuidByBackendTurnId) this.#usageTurnByInputUuid.set(uuid, turnId);
     for (const turn of this.#projection.usageTurns) {
       for (const correlation of turn.completionCorrelations ?? []) this.#usageTurnByInputUuid.set(correlation, turn.backendTurnId);
@@ -1562,14 +1563,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const turns = new Set(claudeResultUserMessageIds(message).flatMap((uuid) => {
       const id = this.#usageTurnByInputUuid.get(uuid); return id ? [id] : [];
     }));
-    if (turns.size === 1) this.#usageAccounting.result(message, [...turns][0]!);
+    if (turns.size === 1) this.#usageAccounting?.result(message, [...turns][0]!);
   }
 
   #consumeResult(message: SDKResultMessage): void {
-    this.#usageAccounting.admitQuery(this.#session.startupProbeUuid, this.#session.reattached === true);
+    this.#usageAccounting?.admitQuery(this.#session.startupProbeUuid, this.#session.reattached === true);
     // Only an applied or reattach-confirmed effort attributes usage, and only to
     // the confirmed model's row; unknown stays null.
-    this.#usageAccounting.pipeline(message, this.#effectiveEffort ?? null, this.#effectiveModel ?? null);
+    this.#usageAccounting?.pipeline(message, this.#effectiveEffort ?? null, this.#effectiveModel ?? null);
     this.#captureResultUsage(message);
     const activeId = this.#activeBackendTurnId();
     // Persistent output is correlated by the owner's exact user-message event.
@@ -1780,12 +1781,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
       turnOffset,
       userMessageOrdinalBase,
     });
-    this.#inheritedUsage = this.#projection.inheritedUsage ?? this.#inheritedUsage;
-    this.#usageAccounting.registerTurns(this.#projection.usageTurns, this.#inheritedUsage);
-    for (const [uuid, turnId] of this.#projection.backendTurnIdByMessageUuid) this.#usageTurnByMessageUuid.set(uuid, turnId);
-    for (const [turnId, uuid] of this.#projection.nativeUserMessageUuidByBackendTurnId) this.#usageTurnByInputUuid.set(uuid, turnId);
-    for (const turn of this.#projection.usageTurns) {
-      for (const correlation of turn.completionCorrelations ?? []) this.#usageTurnByInputUuid.set(correlation, turn.backendTurnId);
+    if (this.#usageAccounting) {
+      this.#inheritedUsage = this.#projection.inheritedUsage ?? this.#inheritedUsage;
+      this.#usageAccounting.registerTurns(this.#projection.usageTurns, this.#inheritedUsage);
+      for (const [uuid, turnId] of this.#projection.backendTurnIdByMessageUuid) this.#usageTurnByMessageUuid.set(uuid, turnId);
+      for (const [turnId, uuid] of this.#projection.nativeUserMessageUuidByBackendTurnId) this.#usageTurnByInputUuid.set(uuid, turnId);
+      for (const turn of this.#projection.usageTurns) {
+        for (const correlation of turn.completionCorrelations ?? []) this.#usageTurnByInputUuid.set(correlation, turn.backendTurnId);
+      }
     }
     const retainedStart =
       this.#projection.window.retainedNativeMessageStartIndex;
@@ -2273,7 +2276,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   #fail(error: unknown): void {
     if (this.#closed || this.#projectionInvalidated) return;
-    this.#usageAccounting.close();
+    this.#usageAccounting?.close();
     this.#invalidateBackgroundActivity();
     this.#setRunState("disconnected");
     this.#emit({

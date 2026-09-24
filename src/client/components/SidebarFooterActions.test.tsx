@@ -52,9 +52,18 @@ function renderActions() {
     onOpenAgents: vi.fn(),
     onOpenArchivedThreads: vi.fn(),
   };
-  render(<SidebarFooterActions {...callbacks} />);
+  render(<SidebarFooterActions {...callbacks} experimentalUsageEnabled />);
   return callbacks;
 }
+
+it("hides experimental Usage by default without hiding provider Accounts", async () => {
+  const user = userEvent.setup();
+  render(<SidebarFooterActions onOpenSettings={vi.fn()} onOpenUsage={vi.fn()} onOpenAgents={vi.fn()} onOpenArchivedThreads={vi.fn()}
+    providerPulseEnabled api={{readProviderPulseStatus:vi.fn()} as never}/>);
+  await user.click(screen.getByRole("button", {name:"More"}));
+  expect(screen.queryByRole("menuitem", {name:/^Usage/})).toBeNull();
+  expect(screen.getByRole("menuitem", {name:"Accounts"})).toBeVisible();
+});
 
 describe("SidebarFooterActions", () => {
   it("uses its visible More text as the menu trigger name", () => {
@@ -106,6 +115,7 @@ describe("SidebarFooterActions", () => {
   it("places the active-warning affordance immediately before Settings", () => {
     render(
       <SidebarFooterActions
+        experimentalUsageEnabled
         onOpenSettings={vi.fn()}
         onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
@@ -129,6 +139,7 @@ describe("SidebarFooterActions", () => {
     const user = userEvent.setup();
     render(
       <SidebarFooterActions
+        experimentalUsageEnabled
         onOpenSettings={vi.fn()}
         onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
@@ -211,6 +222,7 @@ describe("SidebarFooterActions", () => {
     })) as unknown as typeof window.matchMedia;
     render(
       <SidebarFooterActions
+        experimentalUsageEnabled
         onOpenSettings={vi.fn()}
         onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
@@ -290,7 +302,7 @@ describe("SidebarFooterActions", () => {
     expect(menu).toHaveAttribute("data-side", "top");
     expect(
       screen.getAllByRole("menuitem").map((item) => item.textContent),
-    ).toEqual(["Usage", "Agents", "Archived threads"]);
+    ).toEqual(["Usage (Experimental)", "Agents", "Archived threads"]);
     expect(screen.queryByRole("menuitem", { name: "Accounts" })).toBeNull();
   });
 
@@ -309,6 +321,7 @@ describe("SidebarFooterActions", () => {
     const user = userEvent.setup();
     render(
       <SidebarFooterActions
+        experimentalUsageEnabled
         onOpenSettings={vi.fn()}
         onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
@@ -345,6 +358,7 @@ describe("SidebarFooterActions", () => {
     const user = userEvent.setup();
     render(
       <SidebarFooterActions
+        experimentalUsageEnabled
         onOpenSettings={vi.fn()}
         onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
@@ -365,13 +379,14 @@ describe("SidebarFooterActions", () => {
     expect(screen.getByRole("menuitem", { name: "Accounts" })).toBeVisible();
     expect(
       screen.getAllByRole("menuitem").map((item) => item.textContent),
-    ).toEqual(["Usage", "Accounts", "Agents", "Archived threads"]);
+    ).toEqual(["Usage (Experimental)", "Accounts", "Agents", "Archived threads"]);
   });
 
   it("keeps Usage but hides Accounts when Provider Pulse is disabled", async () => {
     const user = userEvent.setup();
     render(
       <SidebarFooterActions
+        experimentalUsageEnabled
         onOpenSettings={vi.fn()}
         onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
@@ -381,7 +396,7 @@ describe("SidebarFooterActions", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "More" }));
-    expect(screen.getByRole("menuitem", { name: "Usage" })).toBeVisible();
+    expect(screen.getByRole("menuitem", { name: "Usage (Experimental)" })).toBeVisible();
     expect(screen.queryByRole("menuitem", { name: "Accounts" })).toBeNull();
   });
 
@@ -390,7 +405,7 @@ describe("SidebarFooterActions", () => {
     const callbacks = renderActions();
 
     await user.click(screen.getByRole("button", { name: "More" }));
-    await user.click(screen.getByRole("menuitem", { name: "Usage" }));
+    await user.click(screen.getByRole("menuitem", { name: "Usage (Experimental)" }));
     expect(callbacks.onOpenUsage).toHaveBeenCalledOnce();
     expect(screen.queryByRole("menu")).toBeNull();
 

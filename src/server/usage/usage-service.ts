@@ -8,6 +8,7 @@ import type { RequestScope } from "../identity/identity-provider.js";
 import { DomainError } from "../domain/errors.js";
 import { applicationTurnIdForBackendTurn } from "../conversations/conversation-projector.js";
 import type { UsageCapture, UsageFact, UsageObservation, UsageSink } from "./contracts.js";
+import { NO_USAGE_CAPTURE } from "./contracts.js";
 import type { UsageAnalyticsRequest, UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
 import { UsageAnalyticsService } from "./usage-analytics-service.js";
 import { costSplit, rebuildUsageTimeline, snapshotFact, snapshotReshaped, timelineInstant, writeUsageIncrement, type TimelineSource, type TimelineTime } from "./usage-timeline.js";
@@ -57,16 +58,24 @@ type CaptureContext = {continuous:boolean; acceptedCheckpoint:boolean; backendKi
 
 /** Database-only scoped reads and nonthrowing provider capture. No transcript or provider IO. */
 export class UsageService implements UsageSink {
+  readonly enabled: boolean;
   readonly #incarnations = new Map<string, symbol>();
   readonly #failed = new Set<string>();
   readonly #failedSubagents = new Map<string, Set<string>>();
   readonly #listeners = new Set<(scope:RequestScope, threadId:string, revision:string) => void>();
   readonly #analytics: UsageAnalyticsService;
-  constructor(readonly database: Database.Database) { this.#analytics = new UsageAnalyticsService(database); }
+  constructor(readonly database: Database.Database, options: {readonly enabled: boolean}) {
+    this.enabled = options.enabled;
+    this.#analytics = new UsageAnalyticsService(database);
+  }
+  #assertEnabled(): void {
+    if (!this.enabled) throw new DomainError("conflict", "Experimental usage accounting is disabled on this server.");
+  }
   /** Principal-wide aggregates over the timeline projection; database-only. */
-  analytics(scope:RequestScope, request:UsageAnalyticsRequest): UsageAnalyticsResponse { return this.#analytics.query(scope,request); }
+  analytics(scope:RequestScope, request:UsageAnalyticsRequest): UsageAnalyticsResponse { this.#assertEnabled(); return this.#analytics.query(scope,request); }
   /** Rebuild pre-projection timelines one source per macrotask; returns a stop function. */
   startTimelineBackfill(): () => void {
+    if (!this.enabled) return () => undefined;
     let stopped=false;
     let timer:ReturnType<typeof setTimeout>|undefined;
     const step=():void=>{
@@ -80,13 +89,14 @@ export class UsageService implements UsageSink {
     return ()=>{stopped=true;if(timer)clearTimeout(timer);};
   }
   recoverInterruptedCapture(): void {
+    if (!this.enabled) return;
     this.database.transaction(() => {
       const active=this.database.prepare("SELECT id,tenant_id,principal_id,thread_id FROM usage_sources WHERE capture_state='active'").all() as Source[];
       for(const source of active){this.#gap(source.id,"capture_gap");this.database.prepare("UPDATE usage_sources SET capture_state='disconnected' WHERE id=?").run(source.id);}
       for(const source of active)this.#materialize({tenantId:source.tenant_id,principalId:source.principal_id},source.thread_id);
     })();
   }
-  subscribe(listener:(scope:RequestScope, threadId:string, revision:string) => void): () => void { this.#listeners.add(listener); return () => this.#listeners.delete(listener); }
+  subscribe(listener:(scope:RequestScope, threadId:string, revision:string) => void): () => void { if (!this.enabled) return () => undefined; this.#listeners.add(listener); return () => this.#listeners.delete(listener); }
   #recordFailure(scope:RequestScope,threadId:string,error:unknown,subagentSourceId?:string):void {
     const key=hash([scope.tenantId,scope.principalId,threadId]);
     if(!(subagentSourceId?this.#failedSubagents.get(key)?.has(subagentSourceId):this.#failed.has(key))){
@@ -112,6 +122,7 @@ export class UsageService implements UsageSink {
     this.database.prepare("INSERT OR IGNORE INTO usage_thread_state(tenant_id,principal_id,thread_id) VALUES(?,?,?)").run(scope.tenantId,scope.principalId,threadId);
   }
   read(scope:RequestScope, threadId:string, turnId:string|null = null): UsageReport {
+    this.#assertEnabled();
     const target = this.#authorize(scope,threadId);
     let state = this.#state(scope,threadId);
     if(state && state.report_json===null){this.database.transaction(()=>this.#materialize(scope,threadId))();state=this.#state(scope,threadId);}
@@ -137,6 +148,7 @@ export class UsageService implements UsageSink {
     return usageReportSchema.parse(report);
   }
   availability(scope:RequestScope,threadId:string,turnIds:readonly string[]):UsageAvailability {
+    this.#assertEnabled();
     this.#authorize(scope,threadId);
     if(turnIds.length>100)throw new DomainError("bad_request","Too many turns.");
     const state=this.#state(scope,threadId);
@@ -153,6 +165,7 @@ export class UsageService implements UsageSink {
     return {threadId,revision:String(this.#state(scope,threadId)?.revision??0n),turns:[...new Set(turnIds)].map(turnId=>({turnId,available:available.has(turnId)}))};
   }
   registerVisibleTurns(scope: RequestScope, threadId: string, turns: readonly ConversationTurn[]): void {
+    if (!this.enabled) return;
     const failedKey=hash([scope.tenantId,scope.principalId,threadId]);
     try {
       let changes:{threadId:string;revision:string}[]=[];
@@ -183,6 +196,7 @@ export class UsageService implements UsageSink {
     return target;
   }
   listSubagentRoots(input:Parameters<UsageSink["listSubagentRoots"]>[0]):ReturnType<UsageSink["listSubagentRoots"]> {
+    if (!this.enabled) return {bindings:[],nextCursor:null};
     if(!Number.isSafeInteger(input.limit) || input.limit<1 || input.limit>128)throw new DomainError("bad_request","Invalid usage root page size.");
     const rows=this.database.prepare(`SELECT DISTINCT b.tenant_id AS tenantId,b.owner_principal_id AS ownerPrincipalId,
       b.application_thread_id AS applicationThreadId,b.backend_instance_id AS backendInstanceId,
@@ -214,6 +228,7 @@ export class UsageService implements UsageSink {
     return {bindings,nextCursor:rows.length>input.limit?bindings.at(-1)!.applicationThreadId:null};
   }
   listSubagents(input:Parameters<UsageSink["listSubagents"]>[0]):ReturnType<UsageSink["listSubagents"]> {
+    if (!this.enabled) return [];
     this.#admitBinding(input.binding);
     const b=input.binding;
     const rows=this.database.prepare(`SELECT c.native_session,c.native_parent_session,s.epoch,s.normalization_version,s.capture_state
@@ -238,6 +253,7 @@ export class UsageService implements UsageSink {
     }));
   }
   findSubagent(input:Parameters<UsageSink["findSubagent"]>[0]):ReturnType<UsageSink["findSubagent"]> {
+    if (!this.enabled) return null;
     const row=this.database.prepare(`SELECT b.tenant_id AS tenantId,b.owner_principal_id AS ownerPrincipalId,
       b.application_thread_id AS applicationThreadId,b.backend_instance_id AS backendInstanceId,
       b.connection_profile_id AS connectionProfileId,b.execution_environment_id AS executionEnvironmentId,
@@ -280,6 +296,7 @@ export class UsageService implements UsageSink {
     if(!owned)throw new Error("usage_source_owned_elsewhere");
   }
   open(input:Parameters<UsageSink["open"]>[0]): UsageCapture {
+    if (!this.enabled) return NO_USAGE_CAPTURE;
     const {binding} = input;
     const scope = {tenantId:binding.tenantId,principalId:binding.ownerPrincipalId} as RequestScope;
     const threadId=binding.applicationThreadId;

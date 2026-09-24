@@ -72,6 +72,8 @@ export interface UsageSubagentRootScope {
   readonly nativeNamespace: string;
 }
 export interface UsageSink {
+  /** Installation-owned experimental gate, fixed for this process lifetime. */
+  readonly enabled: boolean;
   /** Only roots with unresolved descendant capture, paginated within an admitted runtime scope. */
   listSubagentRoots(input: UsageSubagentRootScope & {readonly cursor: string | null; readonly limit: number}): {
     readonly bindings: readonly ConversationBinding[];
@@ -103,7 +105,7 @@ export interface UsageSink {
   }): UsageCapture;
 }
 
-/** Explicit test/unsupported disposition, never used for supported production capture. */
+/** Disabled/unsupported capture succeeds without persisting or blocking provider delivery. */
 export const NO_USAGE_CAPTURE: UsageCapture = {
   registerTurns: () => undefined,
   capture: () => true,
@@ -111,7 +113,7 @@ export const NO_USAGE_CAPTURE: UsageCapture = {
   gap: () => undefined,
   seal: () => undefined,
 };
-export const NO_USAGE_SINK: UsageSink = { open: () => NO_USAGE_CAPTURE, listSubagents: () => [], listSubagentRoots: () => ({bindings:[],nextCursor:null}), findSubagent: () => null };
+export const NO_USAGE_SINK: UsageSink = { enabled: false, open: () => NO_USAGE_CAPTURE, listSubagents: () => [], listSubagentRoots: () => ({bindings:[],nextCursor:null}), findSubagent: () => null };
 
 /** Native numbers must still be exact before normalization; strings are not a second native shape. */
 export function usageCount(value: number | null | undefined): string | null {

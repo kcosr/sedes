@@ -31,7 +31,7 @@ it("upgrades schema 112 by scheduling existing sources for a timeline rebuild wi
     expect(database.prepare("SELECT * FROM schema_migrations WHERE version=112").get()).toEqual(applied);
     expect(database.prepare("SELECT timeline_state FROM usage_sources").pluck().all()).toEqual(["backfill"]);
     expect(database.prepare("SELECT * FROM usage_observations").all()).toEqual(evidence);
-    const result = new UsageService(database).analytics(scope, {from: "2026-09-10T00:00:00.000Z", to: "2026-09-11T00:00:00.000Z", timeZone: "UTC",
+    const result = new UsageService(database, {enabled: true}).analytics(scope, {from: "2026-09-10T00:00:00.000Z", to: "2026-09-11T00:00:00.000Z", timeZone: "UTC",
       bucket: "day", filters: {}, groupBy: "model", crossBy: null, breakdownLimit: 10, facets: false});
     expect(result.totals).toMatchObject({tokens: "15", costs: [{amount: "0.01"}]});
     expect(result.placement.reported).toBe("15");

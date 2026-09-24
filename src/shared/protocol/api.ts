@@ -112,6 +112,7 @@ export const apiErrorCodeSchema = z.enum([
   "origin_not_allowed",
   "forwarded_origin_not_allowed",
   "provider_pulse_unavailable",
+  "experimental_usage_disabled",
   "internal_error",
 ]);
 

@@ -5,8 +5,9 @@ import { ChatViewVisibilityContext } from "./chat-view-visibility.js";
 import { TurnUsagePopover } from "./TurnUsagePopover.js";
 
 export function TurnUsageAction({cache,turn,onOpenChange}:{cache:UsageQueryCache;turn:ConversationTurn;onOpenChange:(open:boolean)=>void}):React.JSX.Element|null {
+  const enabled = useSyncExternalStore(cache.subscribeEnabled, cache.getEnabled);
   // Enforce ended-turn eligibility even when used outside the turn footer.
-  if(turn.status==="in_progress")return null;
+  if(!enabled || turn.status==="in_progress")return null;
   return <AvailableTurnUsage cache={cache} turnId={turn.id} onOpenChange={onOpenChange}/>;
 }
 function AvailableTurnUsage({cache,turnId,onOpenChange}:{cache:UsageQueryCache;turnId:string;onOpenChange:(open:boolean)=>void}):React.JSX.Element|null {

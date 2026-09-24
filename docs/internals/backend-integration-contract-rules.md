@@ -1130,6 +1130,17 @@ visible in both activity modes without exposing hidden operation details.
 The store, selection rules, and timeline behind these rules are described in
 [Usage accounting](usage-accounting.md).
 
+Recorded accounting is opt-in through the installation-owned
+`SEDES_EXPERIMENTAL_USAGE=1` main-server environment setting. A disabled
+`UsageSink.enabled` must prevent creation of usage normalizers, history scans,
+and usage-only runtime leases or subscriptions, not merely discard database
+writes. Pi, Codex, and Claude implement this gate; Grok remains explicitly
+unsupported. Provider delivery acknowledgements, normal conversation history,
+and live context occupancy must continue when accounting is off. Main-server
+recovery, report routes, and browser query subscriptions obey the same setting;
+existing accounting remains persisted. No provider or sidecar protocol flag is
+needed, and native provider recording is outside this policy's authority.
+
 Provider-billed work outside an assistant response must enter the normalized
 [`UsageSink`](../../src/server/usage/contracts.ts) without fabricating a message
 or changing run state. Capture native evidence before lossy presentation, under

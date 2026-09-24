@@ -155,7 +155,7 @@ export function Workbench({
           <div className="tasks-corner-controls">
             <TasksPanelToggle />
           </div>
-          <UsageView store={applicationStore} />
+          {application.experimentalUsageEnabled ? <UsageView store={applicationStore} /> : <p>Experimental usage accounting is disabled on this server.</p>}
         </div>
       </main>
     );

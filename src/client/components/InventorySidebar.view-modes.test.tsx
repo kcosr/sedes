@@ -286,7 +286,7 @@ function makeState(
     status: "ready",
     connection: "connected",
     authoritative: true,
-    providerPulseEnabled: false,
+    providerPulseEnabled: false, experimentalUsageEnabled: false,
     search: options.search ?? "",
     descendantPages: options.descendantPages ?? {},
     pendingThreadConfigurationCopySourceIds: [],
@@ -496,7 +496,7 @@ describe("sidebar footer destinations", () => {
     const view = renderSidebar(threads);
     view.rerender(
       <InventorySidebar
-        state={makeState(threads)}
+        state={{...makeState(threads),experimentalUsageEnabled:true}}
         store={view.store}
         onNavigate={onNavigate}
         onOpenSettings={() => undefined}
@@ -506,7 +506,7 @@ describe("sidebar footer destinations", () => {
 
     await user.click(screen.getByRole("button", { name: "More" }));
     expect(screen.queryByRole("menuitem", { name: "Accounts" })).toBeNull();
-    await user.click(screen.getByRole("menuitem", { name: "Usage" }));
+    await user.click(screen.getByRole("menuitem", { name: "Usage (Experimental)" }));
 
     expect(window.location.pathname).toBe("/usage");
     expect(onNavigate).toHaveBeenCalledOnce();

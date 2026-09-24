@@ -3190,7 +3190,8 @@ async function main(): Promise<void> {
   const bootstrapConfiguration = await loadBootstrapConfigurationFile(
     configurationFilename,
   );
-  const config = loadConfig(process.env, bootstrapConfiguration);
+  // This scripted server explicitly exercises the experimental accounting surfaces.
+  const config = { ...loadConfig(process.env, bootstrapConfiguration), experimentalUsageEnabled: true };
   const fixtureWorkspaceRoots = [path.resolve(process.cwd())];
   const configuredTarget = {
     id: "pi-sdk-local", kind: "pi_sdk" as const, label: "Pi SDK", backendInstanceId: "pi-local",
@@ -3343,7 +3344,7 @@ async function main(): Promise<void> {
     quiescentCutoverConfirmed: true,
   });
   const database = startup.database;
-  const usage = new UsageService(database);
+  const usage = new UsageService(database, {enabled: true});
   const configurationFixture = initializeDatabaseConfigurationFixture(database, backendConfiguration, { sourceLabel: "scripted-e2e-configuration" });
   const notifications = new NotificationService({
     repository: new NotificationRepository(database),

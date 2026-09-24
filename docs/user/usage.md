@@ -1,5 +1,11 @@
 # Usage and spend
 
+Recorded usage is **Experimental** and available only when your server operator
+enables `SEDES_EXPERIMENTAL_USAGE=1` and restarts the server. It is off by
+default. Disabling it hides the accounting views and stops Sedes collection;
+previously recorded data is preserved. Context meters and **Accounts** remain
+available independently.
+
 The **Usage** page shows the tokens and estimated cost that Sedes recorded
 across every thread you own. Open it from the sidebar footer: choose **More**,
 then **Usage**. Remaining provider quota is a different view, **Accounts**, in

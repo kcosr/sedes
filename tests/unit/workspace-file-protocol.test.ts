@@ -486,7 +486,7 @@ describe("workspace-file Markdown link resolver protocol", () => {
   });
 
   it("bumps the atomic browser protocol revision", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(121);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(122);
     expect(
       workspaceFileAbsolutePathSchema.safeParse("/repo/file.md").success,
     ).toBe(true);

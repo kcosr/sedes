@@ -569,6 +569,7 @@ async function fixture(
     readonly quietSnapshotError?: unknown;
     readonly agentTools?: AgentToolRouterDependencies;
     readonly providerPulseEnabled?: boolean;
+    readonly experimentalUsageEnabled?: boolean;
   } = {},
 ) {
   const root = await mkdtemp(path.join(os.tmpdir(), "sedes-normalized-http-"));
@@ -1093,6 +1094,7 @@ async function fixture(
     },
   };
   const config: AppConfig = {
+    experimentalUsageEnabled: options.experimentalUsageEnabled ?? false,
     authenticationRequired: true,
     host: "127.0.0.1",
     port: 4783,
@@ -1119,7 +1121,7 @@ async function fixture(
     onOpened: () => undefined,
   });
   const app = createNormalizedApp({
-    usage: new UsageService(database),
+    usage: new UsageService(database, {enabled: options.experimentalUsageEnabled ?? false}),
     workpads: {} as never,
     questions,
     cannedPrompts: new CannedPromptService(
@@ -1579,13 +1581,33 @@ async function fixture(
 }
 
 describe("normalized HTTP application contract", () => {
+  it("disables all experimental usage reports by default before parsing or reading accounting", async () => {
+    const current = await fixture();
+    const reads = vi.spyOn(UsageService.prototype, "read");
+    const availability = vi.spyOn(UsageService.prototype, "availability");
+    const analytics = vi.spyOn(UsageService.prototype, "analytics");
+    try {
+      const session = await current.withHost(request(current.app).get("/api/application/session")).expect(200);
+      expect(session.body.experimentalUsageEnabled).toBe(false);
+      const id = "00000000-0000-4000-8000-000000000099";
+      const responses = [
+        await current.withHost(request(current.app).get(`/api/threads/${id}/usage`)).expect(403),
+        await current.withHost(request(current.app).get(`/api/threads/${id}/usage/turns/turn`)).expect(403),
+        await current.mutate(request(current.app).post(`/api/threads/${id}/usage/turn-availability`)).send({invalid:true}).expect(403),
+        await current.mutate(request(current.app).post("/api/usage/analytics")).send({invalid:true}).expect(403),
+      ];
+      for (const response of responses) expect(response.body).toMatchObject({error:{code:"experimental_usage_disabled",message:"Experimental usage accounting is disabled on this server.",retryable:false}});
+      expect(reads).not.toHaveBeenCalled(); expect(availability).not.toHaveBeenCalled(); expect(analytics).not.toHaveBeenCalled();
+      expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
+    } finally { reads.mockRestore(); availability.mockRestore(); analytics.mockRestore(); await current.close(); }
+  });
   it("reads durable usage and known empty turns without acquiring a provider", async () => {
-    const current=await fixture();
+    const current=await fixture({experimentalUsageEnabled: true});
     try {
       const workspace=await current.mutate(request(current.app).post("/api/workspaces/open")).send({environmentId:current.environmentId,path:current.workspacePath}).expect(201);
       const created=await current.mutate(request(current.app).post("/api/threads")).send({workspaceId:workspace.body.id,configuration:{kind:"custom",targetId:current.profile.id},executionWorkspace:{kind:"direct"},title:"Usage"}).expect(201);
       const threadId=created.body.threadId;
-      const usage=new UsageService(current.database);
+      const usage=new UsageService(current.database, {enabled: true});
       usage.registerVisibleTurns(current.owner,threadId,[{id:"known-turn",revision:1,status:"completed",orderedItemIds:[]}]);
       const session=await current.withHost(request(current.app).get(`/api/threads/${threadId}/usage`)).expect(200);
       expect(session.headers["cache-control"]).toBe("no-store");
@@ -1605,7 +1627,7 @@ describe("normalized HTTP application contract", () => {
   });
 
   it("aggregates principal usage analytics with labels from the real schema", async () => {
-    const current=await fixture();
+    const current=await fixture({experimentalUsageEnabled: true});
     try {
       const workspace=await current.mutate(request(current.app).post("/api/workspaces/open")).send({environmentId:current.environmentId,path:current.workspacePath}).expect(201);
       const created=await current.mutate(request(current.app).post("/api/threads")).send({workspaceId:workspace.body.id,configuration:{kind:"custom",targetId:current.profile.id},executionWorkspace:{kind:"direct"},title:"Analytics"}).expect(201);

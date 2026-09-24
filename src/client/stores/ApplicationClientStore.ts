@@ -54,6 +54,7 @@ export interface ApplicationClientState {
   /** The connected server's Sedes product version, absent until the handshake lands. */
   readonly serverVersion?: string;
   readonly providerPulseEnabled: boolean;
+  readonly experimentalUsageEnabled: boolean;
   readonly search: string;
   readonly snapshot?: NormalizedApplicationSnapshot;
   readonly visibleThreads: readonly NormalizedApplicationThreadSummary[];
@@ -74,6 +75,7 @@ const initialState: ApplicationClientState = {
   connection: "reconnecting",
   authoritative: false,
   providerPulseEnabled: false,
+  experimentalUsageEnabled: false,
   search: "",
   visibleThreads: [],
   descendantPages: {},
@@ -97,6 +99,10 @@ export class ApplicationClientStore {
   #inventoryReplacementFailureReason?: string;
   #terminalSessionFailure = false;
   #resuming?: Promise<void>;
+  #hasConnected = false;
+  #reconnectSessionRefresh?: Promise<void>;
+  #reconnectSessionRefreshNeeded = false;
+  #sessionRequestSequence = 0;
   readonly #descendantLoads = new Map<string, Promise<void>>();
   readonly #pendingCreatedThreadWorkspaces = new Map<string, string>();
   readonly #threadConfigurationCopyAttempts = new Map<
@@ -823,7 +829,14 @@ export class ApplicationClientStore {
         this.#replaceState({ ...this.#state, connection });
         // An invalidation may arrive just before disconnection while its HTTP
         // read fails. A replay-only live handshake must retry that read too.
-        if (resumed) this.normalized.resyncWorkpads();
+        if (resumed) {
+          this.normalized.resyncWorkpads();
+          // A server restart can change installation-owned features without
+          // a browser visibility/online transition. Refresh only the session;
+          // resume() would reconnect the stream again.
+          if (this.#hasConnected) this.#refreshSessionAfterReconnect();
+          this.#hasConnected = true;
+        }
       },
       onProtocolError: (error) => {
         this.#replaceState({ ...this.#state, error: error.message });
@@ -872,15 +885,30 @@ export class ApplicationClientStore {
     });
   }
 
+  #refreshSessionAfterReconnect(): void {
+    this.#reconnectSessionRefreshNeeded = true;
+    // A newer connection invalidates an older response even while that
+    // request is pending. Coalesce repeated reconnects into one follow-up.
+    this.#sessionRequestSequence += 1;
+    if (this.#reconnectSessionRefresh) return;
+    this.#reconnectSessionRefresh = (async () => {
+      while (this.#reconnectSessionRefreshNeeded && !this.#disposed) {
+        this.#reconnectSessionRefreshNeeded = false;
+        await this.#loadSession(true).catch(() => undefined);
+      }
+    })().finally(() => { this.#reconnectSessionRefresh = undefined; });
+  }
+
   async #loadSession(
     refresh = false,
     terminalOnFailure = !refresh,
   ): Promise<void> {
+    const requestSequence = ++this.#sessionRequestSequence;
     try {
       const session = await this.api.session(
         refresh ? { refresh: true } : undefined,
       );
-      if (this.#disposed) return;
+      if (this.#disposed || requestSequence !== this.#sessionRequestSequence) return;
       const result = this.normalized.installSession(session);
       if (result.kind === "resnapshot_required") {
         throw new ApiError(
@@ -892,7 +920,7 @@ export class ApplicationClientStore {
       }
       this.#terminalSessionFailure = false;
     } catch (error) {
-      if (this.#disposed) return;
+      if (this.#disposed || requestSequence !== this.#sessionRequestSequence) return;
       const nonRetryableSessionFailure =
         error instanceof ApiError && !error.retryable;
       if (nonRetryableSessionFailure) this.#terminalSessionFailure = true;
@@ -916,6 +944,7 @@ export class ApplicationClientStore {
       authoritative: normalized.authoritative,
       ...(normalized.serverVersion ? { serverVersion: normalized.serverVersion } : {}),
       providerPulseEnabled: normalized.providerPulseEnabled === true,
+      experimentalUsageEnabled: normalized.experimentalUsageEnabled === true,
       snapshot: normalized.snapshot,
       visibleThreads: filterAndSortThreads(
         normalized.snapshot?.threads ?? [],

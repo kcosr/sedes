@@ -6,6 +6,17 @@ serves per-turn, per-session, and principal-wide views from the database. This
 page is the maintained contract for that subsystem: its authority, storage,
 capture, selection, reads, analytics projection, and limitations.
 
+Accounting is experimental and disabled unless the main server starts with
+`SEDES_EXPERIMENTAL_USAGE=1`. This installation-owned setting gates capture,
+usage-specific backend work, recovery/backfill, report APIs, and accounting UI.
+It does not remove existing data, stop schema migrations, suppress native
+provider counters, or disable live context/transcript indicators. The required
+authenticated session field `experimentalUsageEnabled` advertises the setting;
+clients clear accounting caches when it becomes disabled. No sidecar update is
+needed. See [operator configuration](../operator/configuration.md#optional-integrations)
+for restart and re-enablement semantics. The capture/read contracts below apply
+while the feature is enabled.
+
 It records **observed work**, not billing. Sedes counts what a supported backend
 reported while Sedes was attached, plus what later supported evidence recovers.
 It does not reproduce a provider invoice, infer subscription charges, or price

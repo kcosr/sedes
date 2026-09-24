@@ -49,7 +49,7 @@ export function TurnUsagePopover({ cache, turnId, onOpenChange }: {
       onPointerEnter={event => { if (event.pointerType !== "mouse") return; hovered.current = true; clearTimeout(timer.current); }}
       onPointerLeave={event => { if (event.pointerType !== "mouse") return; hovered.current = false; scheduleClose(); }}
       onFocusCapture={() => clearTimeout(timer.current)} onBlurCapture={scheduleClose}>
-      <strong className="turn-usage-heading">Turn usage</strong>
+      <strong className="turn-usage-heading">Turn usage (Experimental)</strong>
       {open && <RecordedUsage cache={cache} turnId={turnId} />}
     </PopoverContent>
   </Popover>;

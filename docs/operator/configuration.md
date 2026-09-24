@@ -233,6 +233,27 @@ database files to `0600`; it leaves existing state-directory permissions intact.
 | Variable                   | Default                 | Contract                                                                                           |
 | -------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------- |
 | `SEDES_PROVIDER_PULSE_URL` | `http://127.0.0.1:4317` | Loopback `http://` origin with an explicit port for Provider Pulse. Set to `off` to disable Accounts. |
+| `SEDES_EXPERIMENTAL_USAGE` | `0` (disabled) | Set to exactly `1` to enable experimental recorded usage accounting, reports, and UI. Only `0` and `1` are accepted when set. Restart the main server after changing it. |
+
+Experimental usage is an installation-owned environment opt-in, read once at
+server startup. It is not a browser preference or a `server.json` setting.
+The authenticated session advertises the setting to every client. Enabled
+accounting views are labeled **Experimental**; disabled installations hide
+them and reject usage-report API requests before querying accounting data.
+
+When disabled, Sedes skips accounting capture, usage-only history processing,
+interrupted-capture recovery, timeline backfill, and Codex subagent monitoring
+for accounting. Existing recorded and imported usage remains in the database;
+normal database migrations still run. Context-window meters, transcript
+counters, and Provider Pulse Accounts remain available. Providers may still
+emit or store their own native usage counters.
+
+The opt-in applies to local and remote backends in the main server. It requires
+no sidecar protocol update or remote environment setting. Re-enabling resumes
+accounting; backend history or cumulative counters may recover some earlier
+usage, but there is no automatic comprehensive reconciliation of the disabled
+period. Existing browser and packaged clients must be updated to client
+protocol 122 when installing this version.
 
 Provider Pulse is installation-owned, not tied to one environment, workspace,
 or thread. Sedes contacts it server-to-server on loopback and exposes only

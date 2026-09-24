@@ -28,6 +28,7 @@ export interface SidebarFooterActionsProps {
   readonly connection?: ConnectionState;
   readonly api?: ApiClient;
   readonly providerPulseEnabled?: boolean;
+  readonly experimentalUsageEnabled?: boolean;
   readonly advisories?: readonly NormalizedInstallationAdvisory[];
 }
 
@@ -40,6 +41,7 @@ export function SidebarFooterActions({
   connection,
   api,
   providerPulseEnabled = false,
+  experimentalUsageEnabled = false,
   advisories = [],
 }: SidebarFooterActionsProps): React.JSX.Element {
   const useSheet = useUsageSheetLayout();
@@ -62,10 +64,10 @@ export function SidebarFooterActions({
           sideOffset={6}
           collisionPadding={8}
         >
-          <DropdownMenuItem onSelect={onOpenUsage}>
+          {experimentalUsageEnabled && <DropdownMenuItem onSelect={onOpenUsage}>
             <ChartColumnBig aria-hidden="true" />
-            Usage
-          </DropdownMenuItem>
+            Usage (Experimental)
+          </DropdownMenuItem>}
           {usageApi ? (
             useSheet ? (
               <SidebarUsageSheetItem onOpen={() => setUsageSheetOpen(true)} />

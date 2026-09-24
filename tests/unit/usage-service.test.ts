@@ -43,8 +43,44 @@ function observation(id: string, facts: readonly UsageFact[], replaceCheckpoint 
 }
 const turnId = applicationTurnIdForBackendTurn({backendInstanceId: "backend", sourceApplicationThreadId: "thread", backendTurnId: "turn"});
 describe("durable scoped usage service", () => {
+  it("keeps disabled accounting inert, rejects reads and retains evidence for re-enabling", () => {
+    const db = database();
+    const enabled = new UsageService(db, {enabled: true});
+    enabled.open(source).capture([observation("existing", [fact("existing", "17")])]);
+    const before = db.prepare("SELECT * FROM usage_observations").all();
+    const disabled = new UsageService(db, {enabled: false});
+    vi.useFakeTimers();
+    const prepare = vi.spyOn(db, "prepare");
+    const callback = vi.fn();
+    disabled.recoverInterruptedCapture();
+    disabled.startTimelineBackfill()();
+    disabled.subscribe(callback)();
+    disabled.registerVisibleTurns(scope, "thread", []);
+    const capture = disabled.open(source);
+    capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
+    expect(capture.capture([observation("discarded", [fact("discarded", "999")])])).toBe(true);
+    expect(capture.reconcile()).toBe(true);
+    capture.gap("capture_gap"); capture.seal("detached");
+    const runtime = {...scope,backendInstanceId:binding.backendInstanceId,executionEnvironmentId:binding.executionEnvironmentId,
+      connectionProfileId:binding.connectionProfileId,nativeNamespace:source.nativeNamespace};
+    expect(disabled.listSubagentRoots({...runtime,cursor:null,limit:128})).toEqual({bindings:[],nextCursor:null});
+    expect(disabled.listSubagents({binding,nativeNamespace:source.nativeNamespace})).toEqual([]);
+    expect(disabled.findSubagent({...runtime,nativeSession:"child"})).toBeNull();
+    expect(() => disabled.read(scope,"thread")).toThrow("Experimental usage accounting is disabled");
+    expect(() => disabled.availability(scope,"thread",[])).toThrow("Experimental usage accounting is disabled");
+    expect(() => disabled.analytics(scope,{from:null,to:"2026-09-24T00:00:00Z",timeZone:"UTC",bucket:"day",
+      filters:{},groupBy:null,crossBy:null,breakdownLimit:10,facets:false})).toThrow("Experimental usage accounting is disabled");
+    expect(prepare).not.toHaveBeenCalled();
+    expect(callback).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    prepare.mockRestore();
+    expect(db.prepare("SELECT * FROM usage_observations").all()).toEqual(before);
+    const resumed = new UsageService(db, {enabled:true});
+    resumed.recoverInterruptedCapture();
+    expect(resumed.read(scope,"thread").summary.metrics.input.value).toBe("17");
+  });
   it("reports complete measurements within main-loop scope despite unknown model attribution", () => {
-    const db=database(), service=new UsageService(db), capture=service.open(source);
+    const db=database(), service=new UsageService(db, {enabled: true}), capture=service.open(source);
     const reasons=["main_loop_only", "model_coverage_unknown"] as const;
     capture.registerTurns([{backendTurnId:"turn",status:"in_progress",orderedBackendItemIds:[]}]);
     capture.capture([observation("main",[fact("main","100",{
@@ -59,10 +95,10 @@ describe("durable scoped usage service", () => {
       costs:[{amount:"0.25",quality:"complete"}],
     }});
     expect(service.read(scope,"thread").state).toBe("complete");
-    expect(new UsageService(db).read(scope,"thread",turnId)).toEqual(report);
+    expect(new UsageService(db, {enabled: true}).read(scope,"thread",turnId)).toEqual(report);
   });
   it.each(["capture_gap", "unknown_baseline", "history_partial", "invalid_evidence", "child_coverage_unknown"] as const)("retains incomplete main-loop measurements for %s", reason => {
-    const service=new UsageService(database()), capture=service.open(source);
+    const service=new UsageService(database(), {enabled: true}), capture=service.open(source);
     capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
     capture.capture([observation("main",[fact("main","100",{
       reasons:["main_loop_only","model_coverage_unknown",reason],
@@ -71,7 +107,7 @@ describe("durable scoped usage service", () => {
     expect(service.read(scope,"thread",turnId)).toMatchObject({state:"partial",summary:{metrics:{input:{value:"100",quality:"partial"}}}});
   });
   it.each([false,true])("preserves explicit partial fact quality with informational reasons (costOnly=%s)", costOnly => {
-    const db=database(), service=new UsageService(db), capture=service.open(source);
+    const db=database(), service=new UsageService(db, {enabled: true}), capture=service.open(source);
     const turn={backendTurnId:"turn",status:"completed" as const,orderedBackendItemIds:[]};
     capture.registerTurns([turn]);
     capture.capture([observation("partial",[fact("partial","100",{
@@ -79,7 +115,7 @@ describe("durable scoped usage service", () => {
       tokens:costOnly?{}:{input:"100"},costs:[{amount:"0.25",currency:"USD",kind:"estimated",provenance:"SDK"}],
       turn:{backendTurnId:"turn",scope:"main_loop",contribution:"additive"},
     })])]);
-    const reopened=new UsageService(db);
+    const reopened=new UsageService(db, {enabled: true});
     reopened.registerVisibleTurns(scope,"thread",[{id:turnId,revision:1,status:"completed",orderedItemIds:[]}]);
     const report=reopened.read(scope,"thread",turnId);
     expect(report.state).toBe("partial");
@@ -87,7 +123,7 @@ describe("durable scoped usage service", () => {
     expect(report.summary.metrics.input.quality).toBe(costOnly?"unreported":"partial");
   });
   it("keeps a turn partial when known main-loop measurements coexist with a partial interval", () => {
-    const service=new UsageService(database()), capture=service.open(source);
+    const service=new UsageService(database(), {enabled: true}), capture=service.open(source);
     capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
     capture.capture([observation("mixed",[
       fact("known","100",{turn:{backendTurnId:"turn",scope:"main_loop",contribution:"additive"}}),
@@ -96,7 +132,7 @@ describe("durable scoped usage service", () => {
     expect(service.read(scope,"thread",turnId)).toMatchObject({state:"partial",measurementScope:"partial_interval",summary:{metrics:{input:{value:"110"}}}});
   });
   it("reports availability only for ended turns with durable data and enforces owner scope", () => {
-    const service=new UsageService(database()), capture=service.open(source);
+    const service=new UsageService(database(), {enabled: true}), capture=service.open(source);
     capture.registerTurns([{backendTurnId:"turn",status:"in_progress",orderedBackendItemIds:[]},{backendTurnId:"empty",status:"completed",orderedBackendItemIds:[]}]);
     capture.capture([observation("entry",[fact("entry","10",{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})])]);
     expect(service.availability(scope,"thread",[turnId]).turns).toEqual([{turnId,available:false}]);
@@ -107,13 +143,13 @@ describe("durable scoped usage service", () => {
     expect(()=>service.availability({...scope,principalId:"other"},"thread",[turnId])).toThrow();
   });
   it.each(["completed", "failed", "interrupted"] as const)("keeps recorded zero usage available for a %s turn", status => {
-    const service=new UsageService(database()), capture=service.open(source);
+    const service=new UsageService(database(), {enabled: true}), capture=service.open(source);
     capture.registerTurns([{backendTurnId:"turn",status,orderedBackendItemIds:[]}]);
     capture.capture([observation("zero",[fact("zero","0",{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})])]);
     expect(service.availability(scope,"thread",[turnId]).turns).toEqual([{turnId,available:true}]);
   });
   it("keeps additive turn conflicts visible on session totals without affecting another turn", () => {
-    const service=new UsageService(database()), capture=service.open(source);
+    const service=new UsageService(database(), {enabled: true}), capture=service.open(source);
     capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]},{backendTurnId:"other",status:"completed",orderedBackendItemIds:[]}]);
     const entry=(input:string)=>observation("entry",[fact("entry",input,{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})]);
     capture.capture([entry("10"),entry("20"),observation("other",[fact("other","5",{turn:{backendTurnId:"other",scope:"whole_turn",contribution:"additive"}})])]);
@@ -123,7 +159,7 @@ describe("durable scoped usage service", () => {
   });
 
   it.each([false,true])("keeps one durable Codex series across resume (regression=%s)", regression => {
-    const db=database(), service=new UsageService(db);
+    const db=database(), service=new UsageService(db, {enabled: true});
     const adapter=new CodexUsageCapture({sink:service,binding,nativeNamespace:"native-store",provenZero:false,ancestry:null,onError:vi.fn()});
     const send=(generation:number,sequence:number,inputTokens:number)=>{
       const counts={inputTokens,outputTokens:0,totalTokens:inputTokens,cachedInputTokens:0,cacheWriteInputTokens:0,reasoningOutputTokens:0};
@@ -137,7 +173,7 @@ describe("durable scoped usage service", () => {
   });
 
   it("repairs interrupted capture only after authoritative history reconciliation and retains conflicts", () => {
-    const db=database(), first=new UsageService(db), capture=first.open(source);
+    const db=database(), first=new UsageService(db, {enabled: true}), capture=first.open(source);
     capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
     const evidence=observation("entry",[fact("entry","10",{turn:{backendTurnId:"turn",scope:"main_loop",contribution:"additive"}})]);
     capture.capture([evidence]);
@@ -146,7 +182,7 @@ describe("durable scoped usage service", () => {
     expect(first.read(scope,"thread",turnId)).toMatchObject({state:"partial",summary:{metrics:{input:{value:"10"}}}});
     capture.reconcile();
     expect(first.read(scope,"thread",turnId).state).toBe("complete");
-    const service=new UsageService(db); service.recoverInterruptedCapture();
+    const service=new UsageService(db, {enabled: true}); service.recoverInterruptedCapture();
     const recovered=service.open(source);
     expect(service.read(scope,"thread").summary.reasons).toContain("capture_gap");
     expect(service.read(scope,"thread",turnId).state).toBe("partial");
@@ -159,7 +195,7 @@ describe("durable scoped usage service", () => {
     expect(service.read(scope,"thread").summary.reasons).toContain("conflicting_evidence");
   });
   it("keeps invalid evidence partial without labelling valid tokens conflicting", () => {
-    const service=new UsageService(database()), capture=service.open(source);
+    const service=new UsageService(database(), {enabled: true}), capture=service.open(source);
     capture.capture([observation("valid",[fact("valid","10")])]);
     capture.capture([observation("invalid",[fact("invalid","-1")])]);
     const report=service.read(scope,"thread");
@@ -167,7 +203,7 @@ describe("durable scoped usage service", () => {
     expect(report.summary.reasons).toContain("invalid_evidence");
   });
   it("replaces ordered per-result allocations independently of cumulative regression locks", () => {
-    const service=new UsageService(database()), capture=service.open(source);
+    const service=new UsageService(database(), {enabled: true}), capture=service.open(source);
     capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
     const result=(order:string,input:string)=>observation(`result-${order}`,[fact("turn-result",input,{sessionContribution:"none",kind:"turn_aggregate",turn:{backendTurnId:"turn",scope:"main_loop",contribution:"checkpoint"}})],false,order);
     capture.capture([result("1","30"), result("3","10"), result("2","20")]);
@@ -177,7 +213,7 @@ describe("durable scoped usage service", () => {
     expect(service.read(scope,"thread").summary.reasons).not.toContain("counter_regression");
   });
   it("scopes ambiguous direct-result conflicts to the affected turn without freezing pipeline totals", () => {
-    const service=new UsageService(database()), capture=service.open(source);
+    const service=new UsageService(database(), {enabled: true}), capture=service.open(source);
     capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]},{backendTurnId:"other",status:"completed",orderedBackendItemIds:[]}]);
     const direct=(id:string,input:string)=>observation(id,[fact("result",input,{sessionContribution:"none",turn:{backendTurnId:"turn",scope:"main_loop",contribution:"checkpoint"}})]);
     capture.capture([direct("first","30"),direct("different","10")]);
@@ -192,17 +228,17 @@ describe("durable scoped usage service", () => {
 
   it("persists exact 64-bit counts and decimal money through database reopen without runtime dependencies", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "sedes-usage-")); directories.push(dir);
-    const file = path.join(dir,"usage.sqlite"), db = database(file), service = new UsageService(db), capture = service.open(source);
+    const file = path.join(dir,"usage.sqlite"), db = database(file), service = new UsageService(db, {enabled: true}), capture = service.open(source);
     capture.capture([observation("a", [fact("a", "9007199254740993", {costs:[{amount:"0.1",currency:"USD",kind:"estimated",provenance:"SDK"}]})]), observation("b", [fact("b", "1", {costs:[{amount:"0.2",currency:"USD",kind:"estimated",provenance:"SDK"}]})])]);
     capture.seal("detached"); db.close();
     const reopened = new Database(file); databases.push(reopened);
-    const report = new UsageService(reopened).read(scope,"thread");
+    const report = new UsageService(reopened, {enabled: true}).read(scope,"thread");
     expect(report.summary.metrics.input.value).toBe("9007199254740994");
     expect(report.summary.costs).toMatchObject([{amount:"0.3",billing:"unknown"}]);
     expect(report.captureState).toBe("disconnected");
   });
   it("makes duplicate history/live delivery and turn registration true revision no-ops", () => {
-    const service = new UsageService(database()), capture = service.open(source);
+    const service = new UsageService(database(), {enabled: true}), capture = service.open(source);
     const turn = {backendTurnId:"turn",status:"completed" as const,orderedBackendItemIds:[]};
     capture.registerTurns([turn]);
     const evidence = observation("entry",[fact("entry","10",{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})]);
@@ -214,7 +250,7 @@ describe("durable scoped usage service", () => {
     expect(service.read(scope,"thread",turnId).summary.metrics.input.value).toBe("10");
   });
   it("replaces cumulative model maps instead of adding their successive observations", () => {
-    const service = new UsageService(database()), capture = service.open(source);
+    const service = new UsageService(database(), {enabled: true}), capture = service.open(source);
     const checkpoint = (id:string,input:string) => fact(id,input,{kind:"cumulative",sessionContribution:"checkpoint"});
     capture.capture([observation("first",[checkpoint("model-a","100")],true,"1")]);
     capture.capture([observation("second",[checkpoint("model-a","120"),checkpoint("model-b","30")],true,"2")]);
@@ -223,7 +259,7 @@ describe("durable scoped usage service", () => {
     expect(service.read(scope,"thread").summary.metrics.input.value).toBe("160");
   });
   it("keeps regressed series unresolved even when a later observation exceeds the old checkpoint", () => {
-    const service = new UsageService(database()), capture = service.open(source);
+    const service = new UsageService(database(), {enabled: true}), capture = service.open(source);
     const send = (order:string,input:string) => capture.capture([observation(order,[fact("counter",input,{kind:"cumulative",sessionContribution:"checkpoint"})],true,order)]);
     send("1","100");send("2","80");send("3","120");
     const report=service.read(scope,"thread");
@@ -232,7 +268,7 @@ describe("durable scoped usage service", () => {
     expect(report.state).toBe("partial");
   });
   it("uses direct main-loop result allocations over overlapping historical message evidence across sources", () => {
-    const service = new UsageService(database()), history = service.open({...source,epoch:"history",initialBaseline:"unknown"}), query=service.open(source);
+    const service = new UsageService(database(), {enabled: true}), history = service.open({...source,epoch:"history",initialBaseline:"unknown"}), query=service.open(source);
     history.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
     history.capture([observation("message",[fact("message","10",{sessionContribution:"none",quality:"partial",reasons:["history_partial","main_loop_only"],turn:{backendTurnId:"turn",scope:"main_loop",contribution:"additive"}})])]);
     query.capture([observation("pipeline",[fact("pipeline","40",{kind:"cumulative",sessionContribution:"checkpoint",coverageDomain:"pipeline"})],true,"1")]);
@@ -243,7 +279,7 @@ describe("durable scoped usage service", () => {
     expect(turn.summary.reasons).toContain("main_loop_only");expect(turn.summary.reasons).not.toContain("history_partial");
   });
   it("retains a delayed direct turn result behind a later cumulative source frontier", () => {
-    const service = new UsageService(database()), capture = service.open(source);
+    const service = new UsageService(database(), {enabled: true}), capture = service.open(source);
     capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
     capture.capture([observation("pipeline-new",[fact("model","100",{kind:"cumulative",sessionContribution:"checkpoint",coverageDomain:"pipeline"})],true,"2")]);
     expect(capture.capture([observation("turn-delayed",[fact("result","30",{kind:"turn_aggregate",sessionContribution:"none",turn:{backendTurnId:"turn",scope:"main_loop",contribution:"checkpoint"}})],false,"1")])).toBe(true);
@@ -251,7 +287,7 @@ describe("durable scoped usage service", () => {
     expect(service.read(scope,"thread",turnId).summary.metrics.input.value).toBe("30");
   });
   it("exposes unsupported live turn stubs without creating a provider capture", () => {
-    const db=database(), service=new UsageService(db);
+    const db=database(), service=new UsageService(db, {enabled: true});
     db.prepare("UPDATE agent_backend_instances SET kind='grok_build'").run();
     service.registerVisibleTurns(scope,"thread",[{id:"live-turn",revision:1,status:"in_progress",orderedItemIds:[]}]);
     const report=service.read(scope,"thread","live-turn");
@@ -260,7 +296,7 @@ describe("durable scoped usage service", () => {
     expect(()=>service.read(scope,"thread","foreign-turn")).toThrow();
   });
   it("denies wrong principal reads and binding admission without leaking or mutating totals", () => {
-    const service=new UsageService(database()),capture=service.open(source);
+    const service=new UsageService(database(), {enabled: true}),capture=service.open(source);
     capture.capture([observation("valid",[fact("valid","5")])]);
     expect(()=>service.read({...scope,principalId:"other"},"thread")).toThrow();
     const wrong=service.open({...source,binding:{...binding,ownerPrincipalId:"other"}});
@@ -269,7 +305,7 @@ describe("durable scoped usage service", () => {
     expect(()=>service.read(scope,"thread","unknown-turn")).toThrow();
   });
   it("captures identified first-send work before the durable binding is finalized", () => {
-    const db=database(), service=new UsageService(db);
+    const db=database(), service=new UsageService(db, {enabled: true});
     db.exec("DELETE FROM conversation_bindings; INSERT INTO conversation_creation_attempts VALUES('tenant','principal','thread','backend','connection','environment','native-session','owned-detail',NULL,'conversation_identified')");
     const capture=service.open(source);
     expect(capture.capture([observation("early",[fact("early","11")])])).toBe(true);
@@ -289,20 +325,20 @@ describe("durable scoped usage service", () => {
     {name:"aborted attempt",update:"phase='aborted_unpersisted'"},
     {name:"prepared attempt",update:"phase='prepared'"},
   ])("rejects provisional capture with $name", ({update}) => {
-    const db=database(), service=new UsageService(db);
+    const db=database(), service=new UsageService(db, {enabled: true});
     db.exec("DELETE FROM conversation_bindings; INSERT INTO conversation_creation_attempts VALUES('tenant','principal','thread','backend','connection','environment','native-session','owned-detail',NULL,'conversation_identified')");
     db.exec(`UPDATE conversation_creation_attempts SET ${update}`);
     expect(service.open(source).capture([observation("denied",[fact("denied","11")])])).toBe(false);
     expect(db.prepare("SELECT count(*) AS count FROM usage_sources").get()).toEqual({count:0});
   });
   it("does not use a creation attempt to bypass a mismatched durable binding", () => {
-    const db=database(), service=new UsageService(db);
+    const db=database(), service=new UsageService(db, {enabled: true});
     db.exec("INSERT INTO conversation_creation_attempts VALUES('tenant','principal','thread','backend','connection','environment','native-session','owned-detail',NULL,'conversation_identified'); UPDATE conversation_bindings SET backend_conversation_id='different'");
     expect(service.open(source).capture([observation("denied",[fact("denied","11")])])).toBe(false);
     expect(db.prepare("SELECT count(*) AS count FROM usage_sources").get()).toEqual({count:0});
   });
   it("preserves legacy values separately and removes the obsolete ledger", () => {
-    const db=database(":memory:",true),service=new UsageService(db);
+    const db=database(":memory:",true),service=new UsageService(db, {enabled: true});
     expect(()=>db.prepare("SELECT * FROM claude_usage_ledgers")).toThrow();
     const old=service.read(scope,"thread");expect(old.legacy?.metrics.input.value).toBe("100");
     expect(old.legacyRecordedAt).toBe(new Date(1720000000000).toISOString());
@@ -312,7 +348,7 @@ describe("durable scoped usage service", () => {
     expect(service.read(scope,"thread").legacy?.metrics.input.value).toBe("100");
   });
   it("isolates storage failure from provider execution, then records the gap when storage recovers", () => {
-    const db=database(),service=new UsageService(db),capture=service.open(source);
+    const db=database(),service=new UsageService(db, {enabled: true}),capture=service.open(source);
     db.exec("CREATE TRIGGER fail_usage BEFORE INSERT ON usage_observations BEGIN SELECT RAISE(ABORT,'storage unavailable'); END");
     expect(()=>capture.capture([observation("first",[fact("first","10")])])).not.toThrow();
     expect(service.read(scope,"thread").captureState).toBe("failed");
@@ -320,23 +356,23 @@ describe("durable scoped usage service", () => {
     const report=service.read(scope,"thread");expect(report.summary.metrics.input.value).toBe("10");expect(report.summary.reasons).toContain("capture_failed");
   });
   it("retains restrictive ownership/evidence foreign keys", () => {
-    const db=database(),service=new UsageService(db);service.open(source).capture([observation("a",[fact("a","1")])]);
+    const db=database(),service=new UsageService(db, {enabled: true});service.open(source).capture([observation("a",[fact("a","1")])]);
     expect(()=>db.prepare("DELETE FROM application_threads").run()).toThrow();
     expect(()=>db.prepare("DELETE FROM usage_observations").run()).toThrow();
   });
   it("fences retired capture objects and exposes interrupted startup intervals", () => {
-    const db=database(),service=new UsageService(db),capture=service.open(source);
+    const db=database(),service=new UsageService(db, {enabled: true}),capture=service.open(source);
     capture.capture([observation("before",[fact("before","10")])]);
     capture.seal("closed");
     capture.capture([observation("stale",[fact("stale","100")])]);
     expect(service.read(scope,"thread").summary.metrics.input.value).toBe("10");
     const retained=service.open(source);retained.capture([observation("next",[fact("next","5")])]);
-    const restarted=new UsageService(db);restarted.recoverInterruptedCapture();
+    const restarted=new UsageService(db, {enabled: true});restarted.recoverInterruptedCapture();
     const report=restarted.read(scope,"thread");expect(report.captureState).toBe("disconnected");
     expect(report.summary.reasons).toContain("capture_gap");
   });
   it("references inherited turn totals through validated scoped lineage without charging child spend", () => {
-    const db=database(),service=new UsageService(db),parent=service.open(source);
+    const db=database(),service=new UsageService(db, {enabled: true}),parent=service.open(source);
     parent.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
     parent.capture([observation("parent",[fact("parent","30",{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})])]);
     db.exec("INSERT INTO application_threads VALUES('tenant','principal','child','backend','environment','workspace'); INSERT INTO conversation_bindings(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,execution_environment_id,backend_conversation_id,connection_profile_id) VALUES('tenant','principal','child','backend','environment','child-native','connection'); INSERT INTO thread_lineage_closure VALUES('tenant','principal','thread','child');");
@@ -349,19 +385,19 @@ describe("durable scoped usage service", () => {
     parent.capture([observation("more",[fact("more","5",{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})])]);
     expect(service.read(scope,"child",childTurn).summary.metrics.input.value).toBe("35");
     db.exec("UPDATE usage_thread_state SET report_json=NULL; UPDATE usage_turn_state SET report_json=NULL;");
-    const reopened=new UsageService(db);
+    const reopened=new UsageService(db, {enabled: true});
     expect(reopened.availability(scope,"child",[childTurn]).turns).toEqual([{turnId:childTurn,available:true}]);
     expect(reopened.read(scope,"child",childTurn).summary.metrics.input.value).toBe("35");
   });
   it("rejects malformed native evidence without turning unreported values into zero", () => {
-    const service=new UsageService(database()),capture=service.open(source);
+    const service=new UsageService(database(), {enabled: true}),capture=service.open(source);
     capture.capture([observation("partial",[fact("partial","0",{tokens:{input:"0",output:null}})])]);
     expect(service.read(scope,"thread").summary.metrics.input.value).toBe("0");expect(service.read(scope,"thread").summary.metrics.output.value).toBeNull();
     expect(()=>capture.capture([observation("bad",[fact("bad","-1")])])).not.toThrow();
     const report=service.read(scope,"thread");expect(report.summary.metrics.input.value).toBe("0");expect(report.summary.reasons).toContain("invalid_evidence");
   });
   it("retains diagnostic pricing components without adding them to authoritative money", () => {
-    const db=database(),service=new UsageService(db),capture=service.open(source);
+    const db=database(),service=new UsageService(db, {enabled: true}),capture=service.open(source);
     capture.capture([observation("pricing",[fact("priced","1",{costs:[{amount:"0.3",currency:"USD",kind:"estimated",provenance:"SDK"}],pricing:{canonicalModel:"model-a",basis:"managed",components:[{kind:"input",amount:"0.1",currency:"USD"},{kind:"output",amount:"0.2",currency:"USD"}]}})])]);
     expect(service.read(scope,"thread").summary.costs[0]?.amount).toBe("0.3");
     const stored=db.prepare("SELECT evidence_json FROM usage_observations").get() as {evidence_json:string};
@@ -369,7 +405,7 @@ describe("durable scoped usage service", () => {
   });
   it("keeps identical checkpoint redelivery as a revision no-op even with a new receipt identity", () => {
     vi.useFakeTimers();vi.setSystemTime(new Date("2026-09-22T00:00:00Z"));
-    const service=new UsageService(database()),capture=service.open(source);
+    const service=new UsageService(database(), {enabled: true}),capture=service.open(source);
     const checkpoint=fact("counter","100",{kind:"cumulative",sessionContribution:"checkpoint"});
     capture.capture([observation("receipt-one",[checkpoint],true,"1")]);
     const before=service.read(scope,"thread");
@@ -379,7 +415,7 @@ describe("durable scoped usage service", () => {
   });
   it("preserves the last valid checkpoint timestamp when later counter evidence is rejected", () => {
     vi.useFakeTimers();vi.setSystemTime(new Date("2026-09-22T00:00:00Z"));
-    const service=new UsageService(database()),capture=service.open(source);
+    const service=new UsageService(database(), {enabled: true}),capture=service.open(source);
     capture.capture([observation("valid",[fact("counter","100",{kind:"cumulative",sessionContribution:"checkpoint"})],true,"1")]);
     const before=service.read(scope,"thread");
     vi.setSystemTime(new Date("2026-09-22T01:00:00Z"));
@@ -387,14 +423,14 @@ describe("durable scoped usage service", () => {
     const after=service.read(scope,"thread");expect(after.summary.reasons).toContain("counter_regression");expect(after.lastRecordedAt).toBe(before.lastRecordedAt);
   });
   it("retains the valid cumulative money checkpoint on a cost-only regression", () => {
-    const service=new UsageService(database()),capture=service.open(source);
+    const service=new UsageService(database(), {enabled: true}),capture=service.open(source);
     const priced=(input:string,amount:string)=>fact("counter",input,{kind:"cumulative",sessionContribution:"checkpoint",costs:[{amount,currency:"USD",kind:"estimated",provenance:"SDK"}]});
     capture.capture([observation("a",[priced("100","0.5")],true,"1")]);
     capture.capture([observation("b",[priced("120","0.4")],true,"2")]);
     const report=service.read(scope,"thread");expect(report.summary.metrics.input.value).toBe("100");expect(report.summary.costs[0]?.amount).toBe("0.5");expect(report.summary.reasons).toContain("counter_regression");
   });
   it("rejects oversized normalized evidence without retaining its payload or throwing into execution", () => {
-    const db=database(),service=new UsageService(db),capture=service.open(source);
+    const db=database(),service=new UsageService(db, {enabled: true}),capture=service.open(source);
     const evidence=observation("oversize",Array.from({length:100},(_,i)=>fact(`${i}-${"x".repeat(1000)}`,"1")));
     expect(Buffer.byteLength(JSON.stringify(evidence))).toBeGreaterThan(65536);
     expect(()=>capture.capture([evidence])).not.toThrow();
@@ -410,7 +446,7 @@ describe("durable scoped usage service", () => {
 describe("Codex subagent accounting", () => {
   function setup() {
     const db=database();db.prepare("UPDATE agent_backend_instances SET kind='codex_app_server'").run();
-    return {db,service:new UsageService(db)};
+    return {db,service:new UsageService(db, {enabled: true})};
   }
   function child(nativeSession="child",nativeParentSession=binding.backendConversationId):Parameters<UsageSink["open"]>[0] {
     return {...source,nativeSession,epoch:"native-counter-v1",subagent:{nativeParentSession}};
@@ -484,7 +520,7 @@ describe("Codex subagent accounting", () => {
   });
   it("restores durable child ownership and cumulative checkpoints without history rereads", () => {
     const {db,service}=setup(), capture=service.open(child());capture.capture([checkpoint("one","30")]);
-    const restarted=new UsageService(db);restarted.recoverInterruptedCapture();
+    const restarted=new UsageService(db, {enabled: true});restarted.recoverInterruptedCapture();
     expect(restarted.listSubagents({binding,nativeNamespace:source.nativeNamespace})).toEqual([{
       nativeSession:"child",nativeParentSession:"native-session",epoch:"native-counter-v1",normalizationVersion:"fixture-v1",captureState:"disconnected",
     }]);
@@ -505,7 +541,7 @@ describe("Codex subagent accounting", () => {
     const live=service.open(child("live","completed"));live.capture([checkpoint("live","10")]);live.seal("detached");
     service.open(child("failed"));
     db.prepare("UPDATE usage_sources SET capture_state='failed' WHERE native_session='failed'").run();
-    const restarted=new UsageService(db);restarted.recoverInterruptedCapture();
+    const restarted=new UsageService(db, {enabled: true});restarted.recoverInterruptedCapture();
     expect(restarted.listSubagentRoots(query).bindings).toHaveLength(1);
     expect(restarted.listSubagents({binding,nativeNamespace:source.nativeNamespace})).toEqual([
       expect.objectContaining({nativeSession:"failed",captureState:"failed"}),
@@ -607,7 +643,7 @@ describe("Codex subagent accounting", () => {
     expect(service.read(scope,"thread").summary.metrics.input.value).toBeNull();
     for(const kind of ["claude_agent_sdk","pi_sdk","grok_build"]){
       const other=database();other.prepare("UPDATE agent_backend_instances SET kind=?").run(kind);
-      const receiver=new UsageService(other);vi.spyOn(console,"warn").mockImplementation(()=>undefined);
+      const receiver=new UsageService(other, {enabled: true});vi.spyOn(console,"warn").mockImplementation(()=>undefined);
       expect(receiver.open(child()).capture([checkpoint("bad","10")])).toBe(false);
       expect(receiver.read(scope,"thread").breakdown).toBeNull();
     }
@@ -617,7 +653,7 @@ describe("Codex subagent accounting", () => {
     main.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);
     main.capture([observation("one",[fact("one","10",{turn:{backendTurnId:"turn",scope:"whole_turn",contribution:"additive"}})])]);
     db.exec("UPDATE usage_thread_state SET report_json=NULL; UPDATE usage_turn_state SET report_json=NULL;");
-    const reopened=new UsageService(db);
+    const reopened=new UsageService(db, {enabled: true});
     expect(reopened.read(scope,"thread",turnId).summary.metrics.input.value).toBe("10");
     expect(reopened.read(scope,"thread").breakdown?.main.metrics.input.value).toBe("10");
   });

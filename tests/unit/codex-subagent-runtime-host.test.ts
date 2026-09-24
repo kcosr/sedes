@@ -67,7 +67,7 @@ async function fixture(active: boolean, completedBeforeResumeContinuation = fals
   remote.client.subscribeNotifications(notification => presentation.forwardNotification(notification.generation, notification));
   const gap = vi.fn(), seal = vi.fn();
   const open = vi.fn(() => ({ ...NO_USAGE_CAPTURE, gap, seal }));
-  const sink: UsageSink = { open, findSubagent: () => null, listSubagentRoots: () => ({ bindings: [binding], nextCursor: null }),
+  const sink: UsageSink = { open, enabled: true, findSubagent: () => null, listSubagentRoots: () => ({ bindings: [binding], nextCursor: null }),
     listSubagents: () => [{ nativeSession: "child", nativeParentSession: "root", epoch: "native-counter-v1", normalizationVersion: "codex-subagent-usage-v1", captureState: options.persistedIdle ? "idle" : "disconnected" }] };
   new CodexSubagentUsageCoordinator({ client: presentation, sink, nativeNamespace: "native-store", runtimeScope: { ...scope, connectionProfileId: binding.connectionProfileId },
     onError: error => errors.push(error) });

@@ -949,7 +949,7 @@ test.describe.serial("normalized streaming and restored state", () => {
     await expect(stats).toBeVisible();
     await expect(stats.getByText("Context used")).toBeVisible();
     await expect(stats.getByText("Compactions")).toBeVisible();
-    await expect(stats.getByRole("heading", { name: "Recorded session usage" })).toBeVisible();
+    await expect(stats.getByRole("heading", { name: "Recorded session usage (Experimental)" })).toBeVisible();
     await expect(stats.getByText("Estimated cost")).toBeVisible();
     await expect(stats.getByText(/fixture-model/)).toBeVisible();
     await capture(page, testInfo, "restored-session-stats.png");

@@ -11,11 +11,21 @@ import { UsageDetails } from "./RecordedUsage.js";
 const caches: UsageQueryCache[] = [];
 function cache() {
   const result = new UsageQueryCache("sedes-thread-1", { getUsageAvailability: vi.fn(), getUsage: vi.fn().mockResolvedValue(usageReport({ threadId: "sedes-thread-1", turnId: null, measurementScope: "session", turnState: null, state: "unavailable" })) });
-  caches.push(result); return result;
+  result.setEnabled(true);caches.push(result); return result;
 }
 afterEach(() => { cleanup(); caches.splice(0).forEach(value => value.dispose()); });
 
 describe("SessionStatsDialog", () => {
+  it("keeps live context and identifiers while recorded accounting is disabled", () => {
+    const usageCache = cache(); usageCache.setEnabled(false);
+    render(<SessionStatsDialog open onOpenChange={vi.fn()} sedesThreadId="sedes-thread-1" usageCache={usageCache}
+      executionWorkspace={{kind:"direct"}} environmentKind="local" usage={{context:{usedTokens:50,windowTokens:100}}} />);
+    expect(screen.getByText("sedes-thread-1")).toBeVisible();
+    expect(screen.getByRole("heading", {name:"Live context and transcript"})).toBeVisible();
+    expect(screen.getByText("50 / 100")).toBeVisible();
+    expect(screen.queryByText(/Recorded session usage/)).toBeNull();
+    expect(usageCache.api.getUsage).not.toHaveBeenCalled();
+  });
   it("compares main and combined subagent usage without adding cached input twice", () => {
     const main = usageReport().summary;
     const subagents = usageReport().summary;
@@ -103,7 +113,7 @@ describe("SessionStatsDialog", () => {
     expect(screen.getByText("2,000 / 10,000")).toBeVisible();
     expect(screen.getByText("20.00%")).toBeVisible();
     expect(screen.queryByText("Cached input")).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Recorded session usage" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Recorded session usage (Experimental)" })).toBeVisible();
   });
 
   it("shows an explicit empty state instead of fabricated zeroes", () => {
