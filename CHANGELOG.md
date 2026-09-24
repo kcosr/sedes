@@ -6,7 +6,7 @@
 
 - Durable usage accounting replaces accumulated token/cost values in live
   snapshots. Requires matching browser and packaged clients using protocol 122.
-  Migration preserves old Claude totals separately with unknown coverage.
+  Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
 
@@ -23,7 +23,7 @@
 - Capture Codex subagent usage independently of parent turns, including nested
   and background agents. Session stats separates main-agent, combined-subagent,
   and overall token totals. Migration 112 preserves existing accounting and
-  adds durable child ownership; lightweight recovery avoids transcript scans.
+  adds durable child ownership; lightweight recovery avoids transcript scans. (#8)
 
 - Record Pi, Codex, and Claude usage in the main database, with per-turn
   usage/cost details below replies and offline session totals in Session stats.
@@ -32,7 +32,7 @@
   Turn usage actions appear only after a turn ends with recorded data, in a
   compact overlay sized for mobile screens, with closely spaced 44×44 touch
   controls and cached input grouped beneath its inclusive input total.
-  Session stats stays in the thread menu rather than flashing during loading.
+  Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
 
@@ -51,29 +51,29 @@
 
 - Speed up Usage timeline queries by scanning the time index per bucket instead
   of repeatedly scanning a principal's history; totals, filters, and interval
-  placement remain unchanged.
+  placement remain unchanged. (#8)
 
 - Accept owned final symlinks to private Codex Unix sockets, including daemon
   socket aliases on remote hosts, while preserving owner/mode checks and
-  detecting alias or target replacement without changing accounting identity.
+  detecting alias or target replacement without changing accounting identity. (#8)
 
 - Keep historical Codex subagent accounting out of reconnect monitoring and
   release only acquired attachments, preventing imported history from flooding
   remote sidecars with cleanup requests and disconnecting sessions. Migration
-  114 adds recovery indexes while preserving recorded usage.
+  114 adds recovery indexes while preserving recorded usage. (#8)
 
 - Capture Codex multi-agent v2 spawn events as well as legacy collaboration
-  events, so both modes contribute to the session's subagent totals.
+  events, so both modes contribute to the session's subagent totals. (#8)
 
 - Report fully captured Codex turns as complete at main-agent scope; unknown
   model attribution no longer makes token counts partial. Existing session-wide capture gaps, including
-  restart recovery, can still mark earlier turns partial.
+  restart recovery, can still mark earlier turns partial. (#8)
 
 - Recover first-turn usage from Codex's restored idle checkpoint when provided,
-  without extra history reads.
+  without extra history reads. (#8)
 
 - Preserve the deployed usage-accounting migration checksum and add session-gap
-  scope in a separate migration so existing installations can upgrade.
+  scope in a separate migration so existing installations can upgrade. (#8)
 
 - Avoid spurious active-thread archive errors when opening the thread menu
   starts a status read or cold runtime attachment. Briefly drain existing
