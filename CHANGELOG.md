@@ -5,7 +5,7 @@
 ### Breaking Changes
 
 - Claude history paging requires sidecar runtime protocol 12. Upgrade existing
-  sidecars explicitly before reconnecting with this server version.
+  sidecars explicitly before reconnecting with this server version. (#9)
 
 - Durable usage accounting replaces accumulated token/cost values in live
   snapshots. Requires matching browser and packaged clients using protocol 122.
@@ -54,7 +54,7 @@
 
 - Reclaim acknowledged remote Claude output during long unfinished turns once
   native history covers it, preserving unfinished output and pending delivery.
-  Restart recovery reads large histories in bounded, consistency-checked pages.
+  Restart recovery reads large histories in bounded, consistency-checked pages. (#9)
 
 - Speed up Usage timeline queries by scanning the time index per bucket instead
   of repeatedly scanning a principal's history; totals, filters, and interval
