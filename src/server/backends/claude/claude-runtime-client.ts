@@ -75,7 +75,7 @@ export interface ClaudeRuntimeSessionOptions {
     assessment: VerifiedClaudeRuntimeVersion,
   ) => void;
   readonly onVersionAssessmentFailed?: () => void;
-  readonly onMessage: (message: SDKMessage, evidence?: { readonly consumedTurnRootUuid: string }) => void | Promise<void>;
+  readonly onMessage: (message: SDKMessage, evidence?: { readonly consumedTurnRootUuid: string }) => void | false | Promise<void | false>;
   readonly onFailure?: (error: unknown) => void;
 }
 

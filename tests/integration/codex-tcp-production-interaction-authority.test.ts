@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { SEDES_VERSION } from "../../src/shared/version.js";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
@@ -7,6 +8,7 @@ import {
   CodexConversationHandle,
   type CodexExecutionSettingsProvider,
 } from "../../src/server/backends/codex/codex-conversation-handle.js";
+import { serializeCodexBindingDetail } from "../../src/server/backends/codex/codex-binding-codec.js";
 import { CodexDaemonSupervisor } from "../../src/server/backends/codex/codex-daemon-supervisor.js";
 import { CodexFastModeSessionRegistry } from "../../src/server/backends/codex/codex-fast-mode-session.js";
 import type { ProviderTransportScope } from "../../src/server/provider-protocol/transport/assured-framed-transport.js";
@@ -95,10 +97,18 @@ describe.sequential("production-composed TCP interaction authority", () => {
       });
 
       handle = new CodexConversationHandle({
+        usageSink: NO_USAGE_SINK,
+        nativeNamespace: "test-codex-store",
+        usageProvenZero: false,
         binding: binding(),
         canonicalWorkspacePath: "/workspace",
         workspaceId: "workspace-one",
-        opaqueBindingDetail: "test-codex-binding-detail",
+        opaqueBindingDetail: serializeCodexBindingDetail({
+          threadId: THREAD_ID,
+          sessionId: null,
+          correlationAncestorThreadIds: [],
+          nativeAncestry: null,
+        }),
         client: supervisor.client,
         serverRequests: supervisor.serverRequests,
         toolProvenanceKey: new Uint8Array(32).fill(7),

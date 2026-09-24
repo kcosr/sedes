@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { ClaudeSdkFacade } from "../../src/server/backends/claude/claude-sdk-facade.js";
@@ -197,6 +198,7 @@ describe("ClaudeBackendModule", () => {
         configurationRevision: 0,
       };
       const context: BackendModuleRuntimeContext = {
+        usage: NO_USAGE_SINK,
         database: current.database,
         scope,
         instance,
@@ -341,6 +343,7 @@ describe("ClaudeBackendModule", () => {
       };
       expect(() =>
         prepared.createRuntime({
+          usage: NO_USAGE_SINK,
           database: current.database,
           scope,
           instance,

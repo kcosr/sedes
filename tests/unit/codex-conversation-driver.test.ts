@@ -1,3 +1,12 @@
+import { usageSubagentRecoveryIndexesMigration } from "../../src/server/db/migrations/114-usage-subagent-recovery-indexes.js";
+import Database from "better-sqlite3";
+import { durableUsageAccountingMigration } from "../../src/server/db/migrations/110-durable-usage-accounting.js";
+import { usageSubagentsMigration } from "../../src/server/db/migrations/112-usage-subagents.js";
+import { usageTimelineMigration } from "../../src/server/db/migrations/113-usage-timeline.js";
+import { usageGapSessionScopeMigration } from "../../src/server/db/migrations/111-usage-gap-session-scope.js";
+import { UsageService } from "../../src/server/usage/usage-service.js";
+import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
+import { type UsageSink, type UsageObservation, NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { RetainedRuntimeLifecycle } from "../../src/server/backends/retained-runtime-lifecycle.js";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
@@ -795,8 +804,11 @@ function driver(
   composerSkillPreferences?: CodexComposerSkillPreferenceReader,
   onError?: (error: unknown) => void,
   outputArtifacts = createInMemoryOutputArtifactPublisher(),
+  usageSink: UsageSink = NO_USAGE_SINK,
 ) {
   return new CodexConversationBackendDriver({
+    usageSink,
+    nativeNamespace: "test-codex-store",
     instance,
     connection: profile,
     client: harness.facade,
@@ -7450,6 +7462,248 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it("keeps native context updates without starting main or child accounting when disabled", async () => {
+    const open = vi.fn(() => { throw new Error("disabled accounting opened"); });
+    const sink: UsageSink = {...NO_USAGE_SINK, open};
+    const harness = new RpcHarness();
+    const target = driver(harness, connection, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, sink);
+    const handle = await attachIdle(harness, target);
+    await establish(harness, handle);
+    harness.notify("thread/started", {thread: nativeThread({id:"child",source:{subAgent:{thread_spawn:{
+      parent_thread_id:"thread-1",depth:1,agent_path:null,agent_nickname:null,agent_role:null,
+    }}}})});
+    const total = {inputTokens:42,outputTokens:0,totalTokens:42,cachedInputTokens:0,cacheWriteInputTokens:0,reasoningOutputTokens:0};
+    for (const threadId of ["thread-1", "child"]) harness.notify("thread/tokenUsage/updated", {
+      threadId,turnId:"turn-0",tokenUsage:{total,last:total,modelContextWindow:1000},
+    });
+    expect(await handle.usage()).toEqual({context:{usedTokens:42,windowTokens:1000,percent:4.2}});
+    expect(open).not.toHaveBeenCalled();
+    harness.enqueue("thread/unsubscribe", {status:"unsubscribed"});
+    await handle.close();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("continues child accounting after the parent handle closes", async () => {
+    const observations = new Map<string, UsageObservation[]>();
+    const sink: UsageSink = { enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: input => ({ registerTurns: () => undefined,
+      capture: entries => { observations.set(input.nativeSession, [...(observations.get(input.nativeSession) ?? []), ...entries]); return true; },
+      reconcile: () => true, gap: () => undefined, seal: () => undefined }) };
+    const harness = new RpcHarness();
+    const target = driver(harness, connection, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, sink);
+    const handle = await attachIdle(harness, target);
+    await establish(harness, handle);
+    harness.notify("thread/started", { thread: nativeThread({ id: "child", source: { subAgent: { thread_spawn: {
+      parent_thread_id: "thread-1", depth: 1, agent_path: null, agent_nickname: null, agent_role: null,
+    } } } }) });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+    harness.notify("thread/tokenUsage/updated", { threadId: "child", turnId: "child-turn", tokenUsage: {
+      total: { inputTokens: 42, outputTokens: 0, totalTokens: 42, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+      last: { inputTokens: 42, outputTokens: 0, totalTokens: 42, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 }, modelContextWindow: 1000,
+    } });
+    expect(observations.get("child")?.[0]?.facts[0]).toMatchObject({ tokens: { input: "42" }, turn: null });
+    expect(observations.get("thread-1")).toBeUndefined();
+  });
+
+  it("captures native accounting before presentation and registers visible turns", async () => {
+    const observations: UsageObservation[] = [];
+    const registerTurns = vi.fn();
+    const sink: UsageSink = { enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: vi.fn(() => ({ registerTurns,
+      capture: (entries: readonly UsageObservation[]) => { observations.push(...entries); return true; }, reconcile: () => true, gap: vi.fn(), seal: vi.fn() })) };
+    const harness = new RpcHarness();
+    const target = driver(harness, connection, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, sink);
+    const handle = await attachIdle(harness, target);
+    await establish(harness, handle);
+    for (const total of [100, 150]) {
+      harness.notify("thread/tokenUsage/updated", {
+        threadId: "thread-1", turnId: "turn-0", tokenUsage: {
+          total: { inputTokens: total, outputTokens: 0, totalTokens: total,
+            cachedInputTokens: 5, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+          last: { inputTokens: 20, outputTokens: 0, totalTokens: 20,
+            cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+          modelContextWindow: 1000,
+        },
+      });
+    }
+    expect(registerTurns).toHaveBeenCalled();
+    expect(observations).toHaveLength(2);
+    // The resume reply confirmed the effective tuple for this generation.
+    expect(observations[1]!.attribution).toEqual({ model: { provider: "openai", model: "gpt-5.6" }, reasoningEffort: "low" });
+    expect(observations[1]!.facts).toContainEqual(expect.objectContaining({ kind: "turn_aggregate",
+      sessionContribution: "none", tokens: expect.objectContaining({ input: "50" }) }));
+    harness.notify("turn/completed", { threadId: "thread-1", turn: nativeTurn(0) });
+    harness.notify("turn/started", { threadId: "thread-1", turn: { ...nativeTurn(1), status: "inProgress", completedAt: null } });
+    for (const total of [170, 200]) harness.notify("thread/tokenUsage/updated", {
+      threadId: "thread-1", turnId: "turn-1", tokenUsage: {
+        total: { inputTokens: total, outputTokens: 0, totalTokens: total, cachedInputTokens: 5, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+        last: { inputTokens: 20, outputTokens: 0, totalTokens: 20, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+        modelContextWindow: 1000,
+      },
+    });
+    await vi.waitFor(() => expect(observations).toHaveLength(4));
+    expect(observations.slice(2).flatMap(observation => observation.facts.filter(fact => fact.kind === "turn_aggregate").map(fact => fact.tokens.input))).toEqual(["20", "30"]);
+    expect(await handle.usage()).toEqual({ context: { usedTokens: 20, windowTokens: 1000, percent: 2 } });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("attributes nothing to usage processed before a changed turn tuple is confirmed", async () => {
+    const observations: UsageObservation[] = [];
+    const sink: UsageSink = { enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: vi.fn(() => ({ registerTurns: vi.fn(),
+      capture: (entries: readonly UsageObservation[]) => { observations.push(...entries); return true; }, reconcile: () => true, gap: vi.fn(), seal: vi.fn() })) };
+    const harness = new RpcHarness();
+    const settings = executionSettingsProvider({ freezeOperationSnapshot: () => ({ settings: executionSettingsTuple({ reasoningEffort: "high" }) }) });
+    const target = driver(harness, connection, undefined, undefined, settings, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, sink);
+    const handle = await attachIdle(harness, target);
+    await establish(harness, handle);
+    const usage = (total: number) => ({ threadId: "thread-1", turnId: "turn-1", tokenUsage: {
+      total: { inputTokens: total, outputTokens: 0, totalTokens: total, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+      last: { inputTokens: 10, outputTokens: 0, totalTokens: 10, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 },
+      modelContextWindow: 1000 } });
+    harness.enqueue("turn/start", async (_params: unknown, current: RpcHarness) => {
+      // The new turn reports usage before the start receipt confirms its tuple.
+      current.notify("thread/tokenUsage/updated", usage(100));
+      await vi.waitFor(() => expect(observations).toHaveLength(1));
+      return { turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null } };
+    });
+    await handle.submit({ applicationOperationId: "tuple-change", source: { kind: "user" }, mutationId: "tuple-change-mutation",
+      reconciliationToken: "tuple-change-token", taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
+    harness.notify("thread/tokenUsage/updated", usage(150));
+    await vi.waitFor(() => expect(observations).toHaveLength(2));
+    expect(observations[0]!.attribution).toEqual({ model: null, reasoningEffort: null });
+    expect(observations[1]!.attribution).toEqual({ model: { provider: "openai", model: "gpt-5.6" }, reasoningEffort: "high" });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it.each([false, true])("does not allocate usage across a malformed native checkpoint (wire rejection=%s)", async wireRejected => {
+    const observations: UsageObservation[] = [];
+    const gap = vi.fn();
+    const sink: UsageSink = { enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({ registerTurns: vi.fn(),
+      capture: entries => { observations.push(...entries); return true; },
+      reconcile: () => true, gap, seal: vi.fn() }) };
+    const harness = new RpcHarness();
+    const target = driver(harness, connection, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, sink);
+    const handle = await attachIdle(harness, target);
+    await establish(harness, handle);
+    const counts = (inputTokens: number) => ({ inputTokens, totalTokens: inputTokens,
+      outputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 });
+    const notify = (total: number) => harness.notify("thread/tokenUsage/updated", {
+      threadId: "thread-1", turnId: "turn-0",
+      tokenUsage: { total: counts(total), last: counts(7), modelContextWindow: 1000 },
+    });
+    notify(100);
+    if (wireRejected) harness.notifyUndecodable("thread/tokenUsage/updated", "thread-1");
+    else harness.notify("thread/tokenUsage/updated", {
+      threadId: "thread-1", turnId: "turn-0", tokenUsage: { total: { inputTokens: "invalid" } },
+    });
+    notify(150);
+    notify(170);
+    expect(gap).toHaveBeenCalledWith("invalid_evidence");
+    expect(observations.flatMap(observation => observation.facts.filter(fact => fact.kind === "turn_aggregate")
+      .map(fact => fact.tokens.input))).toEqual(["20"]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it.each([false, true])("persists the first reply after idle resume replay without reopening (rate-limit replay=%s)", async rateLimitReplay => {
+    const database = new Database(":memory:");
+    // Minimal application authority plus the actual production usage migrations.
+    database.exec(`
+      CREATE TABLE application_threads(tenant_id TEXT, owner_principal_id TEXT, id TEXT, backend_instance_id TEXT, environment_id TEXT, workspace_id TEXT, PRIMARY KEY(tenant_id,owner_principal_id,id));
+      CREATE TABLE agent_backend_instances(tenant_id TEXT,id TEXT,kind TEXT);
+      CREATE TABLE conversation_bindings(tenant_id TEXT,owner_principal_id TEXT,application_thread_id TEXT,backend_instance_id TEXT,execution_environment_id TEXT,backend_conversation_id TEXT,connection_profile_id TEXT,created_at INTEGER);
+      CREATE TABLE claude_usage_ledgers(tenant_id TEXT,owner_principal_id TEXT,application_thread_id TEXT,input_tokens INTEGER,output_tokens INTEGER,cache_read_tokens INTEGER,cache_write_tokens INTEGER,request_count INTEGER,updated_at INTEGER);
+      INSERT INTO application_threads VALUES('tenant-1','principal-1','application-profile-1','codex-1','environment-1','workspace-1');
+      INSERT INTO agent_backend_instances VALUES('tenant-1','codex-1','codex_app_server');
+      INSERT INTO conversation_bindings VALUES('tenant-1','principal-1','application-profile-1','codex-1','environment-1','thread-1','profile-1',1790035200000);
+    `);
+    database.exec(durableUsageAccountingMigration.sql);
+    database.exec(usageGapSessionScopeMigration.sql);
+    database.exec(usageSubagentsMigration.sql);
+    database.exec(usageTimelineMigration.sql); database.exec(usageSubagentRecoveryIndexesMigration.sql);
+    const usage = new UsageService(database, {enabled: true});
+    const harness = new RpcHarness();
+    const target = driver(harness, connection, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, usage);
+    const handle = await attachIdle(harness, target);
+    const counts = (input: number, output: number) => ({ inputTokens: input, outputTokens: output,
+      totalTokens: input + output, cachedInputTokens: 5, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 });
+    const notify = (turnId: string, input: number, output: number) => harness.notify("thread/tokenUsage/updated", {
+      threadId: "thread-1", turnId, tokenUsage: { total: counts(input, output), last: counts(20, 3), modelContextWindow: 1000 },
+    });
+    try {
+      // The pinned app-server replies to resume, then replays restored counters.
+      // The transport delivers replay BEFORE the awaiting resume continuation.
+      harness.after("thread/resume", () => notify("turn-0", 100, 10));
+      const established = await establish(harness, handle);
+      const projector = new ConversationProjector({ backendInstanceId: instance.id, bindingIdentity: binding().applicationThreadId });
+      projector.replace(established.snapshot, established.handleSequence);
+      established.subscribeFromNext(event => {
+        const projected = projector.apply(event);
+        if (projected.kind === "events") for (const changed of projected.events) {
+          if (changed.type === "turn_upsert") usage.registerVisibleTurns(scope, binding().applicationThreadId, [changed.turn]);
+        }
+      });
+      harness.notify("turn/started", { threadId: "thread-1", turn: { ...nativeTurn(1), status: "inProgress", completedAt: null } });
+      if (rateLimitReplay) notify("turn-1", 100, 10); // Rate-limit update repeats the old call under the new turn ID.
+      notify("turn-1", 120, 13);
+      notify("turn-1", 120, 13); // Repeated notifications must not double charge.
+      harness.notify("turn/completed", { threadId: "thread-1", turn: nativeTurn(1) });
+      await vi.waitFor(() => expect(database.prepare("SELECT count(*) AS n FROM usage_observations").get()).toEqual({ n: rateLimitReplay ? 4 : 3 }));
+      const turnId = applicationTurnIdForBackendTurn({ backendInstanceId: instance.id,
+        sourceApplicationThreadId: binding().applicationThreadId, backendTurnId: codexBackendTurnId("thread-1", "turn-1") });
+      const report = usage.read(scope, binding().applicationThreadId, turnId);
+      expect(usage.availability(scope, binding().applicationThreadId, [turnId]).turns).toEqual([{ turnId, available: true }]);
+      expect(report.summary.metrics.input.value).toBe("20");
+      expect(report.summary.metrics.output.value).toBe("3");
+      expect(report.summary.reasons).not.toContain("unknown_baseline");
+      expect(report).toMatchObject({state: "complete", measurementScope: "main_loop"});
+      expect(report.summary.metrics.input.quality).toBe("complete");
+      expect(usage.read(scope, binding().applicationThreadId).summary.metrics.input.value).toBe("120");
+      expect(usage.read(scope, binding().applicationThreadId).summary.reasons).not.toContain("capture_failed");
+    } finally {
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+      database.close();
+    }
+  });
+
+  it("keeps warm paginated resume without native replay unallocated rather than charging earlier turns", async () => {
+    const observations: UsageObservation[] = [];
+    const sink: UsageSink = { enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({ registerTurns: () => undefined,
+      capture: entries => { observations.push(...entries); return true; }, reconcile: () => true,
+      gap: () => undefined, seal: () => undefined }) };
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness, driver(harness, connection, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, sink));
+    harness.enqueue("thread/read", { thread: paginatedThread() });
+    harness.enqueue("thread/resume", paginatedResumeResult({ shells: [notLoadedTurn(0)] }));
+    harness.enqueue("thread/items/list", paginatedItems(0));
+    try {
+      await handle.establishProjection({ signal: new AbortController().signal });
+      expect(harness.calls.find(call => call.method === "thread/resume")?.params).toMatchObject({ excludeTurns: true });
+      // Pinned warm metadata-only resume skips token replay even with initialTurnsPage.
+      harness.notify("turn/started", { threadId: "thread-1", turn: { ...nativeTurn(1), status: "inProgress", completedAt: null } });
+      const counts = { inputTokens: 120, outputTokens: 13, totalTokens: 133,
+        cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0 };
+      harness.notify("thread/tokenUsage/updated", { threadId: "thread-1", turnId: "turn-1",
+        tokenUsage: { total: counts, last: counts, modelContextWindow: 1000 } });
+      harness.notify("turn/completed", { threadId: "thread-1", turn: nativeTurn(1) });
+      await vi.waitFor(() => expect(observations).toHaveLength(1));
+      expect(observations[0]!.facts[0]!.tokens.input).toBe("120");
+      expect(observations.flatMap(observation => observation.facts).filter(fact => fact.turn !== null)).toEqual([]);
+    } finally {
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+    }
+  });
+
   it("retains token usage replayed immediately after the resume response", async () => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
@@ -7488,7 +7742,6 @@ describe("CodexConversationHandle", () => {
     ).toHaveLength(1);
     const expectedUsage = {
       context: { usedTokens: 12, windowTokens: 100, percent: 12 },
-      tokens: { input: 20, output: 10, total: 30 },
     };
     expect((await handle.readCurrent()).usage).toMatchObject(expectedUsage);
     expect(await handle.usage()).toMatchObject(expectedUsage);
@@ -15642,6 +15895,8 @@ describe("CodexBackendDriverFactory", () => {
       reattachThread: async () => undefined, detachThread,
     } : undefined, residency);
     const factory = new CodexBackendDriverFactory({
+    usageSink: NO_USAGE_SINK,
+    nativeNamespace: "test-codex-store",
       scope,
       instance,
       client: harness.facade,
@@ -15753,6 +16008,8 @@ describe("CodexBackendDriverFactory", () => {
     const harness = new RpcHarness();
     const allowed = [{ modelIds: ["gpt-5.6"] }];
     const factory = new CodexBackendDriverFactory({
+    usageSink: NO_USAGE_SINK,
+    nativeNamespace: "test-codex-store",
       scope,
       instance,
       client: harness.facade,

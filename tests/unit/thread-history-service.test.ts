@@ -49,7 +49,7 @@ function actorState(): ConversationActorSnapshotState {
         reason: { text: "Branching is unavailable in this fixture." },
       },
       interactionKinds: [],
-      usageSections: [],
+      usageAccounting: "supported" as const, usageSections: [],
       effectiveSettings: {},
     },
     usage: {},
@@ -318,7 +318,7 @@ describe("ThreadHistoryService", () => {
 
     for (let restart = 0; restart < 2; restart += 1) {
       const runtime = makeRuntime();
-      const service = new ThreadHistoryService({
+      const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
         inventory: inventory() as never,
       });
       service.bindRuntimes(runtime.coordinator);
@@ -343,7 +343,7 @@ describe("ThreadHistoryService", () => {
       status: "search_limit_reached" as const,
     }));
     const release = vi.fn();
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     service.bindRuntimes({
@@ -375,7 +375,7 @@ describe("ThreadHistoryService", () => {
   it("returns authoritative absence from targeted lookup", async () => {
     const locateTurn = vi.fn(async () => ({ status: "not_found" as const }));
     const release = vi.fn();
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     service.bindRuntimes({
@@ -399,7 +399,7 @@ describe("ThreadHistoryService", () => {
   it("uses the live window without invoking targeted history lookup", async () => {
     const locateTurn = vi.fn();
     const release = vi.fn();
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     service.bindRuntimes({
@@ -429,7 +429,7 @@ describe("ThreadHistoryService", () => {
       history: { operational: false },
     };
     const history = vi.fn();
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     service.bindRuntimes({
@@ -463,7 +463,7 @@ describe("ThreadHistoryService", () => {
         thread: { id: "thread-1" },
       })),
     };
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: scopedInventory as never,
     });
     service.bindRuntimes(runtimes);
@@ -524,7 +524,7 @@ describe("ThreadHistoryService", () => {
         release,
       })),
     } as unknown as ThreadRuntimeCoordinator;
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     service.bindRuntimes(runtimes);
@@ -603,7 +603,7 @@ describe("ThreadHistoryService", () => {
           resolveHistory = resolve;
         }),
     );
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     service.bindRuntimes({
@@ -695,7 +695,7 @@ describe("ThreadHistoryService", () => {
           itemsById: {},
         },
       });
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     service.bindRuntimes({
@@ -740,7 +740,7 @@ describe("ThreadHistoryService", () => {
     const runtimes = {
       acquire: vi.fn(),
     } as unknown as ThreadRuntimeCoordinator;
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     service.bindRuntimes(runtimes);
@@ -764,7 +764,7 @@ describe("ThreadHistoryService", () => {
   });
 
   it("does not expose a history window until runtime pagination is bound", () => {
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     expect(service.operational(actorState())).toBe(false);
@@ -824,7 +824,7 @@ describe("ThreadHistoryService", () => {
         release,
       })),
     } as unknown as ThreadRuntimeCoordinator;
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     service.bindRuntimes(runtimes);
@@ -875,7 +875,7 @@ describe("ThreadHistoryService", () => {
     }));
     const publish = vi.fn();
     const release = vi.fn();
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     service.bindRuntimes({
@@ -937,7 +937,7 @@ describe("ThreadHistoryService", () => {
           release: vi.fn(),
         })),
       } as unknown as ThreadRuntimeCoordinator;
-      const service = new ThreadHistoryService({
+      const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
         inventory: inventory() as never,
       });
       service.bindRuntimes(runtimes);
@@ -999,7 +999,7 @@ describe("ThreadHistoryService", () => {
     }));
     const publish = vi.fn();
     const release = vi.fn();
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     service.bindRuntimes({
@@ -1126,7 +1126,7 @@ describe("ThreadHistoryService", () => {
     }));
     const publish = vi.fn();
     const release = vi.fn();
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     service.bindRuntimes({
@@ -1237,7 +1237,7 @@ describe("ThreadHistoryService", () => {
       projectionGeneration: "projection-1",
       event,
     }));
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     service.bindRuntimes({
@@ -1345,7 +1345,7 @@ describe("ThreadHistoryService", () => {
         release: vi.fn(),
       })),
     } as unknown as ThreadRuntimeCoordinator;
-    const service = new ThreadHistoryService({
+    const service = new ThreadHistoryService({ usage: { registerVisibleTurns: () => undefined },
       inventory: inventory() as never,
     });
     service.bindRuntimes(runtimes);

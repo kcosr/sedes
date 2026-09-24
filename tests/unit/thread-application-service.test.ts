@@ -304,7 +304,7 @@ function createService(input?: {
                 input?.interactionKinds === undefined
                   ? ["choice", "confirmation"]
                   : [...input.interactionKinds],
-              usageSections: ["context" as const],
+              usageAccounting: "supported" as const, usageSections: ["context" as const],
               effectiveSettings: {},
             },
             usage: {
@@ -411,6 +411,7 @@ function createService(input?: {
   const readPresentation = vi.fn(presentation);
   const readCachedPresentation = vi.fn(presentation);
   const service = new ThreadApplicationService({
+    usage: { registerVisibleTurns: () => undefined },
     inventory: { getAuthorized },
     conversations: { capture },
     queue: { list },
@@ -1069,7 +1070,7 @@ describe("ThreadApplicationService", () => {
         expect(client.apply(event).kind).not.toBe("resnapshot_required");
       });
       const binding = new ConversationEventBridge(
-        new ThreadEventPresentation(service),
+        new ThreadEventPresentation(service), () => undefined
       ).bind({
         scope,
         applicationThreadId: "thread-1",
@@ -1632,11 +1633,11 @@ describe("ThreadApplicationService", () => {
         ...result.state.timeline,
         generation: "bridge-generation",
       },
-      usage: { counters: { requests: 19 } },
+      usage: { counters: { userMessages: 19 } },
     });
 
     expect(capture).not.toHaveBeenCalled();
-    expect(snapshot.usage).toEqual({ counters: { requests: 19 } });
+    expect(snapshot.usage).toEqual({ counters: { userMessages: 19 } });
     expect(snapshot.orderedTurnIds).toEqual(["turn-1"]);
   });
 
@@ -1808,7 +1809,7 @@ describe("ActorBackedThreadApplicationConversationReader", () => {
           reason: { text: "Branching is unavailable in this fixture." },
         },
         interactionKinds: [],
-        usageSections: [],
+        usageAccounting: "supported" as const, usageSections: [],
       },
       usage: {},
     };

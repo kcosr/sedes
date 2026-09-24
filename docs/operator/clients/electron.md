@@ -364,6 +364,11 @@ to disable authentication. Local verifies the child's reported policy and shows
 an OS keyring; no Local credential is issued or replaced in this mode. Unset the
 variable or set it to `true` and restart to restore the default policy.
 
+To enable experimental recorded usage for Managed Local, launch Electron with
+`SEDES_EXPERIMENTAL_USAGE=1` and restart its Local server. Electron passes this
+setting through unchanged for server validation; unset or `0` keeps accounting
+disabled. Direct and SSH-forwarded connections use the remote server's setting.
+
 ## Direct trusted-home-LAN mode
 
 For a deliberately trusted home LAN, Electron can use the bounded wildcard

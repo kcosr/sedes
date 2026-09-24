@@ -29,6 +29,7 @@ from top to bottom.
 | Local and Sidecar SSH shells, panels, control transfer, and retained output | [Terminal panes](user/terminals.md) |
 | Tasks and scheduled or manual automations | [Tasks and automations](user/tasks-and-automations.md) |
 | Shared working documents, drafts, attribution, and revisions | [Workpads](user/workpads.md) |
+| Tokens and estimated spend by time, model, effort, backend, and project | [Usage and spend](user/usage.md) |
 | Models, settings, provider-specific controls, interactions, agent tools, TUI | [Provider features](user/provider-features.md) |
 | Browser and application preferences | [Settings](user/settings.md) |
 | Load failures, uncertain operations, unavailable targets, and recovery | [Troubleshooting](user/troubleshooting.md) |
@@ -52,6 +53,8 @@ from top to bottom.
   references, scheduling, prechecks, and run history.
 - [Workpads](user/workpads.md) — shared notes, synchronized drafts, attribution,
   and document history.
+- [Usage and spend](user/usage.md) — the Usage page, its filters and views, and
+  how to read recorded totals.
 - [Provider features](user/provider-features.md) — model controls, approvals,
   questions, agent tools, skills, and Codex-specific features.
 - [Settings](user/settings.md) — browser-local and principal-owned preferences.

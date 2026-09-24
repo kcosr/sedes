@@ -394,8 +394,14 @@ class PersistentSession implements ClaudeRuntimeSession {
       if (payload.kind === "message") {
         const message = payload.message as SDKMessage;
         if (message.type === "system" && message.subtype === "commands_changed") this.#safeSkills = [];
-        if (payload.consumedTurnRootUuid) await this.options.onMessage(message, { consumedTurnRootUuid: payload.consumedTurnRootUuid });
-        else await this.options.onMessage(message);
+        const committed = payload.consumedTurnRootUuid
+          ? await this.options.onMessage(message, { consumedTurnRootUuid: payload.consumedTurnRootUuid })
+          : await this.options.onMessage(message);
+        // ACKs identify exact events, not a cumulative cursor. A failed main
+        // accounting write retains only this original in the existing host
+        // journal; later events and provider work continue normally. Existing
+        // reattachment replays the unacknowledged evidence.
+        if (committed === false) return;
       } else if (payload.kind === "failed") {
         this.#deliveryFailure = retainedQueryFailure(payload.code);
         this.#failure(this.#deliveryFailure);

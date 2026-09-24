@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
 import { claudeSteerOperationsMigration } from "../../src/server/db/migrations/102-claude-steer-operations.js";
 import { claudeTaskLifecycleMigration } from "../../src/server/db/migrations/100-claude-task-lifecycle.js";
@@ -244,6 +245,8 @@ function provider(
 
 function handle(runtimeClient: ClaudeSdkRuntimeAdapter): ClaudeConversationHandle {
   return new ClaudeConversationHandle({
+      usage: NO_USAGE_SINK,
+      nativeNamespace: "claude-test-native",
     binding: BINDING,
     canonicalWorkspacePath: "/workspace",
     workspaceId: "workspace-a",

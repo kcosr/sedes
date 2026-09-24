@@ -1,3 +1,4 @@
+import type { UsageSink } from "../../usage/contracts.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
 import { createHash } from "node:crypto";
@@ -124,6 +125,8 @@ const branchCheckpointSchema = z
   .strict();
 
 export interface ClaudeConversationDriverInput {
+  readonly usage: UsageSink;
+  readonly nativeNamespace: string;
   readonly resolveThreadEnvironment?: ThreadEnvironmentResolver;
   readonly instance: AgentBackendInstance;
   readonly connection: AgentConnectionProfile;
@@ -152,6 +155,8 @@ export interface ClaudeConversationDriverInput {
 export class ClaudeConversationBackendDriver implements ConversationBackendDriver {
   readonly instance: AgentBackendInstance;
   readonly connection: AgentConnectionProfile;
+  readonly #usage: UsageSink;
+  readonly #nativeNamespace: string;
   readonly #resolveThreadEnvironment: ThreadEnvironmentResolver;
   readonly #runtimeClient: ClaudeRuntimeClient;
   readonly #executablePath: string;
@@ -177,6 +182,8 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
   #nextQueryGeneration = 0;
 
   constructor(input: ClaudeConversationDriverInput) {
+    this.#usage = input.usage;
+    this.#nativeNamespace = input.nativeNamespace;
     this.#resolveThreadEnvironment = input.resolveThreadEnvironment ?? (async () => Object.freeze({}));
     this.instance = input.instance;
     this.connection = input.connection;
@@ -540,6 +547,8 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         "conversation_session",
       );
       handle = await ClaudeConversationHandle.create({
+        usage: this.#usage,
+        nativeNamespace: this.#nativeNamespace,
         binding: input.binding,
         canonicalWorkspacePath: input.workspace.canonicalPath,
         workspaceId: input.workspace.summary.id,

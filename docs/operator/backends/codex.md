@@ -159,9 +159,15 @@ Remote eviction requires sidecar runtime protocol 8.
 ### Local Unix WebSocket
 
 The socket modes are a capability boundary. Sedes requires a canonical,
-owner-only parent (`0700`) and owned socket (`0600`), captures the socket
-identity, connects, and fences a replacement generation. The external
-app-server remains alive when Sedes stops or reconnects.
+owner-only parent (`0700`) and owned socket (`0600`). The configured final path
+may also be an owned symlink in a canonical owner-only directory, pointing
+directly to such a socket; directory symlinks and alias chains remain rejected.
+This supports daemon-managed socket aliases without changing the configured
+path or its accounting namespace. Sedes captures and rechecks both alias and
+target identities around connection and WebSocket Upgrade, and fences a
+replacement or retargeted alias. The same validation runs on a sidecar host for
+its external Unix endpoint. The external app-server remains alive when Sedes
+stops or reconnects.
 
 ### Local TCP and WSS
 
@@ -383,3 +389,75 @@ transport, generated-image path, or TUI.
 
 For contributor-facing protocol and lifecycle contracts, continue with
 [Codex backend internals](../../internals/backends/codex.md).
+
+## Recorded usage
+
+Codex records cumulative `thread/tokenUsage/updated` observations on main.
+Repeated totals replace checkpoints rather than add another charge. Per-turn
+values are conservative differences between continuous, attributable checkpoints.
+The first interval of a new turn is included when Sedes observed the previous
+turn's checkpoint, its completion, and the new turn's start in that order within
+one uninterrupted runtime generation. An idle resume can also establish the
+initial boundary: Sedes validates the resume response and observes the restored
+cumulative checkpoint before the next turn starts in the same generation. This
+lets the first new turn retain its usage when native resume supplies that
+checkpoint. Warm paginated resume and persistent read-only reattachment can omit
+it; a single-update first turn can then have no attributable usage. Saved
+session totals remain intact, but do not prove that no native work occurred
+while Sedes was disconnected. Sedes does not reread full history for accounting.
+A start alone, a reconnect, or a late checkpoint cannot establish that boundary.
+With a proven initial baseline and continuous capture, a completed turn reports
+complete usage at **Main agent only** scope. Missing boundaries remain partial
+recorded intervals. Unknown model attribution does not make token counts partial.
+Capture gaps currently apply to the entire native session. A later disconnect
+gap or recovery of capture left active by a Sedes restart can therefore mark
+earlier completed turns partial too. Codex does not reconcile those gaps through
+history; their saved counts remain available and unchanged.
+The latest-call counter is retained as lower-scope evidence, not the whole turn.
+Codex can repeat an older latest-call value during rate-limit updates, so a new
+turn ID on that notification alone does not make it new turn usage.
+
+Native history provides no per-turn usage backfill. Codex 0.153.0 restores its
+cumulative accumulator from the saved rollout on cold resume, including
+paginated resume. The pinned implementation is
+[`record_initial_history` at revision 41e22fee](https://github.com/openai/codex/blob/41e22fee981a63b3698df7ed36bad393cda24715/codex-rs/core/src/session/mod.rs#L1450),
+with [upstream resume fixtures](https://github.com/openai/codex/blob/41e22fee981a63b3698df7ed36bad393cda24715/codex-rs/app-server/tests/suite/v2/thread_resume.rs#L3502).
+A restored checkpoint can recover session totals without recovering older turns.
+Reconnect and process generation changes therefore preserve the same counter
+series. If resumed totals are lower, Sedes retains the last valid value and shows
+reconciliation incomplete; it does not invent a reset or charge a new series.
+Copied fork baselines are not newly charged. Usage notifications provide no model
+or provider attribution, so those dimensions remain unknown. Native child-thread
+usage is not included in the parent's counters. Sedes captures child lifetime
+counters separately and includes them once in the owning conversation's session
+total, with a main/subagent breakdown. Child counters do not affect parent-turn
+allocations, even when a child spans several turns.
+The pinned implementation updates each session's own counters, and the
+[child accounting fixture](https://github.com/openai/codex/blob/41e22fee981a63b3698df7ed36bad393cda24715/codex-rs/core/src/agent/control_tests.rs#L1389)
+verifies independent child usage without inherited parent charges.
+Previously recorded partial allocations retain their original coverage metadata;
+this change does not reconstruct historical turn boundaries.
+No billing cost is fabricated from token counts.
+
+Native spawn relationships establish child ownership; unrelated thread events
+and ordinary send/wait recipients do not. Both Codex collaboration spawn items
+and multi-agent v2 `subAgentActivity` start items establish those relationships.
+New children are automatically
+subscribed by the shared app-server. Capture follows the admitted runtime
+rather than the parent chat handle and retains residency while children run.
+Nested children accumulate under the same root conversation.
+
+After a restart, a scoped database query restores known child relationships
+when the matching runtime connects, without opening the parent conversation.
+Recovery checks loaded threads and uses `thread/resume` with
+`excludeTurns: true` only for known loaded children; it does not scan transcripts
+or start old unloaded threads. This path does not replay usage. A later cumulative
+update recovers the child's session counter; a child that completed during the
+disconnection can remain incomplete. Children confirmed idle before disconnect
+retain their recorded completeness; a restart alone does not create a gap.
+Previously undiscovered children and work
+done while the runtime is disconnected are not guaranteed to be recovered.
+
+Captured values live in the main Sedes database and remain readable without
+opening a provider session. See [recorded usage](../../user/conversations.md#view-recorded-usage)
+for the UI and [backups](../operations.md#state-upgrades-and-backups) for retention.

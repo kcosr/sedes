@@ -405,6 +405,7 @@ describe("real Codex Sedes CLI skill", () => {
         );
         const config: AppConfig = {
           authenticationRequired: true,
+          experimentalUsageEnabled: false,
           host: "127.0.0.1",
           port: 4784,
           stateDirectory: path.join(root, "state"),

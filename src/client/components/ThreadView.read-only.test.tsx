@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+vi.mock("./thread/TurnUsageAction.js", () => ({ TurnUsageAction: () => null }));
+import { UsageQueryCache } from "../stores/UsageQueryCache.js";
 import { OperationOverlayHost } from "../operations/OperationOverlay.js";
 import { getBlockingOperation } from "../operations/blocking-operation.js";
 vi.mock("../operations/thread-readiness.js", () => ({
@@ -89,6 +91,20 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
+describe("ThreadView load errors", () => {
+  it("keeps session stats out of the error screen when a disabled backend has no snapshot", () => {
+    const snapshot = makeSnapshot("interactive", "disconnected");
+    const state = fixture(snapshot, [], { status: "error", connection: "disconnected", authoritative: false,
+      snapshot: undefined, error: "This backend is disabled." });
+    render(<ThreadView threadId={snapshot.thread.id} visible automationOpen={false} registry={state.registry} applicationStore={state.applicationStore} />);
+    expect(screen.getByText("Couldn’t open this thread")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Session stats" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Back to threads" })).toBeVisible();
+    expect(state.registry.get(snapshot.thread.id).getSnapshot().snapshot).toBeUndefined();
+  });
+});
+
 describe("ThreadView loading header", () => {
   function loadingFixture() {
     const snapshot = {
@@ -157,6 +173,7 @@ describe("ThreadView loading header", () => {
     expect(header.nextElementSibling).toBe(loadingNotice);
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Thread actions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Session stats" })).not.toBeInTheDocument();
     expect(state.registry.get(state.snapshot.thread.id).getSnapshot().snapshot).toBeUndefined();
     act(() => state.updateApplicationSnapshot({
       ...state.applicationSnapshot,
@@ -165,6 +182,7 @@ describe("ThreadView loading header", () => {
     expect(within(header).getByRole("heading", { name: "Updated inventory title" })).toBeInTheDocument();
     expect(screen.queryByText("Loading inventory title")).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Session stats" })).not.toBeInTheDocument();
   });
 
   it("uses a generic header until matching inventory arrives and does not leak the previous thread title", () => {
@@ -1470,6 +1488,7 @@ function fixture(
   let activityDetail: ActivityDetailMode = "full";
   let projectionViewportAnchor: ThreadProjectionViewportAnchor | undefined;
   const threadStore = {
+    usage: new UsageQueryCache(snapshot.thread.id, {getUsage:vi.fn(),getUsageAvailability:vi.fn()}),
     get activityDetail() {
       return activityDetail;
     },
@@ -1520,7 +1539,7 @@ function fixture(
     status: "ready",
     connection: "connected",
     authoritative: true,
-    providerPulseEnabled: false,
+    providerPulseEnabled: false, experimentalUsageEnabled: false,
     search: "",
     descendantPages: {},
     pendingThreadConfigurationCopySourceIds: [],

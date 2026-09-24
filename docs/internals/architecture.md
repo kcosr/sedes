@@ -18,6 +18,7 @@ This document is the system map. Detailed subsystem invariants live in the
 - [Mutations and recovery](#mutations-and-recovery)
 - [Execution environments](#execution-environments)
 - [Persistence](#persistence)
+- [Durable usage accounting](#durable-usage-accounting)
 - [Agent tools and terminals](#agent-tools-and-terminals)
 - [Client ownership](#client-ownership)
 - [Security boundary](#security-boundary)
@@ -365,6 +366,30 @@ recognizes one reviewed native result and hands the common artifact service a
 bounded byte source. Normalized history contains descriptor metadata, never
 provider paths, URLs, base64, or storage paths. See
 [provider output artifacts](output-artifacts.md).
+
+## Durable usage accounting
+
+[`UsageService`](../../src/server/usage/usage-service.ts) records provider-reported
+tokens and cost estimates on main, independently of transcript delivery and of
+any browser. Backend adapters normalize native evidence before lossy
+presentation and hand it to a scoped sink; the service stores immutable
+observations, selects canonical facts (additive entries sum, cumulative
+checkpoints replace their series, turn allocations never add a second charge),
+records gaps and conflicts explicitly, and advances one monotonic revision per
+thread. Live `UsageSnapshot` values carry only context occupancy and transcript
+counters.
+
+Session and turn reports, turn-availability checks, and the principal-wide
+`POST /api/usage/analytics` read are database-only and never open a backend. A
+derived `usage_increments` timeline, written in the capture transaction,
+records each accepted increase with its dimensions and how its time is known,
+so the Usage page charts only provable times. A committed revision can publish
+a generation-bound `usage_revision_changed` hint to an already-loaded actor
+without mutating the transcript or creating actors.
+
+The store, capture transaction, selection rules, backend dispositions, forks
+and subagents, reads, timeline, analytics, recovery, and limitations are
+specified in [Usage accounting](usage-accounting.md).
 
 ## Agent tools and terminals
 

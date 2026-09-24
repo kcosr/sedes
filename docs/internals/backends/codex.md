@@ -152,8 +152,11 @@ Transport implementations also own their generation boundaries:
 - Owned stdio probes the executable, verifies that initialized app-server has
   the same semantic-version precedence, owns the process group and native-store
   lock, and releases the lock only after killing the process group.
-- Local UDS captures the assured owner/mode/socket identity and fences a
-  replaced endpoint.
+- Local and sidecar-hosted UDS capture the assured owner/mode/socket identity
+  and fence a replaced endpoint. A final owned symlink is allowed only between
+  canonical owner-only directories and directly to an owned `0600` socket;
+  alias and target identities are both revalidated. The configured selector
+  remains the native-store/accounting namespace input.
 - TCP/WSS resolves a fresh capability bearer for each generation and limits it
   to the Upgrade header.
 - Persistent SSH execution owns its provider runtime on the sidecar, retaining

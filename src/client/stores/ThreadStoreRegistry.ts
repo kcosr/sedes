@@ -48,6 +48,13 @@ export class ThreadStoreRegistry {
   #activityDetail: ActivityDetailMode;
   #unsubscribeActivityDetail: () => void;
   #inactiveOrder = 0;
+  #experimentalUsageEnabled = false;
+
+  setExperimentalUsageEnabled(enabled: boolean): void {
+    if (enabled === this.#experimentalUsageEnabled) return;
+    this.#experimentalUsageEnabled = enabled;
+    for (const { store } of this.#stores.values()) store.usage.setEnabled(enabled);
+  }
 
   constructor(api: ApiClient, transport: EventStreamTransport) {
     this.#api = api;
@@ -79,6 +86,7 @@ export class ThreadStoreRegistry {
         this.#transport,
         this.#activityDetail,
       );
+      store.usage.setEnabled(this.#experimentalUsageEnabled);
       entry = {
         store,
         references: 0,

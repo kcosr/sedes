@@ -211,6 +211,8 @@ class ClaudeBackendModuleRuntime implements BackendModuleRuntime {
       resolveConnectionDefaults,
     });
     this.driverFactory = new ClaudeBackendDriverFactory({
+      usage: context.usage,
+      nativeNamespace: namespaceKey,
       resolveThreadEnvironment: createThreadEnvironmentResolver(context),
       scope: context.scope,
       instance: context.instance,

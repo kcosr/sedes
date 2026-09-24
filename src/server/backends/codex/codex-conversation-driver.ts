@@ -1,3 +1,5 @@
+import { CodexSubagentUsageCoordinator } from "./codex-subagent-usage.js";
+import type { UsageSink } from "../../usage/contracts.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import { createHash } from "node:crypto";
 import { posix as posixPath, win32 as windowsPath } from "node:path";
@@ -209,6 +211,8 @@ export class CodexConversationOwnershipRegistry {
 }
 
 export interface CodexConversationDriverInput {
+  readonly usageSink: UsageSink;
+  readonly nativeNamespace: string;
   readonly resolveThreadEnvironment?: ThreadEnvironmentResolver;
   readonly instance: AgentBackendInstance;
   readonly connection: AgentConnectionProfile;
@@ -232,6 +236,9 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
   readonly #resolveThreadEnvironment: ThreadEnvironmentResolver;
   readonly instance: AgentBackendInstance;
   readonly connection: AgentConnectionProfile;
+  readonly #usageSink: UsageSink;
+  readonly #subagentUsage: CodexSubagentUsageCoordinator | undefined;
+  readonly #nativeNamespace: string;
   readonly #client: CodexSharedClientFacade;
   readonly #serverRequests: CodexServerRequestRouter;
   readonly #ownership: CodexConversationOwnershipRegistry;
@@ -269,6 +276,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     readonly showOpenAIComposerSkills: boolean;
     readonly promise: Promise<BackendCatalog>;
   };
+  readonly #newUsageCounters = new Map<string, number>();
   readonly #createInFlight = new Map<
     string,
     Promise<CreateConversationResult>
@@ -278,6 +286,8 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     this.#resolveThreadEnvironment = input.resolveThreadEnvironment ?? (async () => Object.freeze({}));
     this.instance = input.instance;
     this.connection = input.connection;
+    this.#usageSink = input.usageSink;
+    this.#nativeNamespace = input.nativeNamespace;
     this.#client = input.client;
     this.#serverRequests = input.serverRequests;
     this.#ownership = input.ownership;
@@ -306,6 +316,9 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     ) {
       throw new Error("codex_driver_configuration_invalid");
     }
+    this.#subagentUsage = input.usageSink.enabled ? new CodexSubagentUsageCoordinator({ client: this.#client, sink: this.#usageSink, nativeNamespace: this.#nativeNamespace,
+      runtimeScope:{tenantId:this.connection.tenantId,principalId:this.connection.ownerPrincipalId,backendInstanceId:this.instance.id,
+        executionEnvironmentId:this.connection.executionEnvironmentId,connectionProfileId:this.connection.id},onError:this.#onError }) : undefined;
     this.#client.subscribeNotifications((notification) => {
       if (
         notification.kind !== "decoded_notification" ||
@@ -1002,6 +1015,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
           now: this.#nowMilliseconds(),
         });
       }
+      this.#newUsageCounters.set(thread.id, lifecycle.generation);
       const result: CreateConversationResult = Object.freeze({
         backendConversationId: thread.id,
         reconciliationToken: token(
@@ -1071,6 +1085,9 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         readonly ("text" | "image")[]
       >();
       const handle = new CodexConversationHandle({
+        usageSink: this.#usageSink,
+        nativeNamespace: this.#nativeNamespace,
+        usageProvenZero: this.#newUsageCounters.get(input.binding.backendConversationId) === this.#client.lifecycleSnapshot().generation,
         resolveThreadEnvironment: this.#resolveThreadEnvironment,
         binding: input.binding,
         canonicalWorkspacePath: input.workspace.canonicalPath,
@@ -1143,7 +1160,9 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         releaseOwnership: ownership.release,
         onError: this.#onError,
       });
+      this.#newUsageCounters.delete(input.binding.backendConversationId);
       ownership.install(handle);
+      this.#subagentUsage?.registerRoot(input.binding);
       return handle;
     } catch (error) {
       ownership.release();

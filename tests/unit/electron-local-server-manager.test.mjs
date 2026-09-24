@@ -183,6 +183,13 @@ describe("Electron managed local server", () => {
     });
   });
 
+  it.each(["0", "1", "invalid"])("passes the experimental usage value %s through for server validation", value => {
+    const environment = managedLocalEnvironment({ SEDES_EXPERIMENTAL_USAGE: value }, {
+      stateDirectory: "/private/state", configurationFilename: "/private/config/server.json",
+    });
+    expect(environment.SEDES_EXPERIMENTAL_USAGE).toBe(value);
+  });
+
   it("spawns the exact Electron binary in Node mode without a shell", () => {
     const child = new FakeChild();
     const implementation = vi.fn(() => child);

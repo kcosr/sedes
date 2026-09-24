@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { describe, expect, it } from "vitest";
 import { GrokBackendModule } from "../../src/server/backends/grok/grok-backend-module.js";
 import { compiledBackendModuleCatalog } from "../../src/server/backends/compiled-module-catalog.js";
@@ -134,7 +135,7 @@ describe("GrokBackendModule", () => {
         }),
         toolProvenanceKey: new Uint8Array(32),
         agentTools: {} as BackendModuleRuntimeContext["agentTools"],
-        outputArtifacts: {} as BackendModuleRuntimeContext["outputArtifacts"],
+        usage: NO_USAGE_SINK, outputArtifacts: {} as BackendModuleRuntimeContext["outputArtifacts"],
         agentToolSourceCapabilities,
         agentToolCli: {
           availability: "unavailable",
@@ -230,7 +231,7 @@ describe("GrokBackendModule", () => {
           }),
           toolProvenanceKey: new Uint8Array(32),
           agentTools: {} as BackendModuleRuntimeContext["agentTools"],
-          outputArtifacts: {} as BackendModuleRuntimeContext["outputArtifacts"],
+          usage: NO_USAGE_SINK, outputArtifacts: {} as BackendModuleRuntimeContext["outputArtifacts"],
           agentToolSourceCapabilities,
           agentToolCli: {
             availability: "unavailable",

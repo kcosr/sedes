@@ -9,6 +9,49 @@ the containing history page must also fit its limit.
 This guide covers the full conversation workflow, from an empty draft through
 running, queued, completed, and forked work.
 
+## View recorded usage
+
+Recorded usage is **Experimental**. The views below require the server
+operator's `SEDES_EXPERIMENTAL_USAGE=1` opt-in. When it is off, Session stats
+still shows live context occupancy and transcript counters.
+
+The **Turn usage and cost** icon appears below a finished turn when it has
+recorded usage. Hover or focus previews the summary; click or tap pins it.
+Click again, press Escape, tap outside, or use mobile Back to close. Failed and
+interrupted turns keep their recorded usage, including while the backend is
+disconnected. Running turns and turns without recorded usage have no icon.
+
+The compact summary shows input and output tokens, nonzero cache or reasoning
+counts, and cost/model information when available. **Cached input** and **Cache
+write** are part of **Input**, and reasoning is part of output. Do not add every row together. An em
+dash means unavailable, not zero. Cost estimates are not billing receipts;
+missing cost is explicitly unavailable. Short status labels indicate partial
+or restricted coverage.
+**Main agent only** excludes subagent work; it does not by itself mean tokens are
+missing from the displayed agent's usage. **Partial** indicates incomplete capture
+or allocation within the reported scope.
+Previously saved records and current Claude results can retain a conservative
+partial classification. Session-wide capture gaps can also affect older turns.
+
+**Thread actions → Session stats** separates durable **Recorded session usage**
+from live context occupancy and transcript counters. Session usage can exceed the
+sum of displayed turns because some work has no reliable turn attribution.
+For Codex, the session table separates **Main agent**, **Subagents** (including
+nested agents), and **Total**. Subagent work belongs to the session rather than
+the turn that launched it; it can continue after that turn finishes. Claude's
+session total already includes its SDK-reported subagent work, without a
+separate subagent subtotal.
+Small **Partial**, **Main agent only**, **Recorded intervals**, and **Needs
+reconciliation** labels explain restricted coverage or unresolved evidence. Inherited turn
+usage does not charge copied work to the child session. Grok currently reports
+usage as unsupported.
+
+Sedes records on the main server independently of an open browser. Open usage
+views refresh periodically; closing them stops those reads. Previously recorded
+values remain available offline from the provider, and a refresh failure retains
+the last successful display. Older turns may have no recoverable accounting.
+For totals across threads over time, open the [Usage page](usage.md).
+
 ## Create a thread
 
 Choose **New thread** from the sidebar or landing page. On desktop the form

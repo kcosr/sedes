@@ -286,7 +286,7 @@ function makeState(
     status: "ready",
     connection: "connected",
     authoritative: true,
-    providerPulseEnabled: false,
+    providerPulseEnabled: false, experimentalUsageEnabled: false,
     search: options.search ?? "",
     descendantPages: options.descendantPages ?? {},
     pendingThreadConfigurationCopySourceIds: [],
@@ -484,6 +484,32 @@ describe("sidebar disclosure persistence", () => {
     view.unmount();
     renderSidebar(threads);
     expect(screen.getAllByTestId("inventory-shelf").find((element) => element.dataset.shelf === "automations")).toHaveAttribute("data-state", "closed");
+  });
+});
+
+describe("sidebar footer destinations", () => {
+  it("opens the Usage page and closes the drawer without Provider Pulse", async () => {
+    window.history.replaceState({}, "", "/");
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    const threads = [makeThread("thread-1", "Thread")];
+    const view = renderSidebar(threads);
+    view.rerender(
+      <InventorySidebar
+        state={{...makeState(threads),experimentalUsageEnabled:true}}
+        store={view.store}
+        onNavigate={onNavigate}
+        onOpenSettings={() => undefined}
+        peekEnabled
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "More" }));
+    expect(screen.queryByRole("menuitem", { name: "Accounts" })).toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: "Usage (Experimental)" }));
+
+    expect(window.location.pathname).toBe("/usage");
+    expect(onNavigate).toHaveBeenCalledOnce();
   });
 });
 

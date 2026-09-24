@@ -1,3 +1,4 @@
+import { usageIntegerSchema } from "./usage-accounting.js";
 import { formFieldsSchema, formAnswersSchema } from "./interactions.js";
 import { questionResponseOriginSchema } from "./questions.js";
 import { backgroundActivitySchema } from "./background-activity.js";
@@ -567,24 +568,8 @@ export const usageSnapshotSchema = z.strictObject({
       percent: z.number().finite().nonnegative().optional(),
     })
     .optional(),
-  tokens: z
-    .strictObject({
-      input: safeCountSchema.optional(),
-      output: safeCountSchema.optional(),
-      cacheRead: safeCountSchema.optional(),
-      cacheWrite: safeCountSchema.optional(),
-      total: safeCountSchema.optional(),
-    })
-    .optional(),
-  cost: z
-    .strictObject({
-      amount: z.number().finite().nonnegative(),
-      currency: z.string().regex(/^[A-Z]{3}$/),
-    })
-    .optional(),
   counters: z
     .strictObject({
-      requests: safeCountSchema.optional(),
       userMessages: safeCountSchema.optional(),
       assistantMessages: safeCountSchema.optional(),
       toolCalls: safeCountSchema.optional(),
@@ -1835,6 +1820,11 @@ export const normalizedThreadEventSchema = z.discriminatedUnion("type", [
     type: z.literal("interaction_resolved"),
     generation: generationSchema,
     interactionId: z.string().min(1).max(160),
+  }),
+  z.strictObject({
+    type: z.literal("usage_revision_changed"),
+    generation: generationSchema,
+    revision: usageIntegerSchema,
   }),
   z.strictObject({
     type: z.literal("usage_changed"),

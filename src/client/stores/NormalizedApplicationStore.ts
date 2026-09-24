@@ -13,6 +13,7 @@ export interface NormalizedApplicationState {
   /** The connected server's Sedes product version from the session handshake. */
   readonly serverVersion?: string;
   readonly providerPulseEnabled?: boolean;
+  readonly experimentalUsageEnabled?: boolean;
   readonly generation?: string;
   readonly snapshot?: NormalizedApplicationSnapshot;
 }
@@ -99,6 +100,7 @@ export class NormalizedApplicationStore {
       csrfToken: parsed.data.csrfToken,
       serverVersion: parsed.data.version,
       providerPulseEnabled: parsed.data.providerPulseEnabled,
+      experimentalUsageEnabled: parsed.data.experimentalUsageEnabled,
     });
     return { kind: "applied" };
   }
@@ -129,6 +131,7 @@ export class NormalizedApplicationStore {
         ...(this.#state.providerPulseEnabled !== undefined
           ? { providerPulseEnabled: this.#state.providerPulseEnabled }
           : {}),
+        experimentalUsageEnabled: this.#state.experimentalUsageEnabled === true,
         generation: envelope.event.generation,
         snapshot: envelope.event.snapshot,
       });

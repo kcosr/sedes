@@ -1,3 +1,13 @@
+import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { UsageService } from "../../src/server/usage/usage-service.js";
+import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
+import { BackendConfigurationRepository } from "../../src/server/db/repositories/backend-configuration-repository.js";
+import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
+import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
+import { AgentSession } from "@earendil-works/pi-coding-agent";
+import { type UsageObservation } from "../../src/server/usage/contracts.js";
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
+import { PiUsageAccounting } from "../../src/server/backends/pi/pi-usage-accounting.js";
 import {
   chmod,
   mkdir,
@@ -27,6 +37,7 @@ import type {
 } from "../../src/server/backends/pi/pi-sdk-session.js";
 import {
   PiInteractionBridge,
+  DefaultPiSdkSessionFactory,
   piModels,
 } from "../../src/server/backends/pi/pi-sdk-session.js";
 import { PI_EXECUTOR_BUILTIN_TOOL_NAMES } from "../../src/server/backends/pi/pi-remote-workspace.js";
@@ -1665,18 +1676,79 @@ describe("Pi interaction bridge", () => {
 });
 
 describe("Pi conversation backend driver", () => {
+  it("records live assistant and tool usage after the pinned SDK persists message_end without entry_appended", async () => {
+    const fixture = await workspace();
+    const agentDir=path.join(fixture.root,"agent");await mkdir(agentDir);
+    await writeFile(path.join(agentDir,"settings.json"),JSON.stringify({cacheWarming:"off"}));
+    const bindExtensions=vi.spyOn(AgentSession.prototype,"bindExtensions");
+    const current=savedAgentDatabase(), database=current.database, owner=current.scope;
+    const profile=new BackendConfigurationRepository(database).listProfiles(owner)[0]!;
+    const dbWorkspace=new InventoryRepository(database).upsertWorkspace(owner,{environmentId:profile.executionEnvironmentId,canonicalPath:fixture.workspace.canonicalPath,displayName:"Usage fixture",available:true,trustState:"trusted",environmentConfigurationRevision:0,now:1});
+    const thread=new ConversationBindingRepository(database).createUnboundThread(owner,{workspaceId:dbWorkspace.id,connectionProfileId:profile.id,title:"Usage fixture",now:1});
+    const sdkWorkspace={...fixture.workspace,summary:{...fixture.workspace.summary,id:dbWorkspace.id,environmentId:profile.executionEnvironmentId}};
+    const usage=new UsageService(database, {enabled: true}), observations:UsageObservation[]=[];
+    const fixtureInstance={...instance,tenantId:owner.tenantId,id:profile.backendInstanceId};
+    const fixtureConnection={...profile,enabled:profile.enabled===1};
+    const driver=new PiConversationBackendDriver({instance:fixtureInstance,connection:fixtureConnection,usage:{enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: input => usage.listSubagents(input), open:source=>{const capture=usage.open(source);return {...capture,capture:batch=>{observations.push(...batch);return capture.capture(batch);}};}},nativeDiscoveryNamespaceKey:"pi-test-native-namespace",toolProvenanceKey,agentTools:noAgentTools,toolAccessPolicy:fullToolAccessPolicy,sessionDirectory:fixture.sessions,sessionFactory:new DefaultPiSdkSessionFactory({agentDir})});
+    const created=await driver.create({scope:owner,workspace:sdkWorkspace,applicationThreadId:thread.id,applicationOperationId:"sdk-usage-create",source:{kind:"user"}});
+    database.prepare("UPDATE application_threads SET backing_state='bound' WHERE id=?").run(thread.id);
+    database.prepare("INSERT INTO conversation_bindings(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,connection_profile_id,execution_environment_id,backend_conversation_id,created_at) VALUES(?,?,?,?,?,?,?,?)").run(owner.tenantId,owner.principalId,thread.id,profile.backendInstanceId,profile.id,profile.executionEnvironmentId,created.backendConversationId,1);
+    const nativeBinding={tenantId:owner.tenantId,ownerPrincipalId:owner.principalId,applicationThreadId:thread.id,backendInstanceId:profile.backendInstanceId,connectionProfileId:profile.id,executionEnvironmentId:profile.executionEnvironmentId,backendConversationId:created.backendConversationId,createdAt:new Date(1).toISOString()};
+    const handle=await driver.attach({scope:owner,workspace:sdkWorkspace,binding:nativeBinding,opaqueBindingDetail:created.opaqueBindingDetail});
+    try {
+      const projection=await handle.establishProjection({signal:new AbortController().signal});
+      const events:BackendConversationEvent[]=[];projection.subscribeFromNext(({event})=>events.push(event));
+      const native=bindExtensions.mock.instances.at(-1)! as AgentSession;
+      const rawEvents:string[]=[];native.subscribe(event=>rawEvents.push(event.type));
+      // Exercise the pinned SDK's actual event/persistence ordering without a provider request.
+      const sdk=native as unknown as {_handleAgentEvent(event:unknown):Promise<void>;_emitAgentSettled():Promise<void>;_emit(event:unknown):void};
+      await sdk._handleAgentEvent({type:"agent_start"});
+      await sdk._handleAgentEvent({type:"message_end",message:{role:"user",content:"Question",timestamp:1}});
+      const nativeUsage={input:11,output:7,cacheRead:3,cacheWrite:2,totalTokens:23,cost:{input:0.0001,output:0.0001,cacheRead:0,cacheWrite:0,total:0.0002}};
+      const assistant={role:"assistant",content:[{type:"toolCall",id:"fixture-tool",name:"fixture",arguments:{}}],api:"openai-completions",provider:"fixture",model:"fixture-model",usage:nativeUsage,stopReason:"toolUse",timestamp:2};
+      await sdk._handleAgentEvent({type:"message_start",message:assistant});
+      await sdk._handleAgentEvent({type:"message_end",message:assistant});
+      await sdk._handleAgentEvent({type:"message_end",message:{role:"toolResult",toolCallId:"fixture-tool",toolName:"fixture",content:[{type:"text",text:"Result"}],isError:false,timestamp:3,usage:nativeUsage}});
+      const finalAssistant={...assistant,content:[{type:"text",text:"Answer"}],stopReason:"stop",timestamp:4};
+      await sdk._handleAgentEvent({type:"message_start",message:finalAssistant});
+      await sdk._handleAgentEvent({type:"message_end",message:finalAssistant});
+      await sdk._emitAgentSettled();
+      expect(rawEvents).not.toContain("entry_appended");
+      const started=events.find(event=>event.type==="turn_started");
+      expect(started?.type).toBe("turn_started");
+      const turnId=started?.type==="turn_started"?started.turn.backendTurnId:"missing";
+      expect(observations).toHaveLength(3);
+      expect(observations.map(observation=>observation.facts[0]!.turn?.backendTurnId)).toEqual([turnId,turnId,turnId]);
+      expect(observations.map(observation=>observation.facts[0]!.activity)).toEqual(["model","tool","model"]);
+      expect(observations[0]!.facts[0]).toMatchObject({tokens:{input:"16",output:"7",requests:"1"},costs:[{amount:"0.0002"}]});
+      const applicationTurnId=applicationTurnIdForBackendTurn({backendInstanceId:profile.backendInstanceId,sourceApplicationThreadId:thread.id,backendTurnId:turnId});
+      expect(database.prepare("SELECT count(*) AS count FROM usage_records WHERE turn_id=?").get(applicationTurnId)).toEqual({count:3});
+      expect(usage.read(owner,thread.id,applicationTurnId)).toMatchObject({state:"complete",turnState:"completed",captureState:"active",measurementScope:"whole_turn",summary:{reasons:[],metrics:{input:{value:"48"},output:{value:"21"},requests:{value:"2"}},costs:[{amount:"0.0006"}]}});
+      expect(usage.read(owner,thread.id).summary.metrics.input.value).toBe("48");
+      native.sessionManager.appendCompaction("Summary",turnId,23,undefined,false,nativeUsage);
+      sdk._emit({type:"compaction_end",reason:"manual",result:{summary:"Summary",firstKeptEntryId:turnId,tokensBefore:23,usage:nativeUsage},aborted:false,willRetry:false});
+      expect(observations).toHaveLength(4);
+      expect(observations[3]!.facts[0]).toMatchObject({activity:"compaction",turn:null,tokens:{input:"16",output:"7"}});
+      expect(usage.read(owner,thread.id).summary.metrics.input.value).toBe("64");
+      expect(usage.read(owner,thread.id,applicationTurnId).summary.metrics.input.value).toBe("48");
+    } finally {await handle.close();database.close();bindExtensions.mockRestore();}
+  });
+
   it.each([
     { kind: "cache_warm", running: false },
     { kind: "cache_warm", running: true },
     { kind: "extension_aggregate", running: false },
-  ])("publishes $kind usage while running=$running without changing conversation state", async ({ kind, running }) => {
+  ])("publishes $kind context while running=$running with accounting disabled", async ({ kind, running }) => {
     const fixture = await workspace();
+    const reconcile = vi.spyOn(PiUsageAccounting.prototype, "reconcile");
+    const append = vi.spyOn(PiUsageAccounting.prototype, "append");
     const baseFactory = fakeSessionFactory();
     let nativeListener!: Parameters<PiSdkSession["subscribe"]>[0];
     let manager!: PiSdkSession["sessionManager"];
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -1750,8 +1822,6 @@ describe("Pi conversation backend driver", () => {
         {
           type: "usage_changed",
           usage: expect.objectContaining({
-            tokens: expect.objectContaining({ total: 103 }),
-            cost: { amount: 0.5, currency: "USD" },
             counters: expect.objectContaining({
               assistantMessages: 0,
               totalMessages: 0,
@@ -1760,8 +1830,7 @@ describe("Pi conversation backend driver", () => {
         },
       ]);
       const usage = await handle.usage();
-      if (kind === "cache_warm") expect(usage.counters?.requests).toBe(1);
-      else expect(usage.counters).not.toHaveProperty("requests");
+      expect(usage.counters).not.toHaveProperty("requests");
       expect(events[0]).toEqual({ type: "usage_changed", usage });
 
       // Repeated notification rereads the aggregate instead of double-counting.
@@ -1771,8 +1840,11 @@ describe("Pi conversation backend driver", () => {
       const afterClose = events.length;
       nativeListener({ type: "entry_appended", entry });
       expect(events).toHaveLength(afterClose);
+      expect(reconcile).not.toHaveBeenCalled();
+      expect(append).not.toHaveBeenCalled();
     } finally {
       await handle.close();
+      reconcile.mockRestore(); append.mockRestore();
     }
   });
 
@@ -1781,6 +1853,7 @@ describe("Pi conversation backend driver", () => {
     const chunks = ["safe prefix", "x".repeat(16 * 1024 * 1024)];
     const driver = new PiConversationBackendDriver({
       instance, connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey, agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy,
       sessionDirectory: fixture.sessions,
@@ -1830,6 +1903,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -1961,6 +2035,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -2245,6 +2320,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: facade,
@@ -2362,6 +2438,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -2420,6 +2497,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -2466,6 +2544,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -2528,6 +2607,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -2594,6 +2674,7 @@ describe("Pi conversation backend driver", () => {
       const driver = new PiConversationBackendDriver({
         instance,
         connection,
+        usage: NO_USAGE_SINK,
         nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
         toolProvenanceKey,
         agentTools: noAgentTools,
@@ -2667,6 +2748,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -2717,6 +2799,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -2788,6 +2871,7 @@ describe("Pi conversation backend driver", () => {
       instance,
       connection,
       toolProvenanceKey,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       agentTools: noAgentTools,
       toolAccessPolicy: fullToolAccessPolicy,
@@ -2877,6 +2961,7 @@ describe("Pi conversation backend driver", () => {
       instance,
       connection,
       toolProvenanceKey,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       agentTools: noAgentTools,
       toolAccessPolicy: fullToolAccessPolicy,
@@ -2999,6 +3084,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -3057,6 +3143,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -3139,6 +3226,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -3298,6 +3386,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -3410,6 +3499,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -3508,6 +3598,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -3605,6 +3696,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -3706,6 +3798,7 @@ describe("Pi conversation backend driver", () => {
     const original = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -3752,6 +3845,7 @@ describe("Pi conversation backend driver", () => {
     const restarted = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -3788,6 +3882,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -3873,6 +3968,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -3897,7 +3993,7 @@ describe("Pi conversation backend driver", () => {
     await handle.establishProjection({
       signal: new AbortController().signal,
     });
-    expect(project).toHaveBeenCalledOnce();
+    expect(project).toHaveBeenCalledTimes(1);
     await handle.history({ limit: 1 });
 
     expect(project).toHaveBeenCalledTimes(2);
@@ -3910,6 +4006,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -4017,6 +4114,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -4106,6 +4204,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -4238,6 +4337,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -4373,6 +4473,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -4464,6 +4565,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -4541,6 +4643,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -4626,6 +4729,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -4664,6 +4768,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -4710,6 +4815,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -4791,6 +4897,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -4875,6 +4982,7 @@ describe("Pi conversation backend driver", () => {
     const options: PiDriverOptions = {
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -4945,6 +5053,7 @@ describe("Pi conversation backend driver", () => {
       const options: PiDriverOptions = {
         instance,
         connection,
+        usage: NO_USAGE_SINK,
         nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
         toolProvenanceKey,
         agentTools: noAgentTools,
@@ -5023,6 +5132,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -5105,6 +5215,7 @@ describe("Pi conversation backend driver", () => {
       const driver = new PiConversationBackendDriver({
         instance,
         connection,
+        usage: NO_USAGE_SINK,
         nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
         toolProvenanceKey,
         agentTools: noAgentTools,
@@ -5184,6 +5295,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -5251,6 +5363,7 @@ describe("Pi conversation backend driver", () => {
     const options: PiDriverOptions = {
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -5417,6 +5530,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: facade,
@@ -5551,6 +5665,7 @@ describe("Pi conversation backend driver", () => {
       const driver = new PiConversationBackendDriver({
         instance,
         connection,
+        usage: NO_USAGE_SINK,
         nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
         toolProvenanceKey,
         agentTools: {
@@ -5630,6 +5745,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: facade,
@@ -5697,6 +5813,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: {
@@ -5741,6 +5858,7 @@ describe("Pi conversation backend driver", () => {
       const driver = new PiConversationBackendDriver({
         instance,
         connection,
+        usage: NO_USAGE_SINK,
         nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
         toolProvenanceKey,
         agentTools: noAgentTools,
@@ -5893,6 +6011,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: facade,
@@ -6103,6 +6222,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: {
@@ -6144,6 +6264,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -6237,6 +6358,7 @@ describe("Pi conversation backend driver", () => {
     let waitingForRetry = false;
     const base = fakeSessionFactory(1, false, undefined, 0, undefined, 0, ["error"]);
     const driver = new PiConversationBackendDriver({
+      usage: NO_USAGE_SINK,
       instance, connection, nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey, agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy,
       sessionDirectory: fixture.sessions,
@@ -6310,6 +6432,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -6419,6 +6542,7 @@ describe("Pi conversation backend driver", () => {
     const options: PiDriverOptions = {
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -6524,6 +6648,7 @@ describe("Pi conversation backend driver", () => {
     const options: PiDriverOptions = {
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -6594,6 +6719,7 @@ describe("Pi conversation backend driver", () => {
     const options: PiDriverOptions = {
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -6651,6 +6777,7 @@ describe("Pi conversation backend driver", () => {
     const options: PiDriverOptions = {
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -6704,6 +6831,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -6771,6 +6899,7 @@ describe("Pi conversation backend driver", () => {
     const options: PiDriverOptions = {
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -6836,6 +6965,7 @@ describe("Pi conversation backend driver", () => {
     const options: PiDriverOptions = {
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -6889,6 +7019,7 @@ describe("Pi conversation backend driver", () => {
     const options: PiDriverOptions = {
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -6941,6 +7072,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -6983,6 +7115,7 @@ describe("Pi conversation backend driver", () => {
       const driver = new PiConversationBackendDriver({
         instance,
         connection,
+        usage: NO_USAGE_SINK,
         nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
         toolProvenanceKey,
         agentTools: noAgentTools,
@@ -7032,6 +7165,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -7088,6 +7222,7 @@ describe("Pi conversation backend driver", () => {
       const driver = new PiConversationBackendDriver({
         instance,
         connection,
+        usage: NO_USAGE_SINK,
         nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
         toolProvenanceKey,
         agentTools: noAgentTools,
@@ -7166,6 +7301,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -7233,6 +7369,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       discoverySnapshots: snapshots,
       toolProvenanceKey,
@@ -7283,6 +7420,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       discoverySnapshots: snapshots,
       toolProvenanceKey,
@@ -7318,6 +7456,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -7420,6 +7559,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -7509,6 +7649,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -7647,6 +7788,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -7764,6 +7906,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -7876,6 +8019,7 @@ describe("Pi conversation backend driver", () => {
     const options: PiDriverOptions = {
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -8009,6 +8153,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -8097,6 +8242,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -8203,6 +8349,7 @@ describe("Pi conversation backend driver", () => {
     const policyChangedDriver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -8368,6 +8515,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -8600,6 +8748,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -9016,6 +9165,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -9136,6 +9286,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -9259,6 +9410,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -9303,6 +9455,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -9374,6 +9527,7 @@ describe("Pi conversation backend driver", () => {
     const options: PiDriverOptions = {
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -9448,6 +9602,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -9537,6 +9692,7 @@ describe("Pi conversation backend driver", () => {
     const options: PiDriverOptions = {
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -9726,6 +9882,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,
@@ -9779,6 +9936,7 @@ describe("Pi conversation backend driver", () => {
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,

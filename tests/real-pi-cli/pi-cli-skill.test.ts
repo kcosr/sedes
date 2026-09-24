@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { randomUUID } from "node:crypto";
 import { unavailableTurnBookmarks } from "../support/unavailable-turn-bookmarks.js";
 import { cp, mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
@@ -601,6 +602,7 @@ describeRealPiCli("real Pi repository-skill CLI verification", () => {
       );
       const appConfig: AppConfig = {
         authenticationRequired: true,
+        experimentalUsageEnabled: false,
         host: "127.0.0.1",
         port: 4784,
         stateDirectory,
@@ -640,6 +642,7 @@ describeRealPiCli("real Pi repository-skill CLI verification", () => {
       const options: PiDriverOptions = {
         instance,
         connection,
+        usage: NO_USAGE_SINK,
         nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
         toolProvenanceKey,
         agentTools: scopedTools,

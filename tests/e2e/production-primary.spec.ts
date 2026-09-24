@@ -19,7 +19,7 @@ test("fresh production workbench starts with the Chat panel instance", async ({
   await capture(page, testInfo, "singleton-production-chat-default.png");
 });
 
-test("mobile Usage opens as a viewport-anchored bottom sheet", async ({
+test("mobile Accounts opens as a viewport-anchored bottom sheet", async ({
   page,
 }, testInfo) => {
   await page.clock.install({ time: new Date(2099, 7, 20, 12) });
@@ -72,11 +72,11 @@ test("mobile Usage opens as a viewport-anchored bottom sheet", async ({
   const navigation = page.getByRole("dialog", { name: "Thread navigation" });
   await expect(navigation).toBeVisible();
   await navigation.getByRole("button", { name: "More" }).click();
-  const usageMenuItem = page.getByRole("menuitem", { name: "Usage" });
+  const usageMenuItem = page.getByRole("menuitem", { name: "Accounts" });
   await expect(usageMenuItem).toBeVisible({ timeout: 5_000 });
   await usageMenuItem.click();
 
-  const usage = page.getByRole("dialog", { name: "Usage" });
+  const usage = page.getByRole("dialog", { name: "Accounts" });
   await expect(usage).toBeVisible();
   const resetDays = usage.locator(".sidebar-usage-reset-day");
   await expect(resetDays).toHaveText(["today", "tomorrow", "Sat"]);

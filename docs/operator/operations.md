@@ -585,6 +585,22 @@ with the installation backup. Remote sidecar state and provider-native stores
 are separate backup units on their hosts; main state alone cannot restore a
 remote terminal's newest offline output or reconcile its active runtime.
 
+Durable usage observations and session/turn summaries are also stored in
+`overlay.sqlite`, scoped to the authenticated owner. Backing up main state retains
+captured accounting; it cannot recover unobserved provider work. No usage sidecar
+spool or separate usage service is required. Existing provider replay/history may
+recover some gaps. A complete successful Pi history reconciliation clears its
+interrupted-capture and storage-failure gaps; unproven coverage and conflicting
+evidence remain visible. SDK numeric cost estimates are rounded to at most 18
+fractional decimal places before storage, then summed with decimal arithmetic.
+
+The durable-accounting migration preserves old Claude ledger totals as a
+separate legacy summary with unknown coverage and its recorded time, and removes
+their old authority.
+Legacy totals are never added to newly selected accounting facts. Opening older
+history registers visible turn identities without performing a global backfill.
+Use the ordinary pre-migration backup and rollback procedure below.
+
 Before an upgrade:
 
 1. Settle active work and resolve or explicitly review uncertain creation,
@@ -1104,7 +1120,7 @@ does.
   cleartext LAN listener exposes pairing codes, credentials, and application
   traffic to network observers even though API authentication is required.
 
-### Usage observations are unavailable
+### Accounts quota observations are unavailable
 
 - Confirm `SEDES_PROVIDER_PULSE_URL` is not `off`, `0`, or empty and points to
   one loopback `http://` origin with an explicit port and no path.

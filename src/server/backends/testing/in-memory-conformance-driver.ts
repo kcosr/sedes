@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK, type UsageCapture, type UsageSink } from "../../usage/contracts.js";
 import {
   backendConversationEventSchema,
   backendConversationSnapshotSchema,
@@ -173,6 +174,7 @@ interface StoredReconciliation {
 }
 
 export interface InMemoryConformanceDriverOptions {
+  readonly usage?: UsageSink;
   readonly instance: AgentBackendInstance;
   readonly connection: AgentConnectionProfile;
   readonly now?: () => string;
@@ -205,9 +207,7 @@ const supportedActions = [
 
 const defaultUsage: UsageSnapshot = {
   context: { usedTokens: 0, windowTokens: 128_000, percent: 0 },
-  tokens: { input: 0, output: 0, total: 0 },
-  cost: { amount: 0, currency: "USD" },
-  counters: { requests: 0, toolCalls: 0, compactions: 0 },
+  counters: { toolCalls: 0, compactions: 0 },
 };
 
 function emptySnapshot(): BackendConversationSnapshot {
@@ -386,7 +386,8 @@ function capabilities(
         reason: { text: "This connection is read-only." },
       },
       interactionKinds: [],
-      usageSections: ["context", "tokens", "cost", "counters"],
+      usageAccounting: "supported",
+      usageSections: ["context", "counters"],
       effectiveSettings: {},
     };
   }
@@ -419,7 +420,8 @@ function capabilities(
       creationRecovery: "idempotent",
     },
     interactionKinds: [],
-    usageSections: ["context", "tokens", "cost", "counters"],
+    usageAccounting: "supported",
+      usageSections: ["context", "counters"],
     effectiveSettings: {},
   };
 }
@@ -467,6 +469,7 @@ function projectionCancellationCheckpoint(signal: AbortSignal): Promise<void> {
 }
 
 export class InMemoryConformanceDriver implements ConversationBackendDriver {
+  readonly usage: UsageSink;
   readonly instance: AgentBackendInstance;
   readonly connection: AgentConnectionProfile;
   readonly #now: () => string;
@@ -484,6 +487,7 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
   #checkpointCounter = 0;
 
   constructor(options: InMemoryConformanceDriverOptions) {
+    this.usage = options.usage ?? NO_USAGE_SINK;
     this.instance = options.instance;
     this.connection = options.connection;
     this.#now = options.now ?? (() => new Date().toISOString());
@@ -1321,18 +1325,12 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
       record.updatedAt = completedAt;
       record.historyRevision += 1;
       const outputTokens = Math.max(1, Math.ceil(completeText.length / 4));
-      const tokens = record.usage.tokens ?? {};
       const counters = record.usage.counters ?? {};
       record.usage = {
         ...record.usage,
         context: {
           usedTokens: (record.usage.context?.usedTokens ?? 0) + outputTokens,
           windowTokens: record.usage.context?.windowTokens ?? 128_000,
-        },
-        tokens: {
-          ...tokens,
-          output: (tokens.output ?? 0) + outputTokens,
-          total: (tokens.total ?? 0) + outputTokens,
         },
         counters: {
           ...counters,
@@ -1511,6 +1509,7 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
 }
 
 class InMemoryConversationHandle implements ConversationHandle {
+  readonly #accounting: UsageCapture;
   readonly binding: ConversationBinding;
   readonly #driver: InMemoryConformanceDriver;
   readonly #record: InMemoryConversation;
@@ -1537,6 +1536,9 @@ class InMemoryConversationHandle implements ConversationHandle {
     this.#driver = driver;
     this.#record = record;
     this.binding = structuredClone(binding);
+    this.#accounting = driver.usage.open({binding, nativeNamespace: `fixture:${binding.backendInstanceId}`, nativeSession: binding.backendConversationId, epoch: "entries", normalizationVersion: "fixture-v1", initialBaseline: "proven_zero"});
+    for (const turn of Object.values(record.snapshot.turnsById)) this.#captureUsage(turn);
+
     this.#maximumProjectionBufferEvents = maximumProjectionBufferEvents;
   }
 
@@ -2128,10 +2130,26 @@ class InMemoryConversationHandle implements ConversationHandle {
     this.#projectionListener = undefined;
     this.#sequencedBuffer.length = 0;
     this.#pendingEvents.length = 0;
+    this.#accounting.seal("closed");
     this.#driver.handleClosed(this.#record, this);
   }
 
+  #captureUsage(turn: BackendTurn): void {
+    this.#accounting.registerTurns([turn]);
+    const facts = [{id: `${turn.backendTurnId}:input`, tokens: {input: "11"}},
+      ...(turn.status === "completed" ? [{id: `${turn.backendTurnId}:output`, tokens: {output: "7"}}] : [])];
+    this.#accounting.capture(facts.map(part => ({id: part.id, revision: "1", order: null,
+      provenance: "live", occurredAt: null, replaceCheckpoint: false,
+      facts: [{...part, kind: "operation", sessionContribution: "additive", coverageDomain: "fixture",
+        costs: [{amount: "0.0001", currency: "USD", kind: "estimated", provenance: "Test provider estimate"}],
+        models: [{provider: "fixture", model: "fixture-model"}], basis: ["provider_reported"],
+        providerPresence: "reported", quality: "complete", reasons: [], activity: "model",
+        turn: {backendTurnId: turn.backendTurnId, scope: "whole_turn", contribution: "additive"}}],
+    })));
+  }
+
   receive(event: BackendConversationEvent): void {
+    if (event.type === "turn_started" || event.type === "turn_completed" || event.type === "turn_updated") this.#captureUsage(event.turn);
     if (this.#closed) {
       return;
     }
@@ -2266,8 +2284,7 @@ class InMemoryConversationHandle implements ConversationHandle {
       ...input.attachments.map(({ fileName }) => fileName),
     ].join("\n");
     const inputTokens = Math.max(1, Math.ceil(visibleInput.length / 4));
-    const previousTokens = this.#record.usage.tokens ?? {};
-    const total = (previousTokens.total ?? 0) + inputTokens;
+    const total = (this.#record.usage.context?.usedTokens ?? 0) + inputTokens;
     const previousCounters = this.#record.usage.counters ?? {};
     this.#record.usage = {
       ...this.#record.usage,
@@ -2276,14 +2293,9 @@ class InMemoryConversationHandle implements ConversationHandle {
         windowTokens: 128_000,
         percent: (total / 128_000) * 100,
       },
-      tokens: {
-        ...previousTokens,
-        input: (previousTokens.input ?? 0) + inputTokens,
-        total,
-      },
       counters: {
         ...previousCounters,
-        requests: (previousCounters.requests ?? 0) + 1,
+        userMessages: (previousCounters.userMessages ?? 0) + 1,
       },
     };
     return turn;

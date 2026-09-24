@@ -48,14 +48,31 @@ afterEach(() => {
 function renderActions() {
   const callbacks = {
     onOpenSettings: vi.fn(),
+    onOpenUsage: vi.fn(),
     onOpenAgents: vi.fn(),
     onOpenArchivedThreads: vi.fn(),
   };
-  render(<SidebarFooterActions {...callbacks} />);
+  render(<SidebarFooterActions {...callbacks} experimentalUsageEnabled />);
   return callbacks;
 }
 
+it("hides experimental Usage by default without hiding provider Accounts", async () => {
+  const user = userEvent.setup();
+  render(<SidebarFooterActions onOpenSettings={vi.fn()} onOpenUsage={vi.fn()} onOpenAgents={vi.fn()} onOpenArchivedThreads={vi.fn()}
+    providerPulseEnabled api={{readProviderPulseStatus:vi.fn()} as never}/>);
+  await user.click(screen.getByRole("button", {name:"More"}));
+  expect(screen.queryByRole("menuitem", {name:/^Usage/})).toBeNull();
+  expect(screen.getByRole("menuitem", {name:"Accounts"})).toBeVisible();
+});
+
 describe("SidebarFooterActions", () => {
+  it("omits the leading separator when Usage and Accounts are disabled", async () => {
+    const user = userEvent.setup();
+    render(<SidebarFooterActions onOpenSettings={vi.fn()} onOpenUsage={vi.fn()} onOpenAgents={vi.fn()} onOpenArchivedThreads={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "More" }));
+    expect(screen.queryByRole("separator")).toBeNull();
+    expect(screen.getAllByRole("menuitem").map(item => item.textContent)).toEqual(["Agents", "Archived threads"]);
+  });
   it("uses its visible More text as the menu trigger name", () => {
     renderActions();
 
@@ -66,6 +83,7 @@ describe("SidebarFooterActions", () => {
     vi.useFakeTimers();
     const callbacks = {
       onOpenSettings: vi.fn(),
+      onOpenUsage: vi.fn(),
       onOpenAgents: vi.fn(),
       onOpenArchivedThreads: vi.fn(),
     };
@@ -104,7 +122,9 @@ describe("SidebarFooterActions", () => {
   it("places the active-warning affordance immediately before Settings", () => {
     render(
       <SidebarFooterActions
+        experimentalUsageEnabled
         onOpenSettings={vi.fn()}
+        onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
         onOpenArchivedThreads={vi.fn()}
         advisories={[codexAdvisory]}
@@ -126,7 +146,9 @@ describe("SidebarFooterActions", () => {
     const user = userEvent.setup();
     render(
       <SidebarFooterActions
+        experimentalUsageEnabled
         onOpenSettings={vi.fn()}
+        onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
         onOpenArchivedThreads={vi.fn()}
         advisories={[
@@ -207,7 +229,9 @@ describe("SidebarFooterActions", () => {
     })) as unknown as typeof window.matchMedia;
     render(
       <SidebarFooterActions
+        experimentalUsageEnabled
         onOpenSettings={vi.fn()}
+        onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
         onOpenArchivedThreads={vi.fn()}
         advisories={[codexAdvisory]}
@@ -224,6 +248,7 @@ describe("SidebarFooterActions", () => {
     const user = userEvent.setup();
     const callbacks = {
       onOpenSettings: vi.fn(),
+      onOpenUsage: vi.fn(),
       onOpenAgents: vi.fn(),
       onOpenArchivedThreads: vi.fn(),
     };
@@ -248,6 +273,7 @@ describe("SidebarFooterActions", () => {
   it("restores focus to Settings when the focused warning trigger resolves", () => {
     const callbacks = {
       onOpenSettings: vi.fn(),
+      onOpenUsage: vi.fn(),
       onOpenAgents: vi.fn(),
       onOpenArchivedThreads: vi.fn(),
     };
@@ -281,14 +307,13 @@ describe("SidebarFooterActions", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     const menu = await screen.findByRole("menu");
     expect(menu).toHaveAttribute("data-side", "top");
-    expect(screen.getByRole("menuitem", { name: "Agents" })).toBeVisible();
     expect(
-      screen.getByRole("menuitem", { name: "Archived threads" }),
-    ).toBeVisible();
-    expect(screen.queryByRole("menuitem", { name: "Usage" })).toBeNull();
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["Usage (Experimental)", "Agents", "Archived threads"]);
+    expect(screen.queryByRole("menuitem", { name: "Accounts" })).toBeNull();
   });
 
-  it("opens a full-width usage sheet on a coarse pointer instead of a submenu", async () => {
+  it("opens a full-width accounts sheet on a coarse pointer instead of a submenu", async () => {
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches:
         String(query).includes("coarse") || String(query).includes("819"),
@@ -303,7 +328,9 @@ describe("SidebarFooterActions", () => {
     const user = userEvent.setup();
     render(
       <SidebarFooterActions
+        experimentalUsageEnabled
         onOpenSettings={vi.fn()}
+        onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
         onOpenArchivedThreads={vi.fn()}
         providerPulseEnabled
@@ -325,18 +352,22 @@ describe("SidebarFooterActions", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "More" }));
-    const usage = screen.getByRole("menuitem", { name: "Usage" });
-    expect(usage).not.toHaveAttribute("aria-haspopup");
-    await user.click(usage);
-    expect(await screen.findByRole("dialog", { name: "Usage" })).toBeVisible();
+    const accounts = screen.getByRole("menuitem", { name: "Accounts" });
+    expect(accounts).not.toHaveAttribute("aria-haspopup");
+    await user.click(accounts);
+    expect(
+      await screen.findByRole("dialog", { name: "Accounts" }),
+    ).toBeVisible();
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("adds Usage only when bootstrap reports Provider Pulse enabled", async () => {
+  it("adds Accounts after Usage only when bootstrap reports Provider Pulse enabled", async () => {
     const user = userEvent.setup();
     render(
       <SidebarFooterActions
+        experimentalUsageEnabled
         onOpenSettings={vi.fn()}
+        onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
         onOpenArchivedThreads={vi.fn()}
         providerPulseEnabled
@@ -352,15 +383,19 @@ describe("SidebarFooterActions", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "More" }));
-    expect(screen.getByRole("menuitem", { name: "Usage" })).toBeVisible();
-    expect(screen.getByRole("menuitem", { name: "Agents" })).toBeVisible();
+    expect(screen.getByRole("menuitem", { name: "Accounts" })).toBeVisible();
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["Usage (Experimental)", "Accounts", "Agents", "Archived threads"]);
   });
 
-  it("hides Usage when an API client exists but Provider Pulse is disabled", async () => {
+  it("keeps Usage but hides Accounts when Provider Pulse is disabled", async () => {
     const user = userEvent.setup();
     render(
       <SidebarFooterActions
+        experimentalUsageEnabled
         onOpenSettings={vi.fn()}
+        onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
         onOpenArchivedThreads={vi.fn()}
         api={{} as never}
@@ -368,12 +403,18 @@ describe("SidebarFooterActions", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "More" }));
-    expect(screen.queryByRole("menuitem", { name: "Usage" })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Usage (Experimental)" })).toBeVisible();
+    expect(screen.queryByRole("menuitem", { name: "Accounts" })).toBeNull();
   });
 
   it("reports destination selections so the parent can navigate and close", async () => {
     const user = userEvent.setup();
     const callbacks = renderActions();
+
+    await user.click(screen.getByRole("button", { name: "More" }));
+    await user.click(screen.getByRole("menuitem", { name: "Usage (Experimental)" }));
+    expect(callbacks.onOpenUsage).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "More" }));
     await user.click(screen.getByRole("menuitem", { name: "Agents" }));

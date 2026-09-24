@@ -23,12 +23,16 @@ import type {
   ClaudeRuntimeVersionObservationSource,
 } from "./claude-runtime-installation-advisories.js";
 
+import type { UsageSink } from "../../usage/contracts.js";
+
 export class ClaudeBackendDriverFactory implements BackendDriverFactory {
   readonly scope: RequestScope;
   readonly instance: AgentBackendInstance;
   readonly connectionKinds = ["claude_agent_sdk"] as const;
   readonly supportsConversationCreation = true;
   readonly creationIdentity = APPLICATION_ASSIGNED_CREATION_IDENTITY;
+  readonly #usage: UsageSink;
+  readonly #nativeNamespace: string;
   readonly #resolveThreadEnvironment: ThreadEnvironmentResolver;
   readonly #runtimeClient: ClaudeRuntimeClient;
   readonly #executablePath: string;
@@ -54,6 +58,8 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
   #closed = false;
 
   constructor(input: {
+    readonly usage: UsageSink;
+    readonly nativeNamespace: string;
     readonly scope: RequestScope;
     readonly resolveThreadEnvironment?: ThreadEnvironmentResolver;
     readonly instance: AgentBackendInstance;
@@ -75,6 +81,8 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
       source: ClaudeRuntimeVersionObservationSource,
     ) => ClaudeRuntimeVersionObservation;
   }) {
+    this.#usage = input.usage;
+    this.#nativeNamespace = input.nativeNamespace;
     this.scope = Object.freeze({ ...input.scope });
     this.#resolveThreadEnvironment = input.resolveThreadEnvironment ?? (async () => Object.freeze({}));
     this.instance = input.instance;
@@ -127,6 +135,8 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
     let driver = this.#drivers.get(connection.id);
     if (!driver) {
       driver = new ClaudeConversationBackendDriver({
+        usage: this.#usage,
+        nativeNamespace: this.#nativeNamespace,
         resolveThreadEnvironment: this.#resolveThreadEnvironment,
         instance: this.instance,
         connection,

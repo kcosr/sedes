@@ -710,7 +710,7 @@ export function describeBackendDriverConformance(
       const usage = await handle.usage();
       expect(() => usageSnapshotSchema.parse(usage)).not.toThrow();
       expect(usage.counters).toMatchObject({
-        requests: 2,
+        userMessages: 2,
         compactions: 1,
       });
       const first = await handle.history({ limit: 1 });

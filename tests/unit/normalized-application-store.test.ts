@@ -106,7 +106,7 @@ function session() {
     clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION,
     version: SEDES_VERSION,
     csrfToken: "csrf-token",
-    providerPulseEnabled: true,
+    providerPulseEnabled: true, experimentalUsageEnabled: false,
   };
 }
 
@@ -531,7 +531,7 @@ describe("NormalizedApplicationStore", () => {
     expect(store.state).toMatchObject({
       authoritative: true,
       csrfToken: "csrf-token",
-      providerPulseEnabled: true,
+      providerPulseEnabled: true, experimentalUsageEnabled: false,
       snapshot: { counts: streamedSnapshot.counts },
     });
 
@@ -648,7 +648,7 @@ describe("NormalizedApplicationStore", () => {
     expect(store.state).toEqual({
       authoritative: false,
       csrfToken: "csrf-token",
-      providerPulseEnabled: true,
+      providerPulseEnabled: true, experimentalUsageEnabled: false,
       generation: "application-1",
       snapshot: snapshot(),
     });

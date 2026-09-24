@@ -17,6 +17,7 @@ function fixture(
     throw new Error("route_not_configured_for_test");
   };
   const app = createNormalizedApp({
+    usage: {availability: () => {throw new Error("usage_not_configured_in_fixture");}, read: () => { throw new Error("usage_not_configured_in_fixture"); }, analytics: () => { throw new Error("usage_not_configured_in_fixture"); }},
     workpads: {} as never,
     questions: {} as never,
     cannedPrompts: {} as never,
@@ -24,6 +25,7 @@ function fixture(
     workspaceDiffReviews: {} as never,
     config: {
       authenticationRequired: true,
+      experimentalUsageEnabled: false,
       host: "127.0.0.1",
       port: 4783,
       stateDirectory: "/tmp/provider-pulse-http-test",

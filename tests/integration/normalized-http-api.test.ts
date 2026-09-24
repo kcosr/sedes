@@ -1,3 +1,4 @@
+import { UsageService } from "../../src/server/usage/usage-service.js";
 import { ScopedThreadEventHubRegistry } from "../../src/server/events/thread-runtime-coordinator.js";
 import { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
 import { NotificationService } from "../../src/server/domain/notification-service.js";
@@ -568,6 +569,7 @@ async function fixture(
     readonly quietSnapshotError?: unknown;
     readonly agentTools?: AgentToolRouterDependencies;
     readonly providerPulseEnabled?: boolean;
+    readonly experimentalUsageEnabled?: boolean;
   } = {},
 ) {
   const root = await mkdtemp(path.join(os.tmpdir(), "sedes-normalized-http-"));
@@ -1092,6 +1094,7 @@ async function fixture(
     },
   };
   const config: AppConfig = {
+    experimentalUsageEnabled: options.experimentalUsageEnabled ?? false,
     authenticationRequired: true,
     host: "127.0.0.1",
     port: 4783,
@@ -1118,6 +1121,7 @@ async function fixture(
     onOpened: () => undefined,
   });
   const app = createNormalizedApp({
+    usage: new UsageService(database, {enabled: options.experimentalUsageEnabled ?? false}),
     workpads: {} as never,
     questions,
     cannedPrompts: new CannedPromptService(
@@ -1577,6 +1581,86 @@ async function fixture(
 }
 
 describe("normalized HTTP application contract", () => {
+  it("disables all experimental usage reports by default before parsing or reading accounting", async () => {
+    const current = await fixture();
+    const reads = vi.spyOn(UsageService.prototype, "read");
+    const availability = vi.spyOn(UsageService.prototype, "availability");
+    const analytics = vi.spyOn(UsageService.prototype, "analytics");
+    try {
+      const session = await current.withHost(request(current.app).get("/api/application/session")).expect(200);
+      expect(session.body.experimentalUsageEnabled).toBe(false);
+      const id = "00000000-0000-4000-8000-000000000099";
+      const responses = [
+        await current.withHost(request(current.app).get(`/api/threads/${id}/usage`)).expect(403),
+        await current.withHost(request(current.app).get(`/api/threads/${id}/usage/turns/turn`)).expect(403),
+        await current.mutate(request(current.app).post(`/api/threads/${id}/usage/turn-availability`)).send({invalid:true}).expect(403),
+        await current.mutate(request(current.app).post("/api/usage/analytics")).send({invalid:true}).expect(403),
+      ];
+      for (const response of responses) expect(response.body).toMatchObject({error:{code:"experimental_usage_disabled",message:"Experimental usage accounting is disabled on this server.",retryable:false}});
+      expect(reads).not.toHaveBeenCalled(); expect(availability).not.toHaveBeenCalled(); expect(analytics).not.toHaveBeenCalled();
+      expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
+    } finally { reads.mockRestore(); availability.mockRestore(); analytics.mockRestore(); await current.close(); }
+  });
+  it("reads durable usage and known empty turns without acquiring a provider", async () => {
+    const current=await fixture({experimentalUsageEnabled: true});
+    try {
+      const workspace=await current.mutate(request(current.app).post("/api/workspaces/open")).send({environmentId:current.environmentId,path:current.workspacePath}).expect(201);
+      const created=await current.mutate(request(current.app).post("/api/threads")).send({workspaceId:workspace.body.id,configuration:{kind:"custom",targetId:current.profile.id},executionWorkspace:{kind:"direct"},title:"Usage"}).expect(201);
+      const threadId=created.body.threadId;
+      const usage=new UsageService(current.database, {enabled: true});
+      usage.registerVisibleTurns(current.owner,threadId,[{id:"known-turn",revision:1,status:"completed",orderedItemIds:[]}]);
+      const session=await current.withHost(request(current.app).get(`/api/threads/${threadId}/usage`)).expect(200);
+      expect(session.headers["cache-control"]).toBe("no-store");
+      expect(session.body.state).toBe("unavailable");
+      expect(session.body.summary.metrics.input.value).toBeNull();
+      const turn=await current.withHost(request(current.app).get(`/api/threads/${threadId}/usage/turns/known-turn`)).expect(200);
+      expect(turn.body.turnState).toBe("completed");
+      await current.withHost(request(current.app).get(`/api/threads/${threadId}/usage/turns/foreign-turn`)).expect(404);
+      await current.withHost(request(current.app).get(`/api/threads/00000000-0000-4000-8000-000000000099/usage`)).expect(404);
+      const availability=await current.mutate(request(current.app).post(`/api/threads/${threadId}/usage/turn-availability`)).send({turnIds:["known-turn","foreign-turn"]}).expect(200);
+      expect(availability.headers["cache-control"]).toBe("no-store");
+      expect(availability.body.turns).toEqual([{turnId:"known-turn",available:false},{turnId:"foreign-turn",available:false}]);
+      await current.mutate(request(current.app).post(`/api/threads/${threadId}/usage/turn-availability`)).send({turnIds:["known-turn"],principalId:"forged"}).expect(400);
+      await current.mutate(request(current.app).post(`/api/threads/00000000-0000-4000-8000-000000000099/usage/turn-availability`)).send({turnIds:["known-turn"]}).expect(404);
+      expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
+    } finally {await current.close();}
+  });
+
+  it("aggregates principal usage analytics with labels from the real schema", async () => {
+    const current=await fixture({experimentalUsageEnabled: true});
+    try {
+      const workspace=await current.mutate(request(current.app).post("/api/workspaces/open")).send({environmentId:current.environmentId,path:current.workspacePath}).expect(201);
+      const created=await current.mutate(request(current.app).post("/api/threads")).send({workspaceId:workspace.body.id,configuration:{kind:"custom",targetId:current.profile.id},executionWorkspace:{kind:"direct"},title:"Analytics"}).expect(201);
+      const threadId=created.body.threadId as string;
+      const thread=current.database.prepare("SELECT backend_instance_id AS backend, environment_id AS environment FROM application_threads WHERE id=?").get(threadId) as {backend:string;environment:string};
+      const db=current.database;
+      db.prepare("INSERT INTO usage_thread_state(tenant_id,principal_id,thread_id) VALUES(?,?,?)").run(current.owner.tenantId,current.owner.principalId,threadId);
+      db.prepare(`INSERT INTO usage_sources(id,tenant_id,principal_id,thread_id,backend_id,environment_id,workspace_id,native_namespace,native_session,epoch,normalization_version,baseline,capture_state)
+        VALUES('analytics-source',?,?,?,?,?,?,'store','native','epoch','v1','unknown','idle')`).run(current.owner.tenantId,current.owner.principalId,threadId,thread.backend,thread.environment,workspace.body.id);
+      db.prepare(`INSERT INTO usage_observations(source_id,observation_id,revision,fingerprint,evidence_json,normalization_version,occurred_at,received_at)
+        VALUES('analytics-source','entry','1','fingerprint','{"facts":[]}','v1','2026-09-02T12:00:00.000Z','2026-09-02T12:00:01.000Z')`).run();
+      db.prepare(`INSERT INTO usage_increments(tenant_id,principal_id,thread_id,source_id,fact_id,observation_id,observation_revision,backend_id,backend_kind,environment_id,workspace_id,
+          agent_role,activity,provider,model,effort,placement,occurred_at,input,output,cost_units,currency,cost_kind,costed)
+        VALUES(?,?,?,'analytics-source','fact','entry','1',?,'pi',?,?,'main','model','anthropic','claude','high','reported','2026-09-02T12:00:00.000Z',120,30,2500000000000,'USD','estimated',1)`)
+        .run(current.owner.tenantId,current.owner.principalId,threadId,thread.backend,thread.environment,workspace.body.id);
+      const body={from:"2026-09-01T00:00:00.000Z",to:"2026-09-03T00:00:00.000Z",timeZone:"America/Chicago",bucket:"auto",filters:{effort:["high"]},groupBy:"thread",crossBy:"model",breakdownLimit:10,facets:true};
+      await current.withHost(request(current.app).post("/api/usage/analytics")).send(body).expect(403);
+      const response=await current.mutate(request(current.app).post("/api/usage/analytics")).send(body).expect(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.body).toMatchObject({bucket:"hour",totals:{tokens:"150",costs:[{currency:"USD",amount:"2.5",kind:"estimated"}]},
+        timeline:{series:[{key:threadId,totals:{input:"120"}}]},matrix:{cells:[{row:threadId,column:"claude"}]}});
+      expect(response.body.labels.thread[threadId]).toMatchObject({label:"Analytics",kind:"pi",retired:false,workspaceId:workspace.body.id});
+      expect(response.body.labels.workspace[workspace.body.id].label).toBe(db.prepare("SELECT display_name FROM workspaces WHERE id=?").pluck().get(workspace.body.id));
+      expect(response.body.labels.environment[thread.environment].label).toBeTruthy();
+      expect(response.body.labels.backend[thread.backend]).toMatchObject({kind:"pi"});
+      const filtered=await current.mutate(request(current.app).post("/api/usage/analytics")).send({...body,filters:{effort:[null]}}).expect(200);
+      expect(filtered.body.totals.increments).toBe("0");
+      await current.mutate(request(current.app).post("/api/usage/analytics")).send({...body,principalId:"forged"}).expect(400);
+      await current.mutate(request(current.app).post("/api/usage/analytics")).send({...body,timeZone:"Nowhere/Invalid"}).expect(400);
+      expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
+    } finally {await current.close();}
+  });
+
   it("manages retained projects and restores the same identity through Add project", async () => {
     const current = await fixture();
     try {

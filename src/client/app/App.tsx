@@ -682,9 +682,14 @@ function ConnectedApp({
     const api = new ApiClient(endpoint);
     const transport = new BrowserEventStreamTransport(endpoint);
     const threadRegistry = new ThreadStoreRegistry(api, transport);
+    const applicationStore = new ApplicationClientStore(api, transport);
+    const unsubscribeUsage = applicationStore.subscribe(() => {
+      threadRegistry.setExperimentalUsageEnabled(applicationStore.getSnapshot().experimentalUsageEnabled);
+    });
     return {
+      unsubscribeUsage,
       transport,
-      applicationStore: new ApplicationClientStore(api, transport),
+      applicationStore,
       threadRegistry,
       mounted: false,
       started: false,
@@ -766,6 +771,7 @@ function ConnectedApp({
       queueMicrotask(() => {
         if (dependencies.mounted || dependencies.disposed) return;
         dependencies.disposed = true;
+        dependencies.unsubscribeUsage();
         dependencies.threadRegistry.dispose();
         dependencies.applicationStore.dispose();
         dependencies.transport.closeAll();

@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -136,6 +137,7 @@ describe("Pi backend module", () => {
       },
     });
     const context = {
+      usage: NO_USAGE_SINK,
       database: {} as Database.Database,
       scope,
       instance,
@@ -250,6 +252,7 @@ describe("Pi backend module", () => {
 
     let channelTouched = false;
     const runtime = prepared.createRuntime({
+      usage: NO_USAGE_SINK,
       database: {} as Database.Database,
       scope,
       instance,

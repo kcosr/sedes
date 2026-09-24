@@ -512,9 +512,10 @@ export const backendCapabilityDocumentSchema = z.strictObject({
       (kinds) => new Set(kinds).size === kinds.length,
       "Backend interaction kinds must be unique.",
     ),
+  usageAccounting: z.enum(["supported", "unsupported"]),
   usageSections: z
-    .array(z.enum(["context", "tokens", "cost", "counters"]))
-    .max(4),
+    .array(z.enum(["context", "counters"]))
+    .max(2),
   effectiveSettings: backendEffectiveSettingsSchema,
 });
 export type BackendCapabilityDocument = z.infer<

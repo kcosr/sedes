@@ -533,7 +533,7 @@ class WorkerSession implements ClaudeRuntimeSession {
       this.#safeSkills = [];
     }
     this.#messageDelivery = this.#messageDelivery
-      .then(async () => await this.#options.onMessage(message))
+      .then(async () => { await this.#options.onMessage(message); })
       .catch((error) => this.workerFailed(error));
   }
 

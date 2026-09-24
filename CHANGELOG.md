@@ -4,14 +4,76 @@
 
 ### Breaking Changes
 
+- Durable usage accounting replaces accumulated token/cost values in live
+  snapshots. Requires matching browser and packaged clients using protocol 122.
+  Migration preserves old Claude totals separately with unknown coverage. (#8)
+
 ### Added
 
+- Add a **Usage** page (sidebar **More** → **Usage**) with tokens and
+  estimated cost over time for every thread, filterable and groupable by
+  model, provider, reasoning effort, backend, environment, project, thread,
+  agent, and activity. It includes period comparison, an explorer with CSV
+  export and two-dimension splits, a thread ranking, weekday-by-hour patterns,
+  token mix, and a coverage view. Charts place usage only where its time is
+  known. Migration 113 adds a derived usage timeline and rebuilds existing
+  accounting once on first read. Pi, Codex, and Claude record the
+  provider-confirmed model and reasoning effort for new usage. (#8)
+
+- Capture Codex subagent usage independently of parent turns, including nested
+  and background agents. Session stats separates main-agent, combined-subagent,
+  and overall token totals. Migration 112 preserves existing accounting and
+  adds durable child ownership; lightweight recovery avoids transcript scans. (#8)
+
+- Record Pi, Codex, and Claude usage in the main database, with per-turn
+  usage/cost details below replies and offline session totals in Session stats.
+  Counts retain model/provider attribution, estimates, and incomplete-coverage
+  labels; Grok reports accounting as unsupported.
+  Turn usage actions appear only after a turn ends with recorded data, in a
+  compact overlay sized for mobile screens, with closely spaced 44×44 touch
+  controls and cached input grouped beneath its inclusive input total.
+  Session stats stays in the thread menu rather than flashing during loading. (#8)
+
 ### Changed
+
+- Make recorded usage accounting experimental and disabled by default. Set
+  `SEDES_EXPERIMENTAL_USAGE=1` on the main server and restart to enable capture,
+  recovery, report APIs, and UI. Existing records are preserved; context meters
+  and Accounts remain available. Electron Managed Local passes through the
+  setting when Electron launches with it. No sidecar protocol update is required. (#8)
+
+- Rename the sidebar Provider Pulse quota entry from **Usage** to **Accounts**. (#8)
 
 - New thread creation selects Custom by default, while explicit saved-Agent and
   template choices remain available. (#6)
 
 ### Fixed
+
+- Speed up Usage timeline queries by scanning the time index per bucket instead
+  of repeatedly scanning a principal's history; totals, filters, and interval
+  placement remain unchanged. (#8)
+
+- Accept owned final symlinks to private Codex Unix sockets, including daemon
+  socket aliases on remote hosts, while preserving owner/mode checks and
+  detecting alias or target replacement without changing accounting identity. (#8)
+
+- Keep historical Codex subagent accounting out of reconnect monitoring and
+  release only acquired attachments, preventing imported history from flooding
+  remote sidecars with cleanup requests and disconnecting sessions. Migration
+  114 adds recovery indexes while preserving recorded usage. (#8)
+
+- Capture Codex multi-agent v2 spawn events as well as legacy collaboration
+  events, so both modes contribute to the session's subagent totals. (#8)
+
+- Report fully captured Codex turns as complete at main-agent scope; unknown
+  model attribution no longer makes token counts partial. Existing session-wide capture gaps, including
+  restart recovery, can still mark earlier turns partial. (#8)
+
+- Recover first-turn usage from Codex's restored idle checkpoint when provided,
+  without extra history reads. (#8)
+
+- Preserve the deployed usage-accounting migration checksum and add session-gap
+  scope in a separate migration so existing installations can upgrade. (#8)
 
 - Avoid spurious active-thread archive errors when opening the thread menu
   starts a status read or cold runtime attachment. Briefly drain existing

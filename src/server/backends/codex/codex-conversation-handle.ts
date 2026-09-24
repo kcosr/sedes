@@ -1,3 +1,6 @@
+import { parseCodexBindingDetail } from "./codex-binding-codec.js";
+import type { UsageSink } from "../../usage/contracts.js";
+import { CodexUsageCapture } from "./codex-usage-capture.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import { createHash, randomUUID } from "node:crypto";
 import type {
@@ -285,6 +288,9 @@ type CodexWindowProjection = CodexHistoryProjection & {
 };
 
 export interface CodexConversationHandleInput {
+  readonly usageSink: UsageSink;
+  readonly nativeNamespace: string;
+  readonly usageProvenZero: boolean;
   readonly resolveThreadEnvironment?: ThreadEnvironmentResolver;
   readonly binding: ConversationBinding;
   readonly canonicalWorkspacePath: string;
@@ -433,6 +439,7 @@ export class CodexConversationHandle implements ConversationHandle {
   #nativeTurnById = new Map<string, CodexThread["turns"][number]>();
   #streamingNativeItems = new Map<string, Set<string>>();
   #historyNonce = randomUUID();
+  readonly #usageCapture: CodexUsageCapture | undefined;
   #usage: UsageSnapshot = {};
   #usageGeneration = 0;
   #model:
@@ -442,6 +449,12 @@ export class CodexConversationHandle implements ConversationHandle {
         readonly reasoningEffort?: string;
       }
     | undefined;
+  // A turn/start with an unknown outcome may have replaced this confirmed
+  // tuple. It attributes no usage until a provider observation replaces it.
+  #unconfirmedUsageModel: object | undefined;
+  // A turn/start in flight may run a different tuple before its receipt
+  // updates #model; usage in that window attributes nothing unless unchanged.
+  #pendingUsageTuple: { readonly model: string; readonly reasoningEffort: string | null } | undefined;
   #modelInputModalities: readonly ("text" | "image")[] = ["text"];
   #closing = false;
   #closed = false;
@@ -540,6 +553,10 @@ export class CodexConversationHandle implements ConversationHandle {
     this.#releaseOwnership = input.releaseOwnership;
     this.#runtimeLease = input.client.residency?.retain();
     this.#onError = input.onError ?? (() => undefined);
+    this.#usageCapture = input.usageSink.enabled ? new CodexUsageCapture({ sink: input.usageSink, binding: input.binding,
+      nativeNamespace: input.nativeNamespace, provenZero: input.usageProvenZero, ancestry: parseCodexBindingDetail(input.opaqueBindingDetail).nativeAncestry,
+      onError: error => this.#reportError(error) }) : undefined;
+
     this.#projectionWorkQueue = new CodexProjectionWorkQueue(() => {
       this.#invalidateProjection("buffer_overflow");
     });
@@ -1115,7 +1132,8 @@ export class CodexConversationHandle implements ConversationHandle {
         "questionnaire",
         "form",
       ],
-      usageSections: ["context", "tokens"],
+      usageAccounting: "supported",
+      usageSections: ["context"],
       effectiveSettings,
     };
   }
@@ -1322,6 +1340,7 @@ export class CodexConversationHandle implements ConversationHandle {
           this.#establishedGeneration
             ? this.#lastSettingsObservationInboundSequence
             : 0;
+        this.#pendingUsageTuple = { model: executionSettings.model, reasoningEffort: executionSettings.reasoningEffort ?? null };
         const response = await this.#client.requestWithReceipt(
           codexTurnStartMethod,
           {
@@ -1392,6 +1411,7 @@ export class CodexConversationHandle implements ConversationHandle {
           { timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS, runtimeCorrelation: { kind: "start", applicationOperationId: input.applicationOperationId, applicationThreadId: this.binding.applicationThreadId } },
         );
         submissionBoundaryCrossed = true;
+        this.#pendingUsageTuple = undefined;
         this.#assertMutationReceipt(response.generation);
         if (
           this.#lastSettingsObservationGeneration !== response.generation ||
@@ -1488,6 +1508,14 @@ export class CodexConversationHandle implements ConversationHandle {
         });
         return result;
       } catch (error) {
+        this.#pendingUsageTuple = undefined;
+        if (
+          !submissionBoundaryCrossed &&
+          error instanceof CodexRpcDeliveryError &&
+          error.delivery === "sent_outcome_unknown"
+        ) {
+          this.#unconfirmedUsageModel = this.#model;
+        }
         if (
           submissionBoundaryCrossed ||
           (error instanceof CodexRpcDeliveryError &&
@@ -2570,6 +2598,7 @@ export class CodexConversationHandle implements ConversationHandle {
           this.#scope(), this.binding.applicationThreadId,
         );
         let resumed;
+        let requestedNativeResume = false;
         try {
           resumed = await this.#client.persistentSessions?.reattachThread(
             this.binding.backendConversationId,
@@ -2599,6 +2628,7 @@ export class CodexConversationHandle implements ConversationHandle {
                 applicationThreadId: this.binding.applicationThreadId,
               },
             );
+            requestedNativeResume = true;
             resumed = await this.#client.requestWithReceipt(
               codexThreadResumeMethod,
               {
@@ -2768,6 +2798,8 @@ export class CodexConversationHandle implements ConversationHandle {
             "codex_history_mode_changed",
           );
         }
+        if (requestedNativeResume) this.#usageCapture?.resumed({ generation: resumed.generation, sequence: resumed.inboundSequence,
+          idle: resumed.result.thread.status.type === "idle" });
         let projection: CodexWindowProjection;
         let projectionThread: CodexThread;
         let paginatedInstallation:
@@ -3007,6 +3039,7 @@ export class CodexConversationHandle implements ConversationHandle {
         );
       }
       const snapshot = projection.snapshot;
+      this.#usageCapture?.registerTurns(Object.values(snapshot.turnsById), settledNativeThread.turns.map(turn => turn.id));
       const projectionBytes = verifiedCodexProjectionBytes(projection);
       const normalizedSettled = normalizeCodexTurnStatuses(settledNativeThread);
       const normalizedLive = normalizeCodexTurnStatuses(liveNativeThread);
@@ -3285,6 +3318,7 @@ export class CodexConversationHandle implements ConversationHandle {
           selected,
           context,
         );
+        this.#usageCapture?.registerTurns(Object.values(projection.snapshot.turnsById), thread.turns.map(turn => turn.id));
         const projectionBytes = verifiedCodexProjectionBytes(projection);
         if (projectionBytes > MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES) {
           throw codexError(
@@ -3819,6 +3853,7 @@ export class CodexConversationHandle implements ConversationHandle {
       return;
     }
     if (this.#pendingNotificationWork >= 1_000) {
+      this.#usageCapture?.gap("capture_gap");
       this.#projectionWorkQueue.enqueue(() => {
         this.#invalidateProjection("buffer_overflow");
       });
@@ -3848,21 +3883,50 @@ export class CodexConversationHandle implements ConversationHandle {
       if (notification.nativeThreadId !== this.binding.backendConversationId) {
         return;
       }
+      const lifecycle = this.#client.lifecycleSnapshot();
+      if (lifecycle.state === "ready" && lifecycle.generation === notification.generation &&
+        ["thread/tokenUsage/updated", "turn/started", "turn/completed"].includes(notification.method)) {
+        this.#usageCapture?.gap("invalid_evidence");
+      }
       this.#recordMutation(notification.generation, notification.sequence);
       this.#reportError(new Error(notification.code));
       this.#invalidateProjection("contradictory_state");
       return;
     }
+    const currentLifecycle = this.#client.lifecycleSnapshot();
+    if (currentLifecycle.state !== "ready" || currentLifecycle.generation !== notification.generation) return;
     const threadId = notificationThreadId(notification.params);
     if (threadId !== this.binding.backendConversationId) return;
+    if (notification.method === "turn/started") {
+      try { this.#usageCapture?.started({ turnId: codexC2NotificationSchemas["turn/started"].parse(notification.params).turn.id,
+        generation: notification.generation, sequence: notification.sequence }); }
+      catch { this.#usageCapture?.gap("invalid_evidence"); }
+    }
+    if (notification.method === "turn/completed") {
+      try { this.#usageCapture?.completed({ turnId: codexC2NotificationSchemas["turn/completed"].parse(notification.params).turn.id,
+        generation: notification.generation, sequence: notification.sequence }); }
+      catch { this.#usageCapture?.gap("invalid_evidence"); }
+    }
     if (notification.method === "thread/tokenUsage/updated") {
       try {
         const parsed = codexC2NotificationSchemas[
           "thread/tokenUsage/updated"
         ].parse(notification.params);
+        // #model holds only provider-confirmed tuples (turn/start receipt,
+        // resume reply, settings notification) for the established generation.
+        const pending = this.#pendingUsageTuple;
+        const model = notification.generation === this.#establishedGeneration &&
+          this.#model !== this.#unconfirmedUsageModel &&
+          (!pending || (pending.model === this.#model?.id && pending.reasoningEffort === (this.#model?.reasoningEffort ?? null)))
+          ? this.#model : undefined;
+        this.#usageCapture?.observe({ generation: notification.generation, sequence: notification.sequence,
+          turnId: parsed.turnId, usage: parsed.tokenUsage,
+          attribution: model ? { model: { provider: model.provider ?? null, model: model.id }, reasoningEffort: model.reasoningEffort ?? null }
+            : { model: null, reasoningEffort: null } });
         this.#usage = projectCodexUsage(parsed.tokenUsage);
         this.#usageGeneration = notification.generation;
       } catch (error) {
+        this.#usageCapture?.gap("invalid_evidence");
         this.#recordMutation(notification.generation, notification.sequence);
         this.#reportError(error);
         if (!this.#establishing) {
@@ -4537,6 +4601,9 @@ export class CodexConversationHandle implements ConversationHandle {
   };
 
   readonly #consumeLifecycleNow: CodexLifecycleListener = (lifecycle) => {
+    if (lifecycle.state !== "ready" || (this.#establishedGeneration !== 0 && lifecycle.generation !== this.#establishedGeneration)) {
+      this.#usageCapture?.gap("capture_gap");
+    }
     if (lifecycle.state !== "ready") {
       this.#interactions.deactivate("codex_interaction_daemon_generation_lost");
       this.#streamingNativeItems.clear();
@@ -5167,6 +5234,10 @@ export class CodexConversationHandle implements ConversationHandle {
 
   async #performClose(evicted = false): Promise<void> {
     if (this.#closing || this.#closed) return;
+    if (this.#pendingNotificationWork > 0 || (this.#nativeThread && activeNativeTurnId(this.#nativeThread))) {
+      this.#usageCapture?.gap("capture_gap");
+    }
+    this.#usageCapture?.seal();
     this.#closing = true;
     this.#projectionWorkQueue.execute(() => {
       this.#projectionInvalidated = true;

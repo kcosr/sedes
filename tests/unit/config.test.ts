@@ -10,11 +10,26 @@ describe("loadConfig", () => {
     expect(loadConfig({ APP_STATE_DIR: "/tmp/sedes-state" })).toMatchObject({
       port: 4784,
       authenticationRequired: true,
+      experimentalUsageEnabled: false,
       conversationRetentionMilliseconds: 3_600_000,
       conversationRuntimeBudget: 32,
       providerPulseUrl: "http://127.0.0.1:4317",
     });
   });
+
+  it.each([["0", false], ["1", true]] as const)(
+    "accepts experimental usage opt-in %s", (value, enabled) => {
+      expect(loadConfig({ SEDES_EXPERIMENTAL_USAGE: value }).experimentalUsageEnabled).toBe(enabled);
+    },
+  );
+
+  it.each(["", " ", "true", "false", "01", "yes", " 1", "1 "])(
+    "fails startup for malformed experimental usage opt-in %j", (value) => {
+      expect(() => loadConfig({ SEDES_EXPERIMENTAL_USAGE: value })).toThrow(
+        "SEDES_EXPERIMENTAL_USAGE must be exactly 0 or 1.",
+      );
+    },
+  );
 
   it.each([["true", true], ["false", false]] as const)(
     "accepts explicit authentication requirement %s", (value, required) => {

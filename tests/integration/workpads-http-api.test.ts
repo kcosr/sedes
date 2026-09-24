@@ -1,3 +1,4 @@
+import { UsageService } from "../../src/server/usage/usage-service.js";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { WorkpadRepository } from "../../src/server/db/repositories/workpad-repository.js";
@@ -15,6 +16,7 @@ function fixture() {
     throw new Error("route_not_configured_for_test");
   };
   const app = createNormalizedApp({
+    usage: new UsageService(database, {enabled: true}),
     questions: {} as never,
     cannedPrompts: {} as never,
     workpads: new WorkpadService(
@@ -25,6 +27,7 @@ function fixture() {
     workspaceDiffReviews: {} as never,
     config: {
       authenticationRequired: true,
+      experimentalUsageEnabled: false,
       host: "127.0.0.1",
       port: 4783,
       stateDirectory: "/tmp/canned-prompts-http-test",

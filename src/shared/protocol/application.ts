@@ -746,7 +746,7 @@ export type ApplicationEventEnvelope = z.infer<
   typeof applicationEventEnvelopeSchema
 >;
 
-export const SEDES_CLIENT_PROTOCOL_VERSION = 117 as const;
+export const SEDES_CLIENT_PROTOCOL_VERSION = 122 as const;
 
 export const normalizedApplicationSessionSchema = z.strictObject({
   clientProtocolVersion: z.literal(SEDES_CLIENT_PROTOCOL_VERSION),
@@ -754,6 +754,7 @@ export const normalizedApplicationSessionSchema = z.strictObject({
   version: z.string().min(1).max(64),
   csrfToken: z.string().min(1).max(512),
   providerPulseEnabled: z.boolean(),
+  experimentalUsageEnabled: z.boolean(),
 });
 export type NormalizedApplicationSession = z.infer<
   typeof normalizedApplicationSessionSchema

@@ -135,7 +135,7 @@ describe("automation CLI thread requests", () => {
           clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION,
           version: SEDES_VERSION,
           csrfToken: "a".repeat(32),
-          providerPulseEnabled: false,
+          providerPulseEnabled: false, experimentalUsageEnabled: false,
         });
       }
       if (path === "/api/application/snapshot") {

@@ -365,7 +365,7 @@ describe("serveThreadEventStream", () => {
     const update = hub.publish({
       type: "usage_changed",
       generation: "projection-1",
-      usage: { counters: { requests: 1 } },
+      usage: { counters: { userMessages: 1 } },
     });
     const checkpoint = vi.spyOn(hub, "currentCheckpoint");
     const capture = vi.fn();
@@ -435,7 +435,7 @@ describe("serveThreadEventStream", () => {
     const after = hub.publish({
       type: "usage_changed",
       generation: "projection-1",
-      usage: { counters: { requests: 1 } },
+      usage: { counters: { userMessages: 1 } },
     });
     expect(envelopes(response)).toEqual([after]);
     request.emit("close");
@@ -511,7 +511,7 @@ describe("serveThreadEventStream", () => {
     const written = hub.publish({
       type: "usage_changed",
       generation: "projection-1",
-      usage: { counters: { requests: 1 } },
+      usage: { counters: { userMessages: 1 } },
     });
     publishNotices(hub, ["one", "two"]);
     response.writeResult = () => true;
@@ -520,7 +520,7 @@ describe("serveThreadEventStream", () => {
     const after = hub.publish({
       type: "usage_changed",
       generation: "projection-1",
-      usage: { counters: { requests: 2 } },
+      usage: { counters: { userMessages: 2 } },
     });
     await vi.waitFor(() =>
       expect(envelopes(response)).toEqual([written, after]),
@@ -543,11 +543,11 @@ describe("serveThreadEventStream", () => {
       publishedSnapshot(hub, "projection-1");
       const request = new FakeRequest();
       const response = new FakeResponse();
-      const publishUsage = (requests: number) =>
+      const publishUsage = (userMessages: number) =>
         hub.publish({
           type: "usage_changed",
           generation: "projection-1",
-          usage: { counters: { requests } },
+          usage: { counters: { userMessages } },
         });
       try {
         await serveThreadEventStream(
@@ -1209,7 +1209,7 @@ describe("serveThreadEventStream", () => {
     const after = hub.publish({
       type: "usage_changed",
       generation: "projection-3",
-      usage: { tokens: { total: 42 } },
+      usage: { counters: { totalMessages: 42 } },
     });
     response.writeResult = () => true;
     response.emit("drain");
@@ -1318,11 +1318,11 @@ describe("serveThreadEventStream", () => {
   it("uses current state after replay eviction and loses no event published by retention callbacks", async () => {
     const hub = new ThreadEventHub({ replayLimit: 2 });
     publishedSnapshot(hub, "projection-1", "Retained history");
-    for (let requests = 1; requests <= 3; requests += 1)
+    for (let userMessages = 1; userMessages <= 3; userMessages += 1)
       hub.publish({
         type: "usage_changed",
         generation: "projection-1",
-        usage: { counters: { requests } },
+        usage: { counters: { userMessages } },
       });
     const capture = vi.fn();
     let crossing: ThreadEventEnvelope | undefined;
@@ -1346,7 +1346,7 @@ describe("serveThreadEventStream", () => {
     expect(checkpoints(response)).toMatchObject([
       {
         eventId: hub.eventIdAt(4),
-        snapshot: { usage: { counters: { requests: 3 } }, runState: "idle" },
+        snapshot: { usage: { counters: { userMessages: 3 } }, runState: "idle" },
       },
     ]);
     expect(envelopes(response)).toEqual([crossing]);
@@ -1416,7 +1416,7 @@ describe("serveThreadEventStream", () => {
     hub.publish({
       type: "usage_changed",
       generation: "projection-1",
-      usage: { counters: { requests: 1 } },
+      usage: { counters: { userMessages: 1 } },
     });
     response.emit("drain");
     const replacement = publishedSnapshot(hub, "projection-2", "Replacement");

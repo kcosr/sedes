@@ -66,10 +66,12 @@ describe("application session and resume contracts", () => {
       clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION,
       version: SEDES_VERSION,
       csrfToken: "a".repeat(32),
-      providerPulseEnabled: false,
+      providerPulseEnabled: false, experimentalUsageEnabled: false,
     };
 
     expect(normalizedApplicationSessionSchema.parse(session)).toEqual(session);
+    const { experimentalUsageEnabled: _usage, ...withoutUsageFlag } = session;
+    expect(normalizedApplicationSessionSchema.safeParse(withoutUsageFlag).success).toBe(false);
     expect(
       normalizedApplicationSessionSchema.safeParse({
         ...session,
@@ -83,7 +85,7 @@ describe("application session and resume contracts", () => {
       clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION,
       version: SEDES_VERSION,
       csrfToken: "a".repeat(32),
-      providerPulseEnabled: false,
+      providerPulseEnabled: false, experimentalUsageEnabled: false,
     };
 
     expect(normalizedApplicationSessionSchema.parse(session).version).toBe(

@@ -5178,7 +5178,8 @@ body:has(.thread-settings-sheet[data-state="open"])
 }
 
 .pane-host-nav-header > .welcome,
-.pane-host-nav-header > .archive-view {
+.pane-host-nav-header > .archive-view,
+.pane-host-nav-header > .usage-view {
   height: auto;
   min-height: 0;
   flex: 1 1 auto;
@@ -7065,7 +7066,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 .turn-fork-controls {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 4px;
   opacity: 0;
   pointer-events: auto;
   transform: translateY(-2px);
@@ -7087,6 +7088,10 @@ body:has(.thread-settings-sheet[data-state="open"])
   color: var(--muted-foreground-2);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+.turn-fork-time:not(:last-child) {
+  margin-inline-end: 7px;
 }
 
 .turn-fork-action {
@@ -14975,11 +14980,16 @@ tr.diff-hunk td {
   .turn-fork-controls {
     opacity: 1;
     transform: none;
+    gap: 0;
   }
 
   .turn-fork-action {
     width: 44px;
     height: 44px;
+  }
+
+  .turn-fork-time:not(:last-child) {
+    margin-inline-end: 14px;
   }
 
   .fork-provenance-button {
@@ -15819,3 +15829,43 @@ tr.diff-hunk td {
 @container settings (max-width: 380px) {
   .settings-view-heading { display: none; }
 }
+
+/* Persisted accounting uses the same compact overlay as context occupancy. */
+.turn-usage-popover {
+  box-sizing: border-box;
+  width: min(264px, calc(100dvw - 24px));
+  max-width: min(calc(100dvw - 24px), var(--radix-popover-content-available-width));
+  max-height: min(calc(100dvh - 24px), var(--radix-popover-content-available-height));
+  overflow: auto;
+  gap: 8px;
+  padding: 12px 14px;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.turn-usage-heading { display: block; }
+.recorded-usage { display: grid; gap: 9px; min-width: 0; font-size: 12px; line-height: 1.4; }
+.recorded-usage p { margin: 0; overflow-wrap: anywhere; }
+.recorded-usage-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.recorded-usage .recorded-usage-badge { border-radius: 5px; padding: 2px 6px; background: var(--muted); color: var(--muted-foreground); font-size: 10px; font-weight: 500; white-space: normal; }
+.recorded-usage .recorded-usage-scope { color: var(--muted-foreground); font-size: 10px; white-space: normal; }
+.recorded-usage-values, .recorded-usage-costs { display: grid; gap: 5px; margin: 0; font-variant-numeric: tabular-nums; }
+.recorded-usage-values > div, .recorded-usage-costs > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 12px; }
+.recorded-usage-values dd, .recorded-usage-costs dd { margin: 0; text-align: end; font-weight: 500; }
+.recorded-usage-values > div[data-subset] { color: var(--muted-foreground); font-size: 11px; }
+.recorded-usage-values > div[data-subset] dt { padding-left: 8px; }
+.recorded-usage-costs, .recorded-usage-cost { padding-top: 8px; border-top: 1px solid var(--border); }
+.recorded-usage-note, .recorded-usage-model { color: var(--muted-foreground); font-size: 11px; }
+.recorded-usage-model { overflow-wrap: anywhere; }
+.recorded-usage-legacy { display: grid; gap: 7px; border-top: 1px solid var(--border); padding-top: 9px; }
+.session-recorded-usage { padding-block: 12px; }
+.recorded-usage-breakdown { min-width: 0; overflow-x: auto; }
+.recorded-usage-breakdown table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.recorded-usage-breakdown th, .recorded-usage-breakdown td { padding: 5px 6px; text-align: end; }
+.recorded-usage-breakdown th:first-child { padding-left: 0; text-align: start; }
+.recorded-usage-breakdown th:last-child, .recorded-usage-breakdown td:last-child { padding-right: 0; }
+.recorded-usage-breakdown thead { color: var(--muted-foreground); font-size: 11px; border-bottom: 1px solid var(--border); }
+.recorded-usage-breakdown th { font-weight: 500; }
+.recorded-usage-breakdown td { white-space: nowrap; }
+.recorded-usage-breakdown tr[data-subset] { color: var(--muted-foreground); font-size: 11px; }
+.recorded-usage-breakdown tr[data-subset] th { padding-left: 8px; }

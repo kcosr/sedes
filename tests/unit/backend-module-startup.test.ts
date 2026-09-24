@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { describe, expect, it, vi } from "vitest";
 import type {
   BackendModuleRuntime,
@@ -309,6 +310,7 @@ describe("backend module startup", () => {
     });
 
     const started = await initializeBackendModuleRuntimes({
+      usage: NO_USAGE_SINK,
       preparedModules,
       database: {} as Database.Database,
       scope,
@@ -330,7 +332,7 @@ describe("backend module startup", () => {
     expect(createRuntime[0]).toHaveBeenCalledOnce();
     expect(createRuntime[1]).toHaveBeenCalledOnce();
     expect(createRuntime[0]).toHaveBeenCalledWith(
-      expect.objectContaining({ agentTools, outputArtifacts }),
+      expect.objectContaining({ agentTools, outputArtifacts, usage: NO_USAGE_SINK }),
     );
     await resources.dispose();
     expect(order).toEqual([
@@ -416,6 +418,7 @@ describe("backend module startup", () => {
 
     try {
       await initializeBackendModuleRuntimes({
+      usage: NO_USAGE_SINK,
         preparedModules,
         database: {} as Database.Database,
         scope,
@@ -473,6 +476,7 @@ describe("backend module startup", () => {
 
     await expect(
       initializeBackendModuleRuntimes({
+      usage: NO_USAGE_SINK,
         preparedModules: [
           {
             backendInstanceId: instance.id,
@@ -532,6 +536,7 @@ describe("backend module startup", () => {
 
     await expect(
       initializeBackendModuleRuntimes({
+      usage: NO_USAGE_SINK,
         preparedModules: [
           {
             backendInstanceId: instance.id,
@@ -588,6 +593,7 @@ describe("backend module startup", () => {
 
     await expect(
       initializeBackendModuleRuntimes({
+      usage: NO_USAGE_SINK,
         preparedModules: [
           {
             backendInstanceId: instance.id,

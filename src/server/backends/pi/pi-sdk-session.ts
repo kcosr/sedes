@@ -1206,16 +1206,6 @@ export function assertPiToolApprovalExtensionLoaded(result: {
 
 export function piUsage(session: PiSdkSession): UsageSnapshot {
   const stats = session.getSessionStats();
-  // Pi aggregates billed usage across all entries, including inactive branches
-  // and compacted history. Match that scope when counting known extra requests.
-  // Arbitrary extension usage can aggregate several calls; its cardinality is
-  // unknown, so do not present a made-up request total in that case.
-  const usageEntries = session.sessionManager
-    .getEntries()
-    .filter((entry) => entry.type === "usage");
-  const requests = usageEntries.every((entry) => entry.kind === "cache_warm")
-    ? stats.assistantMessages + usageEntries.length
-    : undefined;
   return {
     ...(stats.contextUsage
       ? {
@@ -1230,10 +1220,7 @@ export function piUsage(session: PiSdkSession): UsageSnapshot {
           },
         }
       : {}),
-    tokens: { ...stats.tokens },
-    cost: { amount: Math.max(0, stats.cost), currency: "USD" },
     counters: {
-      ...(requests === undefined ? {} : { requests }),
       userMessages: stats.userMessages,
       assistantMessages: stats.assistantMessages,
       toolCalls: stats.toolCalls,

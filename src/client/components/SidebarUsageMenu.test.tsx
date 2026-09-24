@@ -181,6 +181,7 @@ describe("Sidebar Usage", () => {
     render(
       <SidebarFooterActions
         onOpenSettings={vi.fn()}
+        onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
         onOpenArchivedThreads={vi.fn()}
         api={apiWith({ ...balanceOnlyStatus, accounts: [] })}
@@ -189,8 +190,8 @@ describe("Sidebar Usage", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "More" }));
-    const usage = screen.getByRole("menuitem", { name: "Usage" });
-    usage.focus();
+    const accounts = screen.getByRole("menuitem", { name: "Accounts" });
+    accounts.focus();
     await user.keyboard("{ArrowRight}");
 
     expect(

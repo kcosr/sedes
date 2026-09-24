@@ -84,18 +84,6 @@ export interface ClaudeTaskLifecycleReceipt {
   readonly terminalAt: number | null;
 }
 
-export interface ClaudeUsageLedger {
-  readonly tenantId: string;
-  readonly ownerPrincipalId: string;
-  readonly applicationThreadId: string;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly cacheReadTokens: number;
-  readonly cacheWriteTokens: number;
-  readonly requestCount: number;
-  readonly updatedAt: number;
-}
-
 export interface ClaudeSkillInvocationRecord {
   readonly tenantId: string;
   readonly ownerPrincipalId: string;
@@ -153,18 +141,6 @@ const terminalReceiptColumns = `
   provider_result_uuid AS providerResultUuid,
   terminal_at AS terminalAt,
   created_at AS createdAt,
-  updated_at AS updatedAt
-`;
-
-const usageLedgerColumns = `
-  tenant_id AS tenantId,
-  owner_principal_id AS ownerPrincipalId,
-  application_thread_id AS applicationThreadId,
-  input_tokens AS inputTokens,
-  output_tokens AS outputTokens,
-  cache_read_tokens AS cacheReadTokens,
-  cache_write_tokens AS cacheWriteTokens,
-  request_count AS requestCount,
   updated_at AS updatedAt
 `;
 
@@ -1102,76 +1078,7 @@ export class ClaudeThreadRepository {
       ) as ClaudeTerminalReceipt[];
   }
 
-  findUsageLedger(
-    scope: RequestScope,
-    applicationThreadId: string,
-  ): ClaudeUsageLedger | undefined {
-    return this.database
-      .prepare(
-        `SELECT ${usageLedgerColumns}
-         FROM claude_usage_ledgers
-         WHERE tenant_id = ? AND owner_principal_id = ?
-           AND application_thread_id = ?`,
-      )
-      .get(scope.tenantId, scope.principalId, applicationThreadId) as
-      ClaudeUsageLedger | undefined;
-  }
 
-  writeUsageLedger(
-    scope: RequestScope,
-    applicationThreadId: string,
-    input: {
-      readonly inputTokens: number;
-      readonly outputTokens: number;
-      readonly cacheReadTokens: number;
-      readonly cacheWriteTokens: number;
-      readonly requestCount: number;
-      readonly now: number;
-    },
-  ): ClaudeUsageLedger {
-    for (const [field, value] of Object.entries({
-      inputTokens: input.inputTokens,
-      outputTokens: input.outputTokens,
-      cacheReadTokens: input.cacheReadTokens,
-      cacheWriteTokens: input.cacheWriteTokens,
-      requestCount: input.requestCount,
-    })) {
-      requireUsageInteger(value, field);
-    }
-    requireTimestamp(input.now, "updated_at");
-    this.database
-      .prepare(
-        `
-          INSERT INTO claude_usage_ledgers(
-            tenant_id, owner_principal_id, application_thread_id,
-            input_tokens, output_tokens, cache_read_tokens,
-            cache_write_tokens, request_count, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(tenant_id, owner_principal_id, application_thread_id)
-          DO UPDATE SET
-            input_tokens = max(input_tokens, excluded.input_tokens),
-            output_tokens = max(output_tokens, excluded.output_tokens),
-            cache_read_tokens = max(cache_read_tokens, excluded.cache_read_tokens),
-            cache_write_tokens = max(cache_write_tokens, excluded.cache_write_tokens),
-            request_count = max(request_count, excluded.request_count),
-            updated_at = max(updated_at, excluded.updated_at)
-        `,
-      )
-      .run(
-        scope.tenantId,
-        scope.principalId,
-        applicationThreadId,
-        input.inputTokens,
-        input.outputTokens,
-        input.cacheReadTokens,
-        input.cacheWriteTokens,
-        input.requestCount,
-        input.now,
-      );
-    const ledger = this.findUsageLedger(scope, applicationThreadId);
-    if (!ledger) throw new Error("claude_usage_ledger_write_failed");
-    return ledger;
-  }
 }
 
 function requireBoundedText(
@@ -1209,12 +1116,6 @@ function requireTimestamp(value: number, field: string): void {
     value > 8_640_000_000_000_000
   ) {
     throw new Error(`claude_terminal_receipt_${field}_invalid`);
-  }
-}
-
-function requireUsageInteger(value: number, field: string): void {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`claude_usage_ledger_${field}_invalid`);
   }
 }
 

@@ -704,6 +704,16 @@ export class ThreadRuntimeCoordinator {
    * already owns the backend runtime. Dormant bound conversations are never
    * attached merely to project overlay inventory state.
    */
+  publishUsageRevisionIfLoaded(scope: RequestScope, applicationThreadId: string, revision: string): boolean {
+    const entry = this.#entries.get(scopedKey(scope, applicationThreadId));
+    const runtime = entry?.runtime;
+    if (this.#closed || !entry || entry.eviction || !runtime || this.#detached.has(runtime) || runtime.actor.closed) return false;
+    const generation = runtime.hub.projectionGeneration;
+    if (!generation || !runtime.hub.snapshot || runtime.actor.peekSnapshotState()?.timeline.generation !== generation) return false;
+    runtime.hub.publish({type: "usage_revision_changed", generation, revision});
+    return true;
+  }
+
   async publishApplicationIncrementalsIfLoaded(
     scope: RequestScope,
     applicationThreadId: string,

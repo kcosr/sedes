@@ -26,7 +26,7 @@ function session(csrfToken = "a".repeat(32)) {
     clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION,
     version: SEDES_VERSION,
     csrfToken,
-    providerPulseEnabled: true,
+    providerPulseEnabled: true, experimentalUsageEnabled: false,
   };
 }
 

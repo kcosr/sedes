@@ -1,3 +1,5 @@
+import { usageReportSchema, usageAvailabilitySchema, usageAvailabilityRequestSchema, type UsageAvailability, type UsageReport } from "../../shared/protocol/usage-accounting.js";
+import { usageAnalyticsRequestSchema, usageAnalyticsResponseSchema, type UsageAnalyticsRequest, type UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
 import {
   environmentVariablesPreviewQuerySchema,
   environmentVariablesPreviewResultSchema,
@@ -447,6 +449,8 @@ export class ApiClient {
   readonly #endpoint: SedesServerEndpoint;
   readonly #credentialOverride: string | null | undefined;
   #csrfToken = "";
+  #sessionSequence = 0;
+  #appliedSessionSequence = 0;
   #sessionPromise?: Promise<NormalizedApplicationSession>;
 
   constructor(endpoint: SedesServerEndpoint = sameOriginSedesServer, credentialOverride?: string | null) {
@@ -463,12 +467,16 @@ export class ApiClient {
     signal?: AbortSignal;
   }): Promise<NormalizedApplicationSession> {
     if (options?.refresh || !this.#sessionPromise) {
+      const sequence = ++this.#sessionSequence;
       this.#sessionPromise = this.#request(
         "/api/application/session",
         { signal: options?.signal },
         normalizedApplicationSessionSchema,
       ).then((session) => {
-        this.#csrfToken = session.csrfToken;
+        if (sequence > this.#appliedSessionSequence) {
+          this.#csrfToken = session.csrfToken;
+          this.#appliedSessionSequence = sequence;
+        }
         return session;
       });
     }
@@ -930,6 +938,23 @@ export class ApiClient {
     const parameters = new URLSearchParams({ targetId: query.targetId });
     if (query.agentId) parameters.set("agentId", query.agentId);
     return this.#request(`/api/environment-variables/preview?${parameters}`, { signal }, environmentVariablesPreviewResultSchema);
+  }
+
+  getUsageAvailability(threadId: string, turnIds: readonly string[], signal?: AbortSignal): Promise<UsageAvailability> {
+    const body=usageAvailabilityRequestSchema.parse({turnIds});
+    return this.#mutation(`/api/threads/${encodeURIComponent(threadId)}/usage/turn-availability`,usageAvailabilitySchema,
+      {method:"POST",body:JSON.stringify(body),signal});
+  }
+
+  getUsage(threadId: string, turnId: string | null = null, signal?: AbortSignal): Promise<UsageReport> {
+    const suffix = turnId === null ? "" : `/turns/${encodeURIComponent(turnId)}`;
+    return this.#request(`/api/threads/${encodeURIComponent(threadId)}/usage${suffix}`, { signal }, usageReportSchema);
+  }
+
+  /** Principal-wide usage aggregates; a database-only read sent as POST for its bounded body. */
+  getUsageAnalytics(request: UsageAnalyticsRequest, signal?: AbortSignal): Promise<UsageAnalyticsResponse> {
+    const body = usageAnalyticsRequestSchema.parse(request);
+    return this.#mutation("/api/usage/analytics", usageAnalyticsResponseSchema, {method: "POST", body: JSON.stringify(body), signal});
   }
 
   getThreadEnvironmentVariables(threadId: string, signal?: AbortSignal): Promise<ThreadEnvironmentVariablesResult> {

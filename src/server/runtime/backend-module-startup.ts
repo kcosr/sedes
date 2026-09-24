@@ -1,3 +1,4 @@
+import type { UsageSink } from "../usage/contracts.js";
 import type {
   AgentToolCliAvailability,
   BackendModuleRuntime,
@@ -166,6 +167,7 @@ export interface StartedBackendModuleRuntimes {
  * all logical conversations over one shared daemon/client.
  */
 export async function initializeBackendModuleRuntimes(input: {
+  readonly usage: UsageSink;
   readonly preparedModules: readonly PreparedBackendModule[];
   readonly database: Database.Database;
   readonly scope: RequestScope;
@@ -274,6 +276,7 @@ export async function initializeBackendModuleRuntimes(input: {
   }> = [];
   for (const plan of validatedPlans) {
     const runtime = plan.prepared.createRuntime({
+      usage: input.usage,
       database: input.database,
       scope: input.scope,
       instance: plan.instance,

@@ -949,13 +949,62 @@ test.describe.serial("normalized streaming and restored state", () => {
     await expect(stats).toBeVisible();
     await expect(stats.getByText("Context used")).toBeVisible();
     await expect(stats.getByText("Compactions")).toBeVisible();
-    await expect(stats.getByText("Cost")).toBeVisible();
-    await expect(stats.getByText("$0.0000", { exact: true })).toBeVisible();
+    await expect(stats.getByRole("heading", { name: "Recorded session usage (Experimental)" })).toBeVisible();
+    await expect(stats.getByText("Estimated cost")).toBeVisible();
+    await expect(stats.getByText(/fixture-model/)).toBeVisible();
     await capture(page, testInfo, "restored-session-stats.png");
     await stats
       .getByRole("button", { name: "Close", exact: true })
       .last()
       .click();
+    // Exercise the normalized Codex session breakdown independently of this
+    // conformance backend's inclusive usage fixture.
+    await page.route("**/api/threads/*/usage", async route => {
+      const response = await route.fetch();
+      const report = await response.json();
+      const part = (input: string, cacheRead: string, output: string, reasoning: string, total: string) => {
+        const summary = structuredClone(report.summary);
+        summary.costs = []; summary.costQuality = "unreported"; summary.models = []; summary.reasons = [];
+        for (const key of Object.keys(summary.metrics)) {
+          const value = ({ input, cacheRead, output, reasoning, total } as Record<string, string>)[key] ?? null;
+          summary.metrics[key] = { value, quality: value === null ? "unreported" : "complete", basis: ["sdk_normalized"], providerPresence: "unknown" };
+        }
+        return summary;
+      };
+      report.breakdown = { main: part("39609", "32000", "243", "108", "39852"), subagents: part("10228", "0", "5", "0", "10233") };
+      report.summary = part("49837", "32000", "248", "108", "50085");
+      report.state = "complete";
+      await route.fulfill({ response, json: report });
+    });
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    await page.getByRole("button", { name: "Session stats" }).click();
+    const breakdown = stats.getByRole("table", { name: "Session usage by agent" });
+    await expect(breakdown.getByRole("row", { name: "Input 39,609 10,228 49,837" })).toBeVisible();
+    await expect(breakdown.getByRole("row", { name: "Output 243 5 248" })).toBeVisible();
+    await capture(page, testInfo, "codex-session-usage-breakdown.png");
+    const statsViewport = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expectNoPageOverflow(page);
+    await expect(breakdown.getByRole("columnheader", { name: "Subagents" })).toBeVisible();
+    await capture(page, testInfo, "codex-session-usage-breakdown-mobile.png");
+    if (statsViewport) await page.setViewportSize(statsViewport);
+    await stats.getByRole("button", { name: "Close", exact: true }).last().click();
+    await page.unroute("**/api/threads/*/usage");
+    const usageButton = page.getByRole("button", { name: "Turn usage and cost" }).last();
+    await usageButton.hover();
+    const turnUsage = page.getByRole("dialog", { name: "Turn usage", exact: true });
+    await expect(turnUsage).toBeVisible();
+    await expect(turnUsage.getByText("Input", { exact: true })).toBeVisible();
+    await expect(turnUsage.getByText("11", { exact: true })).toBeVisible();
+    await expect(turnUsage.getByText("7", { exact: true })).toBeVisible();
+    await expect(turnUsage.getByText("$0.0002", { exact: true })).toBeVisible();
+    await usageButton.click();
+    await page.getByRole("button", { name: "Thread actions" }).hover();
+    await expect(turnUsage).toBeVisible();
+    await capture(page, testInfo, "recorded-turn-usage.png");
+    await page.keyboard.press("Escape");
+    await expect(turnUsage).toHaveCount(0);
+    await expect(usageButton).toBeFocused();
 
     await openSettingsPage(page, "appearance");
     await page.getByRole("radio", { name: "Dark" }).click();
@@ -987,5 +1036,46 @@ test.describe.serial("normalized streaming and restored state", () => {
         .getByText("1", { exact: true }),
     ).toBeVisible();
     await capture(page, testInfo, "restored-compact-dark.png");
+    await page.keyboard.press("Escape");
+
+    // Exercise the compact mobile layout with realistic partial Codex counts.
+    // Availability remains backed by the real fixture's persisted turn usage.
+    await page.route("**/api/threads/*/usage/turns/*", async route => {
+      const response = await route.fetch();
+      const report = await response.json();
+      report.state = "partial";
+      report.measurementScope = "partial_interval";
+      report.summary.models = [{ model: null, provider: null }];
+      report.summary.costs = [];
+      report.summary.costQuality = "unreported";
+      report.summary.reasons = ["unknown_baseline", "model_coverage_unknown", "main_loop_only"];
+      for (const [key, value] of Object.entries({ input: "20178", output: "249", cacheRead: "18496", cacheWrite: "0", reasoning: "0", total: "20427" })) {
+        report.summary.metrics[key] = { value, quality: "partial", basis: ["sdk_normalized", "derived"], providerPresence: "unknown" };
+      }
+      await route.fulfill({ response, json: report });
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    const touch = await page.context().newCDPSession(page);
+    await touch.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+    await page.reload();
+    expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+    const mobileUsageButton = page.getByRole("button", { name: "Turn usage and cost" }).last();
+    await mobileUsageButton.click();
+    const mobileUsage = page.getByRole("dialog", { name: "Turn usage", exact: true });
+    await expect(mobileUsage.getByText("20,178", { exact: true })).toBeVisible();
+    await expect(mobileUsage.getByText("Partial", { exact: true })).toBeVisible();
+    await expect(mobileUsage.getByText("Cache write")).toHaveCount(0);
+    await expect(mobileUsage.getByText(/SDK-normalized|Unknown model/)).toHaveCount(0);
+    const bounds = await mobileUsage.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(12);
+    expect(bounds!.y).toBeGreaterThanOrEqual(12);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(378);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(832);
+    expect(bounds!.height).toBeLessThan(310);
+    expect(await mobileUsage.evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true);
+    await capture(page, testInfo, "mobile-recorded-turn-usage.png");
+    await page.keyboard.press("Escape");
+    await capture(page, testInfo, "mobile-turn-footer.png");
   });
 });

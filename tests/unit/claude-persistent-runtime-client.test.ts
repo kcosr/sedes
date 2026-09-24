@@ -503,3 +503,34 @@ it.each(["claude_persistent_query_closed", "claude_persistent_input_capacity_exc
   expect(onFailure).toHaveBeenCalledTimes(code === "claude_persistent_query_closed" ? 1 : 0);
   await client.close();
 });
+
+it("retains an exact accounting-failed event without blocking later delivery and retries its existing replay", async () => {
+  const { client, options } = setup();
+  let storageAvailable = false;
+  const onFailure = vi.fn();
+  const onMessage = vi.fn<ClaudeRuntimeSessionOptions["onMessage"]>((message) =>
+    message.uuid === PROBE_ID && !storageAvailable ? false : undefined);
+  const session = client.createSession({...options, onMessage, onFailure});
+  await session.start();
+  const connection = connectionState.instances[0]!;
+  const original: ClaudePersistentEvent = {sessionId:SESSION_ID,sequence:1,payload:{kind:"message",message:{type:"assistant",uuid:PROBE_ID,session_id:SESSION_ID,message:{content:[]}}}};
+  const later: ClaudePersistentEvent = {sessionId:SESSION_ID,sequence:2,payload:{kind:"message",message:{type:"assistant",uuid:SESSION_ID,session_id:SESSION_ID,message:{content:[]}}}};
+  connection.listener!(original);
+  await session.flushMessages?.();
+  const acked = () => connection.execute.mock.calls.flatMap(([command]) => command.action === "acknowledge" ? [command.request.sequence] : []);
+  expect(acked()).not.toContain(1);
+  connection.listener!(later);
+  await session.flushMessages?.();
+  expect(acked()).toContain(2);expect(acked()).not.toContain(1);
+  expect(onFailure).not.toHaveBeenCalled();expect(session.closed).toBe(false);
+  // The original remains in the existing host journal. Replayed originals
+  // must retry accounting instead of entering the delivered-event ACK fast path.
+  storageAvailable = true;
+  connection.listener!(original);
+  await session.flushMessages?.();
+  expect(onMessage).toHaveBeenCalledTimes(3);expect(acked()).toContain(1);
+  connection.listener!(original);
+  await session.flushMessages?.();
+  expect(onMessage).toHaveBeenCalledTimes(3);
+  await client.close();
+});

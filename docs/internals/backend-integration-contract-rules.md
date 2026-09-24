@@ -586,6 +586,16 @@ Characterize an existing backend before extracting common infrastructure,
 migrate it without semantic changes, and verify it independently before making
 a new backend the next consumer of the extraction.
 
+Private Unix channel assurance may admit a final owned symlink only when its
+canonical parent and the resolved socket's canonical parent are owned `0700`
+directories and the socket is owned `0600`. Reject directory symlinks and alias
+chains; retain both alias and target filesystem identities across inspection,
+connection, and Upgrade, and connect to the inspected target. Keep the configured
+selector stable for backend identity and accounting rather than persisting a
+daemon's changing resolved path. Codex consumes this channel locally and on
+sidecar hosts; SSH tunnel delegates also retain its socket validation. Pi,
+Claude, and Grok do not expose external Unix endpoints through this primitive.
+
 ## Compose one coherent module
 
 A compiled backend module owns its configuration parser, preparation,
@@ -1117,15 +1127,89 @@ scrubbing, not raw errors, provider payloads, stacks, or stderr. This is not a
 claim that arbitrary provider text is secret-free. Failed-turn diagnostics remain
 visible in both activity modes without exposing hidden operation details.
 
-Provider-billed work outside an assistant response must update normalized
-usage without fabricating a message or changing conversation run state.
-Preserve the provider's accounting scope across live updates and snapshots;
-omit request counts when native records do not establish their cardinality.
-Pi implements this for native usage entries, including idle cache warming.
-Codex, Claude, and Grok keep their existing native usage projections and do
-not interpret Pi usage entries or expose Pi cache-warming policy. Provider
-system prompts and tool declarations remain private even when stored in the
-native transcript.
+The store, selection rules, and timeline behind these rules are described in
+[Usage accounting](usage-accounting.md).
+
+Recorded accounting is opt-in through the installation-owned
+`SEDES_EXPERIMENTAL_USAGE=1` main-server environment setting. A disabled
+`UsageSink.enabled` must prevent creation of usage normalizers, history scans,
+and usage-only runtime leases or subscriptions, not merely discard database
+writes. Pi, Codex, and Claude implement this gate; Grok remains explicitly
+unsupported. Provider delivery acknowledgements, normal conversation history,
+and live context occupancy must continue when accounting is off. Main-server
+recovery, report routes, and browser query subscriptions obey the same setting;
+existing accounting remains persisted. No provider or sidecar protocol flag is
+needed, and native provider recording is outside this policy's authority.
+
+Provider-billed work outside an assistant response must enter the normalized
+[`UsageSink`](../../src/server/usage/contracts.ts) without fabricating a message
+or changing run state. Capture native evidence before lossy presentation, under
+admitted tenant/principal/thread ownership and a native namespace independent of
+connection aliases. A reconnect is not a new accounting epoch. Retain metric
+presence, normalization version, model/provider dimensions, and coverage; absent
+values are not zero and native correlations do not prove request cardinality.
+
+Pi, Codex, and Claude implement durable capture through this boundary. Grok
+explicitly declares `usageAccounting: "unsupported"`. Live `UsageSnapshot` and
+`usage_changed` contain only context occupancy and transcript counters; token,
+cost, and request totals come solely from accounting reads. Query-wide cumulative
+facts cover lower-scope evidence rather than being added to it. Turn allocations
+must establish native identity and attributable intervals; session completeness
+never silently upgrades turn completeness. Copied ancestry requires scoped proof.
+Completeness is relative to the declared measurement scope: complete main-agent
+counts do not imply captured subagents. Keep scope restrictions and unknown model
+metadata distinct from numerical capture gaps; neither alone makes counts partial.
+Explicit partial facts remain authoritative. Claude's current normalizer retains
+its conservative partial result facts pending a replay-safe normalization update:
+reclassifying the same stable result receipt would otherwise conflict with saved
+evidence. This is a deferred classification correction, not an SDK claim of
+missing main-loop tokens.
+
+Codex child capture uses native spawn ancestry under an admitted root binding,
+with independent lifetime counters and durable parent/root ownership. Children
+are accounting sources, not fork ancestors or fabricated application turns.
+Main-agent turn summaries exclude child measurements and child-only gaps.
+Session reports include each child's checkpoint once and expose a normalized
+main/subagent breakdown. Capture and runtime residency outlive presentation
+handles. Durable historical ownership must not imply live monitoring work.
+Reconnect recovery uses indexed latest-source eligibility (`active`,
+`disconnected`, or `failed`), excluding idle children and roots with no unresolved
+children. It only subscribes eligible loaded children, does not read full history,
+and ends monitoring for unloaded children while retaining gaps until a new
+cumulative snapshot proves recovery. Current native activity may rediscover an
+existing child through an exact scoped ownership lookup; idle or source-less
+ancestors remain valid ownership metadata without being monitored themselves.
+Release only attachments actually acquired by the coordinator in the current
+connection generation; never send cleanup for historical registry entries alone.
+Codex implements this child lifecycle. Pi's capture is unchanged; Claude retains
+its inclusive query-pipeline totals without adding child counters a second time;
+Grok remains unsupported.
+
+An observation may carry `attribution`: the effective model and reasoning
+effort in force when the evidence was produced, as confirmed by the backend at
+capture. Never copy it from desired, draft, or current composer settings, and
+never put it into the fact or its revision hash; replayed evidence must stay a
+no-op. The timeline applies attribution only to source-timestamped or
+continuously observed increments, and a fact-reported model always wins.
+Backends that cannot establish a value pass `null`. Audit per backend:
+
+| Backend | Attribution |
+| --- | --- |
+| Pi | Thinking level from the latest `thinking_level_change` ancestor on the entry's native branch; model and provider stay fact-reported. |
+| Codex | The generation-fenced, provider-confirmed `#model` tuple. Attribution is withheld while a `turn/start` that changes the tuple awaits its receipt, and after one whose delivery outcome is unknown until a new confirmation. Subagent counters carry none. |
+| Claude | The effort applied and confirmed before the result arrives, for the confirmed model's `modelUsage` row only; helper and subagent models in the same delta keep none. |
+| Grok | Unsupported; no usage is captured. |
+
+Register visible normalized turn stubs with ordinary snapshot/page loading.
+Accounting failure must not retry submitted provider work or break an otherwise
+valid transcript read. Retained native replay/history may repair evidence; do not
+add an accounting sidecar spool or silently scan private rollout logs. Generation-
+bound `usage_revision_changed` is a transcript no-op and only a refetch hint for
+visible usage views. Never create or wait for an actor solely to publish it.
+
+Provider system prompts and tool declarations remain private even when stored
+in the native transcript. Accounting retains bounded normalized measurements and
+provenance, not raw transcript, request bodies, credentials, or tool output.
 
 Ordinary user and assistant text is authoritative conversation content. Preserve
 it exactly with the message-text contract in history, live deltas, terminal

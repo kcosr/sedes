@@ -9,7 +9,7 @@ import { ApiClient } from "./ApiClient.js";
 const configuration = { executionEnvironments: [], backends: [], targets: [], defaultTargetId: null, webSearch: null };
 const snapshot = { revision: 0, configuration, runtimes: [] };
 const mutationId = "30000000-0000-4000-8000-000000000001";
-function session() { return { clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION, version: SEDES_VERSION, csrfToken: "a".repeat(32), providerPulseEnabled: false }; }
+function session() { return { clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION, version: SEDES_VERSION, csrfToken: "a".repeat(32), providerPulseEnabled: false, experimentalUsageEnabled: false }; }
 afterEach(() => vi.unstubAllGlobals());
 
 describe("ApiClient execution configuration", () => {

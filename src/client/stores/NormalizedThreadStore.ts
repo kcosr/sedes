@@ -586,6 +586,8 @@ export class NormalizedThreadStore {
             ({ id }) => id !== event.interactionId,
           ),
         });
+      case "usage_revision_changed":
+        return { kind: "applied" };
       case "usage_changed":
         return this.#setSnapshot({ ...snapshot, usage: event.usage });
       case "thread_changed":

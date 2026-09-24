@@ -210,9 +210,9 @@ function pendingOverlayFixture() {
   const interactionRelease = vi.fn(async () => undefined);
   const interactionDetach = vi.fn();
   const ensureProjectionCurrent = vi.fn(async () => undefined);
-  const actorState = { marker: "actor" };
+  const actorState = { marker: "actor", timeline: { generation: "generation-1", runState: "idle" } };
   const actor = {
-    timeline: { generation: "generation-1", runState: "idle" },
+    timeline: actorState.timeline,
     canEvict: true,
     closed: false,
     ensureProjectionCurrent,
@@ -268,7 +268,7 @@ function pendingOverlayFixture() {
     state: ApplicationOverlay,
   ) => [{ type: "application_state_changed" as const, generation, state }]);
   return {
-    coordinator, threadId, acquisition, bound, bridgeReady, actorState, hub,
+    coordinator, threadId, acquisition, bound, bridgeReady, actorState, actor, hub,
     createEvents, ensureProjectionCurrent, actorRelease, hubRelease,
     bridgeRelease, bridgeDetach, interactionRelease, interactionDetach,
     publish: (capture: () => Promise<ApplicationOverlay>, events = createEvents) =>
@@ -279,6 +279,24 @@ function pendingOverlayFixture() {
 }
 
 describe("ThreadRuntimeCoordinator", () => {
+  it("publishes usage hints only for an admitted loaded actor and matching projection generation", async () => {
+    const fixture=pendingOverlayFixture();
+    expect(fixture.coordinator.publishUsageRevisionIfLoaded(scope,"dormant-thread","1")).toBe(false);
+    await fixture.bound.promise;fixture.bridgeReady.resolve();const lease=await fixture.acquisition;
+    expect(fixture.coordinator.publishUsageRevisionIfLoaded({...scope,principalId:"other"},fixture.threadId,"1")).toBe(false);
+    expect(fixture.coordinator.publishUsageRevisionIfLoaded(scope,fixture.threadId,"1")).toBe(true);
+    expect(fixture.hub.publish).toHaveBeenLastCalledWith({type:"usage_revision_changed",generation:"generation-1",revision:"1"});
+    const actor=fixture.actor as unknown as {timeline:{generation:string};closed:boolean};
+    actor.timeline.generation="generation-2";fixture.hub.publish.mockClear();
+    expect(fixture.coordinator.publishUsageRevisionIfLoaded(scope,fixture.threadId,"2")).toBe(false);
+    expect(fixture.hub.publish).not.toHaveBeenCalled();
+    fixture.hub.projectionGeneration="generation-2";
+    expect(fixture.coordinator.publishUsageRevisionIfLoaded(scope,fixture.threadId,"2")).toBe(true);
+    actor.closed=true;
+    expect(fixture.coordinator.publishUsageRevisionIfLoaded(scope,fixture.threadId,"3")).toBe(false);
+    actor.closed=false;lease.release();await fixture.coordinator.close();
+  });
+
   it("accepts zero retention and rejects values beyond the timer ceiling", () => {
     const input = {
       actors: {

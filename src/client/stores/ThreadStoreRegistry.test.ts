@@ -61,6 +61,20 @@ function transportFixture(): {
 }
 
 describe("ThreadStoreRegistry retention", () => {
+  it("applies the server usage flag to retained and newly opened thread caches", () => {
+    const {transport} = transportFixture();
+    const registry = new ThreadStoreRegistry({} as ApiClient,transport);
+    const first = registry.get("first");
+    expect(first.usage.getEnabled()).toBe(false);
+    registry.setExperimentalUsageEnabled(true);
+    const second = registry.get("second");
+    expect(first.usage.getEnabled()).toBe(true);
+    expect(second.usage.getEnabled()).toBe(true);
+    registry.setExperimentalUsageEnabled(false);
+    expect(first.usage.getEnabled()).toBe(false);
+    expect(second.usage.getEnabled()).toBe(false);
+    registry.dispose();
+  });
   it("uses the single-user warm navigation budget", () => {
     expect(INACTIVE_THREAD_STORE_RETENTION_MILLISECONDS).toBe(60 * 60_000);
     expect(MAXIMUM_INACTIVE_THREAD_STORES).toBe(32);

@@ -63,7 +63,7 @@ export interface ClaudeSdkSessionOptions {
     assessment: VerifiedClaudeRuntimeVersion,
   ) => void;
   readonly onVersionAssessmentFailed?: () => void;
-  readonly onMessage: (message: SDKMessage) => void | Promise<void>;
+  readonly onMessage: (message: SDKMessage) => void | false | Promise<void | false>;
   readonly onFailure?: (error: unknown) => void;
 }
 

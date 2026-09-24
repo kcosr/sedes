@@ -1,3 +1,4 @@
+import type { UsageService } from "../usage/usage-service.js";
 import { randomUUID } from "node:crypto";
 import type {
   ConversationHistoryWindow,
@@ -137,12 +138,15 @@ export class ThreadHistoryService {
   readonly #tokensByBoundary = new Map<string, string>();
   #runtimes?: ThreadRuntimeCoordinator;
 
+  readonly #usage: Pick<UsageService, "registerVisibleTurns">;
   constructor(input: {
+    readonly usage: Pick<UsageService, "registerVisibleTurns">;
     readonly inventory: ThreadApplicationInventoryReader;
     readonly maximumCursors?: number;
     readonly cursorLifetimeMilliseconds?: number;
     readonly now?: () => number;
   }) {
+    this.#usage = input.usage;
     this.#inventory = input.inventory;
     this.#maximumCursors = input.maximumCursors ?? DEFAULT_MAXIMUM_CURSORS;
     this.#cursorLifetimeMilliseconds =
@@ -325,6 +329,7 @@ export class ThreadHistoryService {
       const state = await runtime.actor.captureSnapshotState();
       const currentTurn = state.timeline.turnsById[targetTurnId];
       if (currentTurn) {
+        this.#usage.registerVisibleTurns(scope, applicationThreadId, [currentTurn]);
         const forkSource = projectedThreadForkSourceCapability({
           branching: state.backendCapabilities.branching,
           sourceRunState: state.timeline.runState,
@@ -367,6 +372,7 @@ export class ThreadHistoryService {
         maximumTurnCandidates: MAXIMUM_TARGETED_TURN_LOOKUP_CANDIDATES,
       });
       if (located.status === "found") {
+        this.#usage.registerVisibleTurns(scope, applicationThreadId, Object.values(located.page.turnsById));
         return threadHistorySeekResultSchema.parse({
           status: "found",
           targetTurnId,
@@ -495,6 +501,7 @@ export class ThreadHistoryService {
         }
         requestedLimit = Math.max(1, Math.floor(requestedLimit / 2));
       }
+      this.#usage.registerVisibleTurns(scope, applicationThreadId, Object.values(page.turnsById));
       const envelope = runtime.hub.publish({
         type: "history_prepend",
         generation: entry.projectionGeneration,

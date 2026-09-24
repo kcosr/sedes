@@ -1,16 +1,57 @@
 // @vitest-environment jsdom
 
 import { createRef } from "react";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionStatsDialog } from "./SessionStatsDialog.js";
 
-afterEach(cleanup);
+import { UsageQueryCache } from "../../stores/UsageQueryCache.js";
+import { usageReport } from "../../stores/usage-test-fixture.js";
+import { UsageDetails } from "./RecordedUsage.js";
+const caches: UsageQueryCache[] = [];
+function cache() {
+  const result = new UsageQueryCache("sedes-thread-1", { getUsageAvailability: vi.fn(), getUsage: vi.fn().mockResolvedValue(usageReport({ threadId: "sedes-thread-1", turnId: null, measurementScope: "session", turnState: null, state: "unavailable" })) });
+  result.setEnabled(true);caches.push(result); return result;
+}
+afterEach(() => { cleanup(); caches.splice(0).forEach(value => value.dispose()); });
 
 describe("SessionStatsDialog", () => {
+  it("keeps live context and identifiers while recorded accounting is disabled", () => {
+    const usageCache = cache(); usageCache.setEnabled(false);
+    render(<SessionStatsDialog open onOpenChange={vi.fn()} sedesThreadId="sedes-thread-1" usageCache={usageCache}
+      executionWorkspace={{kind:"direct"}} environmentKind="local" usage={{context:{usedTokens:50,windowTokens:100}}} />);
+    expect(screen.getByText("sedes-thread-1")).toBeVisible();
+    expect(screen.getByRole("heading", {name:"Live context and transcript"})).toBeVisible();
+    expect(screen.getByText("50 / 100")).toBeVisible();
+    expect(screen.queryByText(/Recorded session usage/)).toBeNull();
+    expect(usageCache.api.getUsage).not.toHaveBeenCalled();
+  });
+  it("compares main and combined subagent usage without adding cached input twice", () => {
+    const main = usageReport().summary;
+    const subagents = usageReport().summary;
+    const total = usageReport().summary;
+    for (const [summary, input, cached, output] of [[main, "1000", "800", "20"], [subagents, "300", "100", "10"], [total, "1300", "900", "30"]] as const) {
+      summary.metrics.input = { value: input, quality: "complete", basis: ["sdk_normalized"], providerPresence: "unknown" };
+      summary.metrics.cacheRead = { ...summary.metrics.input, value: cached };
+      summary.metrics.output = { ...summary.metrics.input, value: output };
+    }
+    const report = usageReport({ turnId: null, turnState: null, measurementScope: "session", state: "complete", summary: total, breakdown: { main, subagents } });
+    const view = render(<UsageDetails report={report} />);
+    const table = screen.getByRole("table", { name: "Session usage by agent" });
+    expect(within(table).getAllByRole("columnheader").map(node => node.textContent)).toEqual(["Tokens", "Main agent", "Subagents", "Total"]);
+    expect(within(table).getByRole("row", { name: "Input 1,000 300 1,300" })).toBeVisible();
+    expect(within(table).getByRole("row", { name: "Cached input 800 100 900" })).toBeVisible();
+    expect(within(table).getByRole("row", { name: "Output 20 10 30" })).toBeVisible();
+    view.rerender(<UsageDetails report={{ ...report, turnId: "turn-1", measurementScope: "main_loop", summary: main }} />);
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.getByText("1,000")).toBeVisible();
+    expect(screen.queryByText("1,300")).not.toBeInTheDocument();
+  });
+
   it("shows Saved Agent origin only in stats and marks a missing Agent deleted", () => {
     const view = render(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"
@@ -32,6 +73,7 @@ describe("SessionStatsDialog", () => {
 
     view.rerender(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"
@@ -54,6 +96,7 @@ describe("SessionStatsDialog", () => {
   it("renders only normalized usage values that were reported", () => {
     render(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"
@@ -61,25 +104,22 @@ describe("SessionStatsDialog", () => {
         executionWorkspace={{ kind: "direct" }}
         environmentKind="local"
         usage={{
-          tokens: { input: 1_200, output: 345, total: 1_545 },
           context: { usedTokens: 2_000, windowTokens: 10_000, percent: 20 },
-          cost: { amount: 0.125, currency: "EUR" },
           counters: { userMessages: 2, assistantMessages: 3, toolCalls: 4 },
         }}
       />,
     );
 
-    expect(screen.getByText("1,545")).toBeVisible();
     expect(screen.getByText("2,000 / 10,000")).toBeVisible();
     expect(screen.getByText("20.00%")).toBeVisible();
-    expect(screen.getByText(/€|EUR/)).toBeVisible();
-    expect(screen.queryByText("Cache read")).not.toBeInTheDocument();
-    expect(screen.queryByText("Unavailable")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cached input")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Recorded session usage (Experimental)" })).toBeVisible();
   });
 
   it("shows an explicit empty state instead of fabricated zeroes", () => {
     render(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"
@@ -89,27 +129,28 @@ describe("SessionStatsDialog", () => {
       />,
     );
     expect(
-      screen.getByText("This agent has not reported session usage yet."),
+      screen.getByText("Live context and transcript counters are unavailable."),
     ).toBeVisible();
     expect(screen.queryByText("0")).not.toBeInTheDocument();
   });
 
-  it("renders request-only counters and omits an undefined zero-window percentage", () => {
+  it("renders transcript counters and omits an undefined zero-window percentage", () => {
     render(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"
         executionWorkspace={{ kind: "direct" }}
         environmentKind="local"
         usage={{
-          counters: { requests: 3 },
+          counters: { userMessages: 3 },
           context: { usedTokens: 0, windowTokens: 0 },
         }}
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "Requests" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Messages" })).toBeVisible();
     expect(screen.getByText("3")).toBeVisible();
     expect(screen.queryByText(/NaN|Infinity/)).not.toBeInTheDocument();
     expect(screen.queryByText("Context used")).not.toBeInTheDocument();
@@ -125,6 +166,7 @@ describe("SessionStatsDialog", () => {
           Thread actions
         </button>
         <SessionStatsDialog
+        usageCache={cache()}
           open={open}
           onOpenChange={vi.fn()}
           sedesThreadId="sedes-thread-1"
@@ -149,6 +191,7 @@ describe("SessionStatsDialog", () => {
     });
     render(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"
@@ -177,6 +220,7 @@ describe("SessionStatsDialog", () => {
     });
     render(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"
@@ -223,6 +267,7 @@ describe("SessionStatsDialog", () => {
     });
     render(
       <SessionStatsDialog
+        usageCache={cache()}
         open
         onOpenChange={() => undefined}
         sedesThreadId="sedes-thread-1"

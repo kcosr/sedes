@@ -1,3 +1,4 @@
+import { UsageService } from "../../src/server/usage/usage-service.js";
 import { expectBackendSessionSummary } from "../support/backend-session-summary.js";
 import type {
   Options,
@@ -455,7 +456,9 @@ describe("Claude production application integration", () => {
           currentEnvironment.configurationRevision,
       });
       const registry = new AgentBackendRegistry();
+      const usage = new UsageService(database, {enabled: true});
       const runtimeModules = await initializeBackendModuleRuntimes({
+        usage,
         preparedModules: [prepared],
         database,
         scope,
@@ -587,6 +590,7 @@ describe("Claude production application integration", () => {
 
       const queue = new QueuedInputRepository(database);
       const threads = new ThreadApplicationService({
+    usage,
         inventory: new DatabaseThreadApplicationInventoryReader({
           inventory,
           queue,

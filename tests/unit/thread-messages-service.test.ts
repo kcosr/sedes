@@ -151,7 +151,7 @@ function state(
           }
         : { availability: "unavailable", reason: { text: "No branching" } },
       interactionKinds: [],
-      usageSections: [],
+      usageAccounting: "supported" as const, usageSections: [],
       effectiveSettings: {},
     },
     usage: {},

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+vi.mock("./TurnUsageAction.js", () => ({ TurnUsageAction: () => null }));
 import { OperationOverlayHost } from "../../operations/OperationOverlay.js";
 import { getBlockingOperation } from "../../operations/blocking-operation.js";
 vi.mock("../../operations/thread-readiness.js", () => ({
@@ -1237,7 +1238,7 @@ describe("Transcript history positioning", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps an earlier completed fork action while hiding the active turn footer", () => {
+  it("keeps an earlier completed fork action without a running-turn footer", () => {
     const snapshot = makeSnapshot(["turn-1", "turn-2"], false);
     snapshot.forkSource = {
       selectedCompletedTurn: { available: true },
@@ -1276,6 +1277,7 @@ describe("Transcript history positioning", () => {
       screen.getByRole("button", { name: /Fork from here/ }),
     ).toHaveAttribute("aria-disabled", "false");
     expect(screen.queryByTestId("turn-fork-turn-2")).toBeNull();
+    expect(screen.queryByText("Current turn")).toBeNull();
   });
 
   it("does not present an uncertain creation as ready", () => {

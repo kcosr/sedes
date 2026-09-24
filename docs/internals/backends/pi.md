@@ -165,11 +165,13 @@ remain provider-private native history and never become browser messages.
 Resume and fork preserve the historical entries; the next request applies
 current environment instructions and admitted tools as transcript updates.
 
-Native `usage` entries contribute to SDK token/cost totals without creating
-assistant messages. Their `entry_appended` notifications publish normalized
-usage changes, including while idle, without changing run state or projecting
-transcript content. Request counts include assistant messages and known
-`cache_warm` entries; unknown usage categories leave request count unavailable.
+Native `usage` entries supply durable accounting evidence without creating
+assistant messages. Their `entry_appended` notifications capture normalized
+facts on main, including while idle, without changing run state or projecting
+transcript content. Request counts use only native records that establish
+cardinality; unproven extension overlap remains unallocated. Live usage events
+retain context occupancy and transcript counters, not accumulated token/cost
+authority. See [usage accounting](../usage-accounting.md).
 
 Pi 0.86.0 can compact automatically after a tool result and then resume the
 same provider run. Sedes therefore keeps the current live projection open

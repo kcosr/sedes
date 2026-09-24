@@ -23,6 +23,7 @@ import type {
   ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
 import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
+import { UsageQueryCache } from "../../stores/UsageQueryCache.js";
 import type { PanelChromeControls } from "../../workspace-panels/PanelChrome.js";
 import { setEnvironmentColorsEnabled } from "../../app/environment-palette.js";
 import { ThreadHeader } from "./ThreadHeader.js";
@@ -275,6 +276,7 @@ function fixture(
     forceResetThread: ReturnType<typeof vi.fn>;
   };
   const threadStore = {
+    usage: new UsageQueryCache("thread", {getUsage: vi.fn(), getUsageAvailability: vi.fn()}),
     subscribe: () => () => undefined,
     getSnapshot: () => undefined,
     perform: vi.fn(async () => undefined),

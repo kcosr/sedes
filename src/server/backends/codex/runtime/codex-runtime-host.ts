@@ -97,6 +97,9 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
     this.#assertAuthority(authority);
     this.#sessions?.evict(threadId, generation);
     this.#revision++;
+    // Explicit eviction may finish after the final native idle notification.
+    // Revisit a pending idle request when that last retention blocker clears.
+    this.#retryIdle();
   }
 
   cancelIdle(): void { this.#idleRequest = undefined; }
@@ -170,11 +173,28 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
       if (this.#abandoning || remaining <= 0 || client.lifecycleSnapshot().generation !== input.generation || client.lifecycleSnapshot().state !== "ready" || this.#retainedBytes + this.#pendingBytes > this.#maximumBytes) {
         throw new CodexRpcDeliveryError({ code: "codex_runtime_dispatch_unavailable", delivery: "not_sent", generation: input.generation, method: input.method });
       }
+      let resume: ReturnType<CodexRuntimeSessions["trackResume"]> | undefined;
+      try {
+        if (input.method === "thread/resume") resume = this.#sessions!.trackResume((params as { threadId: string }).threadId, input.generation);
+      } catch (error) {
+        if (error instanceof Error && error.message === "codex_runtime_resume_already_pending") {
+          throw new CodexRpcDeliveryError({ code: "codex_runtime_resume_already_pending", delivery: "not_sent", generation: input.generation, method: input.method, cause: error });
+        }
+        throw error;
+      }
       operation.dispatched = true;
-      return await client.requestWithReceipt(method, params, { timeoutMilliseconds: remaining });
+      try {
+        const receipt = await client.requestWithReceipt(method, params, { timeoutMilliseconds: remaining });
+        if (!this.#abandoning) {
+          try {
+            if (resume) resume.apply(receipt);
+            else this.#sessions!.observeResult(input.method, receipt.result, receipt.generation);
+          } catch { this.#sessions!.markUnknown(); }
+        }
+        return receipt;
+      } finally { resume?.close(); }
     }).then(receipt => {
       if (this.#abandoning) return;
-      try { this.#sessions!.observeResult(input.method, receipt.result, receipt.generation); } catch { this.#sessions!.markUnknown(); }
       this.#settle(operation, { status: "completed", operationId: input.operationId, method: input.method, receipt });
     }, error => {
       const failure = error instanceof CodexRpcRemoteError

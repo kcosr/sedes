@@ -55,7 +55,7 @@ export function SidebarUsageSheetItem({
   return (
     <DropdownMenuItem onSelect={onOpen}>
       <Gauge aria-hidden="true" />
-      Usage
+      Accounts
     </DropdownMenuItem>
   );
 }
@@ -84,9 +84,9 @@ export function SidebarUsageSheet({
         className="sidebar-usage-sheet"
         overlayClassName="sidebar-usage-sheet-overlay"
       >
-        <DialogTitle>Usage</DialogTitle>
+        <DialogTitle>Accounts</DialogTitle>
         <DialogDescription className="sr-only">
-          Weekly remaining usage for configured provider accounts.
+          Remaining provider quota for configured provider accounts.
         </DialogDescription>
         <div className="sidebar-usage-sheet-body">
           <UsageList
@@ -125,7 +125,7 @@ export function SidebarUsageMenu({
     >
       <DropdownMenuSubTrigger>
         <Gauge aria-hidden="true" />
-        Usage
+        Accounts
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent
         className="sidebar-usage-menu"

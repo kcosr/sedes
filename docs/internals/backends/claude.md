@@ -234,7 +234,9 @@ history into its database.
 
 The backend supports creation, import, resume or reattach, streaming submit,
 interrupt, rename, exact user-message reconciliation, durable desired and
-effective model and effort, and provider-complete token and request usage.
+effective model and effort, and scoped durable token accounting. Main-loop turn
+usage and cumulative query-pipeline totals remain separate; native round counts
+do not establish request cardinality.
 Creation reserves an application UUID before crossing the SDK boundary so a
 retry or recovery attempt cannot create an untracked replacement.
 

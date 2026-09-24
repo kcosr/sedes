@@ -284,7 +284,6 @@ describe("Claude Agent SDK backend migration", () => {
         { name: "claude_operation_settings_snapshots" },
         { name: "claude_thread_settings" },
         { name: "claude_turn_terminal_receipts" },
-        { name: "claude_usage_ledgers" },
       ]);
       expect(
         (
@@ -297,14 +296,14 @@ describe("Claude Agent SDK backend migration", () => {
       ).toEqual(["CASCADE", "CASCADE", "CASCADE"]);
       expect(
         (
-          current.database.pragma("foreign_key_list(claude_usage_ledgers)") as {
+          current.database.pragma("foreign_key_list(usage_thread_state)") as {
             table: string;
             on_delete: string;
           }[]
         )
           .filter((foreignKey) => foreignKey.table === "application_threads")
           .map((foreignKey) => foreignKey.on_delete),
-      ).toEqual(["CASCADE", "CASCADE", "CASCADE"]);
+      ).toEqual(["RESTRICT", "RESTRICT", "RESTRICT"]);
       expect(current.database.pragma("foreign_key_check")).toEqual([]);
       expect(current.database.pragma("integrity_check")).toEqual([
         { integrity_check: "ok" },

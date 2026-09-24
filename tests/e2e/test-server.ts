@@ -1,3 +1,5 @@
+import { UsageService } from "../../src/server/usage/usage-service.js";
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { EnvironmentVariablesService } from "../../src/server/environment-variables/environment-variables-service.js";
 import { HostPairingRepository } from "../../src/server/host-pairing/host-pairing-repository.js";
 import type { HostPairingAdministration } from "../../src/server/configuration-admin/host-pairing-routes.js";
@@ -3188,7 +3190,8 @@ async function main(): Promise<void> {
   const bootstrapConfiguration = await loadBootstrapConfigurationFile(
     configurationFilename,
   );
-  const config = loadConfig(process.env, bootstrapConfiguration);
+  // This scripted server explicitly exercises the experimental accounting surfaces.
+  const config = { ...loadConfig(process.env, bootstrapConfiguration), experimentalUsageEnabled: true };
   const fixtureWorkspaceRoots = [path.resolve(process.cwd())];
   const configuredTarget = {
     id: "pi-sdk-local", kind: "pi_sdk" as const, label: "Pi SDK", backendInstanceId: "pi-local",
@@ -3341,6 +3344,7 @@ async function main(): Promise<void> {
     quiescentCutoverConfirmed: true,
   });
   const database = startup.database;
+  const usage = new UsageService(database, {enabled: true});
   const configurationFixture = initializeDatabaseConfigurationFixture(database, backendConfiguration, { sourceLabel: "scripted-e2e-configuration" });
   const notifications = new NotificationService({
     repository: new NotificationRepository(database),
@@ -3438,6 +3442,7 @@ async function main(): Promise<void> {
     piConnections.map((candidate) => [
       candidate.id,
       new InMemoryConformanceDriver({
+        usage,
         instance: backend,
         connection: candidate,
         scriptedResponses: { stepDelayMilliseconds: 800 },
@@ -3745,6 +3750,7 @@ async function main(): Promise<void> {
     database,
   );
   const codexDriverFactory = new CodexBackendDriverFactory({
+    usageSink: usage, nativeNamespace: "e2e-codex",
     scope,
     instance: codexBackend,
     client: codexRpc.client,
@@ -3775,6 +3781,7 @@ async function main(): Promise<void> {
     ],
   });
   const codexUdsDriverFactory = new CodexBackendDriverFactory({
+    usageSink: usage, nativeNamespace: "e2e-codex",
     scope,
     instance: codexUdsBackend,
     client: codexUdsRpc.client,
@@ -3805,6 +3812,7 @@ async function main(): Promise<void> {
     ],
   });
   const codexStdioDriverFactory = new CodexBackendDriverFactory({
+    usageSink: usage, nativeNamespace: "e2e-codex",
     scope,
     instance: codexStdioBackend,
     client: codexStdioRpc.client,
@@ -3842,6 +3850,8 @@ async function main(): Promise<void> {
     resolveConnectionDefaults: () => ({ permissionMode: "default" }),
   });
   const claudeDriverFactory = new ClaudeBackendDriverFactory({
+      usage: NO_USAGE_SINK,
+      nativeNamespace: "claude-test-native",
     scope,
     instance: claudeBackend,
     runtimeClient: new ClaudeSdkRuntimeAdapter(claudeSdk),
@@ -4212,6 +4222,7 @@ async function main(): Promise<void> {
     ]),
   });
   const threads = new ThreadApplicationService({
+      usage,
     inventory: threadInventory,
     conversations: new ActorBackedThreadApplicationConversationReader({
       actors,
@@ -4230,7 +4241,7 @@ async function main(): Promise<void> {
     actionPersistence: actionPersistenceByBackend,
     attachmentDelivery,
   });
-  const history = new ThreadHistoryService({ inventory: threadInventory });
+  const history = new ThreadHistoryService({ usage, inventory: threadInventory });
   threads.bindHistory(history);
 
   let publishApplicationThread: ApplicationThreadChangePublisher | undefined;
@@ -4238,7 +4249,7 @@ async function main(): Promise<void> {
   const runtimes = new ThreadRuntimeCoordinator({
     actors,
     targets: actorTargets,
-    bridge: new ConversationEventBridge(new ThreadEventPresentation(threads)),
+    bridge: new ConversationEventBridge(new ThreadEventPresentation(threads), (scope, threadId, turns) => usage.registerVisibleTurns(scope, threadId, turns)),
     interactions,
     hubs: threadHubs,
     retentionMilliseconds: config.conversationRetentionMilliseconds,
@@ -4252,6 +4263,7 @@ async function main(): Promise<void> {
   );
   forks.bindDescendantRunStates(runtimes);
   history.bindRuntimes(runtimes);
+  usage.subscribe((scope, threadId, revision) => runtimes.publishUsageRevisionIfLoaded(scope, threadId, revision));
   const queueGateway = new RuntimeBackedQueuedInputConversationGateway({
     runtimes,
     targets: actorTargets,
@@ -5574,6 +5586,7 @@ async function main(): Promise<void> {
   });
   app.use(
     createNormalizedApp({
+      usage,
       environmentVariables,
       ...{ configurationAdmin, hostPairingAdmin },
       notifications,

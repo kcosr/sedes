@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK, type UsageObservation } from "../../src/server/usage/contracts.js";
 import { createServer, type Server } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -367,7 +368,12 @@ plugins = false
         serviceTier: "standard",
         ...readOnlyPolicy,
       };
+      const usageObservations: UsageObservation[] = [];
       const driver = new CodexConversationBackendDriver({
+    usageSink: { enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: () => ({ registerTurns: () => undefined, capture: observations => {
+      usageObservations.push(...observations); return true;
+    }, reconcile: () => true, gap: () => undefined, seal: () => undefined }) },
+    nativeNamespace: "test-codex-store",
         instance,
         connection,
         client: supervisor.client,
@@ -488,6 +494,12 @@ plugins = false
             ),
         5_000,
       );
+      const firstTurnUsage = usageObservations.flatMap(observation => observation.facts)
+        .filter(fact => fact.turn?.backendTurnId === submission.backendTurnId);
+      expect(firstTurnUsage.map(fact => fact.tokens.input)).toEqual(["11"]);
+      expect(firstTurnUsage.map(fact => fact.tokens.output)).toEqual(["7"]);
+      expect(firstTurnUsage.flatMap(fact => fact.reasons)).not.toContain("unknown_baseline");
+      expect(firstTurnUsage).toEqual([expect.objectContaining({quality: "complete", turn: expect.objectContaining({scope: "main_loop"})})]);
       const firstStreamEvents = handleEvents.slice(streamEventStart);
       const streamedDeltaIndex = firstStreamEvents.findIndex(
         ({ event }) =>
@@ -862,6 +874,8 @@ plugins = false
         ...readOnlyPolicy,
       };
       const driver = new CodexConversationBackendDriver({
+    usageSink: NO_USAGE_SINK,
+    nativeNamespace: "test-codex-store",
         instance,
         connection,
         client: supervisor.client,
@@ -2607,11 +2621,11 @@ async function startLocalProvider(): Promise<{
           response: {
             id: responseId,
             usage: {
-              input_tokens: 0,
+              input_tokens: 11,
               input_tokens_details: null,
-              output_tokens: 0,
+              output_tokens: 7,
               output_tokens_details: null,
-              total_tokens: 0,
+              total_tokens: 18,
             },
           },
         },

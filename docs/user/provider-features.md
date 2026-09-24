@@ -170,20 +170,21 @@ disable, and revoke their credentials in **Settings > Tool clients**. See
 [Tool clients](settings.md#tool-clients) for the one-time-token workflow and
 network safety guidance.
 
-## Check provider usage and warnings
+## Check provider accounts and warnings
 
-Open **Usage** in the sidebar footer to see the available weekly windows,
-balances, reset credits, reset times, and last successful check for configured
-provider accounts. Expand one account for details.
+Open **Accounts** from the sidebar footer **More** menu to see the available
+weekly windows, balances, reset credits, reset times, and last successful check
+for configured provider accounts. Expand one account for details.
 
 - **Check** asks the selected account—or all listed accounts—to run a live
   usage check through Provider Pulse; it is not merely a redraw of cached data.
 - **Snapshot** records the current usage as a comparison baseline. Later views
   can describe what changed since that snapshot.
-- While Usage remains open, Sedes refreshes the displayed server status about
-  once per minute and polls more quickly while a Check or Snapshot settles.
+- While Accounts remains open, Sedes refreshes the displayed server status
+  about once per minute and polls more quickly while a Check or Snapshot
+  settles.
 
-Usage is shown only for provider accounts that expose this capability. An
+Quota is shown only for provider accounts that expose this capability. An
 unavailable or stale result remains labeled instead of being estimated.
 
 When Sedes or a backend publishes an active installation advisory, a numbered

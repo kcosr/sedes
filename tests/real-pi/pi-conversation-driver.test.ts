@@ -1,3 +1,4 @@
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -135,6 +136,7 @@ async function createFixture(): Promise<Fixture> {
     driverOptions: {
       instance,
       connection,
+      usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
       toolProvenanceKey,
       agentTools: noAgentTools,

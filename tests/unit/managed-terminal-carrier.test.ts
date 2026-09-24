@@ -34,6 +34,7 @@ const scope = { tenantId: "tenant-1", principalId: "principal-1" };
 const threadId = "00000000-0000-4000-8000-000000000001";
 const config: AppConfig = {
   authenticationRequired: true,
+  experimentalUsageEnabled: false,
   host: "127.0.0.1",
   port: 4783,
   stateDirectory: "/tmp/sedes-terminal-carrier-test",

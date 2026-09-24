@@ -10,7 +10,7 @@ import { validateNativeWebSocketHost, validateWebSocketHostOrigin } from "../../
 import type { AppConfig } from "../../src/server/config/config.js";
 import { DomainError } from "../../src/server/domain/errors.js";
 
-const config: AppConfig = { authenticationRequired: true, host: "127.0.0.1", port: 4784, stateDirectory: "/tmp/sedes", allowedTailscaleHosts: ["sedes.example.ts.net"], packagedClientOrigins: [], conversationRetentionMilliseconds: 600_000, conversationRuntimeBudget: 8 };
+const config: AppConfig = { authenticationRequired: true, experimentalUsageEnabled: false, host: "127.0.0.1", port: 4784, stateDirectory: "/tmp/sedes", allowedTailscaleHosts: ["sedes.example.ts.net"], packagedClientOrigins: [], conversationRetentionMilliseconds: 600_000, conversationRuntimeBudget: 8 };
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 

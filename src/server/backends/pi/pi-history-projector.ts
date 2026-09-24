@@ -138,6 +138,7 @@ export interface PiHistoryDiagnostic {
 }
 
 export interface PiHistoryProjection {
+  readonly backendTurnIdByEntryId: ReadonlyMap<string, string>;
   readonly snapshot: BackendConversationSnapshot;
   readonly diagnostics: readonly PiHistoryDiagnostic[];
 }
@@ -294,6 +295,7 @@ export class PiHistoryProjector {
   project(branch: readonly SessionEntry[]): PiHistoryProjection {
     const cancelledRetryEntries = cancelledPiRetryEntries(branch, this.#toolIdentityAuthentication);
     const turns: MutableTurn[] = [];
+    const backendTurnIdByEntryId = new Map<string, string>();
     const items: BackendItem[] = [];
     const itemIndex = new Map<string, number>();
     const pendingTools = new Map<string, PendingHistoryTool[]>();
@@ -788,6 +790,7 @@ export class PiHistoryProjector {
             delete turn.endedBy;
             delete turn.completedAt;
           }
+          backendTurnIdByEntryId.set(entry.id, turn.backendTurnId);
           const item: BackendUserMessageItem = {
             backendItemId: `${entry.id}:user`,
             backendTurnId: turn.backendTurnId,
@@ -834,6 +837,7 @@ export class PiHistoryProjector {
         }
         if (messageRole === "assistant") {
           const turn = requireTurn(entry);
+          backendTurnIdByEntryId.set(entry.id, turn.backendTurnId);
           const evidence = piAssistantResponseEvidence(message);
           const candidateItems = new Set<string>();
           terminalAssistantItems.set(turn.backendTurnId, candidateItems);
@@ -980,6 +984,7 @@ export class PiHistoryProjector {
             continue;
           }
           const match = matches[0]!;
+          backendTurnIdByEntryId.set(entry.id, match.backendTurnId);
           const remaining = (pendingTools.get(toolCallId) ?? []).filter(
             (candidate) => candidate !== match,
           );
@@ -1224,6 +1229,7 @@ export class PiHistoryProjector {
           : {}),
       },
       diagnostics,
+      backendTurnIdByEntryId,
     };
   }
 }

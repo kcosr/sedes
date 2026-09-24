@@ -1,3 +1,4 @@
+import { TurnUsageAction } from "./TurnUsageAction.js";
 import { runThreadFork } from "../../operations/thread-creation.js";
 import { Check, Copy, LoaderCircle, RotateCcw, Split, X } from "lucide-react";
 import type {
@@ -17,7 +18,9 @@ import {
 import type { PanelPresentation } from "../../workspace-panels/panel-presentation.js";
 
 function completionLabel(
-  turn: Pick<ConversationTurn, "completedAt" | "status">,
+  turn: Pick<ConversationTurn, "completedAt"> & {
+    readonly status: Exclude<ConversationTurn["status"], "in_progress">;
+  },
   turnNumber?: number,
 ): {
   readonly short: string;
@@ -26,13 +29,11 @@ function completionLabel(
   if (!turn.completedAt) {
     if (turnNumber === undefined) {
       const status =
-        turn.status === "in_progress"
-          ? "Current turn"
-          : turn.status === "interrupted"
-            ? "Interrupted turn"
-            : turn.status === "failed"
-              ? "Failed turn"
-              : "Completed turn";
+        turn.status === "interrupted"
+          ? "Interrupted turn"
+          : turn.status === "failed"
+            ? "Failed turn"
+            : "Completed turn";
       return { short: status, full: status.toLocaleLowerCase() };
     }
     return {
@@ -82,6 +83,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
 }): React.JSX.Element | null {
   // Hooks stay above the eligibility returns: a live turn completing must not
   // change the hook count between renders.
+  const [usageOpen, setUsageOpen] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
     "idle",
   );
@@ -94,18 +96,13 @@ export const TurnForkDivider = memo(function TurnForkDivider({
   // Their timestamps still need formatting only when the label inputs change.
   const { completedAt, status } = turn;
   const time = useMemo(
-    () => status === "completed"
-      ? completionLabel({ completedAt, status }, turnNumber)
-      : undefined,
+    () => status === "in_progress"
+      ? undefined
+      : completionLabel({ completedAt, status }, turnNumber),
     [completedAt, status, turnNumber],
   );
 
-  // Completed-turn time and copy controls are useful independently from fork
-  // eligibility. Keep incomplete turns visually quiet while leaving the fork
-  // action itself under the normalized exact-turn capability authority.
-  if (!time) {
-    return null;
-  }
+  if (!time) return null;
 
   const copyResponse = async () => {
     if (!copyText) return;
@@ -157,7 +154,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
   return (
     <footer
       className="turn-fork-footer"
-      data-active={pending || Boolean(attempt) ? "true" : undefined}
+      data-active={usageOpen || pending || Boolean(attempt) ? "true" : undefined}
       data-testid={`turn-fork-${turn.id}`}
     >
       <div className="turn-fork-controls">
@@ -200,7 +197,8 @@ export const TurnForkDivider = memo(function TurnForkDivider({
             </span>
           </>
         )}
-        <button
+        <TurnUsageAction cache={store.usage} turn={turn} onOpenChange={setUsageOpen} />
+        {turn.status === "completed" && <button
           type="button"
           className="turn-fork-action"
           aria-label={actionLabel}
@@ -222,13 +220,13 @@ export const TurnForkDivider = memo(function TurnForkDivider({
           ) : (
             <Split className="fork-split-icon" size={16} aria-hidden="true" />
           )}
-        </button>
+        </button>}
       </div>
-      <span id={`turn-fork-description-${turn.id}`} className="sr-only">
+      {turn.status === "completed" && <span id={`turn-fork-description-${turn.id}`} className="sr-only">
         {unavailableReason ??
           `Creates a new thread that includes this completed turn (${time.full}) and excludes every later turn.`}
-      </span>
-      {attempt && attempt.phase !== "pending" && (
+      </span>}
+      {turn.status === "completed" && attempt && attempt.phase !== "pending" && (
         <div
           className={`turn-fork-feedback ${attempt.phase}`}
           role={attempt.phase === "request_failed" ? "alert" : "status"}

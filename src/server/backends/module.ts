@@ -1,3 +1,4 @@
+import type { UsageSink } from "../usage/contracts.js";
 import type { EnvironmentVariableOverrides, ConfiguredEnvironmentVariables } from "../../shared/protocol/environment-variables.js";
 import type { SidecarUpgradeBlocker } from "../../internal/sidecar-protocol/service-management-v1.js";
 import type { SidecarRuntimeProvider, SidecarRuntimeLease } from "../sidecar/runtime-channel.js";
@@ -163,6 +164,7 @@ export interface BackendModuleRuntime {
 }
 
 export interface BackendModuleRuntimeContext {
+  readonly usage: UsageSink;
   /** Scope-bound immutable execution snapshot; secret references remain unresolved. */
   readonly executionEnvironmentVariables?: (applicationThreadId: string) => EnvironmentVariableOverrides;
   /** Persistent remote hosting channel, absent for direct local runtimes. */

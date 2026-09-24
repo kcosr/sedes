@@ -31,6 +31,7 @@ import {
   navigate,
   threadPath,
   threadTurnPath,
+  usagePath,
 } from "../app/router.js";
 import {
   resolveModePreferences,
@@ -2099,11 +2100,16 @@ export function InventorySidebar({
           <SidebarFooterActions
             api={store.api}
             providerPulseEnabled={state.providerPulseEnabled}
+            experimentalUsageEnabled={state.experimentalUsageEnabled}
             advisories={snapshot?.advisories}
             connection={
               showFooterConnectionStatus ? state.connection : undefined
             }
             onOpenSettings={onOpenSettings}
+            onOpenUsage={() => {
+              navigate(usagePath());
+              onNavigate();
+            }}
             onOpenAgents={() => {
               navigate(agentsPath());
               onNavigate();

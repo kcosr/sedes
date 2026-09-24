@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Archive, Bot, ChevronUp, Settings } from "lucide-react";
+import { Archive, Bot, ChartColumnBig, ChevronUp, Settings } from "lucide-react";
 import { Button } from "@client/components/ui/button";
 import {
   DropdownMenu,
@@ -22,22 +22,26 @@ import {
 
 export interface SidebarFooterActionsProps {
   readonly onOpenSettings: (trigger: HTMLButtonElement) => void;
+  readonly onOpenUsage: () => void;
   readonly onOpenAgents: () => void;
   readonly onOpenArchivedThreads: () => void;
   readonly connection?: ConnectionState;
   readonly api?: ApiClient;
   readonly providerPulseEnabled?: boolean;
+  readonly experimentalUsageEnabled?: boolean;
   readonly advisories?: readonly NormalizedInstallationAdvisory[];
 }
 
 /** Compact navigation and settings controls for the bottom of the sidebar. */
 export function SidebarFooterActions({
   onOpenSettings,
+  onOpenUsage,
   onOpenAgents,
   onOpenArchivedThreads,
   connection,
   api,
   providerPulseEnabled = false,
+  experimentalUsageEnabled = false,
   advisories = [],
 }: SidebarFooterActionsProps): React.JSX.Element {
   const useSheet = useUsageSheetLayout();
@@ -60,16 +64,18 @@ export function SidebarFooterActions({
           sideOffset={6}
           collisionPadding={8}
         >
+          {experimentalUsageEnabled && <DropdownMenuItem onSelect={onOpenUsage}>
+            <ChartColumnBig aria-hidden="true" />
+            Usage (Experimental)
+          </DropdownMenuItem>}
           {usageApi ? (
-            <>
-              {useSheet ? (
-                <SidebarUsageSheetItem onOpen={() => setUsageSheetOpen(true)} />
-              ) : (
-                <SidebarUsageMenu api={usageApi} />
-              )}
-              <DropdownMenuSeparator />
-            </>
+            useSheet ? (
+              <SidebarUsageSheetItem onOpen={() => setUsageSheetOpen(true)} />
+            ) : (
+              <SidebarUsageMenu api={usageApi} />
+            )
           ) : null}
+          {(experimentalUsageEnabled || usageApi) && <DropdownMenuSeparator />}
           <DropdownMenuItem onSelect={onOpenAgents}>
             <Bot aria-hidden="true" />
             Agents

@@ -1,4 +1,5 @@
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
+import { attachmentDiagnostic } from "../../diagnostics/attachment-diagnostics.js";
 import { backendStartupEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { createThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import { CodexRemoteRuntimeSupervisor } from "./runtime/codex-remote-runtime-supervisor.js";
@@ -326,6 +327,12 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
     });
     this.managedProviderTerminals = this.#managedTui;
     this.driverFactory = new CodexBackendDriverFactory({
+      onError: error => attachmentDiagnostic("codex_backend_observer_failed", {
+        backendInstanceId: input.context.instance.id,
+        stage: "backend_observer",
+      }, error),
+      usageSink: input.context.usage,
+      nativeNamespace: input.namespaceKey,
       resolveThreadEnvironment: createThreadEnvironmentResolver(input.context),
       scope: input.context.scope,
       instance: input.context.instance,

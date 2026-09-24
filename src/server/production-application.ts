@@ -1,3 +1,4 @@
+import { UsageService } from "./usage/usage-service.js";
 import { mergeEnvironmentVariableOverrides } from "../shared/protocol/environment-variables.js";
 import { EnvironmentVariablesService } from "./environment-variables/environment-variables-service.js";
 import { fencePriorLifecycleForStop } from "./configuration-admin/configuration-lifecycle-fencing.js";
@@ -403,6 +404,12 @@ export async function startProductionApplication(
 
     const identity = new SingleUserIdentityProvider<ExpressRequest>(database);
     const scope = identity.getScope();
+    const usage = new UsageService(database, { enabled: config.experimentalUsageEnabled });
+    if (usage.enabled) {
+      usage.recoverInterruptedCapture();
+      resources.defer("usage timeline backfill", usage.startTimelineBackfill());
+      resources.defer("usage revision subscription", usage.subscribe((scope, threadId, revision) => runtimes?.publishUsageRevisionIfLoaded(scope, threadId, revision)));
+    }
     const authenticationRepository = new AuthenticationRepository(config.stateDirectory);
     resources.defer("authentication database", () => authenticationRepository.close());
     const csrfToken = createCsrfToken();
@@ -760,7 +767,7 @@ export async function startProductionApplication(
         const result = await runtimeModules.apply({
           prepared,
           context: {
-            database: database!, scope,
+            database: database!, scope, usage,
             executionEnvironmentVariables: (threadId) => environmentVariables.effective(scope, threadId),
             instance: backendInstance(backendConfiguration.getBackend(scope, backendId)),
             connections, environmentChannel, environmentOperations: operations,
@@ -978,6 +985,7 @@ export async function startProductionApplication(
       providers: presentationProviders,
     });
     const threads = new ThreadApplicationService({
+      usage,
       inventory: threadInventory,
       conversations: new ActorBackedThreadApplicationConversationReader({
         actors,
@@ -996,7 +1004,7 @@ export async function startProductionApplication(
       actionPersistence,
       attachmentDelivery,
     });
-    const history = new ThreadHistoryService({ inventory: threadInventory });
+    const history = new ThreadHistoryService({ usage, inventory: threadInventory });
     threads.bindHistory(history);
     const agentToolApplication = new DatabaseAgentToolApplicationReader(
       database,
@@ -1009,7 +1017,7 @@ export async function startProductionApplication(
     runtimes = new ThreadRuntimeCoordinator({
       actors,
       targets: actorTargets,
-      bridge: new ConversationEventBridge(new ThreadEventPresentation(threads)),
+      bridge: new ConversationEventBridge(new ThreadEventPresentation(threads), (scope, threadId, turns) => usage.registerVisibleTurns(scope, threadId, turns)),
       interactions,
       hubs: threadHubs,
       retentionMilliseconds: config.conversationRetentionMilliseconds,
@@ -2677,6 +2685,7 @@ export async function startProductionApplication(
       },
     );
     const app = createNormalizedApp({
+      usage,
       environmentVariables,
       authentication,
       hostPairingAdmin,

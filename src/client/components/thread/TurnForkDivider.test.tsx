@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+vi.mock("./TurnUsageAction.js", () => ({ TurnUsageAction: () => null }));
 
 import { OperationOverlayHost } from "../../operations/OperationOverlay.js";
 vi.mock("../../operations/thread-readiness.js", () => ({ waitForOperationThreadReady: vi.fn(async () => undefined), setOperationThreadRegistry: vi.fn() }));
@@ -180,7 +181,7 @@ describe("TurnForkDivider", () => {
     );
     expect(view.container).toBeEmptyDOMElement();
 
-    // The in-progress render returns null; completing the turn must not
+    // Completing the turn adds fork controls without changing hook order. It must not
     // change the number of hooks the component mounts.
     view.rerender(
       <TurnForkDivider
@@ -381,11 +382,13 @@ describe("TurnForkDivider", () => {
         />,
       );
 
-      expect(container).toBeEmptyDOMElement();
+      expect(screen.queryByRole("button", { name: "Turn usage and cost" })).toBeNull();
       expect(
         screen.queryByRole("button", { name: /Fork from here/ }),
       ).toBeNull();
       expect(forkTurn).not.toHaveBeenCalled();
+      if (status === "in_progress") expect(container).toBeEmptyDOMElement();
+      else expect(container.querySelector("footer")).toBeInTheDocument();
     },
   );
 

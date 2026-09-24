@@ -1723,6 +1723,7 @@ class GrokConversationHandle implements ConversationHandle {
         ),
       },
       interactionKinds: [],
+      usageAccounting: "unsupported",
       usageSections: [],
       effectiveSettings: {
         model: {

@@ -1,3 +1,6 @@
+import { usageAnalyticsRequestSchema } from "../shared/protocol/usage-analytics.js";
+import { usageAvailabilityRequestSchema } from "../shared/protocol/usage-accounting.js";
+import type { UsageService } from "./usage/usage-service.js";
 import { environmentVariablesPreviewQuerySchema, environmentVariablesPreviewResultSchema, threadEnvironmentVariablesResultSchema } from "../shared/protocol/environment-variables.js";
 import type { EnvironmentVariablesService } from "./environment-variables/environment-variables-service.js";
 import { ProjectManagementService } from "./application/project-management-service.js";
@@ -341,6 +344,7 @@ import type { SidecarArtifactRegistration } from "./sidecar/sidecar-artifact.js"
 import type { AuthenticationAdmission } from "./authentication/authentication-admission.js";
 
 export interface NormalizedAppDependencies {
+  readonly usage: Pick<UsageService, "read" | "availability" | "analytics">;
   readonly environmentVariables?: EnvironmentVariablesService;
   /** Production always supplies admission; isolated service fixtures may omit it. */
   readonly authentication?: AuthenticationAdmission;
@@ -1197,6 +1201,36 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     );
   }
 
+  routes.post("/api/threads/:threadId/usage/turn-availability", async (request, response) => {
+    const requestScope = await scope(request);
+    if (!dependencies.config.experimentalUsageEnabled) throw new ApiError(403, "experimental_usage_disabled", "Experimental usage accounting is disabled on this server.", false);
+    response.setHeader("Cache-Control", "no-store");
+    const {threadId}=threadRouteParametersSchema.parse(request.params);
+    const {turnIds}=usageAvailabilityRequestSchema.parse(request.body);
+    response.json(dependencies.usage.availability(requestScope,threadId,turnIds));
+  });
+
+  routes.post("/api/usage/analytics", async (request, response) => {
+    const requestScope = await scope(request);
+    if (!dependencies.config.experimentalUsageEnabled) throw new ApiError(403, "experimental_usage_disabled", "Experimental usage accounting is disabled on this server.", false);
+    response.setHeader("Cache-Control", "no-store");
+    response.json(dependencies.usage.analytics(requestScope, usageAnalyticsRequestSchema.parse(request.body)));
+  });
+
+  routes.get("/api/threads/:threadId/usage", async (request, response) => {
+    const requestScope = await scope(request);
+    if (!dependencies.config.experimentalUsageEnabled) throw new ApiError(403, "experimental_usage_disabled", "Experimental usage accounting is disabled on this server.", false);
+    response.setHeader("Cache-Control", "no-store");
+    response.json(dependencies.usage.read(requestScope, threadRouteParametersSchema.parse(request.params).threadId));
+  });
+  routes.get("/api/threads/:threadId/usage/turns/:turnId", async (request, response) => {
+    const requestScope = await scope(request);
+    if (!dependencies.config.experimentalUsageEnabled) throw new ApiError(403, "experimental_usage_disabled", "Experimental usage accounting is disabled on this server.", false);
+    response.setHeader("Cache-Control", "no-store");
+    const {threadId,turnId}=threadRouteParametersSchema.extend({turnId:z.string().min(1).max(160)}).parse(request.params);
+    response.json(dependencies.usage.read(requestScope, threadId, turnId));
+  });
+
   routes.get("/api/application/session", async (request, response) => {
     await scope(request);
     response.setHeader("Cache-Control", "no-store");
@@ -1206,6 +1240,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
         version: SEDES_VERSION,
         csrfToken: dependencies.authentication?.csrfForRequest(request) ?? dependencies.csrfToken,
         providerPulseEnabled: providerPulse.enabled,
+        experimentalUsageEnabled: dependencies.config.experimentalUsageEnabled,
       }),
     );
   });
