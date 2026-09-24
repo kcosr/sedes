@@ -66,6 +66,13 @@ it("hides experimental Usage by default without hiding provider Accounts", async
 });
 
 describe("SidebarFooterActions", () => {
+  it("omits the leading separator when Usage and Accounts are disabled", async () => {
+    const user = userEvent.setup();
+    render(<SidebarFooterActions onOpenSettings={vi.fn()} onOpenUsage={vi.fn()} onOpenAgents={vi.fn()} onOpenArchivedThreads={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "More" }));
+    expect(screen.queryByRole("separator")).toBeNull();
+    expect(screen.getAllByRole("menuitem").map(item => item.textContent)).toEqual(["Agents", "Archived threads"]);
+  });
   it("uses its visible More text as the menu trigger name", () => {
     renderActions();
 

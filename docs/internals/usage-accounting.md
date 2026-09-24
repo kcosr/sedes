@@ -17,6 +17,16 @@ needed. See [operator configuration](../operator/configuration.md#optional-integ
 for restart and re-enablement semantics. The capture/read contracts below apply
 while the feature is enabled.
 
+Explicit offline maintenance can construct `UsageService(database,
+{enabled: true})` after admitting the target database through its own safety
+checks. That opt-in is local to the maintenance process and does not enable
+server capture or UI. Maintenance callers and any wrapping `UsageSink` must
+supply the required `enabled` field; do not infer it from the server environment
+or use the disabled sink for an import that is expected to persist evidence.
+Post-import checks must distinguish disabled report APIs from server-health or
+database-validation failures, and must not enable the feature just to read a
+report.
+
 It records **observed work**, not billing. Sedes counts what a supported backend
 reported while Sedes was attached, plus what later supported evidence recovers.
 It does not reproduce a provider invoice, infer subscription charges, or price

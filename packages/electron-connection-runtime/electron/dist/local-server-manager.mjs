@@ -84,6 +84,7 @@ export function managedLocalEnvironment(source, paths) {
     SEDES_CONFIG_FILE: paths.configurationFilename,
     SEDES_MANAGED_PARENT_PROTOCOL: "electron-local-v1",
     ...(source.SEDES_AUTH_REQUIRED === undefined ? {} : { SEDES_AUTH_REQUIRED: source.SEDES_AUTH_REQUIRED }),
+    ...(source.SEDES_EXPERIMENTAL_USAGE === undefined ? {} : { SEDES_EXPERIMENTAL_USAGE: source.SEDES_EXPERIMENTAL_USAGE }),
   };
 }
 

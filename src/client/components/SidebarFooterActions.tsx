@@ -75,7 +75,7 @@ export function SidebarFooterActions({
               <SidebarUsageMenu api={usageApi} />
             )
           ) : null}
-          <DropdownMenuSeparator />
+          {(experimentalUsageEnabled || usageApi) && <DropdownMenuSeparator />}
           <DropdownMenuItem onSelect={onOpenAgents}>
             <Bot aria-hidden="true" />
             Agents
