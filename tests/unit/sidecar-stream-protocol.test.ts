@@ -36,8 +36,8 @@ const contextCapability = {
 } as const;
 
 describe("sidecar retained streams", () => {
-  it.each([5, 8, 9, 10])("uses exact wire v11 and rejects a tagged wire-v%s control envelope", async wireVersion => {
-    expect(SIDECAR_WIRE_VERSION).toBe(11);
+  it.each([5, 8, 9, 10, 11])("uses exact wire v12 and rejects a tagged wire-v%s control envelope", async wireVersion => {
+    expect(SIDECAR_WIRE_VERSION).toBe(12);
     const fixture = await streamFixture();
     await fixture.pair.right.send(
       Buffer.concat([

@@ -711,14 +711,15 @@ describe("ClaudeConversationBackendDriver", () => {
     const established = await handle.establishProjection({
       signal: new AbortController().signal,
     });
-    expect(sdk.getSessionMessages).toHaveBeenCalledTimes(1);
+    const acquisitionReads = sdk.getSessionMessages.mock.calls.length;
+    expect(acquisitionReads).toBe(1);
     await handle.history({
       ...(established.history.previousCursor
         ? { cursor: established.history.previousCursor }
         : {}),
       limit: 10,
     });
-    expect(sdk.getSessionMessages).toHaveBeenCalledTimes(1);
+    expect(sdk.getSessionMessages).toHaveBeenCalledTimes(acquisitionReads);
     await handle.close();
 
     exposeSessionMessages(sdk, [{ session_id: sessionId } as SessionMessage]);

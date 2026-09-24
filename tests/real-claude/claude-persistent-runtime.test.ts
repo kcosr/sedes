@@ -7,6 +7,8 @@ import { build } from "esbuild";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
 import { ClaudePersistentRuntimeClient } from "../../src/server/backends/claude/runtime/claude-remote-runtime-client.js";
+import type { ClaudePersistentEvent } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-wire.js";
+import { compactedStreamSequences, historyCovers } from "../../src/server/backends/claude/runtime/claude-replay-retention.js";
 import { ClaudePersistentRuntimeRegistry } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-registry.js";
 import { registerClaudePersistentRuntimeHost } from "../../src/server/backends/claude/runtime/claude-sidecar-runtime.js";
 import { verifyClaudeRuntimeVersion } from "../../src/server/backends/claude/claude-release-guard.js";
@@ -197,6 +199,21 @@ describe.sequential("real Claude persistent runtime with local SSH carrier stand
       for (const message of replayedAssistant) {
         expect(history.find(item => item.type === "assistant" && item.uuid === message.uuid)?.message)
           .toHaveProperty("content", message.message.content);
+      }
+      // Exercise retention against native SDK frames and persisted records,
+      // including metadata finalized after a complete block was streamed.
+      const replay = new Map<number, ClaudePersistentEvent>(restoredMessages.map((message, index) =>
+        [index + 1, { sessionId, sequence: index + 1, payload: { kind: "message", message: message as never } }]));
+      expect(compactedStreamSequences(replay, new Map()).length).toBeGreaterThan(0);
+      for (const candidate of replay.values()) {
+        if (candidate.payload.kind !== "message" || candidate.payload.message.type !== "assistant") continue;
+        const live = candidate.payload.message;
+        const persisted = history.find(item => item.type === "assistant" && item.uuid === live.uuid);
+        const liveBody = live.message as Record<string, unknown>;
+        const historyBody = persisted?.message as Record<string, unknown> | undefined;
+        const changedKeys = [...new Set([...Object.keys(liveBody), ...Object.keys(historyBody ?? {})])]
+          .filter(key => JSON.stringify(liveBody[key]) !== JSON.stringify(historyBody?.[key]));
+        expect(historyCovers(candidate, persisted), `native history coverage; changed metadata keys: ${changedKeys.join(", ")}`).toBe(true);
       }
       expect((await secondClient.getSessionInfo(sessionId, { dir: workspace }, {}))?.sessionId).toBe(sessionId);
       await restored.close({ reason: "evicted" });

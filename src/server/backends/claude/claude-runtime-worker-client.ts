@@ -1,12 +1,12 @@
 import { resolveEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import { randomUUID } from "node:crypto";
+import { readClaudeSessionHistory, type ClaudeHistoryPage, type ClaudeHistoryPageOptions } from "./claude-session-history.js";
 import type {
   CanUseTool,
   PermissionMode,
   SDKMessage,
   SDKSessionInfo,
-  SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { z } from "zod";
 import type {
@@ -191,6 +191,10 @@ export class ClaudeRuntimeWorkerClient implements ClaudeRuntimeClient {
     sessionId: string,
     options: Parameters<ClaudeRuntimeClient["getSessionMessages"]>[1],
   ) {
+    return readClaudeSessionHistory(page => this.getSessionMessagesPage(sessionId, page), options);
+  }
+
+  async getSessionMessagesPage(sessionId: string, options: ClaudeHistoryPageOptions): Promise<ClaudeHistoryPage> {
     this.#assertOpen();
     await this.#initialize();
     const result = await this.#peer.call(
@@ -200,7 +204,7 @@ export class ClaudeRuntimeWorkerClient implements ClaudeRuntimeClient {
         ...options,
       },
     );
-    return result.messages as SessionMessage[];
+    return result as ClaudeHistoryPage;
   }
 
   async renameSession(

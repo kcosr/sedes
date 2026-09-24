@@ -1,4 +1,5 @@
 import type { EnvironmentVariableOverrides } from "../../../../shared/protocol/environment-variables.js";
+import { ClaudeHistoryPager } from "../claude-session-history.js";
 import { mergeResolvedEnvironment, type ResolvedEnvironmentVariables } from "../../../environment-variables/runtime-environment.js";
 import type {
   CanUseTool,
@@ -21,7 +22,6 @@ import { ClaudeSdkSession } from "../claude-sdk-session.js";
 import {
   CLAUDE_RUNTIME_CAPABILITY_ID,
   CLAUDE_RUNTIME_MAJOR_VERSION,
-  CLAUDE_RUNTIME_MAXIMUM_HISTORY_RESPONSE_BYTES,
   CLAUDE_RUNTIME_MAXIMUM_JSON_BYTES,
   CLAUDE_RUNTIME_MAXIMUM_QUERIES,
   claudeRuntimeCanUseToolOperation,
@@ -80,6 +80,7 @@ type RuntimeConfiguration = {
 export class ClaudeRuntimeWorkerHost {
   readonly handlers: ClaudeRuntimeV1WorkerHandlers;
   readonly #sdk: ClaudeSdkFacade;
+  readonly #history = new ClaudeHistoryPager<Awaited<ReturnType<ClaudeRuntimeV1WorkerHandlers["getSessionMessages"]>>["messages"][number]>();
   readonly #peer: ClaudeRuntimeWorkerProtocolPeer;
   readonly #maximumQueries: number;
   readonly #queries = new Map<string, ActiveQuery>();
@@ -142,6 +143,7 @@ export class ClaudeRuntimeWorkerHost {
 
   close(): Promise<void> {
     this.#closed = true;
+    this.#history.close();
     this.#closePromise ??= Promise.allSettled(
       [...this.#queries.values()].map(({ session }) => session.close()),
     ).then(() => {
@@ -199,14 +201,14 @@ export class ClaudeRuntimeWorkerHost {
     request: Parameters<ClaudeRuntimeV1WorkerHandlers["getSessionMessages"]>[0],
   ) {
     this.#assertOpen();
-    const { sessionId, ...options } = request;
-    const messages = await this.#sdk.getSessionMessages(
-      sessionId,
-      { ...options },
-      this.#configured().environment,
-    );
-    const response = {
-      messages: messages.map((message) => ({
+    const { sessionId, offset: _offset, limit: _limit, cursor: _cursor, maintenance: _maintenance, ...options } = request;
+    return this.#history.getPage(sessionId, request, async () => {
+      const messages = await this.#sdk.getSessionMessages(
+        sessionId,
+        { ...options },
+        this.#configured().environment,
+      );
+      const projected = messages.map((message) => ({
         type: message.type,
         uuid: message.uuid,
         session_id: message.session_id,
@@ -219,25 +221,9 @@ export class ClaudeRuntimeWorkerHost {
         ...("timestamp" in message && typeof message.timestamp === "string"
           ? { timestamp: message.timestamp }
           : {}),
-      })),
-    };
-    try {
-      snapshotBoundedJson(response, {
-        maximumDepth: 68,
-        maximumObjectProperties: 16_384,
-        maximumArrayItems: 262_144,
-        maximumStringBytes: CLAUDE_RUNTIME_MAXIMUM_JSON_BYTES,
-        maximumTotalNodes: 1_000_000,
-        maximumEncodedBytes: CLAUDE_RUNTIME_MAXIMUM_HISTORY_RESPONSE_BYTES,
-      });
-    } catch (error) {
-      throw new SidecarOperationError(
-        "claude_runtime_history_response_too_large",
-        false,
-        { cause: error },
-      );
-    }
-    return response;
+      }));
+      return projected;
+    });
   }
 
   async #renameSession(

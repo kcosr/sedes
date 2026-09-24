@@ -11,6 +11,8 @@ import {
   type SidecarOperationRegistry,
 } from "../../../../internal/sidecar-protocol/operation-registry.js";
 
+import { CLAUDE_HISTORY_PAGE_MESSAGES } from "../claude-session-history.js";
+
 export const CLAUDE_RUNTIME_CAPABILITY_ID = "claude_runtime" as const;
 export const CLAUDE_RUNTIME_MAJOR_VERSION = 1 as const;
 // HSC1's current frame ceiling is a little over 96 MiB. Keep enough room for
@@ -226,15 +228,23 @@ export const claudeRuntimeSessionInfoRequestSchema = z.strictObject({
 export const claudeRuntimeSessionInfoResponseSchema = z.strictObject({
   session: claudeRuntimeSessionInfoSchema.nullable(),
 });
+const claudeHistoryCursorSchema = z.strictObject({
+  offset: nonnegativeSafeIntegerSchema,
+  end: positiveSafeIntegerSchema,
+  snapshotId: uuidSchema,
+}).refine(value => value.offset < value.end);
 export const claudeRuntimeSessionMessagesRequestSchema = z.strictObject({
   sessionId: uuidSchema,
   dir: absolutePathSchema.optional(),
   limit: positiveSafeIntegerSchema.optional(),
   offset: nonnegativeSafeIntegerSchema.optional(),
   includeSystemMessages: z.boolean().optional(),
+  cursor: claudeHistoryCursorSchema.optional(),
+  maintenance: z.boolean().optional(),
 });
 export const claudeRuntimeSessionMessagesResponseSchema = z.strictObject({
-  messages: z.array(claudeRuntimeSessionMessageSchema).max(262_144),
+  messages: z.array(claudeRuntimeSessionMessageSchema).max(CLAUDE_HISTORY_PAGE_MESSAGES),
+  nextCursor: claudeHistoryCursorSchema.nullable(),
 });
 export const claudeRuntimeSessionRenameRequestSchema = z.strictObject({
   sessionId: uuidSchema,

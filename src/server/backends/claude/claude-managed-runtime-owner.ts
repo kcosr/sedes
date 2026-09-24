@@ -186,6 +186,15 @@ export class ClaudeManagedRuntimeOwner implements ClaudeRuntimeClient {
     );
   }
 
+  async getSessionMessagesPage(
+    sessionId: string,
+    options: Parameters<ClaudeRuntimeClient["getSessionMessagesPage"]>[1],
+    environment: Readonly<Record<string, string | undefined>>,
+  ) {
+    assertEmptyEnvironment(environment);
+    return await this.#observe(async () => await (await this.#client()).getSessionMessagesPage(sessionId, options));
+  }
+
   async renameSession(
     sessionId: string,
     title: string,
