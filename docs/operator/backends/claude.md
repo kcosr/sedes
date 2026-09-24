@@ -171,6 +171,22 @@ provider-owned, but an in-flight query may be interrupted and its outcome may
 need recovery. Retained recovery output is bounded; exhaustion produces an
 explicit query failure instead of dropping output silently.
 
+During a healthy connection, acknowledged completed output is removed from
+remote replay once Claude's native history covers it. Completed streaming
+fragments and transient progress notices are also reclaimed. This prevents
+ordinary completed work from accumulating throughout one long unfinished turn.
+Unfinished output, undelivered events, and unresolved decisions remain retained.
+Long disconnections or unavailable native history can still reach the retention
+limit. History remains provider-owned and is read again when Sedes restarts.
+Large history transfers use bounded pages from one short-lived snapshot; an
+expired transfer restarts rather than joining pages from different snapshots.
+
+The fix and bounded history transfer require sidecar runtime protocol 12.
+Upgrading only main cannot change an already-running sidecar's retention code,
+and the old protocol is rejected. Upgrade the sidecar through its supported
+lifecycle controls; active-work protection still applies. After that upgrade,
+compatible main restarts can reattach to the surviving query as usual.
+
 **Disconnect** detaches main Sedes and preserves remote work. **Stop**,
 **Restart**, and **Upgrade and restart** act on the owning runtime/service and
 require the current impact check. Active turns, pending permission decisions,

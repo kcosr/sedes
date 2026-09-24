@@ -1,8 +1,9 @@
 import type { EnvironmentVariableOverrides } from "../../../../shared/protocol/environment-variables.js";
+import { readClaudeSessionHistory, type ClaudeHistoryPage, type ClaudeHistoryPageOptions } from "../claude-session-history.js";
 import { BackendError } from "../../contracts.js";
 import type { BackgroundActivity } from "../../../../shared/protocol/background-activity.js";
 import { z } from "zod";
-import type { CanUseTool, SDKMessage, SDKSessionInfo, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, SDKMessage, SDKSessionInfo } from "@anthropic-ai/claude-agent-sdk";
 import type { EnvironmentChannelScope } from "../../../execution/environment-channel.js";
 import { isSidecarRevisionChanged, type SidecarRuntimeLease, type SidecarRuntimeProvider } from "../../../sidecar/runtime-channel.js";
 import type { ClaudeRuntimeClient, ClaudeRuntimeProbeInput, ClaudeRuntimeProbeResult, ClaudeRuntimeSession, ClaudeRuntimeSessionOptions } from "../claude-runtime-client.js";
@@ -70,7 +71,11 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
   }
   async getSessionMessages(sessionId: string, options: Parameters<ClaudeRuntimeClient["getSessionMessages"]>[1], environment: Readonly<Record<string, string | undefined>>) {
     assertEmptyEnvironment(environment);
-    return worker.claudeRuntimeSessionMessagesResponseSchema.parse(await this.execute({ action: "messages", request: { sessionId, ...options } })).messages as SessionMessage[];
+    return readClaudeSessionHistory(page => this.getSessionMessagesPage(sessionId, page, environment), options);
+  }
+  async getSessionMessagesPage(sessionId: string, options: ClaudeHistoryPageOptions, environment: Readonly<Record<string, string | undefined>>): Promise<ClaudeHistoryPage> {
+    assertEmptyEnvironment(environment);
+    return worker.claudeRuntimeSessionMessagesResponseSchema.parse(await this.execute({ action: "messages", request: { sessionId, ...options } })) as ClaudeHistoryPage;
   }
   async renameSession(sessionId: string, title: string, options: { readonly dir: string }, environment: Readonly<Record<string, string | undefined>>) {
     assertEmptyEnvironment(environment);

@@ -3,6 +3,7 @@ import type {
   Query,
   SDKControlInitializeResponse,
   SDKMessage,
+  SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
@@ -10,6 +11,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { SidecarOperationRegistry } from "../../src/internal/sidecar-protocol/index.js";
 import { SidecarProtocolDeliveryError } from "../../src/internal/sidecar-protocol/contracts.js";
+import { readClaudeSessionHistory } from "../../src/server/backends/claude/claude-session-history.js";
 import type { ClaudeSdkFacade } from "../../src/server/backends/claude/claude-sdk-facade.js";
 import {
   CLAUDE_RUNTIME_MAXIMUM_HISTORY_RESPONSE_BYTES,
@@ -302,10 +304,11 @@ describe("ClaudeRuntimeWorkerHost", () => {
 
       await expect(
         host.handlers.getSessionMessages(
-          { sessionId: SESSION_ID, dir: "/workspace" },
+          { sessionId: SESSION_ID, dir: "/workspace", maintenance: true },
           context(),
         ),
       ).resolves.toEqual({
+        nextCursor: null,
         messages: [
           expect.objectContaining({
             session_id: SESSION_ID,
@@ -965,7 +968,40 @@ describe("ClaudeRuntimeWorkerHost", () => {
     }
   });
 
-  it("fails closed before returning an aggregate history response above its cap", async () => {
+  it("pages aggregate native history above 32 MiB through bounded worker responses", async () => {
+    const configDirectory = await mkdtemp("/tmp/sedes-claude-worker-test-");
+    const sdk = helperFacade();
+    const history: SessionMessage[] = ["a", "b"].map(text => ({
+      type: "user", uuid: randomUUID(), session_id: SESSION_ID,
+      message: { role: "user", content: text.repeat(18 * 1024 * 1024) },
+      parent_tool_use_id: null, parent_agent_id: null,
+    }));
+    vi.mocked(sdk.getSessionMessages).mockResolvedValue(history);
+    const host = new ClaudeRuntimeWorkerHost({ sdk, peer: inertPeer() });
+    try {
+      await host.handlers.initialize({
+        executablePath: process.execPath, configDirectory,
+        initializationTimeoutMs: 1_000,
+      }, context());
+      const responseBytes: number[] = [];
+      const messages = await readClaudeSessionHistory(async options => {
+        const page = await host.handlers.getSessionMessages({ sessionId: SESSION_ID, ...options }, context());
+        responseBytes.push(Buffer.byteLength(JSON.stringify(page)));
+        return page;
+      }, {});
+      expect(messages.map(message => message.uuid)).toEqual(history.map(message => message.uuid));
+      expect(messages.map(message => (message.message as { content: string }).content.length))
+        .toEqual([18 * 1024 * 1024, 18 * 1024 * 1024]);
+      expect(responseBytes).toHaveLength(2);
+      expect(responseBytes.every(bytes => bytes < CLAUDE_RUNTIME_MAXIMUM_HISTORY_RESPONSE_BYTES)).toBe(true);
+      expect(sdk.getSessionMessages).toHaveBeenCalledOnce();
+    } finally {
+      await host.close();
+      await rm(configDirectory, { recursive: true });
+    }
+  });
+
+  it("fails closed for an individual history message above the response cap", async () => {
     const configDirectory = await mkdtemp("/tmp/sedes-claude-worker-test-");
     const sdk = helperFacade();
     vi.mocked(sdk.getSessionMessages).mockResolvedValueOnce([

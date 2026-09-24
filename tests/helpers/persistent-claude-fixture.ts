@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ClaudeHistoryPager } from "../../src/server/backends/claude/claude-session-history.js";
 import { connect, createServer, type Socket } from "node:net";
 import { vi } from "vitest";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -104,6 +105,8 @@ export class FakePersistentClaudeSession implements ClaudeRuntimeSession {
 
 export function createFakePersistentClaudeRuntime() {
   const sessions: FakePersistentClaudeSession[] = [];
+  const history = new ClaudeHistoryPager();
+  const getSessionMessages = vi.fn<ClaudeRuntimeClient["getSessionMessages"]>(async () => []);
   const runtime = {
     createSession: vi.fn((options: ClaudeRuntimeSessionOptions) => {
       const session = new FakePersistentClaudeSession(options);
@@ -115,9 +118,13 @@ export function createFakePersistentClaudeRuntime() {
     })),
     listSessions: vi.fn<ClaudeRuntimeClient["listSessions"]>(async () => []),
     getSessionInfo: vi.fn<ClaudeRuntimeClient["getSessionInfo"]>(async () => undefined),
-    getSessionMessages: vi.fn<ClaudeRuntimeClient["getSessionMessages"]>(async () => []),
+    getSessionMessages,
+    getSessionMessagesPage: vi.fn<ClaudeRuntimeClient["getSessionMessagesPage"]>(async (sessionId, options, environment) => {
+      const { offset: _offset, limit: _limit, cursor: _cursor, maintenance: _maintenance, ...nativeOptions } = options;
+      return history.getPage(sessionId, options, async () => structuredClone(await getSessionMessages(sessionId, nativeOptions, environment)));
+    }),
     renameSession: vi.fn<ClaudeRuntimeClient["renameSession"]>(async () => undefined),
-    close: vi.fn(async () => { await Promise.all(sessions.map(session => session.close())); }),
+    close: vi.fn(async () => { history.close(); await Promise.all(sessions.map(session => session.close())); }),
   } satisfies ClaudeRuntimeClient & { close(): Promise<void> };
   return { runtime, sessions };
 }

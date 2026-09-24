@@ -50,11 +50,29 @@ epoch, replays retained events, and restores the live stream. Native provider
 history remains authoritative after a service restart; retained transport
 events are recovery evidence, not an alternative transcript store.
 
+Connected replay is reclaimed incrementally instead of waiting for the entire
+foreground turn to finish. Exact unacknowledged events stay in the delivery
+journal. Fully acknowledged, completely framed streams can be replaced by their
+matching complete native messages. Paced history reads then retire acknowledged
+complete messages whose native identity and content match provider history.
+Unfinished or ambiguous streams, uncovered messages, and unsettled control or
+terminal evidence remain retained. Acknowledged transient progress notices are
+discarded; replaceable state retains its current value.
+
+Cleanup is independent of optional usage accounting. A failed accounting
+capture still withholds its event ACK. Disconnect stops connected reclamation;
+long outages or unavailable history can still exhaust the existing retention
+limits. Cleanup does not change overflow into an implicit provider restart.
+Existing attachment response arrays remain immutable while later sweeps remove
+entries from the host's replay map. A replacement main loads native history,
+then applies retained residual and live output without resending accepted input.
+
 Discovery, metadata, history, resume, and model catalogs use the official SDK.
 Sedes does not parse Claude's on-disk transcript format, take a global
 Claude-home writer lock, mirror native history into its database, or maintain a
-second provider-history cache. Provider-native IDs, messages, and binding
-shapes stay inside this backend.
+persistent or reusable provider-history cache. Bounded transient snapshots
+exist only while transferring one history acquisition. Provider-native IDs,
+messages, and binding shapes stay inside this backend.
 
 Both executable and config-directory overrides are optional canonical absolute
 POSIX paths in the selected environment. Without an executable override, the
@@ -108,10 +126,51 @@ the separate service-owned lifetime and reattachment contract described above.
 
 ## Authoritative history and paging
 
-On attach, Claude first arms the resumed SDK stream, then acquires the SDK's
-complete authoritative history once. It merges any live messages or
+On attach, Claude first arms the resumed SDK stream, then acquires a complete
+provider-history baseline. It merges any live messages or
 retractions observed during that acquisition. The handle retains the resulting
 provider-private value for its lifetime.
+
+Native history transfer uses byte-bounded pages from one captured SDK read.
+A private random acquisition ID binds continuation offsets to that snapshot,
+session, and read options. Provider appends, compaction, replacement, and
+truncation after capture cannot splice different histories into one acquisition;
+a subsequent acquisition reads the current canonical history. This is transfer
+consistency, not an atomic history/live-stream cursor.
+
+Each worker retains at most 32 transient acquisitions sharing a 256 MiB budget
+of serialized-equivalent rows. A single acquisition is also limited to 262,144
+messages. Each owns detached projected rows plus byte sizes; it does not retain
+a second encoded copy or reread and reproject the full SDK history for every
+page. The SDK still materializes native history before these limits apply, so
+neither the wire bound nor the retained-row bound caps SDK file-read memory,
+concurrent incoming materialization, or JavaScript heap size. The stopped host
+applies the same transfer lifetime to its captured shutdown baseline.
+
+Pages target 4 MiB and at most 8,192 messages; an individual message may occupy
+a page up to the existing 32 MiB encoded response ceiling. Oversized records
+fail explicitly. Completion, page failure, or owner disposal releases the
+snapshot. Snapshots expire after 120 seconds without a continuation; there is
+no fixed total lifetime while valid pages advance. Least recently used snapshots
+are evicted only when admitting an acquisition would exceed the shared count or
+byte budget. Background replay maintenance uses a private acquisition flag
+and skips with a retryable busy result whenever admission would evict an
+existing snapshot. It cannot repeatedly expire a foreground reader; foreground
+acquisitions retain the LRU policy. This flag is scoped to the acquisition and
+is never forwarded to the SDK. Missing or expired acquisitions restart in full at most twice;
+sustained capacity pressure can still fail an acquisition explicitly.
+
+Native reads proceed independently, with at most 32 in flight. A caller stops
+waiting after 30 seconds or owner disposal, and late completion cannot install
+a snapshot. The SDK history API has no cancellation: a timed-out read continues
+to occupy its native-read reservation until it actually settles. Exhausting all
+32 reservations returns a retryable busy error; a single slow reader does not
+block unrelated acquisition or foreground reads. Maintenance iterates validated
+pages without collecting full history, and captured snapshots are never reused
+for a new acquisition.
+The private page response replaces the old whole-history response under sidecar
+wire 12; there is no dual-shape parser, persistent transcript copy, or snapshot
+reuse across acquisitions.
 
 Latest and older browser pages are byte-adaptive whole-turn projections over
 that acquisition. Loading an older page does not reread the provider.

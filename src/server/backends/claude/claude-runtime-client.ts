@@ -1,5 +1,6 @@
 import type { ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import type { BackgroundActivity } from "../../../shared/protocol/background-activity.js";
+import { ClaudeHistoryPager, readClaudeSessionHistory, type ClaudeHistoryPage, type ClaudeHistoryPageOptions } from "./claude-session-history.js";
 import type {
   EffortLevel,
   PermissionMode,
@@ -140,6 +141,11 @@ export interface ClaudeRuntimeClient {
     options: GetSessionMessagesOptions,
     environment: Readonly<Record<string, string | undefined>>,
   ): Promise<SessionMessage[]>;
+  getSessionMessagesPage(
+    sessionId: string,
+    options: ClaudeHistoryPageOptions,
+    environment: Readonly<Record<string, string | undefined>>,
+  ): Promise<ClaudeHistoryPage>;
   renameSession(
     sessionId: string,
     title: string,
@@ -154,6 +160,7 @@ export interface ClaudeRuntimeClient {
  */
 export class ClaudeSdkRuntimeAdapter implements ClaudeRuntimeClient {
   readonly #sdk: ClaudeSdkFacade;
+  readonly #history = new ClaudeHistoryPager();
 
   constructor(sdk: ClaudeSdkFacade) {
     this.#sdk = sdk;
@@ -190,7 +197,18 @@ export class ClaudeSdkRuntimeAdapter implements ClaudeRuntimeClient {
     options: GetSessionMessagesOptions,
     environment: Readonly<Record<string, string | undefined>>,
   ): Promise<SessionMessage[]> {
-    return this.#sdk.getSessionMessages(sessionId, options, environment);
+    return readClaudeSessionHistory(page => this.getSessionMessagesPage(sessionId, page, environment), options);
+  }
+
+  async getSessionMessagesPage(
+    sessionId: string, options: ClaudeHistoryPageOptions,
+    environment: Readonly<Record<string, string | undefined>>,
+  ): Promise<ClaudeHistoryPage> {
+    const { offset: _offset, limit: _limit, cursor: _cursor, maintenance: _maintenance, ...nativeOptions } = options;
+    const scope = JSON.stringify([sessionId, Object.entries(environment).sort(([left], [right]) => left.localeCompare(right))]);
+    return this.#history.getPage(scope, options, async () => structuredClone(
+      await this.#sdk.getSessionMessages(sessionId, nativeOptions, environment),
+    ));
   }
 
   renameSession(

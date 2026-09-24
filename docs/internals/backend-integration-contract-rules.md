@@ -154,6 +154,18 @@ in its private persistent send/attachment contracts; Pi, Codex, and Grok retain
 their existing delivery and lifecycle contracts and do not consume those
 Claude-private wire shapes.
 
+Provider-private replay reclamation must preserve exact unacknowledged delivery
+and unresolved operation/permission evidence. A main-process ACK alone is not
+proof that a replacement main can reconstruct transient output. Claude's
+persistent host compacts fully covered acknowledged streams and retires complete
+content only after matching native history; disposable progress frames have an
+explicit ACK-time policy. History transfer pages belong to one bounded, expiring
+acquisition snapshot with scoped continuation identity and validated progress.
+Do not treat an offset as a stable snapshot or repeatedly reconstruct the full
+history for each page. These are Claude-private rules: Codex, Pi, and Grok retain
+their existing history and delivery contracts, and no browser capability or
+protocol changes.
+
 Backend runtime control adapters expose `BackendRuntimeControlRejectedError`
 only for positively received, known provider refusals, normalized as stale
 confirmation, blocked, or cleanup unproven. Keep provider refusal codes private
