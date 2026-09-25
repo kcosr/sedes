@@ -29,7 +29,15 @@ import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v1.js";
 
 const CLAUDE_SETTING_SOURCES = ["user", "project", "local"] as const;
 
-/** Claude names these tools `mcp__sedes__<tool>`. */
+const SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE =
+  "SEDES_AGENT_TOOL_SOURCE_CAPABILITY";
+
+/**
+ * Claude names these tools `mcp__sedes__<tool>`. The SDK passes MCP servers to
+ * the CLI as a `--mcp-config` argument, which other local users can read, so
+ * the reference stays in the query environment and the server entry names it
+ * with a placeholder that Claude expands when it starts the server.
+ */
 function sedesMcpServers(mcp: ClaudeRuntimeAgentToolMcp) {
   return {
     sedes: {
@@ -38,7 +46,7 @@ function sedesMcpServers(mcp: ClaudeRuntimeAgentToolMcp) {
       args: ["mcp", "--mode", mcp.mode],
       env: {
         SEDES_AGENT_TOOL_ENDPOINT: mcp.endpoint,
-        SEDES_AGENT_TOOL_SOURCE_CAPABILITY: mcp.sourceCapability,
+        [SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE]: `\${${SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE}}`,
       },
     },
   };
@@ -246,7 +254,15 @@ export class ClaudeSdkSession {
         ...(this.#options.agentToolMcp
           ? { mcpServers: sedesMcpServers(this.#options.agentToolMcp) }
           : {}),
-        env: { ...this.#options.environment },
+        env: {
+          ...this.#options.environment,
+          ...(this.#options.agentToolMcp
+            ? {
+                [SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE]:
+                  this.#options.agentToolMcp.sourceCapability,
+              }
+            : {}),
+        },
       },
     });
     this.#query = query;

@@ -868,6 +868,8 @@ describe("ClaudeConversationBackendDriver", () => {
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
     });
     const options = sdk.createQuery.mock.calls[0]![0].options;
+    // The SDK serializes MCP servers into the CLI command line, so the entry
+    // carries only a placeholder that Claude expands from the query env.
     expect(options.mcpServers).toEqual({
       sedes: {
         type: "stdio",
@@ -875,12 +877,19 @@ describe("ClaudeConversationBackendDriver", () => {
         args: ["mcp", "--mode", "individual"],
         env: {
           SEDES_AGENT_TOOL_ENDPOINT: "http://127.0.0.1:4784",
-          SEDES_AGENT_TOOL_SOURCE_CAPABILITY: "htr2_" + "a".repeat(64),
+          SEDES_AGENT_TOOL_SOURCE_CAPABILITY:
+            "${SEDES_AGENT_TOOL_SOURCE_CAPABILITY}",
         },
       },
     });
-    expect(Object.keys(options.env ?? {}).filter((name) => name.startsWith("SEDES_"))).toEqual([]);
-    expect(options.env).toMatchObject({ HOME: "/operator" });
+    expect(JSON.stringify(options.mcpServers)).not.toContain("htr2_");
+    expect(
+      Object.keys(options.env ?? {}).filter((name) => name.startsWith("SEDES_")),
+    ).toEqual(["SEDES_AGENT_TOOL_SOURCE_CAPABILITY"]);
+    expect(options.env).toMatchObject({
+      HOME: "/operator",
+      SEDES_AGENT_TOOL_SOURCE_CAPABILITY: "htr2_" + "a".repeat(64),
+    });
     expect(options.env).not.toHaveProperty("PATH");
     expect(capabilities.issue).toHaveBeenCalledWith(
       expect.objectContaining({ backendKind: "claude_agent_sdk" }),
