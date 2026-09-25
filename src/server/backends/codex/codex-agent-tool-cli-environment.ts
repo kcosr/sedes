@@ -15,7 +15,10 @@ import type {
   AgentToolSourceCapabilityTransport,
 } from "../../agent-tools/application/database-agent-tool-source-authority.js";
 import type { BackendAgentToolFacade } from "../../agent-tools/adapters/backend-facade.js";
-import type { AgentToolPresentationMode } from "../../../shared/protocol/conversation.js";
+import type {
+  AgentToolPresentationMode,
+  AgentToolPresentationSurface,
+} from "../../../shared/protocol/conversation.js";
 
 const SEDES_AGENT_TOOL_ENDPOINT_VARIABLE = "SEDES_AGENT_TOOL_ENDPOINT";
 const SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE =
@@ -24,6 +27,16 @@ const SEDES_AGENT_TOOL_CLIENT_TOKEN_VARIABLE = "SEDES_AGENT_TOOL_CLIENT_TOKEN";
 const SEDES_AGENT_TOOL_CLI_MODE_VARIABLE = "SEDES_AGENT_TOOL_CLI_MODE";
 const PATH_VARIABLE = "PATH";
 const NEVER_CLOSED = new Promise<never>(() => undefined);
+/** The per-thread Codex MCP server key for Native Sedes tools. */
+export const CODEX_SEDES_MCP_SERVER_CONFIG_KEY = "mcp_servers.sedes";
+const SEDES_EXECUTABLE = "sedes";
+const SEDES_MCP_STARTUP_TIMEOUT_SECONDS = 30;
+/**
+ * Codex otherwise times out MCP calls after 60 seconds. Sedes bounds tool
+ * execution itself, while an access approval deliberately waits for the user;
+ * turn interruption still cancels the call.
+ */
+const SEDES_MCP_TOOL_TIMEOUT_SECONDS = 86_400;
 
 export type CodexAgentToolCliEnvironmentUnavailableReason =
   | "imported_thread"
@@ -34,11 +47,18 @@ export type CodexAgentToolCliEnvironmentUnavailableReason =
   | "cli_unavailable"
   | "sidecar_unavailable";
 
+/**
+ * The resolved agent-tool presentation for one Codex thread. The CLI surface
+ * installs the generated `sedes` command in the shell environment; the Native
+ * surface starts `sedes mcp` as the thread's `sedes` MCP server. Both use the
+ * same runtime lease and a thread reference bound to that presentation.
+ */
 export type CodexAgentToolCliEnvironmentResolution =
   | ((Extract<
       AgentToolCliRuntimeResolution,
       { readonly availability: "available" }
     > & { readonly sourceCapability: string }) & {
+      readonly surface: AgentToolPresentationSurface;
       readonly mode: AgentToolPresentationMode;
     })
   | Readonly<{
@@ -187,17 +207,24 @@ export class DatabaseCodexAgentToolCliEnvironmentProvider implements CodexAgentT
       sourceEnvironmentId: row.environmentId,
       backendKind: "codex_app_server",
     });
-    if (policy.presentation.surface !== "cli") {
-      return Object.freeze({
-        availability: "unavailable",
-        reason: "presentation_unavailable",
-      });
-    }
+    const surface = policy.presentation.surface;
     let runtimeResolution: AgentToolCliRuntimeResolution | undefined;
     try {
       runtimeResolution = await this.#runtime.acquire(options);
       if (runtimeResolution.availability !== "available") {
         return runtimeResolution;
+      }
+      // The MCP server runs the generated script directly, which a Windows
+      // process launcher cannot do; Native presentation fails closed there.
+      if (
+        surface === "native" &&
+        pathForRemoteRoot(runtimeResolution.executableDirectory).sep === "\\"
+      ) {
+        runtimeResolution.release();
+        return Object.freeze({
+          availability: "unavailable",
+          reason: "presentation_unavailable",
+        });
       }
       const sourceCapability = this.#sourceCapabilities.issue(
         {
@@ -208,6 +235,7 @@ export class DatabaseCodexAgentToolCliEnvironmentProvider implements CodexAgentT
           backendKind: "codex_app_server",
         },
         this.#sourceCapabilityTransport,
+        surface === "native" ? "mcp" : "cli",
       );
       const activeRuntimeResolution = runtimeResolution;
       const inheritedPath = this.#appliedOwnedPath ? await this.#appliedOwnedPath() : runtimeResolution.inheritedPath;
@@ -215,6 +243,7 @@ export class DatabaseCodexAgentToolCliEnvironmentProvider implements CodexAgentT
       return Object.freeze({
         ...runtimeResolution,
         sourceCapability,
+        surface,
         mode: policy.presentation.mode,
         endpoint: canonicalAgentToolEndpoint(runtimeResolution.endpoint),
         executableDirectory: absoluteDirectory(
@@ -249,7 +278,12 @@ export class DatabaseCodexAgentToolCliEnvironmentProvider implements CodexAgentT
   }
 }
 
-/** Adds isolated CLI context without discarding provider configuration. */
+/**
+ * Adds the thread's agent-tool presentation without discarding provider
+ * configuration: CLI variables in the shell policy, or the `sedes` MCP server
+ * entry. Sedes variables are always removed from the shell otherwise, so a
+ * Native thread's shell never receives a thread reference.
+ */
 export function withCodexAgentToolCliEnvironment(
   config: Readonly<Record<string, CodexJsonValue | undefined>>,
   input: {
@@ -294,15 +328,16 @@ export function withCodexAgentToolCliEnvironment(
       (name) => !sensitiveVariables.includes(name),
     );
   })();
+  const sanitizedShellEnvironmentPolicy = Object.freeze({
+    ...existingPolicy,
+    exclude: [...new Set([...existingExclude, ...sensitiveVariables])],
+    ...(Object.keys(existingSet).length > 0 ? { set: existingSet } : {}),
+    ...(sanitizedIncludeOnly ? { include_only: sanitizedIncludeOnly } : {}),
+  });
   if (input.resolution.availability !== "available") {
     return Object.freeze({
       ...base,
-      shell_environment_policy: Object.freeze({
-        ...existingPolicy,
-        exclude: [...new Set([...existingExclude, ...sensitiveVariables])],
-        ...(Object.keys(existingSet).length > 0 ? { set: existingSet } : {}),
-        ...(sanitizedIncludeOnly ? { include_only: sanitizedIncludeOnly } : {}),
-      }),
+      shell_environment_policy: sanitizedShellEnvironmentPolicy,
     });
   }
   assertApplicationThreadId(input.applicationThreadId);
@@ -312,6 +347,30 @@ export function withCodexAgentToolCliEnvironment(
   const executableDirectory = absoluteDirectory(
     input.resolution.executableDirectory,
   );
+  if (input.resolution.surface === "native") {
+    const executablePath = pathForRemoteRoot(executableDirectory);
+    if (executablePath.sep === "\\") {
+      throw new Error("codex_agent_tool_mcp_platform_unsupported");
+    }
+    return Object.freeze({
+      ...base,
+      shell_environment_policy: sanitizedShellEnvironmentPolicy,
+      [CODEX_SEDES_MCP_SERVER_CONFIG_KEY]: Object.freeze({
+        command: executablePath.join(executableDirectory, SEDES_EXECUTABLE),
+        args: ["mcp", "--mode", input.resolution.mode],
+        env: Object.freeze({
+          [SEDES_AGENT_TOOL_ENDPOINT_VARIABLE]: endpoint,
+          [SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE]:
+            input.resolution.sourceCapability,
+        }),
+        startup_timeout_sec: SEDES_MCP_STARTUP_TIMEOUT_SECONDS,
+        tool_timeout_sec: SEDES_MCP_TOOL_TIMEOUT_SECONDS,
+      }),
+    });
+  }
+  if (input.resolution.surface !== "cli") {
+    throw new Error("codex_agent_tool_presentation_surface_invalid");
+  }
   const configuredPath = Object.entries(input.executionEnvironment ?? {}).find(([name]) => name.toUpperCase() === "PATH");
   const desiredPath = configuredPath ? configuredPath[1] ?? "" : input.resolution.inheritedPath;
   const inheritedPath =

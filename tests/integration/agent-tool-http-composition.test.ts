@@ -270,6 +270,7 @@ describe("agent-tool HTTP production composition", () => {
           backendKind: "pi",
         },
         "management_http",
+        "cli",
       );
 
       const firstRequest = new AbortController();
@@ -306,7 +307,7 @@ describe("agent-tool HTTP production composition", () => {
           scope,
           retainedReference,
           new AbortController().signal,
-        ),
+        ).source,
         adapter: "http",
         request: {
           toolId: "thread.status",
@@ -348,6 +349,7 @@ describe("agent-tool HTTP production composition", () => {
             backendKind: "pi",
           },
           "management_http",
+          "cli",
         ),
       ).toBe(retainedReference);
       const application = new DatabaseAgentToolApplicationReader(
@@ -570,7 +572,11 @@ describe("agent-tool HTTP production composition", () => {
         sourceEnvironmentId: environment.id,
         backendKind: "pi" as const,
       };
-      const sourceCapability = sourceAuthority.issue(source, "management_http");
+      const sourceCapability = sourceAuthority.issue(
+        source,
+        "management_http",
+        "cli",
+      );
       expect(
         providerTools.eligibleCatalog("pi_sdk").map(({ id }) => id),
       ).toEqual([

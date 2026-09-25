@@ -25,8 +25,33 @@ import {
   resolveClaudeSafeSkills,
   type ClaudeSafeSkill,
 } from "./claude-skills.js";
+import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v1.js";
 
 const CLAUDE_SETTING_SOURCES = ["user", "project", "local"] as const;
+
+const SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE =
+  "SEDES_AGENT_TOOL_SOURCE_CAPABILITY";
+
+/**
+ * Claude names these tools `mcp__sedes__<tool>`. The SDK passes MCP servers to
+ * the CLI as a `--mcp-config` argument, which other local users can read, so
+ * the reference stays in the query environment and the server entry names it
+ * with a placeholder that Claude expands when it starts the server.
+ */
+function sedesMcpServers(mcp: ClaudeRuntimeAgentToolMcp) {
+  return {
+    sedes: {
+      type: "stdio" as const,
+      command: mcp.command,
+      args: ["mcp", "--mode", mcp.mode],
+      env: {
+        SEDES_AGENT_TOOL_ENDPOINT: mcp.endpoint,
+        [SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE]: `\${${SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE}}`,
+      },
+    },
+  };
+}
+
 const CLAUDE_RESET_PRODUCING_TOOLS = ["EnterPlanMode", "ExitPlanMode"] as const;
 const CLAUDE_RESET_PRODUCING_TOOL_SET = new Set<string>(
   CLAUDE_RESET_PRODUCING_TOOLS,
@@ -58,6 +83,8 @@ export interface ClaudeSdkSessionOptions {
   ) => void | Promise<void>;
   /** Full child environment. The Agent SDK replaces rather than merges it. */
   readonly environment: Readonly<Record<string, string | undefined>>;
+  /** Native Sedes tools; exclusive with CLI variables in `environment`. */
+  readonly agentToolMcp?: ClaudeRuntimeAgentToolMcp;
   readonly onNewerVersion?: (warning: ClaudeRuntimeVersionWarning) => void;
   readonly onVersionAssessment?: (
     assessment: VerifiedClaudeRuntimeVersion,
@@ -224,7 +251,19 @@ export class ClaudeSdkSession {
         ...(this.#options.canUseTool
           ? { canUseTool: this.#deliveryAwareCanUseTool() }
           : {}),
-        env: { ...this.#options.environment },
+        // Added beside the user's own MCP servers, which setting sources load.
+        ...(this.#options.agentToolMcp
+          ? { mcpServers: sedesMcpServers(this.#options.agentToolMcp) }
+          : {}),
+        env: {
+          ...this.#options.environment,
+          ...(this.#options.agentToolMcp
+            ? {
+                [SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE]:
+                  this.#options.agentToolMcp.sourceCapability,
+              }
+            : {}),
+        },
       },
     });
     this.#query = query;

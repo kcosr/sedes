@@ -79,7 +79,10 @@ import type {
 import type { AgentToolCliAvailability } from "../module.js";
 import type { AgentToolPresentationMode } from "../../../shared/protocol/conversation.js";
 import type { CompiledBackendModelPolicy } from "../model-policy.js";
-import { claudeAgentToolCliEnvironment } from "./claude-agent-tool-cli-environment.js";
+import {
+  claudeAgentToolCliEnvironment,
+  claudeAgentToolMcpServer,
+} from "./claude-agent-tool-cli-environment.js";
 import {
   isClaudePermissionMode,
   isClaudePermissionModeAllowed,
@@ -149,6 +152,8 @@ export interface ClaudeConversationHandleInput {
   readonly attachmentProvenanceKey: Uint8Array;
   readonly agentToolCli?: AgentToolCliAvailability;
   readonly agentToolCliMode?: AgentToolPresentationMode;
+  /** Native presentation: `sourceCapability` is then bound to MCP. */
+  readonly agentToolMcpMode?: AgentToolPresentationMode;
   readonly sourceCapability?: string;
   readonly executionEnvironment?: ResolvedEnvironmentVariables;
   readonly childEnvironment: Readonly<Record<string, string | undefined>>;
@@ -337,8 +342,20 @@ export class ClaudeConversationHandle implements ConversationHandle {
             isClaudePermissionModeAllowed(suppliedMode, this.#permissionPolicy)
           ? suppliedMode
           : undefined;
+    if (input.agentToolMcpMode && input.agentToolCliMode) {
+      throw new Error("claude_agent_tool_presentation_ambiguous");
+    }
+    const agentToolMcp = input.agentToolMcpMode
+      ? claudeAgentToolMcpServer({
+          availability: input.agentToolCli,
+          applicationThreadId: input.binding.applicationThreadId,
+          sourceCapability: input.sourceCapability,
+          mode: input.agentToolMcpMode,
+        })
+      : undefined;
+    // Native presentation still strips ambient Sedes variables from the query.
     const environment = claudeAgentToolCliEnvironment({
-      availability: input.agentToolCli,
+      availability: input.agentToolMcpMode ? undefined : input.agentToolCli,
       applicationThreadId: input.binding.applicationThreadId,
       sourceCapability: input.sourceCapability,
       mode: input.agentToolCliMode,
@@ -370,6 +387,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       onPermissionResponseDeliveryFailed: (response) =>
         this.#interactions.permissionResponseDeliveryFailed(response),
       environment,
+      ...(agentToolMcp ? { agentToolMcp } : {}),
       ...(input.onVersionAssessment
         ? { onVersionAssessment: input.onVersionAssessment }
         : {}),

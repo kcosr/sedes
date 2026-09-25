@@ -105,7 +105,7 @@ const writeExecution = (concurrencyClass: string) => ({
   maximumInputBytes: 1024 * 1024,
   uncertainExternalOutcome: true,
 });
-const exposure = { adapters: ["pi_sdk", "http", "cli"] as const };
+const exposure = { adapters: ["pi_sdk", "mcp", "http", "cli"] as const };
 
 const taskSummaryPageSchema = Type.Object(
   {
@@ -199,6 +199,7 @@ export function createTaskListToolDefinition(
         promptSnippet:
           "Filter task summaries or complete task documents in one scope or its descendants.",
       },
+      mcp: { name: "sedes_task_list" },
       http: { invocation: "inline" },
       cli: { command: taskListManifest.id },
     },
@@ -253,6 +254,7 @@ export function createTaskGetToolDefinition(
         label: "Get Sedes task",
         promptSnippet: "Read a complete Sedes task.",
       },
+      mcp: { name: "sedes_task_get" },
       http: { invocation: "inline" },
       cli: { command: taskGetManifest.id },
     },
@@ -297,6 +299,7 @@ export function createTaskCreateToolDefinition(
         label: "Create Sedes task",
         promptSnippet: "Create a principal-owned Sedes task.",
       },
+      mcp: { name: "sedes_task_create" },
       http: { invocation: "inline" },
       cli: { command: taskCreateManifest.id },
     },
@@ -366,6 +369,7 @@ export function createTaskUpdateToolDefinition(
         label: "Update Sedes task",
         promptSnippet: "Update a Sedes task using its current revision.",
       },
+      mcp: { name: "sedes_task_update" },
       http: { invocation: "inline" },
       cli: { command: taskUpdateManifest.id },
     },

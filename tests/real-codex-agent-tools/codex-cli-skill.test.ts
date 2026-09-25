@@ -381,6 +381,7 @@ describe("real Codex Sedes CLI skill", () => {
             new AbortController().signal,
           ),
           "management_http",
+          "cli",
         );
         const agentTools = {
           sources: application,

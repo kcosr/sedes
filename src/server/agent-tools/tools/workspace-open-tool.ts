@@ -70,7 +70,7 @@ export function createWorkspaceOpenToolDefinition(
       concurrencyClass: "workspace_open_write",
       uncertainExternalOutcome: true,
     },
-    exposure: { adapters: ["pi_sdk", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_workspace_open",
@@ -78,6 +78,7 @@ export function createWorkspaceOpenToolDefinition(
         promptSnippet:
           "Open an existing project directory in a configured Sedes execution environment.",
       },
+      mcp: { name: "sedes_workspace_open" },
       http: { invocation: "inline" },
       cli: { command: manifest.id },
     },

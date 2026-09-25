@@ -17,18 +17,25 @@ describe("thread agent tool backend eligibility", () => {
     ]);
   });
 
-  it.each(["codex_app_server", "claude_agent_sdk", "grok_build"] as const)(
-    "preserves the explicit %s CLI presentation",
+  it.each(["codex_app_server", "claude_agent_sdk"] as const)(
+    "defaults %s to MCP-backed Native Individual, with both CLI modes",
     (backendKind) => {
-      expect(eligibility.presentationOptions(backendKind, "local")).toEqual([
-        { surface: "cli", modes: ["progressive", "individual"] },
-      ]);
-      expect(eligibility.presentationOptions(backendKind, "outbound")).toEqual([
-        { surface: "cli", modes: ["progressive", "individual"] },
-      ]);
-      expect(eligibility.presentationOptions(backendKind, "ssh")).toEqual([
-        { surface: "cli", modes: ["progressive", "individual"] },
-      ]);
+      for (const environmentKind of ["local", "outbound", "ssh"] as const) {
+        expect(
+          eligibility.presentationOptions(backendKind, environmentKind),
+        ).toEqual([
+          { surface: "native", modes: ["individual", "progressive"] },
+          { surface: "cli", modes: ["progressive", "individual"] },
+        ]);
+      }
     },
   );
+
+  it("preserves the explicit Grok CLI-only presentation", () => {
+    for (const environmentKind of ["local", "outbound", "ssh"] as const) {
+      expect(
+        eligibility.presentationOptions("grok_build", environmentKind),
+      ).toEqual([{ surface: "cli", modes: ["progressive", "individual"] }]);
+    }
+  });
 });

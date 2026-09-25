@@ -524,17 +524,24 @@ contract.
 
 ## Agent-tool integration
 
-Codex has no Native Sedes-tool surface. Eligible Sedes-created local threads on
-owned stdio or external local UDS/TCP receive the generated CLI through the
-local HTTP endpoint in Progressive or Individual mode. Progressive uses the
+Eligible Sedes-created local threads on owned stdio or external local UDS/TCP
+receive Sedes tools through the local HTTP endpoint in Progressive or
+Individual mode, on the CLI or Native surface. The CLI surface installs the
+generated CLI in the shell environment policy. The Native surface adds
+`mcp_servers.sedes` to the thread's start, resume, or fork config instead; see
+[Native MCP presentation](../agent-tools.md#native-mcp-presentation-codex-and-claude). Progressive uses the
 bounded catalog/describe/invoke flow; Individual uses live help and named typed
 commands. SSH UDS uses an owner-only Unix socket only when `agent_tools_cli` is
 enabled and the managed sidecar is available.
 
-Both routes expose one `SEDES_AGENT_TOOL_ENDPOINT`, one opaque encrypted
+Both CLI routes expose one `SEDES_AGENT_TOOL_ENDPOINT`, one opaque encrypted
 `SEDES_AGENT_TOOL_SOURCE_CAPABILITY`, the non-authoritative
 `SEDES_AGENT_TOOL_CLI_MODE` presentation hint, and the built provider CLI
-directory on `PATH`. The reference authenticates thread and ingress beneath the
+directory on `PATH`. The Native MCP entry instead gives only the server
+process the endpoint and a reference issued for MCP, runs the same executable
+by absolute path with `mcp --mode <mode>`, and strips every Sedes variable
+from the shell policy. Its environment reaches only that child process, and
+runtime request fingerprints record only its variable names. The reference authenticates thread and ingress beneath the
 server-derived tenant/principal and survives Sedes/provider runtime replacement
 under the same installation key. It never enters the shared daemon environment.
 Current workspace, environment, backend, inventory, policy, and exact active
@@ -551,7 +558,9 @@ another mode or a Native surface. Saved Agents can copy the complete
 execution tuple and Sedes tool policy into a new thread. See
 [Agent tools](../agent-tools.md).
 
-Sedes-owned Codex MCP management is not implemented. Principal Tool clients
+Sedes adds only its own per-thread `sedes` MCP server and never edits
+operator Codex configuration. Native MCP presentation fails closed on Windows
+execution hosts. Principal Tool clients
 use only generic management HTTP routes; they are not injected into Codex or
 accepted by the SSH sidecar. An admitted client may invoke currently eligible
 Codex-backed operations with exact client provenance on creation, queue/send,

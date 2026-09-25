@@ -1614,6 +1614,7 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
               cliSourceCapability = this.#agentToolSourceCapabilities.issue(
                 agentToolSource,
                 "management_http",
+                "cli",
               );
               return createPiAgentToolCliEnvironment(
                 this.#agentToolCli,

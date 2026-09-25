@@ -68,13 +68,14 @@ export function createEnvironmentListToolDefinition(
       concurrencyClass: "environment_list_read",
       uncertainExternalOutcome: false,
     },
-    exposure: { adapters: ["pi_sdk", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_environment_list",
         label: "Sedes environment list",
         promptSnippet: "Discover configured Sedes execution environments.",
       },
+      mcp: { name: "sedes_environment_list" },
       http: { invocation: "inline" },
       cli: { command: manifest.id },
     },

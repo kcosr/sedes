@@ -80,6 +80,7 @@ function writeDefinition(input: {
     catalog: { groupId: "tasks", label: "Example write", order: 999 },
     adapters: {
       pi: { name: "sedes_example_write", label: "Sedes example write" },
+      mcp: { name: "sedes_example_write" },
       http: { invocation: "inline" },
       cli: { command: "example.write" },
     },
@@ -328,6 +329,7 @@ describe("CanonicalInlineAgentToolService", () => {
               name: "sedes_example_shutdown_aware",
               label: "Sedes shutdown-aware example",
             },
+            mcp: { name: "sedes_example_shutdown-aware" },
             http: { invocation: "inline" },
             cli: { command: "example.shutdown-aware" },
           },

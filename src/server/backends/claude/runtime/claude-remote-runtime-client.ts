@@ -254,6 +254,7 @@ class PersistentSession implements ClaudeRuntimeSession {
       ...(options.allowDangerouslySkipPermissions ? { allowDangerouslySkipPermissions: true } : {}),
       enableCanUseTool: options.canUseTool !== undefined,
       environment: Object.fromEntries(Object.entries(options.environment).filter(([, value]) => value !== undefined)),
+      ...(options.agentToolMcp ? { agentToolMcp: options.agentToolMcp } : {}),
           ...(options.executionEnvironment ? { executionEnvironment: options.executionEnvironment } : {}),
     });
     const response = claudePersistentAttachmentSchema.parse(await this.client.execute({ action: "open", request, replay: this.#initialization ? "unacknowledged" : "full" }, attachment));

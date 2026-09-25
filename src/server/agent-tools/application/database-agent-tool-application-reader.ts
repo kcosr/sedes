@@ -12,7 +12,7 @@ import { CanonicalAgentToolRequestError } from "../invocation/canonical-inline-a
 import { DatabaseAgentToolSourceAuthority } from "./database-agent-tool-source-authority.js";
 import type {
   AgentToolSourceContextResolver,
-  ResolvedAgentToolSourceContext,
+  ResolvedAgentToolSourceCapabilityContext,
 } from "../http/agent-tool-http-service.js";
 import type {
   AgentToolApplicationReader,
@@ -60,7 +60,7 @@ export class DatabaseAgentToolApplicationReader
     request: Request,
     sourceCapability: string,
     signal: AbortSignal,
-  ): Promise<ResolvedAgentToolSourceContext> {
+  ): Promise<ResolvedAgentToolSourceCapabilityContext> {
     this.#assertOpen(signal);
     const scope = await this.identity.resolve(request);
     this.#assertOpen(signal);

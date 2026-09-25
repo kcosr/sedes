@@ -1,6 +1,9 @@
 import type { WorkpadAgentToolService } from "../../src/server/agent-tools/tools/workpad-agent-tool-service.js";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentToolDefinition } from "../../src/server/agent-tools/contracts/agent-tool-contracts.js";
+import {
+  nativeAgentToolName,
+  type AgentToolDefinition,
+} from "../../src/server/agent-tools/contracts/agent-tool-contracts.js";
 import {
   AGENT_TOOL_INVOCATION_ENVELOPE_HEADROOM_BYTES,
   AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES,
@@ -430,6 +433,58 @@ describe("AgentToolRegistry", () => {
         cli: { command: "thread.status" },
       },
     });
+  });
+
+  it("names every MCP presentation like its Pi native tool", () => {
+    const registry = new AgentToolRegistry();
+    registry.register(
+      createThreadStatusToolDefinition({
+        readThreadStatus: async () => undefined,
+      }),
+    );
+    expect(
+      registry.resolveAdapterName("mcp", "sedes_thread_status").id,
+    ).toBe("thread.status");
+    expect(registry.artifact("thread.status", 2)).toMatchObject({
+      exposure: { adapters: ["cli", "http", "mcp", "pi_sdk"] },
+      adapters: { mcp: { name: "sedes_thread_status" } },
+      execution: { adapterWaitCeilingMilliseconds: { mcp: 30_000 } },
+    });
+    expect(nativeAgentToolName("thread.worktree_list")).toBe(
+      "sedes_thread_worktree_list",
+    );
+
+    const withMcp = (name: string) =>
+      definition({
+        exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+        execution: {
+          ...definition().execution,
+          adapterWaitCeilingMilliseconds: {
+            ...definition().execution.adapterWaitCeilingMilliseconds,
+            mcp: 30_000,
+          },
+        },
+        adapters: { ...definition().adapters, mcp: { name } },
+      });
+    expect(() =>
+      new AgentToolRegistry().register(withMcp("sedes_example_read")),
+    ).not.toThrow();
+    expect(() =>
+      new AgentToolRegistry().register(withMcp("example_read")),
+    ).toThrow("agent_tool_mcp_name_not_canonical");
+    expect(() =>
+      new AgentToolRegistry().register(
+        definition({ adapters: { ...definition().adapters, mcp: { name: "sedes_example_read" } } }),
+      ),
+    ).toThrow("agent_tool_mcp_exposure_presentation_mismatch");
+    expect(() =>
+      new AgentToolRegistry().register(
+        definition({
+          exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
+          adapters: { ...definition().adapters, mcp: { name: "sedes_example_read" } },
+        }),
+      ),
+    ).toThrow("agent_tool_adapter_wait_ceiling_missing");
   });
 
   it("normalizes order and rejects ambiguous or malformed presentation", () => {

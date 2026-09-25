@@ -138,7 +138,7 @@ const writeExecution = (
   uncertainExternalOutcome: true,
 });
 
-const exposure = { adapters: ["pi_sdk", "http", "cli"] } as const;
+const exposure = { adapters: ["pi_sdk", "mcp", "http", "cli"] } as const;
 
 function scope(context: {
   readonly tenantId: string;
@@ -184,6 +184,7 @@ export function createSavedAgentListToolDefinition(
         label: "List Sedes Agents",
         promptSnippet: "Discover reusable Sedes Agent configurations.",
       },
+      mcp: { name: "sedes_saved_agent_list" },
       http: { invocation: "inline" },
       cli: { command: listManifest.id },
     },
@@ -219,6 +220,7 @@ export function createSavedAgentGetToolDefinition(
         label: "Get Sedes Agent",
         promptSnippet: "Read one complete saved Sedes Agent.",
       },
+      mcp: { name: "sedes_saved_agent_get" },
       http: { invocation: "inline" },
       cli: { command: getManifest.id },
     },
@@ -274,6 +276,7 @@ export function createSavedAgentOptionsToolDefinition(
         promptSnippet:
           "Inspect current target-specific Agent configuration options before writing.",
       },
+      mcp: { name: "sedes_saved_agent_options" },
       http: { invocation: "inline" },
       cli: { command: optionsManifest.id },
     },
@@ -335,6 +338,7 @@ export function createSavedAgentCreateToolDefinition(
         promptSnippet:
           "Create a reusable Sedes Agent from current normalized options.",
       },
+      mcp: { name: "sedes_saved_agent_create" },
       http: { invocation: "inline" },
       cli: { command: createManifest.id },
     },
@@ -395,6 +399,7 @@ export function createSavedAgentUpdateToolDefinition(
         promptSnippet:
           "Revision-check and atomically update a saved Sedes Agent.",
       },
+      mcp: { name: "sedes_saved_agent_update" },
       http: { invocation: "inline" },
       cli: { command: updateManifest.id },
     },
@@ -453,6 +458,7 @@ export function createSavedAgentDeleteToolDefinition(
         promptSnippet:
           "Revision-check and delete only the reusable Sedes Agent preset.",
       },
+      mcp: { name: "sedes_saved_agent_delete" },
       http: { invocation: "inline" },
       cli: { command: deleteManifest.id },
     },

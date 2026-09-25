@@ -4,6 +4,10 @@
 
 ### Breaking Changes
 
+- Sidecars must use runtime protocol 13, which serves `sedes mcp` and accepts
+  Claude's Native agent-tool entry. Upgrade existing sidecars explicitly
+  before reconnecting with this server version. (#10)
+
 - Claude history paging requires sidecar runtime protocol 12. Upgrade existing
   sidecars explicitly before reconnecting with this server version. (#9)
 
@@ -12,6 +16,17 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Let Codex and Claude threads use Native Sedes agent tools. Choose
+  **Native tools** in **Agent tools…**; Sedes adds a per-thread `sedes` MCP
+  server (`sedes mcp`) that presents Progressive gateways or one tool per
+  granted operation, with structured results and hints from each tool's
+  declared effects. Sedes never edits Codex or Claude configuration, and the
+  provider's own permission controls still apply. New Codex and Claude
+  threads and Saved Agents without a tool policy default to Native tools in
+  Individual mode; migration 115 changes only the default for new threads.
+  Thread references are now bound to the CLI or MCP presentation; issued CLI
+  references keep working. (#10)
 
 - Add a **Usage** page (sidebar **More** → **Usage**) with tokens and
   estimated cost over time for every thread, filterable and groupable by

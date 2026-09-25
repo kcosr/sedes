@@ -426,25 +426,33 @@ submission.
 
 ## Agent-tool presentation
 
-Eligible Claude queries receive the generated `sedes` CLI and exact
-thread-scoped context in Progressive or Individual mode. Progressive uses
-bounded catalog discovery and generic invocation; Individual uses live help
-and named typed commands. The same per-thread exact-ID policy and
+Eligible Claude queries receive Sedes tools with exact thread-scoped context
+in Progressive or Individual mode, on the CLI or Native surface. The CLI
+surface installs the generated `sedes` CLI in the query environment:
+Progressive uses bounded catalog discovery and generic invocation; Individual
+uses live help and named typed commands. The Native surface adds a per-query
+`sedes` MCP server; see
+[Native MCP presentation](../agent-tools.md#native-mcp-presentation-codex-and-claude). The same per-thread exact-ID policy and
 invocation-time authority checks used by other backends apply. Claude does not
-implement Pi's shared `set_tool_access` action; Sedes application tools remain
-independent from Claude permission mode.
+implement Pi's shared `set_tool_access` action. Claude's permission mode
+decides whether Claude runs a `sedes` command or `mcp__sedes__*` tool; Sedes's
+own policy and access boundary then apply independently of that mode.
 
-The surface is CLI-only, so the UI hides that one-value selector while
-retaining the Progressive/Individual mode selector. Local workers use the
+The worker protocol carries the Native entry as a closed `agentToolMcp` field
+that is exclusive with the CLI query environment. The Agent SDK passes MCP
+servers to the CLI as a `--mcp-config` argument, so the entry names the
+reference as `${SEDES_AGENT_TOOL_SOURCE_CAPABILITY}` and the query environment
+carries the value, which Claude expands when it starts the server. The user's
+MCP servers from setting sources still load. Local workers use the
 local HTTP endpoint. Remote Linux/macOS queries use the private sidecar Unix
 socket relay
 when `agent_tools_cli` is independently enabled and admitted. Its calls require
 a current authorized main-server connection; disconnected calls are not queued
-for later execution. Claude has
-no native agent-tool presentation. A missing built CLI
-disables only this optional
-surface, not ordinary Claude conversation capabilities, and never falls back
-to another mode or a Native surface. The injected encrypted
+for later execution. For a remote Native query, the sidecar admits the MCP
+entry only when it names the sidecar's own `sedes` binary and live ingress,
+and the retained query's authority fingerprint includes it. A missing built
+CLI disables only the agent-tool presentation, not ordinary Claude
+conversation capabilities, and never falls back to another mode or surface. The injected encrypted
 thread source reference survives a Sedes restart, while every invocation still
 requires the exact current active Claude query and policy. For a service-owned
 remote query, losing the CLI carrier does not close the query. The sidecar validates the exact injected ingress/PATH and

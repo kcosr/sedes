@@ -151,13 +151,14 @@ export function createWorkspaceListToolDefinition(
       concurrencyClass: "workspace_list_read",
       uncertainExternalOutcome: false,
     },
-    exposure: { adapters: ["pi_sdk", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_workspace_list",
         label: "Sedes workspace list",
         promptSnippet: "Discover available Sedes workspaces.",
       },
+      mcp: { name: "sedes_workspace_list" },
       http: { invocation: "inline" },
       cli: { command: workspaceListManifest.id },
     },

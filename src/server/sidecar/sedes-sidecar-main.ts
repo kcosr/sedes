@@ -267,6 +267,13 @@ async function main(): Promise<void> {
       if (!agentToolIngress || environment.SEDES_AGENT_TOOL_ENDPOINT !== agentToolIngress.endpointUrl ||
           environment.PATH !== expectedPath) throw new Error("claude_persistent_query_environment_denied");
     },
+    // Native tools run this binary as `sedes mcp` against the same ingress.
+    validateAgentToolMcp: (agentToolMcp) => {
+      if (!agentToolIngress || agentToolMcp.endpoint !== agentToolIngress.endpointUrl ||
+          agentToolMcp.command !== path.join(path.dirname(executablePath), "sedes")) {
+        throw new Error("claude_persistent_agent_tool_mcp_denied");
+      }
+    },
   });
   const terminals = new PersistentTerminalHost({
     scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },

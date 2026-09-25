@@ -1,10 +1,12 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
-// Wire v12 requires bounded Claude history pages with acquisition snapshot cursors.
-// Older persistent services must go through upgrade handling before attachment.
-// Managed peers require this exact version; there is no dual parser.
-export const SIDECAR_WIRE_VERSION = 12 as const;
+// Wire v13 requires a sidecar whose embedded `sedes` serves `sedes mcp` and whose
+// Claude runtime accepts the Native agent-tool MCP entry (v12 added bounded
+// Claude history pages). Older persistent services must go through upgrade
+// handling before attachment. Managed peers require this exact version; there
+// is no dual parser.
+export const SIDECAR_WIRE_VERSION = 13 as const;
 export const SIDECAR_JSON_FRAME_TAG = 0x01 as const;
 export const SIDECAR_STREAM_DATA_FRAME_TAG = 0x02 as const;
 const STREAM_DATA_SESSION_BINDING_BYTES = 16;

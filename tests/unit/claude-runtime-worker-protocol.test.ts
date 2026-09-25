@@ -188,6 +188,69 @@ describe("claude_runtime@1 protocol", () => {
         },
       }).success,
     ).toBe(true);
+    const agentToolMcp = {
+      command: "/worker/bin/sedes",
+      mode: "individual",
+      endpoint: "unix:///run/user/1000/sedes/agent-tools.sock",
+      sourceCapability: "a".repeat(32),
+    };
+    expect(
+      claudeRuntimeQueryOpenRequestSchema.safeParse({
+        queryId: QUERY_ID,
+        sessionId: SESSION_ID,
+        cwd: "/workspace",
+        launch: "new",
+        enableCanUseTool: true,
+        environment: {},
+        agentToolMcp,
+      }).success,
+    ).toBe(true);
+    for (const invalid of [
+      { ...agentToolMcp, command: "sedes" },
+      { ...agentToolMcp, mode: "native" },
+      { ...agentToolMcp, endpoint: "http://192.168.1.10:4784" },
+      { ...agentToolMcp, sourceCapability: "short" },
+    ]) {
+      expect(
+        claudeRuntimeQueryOpenRequestSchema.safeParse({
+          queryId: QUERY_ID,
+          sessionId: SESSION_ID,
+          cwd: "/workspace",
+          launch: "new",
+          enableCanUseTool: true,
+          environment: {},
+          agentToolMcp: invalid,
+        }).success,
+      ).toBe(false);
+    }
+    // The worker builds the launch arguments; supplied extras never survive.
+    const extra = claudeRuntimeQueryOpenRequestSchema.parse({
+      queryId: QUERY_ID,
+      sessionId: SESSION_ID,
+      cwd: "/workspace",
+      launch: "new",
+      enableCanUseTool: true,
+      environment: {},
+      agentToolMcp: { ...agentToolMcp, args: ["--inject"] },
+    });
+    expect(extra.agentToolMcp).toEqual(agentToolMcp);
+    // CLI context and the MCP server are exclusive presentations.
+    expect(
+      claudeRuntimeQueryOpenRequestSchema.safeParse({
+        queryId: QUERY_ID,
+        sessionId: SESSION_ID,
+        cwd: "/workspace",
+        launch: "new",
+        enableCanUseTool: true,
+        environment: {
+          SEDES_AGENT_TOOL_ENDPOINT: "http://127.0.0.1:4784",
+          SEDES_AGENT_TOOL_SOURCE_CAPABILITY: "a".repeat(32),
+          SEDES_AGENT_TOOL_CLI_MODE: "progressive",
+          PATH: "/worker/bin:/usr/bin",
+        },
+        agentToolMcp,
+      }).success,
+    ).toBe(false);
     expect(
       claudeRuntimeQueryOpenRequestSchema.safeParse({
         queryId: QUERY_ID,

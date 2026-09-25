@@ -22,7 +22,12 @@ const sourceThreadId = "10000000-0000-4000-8000-000000000001";
 const sourceCapability = randomBytes(32).toString("base64url");
 const targetThreadId = "10000000-0000-4000-8000-000000000002";
 
-function fixture() {
+function fixture(
+  caller: {
+    readonly backendKind?: ResolvedAgentToolSourceContext["backendKind"];
+    readonly presentation?: "cli" | "mcp";
+  } = {},
+) {
   let policy: BackendAgentToolPolicy = {
     enabled: true,
     presentation: { surface: "cli", mode: "progressive" },
@@ -34,12 +39,12 @@ function fixture() {
     sourceThreadId,
     sourceWorkspaceId: "20000000-0000-4000-8000-000000000001",
     sourceEnvironmentId: "environment-1",
-    backendKind: "pi",
+    backendKind: caller.backendKind ?? "pi",
   };
   const sources = {
     resolve: vi.fn(async (_request: express.Request, capability: string) => {
       if (capability !== sourceCapability) throw new Error("unexpected_source");
-      return source;
+      return { source, presentation: caller.presentation ?? "cli" };
     }),
   };
   const canonical = new CanonicalInlineAgentToolService({
@@ -221,6 +226,92 @@ describe("agent tool HTTP router", () => {
           toolId: "agent.context",
           schemaVersion: 2,
           requestId: `${presentationMode}-request`,
+          input: {},
+        })
+        .expect(403);
+    },
+  );
+
+  it("serves a Codex MCP reference only while its thread uses Native presentation", async () => {
+    const value = fixture({
+      backendKind: "codex_app_server",
+      presentation: "mcp",
+    });
+    value.setPolicy({
+      enabled: true,
+      presentation: { surface: "native", mode: "individual" },
+      accessBoundary: "environment",
+      enabledToolIds: ["agent.context", "thread.status"],
+    });
+
+    await associated(request(value.app).get("/api/agent-tools"))
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body.tools.map(({ id }: { id: string }) => id)).toEqual([
+          "agent.context",
+          "thread.status",
+        ]),
+      );
+    await associated(request(value.app).post("/api/agent-tool-descriptions"))
+      .send({ toolIds: ["agent.context"] })
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body.tools[0].execution.waitCeilingMilliseconds).toBe(30_000),
+      );
+    await associated(request(value.app).post("/api/agent-tool-invocations"))
+      .send({
+        toolId: "agent.context",
+        schemaVersion: 2,
+        requestId: "mcp-request",
+        input: {},
+      })
+      .expect(200)
+      .expect(({ body }) => expect(body.state).toBe("completed"));
+
+    value.setPolicy({
+      enabled: true,
+      presentation: { surface: "cli", mode: "individual" },
+      accessBoundary: "environment",
+      enabledToolIds: ["agent.context", "thread.status"],
+    });
+    await associated(request(value.app).get("/api/agent-tools"))
+      .expect(200)
+      .expect(({ body }) => expect(body.tools).toEqual([]));
+    await associated(request(value.app).post("/api/agent-tool-invocations"))
+      .send({
+        toolId: "agent.context",
+        schemaVersion: 2,
+        requestId: "stale-mcp-request",
+        input: {},
+      })
+      .expect(403);
+  });
+
+  it.each([
+    ["a CLI reference on a Native Codex thread", "codex_app_server", "cli"],
+    ["an MCP reference on a Native Pi thread", "pi", "mcp"],
+    ["an MCP reference on a Grok thread", "grok_build", "mcp"],
+  ] as const)(
+    "fails closed for %s",
+    async (_label, backendKind, presentation) => {
+      const value = fixture({ backendKind, presentation });
+      value.setPolicy({
+        enabled: true,
+        presentation: { surface: "native", mode: "progressive" },
+        accessBoundary: "environment",
+        enabledToolIds: ["agent.context"],
+      });
+      await associated(request(value.app).get("/api/agent-tools"))
+        .expect(200)
+        .expect(({ body }) => expect(body.tools).toEqual([]));
+      await associated(request(value.app).post("/api/agent-tool-descriptions"))
+        .send({ toolIds: ["agent.context"] })
+        .expect(404);
+      await associated(request(value.app).post("/api/agent-tool-invocations"))
+        .send({
+          toolId: "agent.context",
+          schemaVersion: 2,
+          requestId: "wrong-presentation",
           input: {},
         })
         .expect(403);

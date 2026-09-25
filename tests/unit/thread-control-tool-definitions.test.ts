@@ -153,6 +153,7 @@ describe("thread control tool definitions", () => {
     ]);
     expect(definitions[2]?.execution.adapterWaitCeilingMilliseconds).toEqual({
       pi_sdk: 90_000,
+      mcp: 90_000,
       http: 90_000,
       cli: 90_000,
     });
@@ -163,21 +164,25 @@ describe("thread control tool definitions", () => {
     ).toEqual([
       {
         pi_sdk: 30_000,
+        mcp: 30_000,
         http: 30_000,
         cli: 30_000,
       },
       {
         pi_sdk: 30_000,
+        mcp: 30_000,
         http: 30_000,
         cli: 30_000,
       },
       {
         pi_sdk: 30_000,
+        mcp: 30_000,
         http: 30_000,
         cli: 30_000,
       },
       {
         pi_sdk: 30_000,
+        mcp: 30_000,
         http: 30_000,
         cli: 30_000,
       },

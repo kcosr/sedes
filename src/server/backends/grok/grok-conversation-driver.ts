@@ -986,6 +986,7 @@ export class GrokConversationBackendDriver implements ConversationBackendDriver 
         ? this.#agentToolSourceCapabilities.issue(
             trustedAgentToolSource,
             "management_http",
+            "cli",
           )
         : undefined;
     const runtimeObservation = this.#beginRuntimeAssessmentObservation?.();

@@ -52,6 +52,7 @@ export const agentContextToolDefinition: AgentToolDefinition<
     form: "inline",
     adapterWaitCeilingMilliseconds: {
       pi_sdk: 30_000,
+      mcp: 30_000,
       http: 30_000,
       cli: 30_000,
     },
@@ -63,13 +64,14 @@ export const agentContextToolDefinition: AgentToolDefinition<
     concurrencyClass: "agent_context_read",
     uncertainExternalOutcome: false,
   },
-  exposure: { adapters: ["pi_sdk", "http", "cli"] },
+  exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
   adapters: {
     pi: {
       name: piAgentContextToolName,
       label: "Sedes agent context",
       promptSnippet: "Inspect this agent's Sedes source context.",
     },
+    mcp: { name: piAgentContextToolName },
     http: { invocation: "inline" },
     cli: { command: agentContextToolId },
   },

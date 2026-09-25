@@ -113,6 +113,21 @@ export const claudeRuntimeQueryEnvironmentSchema = z.union([
   }),
 ]);
 
+/**
+ * The thread's Native Sedes tools as one stdio MCP server. It is exclusive
+ * with the CLI query environment: a Native query's shell never receives a
+ * thread reference.
+ */
+export const claudeRuntimeAgentToolMcpSchema = z.strictObject({
+  command: absolutePathSchema,
+  mode: z.enum(["progressive", "individual"]),
+  endpoint: agentToolEndpointSchema,
+  sourceCapability: z.string().regex(/^[A-Za-z0-9_-]{32,256}$/u),
+});
+export type ClaudeRuntimeAgentToolMcp = z.infer<
+  typeof claudeRuntimeAgentToolMcpSchema
+>;
+
 export const claudeRuntimeInitializeRequestSchema = z.strictObject({
   startupEnvironment: resolvedEnvironmentVariablesSchema.optional(),
   startupEnvironmentVariables: environmentVariableOverridesSchema.optional(),
@@ -263,22 +278,30 @@ const queryLaunchSchema = z.discriminatedUnion("launch", [
     resumeSessionAt: uuidSchema,
   }),
 ]);
-export const claudeRuntimeQueryOpenRequestSchema = z.intersection(
-  z.strictObject({
-    queryId: uuidSchema,
-    sessionId: uuidSchema,
-    cwd: absolutePathSchema,
-    title: z.string().min(1).max(16_384).optional(),
-    model: boundedStringSchema.optional(),
-    effort: effortSchema.optional(),
-    permissionMode: permissionModeSchema.optional(),
-    allowDangerouslySkipPermissions: z.literal(true).optional(),
-    enableCanUseTool: z.boolean(),
-    environment: claudeRuntimeQueryEnvironmentSchema,
-    executionEnvironment: resolvedEnvironmentVariablesSchema.optional(),
-  }),
-  queryLaunchSchema,
-);
+export const claudeRuntimeQueryOpenRequestSchema = z
+  .intersection(
+    z.strictObject({
+      queryId: uuidSchema,
+      sessionId: uuidSchema,
+      cwd: absolutePathSchema,
+      title: z.string().min(1).max(16_384).optional(),
+      model: boundedStringSchema.optional(),
+      effort: effortSchema.optional(),
+      permissionMode: permissionModeSchema.optional(),
+      allowDangerouslySkipPermissions: z.literal(true).optional(),
+      enableCanUseTool: z.boolean(),
+      environment: claudeRuntimeQueryEnvironmentSchema,
+      agentToolMcp: claudeRuntimeAgentToolMcpSchema.optional(),
+      executionEnvironment: resolvedEnvironmentVariablesSchema.optional(),
+    }),
+    queryLaunchSchema,
+  )
+  .refine(
+    (request) =>
+      request.agentToolMcp === undefined ||
+      Object.keys(request.environment).length === 0,
+    "A query presents Sedes tools through the CLI or MCP, never both.",
+  );
 export const claudeRuntimeQueryOpenResponseSchema = z.strictObject({
   queryId: uuidSchema,
   startupProbeUuid: uuidSchema,

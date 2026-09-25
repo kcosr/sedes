@@ -26,8 +26,8 @@ import {
   SelectValue,
 } from "@client/components/ui/select";
 
-export const PI_NATIVE_CACHE_WARNING =
-  "This changes the tools sent to Pi. The next turn may miss prompt cache and cost more.";
+export const NATIVE_TOOL_CACHE_WARNING =
+  "This changes the native tools sent to the model. The next turn may miss prompt cache and cost more.";
 
 type AgentToolPolicy = NormalizedThreadAgentToolPolicy;
 type AgentToolGroup = AgentToolPolicy["groups"][number];
@@ -142,7 +142,7 @@ function currentPiToolAccessMode(
     : undefined;
 }
 
-function needsPiNativeConfirmation(
+function needsNativeToolConfirmation(
   draft: AgentToolPolicyDraft,
   policy: AgentToolPolicy,
   toolAccessMode: PiToolAccessMode | undefined,
@@ -224,7 +224,7 @@ export function AgentToolSettingsDialog({
   const policy = snapshot.agentTools;
   const dialogId = useId();
   const dialogDescriptionId = `${dialogId}-description`;
-  const piNativeCacheWarningId = `${dialogId}-pi-native-cache-warning`;
+  const nativeToolCacheWarningId = `${dialogId}-pi-native-cache-warning`;
   const policyFingerprint = `${policy.revision}:${policy.enabled}:${policy.presentation.surface}:${policy.presentation.mode}:${policy.accessBoundary}:${policy.groups
     .flatMap(({ id, order, tools }) => [
       `${id}:${order}`,
@@ -363,7 +363,7 @@ export function AgentToolSettingsDialog({
   const save = () => {
     if (!canSave) return;
     if (
-      needsPiNativeConfirmation(
+      needsNativeToolConfirmation(
         draft,
         policy,
         currentPiToolAccessMode(snapshot),
@@ -674,8 +674,8 @@ export function AgentToolSettingsDialog({
             )}
             {error && <p role="alert">{error}</p>}
             {confirming && (
-              <p id={piNativeCacheWarningId} role="alert">
-                {PI_NATIVE_CACHE_WARNING}
+              <p id={nativeToolCacheWarningId} role="alert">
+                {NATIVE_TOOL_CACHE_WARNING}
               </p>
             )}
           </div>
@@ -692,7 +692,7 @@ export function AgentToolSettingsDialog({
               </Button>
               <Button
                 ref={confirmButtonRef}
-                aria-describedby={piNativeCacheWarningId}
+                aria-describedby={nativeToolCacheWarningId}
                 disabled={!canSave}
                 onClick={submit}
               >

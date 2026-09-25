@@ -19,7 +19,7 @@ import type {
 import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
 import {
   AgentToolSettingsDialog,
-  PI_NATIVE_CACHE_WARNING,
+  NATIVE_TOOL_CACHE_WARNING,
   agentToolPolicySummary,
 } from "./AgentToolSettingsDialog.js";
 
@@ -305,13 +305,13 @@ describe("AgentToolSettingsDialog", () => {
     );
     fireEvent.click(screen.getByRole("checkbox", { name: "List workspaces" }));
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
-    expect(screen.getByText(PI_NATIVE_CACHE_WARNING)).toBeVisible();
+    expect(screen.getByText(NATIVE_TOOL_CACHE_WARNING)).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent(
-      PI_NATIVE_CACHE_WARNING,
+      NATIVE_TOOL_CACHE_WARNING,
     );
     expect(setAgentToolPolicy).not.toHaveBeenCalled();
     const confirm = screen.getByRole("button", { name: "Save changes" });
-    expect(confirm).toHaveAccessibleDescription(PI_NATIVE_CACHE_WARNING);
+    expect(confirm).toHaveAccessibleDescription(NATIVE_TOOL_CACHE_WARNING);
     await waitFor(() => expect(confirm).toHaveFocus());
     fireEvent.click(confirm);
     expect(setAgentToolPolicy).toHaveBeenCalledOnce();
@@ -323,7 +323,7 @@ describe("AgentToolSettingsDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
 
     await waitFor(() => expect(setAgentToolPolicy).toHaveBeenCalledOnce());
-    expect(screen.queryByText(PI_NATIVE_CACHE_WARNING)).not.toBeInTheDocument();
+    expect(screen.queryByText(NATIVE_TOOL_CACHE_WARNING)).not.toBeInTheDocument();
   });
 
   it("warns when a progressive policy adds its first action gateway", async () => {
@@ -332,7 +332,7 @@ describe("AgentToolSettingsDialog", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Update task" }));
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
 
-    expect(screen.getByText(PI_NATIVE_CACHE_WARNING)).toBeVisible();
+    expect(screen.getByText(NATIVE_TOOL_CACHE_WARNING)).toBeVisible();
     expect(setAgentToolPolicy).not.toHaveBeenCalled();
   });
 
@@ -345,7 +345,7 @@ describe("AgentToolSettingsDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
 
     await waitFor(() => expect(setAgentToolPolicy).toHaveBeenCalledOnce());
-    expect(screen.queryByText(PI_NATIVE_CACHE_WARNING)).not.toBeInTheDocument();
+    expect(screen.queryByText(NATIVE_TOOL_CACHE_WARNING)).not.toBeInTheDocument();
   });
 
   it("renders all closed presentation labels and truthful summaries", () => {
@@ -417,8 +417,41 @@ describe("AgentToolSettingsDialog", () => {
     ).toHaveTextContent("Progressive");
 
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
-    expect(screen.getByText(PI_NATIVE_CACHE_WARNING)).toBeVisible();
+    expect(screen.getByText(NATIVE_TOOL_CACHE_WARNING)).toBeVisible();
     expect(setAgentToolPolicy).not.toHaveBeenCalled();
+  });
+
+  it("switches a CLI-first thread to MCP-backed native tools after the cache warning", async () => {
+    const { setAgentToolPolicy } = subject(
+      policySnapshot({
+        presentationSurface: "cli",
+        presentationMode: "individual",
+        presentationOptions: [
+          { surface: "cli", modes: ["progressive", "individual"] },
+          { surface: "native", modes: ["progressive", "individual"] },
+        ],
+      }),
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Agent tool surface" }),
+    ).toHaveTextContent("Sedes CLI");
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Agent tool surface" }),
+    );
+    fireEvent.click(screen.getByRole("option", { name: "Native tools" }));
+    expect(
+      screen.getByRole("combobox", { name: "Agent tool presentation" }),
+    ).toHaveTextContent("Individual");
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    expect(screen.getByText(NATIVE_TOOL_CACHE_WARNING)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(setAgentToolPolicy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          presentation: { surface: "native", mode: "individual" },
+        }),
+      ),
+    );
   });
 
   it("falls back to the first supported mode when the surface changes", async () => {
@@ -473,7 +506,7 @@ describe("AgentToolSettingsDialog", () => {
         }),
       ),
     );
-    expect(screen.queryByText(PI_NATIVE_CACHE_WARNING)).not.toBeInTheDocument();
+    expect(screen.queryByText(NATIVE_TOOL_CACHE_WARNING)).not.toBeInTheDocument();
   });
 
   it("saves the thread boundary without granting global access", async () => {
@@ -532,7 +565,7 @@ describe("AgentToolSettingsDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
 
     await waitFor(() => expect(setAgentToolPolicy).toHaveBeenCalledOnce());
-    expect(screen.queryByText(PI_NATIVE_CACHE_WARNING)).not.toBeInTheDocument();
+    expect(screen.queryByText(NATIVE_TOOL_CACHE_WARNING)).not.toBeInTheDocument();
   });
 
   it("uses the first Escape to return from confirmation and the second to close", async () => {
@@ -550,7 +583,7 @@ describe("AgentToolSettingsDialog", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
 
-    expect(screen.queryByText(PI_NATIVE_CACHE_WARNING)).not.toBeInTheDocument();
+    expect(screen.queryByText(NATIVE_TOOL_CACHE_WARNING)).not.toBeInTheDocument();
     expect(selection).toBeChecked();
     expect(screen.getByRole("button", { name: /^Save$/ })).toBeEnabled();
     expect(onOpenChange).not.toHaveBeenCalled();
@@ -663,7 +696,7 @@ describe("AgentToolSettingsDialog", () => {
     render(<Sedes />);
     fireEvent.click(screen.getByRole("checkbox", { name: "List workspaces" }));
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
-    expect(screen.getByText(PI_NATIVE_CACHE_WARNING)).toBeVisible();
+    expect(screen.getByText(NATIVE_TOOL_CACHE_WARNING)).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     const trigger = screen.getByRole("button", { name: "Open agent tools" });
@@ -673,7 +706,7 @@ describe("AgentToolSettingsDialog", () => {
     expect(
       screen.getByRole("checkbox", { name: "List workspaces" }),
     ).not.toBeChecked();
-    expect(screen.queryByText(PI_NATIVE_CACHE_WARNING)).not.toBeInTheDocument();
+    expect(screen.queryByText(NATIVE_TOOL_CACHE_WARNING)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Save$/ })).toBeDisabled();
     expect(setAgentToolPolicy).not.toHaveBeenCalled();
   });
@@ -786,7 +819,7 @@ describe("AgentToolSettingsDialog", () => {
         presentation: { surface: "cli", mode: presentationMode },
         accessBoundary: "unrestricted",
       }));
-      expect(screen.queryByText(PI_NATIVE_CACHE_WARNING)).not.toBeInTheDocument();
+      expect(screen.queryByText(NATIVE_TOOL_CACHE_WARNING)).not.toBeInTheDocument();
     },
   );
 

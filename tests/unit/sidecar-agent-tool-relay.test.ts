@@ -30,9 +30,15 @@ const source: TrustedAgentToolSource = Object.freeze({
   backendKind: "codex_app_server",
 });
 
-function fixture(overrides: Partial<BackendAgentToolFacade> = {}) {
+function fixture(
+  overrides: Partial<BackendAgentToolFacade> = {},
+  presentation: "cli" | "mcp" = "cli",
+) {
   const sources = {
-    resolveCapabilityInExecutionEnvironment: vi.fn(() => source),
+    resolveCapabilityInExecutionEnvironment: vi.fn(() => ({
+      source,
+      presentation,
+    })),
   } satisfies EnvironmentScopedAgentToolSourceResolver;
   const invoke = vi.fn(async (_input: unknown) => ({
     invocationId: "invocation-1",
@@ -138,6 +144,33 @@ describe("sidecar agent-tool relay", () => {
       },
       signal,
     });
+  });
+
+  it("uses adapter mcp for every operation when the reference names MCP", async () => {
+    const current = fixture({}, "mcp");
+    await current.registry
+      .resolve(agentToolsCatalogOperation)!
+      .handler({ sourceCapability }, context());
+    expect(current.tools.catalogSummaries).toHaveBeenCalledWith(source, "mcp");
+    await current.registry
+      .resolve(agentToolsDescribeOperation)!
+      .handler({ sourceCapability, toolIds: ["agent.context"] }, context());
+    expect(current.tools.describeMany).toHaveBeenCalledWith(source, "mcp", [
+      "agent.context",
+    ]);
+    await current.registry.resolve(agentToolsInvokeOperation)!.handler(
+      {
+        sourceCapability,
+        toolId: "agent.context",
+        schemaVersion: 2,
+        requestId: "tool-request-1",
+        input: {},
+      },
+      context(),
+    );
+    expect(current.invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ source, adapter: "mcp" }),
+    );
   });
 
   it("preserves safe facade errors and hides unexpected failures", async () => {

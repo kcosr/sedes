@@ -196,23 +196,26 @@ export function automationToolPresentations(input: {
       label: input.label,
       promptSnippet: input.promptSnippet,
     },
+    mcp: { name: input.piName },
     http: { invocation: "inline" as const },
     cli: { command: input.command },
   };
 }
 
 export const automationToolExposure = {
-  adapters: ["pi_sdk", "http", "cli"],
+  adapters: ["pi_sdk", "mcp", "http", "cli"],
 } as const;
 
 export const automationReadWaitCeilings = {
   pi_sdk: 30_000,
+  mcp: 30_000,
   http: 30_000,
   cli: 30_000,
 } as const;
 
 export const automationRunWaitCeilings = {
   pi_sdk: 90_000,
+  mcp: 90_000,
   http: 90_000,
   cli: 90_000,
 } as const;

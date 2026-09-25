@@ -2491,7 +2491,10 @@ environment, backend, inventory, and policy on each request. The reference is
 stable across runtime replacement and grant changes; it does not encode the
 granted tools or a provider turn. Bind each reference to exactly one ingress transport so local HTTP
 and the managed sidecar relay cannot accept one another's capabilities or
-alternate source claims. The remote relay uses only the
+alternate source claims, and to exactly one presentation, CLI or MCP. Derive
+the calling adapter from the resolved reference, never from a request field,
+so the CLI and `sedes mcp` share routes and relay frames without either
+satisfying the other's surface. The remote relay uses only the
 strict `agent_tools_cli@3` contract advertised for the enabled
 `agent_tools_cli` capability; unsupported or stale versions fail closed.
 Discovery may retain a bounded transport deadline, but invocation
@@ -2530,6 +2533,17 @@ adapters must all preserve the same exact pair. A selector with one supported
 value may be hidden, but the value remains explicit policy. Never flatten the
 pair into compound enum values, infer an unsupported pair, or fall back across
 surface or mode when admission fails.
+
+Each backend's Native surface has exactly one mechanism: Pi SDK tools in the
+Sedes process for Pi, the stdio `sedes mcp` server for Codex and Claude, and
+none for Grok. Admission maps the calling adapter against the thread's backend
+kind, so one backend's mechanism can never satisfy another's Native
+presentation. A provider-launched MCP server receives its reference only
+through a channel proven to expose it no more widely than the CLI environment
+does: Codex's per-thread server `env`, or Claude's query environment behind a
+placeholder in the argument-borne MCP config. Keep the provider's MCP permission
+controls in force, derive tool hints only from declared effects, and never
+write operator provider configuration.
 
 For managed CLI presentation, inject `SEDES_AGENT_TOOL_CLI_MODE` only after
 stripping its ambient value. The variable is a presentation hint available to
@@ -2615,8 +2629,8 @@ approval. Automations and unavailable interaction bindings fail closed.
 
 Workpads are application-owned Markdown documents, revision history,
 attribution, and user drafts; providers receive only normalized canonical tools.
-Pi native/CLI and Codex, Claude, and Grok CLI paths are implemented through the
-shared source-scoped facade. Tool clients use the same canonical operations
+Pi native/CLI, Codex and Claude CLI/Native MCP, and Grok CLI paths are
+implemented through the shared source-scoped facade. Tool clients use the same canonical operations
 with their environment allowlists. Workpad history is authorized from current
 scope, not historical scope. Approval binds current resource identity/revision;
 document updates additionally check the expected revision atomically. Backend

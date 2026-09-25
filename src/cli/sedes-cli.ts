@@ -21,6 +21,7 @@ import {
 } from "./sedes-agent-tool-endpoint.js";
 import { SEDES_VERSION } from "../shared/version.js";
 import { createSedesToolClient } from "./create-sedes-tool-client.js";
+import { runSedesMcp } from "./sedes-mcp.js";
 import type { SedesToolLocalSocketConnector } from "./sedes-tool-local-client.js";
 import {
   parseDynamicToolInput,
@@ -267,6 +268,21 @@ export async function runSedesCli(
   if (arguments_.length === 1 && (arguments_[0] === "--version" || arguments_[0] === "-v")) {
     io.stdout.write(`sedes ${SEDES_VERSION}\n`);
     return 0;
+  }
+  // The MCP server is a separate Native presentation. It ignores the CLI mode
+  // hint and owns stdin/stdout for JSON-RPC until its client closes stdin.
+  if (arguments_[0] === "mcp") {
+    return runSedesMcp(arguments_.slice(1), {
+      environment,
+      stderr: io.stderr,
+      ...(dependencies.fetch ? { fetch: dependencies.fetch } : {}),
+      ...(dependencies.connect ? { connect: dependencies.connect } : {}),
+      ...(dependencies.transportRequestId
+        ? { transportRequestId: dependencies.transportRequestId }
+        : {}),
+      ...(dependencies.id ? { id: dependencies.id } : {}),
+      ...(dependencies.signal ? { signal: dependencies.signal } : {}),
+    });
   }
   let mode: SedesAgentToolCliMode | undefined;
   try {

@@ -9,7 +9,9 @@ description: >-
 # Sedes Native Individual Tools
 
 Use only the individually exposed native Sedes application tools. Their names,
-descriptions, and schemas are the current discovery surface.
+descriptions, and schemas are the current discovery surface. When they come
+from the Sedes MCP server, the client prefixes each name with its server
+namespace, for example `mcp__sedes__sedes_task_create`.
 
 ## Confirm the presentation
 

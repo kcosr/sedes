@@ -80,6 +80,7 @@ export function createWebSearchToolDefinition(
       form: "inline",
       adapterWaitCeilingMilliseconds: {
         pi_sdk: 105_000,
+        mcp: 105_000,
         http: 105_000,
         cli: 105_000,
       },
@@ -91,7 +92,7 @@ export function createWebSearchToolDefinition(
       concurrencyClass: "web_search_model_read",
       uncertainExternalOutcome: false,
     },
-    exposure: { adapters: ["pi_sdk", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_research_web_search",
@@ -103,6 +104,7 @@ export function createWebSearchToolDefinition(
           "Start a new search for a different or unrelated question.",
         ],
       },
+      mcp: { name: "sedes_research_web_search" },
       http: { invocation: "inline" },
       cli: { command: manifest.id },
     },

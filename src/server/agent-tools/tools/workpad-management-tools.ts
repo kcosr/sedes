@@ -59,9 +59,10 @@ export function createWorkpadToolDefinitions(service: WorkpadAgentToolService): 
         maximumOutputBytes: 4 * 1024 * 1024 - 4096, concurrencyClass: `workpad_${operation}_${write ? "write" : "read"}`,
         uncertainExternalOutcome: write,
       },
-      exposure: { adapters: ["pi_sdk", "http", "cli"] },
+      exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
       adapters: {
         pi: { name: `sedes_workpad_${operation}`, label: manifest.catalog.label, promptSnippet: manifest.description },
+        mcp: { name: `sedes_workpad_${operation}` },
         http: { invocation: "inline" }, cli: { command: manifest.id },
       },
       async execute(input, context) { return service.execute(operation, input, context); },

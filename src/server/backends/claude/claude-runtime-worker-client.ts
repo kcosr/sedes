@@ -430,6 +430,7 @@ class WorkerSession implements ClaudeRuntimeSession {
             : {}),
           enableCanUseTool: options.canUseTool !== undefined,
           environment: definedEnvironment(options.environment),
+          ...(options.agentToolMcp ? { agentToolMcp: options.agentToolMcp } : {}),
           ...(options.executionEnvironment ? { executionEnvironment: options.executionEnvironment } : {}),
         } as never,
         {

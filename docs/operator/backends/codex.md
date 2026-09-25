@@ -264,15 +264,26 @@ model names or free-form provider text.
 
 ### Agent tools
 
-Eligible Sedes-created local or managed-SSH threads can receive the generated
-Sedes CLI in Progressive or Individual mode according to their per-thread
-agent-tool policy and shell environment policy. Progressive uses bounded JSON
-catalog/describe/invoke commands; Individual uses the live help hierarchy and
-named typed commands. Imported
-threads, network-disabled settings, a missing built CLI, an unavailable
-sidecar/capability, or contexts whose isolation cannot be proven receive no
-CLI. For SSH, `agent_tools_cli` must be enabled on the managed sidecar.
-Codex has no Native Sedes-tool surface and never falls back to one.
+Eligible Sedes-created local or managed-SSH threads can receive Sedes tools in
+Progressive or Individual mode according to their per-thread agent-tool
+policy. On the CLI surface, the shell environment policy installs the
+generated Sedes CLI: Progressive uses bounded JSON catalog/describe/invoke
+commands; Individual uses the live help hierarchy and named typed commands. On
+the Native surface, the thread's config adds a `sedes` MCP server that runs
+`sedes mcp` from the same executable, and the shell receives no Sedes
+variables. Imported threads, network-disabled settings, a missing built CLI,
+an unavailable sidecar/capability, a Windows execution host for Native tools,
+or contexts whose isolation cannot be proven receive no tools. For SSH,
+`agent_tools_cli` must be enabled on the managed sidecar. Neither surface falls
+back to the other.
+
+The MCP server entry is per thread: Sedes never edits the Codex configuration
+file or starts daemon-wide servers. Codex keeps the server running while the
+thread stays loaded, and unloads idle threads after its own delay. Codex's
+approval policy applies to the Sedes tools like any MCP server; with the
+default approval mode, read-only tools run without asking and destructive or
+open-world tools ask first. On SSH and outbound hosts, Native tools run the
+sidecar's own `sedes` binary and require sidecar runtime protocol 13.
 
 ### Managed TUI
 
@@ -305,7 +316,8 @@ The following boundaries are intentionally unsupported:
   persistent sidecar;
 - automatic transport fallback or alternate routes;
 - moving an existing thread between backends or environments;
-- Sedes-owned Codex MCP configuration;
+- Sedes-managed Codex MCP configuration beyond the per-thread `sedes` server
+  for Native agent tools;
 - provider `openaiForm` MCP elicitation requests;
 - output artifacts other than completed, in-band PNG `imageGeneration`
   results;

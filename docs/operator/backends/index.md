@@ -50,6 +50,7 @@ contradict it.
 | Structured questions              | No                                             | Questionnaires and MCP forms                        | Native multiple-choice questions                    | No                                          |
 | Provider permission interaction   | Primitive prompts                              | Approvals                                           | Permission prompts                                  | Not exposed                                 |
 | Skills                            | Yes                                            | Yes                                                 | Eligible native skills                              | No                                          |
+| Sedes agent-tool surfaces         | Native SDK tools; CLI on eligible local        | CLI or Native through a per-thread MCP server       | CLI or Native through a per-query MCP server        | CLI on local threads                        |
 | Background-work status            | No                                             | No                                                  | Subagents and commands                              | No                                          |
 | Managed provider terminal         | No                                             | Eligible external connections                       | No                                                  | No                                          |
 | Local image input                 | Model dependent                                | Model dependent                                     | PNG, JPEG, GIF, WebP                                | Model dependent                             |
@@ -110,7 +111,7 @@ runtimes are not equivalent to exercised runtimes.
 | --- | --- | --- | --- | --- |
 | Pi SDK | July 2026 | Pinned SDK `0.86.0` runs inside the Sedes process; no external runtime to qualify | `test:real-pi`, `test:real-pi-cli` | Local runtime; SSH or outbound sidecar for workspace tools and context |
 | Codex | July 2026 | App-server `0.154.0` reviewed against the compiled `0.153.0` profile | `test:real-codex-agent-tools` | Local process, external UDS/TCP, persistent SSH or outbound sidecar |
-| Claude | August 2026 | Claude Code `2.1.274` with Agent SDK `0.3.274` | `test:real-claude` (five files) | Local worker; persistent SSH or outbound sidecar on Linux/macOS |
+| Claude | August 2026 | Claude Code `2.1.274` with Agent SDK `0.3.274` | `test:real-claude` (six files) | Local worker; persistent SSH or outbound sidecar on Linux/macOS |
 | Grok | August 2026 | Grok Build `1.0.4` against the compiled `1.x` ACP profile | `test:real-grok` (three files) | Local Linux x64 or macOS only |
 
 Version-pinned qualification evidence for each external runtime is kept under

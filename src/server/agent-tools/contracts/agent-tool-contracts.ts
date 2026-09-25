@@ -62,6 +62,16 @@ export interface McpToolPresentation {
   readonly title?: string;
 }
 
+/**
+ * The one model-facing name for a native Sedes tool. Pi SDK tools and the
+ * `sedes mcp` server both use it; MCP clients add their own server namespace.
+ * The MCP server derives names from live catalog IDs, so registration rejects
+ * an MCP presentation that does not match this rule.
+ */
+export function nativeAgentToolName(toolId: string): string {
+  return `sedes_${toolId.replaceAll(".", "_")}`;
+}
+
 export interface CliToolPresentation {
   readonly command: string;
 }

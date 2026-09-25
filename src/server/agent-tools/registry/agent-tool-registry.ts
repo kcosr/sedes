@@ -5,6 +5,7 @@ import type {
   AgentToolPresentations,
   ToolExecutionPolicy,
 } from "../contracts/agent-tool-contracts.js";
+import { nativeAgentToolName } from "../contracts/agent-tool-contracts.js";
 import {
   AGENT_TOOL_MAXIMUM_HTTP_TOOL_OUTPUT_BYTES,
   AGENT_TOOL_MAXIMUM_RESPONSE_BYTES,
@@ -98,6 +99,7 @@ function assertPresentationName(value: string, adapter: string): void {
 }
 
 function validatePresentations(
+  toolId: string,
   adapters: AgentToolPresentations,
   exposure: readonly AgentToolAdapter[],
 ): void {
@@ -116,6 +118,9 @@ function validatePresentations(
   }
   if (adapters.mcp) {
     assertPresentationName(adapters.mcp.name, "mcp");
+    if (adapters.mcp.name !== nativeAgentToolName(toolId)) {
+      throw new Error("agent_tool_mcp_name_not_canonical");
+    }
     if (adapters.mcp.title !== undefined) {
       assertBoundedString(adapters.mcp.title, "mcp_title", 120);
     }
@@ -428,7 +433,7 @@ export class AgentToolRegistry {
     ) {
       throw new Error("agent_tool_deployment_exposure_invalid");
     }
-    validatePresentations(definition.adapters, exposure);
+    validatePresentations(definition.id, definition.adapters, exposure);
     validateExecution(definition.execution, exposure);
     validateEffects(definition as AgentToolDefinition);
     validateCatalog(definition as AgentToolDefinition);

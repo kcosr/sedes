@@ -877,6 +877,7 @@ function availableAgentToolCliEnvironment(): CodexAgentToolCliEnvironmentProvide
       executableDirectory: "/opt/sedes/bin",
       inheritedPath: "/usr/bin",
       sourceCapability: agentToolSourceCapability,
+      surface: "cli" as const,
       mode: "progressive",
       closed: new Promise(() => undefined),
       release: () => undefined,
@@ -14602,6 +14603,7 @@ describe("CodexConversationHandle", () => {
       executableDirectory: "/opt/sedes/bin",
       inheritedPath: "/usr/bin",
       sourceCapability: agentToolSourceCapability,
+      surface: "cli" as const,
       mode: "progressive" as const,
       closed: new Promise(() => undefined),
       release,
@@ -14641,6 +14643,62 @@ describe("CodexConversationHandle", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("starts the thread's Sedes MCP server on Native resume without shell context", async () => {
+    const harness = new RpcHarness();
+    const release = vi.fn();
+    const acquire = vi.fn(async () => ({
+      availability: "available" as const,
+      endpoint: "unix:///run/user/1000/sedes-agent-tools.sock",
+      executableDirectory: "/opt/sedes/bin",
+      inheritedPath: "/usr/bin",
+      sourceCapability: agentToolSourceCapability,
+      surface: "native" as const,
+      mode: "individual" as const,
+      closed: new Promise(() => undefined),
+      release,
+    }));
+    const target = driver(
+      harness,
+      connection,
+      new CodexConversationOwnershipRegistry(),
+      { type: "catalog" },
+      executionSettingsProvider(),
+      undefined,
+      undefined,
+      { acquire },
+    );
+
+    const handle = await target.attach(attachInput());
+    await establish(harness, handle);
+    const resume = harness.calls.find(({ method }) => method === "thread/resume")
+      ?.params as { config: Record<string, unknown> };
+    expect(resume.config).toEqual({
+      shell_environment_policy: {
+        exclude: [
+          "SEDES_AGENT_TOOL_ENDPOINT",
+          "SEDES_AGENT_TOOL_SOURCE_CAPABILITY",
+          "SEDES_AGENT_TOOL_CLIENT_TOKEN",
+          "SEDES_AGENT_TOOL_CLI_MODE",
+        ],
+      },
+      "mcp_servers.sedes": {
+        command: "/opt/sedes/bin/sedes",
+        args: ["mcp", "--mode", "individual"],
+        env: {
+          SEDES_AGENT_TOOL_ENDPOINT:
+            "unix:///run/user/1000/sedes-agent-tools.sock",
+          SEDES_AGENT_TOOL_SOURCE_CAPABILITY: agentToolSourceCapability,
+        },
+        startup_timeout_sec: 30,
+        tool_timeout_sec: 86_400,
+      },
+    });
+
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("reacquires a CLI lease whose sidecar session closes before generation recovery", async () => {
     const harness = new RpcHarness();
     let closeFirst!: () => void;
@@ -14657,6 +14715,7 @@ describe("CodexConversationHandle", () => {
         executableDirectory: "/opt/sedes/bin",
         inheritedPath: "/usr/bin",
         sourceCapability: agentToolSourceCapability,
+        surface: "cli" as const,
         mode: "progressive" as const,
         closed: index === 0 ? firstClosed : new Promise(() => undefined),
         release: releases[index]!,

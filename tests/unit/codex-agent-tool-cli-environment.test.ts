@@ -5,6 +5,7 @@ import {
   withCodexAgentToolCliEnvironment,
   type CodexAgentToolCliEnvironmentResolution,
 } from "../../src/server/backends/codex/codex-agent-tool-cli-environment.js";
+import { codexEnvironmentFingerprintInput } from "../../src/server/backends/codex/runtime/codex-runtime-environment-fingerprint.js";
 import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-tool-source-capabilities.js";
 
 const sourceCapabilities = createFakeAgentToolSourceCapabilities();
@@ -22,6 +23,7 @@ const available: Extract<
   executableDirectory: "/opt/sedes/bin",
   inheritedPath: "/usr/local/bin:/usr/bin",
   sourceCapability: "m3-test-capability-7Qx2P9vK4nR8sT6wY1aD5fH0jL3cB",
+  surface: "cli",
   mode: "progressive",
   closed: new Promise(() => undefined),
   release: () => undefined,
@@ -100,6 +102,90 @@ describe("Codex agent-tool CLI environment", () => {
         },
       },
     });
+  });
+
+  it("starts the thread's sedes MCP server instead of exposing CLI context in Native presentation", () => {
+    const config = withCodexAgentToolCliEnvironment(
+      {
+        model_reasoning_effort: "low",
+        shell_environment_policy: {
+          set: {
+            EXISTING: "kept",
+            SEDES_AGENT_TOOL_ENDPOINT: "stale",
+            SEDES_AGENT_TOOL_SOURCE_CAPABILITY: "stale",
+          },
+        },
+      },
+      {
+        resolution: { ...available, surface: "native", mode: "individual" },
+        applicationThreadId: "thread-1",
+      },
+    );
+    expect(config).toEqual({
+      model_reasoning_effort: "low",
+      shell_environment_policy: {
+        exclude: [
+          "SEDES_AGENT_TOOL_ENDPOINT",
+          "SEDES_AGENT_TOOL_SOURCE_CAPABILITY",
+          "SEDES_AGENT_TOOL_CLIENT_TOKEN",
+          "SEDES_AGENT_TOOL_CLI_MODE",
+        ],
+        set: { EXISTING: "kept" },
+      },
+      "mcp_servers.sedes": {
+        command: "/opt/sedes/bin/sedes",
+        args: ["mcp", "--mode", "individual"],
+        env: {
+          SEDES_AGENT_TOOL_ENDPOINT: "http://127.0.0.1:4784",
+          SEDES_AGENT_TOOL_SOURCE_CAPABILITY:
+            "m3-test-capability-7Qx2P9vK4nR8sT6wY1aD5fH0jL3cB",
+        },
+        startup_timeout_sec: 30,
+        tool_timeout_sec: 86_400,
+      },
+    });
+    const sidecar = withCodexAgentToolCliEnvironment({}, {
+      resolution: {
+        ...available,
+        surface: "native",
+        endpoint: "unix:///run/user/1000/sedes/agent-tools.sock",
+        executableDirectory: "/home/user/.local/state/sedes/sidecar",
+      },
+      applicationThreadId: "thread-1",
+    });
+    expect(sidecar["mcp_servers.sedes"]).toMatchObject({
+      command: "/home/user/.local/state/sedes/sidecar/sedes",
+      args: ["mcp", "--mode", "progressive"],
+      env: { SEDES_AGENT_TOOL_ENDPOINT: "unix:///run/user/1000/sedes/agent-tools.sock" },
+    });
+    expect(() =>
+      withCodexAgentToolCliEnvironment({}, {
+        resolution: {
+          ...available,
+          surface: "native",
+          endpoint: createAgentToolCliNamedPipeEndpoint(),
+          executableDirectory: "C:\\Sedes\\bin",
+        },
+        applicationThreadId: "thread-1",
+      }),
+    ).toThrow("codex_agent_tool_mcp_platform_unsupported");
+  });
+
+  it("projects only MCP environment names into durable runtime fingerprints", () => {
+    const params = {
+      threadId: "native-thread",
+      config: withCodexAgentToolCliEnvironment({}, {
+        resolution: { ...available, surface: "native" },
+        applicationThreadId: "thread-1",
+      }),
+    };
+    const projected = JSON.stringify(
+      codexEnvironmentFingerprintInput("thread/resume", params),
+    );
+    expect(projected).not.toContain(available.sourceCapability);
+    expect(projected).toContain("SEDES_AGENT_TOOL_SOURCE_CAPABILITY");
+    expect(projected).toContain("/opt/sedes/bin/sedes");
+    expect(codexEnvironmentFingerprintInput("turn/start", params)).toBe(params);
   });
 
   it("does not install context when composition cannot prove eligibility", () => {
@@ -253,6 +339,62 @@ describe("Codex agent-tool CLI environment", () => {
     });
   });
 
+  it("issues an MCP-bound reference for a Native thread", async () => {
+    const resolution = await databaseProvider(
+      { networkAccess: "enabled", sedesCreated: 1 },
+      undefined,
+      { surface: "native" },
+    ).acquire(scope, "thread-1");
+    expect(resolution).toMatchObject({
+      availability: "available",
+      surface: "native",
+      mode: "progressive",
+    });
+    expect(sourceCapabilities.issue).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceThreadId: "thread-1" }),
+      "management_http",
+      "mcp",
+    );
+  });
+
+  it("fails Native presentation closed on a Windows execution host", async () => {
+    const release = vi.fn();
+    const provider = new DatabaseCodexAgentToolCliEnvironmentProvider({
+      database: {
+        prepare: () => ({
+          get: () => ({ networkAccess: "enabled", sedesCreated: 1 }),
+        }),
+      } as never,
+      backendInstanceId: "codex-1",
+      runtime: {
+        availability: "managed",
+        provider: {
+          acquire: async () => ({
+            availability: "available" as const,
+            endpoint: createAgentToolCliNamedPipeEndpoint(),
+            executableDirectory: "C:\\Sedes\\sidecar",
+            inheritedPath: "C:\\Windows",
+            closed: new Promise<never>(() => undefined),
+            release,
+          }),
+        },
+      },
+      sourceCapabilities: sourceCapabilities.issuer,
+      agentTools: {
+        readPolicy: () => ({
+          ...agentTools.readPolicy(),
+          presentation: { surface: "native" as const, mode: "individual" as const },
+        }),
+      },
+    });
+    await expect(provider.acquire(scope, "thread-1")).resolves.toEqual({
+      availability: "unavailable",
+      reason: "presentation_unavailable",
+    });
+    expect(release).toHaveBeenCalledOnce();
+    expect(sourceCapabilities.issue).not.toHaveBeenCalled();
+  });
+
   it.each(["local", "managed"] as const)(
     "provisions %s CLI authority while access is disabled and no tools are selected",
     async (topology) => {
@@ -307,6 +449,7 @@ describe("Codex agent-tool CLI environment", () => {
         topology === "local"
           ? "management_http"
           : "execution_environment_sidecar",
+        "cli",
       );
       if (resolution.availability === "available") resolution.release();
     },
@@ -338,6 +481,7 @@ describe("Codex agent-tool CLI environment", () => {
     expect(sourceCapabilities.issue).toHaveBeenCalledWith(
       expect.objectContaining({ sourceThreadId: "thread-1" }),
       "management_http",
+      "cli",
     );
   });
 
@@ -415,6 +559,7 @@ describe("Codex agent-tool CLI environment", () => {
         backendKind: "codex_app_server",
       },
       "execution_environment_sidecar",
+      "cli",
     );
     expect(resolution).toMatchObject({
       availability: "available",
@@ -528,7 +673,14 @@ describe("Codex agent-tool CLI environment", () => {
 
 const scope = { tenantId: "tenant-1", principalId: "principal-1" };
 
-function databaseProvider(row: unknown, appliedOwnedPath?: () => Promise<string>) {
+function databaseProvider(
+  row: unknown,
+  appliedOwnedPath?: () => Promise<string>,
+  options: {
+    readonly surface?: "cli" | "native";
+    readonly executableDirectory?: string;
+  } = {},
+) {
   return new DatabaseCodexAgentToolCliEnvironmentProvider({
     database: {
       prepare: () => ({ get: () => row }),
@@ -538,10 +690,19 @@ function databaseProvider(row: unknown, appliedOwnedPath?: () => Promise<string>
     runtime: {
       availability: "available",
       endpoint: available.endpoint,
-      executableDirectory: available.executableDirectory,
+      executableDirectory:
+        options.executableDirectory ?? available.executableDirectory,
       inheritedPath: available.inheritedPath,
     },
     sourceCapabilities: sourceCapabilities.issuer,
-    agentTools,
+    agentTools: {
+      readPolicy: () => ({
+        ...agentTools.readPolicy(),
+        presentation: {
+          surface: options.surface ?? ("cli" as const),
+          mode: "progressive" as const,
+        },
+      }),
+    },
   });
 }

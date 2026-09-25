@@ -127,18 +127,24 @@ to the surface or mode require an idle thread.
 Presentation has two controls:
 
 - **Surface** chooses Native tools or the generated CLI. This selector appears
-  only when the target supports more than one surface; currently that is
-  eligible local Pi.
+  only when the target supports more than one surface: eligible local Pi, and
+  Codex and Claude threads.
 - **Mode** chooses Progressive discovery or Individual named tools/commands.
   Progressive keeps the initial surface compact and describes operations on
   demand. Individual presents each granted operation directly with typed
   parameters.
 
 Pi supports Native Progressive and Native Individual wherever native Sedes
-tools are eligible, plus both CLI modes on eligible local threads. Codex,
-Claude, and Grok support both modes on their single CLI surface, so their
-surface selector is hidden. An unavailable combination is omitted rather than
-silently replaced with another surface or mode.
+tools are eligible, plus both CLI modes on eligible local threads. Codex and
+Claude support both modes on both surfaces. Their Native tools come from a
+Sedes MCP server that Sedes adds to the thread itself, so you do not configure
+anything in Codex or Claude; the tools appear as `mcp__sedes__…` and the
+provider's own permission settings apply to them. New Codex and Claude threads
+start on Native tools with Individual mode; threads created before this change
+keep their CLI setting until you change it. Grok supports both modes on its
+single CLI surface,
+so its surface selector is hidden. An unavailable combination is omitted
+rather than silently replaced with another surface or mode.
 
 For CLI presentation, `sedes --help`, group help, and progressive catalog
 discovery reflect the thread's current grants. Adding or removing a grant in

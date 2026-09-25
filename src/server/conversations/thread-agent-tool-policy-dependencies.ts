@@ -21,8 +21,15 @@ function presentationOptionsForBackend(
         : ([
             { surface: "native", modes: ["progressive", "individual"] },
           ]);
+    // Codex and Claude load Native tools through the stdio `sedes mcp`
+    // server. The first surface and its first mode are the default, so they
+    // default to Native/Individual; migration 115 applies it to new threads.
     case "codex_app_server":
     case "claude_agent_sdk":
+      return [
+        { surface: "native", modes: ["individual", "progressive"] },
+        { surface: "cli", modes: ["progressive", "individual"] },
+      ];
     case "grok_build":
       return [
         { surface: "cli", modes: ["progressive", "individual"] },
