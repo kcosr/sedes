@@ -252,7 +252,10 @@ thread or weaken its model/settings safety checks.
 
 Important opt-ins include:
 
-- `SEDES_RUN_REAL_CODEX_AGENT_TOOLS=1` for the generated CLI skill exercise;
+- `SEDES_RUN_REAL_CODEX_AGENT_TOOLS=1` for the generated CLI skill exercise
+  and both Native MCP modes, where `codex exec` receives the same
+  `mcp_servers.sedes` entry Sedes sends in thread config and calls a real
+  Sedes listener;
 - an absolute `SEDES_REAL_CODEX_UDS_SOCKET` together with
   `SEDES_REAL_CODEX_UDS_MODEL=gpt-5.6-luna` for an operator socket;
 - an absolute `SEDES_REAL_CODEX_TUI_HOME` for a disposable authenticated
@@ -313,7 +316,12 @@ SEDES_REAL_CLAUDE_CONFIG_DIRECTORY=/absolute/provider-home \
 It requires a logged-in first-party `claude.ai` subscription with a nonempty
 subscription type and no API-key override, exactly one `claude-sonnet-5`/low
 catalog entry, `dontAsk`, an empty tool list, and no MCP servers. It creates two
-disposable provider sessions and retains their native history.
+disposable provider sessions and retains their native history. The Native MCP
+file adds a third: the production `ClaudeSdkSession` with no built-in tools,
+strict MCP configuration, and only the thread's `sedes` server, in `default`
+permission mode approving only `mcp__sedes__*` calls. It verifies the server
+connects, the reference stays out of the CLI arguments, and one Individual
+tool call round-trips through a real Sedes listener.
 The driver test covers reopen; the managed-worker test completes an active
 turn while the main client is detached, then reattaches without resubmitting.
 That test uses real worker stdio with local framed sockets standing in for

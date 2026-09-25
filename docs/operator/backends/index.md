@@ -111,7 +111,7 @@ runtimes are not equivalent to exercised runtimes.
 | --- | --- | --- | --- | --- |
 | Pi SDK | July 2026 | Pinned SDK `0.86.0` runs inside the Sedes process; no external runtime to qualify | `test:real-pi`, `test:real-pi-cli` | Local runtime; SSH or outbound sidecar for workspace tools and context |
 | Codex | July 2026 | App-server `0.154.0` reviewed against the compiled `0.153.0` profile | `test:real-codex-agent-tools` | Local process, external UDS/TCP, persistent SSH or outbound sidecar |
-| Claude | August 2026 | Claude Code `2.1.274` with Agent SDK `0.3.274` | `test:real-claude` (five files) | Local worker; persistent SSH or outbound sidecar on Linux/macOS |
+| Claude | August 2026 | Claude Code `2.1.274` with Agent SDK `0.3.274` | `test:real-claude` (six files) | Local worker; persistent SSH or outbound sidecar on Linux/macOS |
 | Grok | August 2026 | Grok Build `1.0.4` against the compiled `1.x` ACP profile | `test:real-grok` (three files) | Local Linux x64 or macOS only |
 
 Version-pinned qualification evidence for each external runtime is kept under
