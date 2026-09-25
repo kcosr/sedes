@@ -25,6 +25,23 @@ const ENCODED_PAYLOAD_PATTERN = /^[A-Za-z0-9_-]{64}$/u;
 export type ThreadSourceReferenceAudience =
   "management_http" | "execution_environment_sidecar";
 
+/**
+ * The provider-facing presentation that receives a reference. A CLI reference
+ * cannot drive the MCP server and an MCP reference cannot drive the CLI, so
+ * the server derives the calling adapter from the credential itself.
+ */
+export type ThreadSourceReferencePresentation = "cli" | "mcp";
+
+export interface ResolvedThreadSourceReference {
+  readonly threadId: string;
+  readonly presentation: ThreadSourceReferencePresentation;
+}
+
+const THREAD_SOURCE_REFERENCE_PRESENTATIONS = Object.freeze([
+  "cli",
+  "mcp",
+] as const satisfies readonly ThreadSourceReferencePresentation[]);
+
 export const THREAD_SOURCE_REFERENCE_TOKEN_LENGTH = TOKEN_CHARACTERS;
 export const THREAD_SOURCE_REFERENCE_PAYLOAD_BYTES = PAYLOAD_BYTES;
 
@@ -60,13 +77,14 @@ export class ThreadSourceReferenceCodec {
     scope: RequestScope,
     threadId: string,
     audience: ThreadSourceReferenceAudience,
+    presentation: ThreadSourceReferencePresentation,
   ): string {
     const canonicalThreadId = parseThreadId(threadId);
     const threadBytes = uuidBytes(canonicalThreadId);
     if (threadBytes.byteLength !== THREAD_ID_BYTES) {
       throw new Error("thread_source_reference_thread_id_invalid");
     }
-    const context = referenceContext(scope, audience);
+    const context = referenceContext(scope, audience, presentation);
     const cipher = createCipheriv(
       "aes-256-ecb",
       contextualEncryptionKey(this.#encryptionKey, context),
@@ -93,7 +111,7 @@ export class ThreadSourceReferenceCodec {
     scope: RequestScope,
     token: string,
     audience: ThreadSourceReferenceAudience,
-  ): string {
+  ): ResolvedThreadSourceReference {
     if (token.length !== TOKEN_CHARACTERS || !token.startsWith(TOKEN_PREFIX)) {
       throw new Error("thread_source_reference_invalid");
     }
@@ -111,15 +129,26 @@ export class ThreadSourceReferenceCodec {
 
     const ciphertext = payload.subarray(0, THREAD_ID_BYTES);
     const tag = payload.subarray(PAYLOAD_BYTES - TAG_BYTES);
-    const context = referenceContext(scope, audience);
-    const expectedTag = authenticationTag(
-      this.#authenticationKey,
-      context,
-      ciphertext,
-    );
-    if (!timingSafeEqual(tag, expectedTag)) {
+    // Check every presentation so the comparison cost does not reveal which
+    // one a presented reference was issued for.
+    let matched:
+      | { readonly presentation: ThreadSourceReferencePresentation; readonly context: Buffer }
+      | undefined;
+    for (const presentation of THREAD_SOURCE_REFERENCE_PRESENTATIONS) {
+      const candidate = referenceContext(scope, audience, presentation);
+      const expectedTag = authenticationTag(
+        this.#authenticationKey,
+        candidate,
+        ciphertext,
+      );
+      if (timingSafeEqual(tag, expectedTag) && matched === undefined) {
+        matched = { presentation, context: candidate };
+      }
+    }
+    if (!matched) {
       throw new Error("thread_source_reference_invalid");
     }
+    const context = matched.context;
     const decipher = createDecipheriv(
       "aes-256-ecb",
       contextualEncryptionKey(this.#encryptionKey, context),
@@ -133,7 +162,10 @@ export class ThreadSourceReferenceCodec {
     if (plaintext.byteLength !== THREAD_ID_BYTES) {
       throw new Error("thread_source_reference_invalid");
     }
-    return parseThreadId(uuidFromBytes(plaintext));
+    return Object.freeze({
+      threadId: parseThreadId(uuidFromBytes(plaintext)),
+      presentation: matched.presentation,
+    });
   }
 }
 
@@ -173,6 +205,7 @@ function parseThreadId(threadId: string): string {
 function referenceContext(
   scope: RequestScope,
   audience: ThreadSourceReferenceAudience,
+  presentation: ThreadSourceReferencePresentation,
 ): Buffer {
   const tenant = boundedScopePart(scope.tenantId);
   const principal = boundedScopePart(scope.principalId);
@@ -189,8 +222,19 @@ function referenceContext(
   offset += 2;
   principal.copy(output, offset);
   offset += principal.byteLength;
-  output.writeUInt8(audience === "management_http" ? 1 : 2, offset);
+  output.writeUInt8(referenceBindingCode(audience, presentation), offset);
   return output;
+}
+
+// CLI codes are the original audience bytes, so references issued before MCP
+// presentation existed keep resolving to the CLI.
+function referenceBindingCode(
+  audience: ThreadSourceReferenceAudience,
+  presentation: ThreadSourceReferencePresentation,
+): number {
+  const management = audience === "management_http";
+  if (presentation === "cli") return management ? 1 : 2;
+  return management ? 3 : 4;
 }
 
 function boundedScopePart(value: string): Buffer {

@@ -419,6 +419,7 @@ describe("thread agent tool policy persistence", () => {
         accessBoundary: "environment",
         presentationOptions: [
           { surface: "cli", modes: ["progressive", "individual"] },
+          { surface: "native", modes: ["progressive", "individual"] },
         ],
       });
     } finally {

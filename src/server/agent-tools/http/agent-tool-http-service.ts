@@ -19,13 +19,22 @@ export interface ResolvedAgentToolSourceContext {
   readonly backendKind: BackendKind;
 }
 
+/**
+ * A thread caller resolved from its opaque reference. The reference, not the
+ * request, names the presentation: the CLI and `sedes mcp` share these routes.
+ */
+export interface ResolvedAgentToolSourceCapabilityContext {
+  readonly source: ResolvedAgentToolSourceContext;
+  readonly presentation: "cli" | "mcp";
+}
+
 /** Resolves only inside the server-derived request scope. */
 export interface AgentToolSourceContextResolver {
   resolve(
     request: Request,
     sourceCapability: string,
     signal: AbortSignal,
-  ): Promise<ResolvedAgentToolSourceContext>;
+  ): Promise<ResolvedAgentToolSourceCapabilityContext>;
 }
 
 /**
@@ -36,35 +45,42 @@ export class PolicyCheckedAgentToolHttpService {
   constructor(readonly scoped: SourceScopedAgentToolService) {}
 
   async catalog(
-    source: ResolvedAgentToolSourceContext,
+    caller: ResolvedAgentToolSourceCapabilityContext,
   ): Promise<readonly AgentToolCatalogSummary[]> {
     try {
-      return this.scoped.catalogSummaries(source, "cli");
+      return this.scoped.catalogSummaries(
+        caller.source,
+        discoveryAdapter(caller),
+      );
     } catch (error) {
       throw mapBackendError(error);
     }
   }
 
   async describeMany(
-    source: ResolvedAgentToolSourceContext,
+    caller: ResolvedAgentToolSourceCapabilityContext,
     toolIds: readonly string[],
   ): Promise<readonly AgentToolDescription[]> {
     try {
-      return this.scoped.describeMany(source, "cli", toolIds);
+      return this.scoped.describeMany(
+        caller.source,
+        discoveryAdapter(caller),
+        toolIds,
+      );
     } catch (error) {
       throw mapBackendError(error);
     }
   }
 
   async invoke(
-    source: ResolvedAgentToolSourceContext,
+    caller: ResolvedAgentToolSourceCapabilityContext,
     request: CreateAgentToolInvocationRequest,
     signal: AbortSignal,
   ): Promise<SedesToolInvocationResult<unknown>> {
     try {
       return await this.scoped.invoke({
-        source,
-        adapter: "http",
+        source: caller.source,
+        adapter: caller.presentation === "mcp" ? "mcp" : "http",
         request,
         signal,
       });
@@ -72,6 +88,12 @@ export class PolicyCheckedAgentToolHttpService {
       throw mapBackendError(error);
     }
   }
+}
+
+function discoveryAdapter(
+  caller: ResolvedAgentToolSourceCapabilityContext,
+): "cli" | "mcp" {
+  return caller.presentation === "mcp" ? "mcp" : "cli";
 }
 
 function mapBackendError(error: unknown): unknown {

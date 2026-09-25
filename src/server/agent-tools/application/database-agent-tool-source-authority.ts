@@ -11,6 +11,7 @@ import { CanonicalAgentToolRequestError } from "../invocation/canonical-inline-a
 import {
   ThreadSourceReferenceCodec,
   type ThreadSourceReferenceAudience,
+  type ThreadSourceReferencePresentation,
 } from "./thread-source-reference.js";
 
 type ScopedThreadFacts = {
@@ -20,13 +21,24 @@ type ScopedThreadFacts = {
   readonly backendKind: BackendKind;
 };
 
+export type AgentToolSourceCapabilityPresentation =
+  ThreadSourceReferencePresentation;
+
+/** A resolved thread reference and the presentation it was issued for. */
+export interface ResolvedAgentToolSourceCapability {
+  readonly source: TrustedAgentToolSource;
+  readonly presentation: AgentToolSourceCapabilityPresentation;
+}
+
 export interface EnvironmentScopedAgentToolSourceResolver {
   resolveCapabilityInExecutionEnvironment(
     scope: RequestScope,
     executionEnvironmentId: string,
     sourceCapability: string,
     signal: AbortSignal,
-  ): Promise<TrustedAgentToolSource> | TrustedAgentToolSource;
+  ):
+    | Promise<ResolvedAgentToolSourceCapability>
+    | ResolvedAgentToolSourceCapability;
 }
 
 export type AgentToolSourceCapabilityTransport =
@@ -37,6 +49,7 @@ export interface AgentToolSourceCapabilityIssuer {
   issue(
     source: TrustedAgentToolSource,
     transport: AgentToolSourceCapabilityTransport,
+    presentation: AgentToolSourceCapabilityPresentation,
   ): string;
 }
 
@@ -64,12 +77,16 @@ export class DatabaseAgentToolSourceAuthority
   issue(
     source: TrustedAgentToolSource,
     transport: AgentToolSourceCapabilityTransport,
+    presentation: AgentToolSourceCapabilityPresentation,
   ): string {
     if (
       transport !== "management_http" &&
       transport !== "execution_environment_sidecar"
     ) {
       throw new Error("agent_tool_source_capability_transport_invalid");
+    }
+    if (presentation !== "cli" && presentation !== "mcp") {
+      throw new Error("agent_tool_source_capability_presentation_invalid");
     }
     const current = this.#resolve(
       source.scope,
@@ -86,7 +103,12 @@ export class DatabaseAgentToolSourceAuthority
         "The agent-tool runtime source does not match live application state.",
       );
     }
-    return this.#references.issue(source.scope, source.sourceThreadId, transport);
+    return this.#references.issue(
+      source.scope,
+      source.sourceThreadId,
+      transport,
+      presentation,
+    );
   }
 
   resolveInScope(
@@ -101,7 +123,7 @@ export class DatabaseAgentToolSourceAuthority
     scope: RequestScope,
     sourceCapability: string,
     signal: AbortSignal,
-  ): TrustedAgentToolSource {
+  ): ResolvedAgentToolSourceCapability {
     return this.#resolveCapability(
       scope,
       sourceCapability,
@@ -116,7 +138,7 @@ export class DatabaseAgentToolSourceAuthority
     executionEnvironmentId: string,
     sourceCapability: string,
     signal: AbortSignal,
-  ): TrustedAgentToolSource {
+  ): ResolvedAgentToolSourceCapability {
     if (!executionEnvironmentId) {
       throw new Error("agent_tool_source_environment_required");
     }
@@ -360,11 +382,11 @@ export class DatabaseAgentToolSourceAuthority
     transport: AgentToolSourceCapabilityTransport,
     executionEnvironmentId: string | undefined,
     signal: AbortSignal,
-  ): TrustedAgentToolSource {
+  ): ResolvedAgentToolSourceCapability {
     this.#assertOpen(signal);
-    let sourceThreadId: string;
+    let reference: ReturnType<ThreadSourceReferenceCodec["resolve"]>;
     try {
-      sourceThreadId = this.#references.resolve(
+      reference = this.#references.resolve(
         scope,
         sourceCapability,
         transport as ThreadSourceReferenceAudience,
@@ -375,12 +397,15 @@ export class DatabaseAgentToolSourceAuthority
         "The agent-tool source capability is invalid or expired.",
       );
     }
-    return this.#resolve(
-      scope,
-      sourceThreadId,
-      executionEnvironmentId,
-      signal,
-    );
+    return Object.freeze({
+      source: this.#resolve(
+        scope,
+        reference.threadId,
+        executionEnvironmentId,
+        signal,
+      ),
+      presentation: reference.presentation,
+    });
   }
 
   #assertOpen(signal: AbortSignal): void {

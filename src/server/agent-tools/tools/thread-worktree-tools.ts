@@ -22,6 +22,7 @@ const revisionSchema = Type.Integer({
 });
 const sharedAdapters = {
   pi_sdk: 30_000,
+  mcp: 30_000,
   http: 30_000,
   cli: 30_000,
 } as const;
@@ -166,7 +167,7 @@ export function createThreadWorktreeListToolDefinition(
     ),
     requiredCapabilities: [],
     execution: execution("thread_worktree_list_read", false),
-    exposure: { adapters: ["pi_sdk", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_worktree_list",
@@ -174,6 +175,7 @@ export function createThreadWorktreeListToolDefinition(
         promptSnippet:
           "List the source thread's selectable linked worktrees and current thread preference revision.",
       },
+      mcp: { name: "sedes_thread_worktree_list" },
       http: { invocation: "inline" },
       cli: { command: listManifest.id },
     },
@@ -204,7 +206,7 @@ export function createThreadWorktreeSetToolDefinition(
     outputSchema: preferenceOutputSchema,
     requiredCapabilities: [],
     execution: execution("thread_worktree_preference_write", true),
-    exposure: { adapters: ["pi_sdk", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_worktree_set",
@@ -212,6 +214,7 @@ export function createThreadWorktreeSetToolDefinition(
         promptSnippet:
           "Revision-check and set one listed linked worktree as this thread's preferred worktree.",
       },
+      mcp: { name: "sedes_thread_worktree_set" },
       http: { invocation: "inline" },
       cli: { command: setManifest.id },
     },
@@ -248,7 +251,7 @@ export function createThreadWorktreeClearToolDefinition(
     outputSchema: preferenceOutputSchema,
     requiredCapabilities: [],
     execution: execution("thread_worktree_preference_write", true),
-    exposure: { adapters: ["pi_sdk", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_worktree_clear",
@@ -256,6 +259,7 @@ export function createThreadWorktreeClearToolDefinition(
         promptSnippet:
           "Revision-check and return this thread's UI context to its primary project directory.",
       },
+      mcp: { name: "sedes_thread_worktree_clear" },
       http: { invocation: "inline" },
       cli: { command: clearManifest.id },
     },

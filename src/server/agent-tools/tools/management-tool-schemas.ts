@@ -142,6 +142,7 @@ function missingCallerDefault(): CanonicalAgentToolRequestError {
 
 export const sharedAdapters = {
   pi_sdk: 30_000,
+  mcp: 30_000,
   http: 30_000,
   cli: 30_000,
 } as const;

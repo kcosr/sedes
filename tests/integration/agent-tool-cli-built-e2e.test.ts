@@ -426,10 +426,12 @@ describe("built Sedes agent-tool CLI", () => {
       const sourceCapability = sourceAuthority.issue(
         trustedSource,
         "management_http",
+        "cli",
       );
       const otherSourceCapability = sourceAuthority.issue(
         trustedOtherSource,
         "management_http",
+        "cli",
       );
       const applicationSnapshots = new ApplicationSnapshotPublicationBoundary(
         {

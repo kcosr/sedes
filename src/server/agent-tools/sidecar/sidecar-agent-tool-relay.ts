@@ -22,7 +22,8 @@ export interface SidecarAgentToolRelayAuthority {
  * Registers only main-Sedes-owned reverse operations. The sidecar session
  * supplies tenant, principal, and execution-environment authority; its UDS
  * caller supplies only an opaque restart-safe thread source reference and canonical
- * tool input.
+ * tool input. The reference also names its presentation, so the generated CLI
+ * and the `sedes mcp` server share this relay without a wire discriminator.
  */
 export function registerSidecarAgentToolRelayOperations(
   registry: SidecarOperationRegistry,
@@ -38,23 +39,28 @@ export function registerSidecarAgentToolRelayOperations(
     throw new Error("sidecar_agent_tool_relay_authority_invalid");
   }
 
-  const resolve = (sourceCapability: string, signal: AbortSignal) =>
-    input.sources.resolveCapabilityInExecutionEnvironment(
+  const resolve = async (sourceCapability: string, signal: AbortSignal) => {
+    const caller = await input.sources.resolveCapabilityInExecutionEnvironment(
       scope,
       executionEnvironmentId,
       sourceCapability,
       signal,
     );
+    return {
+      source: caller.source,
+      adapter: caller.presentation === "mcp" ? ("mcp" as const) : ("cli" as const),
+    };
+  };
 
   registry.register(
     agentToolsCatalogOperation,
     async ({ sourceCapability }, { signal }) => {
       try {
-        const source = await resolve(sourceCapability, signal);
+        const { source, adapter } = await resolve(sourceCapability, signal);
         assertOpen(signal);
         return {
           outcome: "ok" as const,
-          tools: [...input.tools.catalogSummaries(source, "cli")],
+          tools: [...input.tools.catalogSummaries(source, adapter)],
         };
       } catch (error) {
         return relayError(error);
@@ -66,11 +72,11 @@ export function registerSidecarAgentToolRelayOperations(
     agentToolsDescribeOperation,
     async ({ sourceCapability, toolIds }, { signal }) => {
       try {
-        const source = await resolve(sourceCapability, signal);
+        const { source, adapter } = await resolve(sourceCapability, signal);
         assertOpen(signal);
         return {
           outcome: "ok" as const,
-          tools: [...input.tools.describeMany(source, "cli", toolIds)],
+          tools: [...input.tools.describeMany(source, adapter, toolIds)],
         };
       } catch (error) {
         return relayError(error);
@@ -85,13 +91,13 @@ export function registerSidecarAgentToolRelayOperations(
       { signal },
     ) => {
       try {
-        const source = await resolve(sourceCapability, signal);
+        const { source, adapter } = await resolve(sourceCapability, signal);
         assertOpen(signal);
         return {
           outcome: "ok" as const,
           result: await input.tools.invoke({
             source,
-            adapter: "cli",
+            adapter,
             request: {
               toolId,
               schemaVersion,

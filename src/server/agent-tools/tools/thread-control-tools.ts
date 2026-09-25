@@ -42,6 +42,7 @@ const restoreManifest = CANONICAL_AGENT_TOOL_MANIFEST["thread.restore"];
 const MAXIMUM_THREAD_SEND_MESSAGE_BYTES = 65_536;
 const threadForkAdapters = {
   pi_sdk: 90_000,
+  mcp: 90_000,
   http: 90_000,
   cli: 90_000,
 } as const;
@@ -336,7 +337,7 @@ export function createThreadMessagesToolDefinition(
       concurrencyClass: "thread_messages_read",
       uncertainExternalOutcome: false,
     },
-    exposure: { adapters: ["pi_sdk", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_messages",
@@ -344,6 +345,7 @@ export function createThreadMessagesToolDefinition(
         promptSnippet:
           "Read bounded settled thread messages plus text-finalized messages from the active turn on a fresh request.",
       },
+      mcp: { name: "sedes_thread_messages" },
       http: { invocation: "inline" },
       cli: { command: messagesManifest.id },
     },
@@ -419,7 +421,7 @@ export function createThreadSendToolDefinition(
       concurrencyClass: "thread_send_write",
       uncertainExternalOutcome: true,
     },
-    exposure: { adapters: ["pi_sdk", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_send",
@@ -427,6 +429,7 @@ export function createThreadSendToolDefinition(
         promptSnippet:
           "Send an independent message to an unbound or idle Sedes thread. This starts model work and never changes its composer draft. Set callback true to receive the terminal result back in this calling thread; omit it for fire-and-forget delivery.",
       },
+      mcp: { name: "sedes_thread_send" },
       http: { invocation: "inline" },
       cli: { command: sendManifest.id },
     },
@@ -516,7 +519,7 @@ export function createThreadForkToolDefinition(
       concurrencyClass: "thread_fork_write",
       uncertainExternalOutcome: true,
     },
-    exposure: { adapters: ["pi_sdk", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_fork",
@@ -524,6 +527,7 @@ export function createThreadForkToolDefinition(
         promptSnippet:
           "Fork an exact completed Sedes turn without sending a message.",
       },
+      mcp: { name: "sedes_thread_fork" },
       http: { invocation: "inline" },
       cli: { command: forkManifest.id },
     },
@@ -598,7 +602,7 @@ export function createThreadArchiveToolDefinition(
       concurrencyClass: "thread_inventory_write",
       uncertainExternalOutcome: true,
     },
-    exposure: { adapters: ["pi_sdk", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_archive",
@@ -606,6 +610,7 @@ export function createThreadArchiveToolDefinition(
         promptSnippet:
           "Archive a Sedes thread without deleting its provider conversation.",
       },
+      mcp: { name: "sedes_thread_archive" },
       http: { invocation: "inline" },
       cli: { command: archiveManifest.id },
     },
@@ -663,7 +668,7 @@ export function createThreadRestoreToolDefinition(
       concurrencyClass: "thread_inventory_write",
       uncertainExternalOutcome: true,
     },
-    exposure: { adapters: ["pi_sdk", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_restore",
@@ -671,6 +676,7 @@ export function createThreadRestoreToolDefinition(
         promptSnippet:
           "Restore an archived Sedes thread to active inventory.",
       },
+      mcp: { name: "sedes_thread_restore" },
       http: { invocation: "inline" },
       cli: { command: restoreManifest.id },
     },

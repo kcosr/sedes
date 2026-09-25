@@ -104,7 +104,7 @@ describe("DatabaseAgentToolSourceAuthority", () => {
   it("revokes an issued source capability when its project is removed while keeping resource facts readable", () => {
     const scope = { tenantId, principalId };
     const source = authority.resolveInScope(scope, threadId, new AbortController().signal);
-    const capability = authority.issue(source, "management_http");
+    const capability = authority.issue(source, "management_http", "cli");
     database.prepare("UPDATE workspaces SET removed_at = 123 WHERE id = ?").run(workspaceId);
     expect(() => authority.resolveCapabilityInScope(scope, capability, new AbortController().signal))
       .toThrow(expect.objectContaining({ code: "not_found" }));
@@ -123,6 +123,7 @@ describe("DatabaseAgentToolSourceAuthority", () => {
         backendKind: "codex_app_server",
       },
       "execution_environment_sidecar",
+      "cli",
     );
     expect(
       authority.resolveCapabilityInExecutionEnvironment(
@@ -132,11 +133,14 @@ describe("DatabaseAgentToolSourceAuthority", () => {
         new AbortController().signal,
       ),
     ).toEqual({
-      scope: { tenantId, principalId },
-      sourceThreadId: threadId,
-      sourceWorkspaceId: workspaceId,
-      sourceEnvironmentId: environmentId,
-      backendKind: "codex_app_server",
+      source: {
+        scope: { tenantId, principalId },
+        sourceThreadId: threadId,
+        sourceWorkspaceId: workspaceId,
+        sourceEnvironmentId: environmentId,
+        backendKind: "codex_app_server",
+      },
+      presentation: "cli",
     });
   });
 
@@ -210,6 +214,7 @@ describe("DatabaseAgentToolSourceAuthority", () => {
           backendKind: "codex_app_server",
         },
         "execution_environment_sidecar",
+        "cli",
       );
       expect(() =>
         authority.resolveCapabilityInExecutionEnvironment(
@@ -260,8 +265,8 @@ describe("DatabaseAgentToolSourceAuthority", () => {
       sourceEnvironmentId: environmentId,
       backendKind: "codex_app_server" as const,
     };
-    const first = authority.issue(source, "management_http");
-    const second = authority.issue(source, "management_http");
+    const first = authority.issue(source, "management_http", "cli");
+    const second = authority.issue(source, "management_http", "cli");
     expect(second).toBe(first);
     const restarted = new DatabaseAgentToolSourceAuthority(
       database,
@@ -273,14 +278,14 @@ describe("DatabaseAgentToolSourceAuthority", () => {
         first,
         new AbortController().signal,
       ),
-    ).toMatchObject({ sourceThreadId: threadId });
+    ).toMatchObject({ source: { sourceThreadId: threadId } });
     expect(
       restarted.resolveCapabilityInScope(
         source.scope,
         second,
         new AbortController().signal,
       ),
-    ).toMatchObject({ sourceThreadId: threadId });
+    ).toMatchObject({ source: { sourceThreadId: threadId } });
   });
 
   it("re-resolves current runtime facts instead of freezing them", () => {
@@ -293,6 +298,7 @@ describe("DatabaseAgentToolSourceAuthority", () => {
         backendKind: "codex_app_server",
       },
       "management_http",
+      "cli",
     );
     database
       .prepare(
@@ -313,7 +319,7 @@ describe("DatabaseAgentToolSourceAuthority", () => {
         reference,
         new AbortController().signal,
       ),
-    ).toMatchObject({ backendKind: "pi_sdk" });
+    ).toMatchObject({ source: { backendKind: "pi_sdk" } });
   });
 
   it("refuses to issue a capability for mismatched trusted runtime facts", () => {
@@ -327,6 +333,7 @@ describe("DatabaseAgentToolSourceAuthority", () => {
           backendKind: "codex_app_server",
         },
         "management_http",
+        "cli",
       ),
     ).toThrowError(expect.objectContaining({ code: "permission_denied" }));
   });
@@ -339,8 +346,8 @@ describe("DatabaseAgentToolSourceAuthority", () => {
       sourceEnvironmentId: environmentId,
       backendKind: "codex_app_server" as const,
     };
-    const http = authority.issue(source, "management_http");
-    const sidecar = authority.issue(source, "execution_environment_sidecar");
+    const http = authority.issue(source, "management_http", "cli");
+    const sidecar = authority.issue(source, "execution_environment_sidecar", "cli");
     const signal = new AbortController().signal;
 
     expect(() =>
@@ -360,7 +367,7 @@ describe("DatabaseAgentToolSourceAuthority", () => {
     ).toThrowError(expect.objectContaining({ code: "permission_denied" }));
     expect(
       authority.resolveCapabilityInScope(source.scope, http, signal),
-    ).toMatchObject({ sourceThreadId: threadId });
+    ).toMatchObject({ source: { sourceThreadId: threadId } });
     expect(
       authority.resolveCapabilityInExecutionEnvironment(
         source.scope,
@@ -368,7 +375,50 @@ describe("DatabaseAgentToolSourceAuthority", () => {
         sidecar,
         signal,
       ),
-    ).toMatchObject({ sourceThreadId: threadId });
+    ).toMatchObject({ source: { sourceThreadId: threadId } });
+  });
+
+  it("reports the presentation a capability was issued for", () => {
+    const source = {
+      scope: { tenantId, principalId },
+      sourceThreadId: threadId,
+      sourceWorkspaceId: workspaceId,
+      sourceEnvironmentId: environmentId,
+      backendKind: "codex_app_server" as const,
+    };
+    const signal = new AbortController().signal;
+    const cli = authority.issue(source, "management_http", "cli");
+    const mcp = authority.issue(source, "management_http", "mcp");
+    const sidecarMcp = authority.issue(
+      source,
+      "execution_environment_sidecar",
+      "mcp",
+    );
+
+    expect(mcp).not.toBe(cli);
+    expect(
+      authority.resolveCapabilityInScope(source.scope, cli, signal),
+    ).toMatchObject({ presentation: "cli" });
+    expect(
+      authority.resolveCapabilityInScope(source.scope, mcp, signal),
+    ).toMatchObject({
+      source: { sourceThreadId: threadId },
+      presentation: "mcp",
+    });
+    expect(
+      authority.resolveCapabilityInExecutionEnvironment(
+        source.scope,
+        environmentId,
+        sidecarMcp,
+        signal,
+      ),
+    ).toMatchObject({ presentation: "mcp" });
+    expect(() =>
+      authority.resolveCapabilityInScope(source.scope, sidecarMcp, signal),
+    ).toThrowError(expect.objectContaining({ code: "permission_denied" }));
+    expect(() =>
+      authority.issue(source, "management_http", "http" as never),
+    ).toThrow("agent_tool_source_capability_presentation_invalid");
   });
 
   it("fails closed when cancellation races source resolution", () => {

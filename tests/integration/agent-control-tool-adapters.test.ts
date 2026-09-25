@@ -293,11 +293,14 @@ function fixture() {
         );
       }
       return {
-        scope,
-        sourceThreadId,
-        sourceWorkspaceId: workspaceId,
-        sourceEnvironmentId: "environment-1",
-        backendKind,
+        source: {
+          scope,
+          sourceThreadId,
+          sourceWorkspaceId: workspaceId,
+          sourceEnvironmentId: "environment-1",
+          backendKind,
+        },
+        presentation: "cli" as const,
       };
     },
   };

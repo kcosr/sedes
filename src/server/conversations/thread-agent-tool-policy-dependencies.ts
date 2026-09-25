@@ -21,8 +21,14 @@ function presentationOptionsForBackend(
         : ([
             { surface: "native", modes: ["progressive", "individual"] },
           ]);
+    // Codex and Claude load Native tools through the stdio `sedes mcp`
+    // server. CLI stays first so it remains the default presentation.
     case "codex_app_server":
     case "claude_agent_sdk":
+      return [
+        { surface: "cli", modes: ["progressive", "individual"] },
+        { surface: "native", modes: ["progressive", "individual"] },
+      ];
     case "grok_build":
       return [
         { surface: "cli", modes: ["progressive", "individual"] },

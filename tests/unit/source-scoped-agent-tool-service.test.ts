@@ -97,6 +97,7 @@ function crossEnvironmentWriteDefinition(): AgentToolDefinition {
         name: "sedes_example_cross_environment",
         label: "Sedes cross-environment example",
       },
+      mcp: { name: "sedes_example_cross_environment" },
       http: { invocation: "inline" },
       cli: { command: "example.cross_environment" },
     },
@@ -134,13 +135,19 @@ function allEnvironmentQueryDefinition(): AgentToolDefinition {
         name: "sedes_example_all_allowed_environments",
         label: "Sedes all-environment example",
       },
+      mcp: { name: "sedes_example_all_allowed_environments" },
       http: { invocation: "inline" },
       cli: { command: "example.all_allowed_environments" },
     },
   };
 }
 
-function service(presentation: AgentToolPresentation) {
+function service(
+  presentation: AgentToolPresentation,
+  caller: typeof source | Omit<typeof source, "backendKind"> & {
+    readonly backendKind: "pi" | "codex_app_server" | "claude_agent_sdk" | "grok_build";
+  } = source,
+) {
   const canonical = new CanonicalInlineAgentToolService({
     application: { readThreadStatus: async () => undefined },
     invocationId: () => "invocation-1",
@@ -158,7 +165,7 @@ function service(presentation: AgentToolPresentation) {
     canonical,
     policies,
     environmentAuthority,
-    sourceRevalidator,
+    { resolveInScope: () => caller },
     approvalAuthority,
     denyApprovals,
   );
@@ -1127,23 +1134,61 @@ describe("SourceScopedAgentToolService", () => {
     },
   );
 
-  it("fails closed for the unsupported mcp invocation adapter", async () => {
-    const adapter = "mcp" as const;
-    await expect(
-      service({ surface: "cli", mode: "progressive" }).invoke({
+  const nativeAdmission = [
+    ["pi", "native", "pi_sdk", true],
+    ["pi", "native", "mcp", false],
+    ["pi", "cli", "mcp", false],
+    ["codex_app_server", "native", "mcp", true],
+    ["codex_app_server", "native", "pi_sdk", false],
+    ["codex_app_server", "native", "cli", false],
+    ["codex_app_server", "cli", "mcp", false],
+    ["claude_agent_sdk", "native", "mcp", true],
+    ["claude_agent_sdk", "native", "http", false],
+    ["claude_agent_sdk", "cli", "mcp", false],
+    ["grok_build", "native", "mcp", false],
+    ["grok_build", "native", "pi_sdk", false],
+  ] as const;
+
+  it.each(nativeAdmission)(
+    "%s %s presentation admits adapter %s: %s",
+    async (backendKind, surface, adapter, admitted) => {
+      const caller = { ...source, backendKind };
+      for (const mode of ["progressive", "individual"] as const) {
+        const current = service({ surface, mode }, caller);
+        expect(
+          current.catalogSummaries(caller, adapter).map(({ id }) => id),
+        ).toEqual(admitted ? ["agent.context"] : []);
+        const invocation = current.invoke({
+          source: caller,
+          adapter,
+          request: {
+            toolId: "agent.context",
+            schemaVersion: 2,
+            requestId: `${backendKind}-${surface}-${mode}-${adapter}`,
+            input: {},
+          },
+          signal: new AbortController().signal,
+        });
+        if (admitted) {
+          await expect(invocation).resolves.toMatchObject({
+            state: "completed",
+          });
+        } else {
+          await expect(invocation).rejects.toMatchObject({
+            toolError: { code: "permission_denied" },
+          });
+        }
+      }
+    },
+  );
+
+  it("never treats the HTTP invocation hop as a discovery adapter", () => {
+    expect(
+      service({ surface: "cli", mode: "progressive" }).catalogSummaries(
         source,
-        adapter,
-        request: {
-          toolId: "agent.context",
-          schemaVersion: 2,
-          requestId: `unsupported-${adapter}-call`,
-          input: {},
-        },
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toMatchObject({
-      toolError: { code: "permission_denied" },
-    });
+        "http",
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -1174,7 +1219,7 @@ describe("thread access boundary", () => {
         ...agentContextToolDefinition,
         id: "example.boundary",
         environmentAuthority: declaration as AgentToolDefinition["environmentAuthority"],
-        adapters: { pi: { name: "sedes_example_boundary", label: "Boundary" }, cli: { command: "example.boundary" }, http: { invocation: "inline" } },
+        adapters: { pi: { name: "sedes_example_boundary", label: "Boundary" }, mcp: { name: "sedes_example_boundary" }, cli: { command: "example.boundary" }, http: { invocation: "inline" } },
         inputSchema: normalizeCanonicalAgentToolSchema(Type.Object({
           taskId: Type.Optional(Type.String({ maxLength: 128 })),
           workpadId: Type.Optional(Type.String({ maxLength: 128 })),

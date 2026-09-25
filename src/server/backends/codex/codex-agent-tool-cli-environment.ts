@@ -208,6 +208,7 @@ export class DatabaseCodexAgentToolCliEnvironmentProvider implements CodexAgentT
           backendKind: "codex_app_server",
         },
         this.#sourceCapabilityTransport,
+        "cli",
       );
       const activeRuntimeResolution = runtimeResolution;
       const inheritedPath = this.#appliedOwnedPath ? await this.#appliedOwnedPath() : runtimeResolution.inheritedPath;

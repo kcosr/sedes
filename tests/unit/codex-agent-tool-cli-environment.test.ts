@@ -307,6 +307,7 @@ describe("Codex agent-tool CLI environment", () => {
         topology === "local"
           ? "management_http"
           : "execution_environment_sidecar",
+        "cli",
       );
       if (resolution.availability === "available") resolution.release();
     },
@@ -338,6 +339,7 @@ describe("Codex agent-tool CLI environment", () => {
     expect(sourceCapabilities.issue).toHaveBeenCalledWith(
       expect.objectContaining({ sourceThreadId: "thread-1" }),
       "management_http",
+      "cli",
     );
   });
 
@@ -415,6 +417,7 @@ describe("Codex agent-tool CLI environment", () => {
         backendKind: "codex_app_server",
       },
       "execution_environment_sidecar",
+      "cli",
     );
     expect(resolution).toMatchObject({
       availability: "available",

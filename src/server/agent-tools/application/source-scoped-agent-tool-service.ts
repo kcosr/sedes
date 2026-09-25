@@ -4,7 +4,10 @@ import type {
   BackendAgentToolPolicy,
   TrustedAgentToolSource,
 } from "../adapters/backend-facade.js";
-import { BackendAgentToolRequestError } from "../adapters/backend-facade.js";
+import {
+  agentToolPresentationPermitsAdapter,
+  BackendAgentToolRequestError,
+} from "../adapters/backend-facade.js";
 import {
   assertAgentToolDescriptionIds,
   CanonicalAgentToolRequestError,
@@ -65,7 +68,9 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
     adapter: Parameters<BackendAgentToolFacade["catalogSummaries"]>[1],
   ) {
     const policy = this.readPolicy(source);
-    if (!this.#permitsDiscovery(policy, adapter)) return Object.freeze([]);
+    if (!this.#permitsDiscovery(policy, source, adapter)) {
+      return Object.freeze([]);
+    }
     const enabled = new Set(policy.enabledToolIds);
     return Object.freeze(
       this.canonical
@@ -92,7 +97,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
       throw error;
     }
     const policy = this.readPolicy(source);
-    if (!this.#permitsDiscovery(policy, adapter)) {
+    if (!this.#permitsDiscovery(policy, source, adapter)) {
       throw this.#unavailable();
     }
     const enabled = new Set(policy.enabledToolIds);
@@ -281,12 +286,11 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
     // Deliberately re-read immediately before execution; attach-time policy is
     // presentation state, never invocation authority.
     const policy = this.policies.get(source.scope, source.sourceThreadId);
-    const presentationPermitsAdapter =
-      input.adapter === "pi_sdk"
-        ? policy.presentation.surface === "native"
-        : input.adapter === "http" || input.adapter === "cli"
-          ? policy.presentation.surface === "cli"
-          : false;
+    const presentationPermitsAdapter = agentToolPresentationPermitsAdapter(
+      policy.presentation,
+      source.backendKind,
+      input.adapter,
+    );
     if (
       !policy.enabled ||
       !policy.enabledToolIds.includes(input.request.toolId) ||
@@ -370,12 +374,18 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
 
   #permitsDiscovery(
     policy: BackendAgentToolPolicy,
+    source: TrustedAgentToolSource,
     adapter: Parameters<BackendAgentToolFacade["catalogSummaries"]>[1],
   ): boolean {
+    // HTTP names the CLI's invocation hop only; discovery is labelled `cli`.
     return (
       policy.enabled &&
-      ((adapter === "pi_sdk" && policy.presentation.surface === "native") ||
-        (adapter === "cli" && policy.presentation.surface === "cli"))
+      adapter !== "http" &&
+      agentToolPresentationPermitsAdapter(
+        policy.presentation,
+        source.backendKind,
+        adapter,
+      )
     );
   }
 

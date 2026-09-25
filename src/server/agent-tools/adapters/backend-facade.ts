@@ -29,6 +29,41 @@ export interface TrustedAgentToolSource {
   readonly backendKind: BackendKind;
 }
 
+/**
+ * The adapter behind each backend's Native tool surface: Pi installs SDK
+ * tools in process, while Codex and Claude load the stdio `sedes mcp` server.
+ * Grok has no Native surface. Admission uses this so one backend's native
+ * mechanism can never satisfy another backend's Native presentation.
+ */
+export function nativeAgentToolAdapter(
+  backendKind: BackendKind,
+): Extract<AgentToolAdapter, "pi_sdk" | "mcp"> | undefined {
+  switch (backendKind) {
+    case "pi":
+      return "pi_sdk";
+    case "codex_app_server":
+    case "claude_agent_sdk":
+      return "mcp";
+    case "grok_build":
+      return undefined;
+    default: {
+      const unsupported: never = backendKind;
+      throw new Error(`agent_tool_native_adapter_missing:${unsupported}`);
+    }
+  }
+}
+
+/** Whether the thread's current presentation admits a calling adapter. */
+export function agentToolPresentationPermitsAdapter(
+  presentation: AgentToolPresentation,
+  backendKind: BackendKind,
+  adapter: AgentToolAdapter,
+): boolean {
+  return presentation.surface === "cli"
+    ? adapter === "cli" || adapter === "http"
+    : adapter === nativeAgentToolAdapter(backendKind);
+}
+
 export interface BackendAgentToolPolicy {
   readonly enabled: boolean;
   readonly presentation: AgentToolPresentation;

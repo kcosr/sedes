@@ -540,6 +540,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
               this.#agentToolCli.availability === "managed"
                 ? "execution_environment_sidecar"
                 : "management_http",
+              "cli",
             )
           : undefined;
       let handle: ClaudeConversationHandle | undefined;

@@ -325,13 +325,14 @@ export function createThreadListToolDefinition(
       concurrencyClass: "thread_list_read",
       uncertainExternalOutcome: false,
     },
-    exposure: { adapters: ["pi_sdk", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_list",
         label: "Sedes thread list",
         promptSnippet: "Discover Sedes threads and their activity.",
       },
+      mcp: { name: "sedes_thread_list" },
       http: { invocation: "inline" },
       cli: { command: threadListManifest.id },
     },
@@ -426,13 +427,14 @@ export function createThreadCreateToolDefinition(
       concurrencyClass: "thread_create_write",
       uncertainExternalOutcome: true,
     },
-    exposure: { adapters: ["pi_sdk", "http", "cli"] },
+    exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
     adapters: {
       pi: {
         name: "sedes_thread_create",
         label: "Create Sedes thread",
         promptSnippet: "Create an empty Sedes draft thread.",
       },
+      mcp: { name: "sedes_thread_create" },
       http: { invocation: "inline" },
       cli: { command: threadCreateManifest.id },
     },

@@ -61,6 +61,7 @@ export const threadStatusToolContract = {
     form: "inline",
     adapterWaitCeilingMilliseconds: {
       pi_sdk: 30_000,
+      mcp: 30_000,
       http: 30_000,
       cli: 30_000,
     },
@@ -72,13 +73,14 @@ export const threadStatusToolContract = {
     concurrencyClass: "thread_status_read",
     uncertainExternalOutcome: false,
   },
-  exposure: { adapters: ["pi_sdk", "http", "cli"] },
+  exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
   adapters: {
     pi: {
       name: piThreadStatusToolName,
       label: "Sedes thread status",
       promptSnippet: "Read bounded status for a Sedes thread.",
     },
+    mcp: { name: piThreadStatusToolName },
     http: { invocation: "inline" },
     cli: { command: threadStatusToolId },
   },
