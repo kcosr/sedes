@@ -1,6 +1,9 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { claudeAgentToolCliEnvironment } from "../../src/server/backends/claude/claude-agent-tool-cli-environment.js";
+import {
+  claudeAgentToolCliEnvironment,
+  claudeAgentToolMcpServer,
+} from "../../src/server/backends/claude/claude-agent-tool-cli-environment.js";
 
 const capabilityA = "claude-capability-a-1234567890abcdefghijklmnop";
 const capabilityB = "claude-capability-b-1234567890abcdefghijklmnop";
@@ -181,5 +184,59 @@ describe("Claude agent-tool CLI environment", () => {
         parentEnvironment: {},
       }),
     ).toThrow("claude_agent_tool_cli_mode_invalid");
+  });
+
+  it("resolves Native presentation to the sedes MCP server beside the CLI", () => {
+    const availability = {
+      availability: "available" as const,
+      endpoint: "unix:///run/user/1000/sedes/agent-tools.sock",
+      executableDirectory: "/remote/sedes/sidecar",
+      inheritedPath: "/usr/bin",
+    };
+    expect(
+      claudeAgentToolMcpServer({
+        availability,
+        applicationThreadId: "thread-a",
+        sourceCapability: capabilityA,
+        mode: "individual",
+      }),
+    ).toEqual({
+      command: "/remote/sedes/sidecar/sedes",
+      mode: "individual",
+      endpoint: "unix:///run/user/1000/sedes/agent-tools.sock",
+      sourceCapability: capabilityA,
+    });
+    expect(
+      claudeAgentToolMcpServer({
+        availability: { availability: "unavailable", reason: "cli_unavailable" },
+        applicationThreadId: "thread-a",
+        sourceCapability: capabilityA,
+        mode: "individual",
+      }),
+    ).toBeUndefined();
+    expect(() =>
+      claudeAgentToolMcpServer({
+        availability,
+        applicationThreadId: "thread-a",
+        sourceCapability: "short",
+        mode: "individual",
+      }),
+    ).toThrow("claude_agent_tool_cli_source_capability_invalid");
+    expect(() =>
+      claudeAgentToolMcpServer({
+        availability: { ...availability, endpoint: "http://192.168.1.2:4784" },
+        applicationThreadId: "thread-a",
+        sourceCapability: capabilityA,
+        mode: "progressive",
+      }),
+    ).toThrow("claude_agent_tool_cli_url_invalid");
+    expect(() =>
+      claudeAgentToolMcpServer({
+        availability: { ...availability, executableDirectory: "C:\\Sedes\\bin" },
+        applicationThreadId: "thread-a",
+        sourceCapability: capabilityA,
+        mode: "progressive",
+      }),
+    ).toThrow("claude_agent_tool_mcp_platform_unsupported");
   });
 });

@@ -323,6 +323,7 @@ export class ClaudeRuntimeWorkerHost {
           ? { PATH: request.environment.PATH.split(path.delimiter)[0]! + (executionEnvironment.PATH ? path.delimiter + executionEnvironment.PATH : "") }
           : {}),
       }),
+      ...(request.agentToolMcp ? { agentToolMcp: request.agentToolMcp } : {}),
       onMessage: async (message) => {
         const payload = claudeRuntimeQueryMessageEventSchema.parse({
           queryId,

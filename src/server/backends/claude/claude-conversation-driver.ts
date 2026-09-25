@@ -533,14 +533,18 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
           : undefined;
       const cliPresentation =
         agentToolPolicy?.presentation.surface === "cli";
+      // Native presentation runs `sedes mcp` through the same CLI runtime.
+      const mcpPresentation =
+        agentToolPolicy?.presentation.surface === "native";
       const sourceCapability =
-        cliPresentation && this.#agentToolCli.availability !== "unavailable"
+        (cliPresentation || mcpPresentation) &&
+        this.#agentToolCli.availability !== "unavailable"
           ? this.#agentToolSourceCapabilities.issue(
               agentToolSource,
               this.#agentToolCli.availability === "managed"
                 ? "execution_environment_sidecar"
                 : "management_http",
-              "cli",
+              mcpPresentation ? "mcp" : "cli",
             )
           : undefined;
       let handle: ClaudeConversationHandle | undefined;
@@ -593,9 +597,14 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
             axis,
           ),
         attachmentProvenanceKey: this.#attachmentProvenanceKey,
-        ...(cliPresentation ? { agentToolCli: this.#agentToolCli } : {}),
+        ...(cliPresentation || mcpPresentation
+          ? { agentToolCli: this.#agentToolCli }
+          : {}),
         ...(cliPresentation
           ? { agentToolCliMode: agentToolPolicy!.presentation.mode }
+          : {}),
+        ...(mcpPresentation
+          ? { agentToolMcpMode: agentToolPolicy!.presentation.mode }
           : {}),
         ...(sourceCapability ? { sourceCapability } : {}),
         childEnvironment: this.#childEnvironment,

@@ -28,6 +28,7 @@ import type {
   VerifiedClaudeRuntimeVersion,
 } from "./claude-release-guard.js";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
+import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v1.js";
 
 export interface ClaudeRuntimeProbeInput {
   readonly executablePath: string;
@@ -71,6 +72,8 @@ export interface ClaudeRuntimeSessionOptions {
     response: ClaudePermissionResponseIdentity & { readonly error: unknown },
   ) => void | Promise<void>;
   readonly environment: Readonly<Record<string, string | undefined>>;
+  /** Native Sedes tools; exclusive with CLI variables in `environment`. */
+  readonly agentToolMcp?: ClaudeRuntimeAgentToolMcp;
   readonly onNewerVersion?: (warning: ClaudeRuntimeVersionWarning) => void;
   readonly onVersionAssessment?: (
     assessment: VerifiedClaudeRuntimeVersion,

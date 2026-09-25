@@ -838,10 +838,102 @@ describe("ClaudeConversationBackendDriver", () => {
         backendKind: "claude_agent_sdk",
       },
       "management_http",
+      "cli",
+    );
+    expect(sdk.createQuery.mock.calls[0]![0].options).not.toHaveProperty(
+      "mcpServers",
     );
     await handle.close();
     await handle.close();
     expect(capabilities.issue).toHaveBeenCalledOnce();
+  });
+
+  it("starts the Sedes MCP server instead of CLI context for Native presentation", async () => {
+    const capabilities = createFakeAgentToolSourceCapabilities();
+    const sdk = fakeSdk();
+    const driver = createDriver(sdk, {
+      sourceCapabilities: capabilities.issuer,
+      presentation: { surface: "native", mode: "individual" },
+      agentToolCli: {
+        availability: "available",
+        endpoint: "http://127.0.0.1:4784",
+        executableDirectory: "/opt/sedes/bin",
+        inheritedPath: "/usr/bin",
+      },
+    });
+    const handle = await driver.attach({
+      scope,
+      workspace,
+      binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
+    });
+    const options = sdk.createQuery.mock.calls[0]![0].options;
+    expect(options.mcpServers).toEqual({
+      sedes: {
+        type: "stdio",
+        command: "/opt/sedes/bin/sedes",
+        args: ["mcp", "--mode", "individual"],
+        env: {
+          SEDES_AGENT_TOOL_ENDPOINT: "http://127.0.0.1:4784",
+          SEDES_AGENT_TOOL_SOURCE_CAPABILITY: "htr2_" + "a".repeat(64),
+        },
+      },
+    });
+    expect(Object.keys(options.env ?? {}).filter((name) => name.startsWith("SEDES_"))).toEqual([]);
+    expect(options.env).toMatchObject({ HOME: "/operator" });
+    expect(options.env).not.toHaveProperty("PATH");
+    expect(capabilities.issue).toHaveBeenCalledWith(
+      expect.objectContaining({ backendKind: "claude_agent_sdk" }),
+      "management_http",
+      "mcp",
+    );
+    await handle.close();
+  });
+
+  it("runs the sidecar binary as the Native MCP server on a managed host", async () => {
+    const sdk = fakeSdk();
+    const capabilities = createFakeAgentToolSourceCapabilities();
+    const release = vi.fn();
+    const driver = createDriver(sdk, {
+      sourceCapabilities: capabilities.issuer,
+      presentation: { surface: "native", mode: "progressive" },
+      agentToolCli: {
+        availability: "managed",
+        provider: {
+          acquire: async () => ({
+            availability: "available" as const,
+            endpoint: "unix:///home/remote/.local/state/sedes/agent-tools.sock",
+            executableDirectory: "/remote/sedes/sidecar",
+            inheritedPath: "/remote/usr/bin",
+            closed: new Promise<unknown>(() => undefined),
+            release,
+          }),
+        },
+      },
+    });
+    const handle = await driver.attach({
+      scope,
+      workspace,
+      binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
+    });
+    expect(sdk.createQuery.mock.calls[0]![0].options.mcpServers).toMatchObject({
+      sedes: {
+        command: "/remote/sedes/sidecar/sedes",
+        args: ["mcp", "--mode", "progressive"],
+        env: {
+          SEDES_AGENT_TOOL_ENDPOINT:
+            "unix:///home/remote/.local/state/sedes/agent-tools.sock",
+        },
+      },
+    });
+    expect(capabilities.issue).toHaveBeenCalledWith(
+      expect.any(Object),
+      "execution_environment_sidecar",
+      "mcp",
+    );
+    await handle.close();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("provisions managed CLI authority with disabled access and no selected tools", async () => {
@@ -882,6 +974,7 @@ describe("ClaudeConversationBackendDriver", () => {
     expect(capabilities.issue).toHaveBeenCalledWith(
       expect.any(Object),
       "execution_environment_sidecar",
+      "cli",
     );
     expect(release).not.toHaveBeenCalled();
     await handle.close();
@@ -1457,6 +1550,7 @@ function createDriver(
     readonly onAdoptPermissionMode?: (mode: string) => void;
     readonly modelPolicy?: BackendModelPolicy;
     readonly agentToolCli?: AgentToolCliAvailability;
+    readonly presentation?: ReturnType<BackendAgentToolFacade["readPolicy"]>["presentation"];
     readonly sourceCapabilities?: AgentToolSourceCapabilityIssuer;
     readonly copySkillInvocationsForFork?: ClaudeThreadRepository["copySkillInvocationsForFork"];
     readonly copyTaskLifecycleReceiptsForFork?: ClaudeThreadRepository["copyTaskLifecycleReceiptsForFork"];
@@ -1501,7 +1595,15 @@ function createDriver(
     toolProvenanceKey: new Uint8Array(32).fill(7),
     agentToolSourceCapabilities:
       options.sourceCapabilities ?? agentToolSourceCapabilities,
-    agentTools,
+    agentTools: options.presentation
+      ? {
+          ...agentTools,
+          readPolicy: () => ({
+            ...agentTools.readPolicy(undefined as never),
+            presentation: options.presentation!,
+          }),
+        }
+      : agentTools,
     ...(options.agentToolCli ? { agentToolCli: options.agentToolCli } : {}),
     attachmentProvenanceKey: new Uint8Array(32).fill(0x42),
     childEnvironment: {

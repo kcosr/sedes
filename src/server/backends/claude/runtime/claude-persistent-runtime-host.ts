@@ -4,6 +4,7 @@ import { claudeResultIsUnrelated, claudeResultUserMessageIds } from "../claude-r
 import { createHash, randomUUID } from "node:crypto";
 import type { CanUseTool, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeRuntimeClient, ClaudeRuntimeSession } from "../claude-runtime-client.js";
+import type { ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v1.js";
 import type { PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import { SidecarResourceHandoffPendingError } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import type { SidecarUpgradeBlocker } from "../../../../internal/sidecar-protocol/service-management-v1.js";
@@ -57,6 +58,7 @@ export class ClaudePersistentRuntimeHost {
     maximumEventBytes?: number;
     replayRetention?: { highWaterEntries?: number; highWaterBytes?: number; minimumHistoryIntervalMs?: number };
     validateQueryEnvironment?: (environment: Readonly<Record<string, string | undefined>>) => void;
+    validateAgentToolMcp?: (agentToolMcp: ClaudeRuntimeAgentToolMcp) => void;
   }) {}
 
   detach(epoch?: number): void {
@@ -329,6 +331,10 @@ export class ClaudePersistentRuntimeHost {
     this.input.services.assertAdmission(command.controllerEpoch);
     if (this.#sessions.size >= 32) throw new Error("claude_persistent_session_capacity_exceeded");
     this.input.validateQueryEnvironment?.(request.environment);
+    if (request.agentToolMcp) {
+      if (!this.input.validateAgentToolMcp) throw new Error("claude_persistent_agent_tool_mcp_denied");
+      this.input.validateAgentToolMcp(request.agentToolMcp);
+    }
     const config = this.input.configuration;
     let created!: Session;
     const runtime = this.input.client.createSession({
@@ -725,5 +731,6 @@ function queryAuthorityFingerprint(request: Extract<ClaudePersistentCommand, { a
     cwd: request.cwd, enableCanUseTool: request.enableCanUseTool,
     allowDangerouslySkipPermissions: request.allowDangerouslySkipPermissions ?? false,
     environment: request.environment,
+    agentToolMcp: request.agentToolMcp ?? null,
   })).digest("hex");
 }

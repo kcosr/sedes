@@ -4,6 +4,7 @@ import type { ExecutionEnvironmentChannelProvider } from "../../../execution/env
 import type { ManagedWorkerArtifactRegistration } from "../../../managed-workers/artifact.js";
 import { SidecarResourceHandoffPendingError, type PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import type { ClaudeRuntimeClient } from "../claude-runtime-client.js";
+import type { ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v1.js";
 import { ClaudeManagedRuntimeOwner } from "../claude-managed-runtime-owner.js";
 import { ClaudePersistentRuntimeHost } from "./claude-persistent-runtime-host.js";
 import { claudePersistentConfigurationSchema, type ClaudePersistentConfiguration } from "./claude-persistent-runtime-wire.js";
@@ -17,6 +18,7 @@ export class ClaudePersistentRuntimeRegistry {
     services: PersistentSidecarServiceRegistry;
     artifact: () => Promise<ManagedWorkerArtifactRegistration>;
     validateQueryEnvironment?: (environment: Readonly<Record<string, string | undefined>>) => void;
+    validateAgentToolMcp?: (agentToolMcp: ClaudeRuntimeAgentToolMcp) => void;
     createRuntime?: (configuration: ClaudePersistentConfiguration) => ClaudeRuntimeClient & { close(): Promise<void> };
   }) {}
 
@@ -43,7 +45,7 @@ export class ClaudePersistentRuntimeRegistry {
       initializationTimeoutMs: configuration.initializationTimeoutMs,
       startupEnvironmentVariables: configuration.startupEnvironmentVariables,
     });
-    const host = new ClaudePersistentRuntimeHost({ configuration, client, close: () => client.close(), services: this.input.services, ...(this.input.validateQueryEnvironment ? { validateQueryEnvironment: this.input.validateQueryEnvironment } : {}) });
+    const host = new ClaudePersistentRuntimeHost({ configuration, client, close: () => client.close(), services: this.input.services, ...(this.input.validateQueryEnvironment ? { validateQueryEnvironment: this.input.validateQueryEnvironment } : {}), ...(this.input.validateAgentToolMcp ? { validateAgentToolMcp: this.input.validateAgentToolMcp } : {}) });
     const unregister = this.input.services.register({
       resourceId: host.runtimeId, kind: "provider", snapshot: () => host.snapshot(),
       onDetach: () => host.detach(),

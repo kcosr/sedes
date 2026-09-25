@@ -19,7 +19,9 @@ const serviceConfiguration = { environmentRevision: 1, operationsRevision: 1 };
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
-async function fixture() {
+async function fixture(options: {
+  readonly validateAgentToolMcp?: (agentToolMcp: NonNullable<ClaudeRuntimeSessionOptions["agentToolMcp"]>) => void;
+} = {}) {
   const native = createFakePersistentClaudeRuntime();
   const archive = vi.fn(async (_record: unknown) => {});
   const services = new PersistentSidecarServiceRegistry({
@@ -32,6 +34,7 @@ async function fixture() {
     environmentChannel: {} as ExecutionEnvironmentChannelProvider, environment: {}, services,
     artifact: async () => { throw new Error("test_provider_must_not_launch_artifact"); },
     createRuntime,
+    ...(options.validateAgentToolMcp ? { validateAgentToolMcp: options.validateAgentToolMcp } : {}),
   });
   let current: SidecarRuntimeLease | undefined;
   const sidecarRuntime: SidecarRuntimeProvider = {
@@ -105,6 +108,58 @@ function acceptedInput(sessionId: string, operation: { operationId: string; cont
 }
 
 describe("Claude persistent runtime through framed replacement carriers", () => {
+  const agentToolMcp: NonNullable<ClaudeRuntimeSessionOptions["agentToolMcp"]> = {
+    command: "/remote/sedes/sidecar/sedes",
+    mode: "individual",
+    endpoint: "unix:///run/user/1000/sedes/agent-tools.sock",
+    sourceCapability: "m".repeat(48),
+  };
+
+  it("admits a Native MCP server only through the sidecar's own validator", async () => {
+    const open = (
+      attached: Awaited<ReturnType<Awaited<ReturnType<typeof fixture>>["attach"]>>,
+      runtimeId: string,
+      request: Record<string, unknown>,
+    ) => attached.connection.execute({ action: "open", runtimeId,
+      controllerEpoch: attached.lease.controllerEpoch, replay: "full", request } as never);
+    const validate = vi.fn((candidate: NonNullable<ClaudeRuntimeSessionOptions["agentToolMcp"]>) => {
+      if (candidate.command !== agentToolMcp.command) throw new Error("claude_persistent_agent_tool_mcp_denied");
+    });
+    const f = await fixture({ validateAgentToolMcp: validate });
+    const attached = await f.attach();
+    const sessionId = randomUUID();
+    await f.client().createSession(sessionOptions(sessionId, { agentToolMcp })).start();
+    expect(validate).toHaveBeenCalledWith(agentToolMcp);
+    expect(f.runtime.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentToolMcp, environment: {} }),
+    );
+    const runtimeId = f.services.status().resources[0]!.resourceId;
+    const request = { queryId: sessionId, sessionId, cwd: "/workspace", launch: "resume",
+      enableCanUseTool: false, environment: {}, agentToolMcp };
+    // A reattach must present the same MCP authority as the retained query.
+    await expect(open(attached, runtimeId, {
+      ...request, agentToolMcp: { ...agentToolMcp, mode: "progressive" },
+    })).rejects.toThrow();
+    await expect(open(attached, runtimeId, { ...request, agentToolMcp: undefined }))
+      .rejects.toThrow();
+    const other = randomUUID();
+    await expect(open(attached, runtimeId, {
+      ...request, queryId: other, sessionId: other, launch: "new",
+      agentToolMcp: { ...agentToolMcp, command: "/tmp/other/sedes" },
+    })).rejects.toThrow();
+    expect(f.runtime.createSession).toHaveBeenCalledTimes(1);
+
+    const unvalidated = await fixture();
+    const unvalidatedCarrier = await unvalidated.attach();
+    await unvalidated.client().createSession(sessionOptions(randomUUID())).start();
+    const unvalidatedRuntime = unvalidated.services.status().resources[0]!.resourceId;
+    const denied = randomUUID();
+    await expect(open(unvalidatedCarrier, unvalidatedRuntime, {
+      ...request, queryId: denied, sessionId: denied, launch: "new",
+    })).rejects.toThrow();
+    expect(unvalidated.runtime.createSession).toHaveBeenCalledTimes(1);
+  });
+
   it("reattaches after main restart with pending startup edits and applies them only after explicit restart", async () => {
     const f = await fixture();
     const applied: EnvironmentVariableOverrides = { PATH: { kind: "literal", value: "/applied/bin" } };
