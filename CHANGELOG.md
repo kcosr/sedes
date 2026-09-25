@@ -6,7 +6,7 @@
 
 - Sidecars must use runtime protocol 13, which serves `sedes mcp` and accepts
   Claude's Native agent-tool entry. Upgrade existing sidecars explicitly
-  before reconnecting with this server version.
+  before reconnecting with this server version. (#10)
 
 - Claude history paging requires sidecar runtime protocol 12. Upgrade existing
   sidecars explicitly before reconnecting with this server version. (#9)
@@ -24,7 +24,7 @@
   declared effects. Sedes never edits Codex or Claude configuration, the
   provider's own permission controls still apply, and new threads keep the
   CLI surface. Thread references are now bound to the CLI or MCP
-  presentation; issued CLI references keep working.
+  presentation; issued CLI references keep working. (#10)
 
 - Add a **Usage** page (sidebar **More** → **Usage**) with tokens and
   estimated cost over time for every thread, filterable and groupable by
