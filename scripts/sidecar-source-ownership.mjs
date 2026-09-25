@@ -3,6 +3,8 @@ import path from "node:path";
 const REQUIRED_SHARED_SOURCES = Object.freeze([
   "src/cli/sedes-dynamic-tool-command.ts",
   "src/cli/sedes-cli.ts",
+  "src/cli/sedes-mcp.ts",
+  "src/cli/sedes-mcp-server.ts",
   "src/cli/sedes-tool-local-client.ts",
   "src/server/composer-attachments/execution-attachment-staging-engine.ts",
   "src/server/workspace-files/workspace-files-engine.ts",
@@ -20,6 +22,8 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/cli/sedes-agent-tool-endpoint.ts",
   "src/cli/sedes-cli.ts",
   "src/cli/sedes-dynamic-tool-command.ts",
+  "src/cli/sedes-mcp.ts",
+  "src/cli/sedes-mcp-server.ts",
   "src/cli/sedes-tool-api-client.ts",
   "src/cli/sedes-tool-client.ts",
   "src/cli/sedes-tool-local-client.ts",
@@ -172,6 +176,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
 
 const ALLOWED_SOURCE_PREFIXES = Object.freeze([
   "src/internal/agent-tool-cli-protocol/",
+  "src/internal/agent-tool-mcp/",
   "src/internal/sidecar-protocol/",
   "node_modules/ajv/",
   "node_modules/diff/",
