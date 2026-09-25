@@ -182,10 +182,13 @@ Presentation has two independent dimensions:
 The normalized policy stores the exact pair as
 `presentation: { surface, mode }`. Capability metadata groups supported modes
 under each surface so the UI can show separate selectors, hide a selector with
-only one choice, and never synthesize an unsupported pair. New Pi policies
-default to Native/Progressive; new Codex, Claude, and Grok policies default to
-CLI/Progressive, and Codex and Claude list CLI before Native so Saved Agent
-defaults stay CLI.
+only one choice, and never synthesize an unsupported pair. The first listed
+surface and its first mode are the default: new Pi policies default to
+Native/Progressive, new Codex and Claude policies to Native/Individual through
+`sedes mcp`, and new Grok policies to CLI/Progressive. Saved Agents without an
+explicit policy use the same default, and the thread-creation trigger
+(migration 115) stores it for new threads. Existing thread policies keep
+their stored presentation.
 
 | Backend/environment      | Native modes                                             | CLI modes                                                       |
 | ------------------------ | -------------------------------------------------------- | --------------------------------------------------------------- |

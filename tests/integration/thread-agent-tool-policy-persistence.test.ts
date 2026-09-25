@@ -89,7 +89,10 @@ const eligibility: ThreadAgentToolEligibilityPolicy = {
           { surface: "native", modes: ["progressive", "individual"] },
           { surface: "cli", modes: ["progressive", "individual"] },
         ]
-      : [{ surface: "cli", modes: ["progressive", "individual"] }],
+      : [
+          { surface: "native", modes: ["individual", "progressive"] },
+          { surface: "cli", modes: ["progressive", "individual"] },
+        ],
 };
 
 function fixture(): {
@@ -228,11 +231,13 @@ describe("thread agent tool policy persistence", () => {
           now: 350,
         },
       );
+      // Existing threads keep their policy; new Codex threads default to
+      // Native/Individual through the thread's `sedes` MCP server.
       expect(
         repository.get(value.scope, createdCodexAfterMigration.id),
       ).toMatchObject({
         enabled: false,
-        presentation: { surface: "cli", mode: "progressive" },
+        presentation: { surface: "native", mode: "individual" },
         accessBoundary: "environment",
         revision: 0,
         enabledToolIds: [],
@@ -418,8 +423,8 @@ describe("thread agent tool policy persistence", () => {
         presentation: { surface: "cli", mode: "progressive" },
         accessBoundary: "environment",
         presentationOptions: [
+          { surface: "native", modes: ["individual", "progressive"] },
           { surface: "cli", modes: ["progressive", "individual"] },
-          { surface: "native", modes: ["progressive", "individual"] },
         ],
       });
     } finally {
@@ -430,10 +435,14 @@ describe("thread agent tool policy persistence", () => {
   it("denies wrong-scope, unknown-tool, duplicate, and unsupported native updates", () => {
     const value = fixture();
     try {
-      const repository = new ThreadAgentToolPolicyRepository(
-        value.database,
-        eligibility,
-      );
+      // A CLI-only disposition, as Grok has, for the non-Pi thread.
+      const repository = new ThreadAgentToolPolicyRepository(value.database, {
+        ...eligibility,
+        presentationOptions: (backendKind, environmentKind) =>
+          backendKind === "pi"
+            ? eligibility.presentationOptions(backendKind, environmentKind)
+            : [{ surface: "cli", modes: ["progressive", "individual"] }],
+      });
       const wrongScope = {
         ...value.scope,
         principalId: "019196f7-a0a8-7bc4-a89b-8cf013978499",

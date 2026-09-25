@@ -18,14 +18,14 @@ describe("thread agent tool backend eligibility", () => {
   });
 
   it.each(["codex_app_server", "claude_agent_sdk"] as const)(
-    "offers %s CLI first, then MCP-backed Native presentation",
+    "defaults %s to MCP-backed Native Individual, with both CLI modes",
     (backendKind) => {
       for (const environmentKind of ["local", "outbound", "ssh"] as const) {
         expect(
           eligibility.presentationOptions(backendKind, environmentKind),
         ).toEqual([
+          { surface: "native", modes: ["individual", "progressive"] },
           { surface: "cli", modes: ["progressive", "individual"] },
-          { surface: "native", modes: ["progressive", "individual"] },
         ]);
       }
     },

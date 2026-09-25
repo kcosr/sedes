@@ -140,7 +140,9 @@ Claude support both modes on both surfaces. Their Native tools come from a
 Sedes MCP server that Sedes adds to the thread itself, so you do not configure
 anything in Codex or Claude; the tools appear as `mcp__sedes__…` and the
 provider's own permission settings apply to them. New Codex and Claude threads
-start on the CLI surface. Grok supports both modes on its single CLI surface,
+start on Native tools with Individual mode; threads created before this change
+keep their CLI setting until you change it. Grok supports both modes on its
+single CLI surface,
 so its surface selector is hidden. An unavailable combination is omitted
 rather than silently replaced with another surface or mode.
 
