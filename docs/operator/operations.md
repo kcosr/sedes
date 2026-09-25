@@ -942,8 +942,11 @@ that boundary may have failed.
 ### Agent-tool caller boundary
 
 An eligible provider process receives an opaque `htr2_` bearer reference for
-its exact Sedes source thread and HTTP or sidecar ingress. Callers cannot
-select that association by supplying a thread ID. The encrypted reference
+its exact Sedes source thread, HTTP or sidecar ingress, and presentation: the
+generated CLI or, for Native Codex and Claude tools, the `sedes mcp` server the
+provider starts. Callers cannot select that association by supplying a thread
+ID. The MCP reference reaches only the provider's environment and the server's
+own process environment, never process arguments. The encrypted reference
 survives provider/Sedes runtime replacement under the same installation key;
 it is deliberately stable and is not an active-turn lease. Sedes re-resolves
 the current thread, policy, environment, and backend on every request. A valid

@@ -194,10 +194,14 @@ and unsettled results block automatic replacement. Sedes tools that require
 main-server authority cannot execute while main is absent. See
 [Persistent remote services](../operations.md#persistent-remote-services).
 
-Files, attachment staging, directory browsing, and agent-tool CLI modes require
-their own admission in each topology. Managed provider terminals remain unsupported. Claude has no
-Native agent-tool surface, and missing CLI admission does not fall back to
-another presentation.
+Files, attachment staging, directory browsing, and agent tools require their
+own admission in each topology. Managed provider terminals remain unsupported.
+Agent tools use either the CLI or the Native surface, where each query loads a
+per-query `sedes` MCP server beside the MCP servers from its setting sources
+and Claude's permission mode applies to its `mcp__sedes__*` tools. On SSH and
+outbound hosts, Native tools run the sidecar's own `sedes` binary and require
+sidecar runtime protocol 13. Missing admission does not fall back to another
+presentation.
 
 ## Permissions and security
 
@@ -295,8 +299,7 @@ Claude does not support:
 - forks from attachment-ended structured-output turns;
 - guaranteed file-history or attachment fidelity across a native fork;
 - provider-output image artifacts;
-- the shared Pi `set_tool_access` action;
-- native agent-tool presentation; or
+- the shared Pi `set_tool_access` action; or
 - managed terminals.
 
 Unavailable operations are omitted from capabilities and fail closed at the

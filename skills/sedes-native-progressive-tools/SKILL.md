@@ -8,7 +8,9 @@ description: >-
 
 # Sedes Native Progressive Tools
 
-Use only the progressive native Sedes gateways.
+Use only the progressive native Sedes gateways. When they come from the Sedes
+MCP server, the client prefixes each name with its server namespace, for
+example `mcp__sedes__sedes_catalog`.
 
 ## Confirm the presentation
 

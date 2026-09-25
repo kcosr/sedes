@@ -8,8 +8,10 @@ caller classes:
 - a named principal-owned **Tool client** uses a durable, revocable credential
   with its own exact tools, environment allowlist, and optional defaults.
 
-It is an application-management surface—not provider tools, MCP management,
-workspace shell access, or a general asynchronous job system.
+It is an application-management surface—not provider tools, general MCP
+server management, workspace shell access, or a general asynchronous job
+system. Sedes serves only its own tools over MCP, to Codex and Claude threads
+that use the Native surface.
 
 For user workflows, see [Provider features](../user/provider-features.md). For
 operator trust-boundary requirements, see
@@ -25,6 +27,7 @@ backends must also follow the
 - [Policy and caller ownership](#policy-ownership-and-persistence)
 - [Environment authority](#access-boundary)
 - [Catalog and backend presentations](#catalog-and-effects)
+- [Native MCP presentation](#native-mcp-presentation-codex-and-claude)
 - [CLI transport and invocation lifecycle](#cli-transports-and-admission)
 - [Trust boundary and verification](#http-adapter-and-trust-boundary)
 - [Limits](#limits)
@@ -51,7 +54,8 @@ The agent learns about added tools on its next discovery request, not through
 an automatic message.
 
 Native-tool policy and all surface/mode changes require an idle thread and
-runtime retirement. Native presentation retains its per-turn catalog.
+runtime retirement. Native presentation keeps its tool list for the Pi turn or
+the Codex or Claude provider session; every invocation still rechecks policy.
 
 ## Principal Tool clients
 
@@ -167,8 +171,10 @@ discover the live catalog because enabled IDs and versions are thread-specific.
 
 Presentation has two independent dimensions:
 
-- **Surface** selects the provider-facing mechanism: `native` SDK tools or the
-  generated `cli` in an admitted shell environment.
+- **Surface** selects the provider-facing mechanism: `native` tools or the
+  generated `cli` in an admitted shell environment. Native tools are Pi SDK
+  tools in the Sedes process for Pi, and the stdio `sedes mcp` server for
+  Codex and Claude.
 - **Mode** selects disclosure: `progressive` exposes compact discovery and
   generic invocation, while `individual` exposes every granted operation as a
   named tool or command with typed parameters.
@@ -177,21 +183,25 @@ The normalized policy stores the exact pair as
 `presentation: { surface, mode }`. Capability metadata groups supported modes
 under each surface so the UI can show separate selectors, hide a selector with
 only one choice, and never synthesize an unsupported pair. New Pi policies
-default to Native/Progressive; new CLI-only policies default to
-CLI/Progressive.
+default to Native/Progressive; new Codex, Claude, and Grok policies default to
+CLI/Progressive, and Codex and Claude list CLI before Native so Saved Agent
+defaults stay CLI.
 
-| Backend/environment   | Native modes            | CLI modes                                                       |
-| --------------------- | ----------------------- | --------------------------------------------------------------- |
-| Local Pi              | Progressive, Individual | Progressive, Individual when Bash and CLI admission permit them |
-| Pi on SSH workspace   | Progressive, Individual | None                                                            |
-| Local Codex           | None                    | Progressive, Individual on eligible Sedes-created threads       |
-| Codex over SSH UDS    | None                    | Progressive, Individual with sidecar capability and admission   |
-| Local Claude          | None                    | Progressive, Individual on eligible queries                     |
-| Claude over SSH/outbound | None                    | Progressive, Individual with sidecar capability and admission   |
-| Local Grok            | None                    | Progressive, Individual on eligible Sedes-created sessions      |
-| In-memory conformance | None                    | Intentionally unavailable outside contract tests                |
+| Backend/environment      | Native modes                                             | CLI modes                                                       |
+| ------------------------ | -------------------------------------------------------- | --------------------------------------------------------------- |
+| Local Pi                 | Progressive, Individual                                  | Progressive, Individual when Bash and CLI admission permit them |
+| Pi on SSH workspace      | Progressive, Individual                                  | None                                                            |
+| Local Codex              | Progressive, Individual through MCP on eligible threads  | Progressive, Individual on eligible Sedes-created threads       |
+| Codex over SSH UDS       | Progressive, Individual through MCP with sidecar support | Progressive, Individual with sidecar capability and admission   |
+| Local Claude             | Progressive, Individual through MCP on eligible queries  | Progressive, Individual on eligible queries                     |
+| Claude over SSH/outbound | Progressive, Individual through MCP with sidecar support | Progressive, Individual with sidecar capability and admission   |
+| Local Grok               | None                                                     | Progressive, Individual on eligible Sedes-created sessions      |
+| In-memory conformance    | None                                                     | Intentionally unavailable outside contract tests                |
 
-Grok SSH targets and Pi remote CLI presentation are intentionally unsupported.
+Codex and Claude Native presentation uses exactly the eligibility and runtime
+admission of their CLI presentation, and is unavailable on Windows execution
+hosts. Grok has no Native surface. Grok SSH targets and Pi remote CLI
+presentation are intentionally unsupported.
 The shared CLI implements both CLI modes for every supported row: local Pi,
 Codex, Claude, and Grok, plus the admitted Codex and Claude remote relays. It does not
 add a CLI path to the intentionally unsupported Pi-SSH or Grok-SSH topologies.
@@ -219,6 +229,93 @@ on the Pi SDK session. The list is fixed for the complete turn, including model
 continuations. Installation failure stops the turn instead of retaining stale
 definitions. Pi `read_only`, `ask`, and `full` policy continue to govern native
 tool use; `ask` routes protected operations through Sedes approval.
+
+### Native MCP presentation (Codex and Claude)
+
+Codex and Claude load Native Sedes tools from a stdio MCP server that the
+provider starts for the thread:
+
+```text
+sedes mcp --mode progressive|individual
+```
+
+It runs from the same `sedes` executable as the CLI: the built provider bin
+locally, or the sidecar binary on SSH and outbound hosts. It reads
+`SEDES_AGENT_TOOL_ENDPOINT` and a thread reference issued for MCP, reaches
+Sedes over the same loopback HTTP routes or sidecar relay as the CLI, and exits
+when its stdin closes. Principal Tool client tokens are rejected.
+
+The server implements only the tools subset of MCP: `initialize` with version
+negotiation (2025-11-25, 2025-06-18, 2025-03-26, and 2024-11-05, omitting
+fields that an older negotiated version does not define), `ping`,
+`tools/list`, `tools/call`, and `notifications/cancelled`. It advertises no
+list-change notifications, pagination, resources, prompts, logging, progress,
+or client features. Stdout carries only JSON-RPC; diagnostics are fixed stderr
+messages that never echo credentials. The protocol is implemented directly
+rather than through the MCP SDK so the hash-pinned sidecar bundle needs no new
+dependencies; the SDK client drives its conformance tests.
+
+- **Individual** lists one tool per granted operation with the same name as
+  its Pi native tool: `sedes_` plus the tool ID with dots as underscores.
+  Clients add their own namespace, so Claude and Codex show
+  `mcp__sedes__sedes_thread_status`. The registry rejects an MCP name that
+  does not follow this rule. Each tool carries its canonical input and output
+  schemas without the explicit `$schema` dialect, a `title`, `_meta` entries
+  `sedes/toolId` and `sedes/schemaVersion`, and hints derived only from its
+  declared effects: side-effect-free reads are `readOnlyHint`; destructive
+  application effects set `destructiveHint`; model execution or durable
+  external effects set `openWorldHint`. Successful results return
+  `structuredContent` plus the same JSON as text.
+- **Progressive** lists the `sedes_catalog`, `sedes_read`, and `sedes_act`
+  gateways with the same contract as Pi's, except that the catalog gateway's
+  input schema is an object with an `action` field because MCP requires
+  object input schemas. A lane appears only when the current catalog has an
+  operation for it, and an empty catalog lists no tools. Summaries omit the
+  CLI command path.
+
+Every list and call reads the live server catalog, and the server derives
+the calling adapter from the reference, so admission checks the thread's
+current Native policy on every request. The tool list is otherwise fixed for
+the provider session because Native policy changes are idle-only and retire
+the runtime. Input that fails its canonical schema, policy denials, failed
+invocations, and transport failures return `isError` tool results carrying
+`{ "error": { "code", "message", "retryable" } }`, so the model can correct
+itself; an unknown tool name or malformed request is a JSON-RPC error.
+`notifications/cancelled` aborts the exact invocation, including a pending
+access approval, and suppresses its response.
+
+The provider's own permission controls govern each MCP call before Sedes
+applies the thread's access boundary. Codex's default approval mode runs
+read-only tools without asking and asks before destructive or open-world ones;
+Claude's permission mode applies to `mcp__sedes__*` tools like any other MCP
+tool.
+
+Injection is per thread and never changes operator configuration:
+
+- **Codex** receives `config["mcp_servers.sedes"]` on `thread/start`,
+  `thread/resume`, and `thread/fork`, with the command, `--mode`, an
+  environment containing only the endpoint and reference, a 30-second startup
+  timeout, and a 24-hour call timeout so Codex's 60-second default cannot
+  cancel a pending access approval. The shell policy still strips every Sedes
+  variable. The server lives while Codex keeps the thread loaded; a resume
+  that carries config rebuilds an idle, unsubscribed loaded thread with the
+  current entry. Runtime request fingerprints record only the entry's
+  variable names.
+- **Claude** receives `mcpServers.sedes` on the query beside the servers its
+  setting sources load. The Agent SDK passes MCP servers to the CLI as a
+  `--mcp-config` argument that other local users can read, so the entry names
+  the reference as `${SEDES_AGENT_TOOL_SOURCE_CAPABILITY}` and the query
+  environment carries the value, as it does for CLI presentation. The worker
+  protocol carries the entry as a closed `agentToolMcp` field that is
+  exclusive with the CLI query environment. On SSH and outbound hosts the
+  sidecar admits it only for its own `sedes` binary and live ingress, and a
+  reattach must present the same entry.
+
+On SSH and outbound hosts the server is the sidecar's own `sedes` binary,
+which sidecar runtime protocol 13 guarantees can serve it. Windows execution
+hosts fail closed because their process launchers cannot run the generated
+script directly. A missing runtime or admission leaves the
+thread without Sedes tools; it never falls back to the CLI.
 
 ### Progressive CLI
 
@@ -367,6 +464,9 @@ the catalog:
 - [Progressive native tools](../../skills/sedes-native-progressive-tools/SKILL.md)
 - [Individual native tools](../../skills/sedes-native-individual-tools/SKILL.md)
 
+The native skills also cover Codex and Claude Native presentation, where the
+MCP client prefixes the same tool names with its server namespace.
+
 `npm run dev` does not build the provider CLI. Run
 `env -u NODE_ENV npm run build` in a fresh source checkout before expecting CLI
 presentation.
@@ -418,7 +518,8 @@ Eligible CLI runtimes receive their environment even when the master flag is
 off or no tool IDs are selected. This applies to local Pi, local and Sidecar
 remote Codex/Claude, and local Claude/Grok. Unsupported topologies still fail closed.
 Enabling access during a turn therefore needs no new credential or environment
-injection; the next request uses live server policy.
+injection; the next request uses live server policy. A Native Codex or Claude
+thread likewise starts `sedes mcp` while access is off; it lists no tools.
 
 A thread reference accepts an HTTP(S) management origin or one canonical
 `unix:///...` sidecar address. A principal-client token accepts HTTP(S) only;
@@ -426,11 +527,20 @@ the CLI rejects it with a Unix endpoint before opening a transport. There is no
 fallback and no CLI option for tenant, principal, source thread, client, or
 credential-generation override. Sedes deterministically encrypts a thread
 association with a domain-separated key derived from the installation key and
-authenticates the server-derived tenant, principal, and ingress transport. It
-stores no token alias. Reissuing a reference for the same thread and ingress
-returns the same bytes, including after a restart. A management-HTTP reference
-is invalid on the sidecar relay and a sidecar reference is invalid on
-management HTTP.
+authenticates the server-derived tenant, principal, ingress transport, and
+presentation. It stores no token alias. Reissuing a reference for the same
+thread, ingress, and presentation returns the same bytes, including after a
+restart. A management-HTTP reference is invalid on the sidecar relay and a
+sidecar reference is invalid on management HTTP.
+
+The presentation binding separates the CLI from `sedes mcp`: the two
+references for one thread and ingress differ, and the server derives the
+calling adapter (`cli` for discovery and `http` for invocation over HTTP,
+`cli` over the relay, or `mcp`) from the reference rather than from the
+request. Both presentations therefore share the same routes and
+`agent_tools_cli@3` frames without a wire discriminator, and admission rejects
+a reference whose presentation does not match the thread's current surface.
+CLI references keep the bytes issued before MCP presentation existed.
 
 The reference survives Sedes process and provider-runtime replacement. Each
 request still resolves the thread's current workspace, environment, backend,
@@ -555,7 +665,9 @@ thread-policy and Tool-client revision conflicts, token rotation/disable/
 revocation, wrong-principal and wrong-environment denial, default resolution,
 cross-environment approval revalidation, application-decision cancellation,
 and automation fail-closed behavior. Adapter tests must exercise both modes on
-native Pi, both CLI modes for local Codex, Claude, and Grok, remote
+native Pi, both CLI modes for local Codex, Claude, and Grok, both Native MCP
+modes for Codex and Claude, the `sedes mcp` protocol subset against the MCP
+SDK client, presentation-bound references, remote
 Codex/Claude sidecar ingress, transport credential separation, cancellation,
 timeout and outcome-unknown semantics,
 and every unsupported presentation. Mutating operations must retain their
@@ -564,13 +676,14 @@ retry. Live provider and skill gates remain separately opt-in.
 
 ## Limits
 
-- No MCP adapter, per-tool executables, automatic write retry, or generic
-  asynchronous invocation lifecycle.
+- No Sedes-hosted HTTP MCP endpoint, MCP for principal Tool clients, MCP
+  resources, prompts, or list-change notifications, per-tool executables,
+  automatic write retry, or generic asynchronous invocation lifecycle.
 - Tool clients do not authenticate the management UI/API, use Unix/sidecar
   ingress, impersonate a thread, receive interactive access approvals, or
   manage other credentials through agent tools.
-- No native Codex/Claude/Grok presentation, no Grok SSH target, no Pi remote
-  CLI, and no surface or transport fallback.
+- No Native Grok presentation, no Native MCP on Windows execution hosts, no
+  Grok SSH target, no Pi remote CLI, and no surface or transport fallback.
 - Missing CLI or sidecar admission disables agent tools for that presentation;
   it does not disable ordinary provider conversation capabilities.
 - Native policy and surface/mode changes wait for idle. For a bound thread, Sedes proves the complete
