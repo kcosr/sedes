@@ -51,6 +51,7 @@ function sedesMcpServers(mcp: ClaudeRuntimeAgentToolMcp) {
     },
   };
 }
+
 const CLAUDE_RESET_PRODUCING_TOOLS = ["EnterPlanMode", "ExitPlanMode"] as const;
 const CLAUDE_RESET_PRODUCING_TOOL_SET = new Set<string>(
   CLAUDE_RESET_PRODUCING_TOOLS,

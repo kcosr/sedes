@@ -7,14 +7,15 @@ import { AgentToolRegistry } from "../../src/server/agent-tools/registry/agent-t
 const definitions = createWorkpadToolDefinitions({} as WorkpadAgentToolService);
 
 describe("Workpad tool surfaces", () => {
-  it("uses one bounded canonical contract for Pi native and admitted Pi/Codex/Claude/Grok CLI presentations", () => {
+  it("uses one bounded canonical contract for Pi native, Codex/Claude MCP, and admitted Pi/Codex/Claude/Grok CLI presentations", () => {
     const registry = new AgentToolRegistry();
     for (const definition of definitions) {
       registry.register(definition);
-      expect(definition.exposure.adapters).toEqual(["pi_sdk", "http", "cli"]);
+      expect(definition.exposure.adapters).toEqual(["pi_sdk", "mcp", "http", "cli"]);
       expect(definition.callerEligibility).toEqual(["thread_agent", "principal_client"]);
       expect(definition.adapters.cli?.command).toBe(definition.id);
       expect(definition.adapters.pi?.name).toBe(definition.id.replace(".", "_" ).replace(/^/, "sedes_"));
+      expect(definition.adapters.mcp?.name).toBe(definition.adapters.pi?.name);
       expect(definition.execution.uncertainExternalOutcome).toBe(definition.effects.application === "write");
     }
     expect(registry.list().map(({ id }) => id)).toEqual(["workpad.list", "workpad.get", "workpad.revisions", "workpad.create", "workpad.update"]);
