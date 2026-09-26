@@ -4363,6 +4363,7 @@ async function main(): Promise<void> {
     attachmentDelivery,
   });
   let observeAutomationQueue: AutomationQueueRunObserver | undefined;
+  let queueThreadSnapshots: ThreadSnapshotPublisher | undefined;
   queue = new QueuedInputDispatcher({
     repository: queueRepository,
     gateway: queueGateway,
@@ -4382,6 +4383,13 @@ async function main(): Promise<void> {
         void publishApplicationThread
           ?.publish(eventScope, applicationThreadId)
           .catch(() => undefined);
+        // As in production, a queue transition (for example, a pending steer
+        // resolving) refreshes the thread's delivery capabilities.
+        try {
+          queueThreadSnapshots?.schedule(eventScope, applicationThreadId);
+        } catch {
+          // Queue state is durable and will be present in the next snapshot.
+        }
       },
     },
     retryPolicy: {
@@ -4598,6 +4606,7 @@ async function main(): Promise<void> {
     (eventScope, applicationThreadId) =>
       publishApplicationThread!.publish(eventScope, applicationThreadId),
   );
+  queueThreadSnapshots = snapshots;
   const inventory = new InventoryService(
     inventoryRepository,
     {

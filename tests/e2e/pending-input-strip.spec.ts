@@ -1249,7 +1249,6 @@ test("Codex sends Steers serially and preserves Queue-to-Steer presentation unti
     throw new Error("e2e_codex_queue_steer_operation_id_missing");
   }
 
-  await selectDeliveryMode(page, "Steer");
   const submitSteer = async (text: string): Promise<string> => {
     await fillAndPersistDraft(page, text, "Message Codex");
     const responsePromise = page.waitForResponse(
@@ -1297,7 +1296,7 @@ test("Codex sends Steers serially and preserves Queue-to-Steer presentation unti
     "Message Codex",
   );
   await expect(
-    page.getByRole("button", { name: "Steer", exact: true }),
+    page.getByTestId("composer").locator(".delivery-split-submit"),
   ).toBeDisabled();
   await capture(page, testInfo, "pending-steer-accepted-desktop.png");
 
@@ -1332,6 +1331,7 @@ test("Codex sends Steers serially and preserves Queue-to-Steer presentation unti
   });
 
   // Direct Steers follow one at a time, each pending until it materializes.
+  await selectDeliveryMode(page, "Steer");
   for (const text of [
     "First direct steer stays independently visible",
     "Second direct steer follows the first",
