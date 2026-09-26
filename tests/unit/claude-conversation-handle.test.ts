@@ -19,7 +19,7 @@ import {
   BackendError,
   type ConversationBinding,
 } from "../../src/server/backends/contracts.js";
-import type { BackendConversationEvent } from "../../src/shared/protocol/backend.js";
+import type { BackendCapabilityDocument, BackendConversationEvent } from "../../src/shared/protocol/backend.js";
 import {
   ClaudeConversationHandle,
   type ClaudeEffortEvidence,
@@ -3892,6 +3892,39 @@ describe("Claude outstanding background activity and subagent bookends", () => {
     task_type: "local_agent", description: "Sleep 20 seconds test", is_backgrounded: true });
   const inventory = (tasks: unknown[]) => system({ subtype: "background_tasks_changed", tasks });
   const snapshot = async (handle: ClaudeConversationHandle) => (await handle.establishProjection({ signal: new AbortController().signal })).snapshot;
+
+  it("withholds forking while Claude reports background work or its own activity, and says why", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: [...initialMessages, finalMessage] });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const branching: BackendCapabilityDocument["branching"][] = [];
+    established.subscribeFromNext(({ event }) => {
+      if (event.type === "capabilities_changed") branching.push(event.capabilities.branching);
+    });
+    await expect(handle.backendCapabilities()).resolves.toMatchObject({ branching: { availability: "available" } });
+    provider.messages.push(inventory([{ task_id: "child", task_type: "local_agent", description: "Sleep" },
+      { task_id: "shell", task_type: "local_bash", description: "Sleep" }]));
+    await vi.waitFor(() => expect(branching.at(-1)).toEqual({ availability: "unavailable", reason: { text:
+      "Claude has 2 background tasks running in this thread. Fork after they finish; running background work cannot be carried into a fork." } }));
+    // An unchanged blocker does not republish capabilities.
+    const published = branching.length;
+    provider.messages.push(inventory([{ task_id: "child", task_type: "local_agent", description: "Sleep" },
+      { task_id: "shell", task_type: "local_bash", description: "Still sleeping" }]));
+    provider.messages.push(started());
+    provider.messages.push(inventory([]));
+    await vi.waitFor(() => expect(branching.at(-1)).toMatchObject({ availability: "unavailable",
+      reason: { text: "A background task's result is still being recorded. Fork again in a moment." } }));
+    expect(branching).toHaveLength(published + 1);
+    provider.messages.push(system({ subtype: "task_notification", task_id: "child", tool_use_id: "agent-launch",
+      status: "completed", output_file: "/private", summary: "Finished" }));
+    await vi.waitFor(() => expect(branching.at(-1)).toMatchObject({ availability: "available" }));
+    provider.messages.push(system({ subtype: "session_state_changed", state: "running" }));
+    await vi.waitFor(() => expect(branching.at(-1)).toEqual({ availability: "unavailable", reason: { text:
+      "Claude is still working in this thread. Fork after it is idle." } }));
+    provider.messages.push(system({ subtype: "session_state_changed", state: "idle" }));
+    await vi.waitFor(() => expect(branching.at(-1)).toMatchObject({ availability: "available" }));
+    await handle.close();
+  });
 
   it("keeps provider task notifications hidden live and after reopening while retaining the assistant response and outcome row", async () => {
     const provider = fixture();

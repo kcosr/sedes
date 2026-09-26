@@ -264,6 +264,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
   readonly #startupSupersededMessageUuids = new Set<string>();
   /** Claude Code's reported session state, including work it started itself. */
   #providerState: "idle" | "running" | "requires_action" = "idle";
+  /** Fork blocker code of the last capability document ("" for none). */
+  #announcedForkBlocker: string | undefined;
   /** A live turn Claude started itself; it carries no Sedes input identity. */
   #providerTurn: ProviderTurn | undefined;
   /** A non-ambient task finished; its notification can start the next turn. */
@@ -688,8 +690,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const desired = this.#desiredSettings();
     const submissionReadiness = this.#submissionReadiness(desired);
     const branchingReadiness = this.#confirmedSettingsReadiness(desired);
+    const forkBlocker = this.#forkBlocker();
+    this.#announcedForkBlocker = forkBlocker?.code ?? "";
     return {
-      revision: `claude-c4:${desired.revision}:${this.#effectiveModel ?? ""}:${this.#effectiveEffort ?? ""}:${this.#effectivePermissionMode ?? ""}`,
+      revision: `claude-c4:${desired.revision}:${this.#effectiveModel ?? ""}:${this.#effectiveEffort ?? ""}:${this.#effectivePermissionMode ?? ""}:${forkBlocker?.code ?? ""}`,
       actions: ["rename", "set_model", "set_thinking_level"],
       deliveryModes: submissionReadiness.available ? ["submit", ...(branchingReadiness.available ? ["steer" as const] : [])] : [],
       steerTarget: "conversation",
@@ -697,7 +701,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       nonblockingQuestions: false,
       providerOutputArtifacts: { nativeImage: false },
       supportsHistory: true,
-      branching: branchingReadiness.available
+      branching: branchingReadiness.available && !forkBlocker
         ? {
             availability: "available",
             boundaries: ["latest_completed", "selected_completed_turn"],
@@ -723,7 +727,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
           }
         : {
             availability: "unavailable",
-            reason: boundDisplayText(branchingReadiness.reason),
+            reason: boundDisplayText(branchingReadiness.available ? forkBlocker!.reason : branchingReadiness.reason),
           },
       interactionKinds: ["confirmation", "decision", "questionnaire"],
       // The SDK's dollar estimate is API-equivalent telemetry, not a charge
@@ -1325,11 +1329,11 @@ export class ClaudeConversationHandle implements ConversationHandle {
     }
     if (message.type === "system" && message.session_id === this.binding.backendConversationId) {
       if (this.#backgroundActivity.consume(message)) {
-        this.#emit({ type: "background_activity_changed", activity: this.#backgroundActivity.snapshot() });
+        this.#emitBackgroundActivity();
         return;
       }
       if (message.subtype === "task_started" && this.#backgroundActivity.observeTaskStarted(message)) {
-        this.#emit({ type: "background_activity_changed", activity: this.#backgroundActivity.snapshot() });
+        this.#emitBackgroundActivity();
       }
       if (message.subtype === "task_started" && !message.ambient && !message.skip_transcript &&
           (message.spawn_depth === undefined || message.spawn_depth === 1) && message.tool_use_id &&
@@ -1344,7 +1348,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
         this.#consumeTaskTerminal({ nativeTaskId: message.task_id,
           status: message.patch.status === "killed" ? "stopped" : message.patch.status });
         if (this.#backgroundActivity.settleTask(message.task_id)) {
-          this.#emit({ type: "background_activity_changed", activity: this.#backgroundActivity.snapshot() });
+          this.#emitBackgroundActivity();
         }
         return;
       }
@@ -1356,7 +1360,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
         if (this.#backgroundActivity.settleTask(message.task_id)) {
           // Reevaluate idle retirement only after the durable receipt above.
           // Inventory remains exactly the provider's latest replacement level.
-          this.#emit({ type: "background_activity_changed", activity: this.#backgroundActivity.snapshot() });
+          this.#emitBackgroundActivity();
         }
         return;
       }
@@ -1877,7 +1881,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     }
     if ((previous === "idle") !== (state === "idle")) {
       // Retirement eligibility follows Claude's own state; re-evaluate it.
-      this.#emit({ type: "background_activity_changed", activity: this.#backgroundActivity.snapshot() });
+      this.#emitBackgroundActivity();
     }
   }
 
@@ -2473,7 +2477,41 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   #invalidateBackgroundActivity(): void {
     this.#backgroundActivity.invalidate();
+    this.#emitBackgroundActivity();
+  }
+
+  /**
+   * Background inventory and Claude's own state also decide whether this
+   * thread can be forked, so a change there can change its capabilities.
+   */
+  #emitBackgroundActivity(): void {
     this.#emit({ type: "background_activity_changed", activity: this.#backgroundActivity.snapshot() });
+    if (this.#announcedForkBlocker === undefined || this.#closed) return;
+    if ((this.#forkBlocker()?.code ?? "") === this.#announcedForkBlocker) return;
+    this.#emit({ type: "capabilities_changed", capabilities: this.#capabilities() });
+  }
+
+  /**
+   * A Claude fork copies native history only. Work running in the background
+   * would be reported to the child as unfinished while it continues in the
+   * source, so forking waits until Claude reports none and is idle.
+   */
+  #forkBlocker(): { readonly code: string; readonly reason: string } | undefined {
+    const activity = this.#backgroundActivity.snapshot();
+    const running = activity.agents + activity.commands + activity.other;
+    if (activity.state === "unknown") {
+      return { code: "background-unknown", reason: "Claude has not reported this thread's background work yet. Fork after it does; running background work cannot be carried into a fork." };
+    }
+    if (running > 0) {
+      return { code: `background-${running}`, reason: `Claude has ${running} background ${running === 1 ? "task" : "tasks"} running in this thread. Fork after ${running === 1 ? "it finishes" : "they finish"}; running background work cannot be carried into a fork.` };
+    }
+    if (this.#backgroundActivity.retirementBlocked) {
+      return { code: "background-settling", reason: "A background task's result is still being recorded. Fork again in a moment." };
+    }
+    if (this.#providerState !== "idle") {
+      return { code: "provider-active", reason: "Claude is still working in this thread. Fork after it is idle." };
+    }
+    return undefined;
   }
 
   #fail(error: unknown): void {
