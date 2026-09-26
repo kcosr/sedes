@@ -92,6 +92,12 @@ export interface PiSdkSession {
       }[];
     },
   ): Promise<void>;
+  /**
+   * Hand steering input to Pi. `queued` reports whether Pi placed this input
+   * on its steering queue during the call. Pi accepts some input without
+   * queueing it (an extension input handler or command consumed it), and
+   * such input never persists a user entry.
+   */
   steer(
     text: string,
     expandSkillCommand?: boolean,
@@ -100,7 +106,7 @@ export interface PiSdkSession {
       readonly data: string;
       readonly mimeType: string;
     }[],
-  ): Promise<void>;
+  ): Promise<PiSteerAdmission>;
   /**
    * Withdraw generation-volatile Pi steering and follow-up messages.
    *
@@ -132,6 +138,11 @@ export interface PiSdkSession {
     readonly expandPromptTemplates: boolean;
   }>;
   dispose(): void;
+}
+
+export interface PiSteerAdmission {
+  /** Pi placed this input on its steering queue. */
+  readonly queued: boolean;
 }
 
 export interface PiSdkSessionFactory {
@@ -680,15 +691,32 @@ class DefaultPiSdkSession implements PiSdkSession {
       readonly data: string;
       readonly mimeType: string;
     }[],
-  ): Promise<void> {
-    return this.#ready.then(() => {
+  ): Promise<PiSteerAdmission> {
+    return this.#ready.then(async () => {
       this.#fence.assertActive();
-      return this.#session.prompt(text, {
-        source: "rpc",
-        streamingBehavior: "steer",
-        expandPromptTemplates: expandSkillCommand,
-        ...(images ? { images: [...images] } : {}),
+      // Pi publishes every steering-queue mutation as one queue_update: its
+      // own enqueue grows the queue by one, while draining, clearing, and
+      // materialization only shrink it. Growth observed during this call is
+      // therefore the evidence that Pi queued this input rather than letting
+      // an extension input handler or command consume it.
+      let queued = false;
+      let length = this.#session.getSteeringMessages().length;
+      const unsubscribe = this.#session.subscribe((event) => {
+        if (event.type !== "queue_update") return;
+        if (event.steering.length > length) queued = true;
+        length = event.steering.length;
       });
+      try {
+        await this.#session.prompt(text, {
+          source: "rpc",
+          streamingBehavior: "steer",
+          expandPromptTemplates: expandSkillCommand,
+          ...(images ? { images: [...images] } : {}),
+        });
+      } finally {
+        unsubscribe();
+      }
+      return { queued };
     });
   }
   clearQueue(): {
