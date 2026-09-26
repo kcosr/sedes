@@ -374,7 +374,11 @@ env -u NODE_ENV npm run test:real-claude
 ```
 
 The gate uses its reviewed model, effort, and no-tools profile to verify basic
-streaming, persistence, usage, and reopen behavior. Its persistent-runtime case
+streaming, persistence, usage, and reopen behavior. Its native-history case
+also reads a resumed transcript that has parallel tool calls, and reopens a
+thread that was never sent to. For the parallel calls, it enables only the
+Bash tool with three exact pre-approved `sleep`/`echo` invocations, in
+`dontAsk` mode inside a disposable workspace. Its persistent-runtime case
 uses real worker stdio and local framed sockets to verify active-turn completion
 after main-client disposal and reattachment without resubmission. It does not
 verify a remote SSH or outbound host, or its login. Passing the suite also does not claim live

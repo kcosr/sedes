@@ -636,7 +636,9 @@ normalized integration surface:
 - persistence, Saved Agent, automation, fork-lineage, and wrong-scope tests
   must change with their corresponding authority contract; and
 - `tests/real-claude/` is an opt-in, capacity-consuming gate for its narrow
-  reviewed streaming/persistence/usage/reopen profile. Its persistent-runtime
+  reviewed streaming/persistence/usage/reopen profile. Its native-history
+  case reproduces a startup-message tip over parallel tool calls with exact
+  pre-approved `sleep`/`echo` Bash invocations. Its persistent-runtime
   case uses real worker stdio over local framed sockets; it does not verify a
   remote SSH or outbound host or provide blanket evidence for images, tools, permissions,
   skills, or subagents.

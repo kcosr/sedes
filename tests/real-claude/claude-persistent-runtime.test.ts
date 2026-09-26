@@ -216,6 +216,9 @@ describe.sequential("real Claude persistent runtime with local SSH carrier stand
         expect(historyCovers(candidate, persisted), `native history coverage; changed metadata keys: ${changedKeys.join(", ")}`).toBe(true);
       }
       expect((await secondClient.getSessionInfo(sessionId, { dir: workspace }, {}))?.sessionId).toBe(sessionId);
+      // Native presence crosses the real worker and persistent carrier too.
+      await expect(secondClient.hasSessionTranscript(sessionId, { dir: workspace }, {})).resolves.toBe(true);
+      await expect(secondClient.hasSessionTranscript(randomUUID(), { dir: workspace }, {})).resolves.toBe(false);
       await restored.close({ reason: "evicted" });
       const originalPid = originalQuery[0]!.pid!;
       await waitFor(() => {
