@@ -154,7 +154,10 @@ remote query's held replay behind the baseline; the read resolves through the
 startup message that the launch has just persisted.
 
 Every launch sends Sedes' empty `shouldQuery: false` startup message, which
-Claude Code persists as a meta user row at the transcript tip. The pinned SDK's
+Claude Code persists as a meta user row at the transcript tip. From 2.1.280 the
+row is `queueTranscriptOnly` and never reaches the model; earlier releases
+merged its "NON-USER SOURCE" label into the next prompt, one reason the
+runtime minimum is 2.1.281. The pinned SDK's
 `getSessionMessages` picks the file-latest childless row that is not meta.
 Parallel tool calls leave childless sibling tool results, so a transcript
 ending in a startup message read back only to its last parallel tool call:
@@ -616,10 +619,11 @@ reattachment can still drain final receipts without classifying the stopped
 query as an unexpected failure or requiring another forced stop.
 
 Claude advertises conversation-targeted Steer using native `priority: "next"`.
-The runtime minimum is 2.1.274. Testing 2.1.241 showed that it can consume
-guidance but omits the second input’s consumption UUID, which cannot establish
-safe delivery tracking. Older runtimes fail the common admission guard; there
-is no separate compatibility path or version-specific Steer capability.
+Steer needs 2.1.274 or newer, below the 2.1.281 runtime minimum. Testing
+2.1.241 showed that it can consume guidance but omits the second input’s
+consumption UUID, which cannot establish safe delivery tracking. Older
+runtimes fail the common admission guard; there is no separate compatibility
+path or version-specific Steer capability.
 The target contains no turn ID. Native enqueue stays pending until exact
 user-message UUID evidence confirms incorporation; normalized history associates
 that input with the actual receiving turn. This can be the current turn or the

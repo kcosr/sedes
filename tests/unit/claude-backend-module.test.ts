@@ -16,7 +16,7 @@ const agentToolSourceCapabilities =
 
 function fakeSdk(): ClaudeSdkFacade {
   return {
-    readCliRelease: vi.fn(async () => "2.1.274"),
+    readCliRelease: vi.fn(async () => "2.1.283"),
     readCliAuthStatus: vi.fn(async () => ({
       loggedIn: true,
       authMethod: "claude.ai",

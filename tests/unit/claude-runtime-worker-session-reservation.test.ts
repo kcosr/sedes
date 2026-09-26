@@ -28,7 +28,7 @@ const context = () => ({ requestId: randomUUID(), signal: new AbortController().
  */
 const FAKE_CLAUDE = `#!${process.execPath}
 const args = process.argv.slice(2);
-if (args[0] === "--version") { process.stdout.write("2.1.274 (Claude Code)\\n"); process.exit(0); }
+if (args[0] === "--version") { process.stdout.write("2.1.283 (Claude Code)\\n"); process.exit(0); }
 if (args[0] === "auth") {
   process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max" }));
   process.exit(0);
@@ -239,7 +239,7 @@ function queryDelegate(
   closed: () => void = () => undefined,
 ): ClaudeSdkFacade & { createQuery: ReturnType<typeof vi.fn> } {
   return {
-    readCliRelease: vi.fn(async () => "2.1.274"),
+    readCliRelease: vi.fn(async () => "2.1.283"),
     readCliAuthStatus: vi.fn(async () => ({
       loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max",
     })),
@@ -260,7 +260,7 @@ function queryDelegate(
         : String(input.options.resume);
       const stream = (async function* (): AsyncGenerator<SDKMessage> {
         yield {
-          type: "system", subtype: "init", apiKeySource: "oauth", claude_code_version: "2.1.274",
+          type: "system", subtype: "init", apiKeySource: "oauth", claude_code_version: "2.1.283",
           cwd: "/workspace", tools: [], mcp_servers: [], model: "claude-sonnet-5", permissionMode: "default",
           slash_commands: [], output_style: "default", skills: [], plugins: [], uuid: randomUUID(), session_id: sessionId,
         } as SDKMessage;

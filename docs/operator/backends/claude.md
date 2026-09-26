@@ -114,15 +114,32 @@ explicitly enable them; their IDs and native session bindings are retained.
 ## Version compatibility
 
 Sedes pins one SDK profile: `@anthropic-ai/claude-agent-sdk` 0.3.274. It admits
-stable Claude Code releases at or above 2.1.274, except for explicitly excluded
+stable Claude Code releases at or above 2.1.281, except for explicitly excluded
 known-bad releases.
 
-The reviewed runtime baseline is Claude Code 2.1.274. A newer admitted stable
+The minimum is 2.1.281 because earlier releases change the conversation when
+Sedes opens or resumes a thread:
+
+- Before 2.1.280, Claude Code sent Sedes' startup message to the model with
+  the next prompt, labelled as input from a non-user source. Claude sometimes
+  refused that first prompt.
+- Before 2.1.281, resuming a session that ended during a tool call added a
+  hidden "Continue from where you left off." prompt. 2.1.281 also fixed Agent
+  SDK sessions failing every turn after an assistant message with plain-string
+  content.
+
+Update Claude Code on every execution host, local and remote, before
+upgrading Sedes. An older release now fails backend startup with a runtime
+version error.
+
+The reviewed runtime baseline is Claude Code 2.1.283. A newer admitted stable
 release produces a structured advisory while continuing to use the pinned
 SDK profile and behavioral checks. This warning is not an authentication
-failure. Prereleases and releases older than 2.1.274 fail closed. The minimum
+failure. Prereleases and releases older than 2.1.281 fail closed. The minimum
 runtime does not move merely because a future SDK package bundles a newer CLI,
-and protocol or behavioral incompatibility still fails closed.
+and protocol or behavioral incompatibility still fails closed. The pinned SDK
+package bundles Claude Code 2.1.274, below the minimum; Sedes never runs it and
+always uses the operator-installed executable.
 
 For the most predictable deployment, pin the reviewed baseline. Before adopting
 a newer admitted runtime, deliberately run the opt-in live gate described
@@ -266,7 +283,8 @@ Steer sends input at Claude’s next native opportunity, including during active
 work, using conversation-scoped delivery. It may join the current turn
 or start the next if the current turn has finished. Pending input remains
 visible until Claude confirms incorporation. Steer does not interrupt work.
-Claude Code 2.1.274 is the minimum because its consumption acknowledgments allow Sedes to track delivery reliably.
+Steer relies on the consumption acknowledgments Claude Code has sent since
+2.1.274, which let Sedes track delivery reliably.
 If a server restart interrupts confirmation, Sedes exposes the delivery as
 unconfirmed for recovery and retains its original identity. Missing transcript
 entries or an empty native queue never authorize an automatic resend. A late
@@ -282,7 +300,7 @@ relabeled as Steer. An unconfirmed delivery pauses subsequent dispatch and shows
 Use **Reconcile delivery** to check the original submission; your draft and
 later queued messages remain intact while confirmation is pending.
 
-On the reviewed 2.1.274 runtime, native background inventories keep subagents
+On the reviewed 2.1.283 runtime, native background inventories keep subagents
 and commands visible after the main response finishes. Ordinary Send remains
 available. Live or uncertain background work blocks automatic idle eviction;
 remote runtime impact checks include known background work. Transport loss
@@ -347,8 +365,8 @@ workspace, and do not use sensitive files merely to validate connectivity.
 | Backend is unavailable at startup                            | Confirm the target account's `PATH` resolves `claude`, or verify the optional canonical `executablePath` override; also check the selected provider home (`configDirectory`, then the execution account's `CLAUDE_CONFIG_DIR`, then `$HOME/.claude`), worker artifact admission, executable permissions, and runtime compatibility. Inspect the bounded diagnostic code for worker, version, authentication, or initialization failure. |
 | Authentication is rejected despite a working interactive CLI | Run the configured executable's `auth status` as the selected local or remote execution account. Confirm first-party `claude.ai` subscription login, remove active API-key overrides, and verify the selected provider home and the environment visible to that account.                                                                                                              |
 | SSH runtime does not reconnect                              | Check the environment connection preference, exact SSH alias and account, remote Node installation, sidecar compatibility, and ownership/recovery status. Use **Connect** after intentional Disconnect; do not substitute local provider paths. |
-| Runtime version is rejected                                  | Use a stable Claude Code release at or above 2.1.274. Prereleases and explicitly excluded releases fail closed.                                                                                                                                                                                                                    |
-| Runtime is newer than tested                                 | This is advisory for an otherwise admitted stable release. Pin 2.1.274 for the reviewed baseline or deliberately run the opt-in real-Claude gate before adopting the newer CLI.                                                                                                                                                    |
+| Runtime version is rejected                                  | Use a stable Claude Code release at or above 2.1.281. Prereleases and explicitly excluded releases fail closed.                                                                                                                                                                                                                    |
+| Runtime is newer than tested                                 | This is advisory for an otherwise admitted stable release. Pin 2.1.283 for the reviewed baseline or deliberately run the opt-in real-Claude gate before adopting the newer CLI.                                                                                                                                                    |
 | No models or efforts are selectable                          | Confirm native initialization and catalog success, then inspect `modelPolicy`. Claude matchers use model IDs and efforts; `providerIds` are invalid.                                                                                                                                                                               |
 | Initialization times out on a healthy installation           | Investigate slow CLI startup first. If appropriate, increase `initializationTimeoutMs` within its supported one-to-120-second range; do not hide authentication or version failures with a longer timeout.                                                                                                                         |
 | The worker reports query capacity exceeded                   | The fixed 32-query worker guard indicates that too many Claude queries remain resident in one execution environment. Close or archive idle threads and inspect runtime retirement if capacity does not recover. Attaching the same native session twice is denied independently.                                                   |
@@ -376,14 +394,16 @@ env -u NODE_ENV npm run test:real-claude
 The gate uses its reviewed model, effort, and no-tools profile to verify basic
 streaming, persistence, usage, and reopen behavior. Its native-history case
 also reads a resumed transcript that has parallel tool calls, and reopens a
-thread that was never sent to. For the parallel calls, it enables only the
+thread that was never sent to, then twice more after its first reply, checking
+that no phantom turn appears. For the parallel calls, it enables only the
 Bash tool with three exact pre-approved `sleep`/`echo` invocations, in
 `dontAsk` mode inside a disposable workspace. Its persistent-runtime case
 uses real worker stdio and local framed sockets to verify active-turn completion
 after main-client disposal and reattachment without resubmission. It does not
 verify a remote SSH or outbound host, or its login. Passing the suite also does not claim live
 verification of every tool projection, image, subagent, skill, or permission
-path.
+path. Its Native-tools case launches the built `sedes` provider CLI, so run
+`npm run build` first.
 
 For implementation ownership, history projection, terminal receipts, input
 correlation, agent-tool injection, forks, and recovery, continue with the

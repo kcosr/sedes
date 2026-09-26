@@ -43,8 +43,8 @@ describe("Claude Agent SDK release contract", () => {
     };
 
     expect(CLAUDE_AGENT_SDK_RELEASE).toBe("0.3.274");
-    expect(CLAUDE_CODE_MINIMUM_VERSION).toBe("2.1.274");
-    expect(CLAUDE_CODE_TESTED_THROUGH_VERSION).toBe("2.1.274");
+    expect(CLAUDE_CODE_MINIMUM_VERSION).toBe("2.1.281");
+    expect(CLAUDE_CODE_TESTED_THROUGH_VERSION).toBe("2.1.283");
     expect(packageJson.dependencies["@anthropic-ai/claude-agent-sdk"]).toBe(
       CLAUDE_AGENT_SDK_RELEASE,
     );
