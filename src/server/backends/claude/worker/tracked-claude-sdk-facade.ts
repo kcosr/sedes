@@ -1,4 +1,4 @@
-import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import path from "node:path";
 import {
   type ClaudeCliAuthStatus,
@@ -7,6 +7,16 @@ import {
 } from "../claude-sdk-facade.js";
 import type { ClaudeChildEnvironment } from "../claude-child-environment.js";
 import type { ClaudeChildProcessSupervisor } from "./claude-child-process-supervisor.js";
+
+/** Processes launched for one SDK query, with the facade that launches them. */
+export interface ClaudeQueryProcessScope {
+  readonly sdk: ClaudeSdkFacade;
+  /**
+   * Settles after every Claude process this scope launched has exited and its
+   * process tree is proven gone; rejects when any cleanup is unproven.
+   */
+  settled(): Promise<void>;
+}
 
 /** Adds owned-process supervision to the official SDK facade used in a worker. */
 export class TrackedClaudeSdkFacade implements ClaudeSdkFacade {
@@ -75,6 +85,36 @@ export class TrackedClaudeSdkFacade implements ClaudeSdkFacade {
   }
 
   createQuery(input: ClaudeQueryInput) {
+    return this.#createQuery(input, () => undefined);
+  }
+
+  /** Returns a facade whose query processes can be awaited as one scope. */
+  createQueryScope(): ClaudeQueryProcessScope {
+    const processes: SpawnedProcess[] = [];
+    const sdk: ClaudeSdkFacade = {
+      readCliRelease: (...input) => this.readCliRelease(...input),
+      readCliAuthStatus: (...input) => this.readCliAuthStatus(...input),
+      createQuery: (input) =>
+        this.#createQuery(input, (spawned) => processes.push(spawned)),
+      listSessions: (...input) => this.listSessions(...input),
+      getSessionInfo: (...input) => this.getSessionInfo(...input),
+      getSessionMessages: (...input) => this.getSessionMessages(...input),
+      renameSession: (...input) => this.renameSession(...input),
+    };
+    return Object.freeze({
+      sdk,
+      settled: async () => {
+        await Promise.all(
+          processes.map((spawned) => this.#supervisor.processCleanup(spawned)),
+        );
+      },
+    });
+  }
+
+  #createQuery(
+    input: ClaudeQueryInput,
+    onSpawn: (spawned: SpawnedProcess) => void,
+  ) {
     const executablePath = input.options.pathToClaudeCodeExecutable;
     if (
       typeof executablePath !== "string" ||
@@ -93,7 +133,9 @@ export class TrackedClaudeSdkFacade implements ClaudeSdkFacade {
         ) {
           throw new Error("claude_worker_query_executable_mismatch");
         }
-        return this.#supervisor.spawnClaudeCodeProcess(spawnOptions);
+        const spawned = this.#supervisor.spawnClaudeCodeProcess(spawnOptions);
+        onSpawn(spawned);
+        return spawned;
       },
     };
     return this.#delegate.createQuery({ ...input, options });

@@ -159,6 +159,7 @@ async function runInternalWorker(
   });
   const host = new ClaudeRuntimeWorkerHost({
     sdk,
+    queryProcessScope: () => sdk.createQueryScope(),
     peer: {
       call: (definition, request, options) =>
         peer!.call(definition, request, options),

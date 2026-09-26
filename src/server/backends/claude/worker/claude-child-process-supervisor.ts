@@ -72,6 +72,7 @@ export class ClaudeChildProcessSupervisor {
   readonly #killMilliseconds: number;
   readonly #observationMilliseconds: number;
   readonly #tracked = new Set<TrackedClaudeProcess>();
+  readonly #records = new WeakMap<SpawnedProcess, TrackedClaudeProcess>();
   readonly #processGroupRegistrar: ClaudeProcessGroupRegistrar;
   readonly #onCleanupFailure: (error: unknown) => void;
   #closePromise: Promise<void> | undefined;
@@ -117,6 +118,16 @@ export class ClaudeChildProcessSupervisor {
   spawnClaudeCodeProcess = (options: SpawnOptions): SpawnedProcess => {
     return this.spawn(options);
   };
+
+  /**
+   * Settles after this supervised process has closed and its whole tree is
+   * proven gone; rejects when that cleanup is unproven.
+   */
+  processCleanup(spawned: SpawnedProcess): Promise<void> {
+    const record = this.#records.get(spawned);
+    if (!record) return Promise.reject(new Error("claude_worker_process_unknown"));
+    return record.exited.then(() => this.#cleanupRecord(record));
+  }
 
   spawn(options: SpawnOptions): SpawnedProcess {
     if (this.#closed) throw new Error("claude_worker_supervisor_closed");
@@ -229,7 +240,7 @@ export class ClaudeChildProcessSupervisor {
       () => undefined,
     );
 
-    return {
+    const spawned: SpawnedProcess = {
       stdin: child.stdin,
       stdout: child.stdout,
       get killed() {
@@ -255,6 +266,8 @@ export class ClaudeChildProcessSupervisor {
         events.off(event, listener);
       },
     };
+    this.#records.set(spawned, record);
+    return spawned;
   }
 
   async executeProbe(input: {

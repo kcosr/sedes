@@ -39,7 +39,11 @@ principal/backend runtime owns the SDK queries admitted by the shared Sedes
 conversation-runtime budget for that execution environment. A live Sedes thread
 has at most one warm query.
 Closing a handle does not delete its Claude session, and attaching the same
-native session twice is denied independently. The worker's fixed maximum of 32
+native session twice is denied independently. After a query closes or fails,
+the worker keeps its native session reserved until every Claude process the
+query launched is proven gone. Closing returns only then, and a reopen waits, so
+two Claude processes never write one transcript. Unproven cleanup keeps the
+session reserved and fences the worker generation. The worker's fixed maximum of 32
 simultaneous queries is a last-resort execution-environment safety guard, not a
 backend configuration surface.
 

@@ -123,6 +123,10 @@
   proven only after they are gone; previously they could outlive a stopped or
   crashed Claude process.
 
+- Reopen a Claude session only after its previous Claude process has exited.
+  Closing or failing a query no longer releases the session while the old
+  process can still write its transcript.
+
 ### Removed
 
 ## [0.1.1] - 2026-09-21
