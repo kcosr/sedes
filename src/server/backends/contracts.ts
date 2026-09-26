@@ -414,7 +414,16 @@ export type SubmissionReconciliation =
       readonly backendTurn?: BackendTurn;
       readonly completionIdentity?: string;
     }
-  | { readonly status: "not_accepted"; readonly retryable: boolean }
+  /**
+   * Proven never accepted. `retryable: false` forbids an automatic resend:
+   * the application returns the input to the user, with `diagnostic` when
+   * given (for example, a provider withdrew queued input on Stop).
+   */
+  | {
+      readonly status: "not_accepted";
+      readonly retryable: boolean;
+      readonly diagnostic?: BoundedDisplayText;
+    }
   /** Tracking is terminal, but prior consumption is unknown. Never auto-retry. */
   | { readonly status: "failed_unknown"; readonly diagnostic: BoundedDisplayText }
   | { readonly status: "unresolved"; readonly diagnostic: BoundedDisplayText };

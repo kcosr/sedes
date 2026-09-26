@@ -470,6 +470,11 @@ export class QueuedInputDispatcher {
               throw new DomainError("invalid_transition",
                 this.#operations.getSteer(scope, input.mutationId).failureDiagnostic!);
             }
+            if (outcome === "not_sent") {
+              throw new DomainError("invalid_transition",
+                this.#repository.get(scope, applicationThreadId, id).diagnostic ??
+                  "This steering message was not sent.");
+            }
             if (outcome === "not_accepted") {
               return {
                 status: "restored" as const,
@@ -857,7 +862,7 @@ export class QueuedInputDispatcher {
   async #reconcileQueuedSteer(
     scope: RequestScope,
     receipt: QueuedInputSteerOperationRecord,
-  ): Promise<"accepted" | "not_accepted" | "failed_unknown" | "unresolved"> {
+  ): Promise<"accepted" | "not_accepted" | "not_sent" | "failed_unknown" | "unresolved"> {
     let reconciliation;
     try {
       reconciliation = await this.#gateway.reconcileSubmission(
@@ -891,6 +896,24 @@ export class QueuedInputDispatcher {
       }).immediate();
       await this.#emitQueueChanged(scope, receipt.threadId);
       return "failed_unknown";
+    }
+    if (reconciliation.status === "not_accepted" && !reconciliation.retryable) {
+      // Proven never sent, but not to be resent automatically (a provider
+      // withdrew it on Stop). Return it to the user as a failed item they can
+      // restore or dismiss; later entries wait for that decision.
+      const diagnostic = safeDiagnostic(reconciliation.diagnostic?.text ??
+        "The backend proved this steering message was not sent. Nothing was resent. Restore it to send it again, or dismiss it.");
+      const now = this.#clock.now();
+      this.#repository.database.transaction(() => {
+        this.#operations.rejectSteerBeforeAcceptance(scope, receipt.mutationId);
+        this.#repository.failSteerNotSent(scope, receipt.threadId, receipt.queuedInputId, {
+          steerOperationId: receipt.mutationId,
+          expectedState: receipt.state === "pending_materialization" ? "dispatching" : "uncertain",
+          diagnostic, now,
+        });
+      }).immediate();
+      await this.#emitQueueChanged(scope, receipt.threadId);
+      return "not_sent";
     }
     if (reconciliation.status === "not_accepted") {
       this.#restoreQueuedSteer(

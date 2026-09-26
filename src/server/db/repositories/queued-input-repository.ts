@@ -1687,6 +1687,40 @@ export class QueuedInputRepository {
       readonly now: number;
     },
   ): QueuedInputRecord {
+    return this.#failDispatchedSteer(scope, applicationThreadId, id, input,
+      "The queued Steer changed before its unknown outcome was recorded.");
+  }
+
+  /** Proven never sent, but not to be resent automatically (for example,
+   * withdrawn on Stop). The failed head stays unacknowledged, so the user
+   * dismisses, deletes, or restores it; nothing resends. */
+  failSteerNotSent(
+    scope: RequestScope,
+    applicationThreadId: string,
+    id: string,
+    input: {
+      readonly steerOperationId: string;
+      readonly expectedState: "dispatching" | "uncertain";
+      readonly diagnostic: string;
+      readonly now: number;
+    },
+  ): QueuedInputRecord {
+    return this.#failDispatchedSteer(scope, applicationThreadId, id, input,
+      "The queued Steer changed before it was returned as not sent.");
+  }
+
+  #failDispatchedSteer(
+    scope: RequestScope,
+    applicationThreadId: string,
+    id: string,
+    input: {
+      readonly steerOperationId: string;
+      readonly expectedState: "dispatching" | "uncertain";
+      readonly diagnostic: string;
+      readonly now: number;
+    },
+    conflict: string,
+  ): QueuedInputRecord {
     return this.database.transaction(() => {
       const changed = this.database.prepare(`
         UPDATE queued_inputs
@@ -1699,7 +1733,7 @@ export class QueuedInputRepository {
       `).run(input.now, input.diagnostic, scope.tenantId, scope.principalId,
         applicationThreadId, id, input.expectedState, input.steerOperationId);
       if (changed.changes !== 1) {
-        throw new DomainError("invalid_transition", "The queued Steer changed before its unknown outcome was recorded.");
+        throw new DomainError("invalid_transition", conflict);
       }
       this.#touchThread(scope, applicationThreadId, input.now, false);
       return this.get(scope, applicationThreadId, id);

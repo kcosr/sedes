@@ -4446,6 +4446,106 @@ describe("QueuedInputDispatcher", () => {
     }
   });
 
+  it("returns a conversation Steer the backend withdrew on Stop as a restorable failure and never resends it", async () => {
+    const fixture = createFixture();
+    try {
+      const [threadId] = fixture.threadIds;
+      const repository = new QueuedInputRepository(fixture.database);
+      const gateway = new FakeGateway();
+      gateway.steerTargetKind = "conversation";
+      const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 1_060 } });
+      await dispatcher.recover(fixture.scope);
+      enqueueUser(fixture, repository, threadId, "withdrawn-steer", 1_040);
+      const expectedThreadRevision = revision(fixture, threadId);
+      const reservation = repository.reserveHeadForSteer(fixture.scope, threadId, "withdrawn-steer", {
+        steerOperationId: "withdrawn-steer-operation", expectedThreadRevision, now: 1_050,
+      });
+      const operations = new ConversationOperationRepository(fixture.database);
+      operations.prepareQueuedInputSteer(fixture.scope, threadId, {
+        mutationId: "withdrawn-steer-operation", queuedInputId: "withdrawn-steer", text: reservation.item.text,
+        contextExcerpts: reservation.item.contextExcerpts, attachmentIds: [], taskContexts: reservation.item.taskContexts,
+        expectedThreadRevision, priorQueueState: reservation.priorState, priorNextAttemptAt: reservation.priorNextAttemptAt,
+        priorDiagnostic: reservation.priorDiagnostic, now: 1_050,
+      });
+      operations.markSteerSubmissionStarted(fixture.scope, "withdrawn-steer-operation", { kind: "conversation" });
+      operations.markSteerPendingMaterialization(fixture.scope, "withdrawn-steer-operation", 1_051);
+      enqueue(fixture, repository, threadId, "later-queue", 1_052);
+      const diagnostic = "Claude withdrew this message before starting it, as it does on Stop, so it was not sent.";
+      gateway.reconciliationBehaviors.push({ status: "not_accepted", retryable: false, diagnostic: { text: diagnostic } });
+
+      // Stop settled the thread; Sedes' own queue is otherwise untouched.
+      await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+
+      expect(gateway.reconciled).toEqual([{
+        applicationOperationId: "withdrawn-steer-operation", reconciliationToken: "withdrawn-steer-operation",
+      }]);
+      expect(repository.get(fixture.scope, threadId, "withdrawn-steer")).toMatchObject({
+        state: "failed", deliveryMode: null, failureAcknowledgedAt: null, diagnostic,
+      });
+      expect(operations.findSteer(fixture.scope, "withdrawn-steer-operation")).toBeUndefined();
+      expect(operations.hasBlockingThreadOperation(fixture.scope, threadId)).toBe(false);
+      // Nothing is resent, and later input waits for the user's decision.
+      expect(gateway.steered).toEqual([]);
+      expect(gateway.submitted).toEqual([]);
+      await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+      expect(gateway.steered).toEqual([]);
+      expect(gateway.submitted).toEqual([]);
+      await expect(dispatcher.observeAuthoritativeSubmission(fixture.scope, threadId, "withdrawn-steer-operation"))
+        .resolves.toBe(false);
+
+      const draft = new ConversationDraftRepository(fixture.database).get(fixture.scope, threadId);
+      await expect(dispatcher.restoreUserInput(fixture.scope, threadId, "withdrawn-steer", {
+        mutationId: "restore-withdrawn-steer", expectedThreadRevision: revision(fixture, threadId),
+        expectedDraftRevision: draft.revision, now: 1_062,
+      })).resolves.toMatchObject({ item: { state: "cancelled" }, draft: { text: reservation.item.text } });
+      await vi.waitFor(() => expect(gateway.submitted.map(input => input.applicationOperationId)).toEqual(["operation-later-queue"]));
+      expect(gateway.steered).toEqual([]);
+      await dispatcher.close();
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  it("reports an uncertain Steer that the owner proves withdrawn as not sent when its operation is replayed", async () => {
+    const fixture = createFixture();
+    try {
+      const [threadId] = fixture.threadIds;
+      const repository = new QueuedInputRepository(fixture.database);
+      enqueueUser(fixture, repository, threadId, "replayed-steer", 1_040);
+      const expectedThreadRevision = revision(fixture, threadId);
+      const reservation = repository.reserveHeadForSteer(fixture.scope, threadId, "replayed-steer", {
+        steerOperationId: "replayed-steer-operation", expectedThreadRevision, now: 1_050,
+      });
+      const operations = new ConversationOperationRepository(fixture.database);
+      operations.prepareQueuedInputSteer(fixture.scope, threadId, {
+        mutationId: "replayed-steer-operation", queuedInputId: "replayed-steer", text: reservation.item.text,
+        contextExcerpts: reservation.item.contextExcerpts, attachmentIds: [], taskContexts: reservation.item.taskContexts,
+        expectedThreadRevision, priorQueueState: reservation.priorState, priorNextAttemptAt: reservation.priorNextAttemptAt,
+        priorDiagnostic: reservation.priorDiagnostic, now: 1_050,
+      });
+      operations.markSteerSubmissionStarted(fixture.scope, "replayed-steer-operation", { kind: "conversation" });
+      operations.markSteerPendingMaterialization(fixture.scope, "replayed-steer-operation", 1_051);
+      const gateway = new FakeGateway();
+      gateway.authoritativelySettled = false;
+      // A restart leaves it uncertain; the retained owner later proves withdrawal.
+      gateway.reconciliationBehaviors.push({ status: "unresolved", diagnostic: { text: "Owner unreachable" } },
+        { status: "not_accepted", retryable: false, diagnostic: { text: "Claude withdrew this message before starting it." } });
+      const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 1_060 } });
+      await dispatcher.recover(fixture.scope);
+      expect(operations.getSteer(fixture.scope, "replayed-steer-operation").state).toBe("uncertain");
+      await expect(dispatcher.steerUserInput(fixture.scope, threadId, "replayed-steer", {
+        mutationId: "replayed-steer-operation", expectedThreadRevision,
+      })).rejects.toThrow("Claude withdrew this message before starting it.");
+      expect(repository.get(fixture.scope, threadId, "replayed-steer")).toMatchObject({ state: "failed", deliveryMode: null });
+      expect(operations.findSteer(fixture.scope, "replayed-steer-operation")).toBeUndefined();
+      expect(gateway.steered).toEqual([]);
+      expect(gateway.submitted).toEqual([]);
+      await dispatcher.close();
+    } finally {
+      fixture.database.close();
+    }
+  });
+
   it("caps active queue state at the normalized event payload limit", () => {
     const fixture = createFixture();
     try {
