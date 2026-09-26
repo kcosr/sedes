@@ -109,6 +109,19 @@ describe("owned process tree", () => {
     expect(hidden.remaining(table())).toEqual({ processes: [], groups: [200] });
   });
 
+  it("forgets ended descendant groups while observing a long-lived leader", () => {
+    let current = table(entry(100, 1), entry(101, 100, 101), entry(102, 100, 102));
+    const { signals } = fakeSignals(() => current);
+    const tree = new OwnedProcessTree(current.get(100)!, signals);
+    tree.observe(current);
+    current = table(entry(100, 1), entry(102, 100, 102));
+    tree.observe(current);
+    // Group 101 ended. A later unrelated group reusing that number whose
+    // leader already exited has no creator entry left to compare.
+    current = table(entry(100, 1), entry(102, 100, 102), entry(103, 1, 101, "unrelated"));
+    expect(tree.remaining(current)).toEqual({ processes: [102], groups: [100, 102] });
+  });
+
   it("rejects a leader that is not its own live group leader", () => {
     expect(() => new OwnedProcessTree(entry(100, 1, 99))).toThrow("owned_process_tree_leader_invalid");
     expect(() => new OwnedProcessTree(entry(100, 1, 100, "t", true))).toThrow("owned_process_tree_leader_invalid");

@@ -77,6 +77,13 @@ export class OwnedProcessTree {
         this.#groups.set(descendant.pid, descendant.startTime);
       }
     }
+    // Each Bash tool call adds a group; forget ended ones during long sessions.
+    const members = groupMembership(table);
+    for (const group of this.#groups.keys()) {
+      if (group !== this.leaderPid && !members.has(group) && !this.#signals.exists(-group)) {
+        this.#groups.delete(group);
+      }
+    }
   }
 
   /** Live tracked descendants and still-owned groups with a live member. */
