@@ -55,6 +55,11 @@ import {
 const LATEST_SNAPSHOT_TURNS = 10;
 const MAXIMUM_CURSOR_BYTES = 512;
 const MAXIMUM_PROVIDER_TOOL_NAME_BYTES = 4_096;
+/** Model Claude Code stamps on assistant rows it writes without an API call. */
+const CLAUDE_SYNTHETIC_MODEL = "<synthetic>";
+const CLAUDE_NO_RESPONSE_REQUESTED = "No response requested.";
+const UNANSWERED_TURN_NOTICE =
+  "Claude Code exited before this turn finished and closed it without a response when the conversation resumed.";
 const OPERATION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const CLAUDE_MESSAGE_TIMESTAMP_SCHEMA = z.iso.datetime();
@@ -647,6 +652,20 @@ function buildTimeline(
     }
     if (!message.mainThread || message.type === "system") continue;
     const content = parseMessageContent(message.message, message.type);
+    if (isResumeClosure(message, content)) {
+      // Never an answer, a turn, or a fork checkpoint. Most close the startup
+      // message or another hidden row; one closing the turn itself proves that
+      // turn ended unanswered unless a Sedes receipt already settled it.
+      if (current && isUnsettledTurn(current) && !hasTerminalReceipt(terminalReceipts, current.backendTurnId)) {
+        current.interruptedAt = message.timestamp!;
+        addItem(current, itemsById, message, 0, {
+          semanticKind: "notice",
+          tone: "warning",
+          text: boundText(UNANSWERED_TURN_NOTICE),
+        });
+      }
+      continue;
+    }
     if (current && isInterruptionMarker(message, content, authentication?.isApplicationInputOperation)) {
       current.interruptedAt = message.timestamp!;
       current.lastRetainedMessageUuid = message.uuid;
@@ -1140,6 +1159,36 @@ function isTaskNotification(message: ParsedSessionMessage, content: readonly Par
     content[0].text.trimEnd().endsWith("</task-notification>");
 }
 
+/**
+ * When Claude Code resumes a session whose tip is an unanswered user-side row
+ * (Sedes' startup message, a prompt, a tool result, or an interruption
+ * marker), it inserts this exact assistant row instead of calling the model.
+ * Match Claude Code's own structural test: the synthetic model and exactly
+ * this one text block, timestamped like every native row. Synthetic API error
+ * rows share the model but carry other text and stay ordinary messages.
+ */
+function isResumeClosure(message: ParsedSessionMessage, content: readonly ParsedContentBlock[]): boolean {
+  return message.type === "assistant" && message.timestamp !== undefined &&
+    isPlainRecord(message.message) && message.message.model === CLAUDE_SYNTHETIC_MODEL &&
+    content.length === 1 && content[0]?.type === "text" && content[0].text === CLAUDE_NO_RESPONSE_REQUESTED;
+}
+
+/** Whether a later resume closure means this turn ended without settling. A
+ * notification without a response is dropped rather than shown as ended. */
+function isUnsettledTurn(turn: MutableTurn): boolean {
+  if (turn.interruptedAt !== undefined) return false;
+  if (turn.taskNotificationBoundary && turn.orderedBackendItemIds.length === 0) return false;
+  return !(turn.terminalAssistantUuid !== undefined &&
+    turn.lastRetainedMessageUuid === turn.terminalAssistantUuid &&
+    turn.unresolvedToolIds.size === 0);
+}
+
+/** Receipts are validated where applied; this lookup only defers to them. */
+function hasTerminalReceipt(receipts: readonly ClaudeTerminalReceiptOverride[], backendTurnId: string): boolean {
+  return Array.isArray(receipts) &&
+    receipts.some((receipt: unknown) => isPlainRecord(receipt) && receipt.backendTurnId === backendTurnId);
+}
+
 /** Native CLI control markers have no origin or synthetic flag, even in SDK
  * history. Recognize only the exact timestamped, single-block native shape.
  * Explicit provider provenance and authenticated Sedes inputs remain messages. */
@@ -1371,6 +1420,7 @@ export function nextClaudeUserMessageOrdinal(
   return parseMessages(value).filter((message) => {
     if (!message.mainThread || message.type === "system") return false;
     const content = parseMessageContent(message.message, message.type);
+    if (isResumeClosure(message, content)) return false;
     if (hasTurn && isInterruptionMarker(message, content, isApplicationInputOperation)) return false;
     if (message.type === "assistant") { hasTurn = true; return false; }
     if (isTaskNotification(message, content)) return false;

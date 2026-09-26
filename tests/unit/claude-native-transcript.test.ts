@@ -10,6 +10,7 @@ import {
   readClaudeSessionMessages,
   resolveClaudeSessionMessages,
 } from "../../src/server/backends/claude/claude-native-transcript.js";
+import { projectClaudeHistory } from "../../src/server/backends/claude/claude-history-projector.js";
 import { ClaudeSdkRuntimeAdapter } from "../../src/server/backends/claude/claude-runtime-client.js";
 import { OfficialClaudeSdkFacade } from "../../src/server/backends/claude/claude-sdk-facade.js";
 import { ClaudeTranscriptFixture } from "../helpers/claude-native-transcript-fixture.js";
@@ -309,6 +310,209 @@ describe("Claude native transcript reader", () => {
     ].join("\n")));
     expect(entries).toEqual([{ type: "user", uuid: "a" }, { type: "progress", uuid: "b" }]);
     expect(await resolveClaudeSessionMessages([])).toEqual([]);
+  });
+});
+
+/**
+ * Claude Code behaviours on resume that Sedes' reader and projector depend on,
+ * as native rows: the persisted startup message, its `<synthetic>` closure on
+ * the next resume, and provider notifications about unfinished background work.
+ */
+describe("Claude Code resume shapes", () => {
+  const unansweredNotice = "Claude Code exited before this turn finished and closed it without a response when the conversation resumed.";
+
+  async function project(fixture: ClaudeTranscriptFixture) {
+    const messages = await ours(fixture);
+    // No shape here has a parallel dead end, so the pinned SDK agrees.
+    expect(messages).toEqual(await sdk(fixture));
+    return projectClaudeHistory(messages);
+  }
+
+  function statuses(projection: ReturnType<typeof projectClaudeHistory>): string[] {
+    return projection.snapshot.orderedBackendTurnIds.map((id) => projection.snapshot.turnsById[id]!.status);
+  }
+
+  /** User, assistant, and notice text per turn, in order. */
+  function transcript(projection: ReturnType<typeof projectClaudeHistory>): string[][] {
+    const { snapshot } = projection;
+    return snapshot.orderedBackendTurnIds.map((turnId) => snapshot.turnsById[turnId]!.orderedBackendItemIds.flatMap((itemId) => {
+      const item = snapshot.itemsById[itemId]!;
+      if (item.semanticKind === "user_message") return item.content.flatMap((part) => part.kind === "text" ? [`user: ${part.text.text}`] : []);
+      if (item.semanticKind === "assistant_message") return [`assistant: ${item.markdown.text}`];
+      if (item.semanticKind === "notice") return [`notice: ${item.text.text}`];
+      return [item.semanticKind];
+    }));
+  }
+
+  function closures(fixture: ClaudeTranscriptFixture) {
+    return fixture.rows.filter((row) => row.type === "assistant" && (row.message as { model?: string }).model === "<synthetic>");
+  }
+
+  it.each([true, false])("hides the startup message and parents the next prompt on it (queueTranscriptOnly: %s)", async (queueTranscriptOnly) => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    const startup = fixture.startupMessage({ queueTranscriptOnly });
+    const prompt = fixture.prompt("Describe the synthetic module.");
+    const answer = fixture.answer("It parses synthetic input.");
+    // Before 2.1.280 the row lacked `queueTranscriptOnly`, so the model also
+    // received its "NON-USER SOURCE" label merged into this prompt.
+    expect(fixture.rows.find(({ uuid }) => uuid === startup)?.queueTranscriptOnly).toBe(queueTranscriptOnly || undefined);
+    expect(fixture.rows.find(({ uuid }) => uuid === prompt)).toMatchObject({ parentUuid: startup });
+
+    const projection = await project(fixture);
+    expect(statuses(projection)).toEqual(["completed"]);
+    expect(transcript(projection)).toEqual([["user: Describe the synthetic module.", "assistant: It parses synthetic input."]]);
+    expect(projection.terminalCheckpointUuidByBackendTurnId.get(projection.snapshot.orderedBackendTurnIds[0]!)).toBe(answer);
+  });
+
+  it("accumulates a startup message per attach and a closure per later resume without changing history", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.startupMessage();
+    fixture.prompt("Summarize the synthetic notes.");
+    const answer = fixture.answer("There are three synthetic notes.");
+    const settled = await project(fixture);
+
+    // The first reopen finds the answer at the tip; every later one finds the previous startup message.
+    const resumes = Array.from({ length: 9 }, () => fixture.resume());
+    expect(resumes[0]!.closure).toBeUndefined();
+    for (const [index, resume] of resumes.entries()) {
+      if (index === 0) continue;
+      expect(fixture.rows.find(({ uuid }) => uuid === resume.closure)).toMatchObject({ parentUuid: resumes[index - 1]!.startup });
+    }
+    expect(fixture.rows.filter((row) => row.isMeta === true)).toHaveLength(10);
+    expect(closures(fixture)).toHaveLength(8);
+
+    const messages = await ours(fixture);
+    expect(messages.filter(({ type }) => type === "assistant")).toHaveLength(9);
+    const reopened = await project(fixture);
+    expect(reopened.snapshot).toEqual(settled.snapshot);
+    expect(reopened.usage).toEqual(settled.usage);
+    expect(reopened.terminalCheckpointUuidByBackendTurnId).toEqual(settled.terminalCheckpointUuidByBackendTurnId);
+    expect([...reopened.terminalCheckpointUuidByBackendTurnId.values()]).toEqual([answer]);
+  });
+
+  it("projects no turn for a thread reopened several times before its first prompt", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.startupMessage();
+    for (let attach = 0; attach < 3; attach += 1) fixture.resume();
+    expect(closures(fixture)).toHaveLength(3);
+    const reopened = await project(fixture);
+    expect(reopened.snapshot.orderedBackendTurnIds).toEqual([]);
+    expect(reopened.snapshot.runState).toBe("idle");
+
+    fixture.prompt("First synthetic prompt.");
+    fixture.answer("First synthetic answer.");
+    const sent = await project(fixture);
+    expect(statuses(sent)).toEqual(["completed"]);
+    expect(transcript(sent)).toEqual([["user: First synthetic prompt.", "assistant: First synthetic answer."]]);
+  });
+
+  it("ends a prompt left unanswered by a process that died as interrupted, stably across resumes", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.startupMessage();
+    fixture.prompt("Earlier synthetic prompt.");
+    fixture.answer("Earlier synthetic answer.");
+    fixture.resume();
+    fixture.prompt("A synthetic prompt nobody answered.");
+    const reminder = fixture.attachment({ type: "synthetic_reminder", content: "synthetic" });
+    const { closure } = fixture.resume();
+    // Claude Code closes the trailing row, here an attachment after the prompt.
+    expect(fixture.rows.find(({ uuid }) => uuid === closure)).toMatchObject({ parentUuid: reminder });
+
+    const projection = await project(fixture);
+    expect(statuses(projection)).toEqual(["completed", "interrupted"]);
+    expect(transcript(projection)[1]).toEqual(["user: A synthetic prompt nobody answered.", `notice: ${unansweredNotice}`]);
+    expect(projection.snapshot.runState).toBe("idle");
+    const ended = projection.snapshot.orderedBackendTurnIds[1]!;
+    expect(projection.snapshot.turnsById[ended]).toMatchObject({ endedBy: "interrupted",
+      completedAt: fixture.rows.find(({ uuid }) => uuid === closure)!.timestamp });
+    expect(projection.terminalCheckpointUuidByBackendTurnId.has(ended)).toBe(false);
+
+    fixture.resume();
+    fixture.resume();
+    expect((await project(fixture)).snapshot).toEqual(projection.snapshot);
+  });
+
+  it.each([false, true])("ends a turn cut off after a tool result (hidden Continue row before 2.1.281: %s)", async (hiddenContinue) => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.startupMessage();
+    fixture.prompt("Read the synthetic file.");
+    const [call] = fixture.reply([{ type: "tool_use", id: "toolu_synthetic_read", name: "Read", input: { file_path: "/synthetic/file" } }],
+      { stopReason: "tool_use" });
+    fixture.toolResult("toolu_synthetic_read", call!);
+    if (hiddenContinue) {
+      fixture.prompt("Continue from where you left off.", { isMeta: true, origin: undefined, promptId: undefined,
+        message: { role: "user", content: [{ type: "text", text: "Continue from where you left off." }] } });
+    }
+    expect(fixture.resume().closure).toBeDefined();
+
+    const projection = await project(fixture);
+    expect(statuses(projection)).toEqual(["interrupted"]);
+    expect(transcript(projection)).toEqual([["user: Read the synthetic file.", "file_read", `notice: ${unansweredNotice}`]]);
+    const tool = Object.values(projection.snapshot.itemsById).find((item) => item.semanticKind === "file_read");
+    expect(tool?.status).toBe("completed");
+  });
+
+  it("keeps a user-interrupted turn interrupted without a phantom answer", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.startupMessage();
+    fixture.prompt("Start a long synthetic task.");
+    fixture.text("Working on the synthetic task");
+    fixture.prompt("[Request interrupted by user]", { origin: undefined, promptId: undefined,
+      message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] } });
+    expect(fixture.resume().closure).toBeDefined();
+
+    const projection = await project(fixture);
+    expect(statuses(projection)).toEqual(["interrupted"]);
+    expect(transcript(projection)).toEqual([["user: Start a long synthetic task.", "assistant: Working on the synthetic task"]]);
+  });
+
+  describe("unfinished background work reported on resume", () => {
+    const variants = [
+      ["an agent with no completion record", { status: "stopped", summary: "Background agent \"synthetic survey\" didn't finish before the previous session ended",
+        note: "Synthetic note: no completion record was found in the previous session." }],
+      ["an agent lost with its process", { status: "failed", summary: "Background agent \"synthetic survey\" didn't finish before the previous session ended",
+        note: "Synthetic note: it was running when the previous process exited." }],
+      ["several agents", { status: "stopped", taskIds: ["asynthetic0000001", "asynthetic0000002"],
+        summary: "2 background agents didn't finish before the previous session ended: \"synthetic a\" (asynthetic0000001), \"synthetic b\" (asynthetic0000002)." }],
+      ["a shell command", { status: "stopped", toolUseId: "toolu_synthetic_shell",
+        summary: "Background shell command didn't finish before the previous session ended" }],
+      ["the older wording", { status: "stopped",
+        summary: "No completion record was found for background agent \"synthetic survey\" from the previous session." }],
+    ] as const;
+
+    function beforeResume() {
+      const fixture = new ClaudeTranscriptFixture(workspace);
+      fixture.startupMessage();
+      fixture.prompt("Start a synthetic background survey.");
+      fixture.answer("The synthetic survey is running in the background.");
+      return fixture;
+    }
+
+    it.each(variants)("drops an unanswered notification about %s and its later closure", async (_label, notification) => {
+      const fixture = beforeResume();
+      const settled = await project(fixture);
+      // Claude Code writes the notification on resume, before the startup message.
+      const row = fixture.taskNotification(notification);
+      fixture.startupMessage();
+      expect((await ours(fixture)).find(({ uuid }) => uuid === row)).toMatchObject({ origin: { kind: "task-notification" } });
+      expect((await project(fixture)).snapshot).toEqual(settled.snapshot);
+      expect(fixture.resume().closure).toBeDefined();
+      const reopened = await project(fixture);
+      expect(reopened.snapshot).toEqual(settled.snapshot);
+      expect(reopened.terminalCheckpointUuidByBackendTurnId).toEqual(settled.terminalCheckpointUuidByBackendTurnId);
+    });
+
+    it("shows a turn Claude starts for a resume notification", async () => {
+      const fixture = beforeResume();
+      fixture.taskNotification(variants[0][1]);
+      const answer = fixture.answer("The synthetic survey stopped; it can be resumed.");
+      fixture.startupMessage();
+      fixture.resume();
+      const projection = await project(fixture);
+      expect(statuses(projection)).toEqual(["completed", "completed"]);
+      expect(transcript(projection)[1]).toEqual(["assistant: The synthetic survey stopped; it can be resumed."]);
+      expect(projection.terminalCheckpointUuidByBackendTurnId.get(projection.snapshot.orderedBackendTurnIds[1]!)).toBe(answer);
+    });
   });
 });
 

@@ -19,6 +19,13 @@ describe("Claude native usage accounting", () => {
     expect(claudeMessageObservation(message, "turn", "history")!.facts[0]).toMatchObject({tokens: {input: null, cacheRead: null, cacheWrite: null, uncachedInput: "10"}, basis: ["provider_reported"], models: [{model: "model-a", provider: null}]});
     expect(claudeMessageObservation({...message, parent_tool_use_id: "child"}, "turn", "history")).toBeUndefined();
   });
+  it.each(["No response requested.", "API Error: synthetic failure"])("ignores Claude Code's locally written %j rows", text => {
+    const zero = {input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0};
+    const message = {type: "assistant", uuid: "frame", parent_tool_use_id: null, parent_agent_id: null, message: {id: "a5d0a52e-3f43-4c56-9b6c-6f4a4f1d2b10",
+      model: "<synthetic>", role: "assistant", stop_reason: "stop_sequence", content: [{type: "text", text}], usage: zero}} as unknown as SessionMessage;
+    expect(claudeMessageObservation(message, "turn", "history")).toBeUndefined();
+    expect(claudeMessageObservation({...message, message: {...message.message as object, model: "model-a"}} as SessionMessage, "turn", "history")).toBeDefined();
+  });
   it("reuses actual query epochs and keeps history independent of resumed query checkpoints", () => {
     const epochs: string[] = [], captured: UsageObservation[] = [], sealed: string[] = [];
     const sink: UsageSink = {enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [], open: (source) => {epochs.push(source.epoch); return {registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: (reason) => sealed.push(reason)};}};

@@ -4,6 +4,13 @@
 
 ### Breaking Changes
 
+- Claude backends require Claude Code 2.1.281 or newer and are tested through
+  2.1.283. Earlier releases sent Sedes' startup message to the model with the
+  first prompt, which Claude sometimes refused, or added a hidden "Continue"
+  prompt when resuming after an interrupted tool call. Update Claude Code on
+  every local and remote execution host before upgrading; an older release
+  fails backend startup.
+
 - Sidecars must use runtime protocol 14, which reads Claude history through the
   transcript's true tip and reports transcript presence. Upgrade existing
   sidecars explicitly before reconnecting with this server version.
@@ -92,6 +99,12 @@
 - Reopen a Claude thread that was opened but never sent to. Sedes now resumes
   the existing session instead of failing with "Session ID … is already in
   use", and first-send recovery can resolve it.
+
+- Stop showing Claude Code's "No response requested." resume placeholder as a
+  reply. Reopening a Claude thread no longer adds a phantom turn or displaces a
+  turn's final answer, and forks and usage ignore the placeholder. A prompt
+  left unanswered because Claude Code exited now ends as interrupted with an
+  explanation instead of completed.
 
 - Show turns Claude starts itself, such as after a background task or peer
   hand-back, as running with **Stop**, and keep idle retirement, eviction and

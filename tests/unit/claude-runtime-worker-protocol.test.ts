@@ -1115,7 +1115,7 @@ describe("ClaudeRuntimeWorkerHost", () => {
 
 function helperFacade(): ClaudeSdkFacade {
   return {
-    readCliRelease: vi.fn(async () => "2.1.274"),
+    readCliRelease: vi.fn(async () => "2.1.283"),
     readCliAuthStatus: vi.fn(async () => ({ loggedIn: true })),
     createQuery: vi.fn(() => {
       throw new Error("unused");
@@ -1151,7 +1151,7 @@ function queryFacade(
   let options: Options | undefined;
   const close = vi.fn();
   const sdk: ClaudeSdkFacade = {
-    readCliRelease: vi.fn(async () => "2.1.274"),
+    readCliRelease: vi.fn(async () => "2.1.283"),
     readCliAuthStatus: vi.fn(async () => ({
       loggedIn: true,
       authMethod: "claude.ai",
@@ -1174,7 +1174,7 @@ function queryFacade(
           type: "system",
           subtype: "init",
           apiKeySource: "oauth",
-          claude_code_version: "2.1.274",
+          claude_code_version: "2.1.283",
           cwd: "/workspace",
           tools: [],
           mcp_servers: [],

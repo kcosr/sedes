@@ -167,7 +167,7 @@ function provider(
   interruptReceipt: SDKControlInterruptResponse = {
     still_queued: [],
   },
-  cliRelease = "2.1.274",
+  cliRelease = "2.1.283",
 ) {
   let input: ClaudeQueryInput | undefined;
   let releaseStream!: () => void;

@@ -21,7 +21,7 @@ const subscriptionAuth = Object.freeze({
 }) satisfies ClaudeCliAuthStatus;
 
 function facade(
-  release = "2.1.274",
+  release = "2.1.283",
   streamedRelease: string | null = release,
   streamError?: Error,
   behavior?: {
@@ -103,7 +103,7 @@ describe("probeClaudeSdk", () => {
         environment: { HOME: "/operator", CLAUDE_CONFIG_DIR: "/claude" },
       }),
     ).resolves.toMatchObject({
-      cliRelease: "2.1.274",
+      cliRelease: "2.1.283",
       account: {
         apiProvider: "firstParty",
         subscriptionType: "Claude Max",
@@ -213,7 +213,7 @@ describe("probeClaudeSdk", () => {
   });
 
   it("rejects a successful control initialization when stream init is missing", async () => {
-    const sdk = facade("2.1.274", null);
+    const sdk = facade("2.1.283", null);
     await expect(
       probeClaudeSdkDirect({
         sdk,
@@ -227,8 +227,8 @@ describe("probeClaudeSdk", () => {
 
   it("propagates an iterator failure despite successful control initialization", async () => {
     const sdk = facade(
-      "2.1.274",
-      "2.1.274",
+      "2.1.283",
+      "2.1.283",
       new Error("claude_sdk_iterator_failed"),
     );
     await expect(
@@ -243,7 +243,7 @@ describe("probeClaudeSdk", () => {
   });
 
   it("rejects natural stream termination after validated initialization", async () => {
-    const sdk = facade("2.1.274", "2.1.274", undefined, {
+    const sdk = facade("2.1.283", "2.1.283", undefined, {
       endAfterInit: true,
     });
     await expect(
@@ -258,7 +258,7 @@ describe("probeClaudeSdk", () => {
   });
 
   it("ignores iterator errors caused by successful owner cleanup", async () => {
-    const sdk = facade("2.1.274", "2.1.274", undefined, {
+    const sdk = facade("2.1.283", "2.1.283", undefined, {
       cleanupError: new Error("claude_sdk_cleanup_error"),
     });
     await expect(
@@ -269,11 +269,11 @@ describe("probeClaudeSdk", () => {
         timeoutMs: 1_000,
         environment: { HOME: "/operator", CLAUDE_CONFIG_DIR: "/claude" },
       }),
-    ).resolves.toMatchObject({ cliRelease: "2.1.274" });
+    ).resolves.toMatchObject({ cliRelease: "2.1.283" });
   });
 
   it("preserves an original admission failure over owner cleanup errors", async () => {
-    const sdk = facade("2.1.274", "2.1.274", undefined, {
+    const sdk = facade("2.1.283", "2.1.283", undefined, {
       cleanupError: new Error("claude_sdk_cleanup_error"),
       initialization: {
         account: { apiProvider: "firstParty" },
@@ -305,7 +305,7 @@ describe("probeClaudeSdk", () => {
   });
 
   it("accepts a newer CLI release and reports the compatibility warning", async () => {
-    const sdk = facade("2.1.275");
+    const sdk = facade("2.1.284");
     const onNewerVersion = vi.fn();
     await expect(
       probeClaudeSdkDirect({
@@ -316,10 +316,10 @@ describe("probeClaudeSdk", () => {
         environment: { HOME: "/operator", CLAUDE_CONFIG_DIR: "/claude" },
         onNewerVersion,
       }),
-    ).resolves.toMatchObject({ cliRelease: "2.1.275" });
+    ).resolves.toMatchObject({ cliRelease: "2.1.284" });
     expect(onNewerVersion).toHaveBeenCalledWith({
-      testedThroughVersion: "2.1.274",
-      observedVersion: "2.1.275",
+      testedThroughVersion: "2.1.283",
+      observedVersion: "2.1.284",
     });
   });
 
@@ -343,7 +343,7 @@ describe("probeClaudeSdk", () => {
   });
 
   it("accepts a newer compatible streamed CLI release", async () => {
-    const sdk = facade("2.1.274", "2.1.275");
+    const sdk = facade("2.1.283", "2.1.284");
     const onNewerVersion = vi.fn();
     await expect(
       probeClaudeSdkDirect({
@@ -354,20 +354,20 @@ describe("probeClaudeSdk", () => {
         environment: { HOME: "/operator", CLAUDE_CONFIG_DIR: "/claude" },
         onNewerVersion,
       }),
-    ).resolves.toMatchObject({ cliRelease: "2.1.274" });
+    ).resolves.toMatchObject({ cliRelease: "2.1.283" });
     expect(onNewerVersion).toHaveBeenCalledWith({
-      testedThroughVersion: "2.1.274",
-      observedVersion: "2.1.275",
+      testedThroughVersion: "2.1.283",
+      observedVersion: "2.1.284",
     });
   });
 
   it.each([
     ["2.1.240", "claude_cli_release_below_minimum"],
-    ["2.1.275-beta.1", "claude_cli_release_prerelease_unsupported"],
+    ["2.1.284-beta.1", "claude_cli_release_prerelease_unsupported"],
   ])(
     "retains incompatible streamed CLI release %s during cleanup",
     async (streamRelease, expectedError) => {
-      const sdk = facade("2.1.274", streamRelease);
+      const sdk = facade("2.1.283", streamRelease);
       await expect(
         probeClaudeSdkDirect({
           sdk,

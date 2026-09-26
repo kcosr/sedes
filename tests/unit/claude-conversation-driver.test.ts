@@ -1697,6 +1697,21 @@ describe("ClaudeConversationBackendDriver native history", () => {
     }
   });
 
+  it("reconciles a prompt Claude Code closed unanswered on resume as interrupted, not completed", async () => {
+    const fixture = transcript();
+    fixture.startupMessage();
+    const anchor = retryAnchor([]);
+    fixture.prompt("Rename the synthetic function.", { uuid: operationId });
+    // The process died before replying; the next attach resumes the session.
+    expect(fixture.resume().closure).toBeDefined();
+    await fixture.write(configDirectory, workspace.canonicalPath);
+    const { driver } = nativeStoreDriver();
+    const reconciled = await driver.reconcileSubmission({ ...attachment(), applicationOperationId: operationId, retryAnchor: anchor });
+    expect(reconciled).toMatchObject({ status: "accepted", backendTurn: { status: "interrupted", completionCorrelations: [operationId] } });
+    expect(reconciled.status === "accepted" && reconciled.completionIdentity).toMatch(/:interrupted$/u);
+    expect(JSON.stringify(reconciled)).not.toContain("No response requested.");
+  });
+
   async function readViaDriver(driver: ClaudeConversationBackendDriver): Promise<SessionMessage[]> {
     const native = new OfficialClaudeSdkFacade();
     await driver.read(attachment());
@@ -1905,7 +1920,7 @@ function fakeSdk(
     },
   } satisfies SDKControlInitializeResponse;
   const sdk = {
-    readCliRelease: vi.fn(async () => "2.1.274"),
+    readCliRelease: vi.fn(async () => "2.1.283"),
     readCliAuthStatus: vi.fn(async () => ({
       loggedIn: true,
       authMethod: "claude.ai",
@@ -1924,7 +1939,7 @@ function fakeSdk(
           type: "system",
           subtype: "init",
           apiKeySource: "oauth",
-          claude_code_version: "2.1.274",
+          claude_code_version: "2.1.283",
           cwd: "/workspace",
           tools: [],
           mcp_servers: [],

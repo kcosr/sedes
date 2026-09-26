@@ -60,7 +60,8 @@ export function claudeTurnObservation(message: SDKResultMessage, backendTurnId: 
 export function claudeMessageObservation(message: SessionMessage, backendTurnId: string, provenance: "live" | "history"): UsageObservation | undefined {
   if (message.type !== "assistant" || message.parent_tool_use_id || message.parent_agent_id) return;
   const payload = record(message.message); const usage = record(payload?.usage);
-  if (!payload || !usage || payload.stop_reason === null) return;
+  // Claude Code writes `<synthetic>` rows (resume closures, API errors) without a model request.
+  if (!payload || !usage || payload.stop_reason === null || payload.model === "<synthetic>") return;
   const input = count(usage.input_tokens), output = count(usage.output_tokens);
   const cacheRead = count(usage.cache_read_input_tokens), cacheWrite = count(usage.cache_creation_input_tokens);
   // Anthropic message ID survives history transport and split content blocks.

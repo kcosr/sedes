@@ -137,7 +137,7 @@ class FakeClaudeSdk implements ClaudeSdkFacade {
   readonly #sessions = new Map<string, SessionMessage[]>();
 
   async readCliRelease(): Promise<string> {
-    return "2.1.274";
+    return "2.1.283";
   }
 
   async readCliAuthStatus() {
@@ -290,7 +290,7 @@ function systemInit(sessionId: string, options: Options): SDKMessage {
     type: "system",
     subtype: "init",
     apiKeySource: "oauth",
-    claude_code_version: "2.1.274",
+    claude_code_version: "2.1.283",
     cwd: options.cwd!,
     tools: [],
     mcp_servers: [],

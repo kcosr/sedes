@@ -335,7 +335,7 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
   readonly #backgroundTasks = new Map<string, { taskId: string; toolId: string }>();
 
   async readCliRelease(): Promise<string> {
-    return "2.1.274";
+    return "2.1.283";
   }
 
   async readCliAuthStatus() {
@@ -911,7 +911,7 @@ function claudeSystemInit(
     type: "system",
     subtype: "init",
     apiKeySource: "oauth",
-    claude_code_version: "2.1.274",
+    claude_code_version: "2.1.283",
     cwd: options.cwd!,
     tools: [],
     mcp_servers: [],

@@ -23,7 +23,7 @@ vi.mock("../../src/server/backends/claude/runtime/claude-sidecar-runtime.js", as
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const PROBE_ID = "22222222-2222-4222-8222-222222222222";
 function opened(events: ClaudePersistentEvent[] = [], reattached = false) {
-  return { failureCode: null, pendingBackgroundTaskIds: [], backgroundActivity: { state: "known", agents: 0, commands: 0, other: 0 }, reattached, queryId: SESSION_ID, startupProbeUuid: PROBE_ID, initialization: { cliRelease: "2.1.274", models: [], commands: [], skillNames: [], terminalCommandNames: [], account: {}, actualPermissionMode: "default" }, events };
+  return { failureCode: null, pendingBackgroundTaskIds: [], backgroundActivity: { state: "known", agents: 0, commands: 0, other: 0 }, reattached, queryId: SESSION_ID, startupProbeUuid: PROBE_ID, initialization: { cliRelease: "2.1.283", models: [], commands: [], skillNames: [], terminalCommandNames: [], account: {}, actualPermissionMode: "default" }, events };
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 function setup(input: { nativeDefault?: boolean; supportsRuntime?: boolean } = {}) {

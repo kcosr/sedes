@@ -277,7 +277,7 @@ function fixture(options: {
     },
   } satisfies SDKControlInitializeResponse;
   const sdk = {
-    readCliRelease: vi.fn(async () => "2.1.274"),
+    readCliRelease: vi.fn(async () => "2.1.283"),
     readCliAuthStatus: vi.fn(async () => ({
       loggedIn: true,
       authMethod: "claude.ai",
@@ -291,7 +291,7 @@ function fixture(options: {
           type: "system",
           subtype: "init",
           apiKeySource: "oauth",
-          claude_code_version: "2.1.274",
+          claude_code_version: "2.1.283",
           cwd: input.options.cwd!,
           tools: [],
           mcp_servers: [],

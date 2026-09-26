@@ -1,10 +1,20 @@
 # Claude Agent SDK 0.3.274 native qualification
 
 This is release qualification for the existing Sedes Claude integration.
-The SDK is pinned to 0.3.274; the qualified current CLI is 2.1.274.
-The admitted minimum CLI is 2.1.274. The 2.1.241 observations below are
-historical comparison evidence, not a supported runtime configuration. No
+The SDK is pinned to 0.3.274; the qualified current CLI is 2.1.283 and the
+admitted minimum CLI is 2.1.281. The 2.1.274 cases below were the original
+qualification of this profile, and the 2.1.241 observations are historical
+comparison evidence; neither is a supported runtime configuration now. No
 automatic adoption of new SDK features is implied by updating the dependency.
+
+On 2026-09-26 the minimum moved to 2.1.281. Earlier releases send Sedes'
+persisted startup message to the model with the next prompt (fixed in 2.1.280)
+or resume an interrupted tool call with a hidden "Continue" prompt (fixed in
+2.1.281). That choice rests on release notes and native transcript evidence;
+the cases below were not rerun on 2.1.281. The same day, the four
+`claude-native-boundary.test.ts` cases passed on 2.1.283. The 2.1.283
+metadata entry records its registry integrity; the package executable was
+byte-identical to the installed CLI.
 
 ## Authority and artifacts
 

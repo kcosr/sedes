@@ -25,6 +25,17 @@
       "executableSha256": "15e2d05148f801b5774032faad87e624ecd172e9903288bda448b892eb58fa07",
       "reportedVersion": "2.1.274 (Claude Code)",
       "qualification": "loopback_fixture"
+    },
+    {
+      "package": "@anthropic-ai/claude-code-linux-x64",
+      "version": "2.1.283",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.283.tgz",
+      "integrity": "sha512-q9+Ke42t/I6oLb/bTmh6sI24jMw4KNwz3QbQLp9dVQ8ipQChfAW5L11SX8jcDzVCW/P2tId7ftI+lgBURvz9uQ==",
+      "tarballSha256": "d14ec0fca400151092c926928fea7e8e38231f7a90e6e1f8eeb2a55c24676afb",
+      "executableRelativePath": "claude",
+      "executableSha256": "1859583ce32920595c61ef868bee52e1b1594f7486db209935e01f1e5e804ae2",
+      "reportedVersion": "2.1.283 (Claude Code)",
+      "qualification": "loopback_fixture"
     }
   ],
   "sdkArtifact": {

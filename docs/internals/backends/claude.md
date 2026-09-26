@@ -201,7 +201,10 @@ remote query's held replay behind the baseline; the read resolves through the
 startup message that the launch has just persisted.
 
 Every launch sends Sedes' empty `shouldQuery: false` startup message, which
-Claude Code persists as a meta user row at the transcript tip. The pinned SDK's
+Claude Code persists as a meta user row at the transcript tip. From 2.1.280 the
+row is `queueTranscriptOnly` and never reaches the model; earlier releases
+merged its "NON-USER SOURCE" label into the next prompt, one reason the
+runtime minimum is 2.1.281. The pinned SDK's
 `getSessionMessages` picks the file-latest childless row that is not meta.
 Parallel tool calls leave childless sibling tool results, so a transcript
 ending in a startup message read back only to its last parallel tool call:
@@ -311,6 +314,28 @@ content, and quoted or mixed content remain ordinary messages. SDK history
 does not distinguish an unannotated external input that exactly copies the
 native sentinel shape; that reserved shape is interpreted as native control
 history. A late interrupt acknowledgment never overwrites a settled run state.
+
+Claude Code closes a trailing user or attachment row when it resumes a session.
+That row can be the previous attach's startup message, an unanswered prompt, a
+tool result, or an interruption sentinel. The closure is a timestamped
+assistant row with the `<synthetic>` model and exactly one text block,
+`No response requested.`, and no model call is made for it. The projector
+matches that exact shape, as Claude Code itself does. It never projects the
+closure as an answer, a turn, a usage source, or a fork checkpoint. Most
+closures follow a settled turn and answer a hidden startup message, so history
+is unchanged; a thread reopened before its first prompt shows no turn.
+
+A closure can instead follow a turn that had not settled, meaning its last
+visible row is not a terminal assistant reply. If that turn also has no Sedes
+terminal receipt, it ends `interrupted` at the closure's timestamp. It carries
+a warning notice keyed to the closure row: "Claude Code exited before this turn
+finished and closed it without a response when the conversation resumed." A
+dangling Sedes submission therefore reconciles as interrupted, not completed.
+A terminal receipt stays authoritative. An unanswered resume task notification
+and its later closure remain hidden. Synthetic API-error rows share the model
+but carry other text, so they stay ordinary assistant messages. Usage
+accounting ignores every `<synthetic>` row, because none records a model
+request.
 
 SDK 0.3.274 can emit intermediate results while draining background task
 notifications. Only successful empty zero-turn results carrying native
@@ -707,10 +732,11 @@ query as an unexpected failure or requiring another forced stop.
 Claude advertises conversation-targeted Steer using native `priority: "next"`.
 Stop interrupts the current turn only. Claude reports a queued steer as
 `still_queued` and runs it as the next turn; Sedes does not withdraw it.
-The runtime minimum is 2.1.274. Testing 2.1.241 showed that it can consume
-guidance but omits the second input’s consumption UUID, which cannot establish
-safe delivery tracking. Older runtimes fail the common admission guard; there
-is no separate compatibility path or version-specific Steer capability.
+Steer needs 2.1.274 or newer, below the 2.1.281 runtime minimum. Testing
+2.1.241 showed that it can consume guidance but omits the second input’s
+consumption UUID, which cannot establish safe delivery tracking. Older
+runtimes fail the common admission guard; there is no separate compatibility
+path or version-specific Steer capability.
 The target contains no turn ID. Native enqueue stays pending until exact
 user-message UUID evidence confirms incorporation; normalized history associates
 that input with the actual receiving turn. This can be the current turn or the
@@ -755,7 +781,11 @@ normalized integration surface:
   with the pinned SDK over synthetic native fixtures. The fixtures cover
   startup-message tips, parallel dead ends, rewinds, sidechains, queued
   commands, compaction, and partial lines. Revalidate this parity whenever the
-  SDK release changes;
+  SDK release changes. Its resume-shape fixtures also project the Claude Code
+  behaviours Sedes depends on: startup messages with and without
+  `queueTranscriptOnly`, one closure per later resume, closures after a
+  dangling startup message, prompt, tool result, or interruption, and resume
+  task-notification wording variants;
 - `tests/unit/claude-native-images.test.ts`, skill/command tests, and
   agent-tool environment tests cover input projection and optional surfaces;
 - persistent-runtime tests cover exact-session attachment, event replay,
@@ -775,7 +805,8 @@ normalized integration surface:
 - `tests/real-claude/` is an opt-in, capacity-consuming gate for its narrow
   reviewed streaming/persistence/usage/reopen profile. Its native-history
   case reproduces a startup-message tip over parallel tool calls with exact
-  pre-approved `sleep`/`echo` Bash invocations. Its persistent-runtime
+  pre-approved `sleep`/`echo` Bash invocations, and reopens a thread before
+  and after its first reply without a phantom turn. Its persistent-runtime
   case uses real worker stdio over local framed sockets; it does not verify a
   remote SSH or outbound host or provide blanket evidence for images, tools, permissions,
   skills, or subagents.
