@@ -854,7 +854,8 @@ describe("thread force-reset protocol", () => {
         blockerFingerprint,
         resettable: true,
         blockers,
-        affectedThreadIds: [threadId],
+        affectedThreads: [{ threadId, title: "Thread", runtime: { runState: "running",
+          backgroundActivity: { state: "known", agents: 1, commands: 0, other: 0 } } }],
         warnings: [
           {
             code: "provider_side_effects_may_remain",
@@ -884,10 +885,17 @@ describe("thread force-reset protocol", () => {
       blockerFingerprint,
       resettable: true,
       blockers: [blockers[0], blockers[0]],
-      affectedThreadIds: [threadId],
+      affectedThreads: [{ threadId, title: "Thread" }],
       warnings: [],
     };
     expect(threadForceResetImpactSchema.safeParse(impact).success).toBe(false);
+    expect(threadForceResetImpactSchema.safeParse({ ...impact, blockers }).success).toBe(true);
+    // Per-thread runtime background inventory is the only background contract.
+    expect(threadForceResetImpactSchema.safeParse({ ...impact, blockers,
+      backgroundActivity: { agents: 0, commands: 0, other: 0, unknownThreads: 0 } }).success).toBe(false);
+    expect(threadForceResetImpactSchema.safeParse({ ...impact, blockers,
+      affectedThreads: [{ threadId, title: "Thread", runtime: { runState: "idle",
+        backgroundActivity: { state: "known", agents: -1, commands: 0, other: 0 } } }] }).success).toBe(false);
     expect(
       threadForceResetImpactSchema.safeParse({
         ...impact,

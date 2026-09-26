@@ -1318,7 +1318,7 @@ describe("InteractionBroker", () => {
     expect(conversation.respond).toHaveBeenCalledOnce();
   });
 
-  it("force-resets exact pending interactions locally and suppresses stale backend replay", () => {
+  it("force-resets exact pending interactions, denies them at the provider, and suppresses stale backend replay", async () => {
     const conversation = new FakeConversation();
     const publisher = { opened: vi.fn(), resolved: vi.fn() };
     const broker = new InteractionBroker({ publisher });
@@ -1326,10 +1326,16 @@ describe("InteractionBroker", () => {
     conversation.emit(opened());
     const interaction = broker.listPending(scope, "thread-1")[0]!;
 
-    broker.abandonPending(scope, "thread-1", [interaction.id]);
+    const denied = broker.abandonPending(scope, "thread-1", [interaction.id]);
 
     expect(broker.listPending(scope, "thread-1")).toEqual([]);
-    expect(conversation.responses).toEqual([]);
+    await denied;
+    // The provider is told no, so a replaced runtime is not left waiting.
+    expect(conversation.responses).toEqual([{
+      applicationOperationId: `force-reset:${interaction.id}`,
+      interactionId: "backend-interaction-1",
+      kind: "cancel",
+    }]);
     expect(publisher.resolved).toHaveBeenCalledWith(
       scope,
       "thread-1",
@@ -1345,6 +1351,45 @@ describe("InteractionBroker", () => {
     conversation.emit(opened());
     expect(broker.listPending(scope, "thread-1")).toHaveLength(1);
     expect(publisher.opened).toHaveBeenCalledTimes(2);
+  });
+
+  it("abandons every force-reset interaction even when the provider refuses or cannot cancel one", async () => {
+    const conversation = new FakeConversation();
+    const publisher = { opened: vi.fn(), resolved: vi.fn() };
+    const broker = new InteractionBroker({ publisher });
+    broker.bind(scope, "thread-1", conversation);
+    // A non-cancellable prompt still receives the force-reset cancellation:
+    // the backend decides whether it can honor it.
+    conversation.emit(opened("backend-rejects", false));
+    conversation.emit(opened("backend-throws"));
+    conversation.emit(opened("backend-accepts"));
+    const ids = broker.listPending(scope, "thread-1").map(({ id }) => id);
+    expect(ids).toHaveLength(3);
+    conversation.respond = vi.fn((input: InteractionResponseInput) => {
+      conversation.responses.push(input);
+      if (input.interactionId === "backend-rejects") {
+        return Promise.reject(new Error("cancellation_unsupported"));
+      }
+      if (input.interactionId === "backend-throws") {
+        throw new Error("synchronous_refusal");
+      }
+      return Promise.resolve();
+    });
+
+    await expect(
+      broker.abandonPending(scope, "thread-1", ids),
+    ).resolves.toBeUndefined();
+
+    expect(broker.listPending(scope, "thread-1")).toEqual([]);
+    expect(conversation.responses.map(({ interactionId, kind }) => ({ interactionId, kind }))).toEqual([
+      { interactionId: "backend-rejects", kind: "cancel" },
+      { interactionId: "backend-throws", kind: "cancel" },
+      { interactionId: "backend-accepts", kind: "cancel" },
+    ]);
+    expect(publisher.resolved).toHaveBeenCalledTimes(3);
+    // A replay of a request the provider did not cancel stays abandoned.
+    conversation.emit(opened("backend-rejects", false));
+    expect(broker.listPending(scope, "thread-1")).toEqual([]);
   });
 
   it("leaves pending interactions intact when force-reset evidence changed", () => {

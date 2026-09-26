@@ -161,9 +161,13 @@ Existing insecure files, symlinks, hard links, and non-private parent directorie
 are refused. The asynchronous pending-write buffer is capped at 64 KiB and each
 record at 8 KiB; overload drops diagnostic records instead of delaying provider
 work. Graceful shutdown allows up to 500 ms to flush optional logging. Each PID
-has its own bounded files; remove old PID files after collecting the incident
-because the sink does not delete other processes' captures. File-output failure
-does not affect application startup or recovery.
+has its own bounded files. A persistent sidecar daemon starting with the opt-in
+keeps its own capture and those of the four most recent earlier daemon PIDs, and
+deletes older captures of PIDs that are no longer running; collect an incident's
+files before several restarts. Main's operator-selected
+`SEDES_DEBUG_DELIVERY_FILE` captures are never deleted; remove old PID files
+there after collecting the incident. File-output failure does not affect
+application startup or recovery.
 
 ### Bounded main CPU capture
 
@@ -409,7 +413,12 @@ and Grok do not gain a new persistent-runtime diagnostic path.
    commit, and delayed-frame entries.
 3. For mutation latency, enable `SEDES_DEBUG_DELIVERY`, restart, reproduce
    once, and compare the `[delivery]` total with its runtime, queue, capture,
-   and RPC steps.
+   and RPC steps. For Claude, `[delivery-dispatch] step=conversation.submit`
+   ends when Claude dequeues the input (its native `started` lifecycle frame),
+   not at the model's first output. With unchanged settings it includes one
+   runtime call (send). A long step means the input waited behind a turn Claude
+   started itself, or the runtime reported no dequeue and acceptance fell back
+   to the first stamped output.
 4. If events arrive promptly but draw slowly, use the console delta warnings
    and browser long-task reports.
 5. For a slow switch with no replay, compare the client interval from

@@ -173,13 +173,18 @@ export class CodexRuntimeHostRegistry {
     });
     host.bind(supervisor.client);
     let closed = false;
+    // The resource snapshot's state and blockers, including managed terminals,
+    // let the archive recognize an idle runtime whose stop abandons nothing.
+    const evidence = (phase: "before_shutdown" | "after_shutdown") => {
+      const { state, blockers } = this.#snapshot(runtime);
+      return { phase, ownership: resolved.connection.ownership, state, blockers, ...host.abandonmentEvidence() };
+    };
     const runtime: CodexHostedRuntime = { configuration: resolved, environmentChannel: this.input.environmentChannel, environment: this.input.environment, host, fingerprint, startupEnvironmentFingerprint: configurationFingerprint(configuration.startupEnvironmentVariables ?? {}), supervisor, stop: async (reason = "runtime_cleanup", force = false) => {
       if (closed) return;
       if (force) {
         host.freezeAdmission();
         this.managedTui.freezeAdmission(host.runtimeId);
-        await this.input.services.recordAbandonment({ resourceId: host.runtimeId, kind: "codex_app_server", reason,
-          evidence: { phase: "before_shutdown", ownership: resolved.connection.ownership, ...host.abandonmentEvidence() } });
+        await this.input.services.recordAbandonment({ resourceId: host.runtimeId, kind: "codex_app_server", reason, evidence: evidence("before_shutdown") });
       }
       // External providers own their running turns and pending approvals. Fence
       // native writes by closing our connection before settling local callers;
@@ -189,8 +194,7 @@ export class CodexRuntimeHostRegistry {
       if (force) host.abandonPendingWork();
       await this.managedTui.stopRuntime(host.runtimeId);
       if (resolved.connection.ownership === "owned") await supervisor.close();
-      if (force) await this.input.services.recordAbandonment({ resourceId: host.runtimeId, kind: "codex_app_server", reason,
-        evidence: { phase: "after_shutdown", ownership: resolved.connection.ownership, ...host.abandonmentEvidence() } });
+      if (force) await this.input.services.recordAbandonment({ resourceId: host.runtimeId, kind: "codex_app_server", reason, evidence: evidence("after_shutdown") });
       await lease?.release();
       host.dispose();
       registered();

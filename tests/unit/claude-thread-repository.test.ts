@@ -1,5 +1,6 @@
 import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
 import { claudeSteerOperationsMigration } from "../../src/server/db/migrations/102-claude-steer-operations.js";
+import { claudeForkChildrenMigration } from "../../src/server/db/migrations/117-claude-fork-children.js";
 import { claudeTaskLifecycleMigration } from "../../src/server/db/migrations/100-claude-task-lifecycle.js";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
@@ -126,6 +127,7 @@ function repository(): ClaudeThreadRepository {
   database.exec(claudeTurnFailureDetailsMigration.sql);
   database.exec(claudeTaskLifecycleMigration.sql);
   database.exec(claudeSteerOperationsMigration.sql);
+  database.exec(claudeForkChildrenMigration.sql);
   return new ClaudeThreadRepository(database);
 }
 
@@ -149,7 +151,7 @@ describe("Claude thread repository", () => {
     }]);
   });
 
-  it("copies only retained tool receipts into the exact scoped fork session", () => {
+  it("copies exactly the selected source receipts into the scoped fork session", () => {
     const settings = repository();
     const otherScope = { ...scope, principalId: "other" };
     for (const owner of [scope, otherScope]) for (const thread of ["source", "child"]) {
@@ -161,8 +163,10 @@ describe("Claude thread repository", () => {
     settings.writeTaskStarted(scope, "source", "source-session", { ...start, nativeTaskId: "later", nativeToolUseId: "excluded" });
     settings.writeTaskStarted(scope, "source", "other-session", { ...start, nativeTaskId: "wrong-session" });
     settings.writeTaskStarted(otherScope, "source", "source-session", { ...start, nativeTaskId: "wrong-owner" });
-    const input = { sourceApplicationThreadId: "source", sourceNativeSessionId: "source-session",
-      childApplicationThreadId: "child", childNativeSessionId: "child-session", nativeToolUseIds: ["kept"] };
+    const kept = settings.listTaskLifecycleReceipts(scope, "source", "source-session")
+      .filter(({ nativeToolUseId }) => nativeToolUseId === "kept");
+    const input = { sourceApplicationThreadId: "source",
+      childApplicationThreadId: "child", childNativeSessionId: "child-session", receipts: kept };
     settings.copyTaskLifecycleReceiptsForFork(scope, input);
     settings.copyTaskLifecycleReceiptsForFork(scope, input);
     expect(settings.listTaskLifecycleReceipts(scope, "child", "child-session")).toEqual([{
@@ -687,6 +691,38 @@ describe("Claude thread repository", () => {
         )
         .get(scope.tenantId, scope.principalId, "large-child"),
     ).toEqual({ count: 20_001 });
+  });
+
+  it("records fork child evidence once, replays it exactly, and copies inherited terminal receipts", () => {
+    const settings = repository();
+    const otherScope = { ...scope, principalId: "other" };
+    for (const owner of [scope, otherScope]) for (const thread of ["source", "child"]) {
+      settings.initialize(owner, thread, target, { model: "claude-sonnet-5", effort: null, permissionMode: "default" }, 1);
+    }
+    settings.writeTerminalReceipt(scope, "source", { backendTurnId: "source-turn-2", status: "failed",
+      providerTerminalReason: "error_during_execution", failureMessage: "Tool crashed", terminalAt: 20, now: 21 });
+    const record = {
+      childApplicationThreadId: "child", childNativeSessionId: "child-session", forkOperationId: "fork-operation",
+      inheritedTurns: [{ backendTurnId: "child-turn-1", sourceBackendTurnId: "source-turn-1" },
+        { backendTurnId: "child-turn-2", sourceBackendTurnId: "source-turn-2" }],
+      omittedTasks: [{ nativeMessageUuid: "notification-row", nativeTaskId: "agent" }], now: 30,
+    };
+    settings.recordForkChild(scope, record);
+    settings.recordForkChild(scope, { ...record, now: 40 });
+    expect(settings.findForkChild(scope, "child")).toEqual({ nativeSessionId: "child-session", forkOperationId: "fork-operation",
+      inheritedTurns: record.inheritedTurns, omittedTaskNotificationUuids: new Set(["notification-row"]) });
+    expect(() => settings.recordForkChild(scope, { ...record, inheritedTurns: record.inheritedTurns.slice(1) }))
+      .toThrow("claude_fork_child_evidence_conflict");
+    expect(settings.findForkChild(otherScope, "child")).toBeUndefined();
+    expect(settings.findForkChild(scope, "source")).toBeUndefined();
+
+    settings.copyTerminalReceiptsForFork(scope, { sourceApplicationThreadId: "source", childApplicationThreadId: "child",
+      turns: record.inheritedTurns, now: 50 });
+    expect(settings.listTerminalReceipts(scope, "child")).toEqual([expect.objectContaining({
+      applicationThreadId: "child", backendTurnId: "child-turn-2", status: "failed",
+      providerTerminalReason: "error_during_execution", failureMessage: "Tool crashed", terminalAt: 20, createdAt: 50,
+    })]);
+    expect(settings.listTerminalReceipts(otherScope, "child")).toEqual([]);
   });
 
   it("writes terminal receipts idempotently and rejects a conflicting status", () => {

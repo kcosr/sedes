@@ -295,6 +295,7 @@ describe("backend-normalized application adapters", () => {
         runtimes: {
           captureLoadedState: async () => undefined,
           async runWithRuntimeRetired(_scope, _id, operation) { return operation(); },
+          async releaseProviderResidency() {},
         },
         publications: inventoryService, tasks: projection.tasks,
         taskPublications: boundary, now: () => 900,

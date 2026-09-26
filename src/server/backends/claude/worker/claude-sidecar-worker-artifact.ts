@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ManagedWorkerArtifactRegistration } from "../../../managed-workers/artifact.js";
+import { pruneUnreferencedBuilds } from "../../../runtime/artifact-retention.js";
 import {
   CLAUDE_RUNTIME_WORKER_FILENAME,
   CLAUDE_RUNTIME_WORKER_MAXIMUM_ARTIFACT_BYTES,
@@ -10,6 +11,10 @@ import {
 
 declare const __SEDES_CLAUDE_WORKER_SOURCE__: string;
 declare const __SEDES_CLAUDE_WORKER_MANIFEST__: string;
+
+/** Superseded worker builds kept for rollback beside the installed one. */
+const RETAINED_PREVIOUS_WORKER_BUILDS = 2;
+const WORKER_BUILD_MINIMUM_PRUNE_AGE_MILLISECONDS = 60 * 60 * 1_000;
 
 /** The sidecar digest covers this separately built, source-audited worker.
  * It remains a subprocess: SDK account configuration is process-global. */
@@ -20,8 +25,29 @@ export async function installEmbeddedClaudeWorker(serviceDirectory: string): Pro
   });
 }
 
-/** Only installation-owned build bytes enter this function, never wire input. */
+/**
+ * Only installation-owned build bytes enter this function, never wire input.
+ * After the exact build is verified, superseded builds that no live process
+ * references are pruned on a best-effort basis.
+ */
 export async function installClaudeWorkerBundle(
+  serviceDirectory: string,
+  bundle: { readonly source: string; readonly manifest: string },
+): Promise<ManagedWorkerArtifactRegistration> {
+  const artifact = await installVerifiedClaudeWorkerBundle(serviceDirectory, bundle);
+  await pruneUnreferencedBuilds({
+    root: path.join(serviceDirectory, "claude-workers"),
+    keep: new Set([artifact.artifactSha256]),
+    retain: RETAINED_PREVIOUS_WORKER_BUILDS,
+    minimumAgeMilliseconds: WORKER_BUILD_MINIMUM_PRUNE_AGE_MILLISECONDS,
+    namePattern: /^[0-9a-f]{64}$/u,
+  }).catch(() => {
+    // Retention is hygiene; an unreadable process table keeps every build.
+  });
+  return artifact;
+}
+
+async function installVerifiedClaudeWorkerBundle(
   serviceDirectory: string,
   bundle: { readonly source: string; readonly manifest: string },
 ): Promise<ManagedWorkerArtifactRegistration> {

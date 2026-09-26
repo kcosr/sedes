@@ -163,11 +163,31 @@ test("compiled Claude backend streams, settles, and reloads through normalized U
   await capture(page, testInfo, "claude-steer-active.png");
   await page.getByRole("button", { name: "Steer", exact: true }).click();
   expect((await steerRequest).postDataJSON().steerTarget).toEqual({ kind: "conversation" });
-  await expect(page.getByText("Claude incorporated the revised approach.", { exact: true })).toBeVisible();
+  // Claude takes the steer at its next tool boundary. It resolves there, in
+  // place, while the turn still runs, and the composer can steer again.
+  const messages = page.getByRole("region", { name: "Messages" });
+  const firstSteer = "Use the revised Claude approach", secondSteer = "Also keep the Claude tests green";
+  const steeredAnswer = "Claude incorporated both corrections.";
+  await expect(messages.getByText(firstSteer, { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Pending inputs" }).getByText(firstSteer, { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+  await capture(page, testInfo, "claude-steer-taken-mid-turn.png");
+  await page.getByRole("textbox", { name: /Message Claude/ }).fill(secondSteer);
+  await page.getByRole("button", { name: "Steer", exact: true }).click();
+  await expect(messages.getByText(steeredAnswer, { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+  const ordered = async () => {
+    const text = await messages.innerText();
+    return [firstSteer, secondSteer, steeredAnswer].map(value => text.indexOf(value));
+  };
+  expect(await ordered()).toEqual([...(await ordered())].sort((a, b) => a - b));
   await page.reload();
-  await expect(page.getByText("Use the revised Claude approach", { exact: true })).toHaveCount(1);
-  await expect(page.getByText("Claude incorporated the revised approach.", { exact: true })).toHaveCount(1);
+  await expect(messages.getByText(firstSteer, { exact: true })).toHaveCount(1);
+  await expect(messages.getByText(secondSteer, { exact: true })).toHaveCount(1);
+  await expect(messages.getByText(steeredAnswer, { exact: true })).toHaveCount(1);
+  const reloaded = await ordered();
+  expect(reloaded.every(index => index >= 0)).toBe(true);
+  expect(reloaded).toEqual([...reloaded].sort((a, b) => a - b));
 
   // The parent is ready for ordinary input while the child remains alive.
   const input = page.getByRole("textbox", { name: /Message Claude/ });

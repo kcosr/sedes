@@ -365,7 +365,7 @@ class OutboundFixture {
     // the test SDK runs inside the real managed worker, without a live provider.
     const executablePath = path.join(this.hostHome, "claude-fixture");
     await writeFile(executablePath, `#!${process.execPath}
-if (process.argv.slice(2).join(" ") === "--version") console.log("2.1.274 (Claude Code)");
+if (process.argv.slice(2).join(" ") === "--version") console.log("2.1.283 (Claude Code)");
 else if (process.argv.slice(2).join(" ") === "auth status --json") console.log(JSON.stringify({ loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max" }));
 else process.exit(64);
 `, { mode: 0o700 });

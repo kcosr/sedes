@@ -181,7 +181,7 @@ function makeStore(): ApplicationClientStore & {
       blockerFingerprint: "a".repeat(64),
       resettable: true,
       blockers: [{ kind: "queued_input", count: 1 }],
-      affectedThreadIds: ["11111111-1111-4111-8111-111111111111"],
+      affectedThreads: [{ threadId: "11111111-1111-4111-8111-111111111111", title: "Thread" }],
       warnings: [
         {
           code: "provider_side_effects_may_remain",

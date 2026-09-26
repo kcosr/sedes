@@ -106,9 +106,14 @@ export function projectedTurnForkCapability(input: {
   const sourceStateAllowed =
     branchingAllowsSelectedCompletedTurnForSourceState(input);
   const available =
-    turnCompleted && selectedTurnSupported && sourceStateAllowed;
+    turnCompleted &&
+    input.turn.forkUnavailableReason === undefined &&
+    selectedTurnSupported &&
+    sourceStateAllowed;
   const unavailableReason = !turnCompleted
     ? { text: "Only a successfully completed turn can be forked." }
+    : input.turn.forkUnavailableReason
+      ? input.turn.forkUnavailableReason
     : input.branching.availability === "unavailable"
       ? input.branching.reason
       : !input.branching.boundaries.includes("selected_completed_turn")
@@ -925,6 +930,10 @@ export class ConversationProjector {
       ...(backendTurn.completedAt
         ? { completedAt: backendTurn.completedAt }
         : {}),
+      // Only a completed turn can explain why it is not a fork boundary.
+      ...(backendTurn.status === "completed" && backendTurn.forkUnavailableReason
+        ? { forkUnavailableReason: backendTurn.forkUnavailableReason }
+        : {}),
       orderedItemIds: backendTurn.orderedBackendItemIds.map((backendItemId) => {
         const itemId = itemIds.get(backendItemId);
         if (!itemId) throw new Error("backend_turn_item_not_projected");
@@ -1064,6 +1073,7 @@ function equalBackendTurn(left: BackendTurn, right: BackendTurn): boolean {
     left.status === right.status &&
     left.endedBy === right.endedBy &&
     JSON.stringify(left.failure) === JSON.stringify(right.failure) &&
+    JSON.stringify(left.forkUnavailableReason) === JSON.stringify(right.forkUnavailableReason) &&
     left.startedAt === right.startedAt &&
     left.completedAt === right.completedAt &&
     left.orderedBackendItemIds.length === right.orderedBackendItemIds.length &&
@@ -1082,6 +1092,7 @@ function equalConversationTurn(
     left.status === right.status &&
     left.endedBy === right.endedBy &&
     JSON.stringify(left.failure) === JSON.stringify(right.failure) &&
+    JSON.stringify(left.forkUnavailableReason) === JSON.stringify(right.forkUnavailableReason) &&
     left.startedAt === right.startedAt &&
     left.completedAt === right.completedAt &&
     left.orderedItemIds.length === right.orderedItemIds.length &&

@@ -121,6 +121,12 @@ fully acknowledged presentation must not invalidate the confirmation itself.
 Explicitly confirmed Stop, Restart, and Upgrade may abandon retained delivery
 records after bounded best-effort archival of scoped operation identities and
 known dispositions. Archive failure is diagnostic, not a new admission veto.
+A sidecar host's evidence carries its resource snapshot's `state` and
+`blockers` with its work lists. The archive skips only evidence that positively
+reports an idle resource, and an `after_shutdown` record follows its
+`before_shutdown` decision, so fence admission before the first record.
+Classify each new evidence field in the archive's predicate; until then it is
+recorded.
 Never turn abandonment into provider success or a claim that a sent mutation
 did not execute. Actual owned-process cleanup remains required; external Codex
 Stop closes Sedes's client only. Automatic retirement keeps its acknowledgement
@@ -337,6 +343,21 @@ closes only resident handles, processes, subscriptions, and leases; it never
 deletes provider-native durable conversation history. Audit this close
 disposition for Pi, Codex, Claude, and Grok whenever archive or runtime
 ownership changes.
+
+Provider residency can outlive Sedes' handle, as a Claude query owned by a
+persistent sidecar service does. A backend with such residency implements the
+optional driver method `releaseConversationResidency`. Inside each thread's
+retired fence, archive calls it for a thread with a bound, enabled target. The
+method must report `busy` rather than stop outstanding provider work, and
+`busy` refuses the archive before commit. Retained provider output that no
+runtime has applied is not work: the method first applies it as attaching
+would, and reports `undelivered` only if it still holds the residency. That
+also refuses the archive, with a message to open the thread so its output is
+applied, rather than one claiming the thread is active. An unreachable provider is logged
+and left to the provider's own residency limit. Claude implements it through
+the persistent `retire` command, and its local worker owns no residency beyond
+the handle. Pi, Codex, and Grok omit it; retiring their handles already
+releases what they hold for the thread.
 
 If policy and preference meet, document precedence explicitly. Installation
 policy is a ceiling; principal or thread state may select only admitted values.
@@ -819,6 +840,24 @@ its applied launch environment and report the pending definitions until an
 explicit provider restart. Initial observation must recover the retained
 fingerprint without launching a provider.
 
+Provider work can outlive main in a service-owned runtime that journals
+per-thread events until main acknowledges them. The runtime's administrative
+inspection then reports `retainedThreadIds`: the application threads whose
+retained work (a running turn, a pending interaction or input, or
+unacknowledged output) needs a main attachment. Whenever main inspects the
+runtime, which it does soon after startup, after the service's controller
+changes, and for every lifecycle preview, it opens those threads one at a time
+within the shared conversation-runtime budget. Their output is then applied and
+acknowledged instead of overflowing the owner's retention bound. A pass cut
+short at the budget retries at the next inspection. Inspection uses the
+existing recovery attachment and never launches a provider. The inspection
+may also report bounded `activity` counts (running turns, background work,
+pending interactions, and conversations with unacknowledged output) that
+interruption previews show; absent counts are not zero. Claude's persistent
+host reports both. Codex's runtime-wide attachment already records and
+acknowledges retained outcomes without a thread handle, and Pi, Grok, and
+local Claude workers end with main, so they report neither.
+
 **Execution** definitions are principal-owned Environment → Backend → Saved
 Agent → Thread layers. Capture definitions and provenance transactionally before
 native creation, fence the preview's configuration and agent revisions, and
@@ -896,6 +935,17 @@ retain a fenced/poisoned entry and never create a competing runtime or
 synthesize idle. Receipt replay is observational and must never retire a newer
 generation. This contract is backend-neutral and shared code must not branch on
 provider identity.
+
+Force reset also releases the exact provider interactions it abandons. After
+the durable commit and before replacing a runtime, send each abandoned
+provider-owned interaction the normalized `cancel` response through its owning
+runtime, and wait at most 10 seconds in total. This cancellation is not a user
+response: record no receipt, never report it as provider success, ignore its
+failures, and never let it block or undo the commit. Every backend that
+advertises interaction kinds must map `cancel` for each kind to its native
+cancel, decline, or dismissal, or reject it without side effects so that
+replacing the runtime releases the request. Record each backend's disposition in
+[Blocking interactions](blocking-interactions.md#compiled-backend-audit).
 
 The scoped thread event registry must retain the same hub while a runtime
 owns it, including establishment and periods without browser subscribers.
@@ -1176,6 +1226,24 @@ its conservative partial result facts pending a replay-safe normalization update
 reclassifying the same stable result receipt would otherwise conflict with saved
 evidence. This is a deferred classification correction, not an SDK claim of
 missing main-loop tokens.
+
+A cumulative counter that resumes above zero, for example from provider totals
+saved by an earlier process, is not new work. Pass its starting value to
+`open()` as `reportedBaseline` when the series is created, so the service
+counts only the increase and treats a fall below it as a regression, never a
+negative charge. Keep the evidence as the provider reported it; do not
+subtract in the backend or estimate the start from transcript arithmetic. Use
+provider evidence that no work has happened yet as a proven start; otherwise
+pass the first observed value as an `unknown` start, which leaves earlier work
+out and records `unknown_baseline`. A reopened series keeps its first
+baseline and ignores one offered on reattachment. Audit per backend:
+
+| Backend | Resumed cumulative counters |
+| --- | --- |
+| Pi | Not applicable: native entries are additive and keyed by entry. |
+| Codex | Not used: one counter series per thread across warm resume and reconnect; a fork child's counter stays non-contributing, with turn intervals charged. |
+| Claude | Each resumed, forked, or reattached query opens its series at its first result. The startup message's own zero-turn result is a proven start; any other first result is an unknown one. |
+| Grok | Unsupported; no usage is captured. |
 
 Codex child capture uses native spawn ancestry under an admitted root binding,
 with independent lifetime counters and durable parent/root ownership. Children
@@ -1988,10 +2056,16 @@ operations, pre-boundary stale-target classifications, and authenticated
 delivery correlation. Active Submit may therefore resolve to Steer for these
 backends. Codex's provider-private adapter recognizes only its exact reviewed
 `turn/steer` no-active-turn and expected-turn-mismatch rejection responses;
-unknown wording fails closed. Pi may additionally remain pending until provider
-materialization is observed. Claude implements conversation-targeted Steer via
-native `priority: "next"`. Native enqueue is pending materialization until exact
-user-message UUID evidence identifies incorporation and the receiving turn.
+unknown wording fails closed. Both remain pending until provider
+materialization is observed: an accepted receipt only admits the input to the
+provider's volatile queue for that turn. Claude implements conversation-targeted Steer via
+native `priority: "next"`. Native enqueue is pending materialization until
+exact per-input evidence that Claude took the steer: its own `started`
+lifecycle frame, or a consumption stamp. The frame's position before or after
+the running turn's result identifies the receiving turn, so the steer
+materializes where Claude took it, mid-turn when folded, and later Steer can
+follow in the same turn. The turn's result only cross-checks that placement;
+a contradiction is logged and never rewrites it or causes a resend.
 Earlier assistant activity is never acceptance evidence for a new steer.
 The owner-scoped operation and native message identity survive reconnects;
 uncertain delivery never triggers a replacement send. Grok advertises no Steer;
@@ -2007,8 +2081,22 @@ and restoration to the draft provide user recovery; restoration itself does
 not send. Late exact consumption evidence may still accept an untouched,
 unacknowledged failed item; it must not revive one already restored or
 acknowledged by the user. A live or merely unreachable tracker remains unresolved. Codex/Pi
-exact-turn reconciliation and ordinary Submit retain their existing conservative
-uncertainty handling; they do not adopt this terminal Steer recovery path.
+exact-turn reconciliation retains its existing conservative uncertainty
+handling and does not adopt this terminal Steer recovery path.
+
+An ordinary queued Submit whose explicit or recovery reconciliation returns
+`failed_unknown` follows the same user recovery. Its uncertain head becomes a
+failed, unacknowledged item with a diagnostic that preserves the unknown
+outcome and asks the user to review the conversation first. It still blocks
+later queued input until the user dismisses, deletes, or restores it;
+restoration returns the text to the draft and sends nothing. The automatic
+dispatch check still closes uncertainty only on acceptance. Tracking is
+terminal, so there is no late-acceptance path for a failed Submit. `unresolved`
+keeps the head uncertain. Only Claude returns `failed_unknown` for Submit,
+when its remote delivery owner ended and tip-correct history shows no
+acceptance; Codex, Pi, and Grok return only accepted, not accepted, or
+unresolved, and a new backend must return `failed_unknown` only for terminally
+lost tracking.
 
 The same disposition applies explicitly to completion-callback delivery. Pi
 and Codex use their already-audited application delivery correlation and
@@ -2032,6 +2120,44 @@ expose reviewed semantics for every accepted but not-yet-materialized input,
 including whether it survives, is cancelled, or is fenced from a later turn. If
 any of target admission, receipt, history grouping, or interrupt-race evidence
 is absent, advertise only provider-neutral next-turn Queue and omit Steer.
+
+**Stop means stop.** This rule is the same for every backend:
+
+- Stop never removes Sedes's durable Queue, including a Steer intent Sedes has
+  not yet sent to the provider. That input is Sedes's own work and runs after
+  the stopped turn.
+- A Steer the provider accepted but had not started or consumed when Stop
+  landed returns to the user as not sent. It must neither start a turn after
+  Stop nor disappear while Sedes records it delivered, and it is never resent
+  automatically. Runtime retirement or loss of the process holding it has the
+  same outcome.
+- A Steer the provider already started or consumed belongs to the stopped
+  turn and is accepted with it.
+
+Each backend proves the outcome per input: withdrawal evidence the provider
+emits for that input, or the input's absence from final history once its
+target turn can no longer use it. A receipt list, an empty provider queue, or
+a missing history row while the target turn can still use the input is never
+evidence. A proven unused Steer reconciles `not_accepted` with
+`retryable: false` and a bounded not-sent `diagnostic`; the queue fails the
+entry as not sent, returns it to restore or dismiss, and later entries wait for
+that decision. Insufficient evidence stays unresolved (or `failed_unknown`
+for terminally lost conversation-Steer tracking), never a guess.
+`not_accepted` with `retryable: true` is reserved for input proven unsent
+before the provider accepted it, such as pre-boundary stale-target evidence or
+a provider refusal; the queue keeps that as Sedes's own work, which the
+stale-target rule dispatches after Stop.
+
+Steer reconciliation receives `steerTarget`, the exact target durably recorded
+when the Steer crossed the provider boundary, so a backend can prove that the
+targeted turn ended without the input. It never authorizes a resend.
+
+| Backend | Accepted Steer not yet started when Stop lands |
+| --- | --- |
+| Claude | Withdrawn by `cancel_async_message` for each Sedes input awaiting its start, before the interrupt, by the owner holding the query's inputs: the handle for a local query, the persistent owner for a remote one, including a steer an earlier main attachment sent. The exact evidence is that input's `command_lifecycle` `cancelled` before any `started`. |
+| Pi | Withdrawn by clearing Pi's generation-volatile steering queue before the abort (Stop and retirement). The exact evidence is that input's authenticated `lost` submission marker, written when its run settles, or restart reconciliation finds its generation gone, without its user entry. |
+| Codex | Dropped by Codex's interrupt, which clears the turn's pending input without an event; it can never start or join a later turn. The Steer stays pending until its exact `userMessage` appears. The evidence is its absence from final history once the target turn is terminal (complete legacy read) or the thread is settled (stable paginated cuts). Residual: a forced abort after Codex's 100 ms interrupt grace can leave a just-drained Steer in model history without its item. |
+| Grok | No Steer; active-turn input waits in Queue. |
 
 Text, context excerpts, attachments, and structured Task references are
 normalized application input, not provider-native IDs or browser-selected
@@ -2208,6 +2334,27 @@ newest completed turn without silently falling back to an older one. Exact
 transcript and agent-tool selectors remain completed-turn boundaries unless
 their contracts explicitly change.
 
+A backend that cannot copy history exactly through a completed turn marks that
+turn with a bounded user-facing `forkUnavailableReason`. Currently only Claude
+does so, for turns without a final answer and turns before its latest
+compaction. The turn's fork action shows the reason instead of forking. Only a completed
+turn carries a reason, and the normalized projector publishes a change to the
+reason alone as a turn revision. The
+normalized actor and the backend both resolve `latest_completed` to the newest
+completed turn; interrupted and failed turns are not completed. If that turn
+carries a reason, the fork fails with it before any provider call rather than
+falling back to an older turn. The actor passes the backend turn it resolved,
+which lineage records as the source, in the `latest_completed` selection. The
+backend fails retryably, with `invalid_state`, when its own newest completed
+turn differs, so it never forks a turn other than the recorded one. Pi, Codex,
+Claude, and the in-memory conformance backend implement this check; Grok does
+not support forks.
+
+A definite fork failure that another fork of the same boundary would repeat,
+such as a deterministic history mismatch or an unsupported runtime, sets
+`forkRestart: "futile"` on its `BackendError`. The aborted result is then not
+restartable, and clients do not offer to start the same fork again.
+
 Recovery must preserve the same distinction. Completed-turn forks may be
 adopted from exact authenticated parent-and-turn evidence. An acceptance-time
 snapshot without a durable provider-turn anchor must remain nonretryable and
@@ -2215,6 +2362,15 @@ non-adoptable unless the backend supplies a separately reviewed uniqueness and
 snapshot-boundary proof. Authenticated operation-only discovery evidence must
 still quarantine the possible child; dropping that correlation and importing
 the child as unrelated would violate application ownership.
+
+An explicit discard removes only the unfinished Sedes child and never repeats
+the provider call. It is unavailable once the provider returned the child,
+which the normalized recovery reports as `conversationIdentified`; recovery
+then finishes the fork locally, and the capability and the fork service must
+agree. After an abort or discard, keep an application-reserved child identity
+quarantined from discovery. A provider-assigned child has no reserved identity,
+so the recovery reports `forkChildIdentity` and discard wording must not
+promise that such a child stays hidden.
 
 A backend without reviewed native fork semantics must report unsupported. It
 must not approximate a native fork by replaying history as fresh user input.
@@ -3008,12 +3164,12 @@ surfaces that apply:
 | Capability projection              | Is support truthful at exact scope and generation? Does direct invocation fail closed?                                                                                                                                                                                                                                                                               |
 | Discovery/import/create            | Are namespace, paging, binding, titles, partial success, and recovery covered?                                                                                                                                                                                                                                                                                       |
 | History and streaming              | Are snapshot bounds, ordering, correlation, reconnect, duplicates, and stale events covered?                                                                                                                                                                                                                                                                         |
-| Input lifecycle                    | Are send, steer, queue, stop, attachments, Task references, immutable acceptance snapshots, and active-turn races explicit?                                                                                                                                                                                                                                          |
+| Input lifecycle                    | Are send, steer, queue, stop, attachments, Task references, immutable acceptance snapshots, and active-turn races explicit? Does Stop return an accepted, unstarted Steer as not sent on exact per-input evidence, per the Stop rule?                                                                                                                                  |
 | Completion consumers               | Does each obligation bind one exact operation, register atomically, consume one immutable normalized terminal snapshot, materialize idempotently, recover after restart, retain authenticated provenance, and give Pi, Codex, Claude, and Grok an explicit Steer, Queue, or unsupported disposition without provider-native leakage?                                 |
 | Provider output artifacts          | Are exact native completion and byte authority, immutable scoped storage, duplicate live/history observation, normalized metadata, content retrieval, bounds, unavailable projection, topology, path-capture authority and host attribution, and input/tool-result separation explicit?                                                                              |
 | Settings and provider features     | Are policy, desired/effective evidence, generation, turn-boundary application, persistence, native mapping, revisions, receipts, Saved Agents, and unsupported paths covered?                                                                                                                                                                                        |
 | Model policy                       | Is it backend-owned and fingerprinted? Are native provider/model/effort matcher dispositions, catalog intersection, defaults, every new provider-effect boundary, stale stored selections, empty intersections, denylist future admission, and receipt/reconciliation ordering covered?                                                                              |
-| Interactions                       | Are kinds, answers, interruption, reconnect, and sensitive data covered?                                                                                                                                                                                                                                                                                             |
+| Interactions                       | Are kinds, answers, interruption, force-reset cancellation, reconnect, and sensitive data covered?                                                                                                                                                                                                                                                                   |
 | Forks                              | Are ancestry, exact selected turns, latest-provider-snapshot capability, lineage boundary/source-turn nullability, acceptance races, active-leaf interruption, immutable context, provider-history fidelity, backend fallback, and unresolved outcomes covered?                                                                                                      |
 | Environments and Files             | Are local/remote authority, exact sidecar providers, no-fallback behavior, paths, idempotency, and cleanup covered?                                                                                                                                                                                                                                                  |
 | Application terminal resources     | Are all environment providers explicitly implemented or unsupported? Are process/panel/End separation, initial-CWD authority, bounded checkpoint and `CSI 3 J` floor semantics, output ordering, preemptive epoch-fenced control, input reconciliation, zero-viewer lifetime, retained interruption truth, Sidecar revision, and no-local-fallback behavior covered? |

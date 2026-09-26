@@ -13,11 +13,14 @@ import {
 import { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.js";
 import { sidecarSocketByteStream } from "../../src/server/sidecar/sidecar-socket-byte-stream.js";
 import type {
+  ClaudeOwnedRuntimeClient,
+  ClaudeOwnedRuntimeSession,
   ClaudeRuntimeClient,
   ClaudeRuntimeSession,
   ClaudeRuntimeSessionOptions,
 } from "../../src/server/backends/claude/claude-runtime-client.js";
 import type { ClaudeSdkSessionInitialization } from "../../src/server/backends/claude/claude-sdk-session.js";
+import { runClaudeForkLaunch } from "../../src/server/backends/claude/claude-fork-launch.js";
 
 /** Both sides exchange production length-prefixed protocol bytes over a fresh
  * local socket standing in for the SSH stdio carrier. Provider-independent. */
@@ -75,17 +78,18 @@ export async function createClaudeFramedCarrier() {
   };
 }
 
-export class FakePersistentClaudeSession implements ClaudeRuntimeSession {
+export class FakePersistentClaudeSession implements ClaudeOwnedRuntimeSession {
   closed = false;
   readonly initialization: ClaudeSdkSessionInitialization = {
     models: [], commands: [], skillNames: [], terminalCommandNames: [], account: {},
-    actualModel: "claude-sonnet-4-6", actualPermissionMode: "default", cliRelease: "2.1.274",
+    actualModel: "claude-sonnet-4-6", actualPermissionMode: "default", cliRelease: "2.1.283",
   };
   readonly startupProbeUuid = randomUUID();
   readonly safeSkills = [];
   readonly start = vi.fn(async () => this.initialization);
   readonly send = vi.fn<ClaudeRuntimeSession["send"]>();
   readonly interrupt = vi.fn(async () => undefined);
+  readonly cancelQueuedInput = vi.fn<ClaudeOwnedRuntimeSession["cancelQueuedInput"]>(async () => false);
   readonly setModel = vi.fn(async () => undefined);
   readonly setEffort = vi.fn(async () => undefined);
   readonly setPermissionMode = vi.fn(async () => undefined);
@@ -107,14 +111,18 @@ export function createFakePersistentClaudeRuntime() {
   const sessions: FakePersistentClaudeSession[] = [];
   const history = new ClaudeHistoryPager();
   const getSessionMessages = vi.fn<ClaudeRuntimeClient["getSessionMessages"]>(async () => []);
+  const createSession = vi.fn((options: ClaudeRuntimeSessionOptions) => {
+    const session = new FakePersistentClaudeSession(options);
+    sessions.push(session);
+    return session;
+  });
   const runtime = {
-    createSession: vi.fn((options: ClaudeRuntimeSessionOptions) => {
-      const session = new FakePersistentClaudeSession(options);
-      sessions.push(session);
-      return session;
-    }),
+    createSession,
+    // The production one-shot launch over the fake sessions above.
+    forkSession: vi.fn<ClaudeRuntimeClient["forkSession"]>(async (options) =>
+      await runClaudeForkLaunch(createSession, options)),
     probe: vi.fn<ClaudeRuntimeClient["probe"]>(async () => ({
-      cliRelease: "2.1.274", account: {}, models: [], commands: [], skillNames: [], terminalCommandNames: [],
+      cliRelease: "2.1.283", account: {}, models: [], commands: [], skillNames: [], terminalCommandNames: [],
     })),
     listSessions: vi.fn<ClaudeRuntimeClient["listSessions"]>(async () => []),
     getSessionInfo: vi.fn<ClaudeRuntimeClient["getSessionInfo"]>(async () => undefined),
@@ -123,8 +131,9 @@ export function createFakePersistentClaudeRuntime() {
       const { offset: _offset, limit: _limit, cursor: _cursor, maintenance: _maintenance, ...nativeOptions } = options;
       return history.getPage(sessionId, options, async () => structuredClone(await getSessionMessages(sessionId, nativeOptions, environment)));
     }),
+    hasSessionTranscript: vi.fn<ClaudeRuntimeClient["hasSessionTranscript"]>(async () => false),
     renameSession: vi.fn<ClaudeRuntimeClient["renameSession"]>(async () => undefined),
     close: vi.fn(async () => { history.close(); await Promise.all(sessions.map(session => session.close())); }),
-  } satisfies ClaudeRuntimeClient & { close(): Promise<void> };
+  } satisfies ClaudeOwnedRuntimeClient & { close(): Promise<void> };
   return { runtime, sessions };
 }

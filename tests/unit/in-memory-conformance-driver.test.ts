@@ -228,6 +228,18 @@ describe("in-memory conformance fault boundaries", () => {
       taskContexts: [],
       attachments: [],
     });
+    const latest = (backendTurnId: string) => current.driver.resolveBranchCheckpoint({
+      scope: current.scope,
+      binding: sourceBinding,
+      workspace: current.workspace,
+      opaqueBindingDetail: created.opaqueBindingDetail,
+      selection: { kind: "latest_completed", backendTurnId },
+    });
+    // The backend forks exactly the latest completed turn the actor recorded.
+    await expect(latest(active.backendTurnId!)).rejects.toMatchObject({
+      retryable: true, backendCode: "memory_checkpoint_latest_turn_changed",
+    });
+    await expect(latest(selectedBackendTurnId)).resolves.toMatchObject({ kind: "conversation_leaf" });
     const checkpoint = await current.driver.resolveBranchCheckpoint({
       scope: current.scope,
       binding: sourceBinding,

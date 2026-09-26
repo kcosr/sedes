@@ -216,6 +216,13 @@ const connection: AgentConnectionProfile = {
 };
 
 const scope = { tenantId: "tenant", principalId: "principal" };
+const piWithdrawnSteer = {
+  status: "not_accepted",
+  retryable: false,
+  diagnostic: {
+    text: "Pi's turn ended, or its runtime stopped, before Pi used this steering message, so it was not sent. Nothing was resent. Restore it to send it again, or dismiss it.",
+  },
+};
 
 function fakeSessionFactory(
   assistantResponseCount = 1,
@@ -684,6 +691,23 @@ function binding(
     executionEnvironmentId: connection.executionEnvironmentId,
     createdAt: "2026-07-30T12:00:00.000Z",
   };
+}
+
+/** The actor's `latest_completed` selection: the newest completed turn it resolved. */
+async function latestCompleted(
+  driver: PiConversationBackendDriver,
+  input: Parameters<PiConversationBackendDriver["read"]>[0],
+) {
+  const { snapshot } = await driver.read(input);
+  const backendTurnId = snapshot.orderedBackendTurnIds.findLast((turnId) =>
+    snapshot.turnsById[turnId]?.status === "completed" && snapshot.turnsById[turnId]?.endedBy === "agent_settled");
+  return { kind: "latest_completed" as const, backendTurnId: backendTurnId ?? "no-completed-turn" };
+}
+
+/** A Pi turn is named by its user entry; this names the newest one. */
+function latestCompletedIn(manager: Awaited<ReturnType<PiSessionStore["reserve"]>>["manager"]) {
+  const entry = manager.getBranch().findLast((candidate) => candidate.type === "message" && candidate.message.role === "user");
+  return { kind: "latest_completed" as const, backendTurnId: entry?.id ?? "no-completed-turn" };
 }
 
 function appendBranchableSessionTurn(
@@ -2455,7 +2479,7 @@ describe("Pi conversation backend driver", () => {
         workspace: fixture.workspace,
         binding: sourceBinding,
         opaqueBindingDetail: "isolated-source-binding",
-        selection: { kind: "latest_completed" },
+        selection: { kind: "latest_completed", backendTurnId: "isolated-source-turn" },
       }),
     ).rejects.toMatchObject({
       category: "unavailable",
@@ -3365,7 +3389,7 @@ describe("Pi conversation backend driver", () => {
     await handle.close();
   });
 
-  it("withdraws an unmaterialized Steer before Stop and preserves not-accepted reconciliation", async () => {
+  it("withdraws an unmaterialized Steer on Stop and returns it as not sent without resend permission", async () => {
     const fixture = await workspace();
     const order: string[] = [];
     const base = fakeSessionFactory(
@@ -3461,7 +3485,7 @@ describe("Pi conversation backend driver", () => {
         applicationOperationId: steerInput.applicationOperationId,
         reconciliationToken: steerInput.reconciliationToken,
       }),
-    ).resolves.toEqual({ status: "not_accepted", retryable: true });
+    ).resolves.toEqual(piWithdrawnSteer);
     expect(
       (await new PiSessionStore({
         sessionDirectory: fixture.sessions,
@@ -3593,8 +3617,24 @@ describe("Pi conversation backend driver", () => {
     await handle.close();
   });
 
-  it("rejects an unmaterialized steer when the Pi generation settles during enqueue", async () => {
+  it("withdraws a steer Pi accepted after its generation settled during enqueue", async () => {
     const fixture = await workspace();
+    const order: string[] = [];
+    let settled = false;
+    const base = fakeSessionFactory(
+      1,
+      false,
+      () => undefined,
+      0,
+      () => [],
+      0,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
     const driver = new PiConversationBackendDriver({
       instance,
       connection,
@@ -3604,20 +3644,26 @@ describe("Pi conversation backend driver", () => {
       agentTools: noAgentTools,
       toolAccessPolicy: fullToolAccessPolicy,
       sessionDirectory: fixture.sessions,
-      sessionFactory: fakeSessionFactory(
-        1,
-        false,
-        () => undefined,
-        0,
-        () => [],
-        0,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        true,
-      ),
+      sessionFactory: {
+        async create(input) {
+          const session = await base.create(input);
+          return Object.defineProperties(
+            {
+              ...session,
+              async steer(...args: Parameters<typeof session.steer>) {
+                await session.steer(...args);
+                // Pi queued the input, then its run settled before using it.
+                settled = true;
+              },
+              clearQueue() {
+                order.push("clear_queue");
+                return { steering: ["Too late for this generation"], followUp: [] };
+              },
+            },
+            { isIdle: { get: () => settled } },
+          );
+        },
+      },
     });
     const created = await driver.create({
       scope,
@@ -3652,11 +3698,14 @@ describe("Pi conversation backend driver", () => {
       text: "Too late for this generation",
     };
 
-    await expect(handle.steer(input)).rejects.toMatchObject({
-      backendCode: "pi_steer_generation_ended",
-      retryable: true,
-      crossedSubmissionBoundary: false,
+    // Pi accepted it, so it is not Sedes's own queue work any more: it stays
+    // pending until reconciliation returns it to the user as not sent.
+    await expect(handle.steer(input)).resolves.toMatchObject({
+      status: "pending_materialization",
+      backendTurnId: activeTurnId,
     });
+    // An idle Pi would hand queued steering to its next run.
+    expect(order).toEqual(["clear_queue"]);
     await expect(
       driver.reconcileSubmission({
         scope,
@@ -3665,7 +3714,7 @@ describe("Pi conversation backend driver", () => {
         applicationOperationId: input.applicationOperationId,
         reconciliationToken: input.reconciliationToken,
       }),
-    ).resolves.toEqual({ status: "not_accepted", retryable: true });
+    ).resolves.toEqual(piWithdrawnSteer);
     expect(
       (await new PiSessionStore({
         sessionDirectory: fixture.sessions,
@@ -3678,6 +3727,187 @@ describe("Pi conversation backend driver", () => {
             : [];
         }),
     ).toEqual(["intent", "enqueued", "lost"]);
+    await handle.close();
+  });
+
+  it("keeps a steer as Sedes's own work when its run settles while it is prepared", async () => {
+    const fixture = await workspace();
+    let stopped = false;
+    const nativeSteer = vi.fn();
+    const base = fakeSessionFactory(1, false, () => undefined, 0, () => []);
+    const driver = new PiConversationBackendDriver({
+      instance,
+      connection,
+      usage: NO_USAGE_SINK,
+      nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
+      toolProvenanceKey,
+      agentTools: noAgentTools,
+      toolAccessPolicy: fullToolAccessPolicy,
+      sessionDirectory: fixture.sessions,
+      sessionFactory: {
+        async create(input) {
+          const session = await base.create(input);
+          return Object.defineProperties(
+            {
+              ...session,
+              async skillPrompt(
+                ...args: Parameters<typeof session.skillPrompt>
+              ) {
+                // The run settles while Sedes prepares the input.
+                stopped = true;
+                return session.skillPrompt(...args);
+              },
+              async steer(...args: Parameters<typeof session.steer>) {
+                nativeSteer();
+                await session.steer(...args);
+              },
+            },
+            { isIdle: { get: () => stopped } },
+          );
+        },
+      },
+    });
+    const created = await driver.create({
+      scope,
+      workspace: fixture.workspace,
+      applicationThreadId: "prepared-steer-stop-create",
+      applicationOperationId: "prepared-steer-stop-create",
+      source: { kind: "user" },
+    });
+    const manager = await new PiSessionStore({
+      sessionDirectory: fixture.sessions,
+    }).openPersisted(fixture.workspace, created.backendConversationId);
+    const activeTurnId = manager!.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "Active work" }],
+      timestamp: Date.now(),
+    });
+    const handle = await driver.attach({
+      scope,
+      workspace: fixture.workspace,
+      binding: binding(created.backendConversationId),
+      opaqueBindingDetail: created.opaqueBindingDetail,
+    });
+
+    await expect(
+      handle.steer({
+        applicationOperationId: "prepared-steer-stop-operation",
+        mutationId: "prepared-steer-stop-mutation",
+        reconciliationToken: "prepared-steer-stop-token",
+        target: { kind: "turn", turnId: activeTurnId },
+        selectedSkillId: "skill",
+        contextExcerpts: [],
+        attachments: [],
+        taskContexts: [],
+        text: "Prepared while stopping",
+      }),
+    ).rejects.toMatchObject({
+      backendCode: "pi_steer_target_changed",
+      crossedSubmissionBoundary: false,
+      steerRejectionReason: "target_no_longer_active",
+    });
+    // Pi would start a new run from steering input once nothing streams.
+    expect(nativeSteer).not.toHaveBeenCalled();
+    expect(
+      (await new PiSessionStore({
+        sessionDirectory: fixture.sessions,
+      }).openPersisted(fixture.workspace, created.backendConversationId))!
+        .getBranch()
+        .flatMap((entry) => {
+          const marker = piSubmissionMarker(entry);
+          return marker ? [marker.applicationOperationId] : [];
+        }),
+    ).not.toContain("prepared-steer-stop-operation");
+    await handle.close();
+  });
+
+  it("fails closed when another Pi run starts before an accepted steer appears", async () => {
+    const fixture = await workspace();
+    const base = fakeSessionFactory(
+      1,
+      false,
+      () => undefined,
+      0,
+      () => [],
+      0,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const driver = new PiConversationBackendDriver({
+      instance,
+      connection,
+      usage: NO_USAGE_SINK,
+      nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
+      toolProvenanceKey,
+      agentTools: noAgentTools,
+      toolAccessPolicy: fullToolAccessPolicy,
+      sessionDirectory: fixture.sessions,
+      // The session stays busy after the targeted run settled: another run
+      // may still drain the queued input.
+      sessionFactory: base,
+    });
+    const created = await driver.create({
+      scope,
+      workspace: fixture.workspace,
+      applicationThreadId: "changed-during-steer-create",
+      applicationOperationId: "changed-during-steer-create",
+      source: { kind: "user" },
+    });
+    const manager = await new PiSessionStore({
+      sessionDirectory: fixture.sessions,
+    }).openPersisted(fixture.workspace, created.backendConversationId);
+    const activeTurnId = manager!.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "Active work" }],
+      timestamp: Date.now(),
+    });
+    const target = binding(created.backendConversationId);
+    const handle = await driver.attach({
+      scope,
+      workspace: fixture.workspace,
+      binding: target,
+      opaqueBindingDetail: created.opaqueBindingDetail,
+    });
+    const input = {
+      applicationOperationId: "changed-during-steer-operation",
+      mutationId: "changed-during-steer-mutation",
+      reconciliationToken: "changed-during-steer-token",
+      target: { kind: "turn" as const, turnId: activeTurnId },
+      contextExcerpts: [],
+      attachments: [],
+      taskContexts: [],
+      text: "Maybe drained by the next run",
+    };
+
+    await expect(handle.steer(input)).rejects.toMatchObject({
+      backendCode: "pi_steer_generation_changed",
+      crossedSubmissionBoundary: true,
+    });
+    await expect(
+      driver.reconcileSubmission({
+        scope,
+        workspace: fixture.workspace,
+        binding: target,
+        applicationOperationId: input.applicationOperationId,
+        reconciliationToken: input.reconciliationToken,
+      }),
+    ).resolves.toMatchObject({ status: "unresolved" });
+    expect(
+      (await new PiSessionStore({
+        sessionDirectory: fixture.sessions,
+      }).openPersisted(fixture.workspace, created.backendConversationId))!
+        .getBranch()
+        .flatMap((entry) => {
+          const marker = piSubmissionMarker(entry);
+          return marker?.applicationOperationId === input.applicationOperationId
+            ? [marker.phase]
+            : [];
+        }),
+    ).toEqual(["intent", "enqueued"]);
     await handle.close();
   });
 
@@ -3771,7 +4001,7 @@ describe("Pi conversation backend driver", () => {
         applicationOperationId: input.applicationOperationId,
         reconciliationToken: input.reconciliationToken,
       }),
-    ).resolves.toEqual({ status: "not_accepted", retryable: true });
+    ).resolves.toEqual(piWithdrawnSteer);
     expect(
       (await new PiSessionStore({
         sessionDirectory: fixture.sessions,
@@ -3861,7 +4091,7 @@ describe("Pi conversation backend driver", () => {
         applicationOperationId: input.applicationOperationId,
         reconciliationToken: input.reconciliationToken,
       }),
-    ).resolves.toEqual({ status: "not_accepted", retryable: true });
+    ).resolves.toEqual(piWithdrawnSteer);
     expect(
       (await new PiSessionStore({
         sessionDirectory: fixture.sessions,
@@ -6411,7 +6641,7 @@ describe("Pi conversation backend driver", () => {
     if (!persisted || assistant?.type !== "message" || assistant.message.role !== "assistant") throw new Error("Missing assistant fixture");
     persisted.appendMessage({ role: "user", content: [{ type: "text", text: "Later successful work" }], timestamp: Date.now() });
     persisted.appendMessage({ ...assistant.message, stopReason: "stop", errorMessage: undefined, timestamp: Date.now() });
-    const sourceCheckpoint = await driver.resolveBranchCheckpoint({ ...attach, selection: { kind: "latest_completed" } });
+    const sourceCheckpoint = await driver.resolveBranchCheckpoint({ ...attach, selection: await latestCompleted(driver, attach) });
     const child = await driver.branchConversation({
       scope, workspace: fixture.workspace, applicationOperationId: "cancelled-retry-fork",
       childApplicationThreadId: "cancelled-retry-child", source: { kind: "user" },
@@ -7205,6 +7435,26 @@ describe("Pi conversation backend driver", () => {
     expect(enumerate).toHaveBeenCalledTimes(2);
   });
 
+  it("never forks another turn than the latest completed turn the actor resolved", async () => {
+    const fixture = await workspace();
+    const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
+    const reserved = await store.reserve(fixture.workspace, "latest-source");
+    appendBranchableSessionTurn(reserved.manager, "First");
+    const recorded = latestCompletedIn(reserved.manager);
+    appendBranchableSessionTurn(reserved.manager, "Second");
+    const driver = new PiConversationBackendDriver({
+      instance, connection, usage: NO_USAGE_SINK, nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
+      toolProvenanceKey, agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy, store,
+      sessionFactory: fakeSessionFactory(),
+    });
+    const resolve = (selection: { readonly kind: "latest_completed"; readonly backendTurnId: string }) =>
+      driver.resolveBranchCheckpoint({ scope, workspace: fixture.workspace, binding: binding("latest-source"),
+        opaqueBindingDetail: reserved.opaqueBindingDetail, selection });
+    await expect(resolve(recorded)).rejects.toMatchObject({ category: "invalid_state", retryable: true,
+      backendCode: "pi_latest_checkpoint_changed" });
+    await expect(resolve(latestCompletedIn(reserved.manager))).resolves.toMatchObject({ kind: "conversation_leaf" });
+  });
+
   it.each([
     "present",
     "missing",
@@ -7262,7 +7512,7 @@ describe("Pi conversation backend driver", () => {
         workspace: fixture.workspace,
         binding: binding("checkpoint-source"),
         opaqueBindingDetail: reserved.opaqueBindingDetail,
-        selection: { kind: "latest_completed" },
+        selection: latestCompletedIn(reserved.manager),
       });
       if (state === "present") {
         await expect(result).resolves.toMatchObject({ kind: "conversation_leaf" });
@@ -7524,7 +7774,7 @@ describe("Pi conversation backend driver", () => {
       workspace: fixture.workspace,
       binding: binding(created.backendConversationId),
       opaqueBindingDetail: created.opaqueBindingDetail,
-      selection: { kind: "latest_completed" },
+      selection: await latestCompleted(driver, { scope, workspace: fixture.workspace, binding: binding(created.backendConversationId), opaqueBindingDetail: created.opaqueBindingDetail }),
     });
     const child = await driver.branchConversation({
       scope,
@@ -8191,7 +8441,7 @@ describe("Pi conversation backend driver", () => {
       workspace: fixture.workspace,
       binding: sourceBinding,
       opaqueBindingDetail: created.opaqueBindingDetail,
-      selection: { kind: "latest_completed" },
+      selection: await latestCompleted(driver, { scope, workspace: fixture.workspace, binding: sourceBinding, opaqueBindingDetail: created.opaqueBindingDetail }),
     });
     const cloned = await driver.branchConversation({
       scope,
@@ -8620,7 +8870,7 @@ describe("Pi conversation backend driver", () => {
         workspace: fixture.workspace,
         binding: sourceBinding,
         opaqueBindingDetail: created.opaqueBindingDetail,
-        selection: { kind: "latest_completed" },
+        selection: { kind: "latest_completed", backendTurnId: selectedBackendTurnId },
       }),
     ).rejects.toMatchObject({
       category: "invalid_state",
@@ -9762,7 +10012,7 @@ describe("Pi conversation backend driver", () => {
         workspace: fixture.workspace,
         binding: binding(created.backendConversationId),
         opaqueBindingDetail: created.opaqueBindingDetail,
-        selection: { kind: "latest_completed" },
+        selection: { kind: "latest_completed", backendTurnId: "no-completed-turn" },
       }),
     ).rejects.toMatchObject({
       category: "invalid_state",
@@ -9802,7 +10052,7 @@ describe("Pi conversation backend driver", () => {
         workspace: fixture.workspace,
         binding: binding(created.backendConversationId),
         opaqueBindingDetail: created.opaqueBindingDetail,
-        selection: { kind: "latest_completed" },
+        selection: { kind: "latest_completed", backendTurnId: accepted.backendTurnId! },
       }),
     ).resolves.toMatchObject({
       backendInstanceId: instance.id,

@@ -32,6 +32,61 @@ const blockerLabels: Record<
   conversation_runtime: ["conversation runtime", "conversation runtimes"],
 };
 
+function runtimeDescription(
+  runtime: NonNullable<ThreadForceResetImpact["affectedThreads"][number]["runtime"]>,
+): string {
+  const activity = runtime.backgroundActivity;
+  const background =
+    activity?.state === "unknown"
+      ? "background work unknown"
+      : activity && activity.agents + activity.commands + activity.other > 0
+        ? `${activity.agents + activity.commands + activity.other} background ${
+            activity.agents + activity.commands + activity.other === 1 ? "task" : "tasks"
+          }`
+        : undefined;
+  const active = runtime.runState !== "idle" && runtime.runState !== "failed";
+  const state = active ? `${runtime.runState.replaceAll("_", " ")}` : "loaded";
+  return active || background
+    ? `Runtime ${state}${background ? `, ${background}` : ""}; resetting stops this work.`
+    : "Loaded runtime will be replaced.";
+}
+
+function countLabel(count: number, singular: string, plural: string): string | undefined {
+  return count === 0 ? undefined : `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
+}
+
+/** Totals of the background work the affected loaded runtimes report. */
+function backgroundSummary(
+  threads: ThreadForceResetImpact["affectedThreads"],
+): React.JSX.Element | null {
+  const total = { agents: 0, commands: 0, other: 0, unknownThreads: 0 };
+  for (const { runtime } of threads) {
+    const activity = runtime?.backgroundActivity;
+    if (!activity) continue;
+    total.agents += activity.agents;
+    total.commands += activity.commands;
+    total.other += activity.other;
+    if (activity.state === "unknown") total.unknownThreads++;
+  }
+  const counts = [
+    countLabel(total.agents, "background agent", "background agents"),
+    countLabel(total.commands, "background command", "background commands"),
+    countLabel(total.other, "other background task", "other background tasks"),
+  ].filter((label): label is string => label !== undefined);
+  if (counts.length === 0 && total.unknownThreads === 0) return null;
+  return (
+    <p data-testid="force-reset-background">
+      {counts.length > 0
+        ? `Running in the affected conversations: ${counts.join(", ")}. Replacing their runtimes may stop this work.`
+        : null}
+      {counts.length > 0 && total.unknownThreads > 0 ? " " : null}
+      {total.unknownThreads > 0
+        ? `Background work is unknown in ${total.unknownThreads === 1 ? "one conversation" : `${total.unknownThreads.toLocaleString()} conversations`}.`
+        : null}
+    </p>
+  );
+}
+
 export function ForceResetDialog({
   open,
   onOpenChange,
@@ -196,11 +251,22 @@ export function ForceResetDialog({
                       );
                     })}
                   </ul>
-                  <p>
-                    {impact.affectedThreadIds.length === 1
-                      ? "This affects this thread."
-                      : `This affects ${impact.affectedThreadIds.length.toLocaleString()} related threads.`}
-                  </p>
+                  <h3>
+                    {impact.affectedThreads.length === 1
+                      ? "Affected thread"
+                      : `Affected threads (${impact.affectedThreads.length.toLocaleString()})`}
+                  </h3>
+                  <ul className="force-reset-threads">
+                    {impact.affectedThreads.map((thread) => (
+                      <li key={thread.threadId}>
+                        <span>{thread.title}</span>
+                        {thread.runtime && (
+                          <small>{runtimeDescription(thread.runtime)}</small>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  {backgroundSummary(impact.affectedThreads)}
                 </>
               ) : (
                 <p role="status">No unresolved Sedes work was found.</p>

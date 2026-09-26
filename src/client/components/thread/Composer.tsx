@@ -1221,8 +1221,18 @@ export function Composer({
     : false;
   const capabilitiesPending =
     state.connection === "connected" && store.awaitingRunStateCapabilities;
+  // A sent message is on its way before the server publishes its run state.
+  // Show activity from Send until authoritative state takes over; this is
+  // presentation only and does not change delivery modes or controls.
+  const submitInFlight = state.pendingComposerTransfers.some(
+    (transfer) =>
+      transfer.presentation === "transcript" &&
+      transfer.authorityState === "client_only" &&
+      !transfer.rollbackRequired &&
+      transfer.requestState !== "request_failed",
+  );
   const showLiveActivityBar =
-    busy && state.connection === "connected" &&
+    (busy || submitInFlight) && state.connection === "connected" &&
     (state.authoritative || capabilitiesPending);
   const supportedBusyDeliveryModes =
     snapshot?.capabilities.deliveryModes.filter(

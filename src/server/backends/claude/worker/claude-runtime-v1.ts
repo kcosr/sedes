@@ -224,6 +224,10 @@ export const claudeRuntimeSessionMessageSchema = z.strictObject({
   parent_agent_id: z.string().max(256).nullable(),
   origin: boundedJsonValueSchema.optional(),
   timestamp: z.iso.datetime().optional(),
+  /** Claude Code's compaction summary; the SDK carries it on history rows. */
+  isCompactSummary: z.literal(true).optional(),
+  /** Queued input Claude read during a turn, converted from its attachment row. */
+  isQueuedCommand: z.literal(true).optional(),
 });
 
 export const claudeRuntimeSessionListRequestSchema = z.strictObject({
@@ -243,6 +247,13 @@ export const claudeRuntimeSessionInfoRequestSchema = z.strictObject({
 export const claudeRuntimeSessionInfoResponseSchema = z.strictObject({
   session: claudeRuntimeSessionInfoSchema.nullable(),
 });
+export const claudeRuntimeSessionTranscriptRequestSchema = z.strictObject({
+  sessionId: uuidSchema,
+  dir: absolutePathSchema,
+});
+export const claudeRuntimeSessionTranscriptResponseSchema = z.strictObject({
+  present: z.boolean(),
+});
 const claudeHistoryCursorSchema = z.strictObject({
   offset: nonnegativeSafeIntegerSchema,
   end: positiveSafeIntegerSchema,
@@ -256,6 +267,7 @@ export const claudeRuntimeSessionMessagesRequestSchema = z.strictObject({
   includeSystemMessages: z.boolean().optional(),
   cursor: claudeHistoryCursorSchema.optional(),
   maintenance: z.boolean().optional(),
+  resumableOnly: z.boolean().optional(),
 });
 export const claudeRuntimeSessionMessagesResponseSchema = z.strictObject({
   messages: z.array(claudeRuntimeSessionMessageSchema).max(CLAUDE_HISTORY_PAGE_MESSAGES),
@@ -301,7 +313,39 @@ export const claudeRuntimeQueryOpenRequestSchema = z
       request.agentToolMcp === undefined ||
       Object.keys(request.environment).length === 0,
     "A query presents Sedes tools through the CLI or MCP, never both.",
+  )
+  .refine(
+    (request) =>
+      request.launch !== "fork" ||
+      (request.permissionMode === undefined &&
+        request.allowDangerouslySkipPermissions === undefined &&
+        !request.enableCanUseTool &&
+        request.agentToolMcp === undefined &&
+        Object.keys(request.environment).length === 0),
+    "A fork launch owns its locked-down permissions and presents no tools.",
   );
+/**
+ * One locked-down fork launch: copy the retained source prefix into the
+ * application-reserved child session, confirm the launch, and exit.
+ */
+export const claudeRuntimeForkRequestSchema = z
+  .strictObject({
+    sessionId: uuidSchema,
+    sourceSessionId: uuidSchema,
+    resumeSessionAt: uuidSchema,
+    cwd: absolutePathSchema,
+    title: z.string().min(1).max(16_384).optional(),
+    model: boundedStringSchema.min(1),
+    effort: effortSchema.optional(),
+    executionEnvironment: resolvedEnvironmentVariablesSchema.optional(),
+  })
+  .refine(
+    (request) => request.sessionId !== request.sourceSessionId,
+    "A fork child needs its own session identity.",
+  );
+export const claudeRuntimeForkResponseSchema = z.strictObject({
+  cliRelease: boundedStringSchema,
+});
 export const claudeRuntimeQueryOpenResponseSchema = z.strictObject({
   queryId: uuidSchema,
   startupProbeUuid: uuidSchema,
@@ -318,6 +362,15 @@ export const claudeRuntimeQuerySendResponseSchema = z.strictObject({
   accepted: z.literal(true),
 });
 const queryIdRequestSchema = z.strictObject({ queryId: uuidSchema });
+/** Withdraws one input Claude admitted but has not started (Stop). */
+export const claudeRuntimeQueryCancelInputRequestSchema = z.strictObject({
+  queryId: uuidSchema,
+  operationId: uuidSchema,
+});
+/** Claude's own answer; the `cancelled` lifecycle frame is the evidence. */
+export const claudeRuntimeQueryCancelInputResponseSchema = z.strictObject({
+  cancelled: z.boolean(),
+});
 export const claudeRuntimeQueryInterruptResponseSchema = z.strictObject({
   receipt: z
     .strictObject({
@@ -476,6 +529,13 @@ export const claudeRuntimeSessionMessagesOperation = operation({
   maximumDeadlineMilliseconds: 120_000,
   lane: "operation",
 });
+export const claudeRuntimeSessionTranscriptOperation = operation({
+  operation: "session.transcript",
+  requestSchema: claudeRuntimeSessionTranscriptRequestSchema,
+  responseSchema: claudeRuntimeSessionTranscriptResponseSchema,
+  maximumDeadlineMilliseconds: 60_000,
+  lane: "operation",
+});
 export const claudeRuntimeSessionRenameOperation = operation({
   operation: "session.rename",
   requestSchema: claudeRuntimeSessionRenameRequestSchema,
@@ -501,6 +561,13 @@ export const claudeRuntimeQueryInterruptOperation = operation({
   operation: "query.interrupt",
   requestSchema: queryIdRequestSchema,
   responseSchema: claudeRuntimeQueryInterruptResponseSchema,
+  maximumDeadlineMilliseconds: 30_000,
+  lane: "control",
+});
+export const claudeRuntimeQueryCancelInputOperation = operation({
+  operation: "query.cancel_input",
+  requestSchema: claudeRuntimeQueryCancelInputRequestSchema,
+  responseSchema: claudeRuntimeQueryCancelInputResponseSchema,
   maximumDeadlineMilliseconds: 30_000,
   lane: "control",
 });
@@ -553,10 +620,12 @@ export const claudeRuntimeWorkerOperations = Object.freeze([
   claudeRuntimeSessionListOperation,
   claudeRuntimeSessionInfoOperation,
   claudeRuntimeSessionMessagesOperation,
+  claudeRuntimeSessionTranscriptOperation,
   claudeRuntimeSessionRenameOperation,
   claudeRuntimeQueryOpenOperation,
   claudeRuntimeQuerySendOperation,
   claudeRuntimeQueryInterruptOperation,
+  claudeRuntimeQueryCancelInputOperation,
   claudeRuntimeQuerySetModelOperation,
   claudeRuntimeQuerySetEffortOperation,
   claudeRuntimeQuerySetPermissionModeOperation,
@@ -582,6 +651,9 @@ export interface ClaudeRuntimeV1WorkerHandlers {
   readonly getSessionMessages: HandlerFor<
     typeof claudeRuntimeSessionMessagesOperation
   >;
+  readonly hasSessionTranscript: HandlerFor<
+    typeof claudeRuntimeSessionTranscriptOperation
+  >;
   readonly renameSession: HandlerFor<
     typeof claudeRuntimeSessionRenameOperation
   >;
@@ -589,6 +661,9 @@ export interface ClaudeRuntimeV1WorkerHandlers {
   readonly sendQuery: HandlerFor<typeof claudeRuntimeQuerySendOperation>;
   readonly interruptQuery: HandlerFor<
     typeof claudeRuntimeQueryInterruptOperation
+  >;
+  readonly cancelQueryInput: HandlerFor<
+    typeof claudeRuntimeQueryCancelInputOperation
   >;
   readonly setQueryModel: HandlerFor<
     typeof claudeRuntimeQuerySetModelOperation
@@ -615,6 +690,10 @@ export function registerClaudeRuntimeV1WorkerOperations(
     handlers.getSessionMessages,
   );
   registry.register(
+    claudeRuntimeSessionTranscriptOperation,
+    handlers.hasSessionTranscript,
+  );
+  registry.register(
     claudeRuntimeSessionRenameOperation,
     handlers.renameSession,
   );
@@ -623,6 +702,10 @@ export function registerClaudeRuntimeV1WorkerOperations(
   registry.register(
     claudeRuntimeQueryInterruptOperation,
     handlers.interruptQuery,
+  );
+  registry.register(
+    claudeRuntimeQueryCancelInputOperation,
+    handlers.cancelQueryInput,
   );
   registry.register(
     claudeRuntimeQuerySetModelOperation,

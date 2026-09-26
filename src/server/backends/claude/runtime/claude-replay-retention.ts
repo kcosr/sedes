@@ -30,7 +30,9 @@ export function isTransientReplay(event: ClaudePersistentEvent): boolean {
     // acceptance, lifecycle, or billed usage. Preserve unexpected stamp shapes.
     return !Object.hasOwn(message, "user_message_uuid") && !Object.hasOwn(message, "user_message_uuids");
   }
-  if (["tool_progress", "tool_use_summary", "rate_limit_event"].includes(String(message.type))) return true;
+  // The owner applies an input's lifecycle when Claude emits it; the frame
+  // itself has no later transcript or acceptance meaning for a replacement.
+  if (["tool_progress", "tool_use_summary", "rate_limit_event", "command_lifecycle"].includes(String(message.type))) return true;
   return message.type === "system" && ["task_progress", "api_retry", "informational", "hook_started", "hook_progress", "hook_response"].includes(String(message.subtype));
 }
 

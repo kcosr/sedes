@@ -217,9 +217,10 @@ The composer action changes with thread state and provider capability.
 | **Stop** | Ask the provider to interrupt the active turn. |
 
 Pi and Codex steer the exact turn that is running. Claude's Steer goes to the
-conversation: Claude delivers it at its next opportunity, which may join the
-running turn or start the next one, and it never interrupts work. Grok has no
-Steer, so active-turn input waits in Queue.
+conversation: Claude takes it at its next opportunity, usually when the tool
+call it is running finishes, and it never interrupts work. If the turn is still
+running, the message joins it at that point; otherwise it starts the next turn.
+Grok has no Steer, so active-turn input waits in Queue.
 
 The selector shows only modes the current backend supports; temporarily
 unavailable modes remain visible but disabled. A temporary change in thread
@@ -235,8 +236,9 @@ the mode locally without submitting the draft. Tap the main button to submit. Th
 Sedes checks the current server state when it admits an action. If a turn
 finishes between clicking and admission, an ordinary delivery intent becomes
 Send. A Steer whose exact target has just ended becomes queued work only when
-Sedes can prove it was not accepted; it is never redirected into a different
-active turn.
+Sedes can prove the provider never accepted it; it is never redirected into a
+different active turn. A Steer the provider accepted but never used comes back
+to you as not sent, as described under [Stop a turn](#stop-a-turn).
 
 ### What happens to the composer
 
@@ -244,7 +246,8 @@ Send, Steer, and Queue transfer the captured content out of the composer
 immediately. New typing after the clear is a new draft.
 
 - Idle Send appears immediately as a normal user message while provider
-  history catches up.
+  history catches up, and the activity bar above the composer starts at once
+  rather than waiting for the provider's first output.
 - Steer and Queue appear as pending-input rows above the composer.
 - If a clean failure proves the input was not delivered, Sedes restores or
   reconciles it instead of leaving a failed chat bubble.
@@ -269,10 +272,16 @@ direct Steer can be admitted.
 
 ### Send more than one Steer
 
-You may submit several Steers while the same turn remains active. Their cards
-stay in first-in, first-out order while Sedes makes provider calls one at a
-time. Each card disappears only when its exact operation is represented in
-history.
+Sedes sends Steers to the provider one at a time, in first-in, first-out
+order. A Steer card shows **Steering** until its exact message appears in
+history, and then disappears. While it waits for the provider to use it, the
+composer waits too: Send, Steer, and Queue return when it appears, or when
+Stop returns it to you.
+
+On Claude, the message appears as soon as Claude takes it, at that point in
+the running turn rather than after Claude's final answer, and it stays there
+after a reload. You can then steer the same turn again. Several steers Claude
+takes together appear in the order you sent them.
 
 ### Stop a turn
 
@@ -280,6 +289,29 @@ history.
 work already persisted by the provider, and it does not imply that every
 external side effect was rolled back. If the outcome cannot be confirmed, use
 the displayed recovery action rather than repeating Stop.
+
+Stop means stop, on every backend:
+
+- Sedes's own Queue is untouched: queued entries keep their order and run
+  after the stopped turn. A Steer card Sedes has not yet sent to the provider
+  is also still Sedes's own work.
+- A Steer the provider received but has not used yet never runs. Its card
+  shows **Steer failed** and says it was not sent. Restore it to the composer
+  or dismiss it; later queued entries wait for that choice. Sedes never
+  resends it.
+- A Steer the provider already used stays with the stopped turn.
+
+If the provider's runtime ends or Sedes restarts before the provider used a
+Steer, Sedes also returns it as not sent when it can prove that. When it
+cannot, the card stays unconfirmed or says the outcome is unknown. Either way
+Sedes never resends it.
+
+| Backend | How Stop handles a Steer the provider has not used |
+| --- | --- |
+| Claude | Stop asks Claude to withdraw it before interrupting. Claude's own queued work, such as a finished background task's notification, can still start a turn afterwards. |
+| Pi | Stop clears Pi's steering queue before interrupting. |
+| Codex | Codex discards it when it interrupts the turn. Sedes reports it not sent once the stopped turn's history is final without it. |
+| Grok | Grok has no Steer; active-turn input waits in Queue. |
 
 ### Mobile composer focus
 
@@ -348,6 +380,10 @@ During an active Codex turn, a recent provider-supplied reasoning summary may
 briefly appear above the composer. Select it to see the complete summary.
 Approval and question panels take precedence over that status area.
 
+Claude can start a turn on its own, for example when a background task
+finishes. The thread then shows as running and **Stop** is available, even
+though you sent nothing.
+
 Claude also shows **Waiting for subagent** or **Background command running**
 above the composer while its main response may already be finished. Multiple
 jobs show counts. You can send a normal message once the main response ends;
@@ -408,13 +444,30 @@ Provider capabilities determine when forking is available:
 
 - Pi and Codex can fork an explicitly selected completed turn while later
   source work is active.
-- Claude exact-turn forks require the source to be idle.
+- Claude forks require the source to be idle, with no background agents or
+  commands still running in it. Some Claude turns cannot be forked at, such as
+  a turn that ended without a final answer or one before Claude compacted the
+  conversation; the turn's fork action shows why. If the newest completed turn
+  is one of these, **Fork** explains why instead of forking an older turn.
 - Generic **Fork** may use a provider-supported latest snapshot; otherwise it
   uses the newest eligible completed turn.
 
 A child inherits eligible settings and records its source lineage. Detaching or
 reattaching its sidebar lineage changes organization, not history. Grok does
 not currently offer native fork support.
+
+A Claude fork of an earlier turn can include background work that had not
+finished by that turn. That work keeps running only in the source. The child
+shows a notice saying so, and any results appear in the source thread.
+
+If a fork fails or needs recovery, its thread explains why. **Recover fork** retries
+the same fork. **Discard this fork** removes the unfinished fork without
+retrying it; confirm with **Discard fork**. It is not offered once the provider
+has returned the fork's copy, because **Recover fork** can then finish it
+without contacting the provider again. A copy the provider already made is
+left untouched. For Pi and Claude forks Sedes never imports it as a thread; a
+Codex copy may later appear as a separate thread. **Start a new fork** appears
+only when another attempt could succeed.
 
 ## Respond to approvals and questions
 

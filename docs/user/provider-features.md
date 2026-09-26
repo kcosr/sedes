@@ -40,8 +40,10 @@ unsupported provider capability.
 
 When a transcript contains a provider-proven compaction boundary, Sedes shows
 **Conversation compacted**. The marker expands only when the provider retained
-a genuine summary for that boundary. Pi summaries are expandable; Codex
-boundaries are static because its native compaction item contains no summary.
+a genuine summary for that boundary. Pi and Claude summaries are expandable;
+Codex boundaries are static because its native compaction item contains no
+summary. Turns before a Claude compaction stay visible. Only later turns can be
+forked, because Claude resumes a compacted conversation from its summary.
 
 ## Settings are validated, not substituted
 

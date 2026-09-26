@@ -1,4 +1,5 @@
 import type { BackendRuntimeAdministration, BackendRuntimeRecoveryContext } from "../../module.js";
+import { ConversationBindingRepository } from "../../../db/repositories/conversation-binding-repository.js";
 import { claudePersistentConfigurationSchema, type ClaudePersistentConfiguration } from "./claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, claudePersistentRuntimeOperations } from "./claude-sidecar-runtime.js";
 
@@ -57,7 +58,19 @@ export async function recoverClaudeRuntimeAdministration(input: {
   return {
     inspect: async () => await withExisting(async (connection, current, controllerEpoch) => {
       assertIncarnation(current);
-      return await connection.inspect({ configuration, runtimeId, controllerEpoch });
+      const { retainedSessionIds, activity, ...inspection } = await connection.inspect({ configuration, runtimeId, controllerEpoch });
+      // Only sessions bound to this backend's threads in this scope; an
+      // unbound native session has no application owner to attach it.
+      const bindings = retainedSessionIds.length ? new ConversationBindingRepository(context.database) : undefined;
+      return { ...inspection,
+        activity: { runningTurns: activity.runningTurns, pendingInteractions: activity.pendingInteractions,
+          unacknowledgedConversations: activity.unacknowledgedSessions,
+          background: { agents: activity.background.agents, commands: activity.background.commands, other: activity.background.other,
+            unknownConversations: activity.background.unknownSessions } },
+        retainedThreadIds: retainedSessionIds.flatMap(sessionId => {
+          const binding = bindings!.findByBackendConversation(context.scope, context.instance.id, sessionId);
+          return binding ? [binding.applicationThreadId] : [];
+        }) };
     }),
     stop,
     // Application composition applies the desired replacement only after

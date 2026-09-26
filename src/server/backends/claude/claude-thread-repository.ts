@@ -74,6 +74,20 @@ export interface ClaudeTerminalReceipt {
   readonly updatedAt: number;
 }
 
+/** A child turn that copies a source turn through a verified native fork. */
+export interface ClaudeForkInheritedTurn {
+  readonly backendTurnId: string;
+  readonly sourceBackendTurnId: string;
+}
+
+export interface ClaudeForkChildRecord {
+  readonly nativeSessionId: string;
+  readonly forkOperationId: string;
+  readonly inheritedTurns: readonly ClaudeForkInheritedTurn[];
+  /** Child rows where Claude reported background work from before the fork point as unfinished. */
+  readonly omittedTaskNotificationUuids: ReadonlySet<string>;
+}
+
 /** Bounded provider bookends; these receipts do not imply that a task is still running. */
 export interface ClaudeTaskLifecycleReceipt {
   readonly nativeTaskId: string;
@@ -922,30 +936,130 @@ export class ClaudeThreadRepository {
     return result.changes === 1;
   }
 
+  /**
+   * Copy exactly the source task receipts the fork may truthfully inherit,
+   * under the child's native session. The caller selects them from evidence
+   * inside the retained prefix; nothing else about the source is carried.
+   */
   copyTaskLifecycleReceiptsForFork(scope: RequestScope, input: {
     readonly sourceApplicationThreadId: string;
-    readonly sourceNativeSessionId: string;
     readonly childApplicationThreadId: string;
     readonly childNativeSessionId: string;
-    readonly nativeToolUseIds: Iterable<string>;
+    readonly receipts: readonly ClaudeTaskLifecycleReceipt[];
   }): void {
     this.get(scope, input.sourceApplicationThreadId);
     this.get(scope, input.childApplicationThreadId);
-    requireBoundedText(input.sourceNativeSessionId, 512, "source_native_session_id");
     requireBoundedText(input.childNativeSessionId, 512, "child_native_session_id");
     const copy = this.database.prepare(`INSERT INTO claude_task_lifecycle_receipts
       (tenant_id, owner_principal_id, application_thread_id, native_session_id, native_task_id,
        native_tool_use_id, description, started_at, terminal_status, terminal_at)
-      SELECT tenant_id, owner_principal_id, ?, ?, native_task_id,
-        native_tool_use_id, description, started_at, terminal_status, terminal_at
-      FROM claude_task_lifecycle_receipts WHERE tenant_id = ? AND owner_principal_id = ?
-        AND application_thread_id = ? AND native_session_id = ? AND native_tool_use_id = ?
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT DO NOTHING`);
     this.database.transaction(() => {
-      for (const toolUseId of input.nativeToolUseIds) {
-        requireBoundedText(toolUseId, 512, "native_tool_use_id");
-        copy.run(input.childApplicationThreadId, input.childNativeSessionId,
-          scope.tenantId, scope.principalId, input.sourceApplicationThreadId, input.sourceNativeSessionId, toolUseId);
+      for (const receipt of input.receipts) {
+        requireBoundedText(receipt.nativeTaskId, 512, "native_task_id");
+        requireBoundedText(receipt.nativeToolUseId, 512, "native_tool_use_id");
+        copy.run(scope.tenantId, scope.principalId, input.childApplicationThreadId, input.childNativeSessionId,
+          receipt.nativeTaskId, receipt.nativeToolUseId, receipt.description, receipt.startedAt,
+          receipt.terminalStatus, receipt.terminalAt);
+      }
+    })();
+  }
+
+  /**
+   * Record the verified fork child's evidence once. A replay of the same fork
+   * (recovery of the existing child) must record exactly the same evidence.
+   */
+  recordForkChild(scope: RequestScope, input: {
+    readonly childApplicationThreadId: string;
+    readonly childNativeSessionId: string;
+    readonly forkOperationId: string;
+    readonly inheritedTurns: readonly ClaudeForkInheritedTurn[];
+    readonly omittedTasks: readonly { readonly nativeMessageUuid: string; readonly nativeTaskId: string }[];
+    readonly now: number;
+  }): void {
+    this.get(scope, input.childApplicationThreadId);
+    requireBoundedText(input.childNativeSessionId, 512, "native_session_id");
+    requireBoundedText(input.forkOperationId, 128, "fork_operation_id");
+    requireTimestamp(input.now, "created_at");
+    if (input.inheritedTurns.length > 100_000 || input.omittedTasks.length > 256) {
+      throw new Error("claude_fork_child_evidence_too_large");
+    }
+    this.database.transaction(() => {
+      const existing = this.findForkChild(scope, input.childApplicationThreadId);
+      if (existing) {
+        if (existing.nativeSessionId !== input.childNativeSessionId ||
+            existing.forkOperationId !== input.forkOperationId ||
+            JSON.stringify(existing.inheritedTurns) !== JSON.stringify(input.inheritedTurns) ||
+            JSON.stringify([...existing.omittedTaskNotificationUuids]) !==
+              JSON.stringify(input.omittedTasks.map(({ nativeMessageUuid }) => nativeMessageUuid))) {
+          throw new Error("claude_fork_child_evidence_conflict");
+        }
+        return;
+      }
+      this.database.prepare(`INSERT INTO claude_fork_children
+        (tenant_id, owner_principal_id, application_thread_id, native_session_id, fork_operation_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)`).run(scope.tenantId, scope.principalId, input.childApplicationThreadId,
+        input.childNativeSessionId, input.forkOperationId, input.now);
+      const turn = this.database.prepare(`INSERT INTO claude_fork_inherited_turns
+        (tenant_id, owner_principal_id, application_thread_id, ordinal, child_backend_turn_id, source_backend_turn_id)
+        VALUES (?, ?, ?, ?, ?, ?)`);
+      for (const [ordinal, inherited] of input.inheritedTurns.entries()) {
+        requireBoundedText(inherited.backendTurnId, 512, "child_backend_turn_id");
+        requireBoundedText(inherited.sourceBackendTurnId, 512, "source_backend_turn_id");
+        turn.run(scope.tenantId, scope.principalId, input.childApplicationThreadId, ordinal,
+          inherited.backendTurnId, inherited.sourceBackendTurnId);
+      }
+      const omitted = this.database.prepare(`INSERT INTO claude_fork_omitted_tasks
+        (tenant_id, owner_principal_id, application_thread_id, native_message_uuid, native_task_id)
+        VALUES (?, ?, ?, ?, ?)`);
+      for (const task of input.omittedTasks) {
+        requireBoundedText(task.nativeMessageUuid, 512, "native_message_uuid");
+        requireBoundedText(task.nativeTaskId, 512, "native_task_id");
+        omitted.run(scope.tenantId, scope.principalId, input.childApplicationThreadId, task.nativeMessageUuid, task.nativeTaskId);
+      }
+    })();
+  }
+
+  findForkChild(scope: RequestScope, applicationThreadId: string): ClaudeForkChildRecord | undefined {
+    const child = this.database.prepare(`SELECT native_session_id AS nativeSessionId, fork_operation_id AS forkOperationId
+      FROM claude_fork_children WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ?`)
+      .get(scope.tenantId, scope.principalId, applicationThreadId) as
+      { readonly nativeSessionId: string; readonly forkOperationId: string } | undefined;
+    if (!child) return undefined;
+    const inheritedTurns = this.database.prepare(`SELECT child_backend_turn_id AS backendTurnId,
+      source_backend_turn_id AS sourceBackendTurnId FROM claude_fork_inherited_turns
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? ORDER BY ordinal`)
+      .all(scope.tenantId, scope.principalId, applicationThreadId) as ClaudeForkInheritedTurn[];
+    const omitted = this.database.prepare(`SELECT native_message_uuid AS uuid FROM claude_fork_omitted_tasks
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? ORDER BY rowid`)
+      .all(scope.tenantId, scope.principalId, applicationThreadId) as { readonly uuid: string }[];
+    return { ...child, inheritedTurns, omittedTaskNotificationUuids: new Set(omitted.map(({ uuid }) => uuid)) };
+  }
+
+  /** The child's copies of source turns inherit their durable terminal outcome. */
+  copyTerminalReceiptsForFork(scope: RequestScope, input: {
+    readonly sourceApplicationThreadId: string;
+    readonly childApplicationThreadId: string;
+    readonly turns: readonly ClaudeForkInheritedTurn[];
+    readonly now: number;
+  }): void {
+    this.get(scope, input.sourceApplicationThreadId);
+    this.get(scope, input.childApplicationThreadId);
+    requireTimestamp(input.now, "created_at");
+    const copy = this.database.prepare(`INSERT INTO claude_turn_terminal_receipts(
+        tenant_id, owner_principal_id, application_thread_id, backend_turn_id, status, provider_terminal_reason,
+        provider_result_uuid, terminal_at, created_at, updated_at, failure_message)
+      SELECT tenant_id, owner_principal_id, ?, ?, status, provider_terminal_reason,
+        provider_result_uuid, terminal_at, ?, ?, failure_message
+      FROM claude_turn_terminal_receipts
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND backend_turn_id = ?
+      ON CONFLICT(tenant_id, owner_principal_id, application_thread_id, backend_turn_id) DO NOTHING`);
+    this.database.transaction(() => {
+      for (const turn of input.turns) {
+        requireBoundedText(turn.backendTurnId, 512, "backend_turn_id");
+        copy.run(input.childApplicationThreadId, turn.backendTurnId, input.now, input.now,
+          scope.tenantId, scope.principalId, input.sourceApplicationThreadId, turn.sourceBackendTurnId);
       }
     })();
   }

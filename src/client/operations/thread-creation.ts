@@ -81,6 +81,8 @@ export function runThreadFork(options: {
             },
           },
         ];
+      // A deterministic failure would repeat; do not offer the same fork again.
+      if (!result.restartable) return [];
       return [
         {
           label: "Start a new fork",

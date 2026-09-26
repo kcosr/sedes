@@ -439,6 +439,7 @@ function fixture(withEnvironmentVariables = false) {
     secondSource,
     sourceTurnId,
     sourceBackendTurnId,
+    binding: target.binding,
     reconciliationScope: {
       connectionProfileIds: [target.driver.connection.id],
       executionEnvironmentId: environment.id,
@@ -1459,6 +1460,8 @@ describe("ThreadForkService", () => {
         submissionMayHaveBeenAccepted: true,
         forkUncertainty: "fork_unknown",
         possibleProviderOrphan: "full_native_copy",
+        conversationIdentified: false,
+        forkChildIdentity: "provider_assigned",
         recoverable: false,
       });
       current.targets.actor.mockRejectedValueOnce(
@@ -1702,6 +1705,218 @@ describe("ThreadForkService", () => {
       ).rejects.toMatchObject({ code: "conflict" });
       expect(current.branchConversation).toHaveBeenCalledOnce();
     } finally {
+      current.database.close();
+    }
+  });
+
+  it("records a futile abort, quarantines its reserved child, and logs the cause", async () => {
+    const current = fixture();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      let reserved: string | undefined;
+      current.branchConversation.mockImplementation(async (input) => {
+        reserved = input.requestedBackendConversationId;
+        throw new BackendError({
+          category: "invalid_state", retryable: false, crossedSubmissionBoundary: false,
+          safeMessage: "Claude created the fork, but its history does not match the selected turn.",
+          backendCode: "claude_fork_history_mismatch", forkRestart: "futile",
+        }, { cause: new Error("claude_fork_history_mismatch: expected 4 retained messages, found 3") });
+      });
+      const request = current.manual("futile-abort");
+      const result = await current.service.forkManual(request);
+      expect(result).toMatchObject({ status: "aborted", restartable: false,
+        diagnostic: "Claude created the fork, but its history does not match the selected turn." });
+      await expect(current.service.forkManual(request)).resolves.toEqual(result);
+      expect(current.lineage.isReservedForkChild(current.scope, {
+        backendInstanceId: current.binding.backendInstanceId, backendConversationId: reserved!,
+      })).toBe(true);
+      expect(current.lineage.isReservedForkChild(current.scope, {
+        backendInstanceId: current.binding.backendInstanceId, backendConversationId: uuid(77_777),
+      })).toBe(false);
+      const logged = stderr.mock.calls.map(([line]) => String(line)).join("");
+      expect(logged).toContain(`Fork ${result.childThreadId} creation (aborted, claude_fork_history_mismatch) failed: Claude created the fork`);
+      expect(logged).toContain("cause: claude_fork_history_mismatch: expected 4 retained messages, found 3");
+    } finally {
+      stderr.mockRestore();
+      current.database.close();
+    }
+  });
+
+  it("keeps a retried fork recoverable after a transient definite failure, since an earlier call may have created it", async () => {
+    const current = fixture();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      current.branchConversation
+        .mockRejectedValueOnce(new BackendError({ category: "submission_unknown", retryable: false,
+          crossedSubmissionBoundary: true, safeMessage: "outcome unknown" }))
+        .mockRejectedValueOnce(new BackendError({ category: "unavailable", retryable: true,
+          crossedSubmissionBoundary: false, safeMessage: "Claude session data is temporarily unavailable." }));
+      const request = current.manual("retry-transient");
+      await expect(current.service.forkManual(request)).resolves.toMatchObject({ status: "recovery_required", retryable: true });
+      const retried = await current.service.forkManual(request);
+      expect(retried).toMatchObject({ status: "recovery_required", retryable: true,
+        diagnostic: "Claude session data is temporarily unavailable." });
+      expect(current.bindings.findThreadDefinition(current.scope, retried.childThreadId)).toBeDefined();
+      expect(current.lineage.isReservedForkChild(current.scope, {
+        backendInstanceId: current.binding.backendInstanceId,
+        backendConversationId: current.branchConversation.mock.calls[0]![0].requestedBackendConversationId!,
+      })).toBe(true);
+    } finally {
+      stderr.mockRestore();
+      current.database.close();
+    }
+  });
+
+  it("recovers only crash-interrupted forks at startup and never discards one automatically", async () => {
+    const current = fixture();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      current.branchConversation.mockRejectedValueOnce(new BackendError({ category: "submission_unknown", retryable: false,
+        crossedSubmissionBoundary: true, safeMessage: "outcome unknown" }));
+      const awaiting = await current.service.forkManual(current.manual("awaiting-user"));
+      expect(awaiting).toMatchObject({ status: "recovery_required" });
+      // A crash left this attempt with its provider call started.
+      let interruptedId!: string;
+      current.branchConversation.mockImplementationOnce(async (input) => {
+        interruptedId = input.childApplicationThreadId;
+        throw new Error("process_crashed_before_response");
+      });
+      const crashed = await current.service.forkManual(current.manual("crash-interrupted"));
+      expect(crashed).toMatchObject({ status: "recovery_required" });
+      current.database.prepare(`UPDATE conversation_creation_attempts SET phase = 'external_call_started', diagnostic = NULL,
+        fork_uncertainty_kind = NULL WHERE application_thread_id = ?`).run(interruptedId);
+      current.branchConversation.mockClear();
+      current.branchConversation.mockRejectedValue(new BackendError({ category: "invalid_state", retryable: false,
+        crossedSubmissionBoundary: false, safeMessage: "Claude did not start the fork: this Claude Code version is not supported.",
+        backendCode: "claude_fork_launch_refused_version", forkRestart: "futile" }));
+      await current.service.recoverInterruptedForks(current.scope);
+      expect(current.branchConversation).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ childApplicationThreadId: interruptedId }));
+      expect(current.creation.findActiveForThread(current.scope, interruptedId)).toMatchObject({
+        phase: "recovery_required", diagnostic: "Claude did not start the fork: this Claude Code version is not supported." });
+      expect(current.bindings.findThreadDefinition(current.scope, interruptedId)).toBeDefined();
+      expect(current.creation.findActiveForThread(current.scope, awaiting.childThreadId)).toMatchObject({ phase: "recovery_required" });
+      expect(warn).toHaveBeenCalledWith("thread_fork_startup_recovery", expect.objectContaining({
+        childThreadId: interruptedId, outcome: "recovery_required" }));
+    } finally {
+      stderr.mockRestore();
+      warn.mockRestore();
+      current.database.close();
+    }
+  });
+
+  it("finalizes forks whose provider child was already returned at startup without a provider call", async () => {
+    const current = fixture();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      current.setBranching(branching("provider_assigned", "potentially_unknown"));
+      let created = 0;
+      current.branchConversation.mockImplementation(async () => {
+        created += 1;
+        return { backendConversationId: `provider-child-${created}`,
+          reconciliationToken: `token-${created}`, opaqueBindingDetail: `detail-${created}` };
+      });
+      // Binding the returned child failed, so recovery awaits the user.
+      current.failBoundDetailSaveOnce();
+      const awaiting = await current.service.forkManual(current.manual("returned-awaiting"));
+      expect(awaiting).toMatchObject({ status: "recovery_required" });
+      // A crash left this one between recording the child and binding it.
+      current.failBoundDetailSaveOnce();
+      const identified = await current.service.forkManual(current.manual("returned-identified"));
+      current.database.prepare(`UPDATE conversation_creation_attempts SET phase = 'conversation_identified',
+        diagnostic = NULL WHERE application_thread_id = ?`).run(identified.childThreadId);
+      expect(current.creation.findActiveForThread(current.scope, identified.childThreadId)).toMatchObject({
+        phase: "conversation_identified", provisionalBackendConversationId: "provider-child-2" });
+      current.branchConversation.mockClear();
+
+      await current.service.recoverInterruptedForks(current.scope);
+
+      expect(current.branchConversation).not.toHaveBeenCalled();
+      for (const [result, mutationId, child, phase] of [
+        [awaiting, "returned-awaiting", "provider-child-1", "recovery_required"],
+        [identified, "returned-identified", "provider-child-2", "conversation_identified"],
+      ] as const) {
+        expect(current.creation.findByMutationId(current.scope, mutationId)).toMatchObject({ phase: "bound" });
+        expect(current.bindings.getBinding(current.scope, result.childThreadId)).toMatchObject({
+          backendConversationId: child });
+        expect(warn).toHaveBeenCalledWith("thread_fork_startup_recovery", {
+          childThreadId: result.childThreadId, phase, outcome: "created" });
+      }
+    } finally {
+      stderr.mockRestore();
+      warn.mockRestore();
+      current.database.close();
+    }
+  });
+
+  it("discards an unfinished fork on request without another provider call and quarantines its child", async () => {
+    const current = fixture();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      current.branchConversation.mockRejectedValueOnce(new BackendError({ category: "submission_unknown", retryable: false,
+        crossedSubmissionBoundary: true, safeMessage: "outcome unknown" }));
+      const request = current.manual("discard-me");
+      const stuck = await current.service.forkManual(request);
+      expect(stuck).toMatchObject({ status: "recovery_required" });
+      const reserved = current.branchConversation.mock.calls[0]![0].requestedBackendConversationId!;
+      const discarded = await current.service.discardActive(current.scope, stuck.childThreadId);
+      expect(discarded).toEqual({ status: "aborted", childThreadId: stuck.childThreadId,
+        diagnostic: "The fork was discarded.", restartable: true });
+      expect(current.branchConversation).toHaveBeenCalledOnce();
+      expect(current.bindings.findThreadDefinition(current.scope, stuck.childThreadId)).toBeUndefined();
+      expect(current.lineage.isReservedForkChild(current.scope, {
+        backendInstanceId: current.binding.backendInstanceId, backendConversationId: reserved })).toBe(true);
+      // Replaying the original fork request reports the discard.
+      await expect(current.service.forkManual(request)).resolves.toEqual(discarded);
+      await expect(current.service.discardActive(current.scope, stuck.childThreadId)).rejects.toMatchObject({ code: "not_found" });
+    } finally {
+      stderr.mockRestore();
+      current.database.close();
+    }
+  });
+
+  it("refuses to discard a fork that is still being created or whose child the provider returned", async () => {
+    const current = fixture();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      let childThreadId!: string;
+      current.branchConversation.mockImplementationOnce(async (input) => {
+        childThreadId = input.childApplicationThreadId;
+        await gate;
+        throw new BackendError({ category: "submission_unknown", retryable: false, crossedSubmissionBoundary: true, safeMessage: "unknown" });
+      });
+      const forking = current.service.forkManual(current.manual("in-flight"));
+      await vi.waitFor(() => expect(childThreadId).toBeDefined());
+      await expect(current.service.discardActive(current.scope, childThreadId)).rejects.toMatchObject({
+        code: "invalid_transition", message: "This fork is still being created. Wait for it to finish before discarding it." });
+      release();
+      await forking;
+
+      current.setBranching(branching("provider_assigned", "potentially_unknown"));
+      current.branchConversation.mockResolvedValue({ backendConversationId: "provider-returned",
+        reconciliationToken: "token", opaqueBindingDetail: "detail" });
+      current.failBoundDetailSaveOnce();
+      const returned = await current.service.forkManual(current.manual("provider-returned"));
+      await expect(current.service.discardActive(current.scope, returned.childThreadId)).rejects.toMatchObject({
+        code: "invalid_transition" });
+      // The recovery the capability document is built from reports the
+      // returned child, so Discard is not offered for it.
+      const recoveryReader = new DatabaseThreadApplicationRecoveryReader({
+        creation: current.creation,
+        operations: new ConversationOperationRepository(current.database),
+        targets: {} as never,
+        registry: {} as never,
+        forks: current.service,
+      });
+      await expect(recoveryReader.read(current.scope, returned.childThreadId)).resolves.toMatchObject({
+        creationType: "fork", phase: "recovery_required", conversationIdentified: true,
+        forkChildIdentity: "provider_assigned", recoverable: true });
+      expect(current.bindings.findThreadDefinition(current.scope, returned.childThreadId)).toBeDefined();
+    } finally {
+      stderr.mockRestore();
       current.database.close();
     }
   });

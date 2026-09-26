@@ -2446,6 +2446,8 @@ describe("inactive backend-normalization migration", () => {
         status: "aborted",
         childThreadId: child.id,
         diagnostic: "The older clone was not created.",
+        // Legacy tombstones never recorded a deterministic failure.
+        restartable: true,
       });
     } finally {
       database.close();
@@ -2709,6 +2711,8 @@ describe("inactive backend-normalization migration", () => {
         status: "aborted",
         childThreadId: child.id,
         diagnostic: "Legacy provider rejected the clone.",
+        // Legacy tombstones never recorded a deterministic failure.
+        restartable: true,
       });
     } finally {
       database.close();

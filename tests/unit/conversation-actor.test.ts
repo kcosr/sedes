@@ -2494,10 +2494,40 @@ describe("ConversationActorManager", () => {
       sourceTurnId,
       backendTurnId: "turn-1",
     });
+    // The backend is told exactly which turn the actor records as the source.
     expect(driver.resolveBranchCheckpoint).toHaveBeenCalledWith(
-      expect.objectContaining({ selection: { kind: "latest_completed" } }),
+      expect.objectContaining({ selection: { kind: "latest_completed", backendTurnId: "turn-1" } }),
     );
 
+    acquired.release();
+    await manager.close();
+  });
+
+  it("fails a latest-completed fork with the newest completed turn's reason instead of an older turn", async () => {
+    const { driver, handle, manager } = fixture();
+    const base = snapshot();
+    handle.establishmentSnapshots[0] = {
+      ...base,
+      orderedBackendTurnIds: ["turn-1", "turn-2"],
+      turnsById: {
+        ...base.turnsById,
+        "turn-2": { backendTurnId: "turn-2", status: "completed", endedBy: "agent_settled",
+          forkUnavailableReason: { text: "No exact fork point." }, orderedBackendItemIds: [] },
+      },
+    };
+    handle.backendCapabilities.mockResolvedValue(
+      selectedBranchingCapabilities(["latest_completed", "selected_completed_turn"]),
+    );
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const [forkable, unforkable] = acquired.actor.timeline.orderedTurnIds;
+    const rejection = { category: "invalid_state", retryable: false, safeMessage: "No exact fork point." };
+    await expect(acquired.actor.resolveBranchCheckpoint({ kind: "latest_completed" })).rejects.toMatchObject(rejection);
+    await expect(acquired.actor.resolveBranchCheckpoint({ kind: "selected_completed_turn", turnId: unforkable!,
+      expectedTurnRevision: acquired.actor.timeline.turnsById[unforkable!]!.revision })).rejects.toMatchObject(rejection);
+    expect(driver.resolveBranchCheckpoint).not.toHaveBeenCalled();
+    await expect(acquired.actor.resolveBranchCheckpoint({ kind: "selected_completed_turn", turnId: forkable!,
+      expectedTurnRevision: acquired.actor.timeline.turnsById[forkable!]!.revision }))
+      .resolves.toMatchObject({ sourceTurnId: forkable, backendTurnId: "turn-1" });
     acquired.release();
     await manager.close();
   });

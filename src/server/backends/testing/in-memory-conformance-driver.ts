@@ -684,6 +684,17 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
         "memory_checkpoint_turn_unavailable",
       );
     }
+    if (
+      input.selection.kind === "latest_completed" &&
+      selectedBackendTurnId !== input.selection.backendTurnId
+    ) {
+      throw error(
+        "invalid_state",
+        "The latest completed turn changed before it could be forked.",
+        "memory_checkpoint_latest_turn_changed",
+        true,
+      );
+    }
     const checkpointSnapshot = snapshotThroughCompletedTurn(
       record.snapshot,
       selectedBackendTurnId,

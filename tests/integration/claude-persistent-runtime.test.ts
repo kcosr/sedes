@@ -1,17 +1,22 @@
 import type { EnvironmentVariableOverrides } from "../../src/shared/protocol/environment-variables.js";
 import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { CanUseTool, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeRuntimeSessionOptions } from "../../src/server/backends/claude/claude-runtime-client.js";
-import { ClaudePersistentRuntimeClient } from "../../src/server/backends/claude/runtime/claude-remote-runtime-client.js";
+import { CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS, ClaudePersistentRuntimeClient } from "../../src/server/backends/claude/runtime/claude-remote-runtime-client.js";
 import { ClaudePersistentRuntimeRegistry } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-registry.js";
+import { CLAUDE_PERSISTENT_RETAINED_EVENT_LIMIT } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-host.js";
 import { claudePersistentAttachmentSchema, type ClaudePersistentEvent } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, registerClaudePersistentRuntimeHost } from "../../src/server/backends/claude/runtime/claude-sidecar-runtime.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execution/environment-channel.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
+import { createSidecarAbandonmentArchive, type SidecarAbandonmentRecord } from "../../src/server/sidecar/sidecar-abandonment-archive.js";
 import type { SidecarRuntimeLease, SidecarRuntimeProvider } from "../../src/server/sidecar/runtime-channel.js";
-import { createClaudeFramedCarrier, createFakePersistentClaudeRuntime } from "../helpers/persistent-claude-fixture.js";
+import { createClaudeFramedCarrier, createFakePersistentClaudeRuntime, FakePersistentClaudeSession } from "../helpers/persistent-claude-fixture.js";
 
 const scope = { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "ssh-environment", backendInstanceId: "claude-remote" };
 const configuration = { ...scope, executablePath: "/provider/claude", configDirectory: "/provider/.claude", initializationTimeoutMs: 5_000 };
@@ -21,6 +26,7 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) awai
 
 async function fixture(options: {
   readonly validateAgentToolMcp?: (agentToolMcp: NonNullable<ClaudeRuntimeSessionOptions["agentToolMcp"]>) => void;
+  readonly detachedSessionTtlMs?: number;
 } = {}) {
   const native = createFakePersistentClaudeRuntime();
   const archive = vi.fn(async (_record: unknown) => {});
@@ -35,6 +41,7 @@ async function fixture(options: {
     artifact: async () => { throw new Error("test_provider_must_not_launch_artifact"); },
     createRuntime,
     ...(options.validateAgentToolMcp ? { validateAgentToolMcp: options.validateAgentToolMcp } : {}),
+    ...(options.detachedSessionTtlMs !== undefined ? { detachedSessionTtlMs: options.detachedSessionTtlMs } : {}),
   });
   let current: SidecarRuntimeLease | undefined;
   const sidecarRuntime: SidecarRuntimeProvider = {
@@ -101,6 +108,13 @@ function sessionOptions(sessionId: string, overrides: Partial<ClaudeRuntimeSessi
 function delta(sessionId: string, text: string): SDKMessage {
   return { type: "stream_event", uuid: randomUUID(), session_id: sessionId, parent_tool_use_id: null,
     event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } } };
+}
+/** Claude stamps the first stream event of the turn that consumed an input. */
+function firstDelta(sessionId: string, text: string, operationId: string): SDKMessage {
+  return { ...delta(sessionId, text), user_message_uuid: operationId, user_message_uuids: [operationId] } as SDKMessage;
+}
+function lifecycle(sessionId: string, operationId: string, state: "queued" | "started" | "completed" | "cancelled" | "refused"): SDKMessage {
+  return { type: "command_lifecycle", command_uuid: operationId, state, uuid: randomUUID(), session_id: sessionId } as unknown as SDKMessage;
 }
 function acceptedInput(sessionId: string, operation: { operationId: string; content: string }) {
   return { type: "user", uuid: operation.operationId, session_id: sessionId,
@@ -225,6 +239,94 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     await restored.close({ reason: "evicted" });
   });
 
+  function forkOptions(sessionId: string, overrides: Partial<Parameters<ClaudePersistentRuntimeClient["forkSession"]>[0]> = {}) {
+    return { executablePath: configuration.executablePath, initializationTimeoutMs: 5_000, sessionId,
+      sourceSessionId: randomUUID(), resumeSessionAt: randomUUID(), cwd: "/workspace", title: "Source",
+      model: "claude-sonnet-4-6", effort: "low" as const, environment: {}, ...overrides };
+  }
+
+  it("runs a fork launch to its proven exit on the host, then attaches the child as its own runtime", async () => {
+    const f = await fixture();
+    await f.attach();
+    const client = f.client();
+    const childId = randomUUID();
+    await expect(client.forkSession(forkOptions(childId))).resolves.toEqual({ cliRelease: "2.1.283" });
+    const launch = f.sessions[0]!;
+    // Locked down, confirmed, and closed before the host answered.
+    expect(launch.options).toMatchObject({ launch: "fork", sessionId: childId, model: "claude-sonnet-4-6", effort: "low", environment: {} });
+    for (const key of ["canUseTool", "permissionMode", "allowDangerouslySkipPermissions", "agentToolMcp"]) expect(launch.options).not.toHaveProperty(key);
+    expect(launch.setEffort).toHaveBeenCalledWith("low");
+    expect(launch.closed).toBe(true);
+    const runtimeId = f.services.status().resources[0]!.resourceId;
+    const host = f.hosts.get(runtimeId);
+    expect(host.abandonmentEvidence()).toMatchObject({ sessionCount: 0, state: "idle" });
+
+    const bridge = vi.fn<CanUseTool>(async () => ({ behavior: "deny", message: "no" }));
+    const child = client.createSession(sessionOptions(childId, { launch: "resume", canUseTool: bridge, permissionMode: "acceptEdits" }));
+    await expect(child.start()).resolves.toMatchObject({ cliRelease: "2.1.283" });
+    expect(f.runtime.createSession).toHaveBeenCalledTimes(2);
+    expect(f.sessions[1]!.options).toMatchObject({ launch: "resume", sessionId: childId, permissionMode: "acceptEdits" });
+    expect(f.sessions[1]!.options.canUseTool).toBeTypeOf("function");
+    await child.close({ reason: "evicted" });
+    expect(host.abandonmentEvidence()).toMatchObject({ sessionCount: 0 });
+  });
+
+  it("reports a failed fork launch by code after closing it, and holds child reads until its exit", async () => {
+    const f = await fixture();
+    await f.attach();
+    const client = f.client();
+    const mismatch = randomUUID();
+    await expect(client.forkSession(forkOptions(mismatch, { model: "claude-opus-5" }))).rejects.toMatchObject({
+      name: "SidecarOperationError", code: "claude_fork_effective_settings_mismatch",
+    });
+    expect(f.sessions[0]!.closed).toBe(true);
+
+    const childId = randomUUID();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    f.runtime.createSession.mockImplementationOnce((options) => {
+      const session = new FakePersistentClaudeSession(options);
+      session.start.mockImplementation(async () => { await gate; return session.initialization; });
+      f.sessions.push(session);
+      return session;
+    });
+    const forking = client.forkSession(forkOptions(childId));
+    await vi.waitFor(() => expect(f.sessions).toHaveLength(2));
+    // A running fork launch is never a session a replacement main should attach.
+    const host = f.hosts.get(f.services.status().resources[0]!.resourceId);
+    expect(host.retainedWork().retainedSessionIds).not.toContain(childId);
+    expect(host.abandonmentEvidence().sessions.map(session => session.sessionId)).not.toContain(childId);
+    expect(host.snapshot().blockers).toContain("active_work");
+    const read = client.hasSessionTranscript(childId, { dir: "/workspace" }, {});
+    const settled = vi.fn();
+    void read.then(settled);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(settled).not.toHaveBeenCalled();
+    expect(f.runtime.hasSessionTranscript).not.toHaveBeenCalled();
+    // Nothing else can open the identity while its launch runs.
+    const early = client.createSession(sessionOptions(childId, { launch: "resume" }));
+    await expect(early.start()).rejects.toThrow();
+    await early.close().catch(() => undefined);
+    release();
+    await forking;
+    await expect(read).resolves.toBe(false);
+    expect(f.sessions[1]!.closed).toBe(true);
+  });
+
+  it("counts fork launches against the host's session cap and refuses beyond it", async () => {
+    const f = await fixture();
+    await f.attach();
+    const client = f.client();
+    const sessions = Array.from({ length: 32 }, () => client.createSession(sessionOptions(randomUUID())));
+    await Promise.all(sessions.map(session => session.start()));
+    await expect(client.forkSession(forkOptions(randomUUID()))).rejects.toMatchObject({ code: "claude_fork_launch_refused_capacity" });
+    const refused = client.createSession(sessionOptions(randomUUID()));
+    await expect(refused.start()).rejects.toMatchObject({ backendCode: "claude_persistent_session_capacity_exceeded", retryable: true });
+    await refused.close().catch(() => undefined);
+    expect(f.runtime.createSession).toHaveBeenCalledTimes(32);
+    await Promise.all(sessions.map(session => session.close({ reason: "evicted" })));
+  });
+
   it("preserves idle queries across detach and closes only the deliberately evicted query", async () => {
     const f = await fixture();
     const carrier = await f.attach();
@@ -243,6 +345,103 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(f.sessions[1]!.closed).toBe(true);
   });
 
+  it("withdraws on Stop, before interrupting, only inputs Claude has not started, and records only those Claude withdrew", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const client = f.client();
+    const sessionId = randomUUID();
+    const roots = new Map<string, string>();
+    const remote = client.createSession(sessionOptions(sessionId, { onMessage: (message, evidence) => {
+      if (evidence && message.type === "user") roots.set(String(message.uuid), evidence.consumedTurnRootUuid);
+    } }));
+    await remote.start();
+    // The owner withdraws; main sends no request of its own.
+    expect(remote.cancelQueuedInput).toBeUndefined();
+    const native = f.sessions[0]!;
+    const turn = { operationId: randomUUID(), content: "Run the long task." };
+    const folded = { operationId: randomUUID(), content: "Use tabs.", priority: "next" as const };
+    const withdrawn = { operationId: randomUUID(), content: "Also check the lexer.", priority: "next" as const };
+    const unconfirmed = { operationId: randomUUID(), content: "Mention the tests.", priority: "next" as const };
+    const failing = { operationId: randomUUID(), content: "Keep it short.", priority: "next" as const };
+    await remote.send(turn);
+    await native.emit(lifecycle(sessionId, turn.operationId, "started"));
+    for (const steer of [folded, withdrawn, unconfirmed, failing]) {
+      await remote.send(steer);
+      await native.emit(lifecycle(sessionId, steer.operationId, "queued"));
+    }
+    // Claude folded one steer into the running turn before the Stop landed;
+    // the owner places it in that turn at once and no longer holds it.
+    await native.emit(lifecycle(sessionId, folded.operationId, "started"));
+    await remote.flushMessages?.();
+    await vi.waitFor(() => expect(roots.get(folded.operationId)).toBe(turn.operationId));
+    native.cancelQueuedInput.mockImplementation(async operationId => {
+      if (operationId === failing.operationId) throw new Error("claude_control_request_failed");
+      // Claude's answer alone records nothing; only the lifecycle frame does.
+      if (operationId === withdrawn.operationId) await native.emit(lifecycle(sessionId, withdrawn.operationId, "cancelled"));
+      return true;
+    });
+    await remote.interrupt();
+    // A failed request does not block the interrupt, which comes last.
+    expect(native.cancelQueuedInput.mock.calls).toEqual([[withdrawn.operationId], [unconfirmed.operationId], [failing.operationId]]);
+    expect(native.interrupt).toHaveBeenCalledOnce();
+    expect(Math.max(...native.cancelQueuedInput.mock.invocationCallOrder)).toBeLessThan(native.interrupt.mock.invocationCallOrder[0]!);
+    // The interrupted turn closes the inputs it started with `cancelled` too.
+    await native.emit(lifecycle(sessionId, folded.operationId, "cancelled"));
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({
+      pendingInputIds: [unconfirmed.operationId, failing.operationId] });
+    expect(host.abandonmentEvidence().sessions[0]!.activeOperationIds).not.toContain(withdrawn.operationId);
+    const query = { sessionId, cwd: "/workspace" };
+    await expect(client.submissionDisposition({ ...query, operationId: withdrawn.operationId })).resolves.toBe("cancelled");
+    for (const input of [turn, folded, unconfirmed, failing]) {
+      await expect(client.submissionDisposition({ ...query, operationId: input.operationId })).resolves.toBe("submitted");
+    }
+    // The withdrawal outlives the query: it is proof, not tracking state.
+    native.options.onFailure?.(new Error("claude_test_query_lost"));
+    await expect(client.submissionDisposition({ ...query, operationId: withdrawn.operationId })).resolves.toBe("cancelled");
+    await expect(client.submissionDisposition({ ...query, operationId: folded.operationId })).resolves.toBe("session_ended");
+  });
+
+  it("withdraws on Stop a steer an earlier main attachment sent, which the replacement main never saw", async () => {
+    const f = await fixture();
+    const first = await f.attach();
+    const firstClient = f.client();
+    const sessionId = randomUUID();
+    const original = firstClient.createSession(sessionOptions(sessionId));
+    await original.start();
+    const native = f.sessions[0]!;
+    const turn = { operationId: randomUUID(), content: "Run the long task." };
+    const steer = { operationId: randomUUID(), content: "Also check the lexer.", priority: "next" as const };
+    await original.send(turn);
+    await native.emit(lifecycle(sessionId, turn.operationId, "started"));
+    await original.send(steer);
+    await native.emit(lifecycle(sessionId, steer.operationId, "queued"));
+    // Main restarts while Claude still holds the steer.
+    await firstClient.close();
+    await first.close();
+    expect(native.close).not.toHaveBeenCalled();
+
+    const second = await f.attach();
+    const host = f.hosts.ensure(configuration, second.lease.controllerEpoch);
+    const client = f.client();
+    const replacement = client.createSession(sessionOptions(sessionId, { launch: "resume" }));
+    await replacement.start();
+    expect(replacement.reattached).toBe(true);
+    await expect(client.submissionDisposition({ sessionId, cwd: "/workspace", operationId: steer.operationId })).resolves.toBe("submitted");
+    native.cancelQueuedInput.mockImplementation(async operationId => {
+      await native.emit(lifecycle(sessionId, operationId, "cancelled"));
+      return true;
+    });
+    await replacement.interrupt();
+    expect(native.cancelQueuedInput.mock.calls).toEqual([[steer.operationId]]);
+    expect(native.cancelQueuedInput.mock.invocationCallOrder[0]).toBeLessThan(native.interrupt.mock.invocationCallOrder[0]!);
+    // It no longer counts as work Claude can still run after the Stop.
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ pendingInputIds: [] });
+    expect(host.abandonmentEvidence().sessions[0]!.activeOperationIds).not.toContain(steer.operationId);
+    await expect(client.submissionDisposition({ sessionId, cwd: "/workspace", operationId: steer.operationId })).resolves.toBe("cancelled");
+    await expect(client.submissionDisposition({ sessionId, cwd: "/workspace", operationId: turn.operationId })).resolves.toBe("submitted");
+  });
+
   it("reattaches the same active native query after main client replacement and replays disconnected output once", async () => {
     const f = await fixture();
     const first = await f.attach();
@@ -255,7 +454,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const operation = { operationId: randomUUID(), content: "Keep working remotely." };
     original.send(operation);
     await vi.waitFor(() => expect(native.send).toHaveBeenCalledTimes(1));
-    const beforeDisconnect = delta(sessionId, "Started before the connection was lost.");
+    const beforeDisconnect = firstDelta(sessionId, "Started before the connection was lost.", operation.operationId);
     await native.emit(beforeDisconnect);
     await vi.waitFor(() => expect(originalMessages.mock.calls.map(([message]) => message)).toEqual([acceptedInput(sessionId, operation), beforeDisconnect]));
     await vi.waitFor(() => expect(f.services.status().resources[0]!.blockers).toEqual(["active_work"]));
@@ -283,7 +482,9 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(f.runtime.createSession).toHaveBeenCalledTimes(1);
     const restored = restoredClient.createSession(sessionOptions(sessionId, { launch: "resume", onMessage: restoredMessages }));
     await restored.start();
-    const replay = [acceptedInput(sessionId, operation), beforeDisconnect, ...buffered];
+    // Deltas no main was offered fold into one frame; the offered one stays exact.
+    const replay = [acceptedInput(sessionId, operation), beforeDisconnect,
+      { ...buffered[1]!, event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Still running remotely." } } }];
     await vi.waitFor(() => expect(restoredMessages.mock.calls.map(([message]) => message)).toEqual(replay));
     expect(restored.startupProbeUuid).toBe(original.startupProbeUuid);
     expect(f.services.status().resources[0]!.resourceId).toBe(originalRuntimeId);
@@ -313,7 +514,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     session.send(operation);
     const native = f.sessions[0]!;
     await vi.waitFor(() => expect(native.send).toHaveBeenCalledTimes(1));
-    const beforeDisconnect = delta(sessionId, "Already delivered.");
+    const beforeDisconnect = firstDelta(sessionId, "Already delivered.", operation.operationId);
     await native.emit(beforeDisconnect);
     await vi.waitFor(() => expect(received.mock.calls.map(([message]) => message)).toEqual([acceptedInput(sessionId, operation), beforeDisconnect]));
     await vi.waitFor(() => expect(f.services.status().resources[0]!.blockers).toEqual(["active_work"]));
@@ -490,7 +691,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     await vi.waitFor(() => expect(native.send).toHaveBeenCalledTimes(1));
     await originalClient.close();
     await first.close();
-    const buffered = delta(sessionId, "This output must survive until main adopts it.");
+    const buffered = firstDelta(sessionId, "This output must survive until main adopts it.", operation.operationId);
     await native.emit(buffered);
 
     const host = f.hosts.get(f.services.status().resources[0]!.resourceId);
@@ -593,7 +794,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
         },
         listener,
       );
-      await native.emit(delta(sessionId, "Working"));
+      await native.emit(firstDelta(sessionId, "Working", operation.operationId));
       const accepted = delivered.find(
         (event) =>
           event.payload.kind === "message" &&
@@ -772,7 +973,8 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(native.closed).toBe(false);
     for (const event of delivered.splice(0)) await host.execute({ ...authority, action: "acknowledge",
       request: { sessionId, sequence: event.sequence } }, listener);
-    expect(host.snapshot().blockers).not.toContain("active_work");
+    // The acknowledgement returns at once; retiring the evicted query follows.
+    await vi.waitFor(() => expect(host.snapshot().blockers).not.toContain("active_work"));
     await host.execute({ ...authority, action: "evict", request: { sessionId } }, listener);
     expect(native.closed).toBe(true);
   });
@@ -794,7 +996,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     // Direct host acknowledgments keep the bound test deterministic and fast;
     // the final response still traverses the production framed wire and codec.
     for (let index = 0; index < 8_200; index++) {
-      await native.emit(delta(sessionId, "x"));
+      await native.emit(index === 0 ? firstDelta(sessionId, "x", operation.operationId) : delta(sessionId, "x"));
       for (const event of delivered.splice(0)) {
         await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, listener);
       }
@@ -921,7 +1123,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(f.hosts.get(runtimeId).snapshot().blockers).toEqual([]);
   });
 
-  it("keeps submission disposition unknown after its admission journal retires and the native session resumes", async () => {
+  it("resolves a healthy retired query's inputs from its journal, and lets a resumed query answer first without ever proving not sent", async () => {
     const f = await fixture();
     const attached = await f.attach();
     const runtimeId = await attached.connection.ensure(configuration);
@@ -935,21 +1137,29 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const host = f.hosts.get(runtimeId);
     const seen: ClaudePersistentEvent[] = [];
     await host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, event => seen.push(event));
-    await f.sessions[0]!.emit({ type: "result", session_id: sessionId, uuid: randomUUID() } as SDKMessage);
+    await f.sessions[0]!.emit({ type: "result", session_id: sessionId, uuid: randomUUID(), user_message_uuid: operation.operationId } as SDKMessage);
     for (const event of seen) await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, () => {});
     await attached.connection.execute({ ...authority, action: "evict", request: { sessionId } });
     expect(f.sessions[0]!.closed).toBe(true);
+    const disposition = (operationId: string) => attached.connection.execute({ ...authority, action: "submission_disposition",
+      request: { sessionId, operationId, cwd: "/workspace" } });
+    // The healthy query's complete journal outlives it.
+    await expect(disposition(operation.operationId)).resolves.toEqual({ disposition: "session_ended" });
+    const absent = randomUUID();
+    await expect(disposition(absent)).resolves.toEqual({ disposition: "not_sent" });
     await attached.connection.execute({ ...authority, action: "open", replay: "full", request: { ...request, launch: "resume" } });
     expect(f.runtime.createSession).toHaveBeenCalledTimes(2);
-    await expect(attached.connection.execute({ ...authority, action: "submission_disposition", request: {
-      sessionId, operationId: operation.operationId, cwd: "/workspace",
-    } })).resolves.toEqual({ disposition: "unknown" });
-    // Even after this replacement fails, its empty admission journal cannot
-    // prove that an earlier incarnation never submitted the same operation.
+    // The resumed query could still admit an absent input.
+    await expect(disposition(absent)).resolves.toEqual({ disposition: "unknown" });
+    await expect(disposition(operation.operationId)).resolves.toEqual({ disposition: "session_ended" });
+    // The newest incarnation answers first for an identity it admitted.
+    await attached.connection.execute({ ...authority, action: "send", request: { ...operation, priority: "next" } });
+    await expect(disposition(operation.operationId)).resolves.toEqual({ disposition: "submitted" });
+    // Even after this replacement fails, its resumed admission journal cannot
+    // prove that an earlier incarnation never submitted an input.
     f.sessions[1]!.closed = true;
-    await expect(attached.connection.execute({ ...authority, action: "submission_disposition", request: {
-      sessionId, operationId: operation.operationId, cwd: "/workspace",
-    } })).resolves.toEqual({ disposition: "session_ended" });
+    await expect(disposition(absent)).resolves.toEqual({ disposition: "session_ended" });
+    await expect(disposition(operation.operationId)).resolves.toEqual({ disposition: "session_ended" });
   });
 
   it("retains provider-initiated permission cancellation outside an intentional shutdown", async () => {
@@ -1064,11 +1274,141 @@ describe("Claude rejected sends and retained query failure", () => {
     await restored.start();
     await expect(restored.flushMessages!()).rejects.toMatchObject({
       category: "unavailable", backendCode: "claude_persistent_query_failed",
-      safeMessage: expect.stringContaining("Restart the Claude backend"),
+      safeMessage: expect.stringContaining("Reopen the thread to start a new Claude session"),
     });
     expect(replacementFailure).toHaveBeenCalled();
     expect(f.sessions).toHaveLength(1);
     expect(native.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("remote query residency", () => {
+  it("retires a failed query main evicts once its events are acknowledged, keeping its admission journal", async () => {
+    const f = await fixture(); await f.attach();
+    const client = f.client(); const sessionId = randomUUID(); const onFailure = vi.fn();
+    const session = client.createSession(sessionOptions(sessionId, { onFailure }));
+    await session.start();
+    const native = f.sessions[0]!;
+    const admittedId = randomUUID();
+    await session.send({ operationId: admittedId, content: "Sent before the failure" });
+    native.closed = true;
+    native.options.onFailure?.(new Error("simulated_native_exit"));
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledOnce());
+    await session.close({ reason: "evicted" });
+    const runtimeId = f.services.status().resources[0]!.resourceId;
+    const host = f.hosts.get(runtimeId);
+    await vi.waitFor(() => expect(host.abandonmentEvidence().sessionCount).toBe(0));
+    // Inputs of the retired query still resolve from its journal.
+    await expect(client.submissionDisposition({ sessionId, operationId: admittedId, cwd: "/workspace" })).resolves.toBe("session_ended");
+    await expect(client.submissionDisposition({ sessionId, operationId: randomUUID(), cwd: "/workspace" })).resolves.toBe("not_sent");
+    // Reopening starts a fresh query; no backend restart is needed.
+    const reopened = client.createSession(sessionOptions(sessionId, { launch: "resume" }));
+    await expect(reopened.start()).resolves.toBeDefined();
+    await expect(reopened.flushMessages!()).resolves.toBeUndefined();
+    expect(f.sessions).toHaveLength(2);
+    expect(f.sessions[1]!.options.launch).toBe("resume");
+    await expect(client.submissionDisposition({ sessionId, operationId: admittedId, cwd: "/workspace" })).resolves.toBe("session_ended");
+    await reopened.close({ reason: "evicted" });
+  });
+
+  it("retires an unattended query on request only when nothing is outstanding", async () => {
+    const f = await fixture();
+    const carrier = await f.attach();
+    const client = f.client();
+    const idleId = randomUUID(); const busyId = randomUUID();
+    const idle = client.createSession(sessionOptions(idleId));
+    const busy = client.createSession(sessionOptions(busyId));
+    await Promise.all([idle.start(), busy.start()]);
+    await busy.send({ operationId: randomUUID(), content: "Still running" });
+    // A thread main still attends is not retired from under it.
+    await expect(client.retireSession({ sessionId: idleId, cwd: "/workspace" })).resolves.toBe("busy");
+    await carrier.close();
+    await f.attach();
+    const other = f.client();
+    await expect(other.retireSession({ sessionId: idleId, cwd: "/other" })).rejects.toThrow();
+    await expect(other.retireSession({ sessionId: idleId, cwd: "/workspace" })).resolves.toBe("retired");
+    expect(f.sessions[0]!.closed).toBe(true);
+    await expect(other.retireSession({ sessionId: busyId, cwd: "/workspace" })).resolves.toBe("busy");
+    expect(f.sessions[1]!.closed).toBe(false);
+    await expect(other.retireSession({ sessionId: randomUUID(), cwd: "/workspace" })).resolves.toBe("absent");
+  });
+
+  it.each(["the residency limit", "eviction", "retire"] as const)("keeps a withdrawal main acknowledged but never reconciled after %s retires its settled query", async path => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      const f = await fixture({ detachedSessionTtlMs: 1_000 });
+      const carrier = await f.attach();
+      const client = f.client();
+      const sessionId = randomUUID();
+      const remote = client.createSession(sessionOptions(sessionId));
+      await remote.start();
+      const native = f.sessions[0]!;
+      const turn = { operationId: randomUUID(), content: "Run the long task." };
+      const steer = { operationId: randomUUID(), content: "Also check the lexer.", priority: "next" as const };
+      await remote.send(turn);
+      await native.emit(lifecycle(sessionId, turn.operationId, "started"));
+      await remote.send(steer);
+      await native.emit(lifecycle(sessionId, steer.operationId, "queued"));
+      native.cancelQueuedInput.mockImplementation(async operationId => {
+        await native.emit(lifecycle(sessionId, operationId, "cancelled"));
+        return true;
+      });
+      await remote.interrupt();
+      await native.emit({ type: "result", session_id: sessionId, uuid: randomUUID(), user_message_uuid: turn.operationId } as SDKMessage);
+      // Main applied and acknowledged the cancellation, then detached before
+      // its queue reconciliation committed.
+      await remote.flushMessages!();
+      const host = f.hosts.get(f.services.status().resources[0]!.resourceId);
+      await vi.waitFor(() => expect(host.snapshot().blockers).toEqual([]));
+      if (path === "eviction") await remote.close({ reason: "evicted" });
+      await client.close();
+      await carrier.close();
+      const replacement = f.client();
+      await f.attach();
+      if (path === "the residency limit") await vi.advanceTimersByTimeAsync(2_000);
+      if (path === "retire") await expect(replacement.retireSession({ sessionId, cwd: "/workspace" })).resolves.toBe("retired");
+      await vi.waitFor(() => expect(host.abandonmentEvidence().sessionCount).toBe(0));
+      expect(native.closed).toBe(true);
+      const query = { sessionId, cwd: "/workspace" };
+      await expect(replacement.submissionDisposition({ ...query, operationId: steer.operationId })).resolves.toBe("cancelled");
+      await expect(replacement.submissionDisposition({ ...query, operationId: turn.operationId })).resolves.toBe("session_ended");
+      await expect(replacement.submissionDisposition({ ...query, operationId: randomUUID() })).resolves.toBe("not_sent");
+      await expect(replacement.submissionDisposition({ ...query, cwd: "/other", operationId: steer.operationId })).resolves.toBe("unknown");
+      // A later incarnation that also retires keeps the earlier evidence.
+      const resumed = replacement.createSession(sessionOptions(sessionId, { launch: "resume" }));
+      await resumed.start();
+      await expect(replacement.submissionDisposition({ ...query, operationId: steer.operationId })).resolves.toBe("cancelled");
+      await resumed.close({ reason: "evicted" });
+      await vi.waitFor(() => expect(host.abandonmentEvidence().sessionCount).toBe(0));
+      await expect(replacement.submissionDisposition({ ...query, operationId: steer.operationId })).resolves.toBe("cancelled");
+      await expect(replacement.submissionDisposition({ ...query, operationId: turn.operationId })).resolves.toBe("session_ended");
+      // The resumed incarnation's journal is incomplete, so absence proves nothing.
+      await expect(replacement.submissionDisposition({ ...query, operationId: randomUUID() })).resolves.toBe("session_ended");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("retires a detached query after the residency limit only once nothing is outstanding", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      const f = await fixture({ detachedSessionTtlMs: 1_000 });
+      const carrier = await f.attach();
+      const client = f.client();
+      const idle = client.createSession(sessionOptions(randomUUID()));
+      const busy = client.createSession(sessionOptions(randomUUID()));
+      const working = client.createSession(sessionOptions(randomUUID()));
+      await Promise.all([idle.start(), busy.start(), working.start()]);
+      await busy.send({ operationId: randomUUID(), content: "Still running" });
+      await f.sessions[2]!.emit({ type: "system", subtype: "session_state_changed", state: "running",
+        uuid: randomUUID(), session_id: f.sessions[2]!.options.sessionId } as SDKMessage);
+      await working.flushMessages!();
+      await carrier.close();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(f.sessions.map(({ closed }) => closed)).toEqual([false, false, false]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.waitFor(() => expect(f.sessions[0]!.closed).toBe(true));
+      expect(f.sessions[1]!.closed).toBe(false);
+      expect(f.sessions[2]!.closed).toBe(false);
+    } finally { vi.useRealTimers(); }
   });
 });
 
@@ -1134,6 +1474,68 @@ describe("native next over persistent replacement carriers", () => {
     expect(native.send).toHaveBeenCalledTimes(67);
   });
 
+  it("places each steer where Claude starts it, and a replacement main replays the same placement", async () => {
+    const f = await fixture(); const carrier = await f.attach();
+    const sessionId = randomUUID();
+    const first = randomUUID(), s1 = randomUUID(), s2 = randomUUID(), s3 = randomUUID(), s4 = randomUUID(), s5 = randomUUID();
+    const collect = (into: { uuid: string; root?: string }[]) => (message: SDKMessage, evidence?: { consumedTurnRootUuid: string }) => {
+      if (message.type === "user") into.push({ uuid: String(message.uuid), ...(evidence ? { root: evidence.consumedTurnRootUuid } : {}) });
+    };
+    const seen: { uuid: string; root?: string }[] = [];
+    const session = f.client().createSession(sessionOptions(sessionId, { onMessage: collect(seen) }));
+    await session.start();
+    const native = f.sessions[0]!;
+    const host = f.hosts.get(f.services.status().resources[0]!.resourceId);
+    await session.send({ operationId: first, content: "Run the long task." });
+    await native.emit(lifecycle(sessionId, first, "started"));
+    await native.emit(firstDelta(sessionId, "Working", first));
+    for (const operationId of [s1, s2]) {
+      await session.send({ operationId, content: `Correction ${operationId}`, priority: "next" });
+      await native.emit(lifecycle(sessionId, operationId, "queued"));
+    }
+    await native.emit(delta(sessionId, "Still working"));
+    await session.flushMessages?.();
+    // Queued is not taken: the owner still holds both.
+    expect(seen.map(({ uuid }) => uuid)).toEqual([first]);
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ pendingInputIds: [s1, s2] });
+    // Claude folds both into the running turn at a tool boundary.
+    await native.emit(lifecycle(sessionId, s1, "started"));
+    await native.emit(lifecycle(sessionId, s2, "started"));
+    await session.flushMessages?.();
+    await vi.waitFor(() => expect(seen).toEqual([{ uuid: first }, { uuid: s1, root: first }, { uuid: s2, root: first }]));
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ pendingInputIds: [], activeOperationIds: [first, s1, s2] });
+
+    // A replacement main replays the steers where Claude started them.
+    await carrier.close(); await f.attach();
+    const replayed: { uuid: string; root?: string }[] = [];
+    const restored = f.client().createSession(sessionOptions(sessionId, { launch: "resume", onMessage: collect(replayed) }));
+    await restored.start();
+    await restored.flushMessages?.();
+    await vi.waitFor(() => expect(replayed).toEqual([{ uuid: first }, { uuid: s1, root: first }, { uuid: s2, root: first }]));
+    const terminal = (ids: string[]) => ({ type: "result", subtype: "success", uuid: randomUUID(), session_id: sessionId,
+      user_message_uuid: ids.at(-1), user_message_uuids: ids, num_turns: 1, terminal_reason: "completed",
+      result: "Done", is_error: false, usage: {}, modelUsage: {}, permission_denials: [] }) as unknown as SDKMessage;
+    await native.emit(terminal([first, s1, s2]));
+    // After the turn's result, a steer Claude starts begins the next turn,
+    // and a later steer joins that one.
+    await restored.send({ operationId: s3, content: "Next", priority: "next" });
+    await native.emit(lifecycle(sessionId, s3, "started"));
+    await native.emit(firstDelta(sessionId, "Next turn", s3));
+    await restored.send({ operationId: s4, content: "Also", priority: "next" });
+    await native.emit(lifecycle(sessionId, s4, "started"));
+    await native.emit(terminal([s3, s4]));
+    // A steer Claude starts during a turn it started itself takes that turn over.
+    await native.emit({ type: "system", subtype: "session_state_changed", state: "running", uuid: randomUUID(), session_id: sessionId } as SDKMessage);
+    await native.emit(delta(sessionId, "Notification work"));
+    await restored.send({ operationId: s5, content: "Steer the notification turn", priority: "next" });
+    await native.emit(lifecycle(sessionId, s5, "started"));
+    await restored.flushMessages?.();
+    await vi.waitFor(() => expect(replayed.slice(3)).toEqual([{ uuid: s3, root: s3 }, { uuid: s4, root: s3 }, { uuid: s5, root: s5 }]));
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ pendingInputIds: [] });
+    // Consumption is still a submission the owner admitted.
+    await expect(f.client().submissionDisposition({ sessionId, cwd: "/workspace", operationId: s1 })).resolves.toBe("submitted");
+  });
+
   it("admits steer while busy, waits for its exact stamp, retains it across the older result and reconnect", async () => {
     const f = await fixture(); const carrier = await f.attach();
     const sessionId = randomUUID(); const firstId = randomUUID(); const steerId = randomUUID();
@@ -1142,7 +1544,7 @@ describe("native next over persistent replacement carriers", () => {
     await session.start();
     await session.send({ operationId: firstId, content: "First" });
     const native = f.sessions[0]!;
-    await native.options.onMessage(delta(sessionId, "First output"));
+    await native.options.onMessage(firstDelta(sessionId, "First output", firstId));
     await vi.waitFor(() => expect(seen.some(message => message.type === "user" && message.uuid === firstId)).toBe(true));
     await session.send({ operationId: steerId, content: "Correction", priority: "next" });
     await native.options.onMessage(acceptedInput(sessionId, { operationId: steerId, content: "Correction" }) as SDKMessage);
@@ -1172,5 +1574,395 @@ describe("native next over persistent replacement carriers", () => {
     await vi.waitFor(() => expect(consumedRoots).toEqual([steerId]));
     await restored.flushMessages?.();
     expect(restoredSeen.filter(message => message.type === "result" && message.user_message_uuid === steerId)).toHaveLength(1);
+  });
+});
+
+describe("persistent owner run-state evidence", () => {
+  it("materializes an ordinary input only at Claude's exact dequeue, never from unstamped output", async () => {
+    const f = await fixture(); await f.attach();
+    const sessionId = randomUUID(); const operationId = randomUUID();
+    const seen: SDKMessage[] = [];
+    const session = f.client().createSession(sessionOptions(sessionId, { onMessage: message => { seen.push(message); } }));
+    await session.start();
+    await session.send({ operationId, content: "Queued behind Claude's own turn" });
+    const native = f.sessions[0]!;
+    const host = f.hosts.get(f.services.status().resources[0]!.resourceId);
+    // Claude finishes a turn it started itself before dequeuing the input.
+    const providerOutput = delta(sessionId, "Notification turn output");
+    await native.emit(lifecycle(sessionId, operationId, "queued"));
+    await native.emit(providerOutput);
+    await native.emit({ type: "result", subtype: "success", uuid: randomUUID(), session_id: sessionId,
+      origin: { kind: "task-notification" }, num_turns: 1, result: "Notified", is_error: false } as unknown as SDKMessage);
+    await session.flushMessages?.();
+    expect(seen.some(message => message.type === "user")).toBe(false);
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ pendingInputIds: [operationId], activeOperationIds: [operationId] });
+    const started = lifecycle(sessionId, operationId, "started");
+    await native.emit(started);
+    await session.flushMessages?.();
+    await vi.waitFor(() => expect(seen.map(message => message.type)).toEqual([
+      "command_lifecycle", "stream_event", "result", "user", "command_lifecycle",
+    ]));
+    expect(seen[3]).toEqual(acceptedInput(sessionId, { operationId, content: "Queued behind Claude's own turn" }));
+    expect(host.abandonmentEvidence().sessions[0]?.pendingInputIds).toEqual([]);
+  });
+
+  it("counts Claude's own running state as active work for upgrade and idle retirement", async () => {
+    const f = await fixture(); const carrier = await f.attach();
+    const sessionId = randomUUID();
+    const session = f.client().createSession(sessionOptions(sessionId));
+    await session.start();
+    const native = f.sessions[0]!;
+    const state = (value: "idle" | "running") => ({ type: "system", subtype: "session_state_changed", state: value,
+      uuid: randomUUID(), session_id: sessionId }) as SDKMessage;
+    await native.emit(state("running"));
+    await session.flushMessages?.();
+    await vi.waitFor(() => expect(f.services.status().resources[0]!.blockers).toEqual(["active_work"]));
+    const runtimeId = f.services.status().resources[0]!.resourceId;
+    await carrier.connection.execute({ runtimeId, controllerEpoch: carrier.lease.controllerEpoch,
+      action: "evict", request: { sessionId } });
+    // A turn Claude started itself must not be killed by idle retirement.
+    expect(native.closed).toBe(false);
+    await session.close();
+    const restored = f.client().createSession(sessionOptions(sessionId, { launch: "resume" }));
+    await restored.start();
+    await native.emit(state("idle"));
+    await restored.flushMessages?.();
+    await vi.waitFor(() => expect(f.services.status().resources[0]!.blockers).toEqual([]));
+    await restored.close({ reason: "evicted" });
+    await vi.waitFor(() => expect(native.closed).toBe(true));
+  });
+});
+
+describe("persistent event acknowledgement pipelining", () => {
+  it("applies events in order without waiting one acknowledgement round trip each, within a bounded window", async () => {
+    const f = await fixture(); await f.attach();
+    const sessionId = randomUUID();
+    const seen: string[] = [];
+    const session = f.client().createSession(sessionOptions(sessionId, { onMessage: message => {
+      if (message.type === "stream_event" && message.event.type === "content_block_delta" && message.event.delta.type === "text_delta") {
+        seen.push(message.event.delta.text);
+      }
+    } }));
+    await session.start();
+    const host = f.hosts.get(f.services.status().resources[0]!.resourceId);
+    let releaseAcknowledgements!: () => void;
+    const acknowledgementsHeld = new Promise<void>(resolve => { releaseAcknowledgements = resolve; });
+    const execute = host.execute.bind(host);
+    vi.spyOn(host, "execute").mockImplementation(async (command, listener) => {
+      if (command.action === "acknowledge") await acknowledgementsHeld;
+      return await execute(command, listener);
+    });
+    const texts = Array.from({ length: CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS + 4 }, (_, index) => `chunk-${index}`);
+    for (const text of texts) await f.sessions[0]!.emit(delta(sessionId, text));
+    // Every in-window event is applied while all acknowledgements are held;
+    // the next event is applied and then waits for an acknowledgement slot.
+    await vi.waitFor(() => expect(seen).toEqual(texts.slice(0, CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS + 1)));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(seen).toHaveLength(CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS + 1);
+    expect(host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(texts.length);
+    releaseAcknowledgements();
+    await session.flushMessages?.();
+    expect(seen).toEqual(texts);
+    expect(host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(0);
+  });
+});
+
+describe("persistent retained-event accounting", () => {
+  async function openDirect() {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const sessionId = randomUUID();
+    const delivered: ClaudePersistentEvent[] = [];
+    const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {},
+    } }, listener);
+    const replay = async () => claudePersistentAttachmentSchema.parse(await host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, listener));
+    const detach = async () => { await host.execute({ ...authority, action: "detach", request: { sessionId } }, listener); };
+    return { f, host, authority, sessionId, delivered, listener, replay, detach, native: f.sessions[0]! };
+  }
+  const texts = (events: readonly ClaudePersistentEvent[]) => events.map(event => {
+    const message = event.payload.kind === "message" ? event.payload.message as unknown as { event?: { delta?: { text?: string } } } : undefined;
+    return message?.event?.delta?.text;
+  });
+
+  it("counts each unacknowledged message once, so a disconnected main can fall behind by the full bound", async () => {
+    const { host, sessionId, native, f } = await openDirect();
+    // Main receives these but never acknowledges them. Before, each counted in
+    // both the journal and the replay map and the query failed at 4,095.
+    for (let index = 0; index < CLAUDE_PERSISTENT_RETAINED_EVENT_LIMIT; index++) await native.emit(delta(sessionId, `${index} `));
+    expect(host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(CLAUDE_PERSISTENT_RETAINED_EVENT_LIMIT);
+    expect(native.close).not.toHaveBeenCalled();
+    await expect(native.emit(delta(sessionId, "overflow"))).rejects.toThrow("claude_persistent_event_capacity_exceeded");
+    expect(native.close).toHaveBeenCalledTimes(1);
+    await f.stop(true);
+  });
+
+  it("folds deltas no main was offered, keeping offered, stamped and non-adjacent frames exact", async () => {
+    const { host, sessionId, native, delivered, replay, detach, f } = await openDirect();
+    await native.emit(delta(sessionId, "offered "));
+    expect(delivered).toHaveLength(1);
+    await detach();
+    // The offered frame may already be applied without its acknowledgement.
+    for (const text of ["a", "b", "c"]) await native.emit(delta(sessionId, text));
+    await native.emit({ type: "tool_progress", tool_use_id: "tool-1", tool_name: "Bash", parent_tool_use_id: null,
+      elapsed_time_seconds: 1, uuid: randomUUID(), session_id: sessionId } as SDKMessage);
+    await native.emit(delta(sessionId, "d"));
+    await native.emit(firstDelta(sessionId, "e", randomUUID()));
+    await native.emit(delta(sessionId, "f"));
+    for (let index = 0; index < 20_000; index++) await native.emit(delta(sessionId, "g"));
+    expect(delivered).toHaveLength(1);
+    const attachment = await replay();
+    expect(texts(attachment.events)).toEqual(["offered ", "abc", undefined, "d", "e", `f${"g".repeat(20_000)}`]);
+    expect(attachment.events[0]!.sequence).toBe(delivered[0]!.sequence);
+    expect(host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(6);
+    // Everything retained was offered by that attachment; live frames stay exact.
+    for (const text of ["h", "i"]) await native.emit(delta(sessionId, text));
+    expect(texts(delivered.slice(1))).toEqual(["h", "i"]);
+    expect(host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(8);
+    await f.stop(true);
+  });
+});
+
+describe("persistent host shutdown evidence", () => {
+  const result = (sessionId: string, operationId: string): SDKMessage => ({ type: "result", subtype: "success", duration_ms: 0, duration_api_ms: 0,
+    is_error: false, num_turns: 1, result: "Done.", stop_reason: "end_turn", total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [],
+    uuid: randomUUID(), session_id: sessionId, user_message_uuid: operationId, user_message_uuids: [operationId] }) as unknown as SDKMessage;
+  const running = (sessionId: string) => ({ type: "system", subtype: "session_state_changed", state: "running",
+    uuid: randomUUID(), session_id: sessionId }) as SDKMessage;
+  type Evidence = { phase: string; startedAfterConfirmation?: boolean;
+    sessions: { sessionId: string; liveWork: boolean; events: { kind: string; messageType?: string; code?: string }[] }[] };
+  const evidence = (archive: ReturnType<typeof vi.fn>) => archive.mock.calls.map(([record]) => (record as { evidence: Evidence }).evidence);
+
+  it("does not hold an input Claude refused as outstanding work", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const listener = (_event: ClaudePersistentEvent) => undefined;
+    const sessionId = randomUUID(), operationId = randomUUID();
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
+    await host.execute({ ...authority, action: "send", request: { queryId: sessionId, operationId, content: "Refused." } }, listener);
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ liveWork: true, pendingInputIds: [operationId] });
+    await f.sessions.find(session => session.options.sessionId === sessionId)!.emit(lifecycle(sessionId, operationId, "refused"));
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ liveWork: false, pendingInputIds: [] });
+  });
+
+  it("tells a retire request apart when only undelivered output holds the query", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const delivered: ClaudePersistentEvent[] = [];
+    const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
+    const sessionId = randomUUID();
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
+    const native = f.sessions.find(session => session.options.sessionId === sessionId)!;
+    await native.emit(delta(sessionId, "unapplied output"));
+    await host.execute({ ...authority, action: "detach", request: { sessionId } }, listener);
+    const retire = () => host.execute({ ...authority, action: "retire", request: { sessionId, cwd: "/workspace" } }, listener);
+    await expect(retire()).resolves.toEqual({ outcome: "undelivered" });
+    expect(native.closed).toBe(false);
+    await native.emit(running(sessionId));
+    await expect(retire()).resolves.toEqual({ outcome: "busy" });
+  });
+
+  it("acknowledges an evicted query's last event without waiting for its retirement", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const delivered: ClaudePersistentEvent[] = [];
+    const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
+    const sessionId = randomUUID();
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
+    const native = f.sessions.find(session => session.options.sessionId === sessionId)!;
+    await native.emit(delta(sessionId, "last output"));
+    await host.execute({ ...authority, action: "evict", request: { sessionId } }, listener);
+    // Closing the Claude process can take seconds; retirement runs on its own.
+    let finishClose!: () => void;
+    native.close.mockImplementationOnce(() => new Promise<void>(resolve => { finishClose = () => { native.closed = true; resolve(); }; }));
+    const acknowledged = host.execute({ ...authority, action: "acknowledge",
+      request: { sessionId, sequence: delivered.at(-1)!.sequence } }, listener);
+    await expect(Promise.race([acknowledged, new Promise(resolve => setTimeout(() => resolve("pending"), 200))]))
+      .resolves.toEqual({ acknowledged: true });
+    await vi.waitFor(() => expect(native.close).toHaveBeenCalled());
+    finishClose();
+    await vi.waitFor(() => expect(host.abandonmentEvidence().sessions).toEqual([]));
+  });
+
+  it("replays Claude's running state after pruning a result Claude chained into a turn of its own", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const delivered: ClaudePersistentEvent[] = [];
+    const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
+    const sessionId = randomUUID(), operationId = randomUUID();
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
+    await host.execute({ ...authority, action: "send", request: { queryId: sessionId, operationId, content: "Work." } }, listener);
+    const native = f.sessions.find(session => session.options.sessionId === sessionId)!;
+    await native.emit(running(sessionId));
+    await native.emit(lifecycle(sessionId, operationId, "started"));
+    await native.emit(result(sessionId, operationId));
+    // Claude goes straight on to a turn of its own: no idle edge follows.
+    for (const event of [...delivered]) {
+      await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, listener);
+    }
+    const replayed = await host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, listener) as
+      { events: ClaudePersistentEvent[] };
+    const states = replayed.events.flatMap(event => {
+      const message = event.payload.kind === "message" ? event.payload.message as { type?: string; subtype?: string; state?: string } : undefined;
+      return message?.type === "system" && message.subtype === "session_state_changed" ? [message.state] : [];
+    });
+    // The result's pruning keeps Claude's current state for a new main.
+    expect(states).toEqual(["running"]);
+    expect(replayed.events.some(event => event.payload.kind === "message" &&
+      (event.payload.message as { type?: string }).type === "result")).toBe(false);
+  });
+
+  it("keeps an unforced stop within its baseline budget by leaving out idle sessions' full histories", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const delivered: ClaudePersistentEvent[] = [];
+    const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
+    const [idle, working] = [randomUUID(), randomUUID()];
+    for (const sessionId of [idle, working]) {
+      await host.execute({ ...authority, action: "open", replay: "full", request: {
+        queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
+    }
+    const operationId = randomUUID();
+    await host.execute({ ...authority, action: "send", request: { queryId: working, operationId, content: "Work." } }, listener);
+    const native = f.sessions.find(session => session.options.sessionId === working)!;
+    await native.emit(lifecycle(working, operationId, "started"));
+    for (const event of delivered.splice(0)) {
+      await host.execute({ ...authority, action: "acknowledge", request: { sessionId: event.sessionId, sequence: event.sequence } }, listener);
+    }
+    // Earlier compaction segments make each full history large.
+    f.runtime.hasSessionTranscript.mockResolvedValue(true);
+    f.runtime.getSessionMessages.mockImplementation(async (sessionId) => Array.from({ length: 10 }, () => ({ type: "user",
+      uuid: randomUUID(), session_id: sessionId, parent_tool_use_id: null, parent_agent_id: null,
+      message: { role: "user", content: "x".repeat(4 * 1024 * 1024) } })) as never);
+    // The working session's result lands while the worker closes: a main must drain it.
+    const close = f.runtime.close.getMockImplementation()!;
+    f.runtime.close.mockImplementationOnce(async () => { await native.emit(result(working, operationId)); await close(); });
+    await expect(host.stop()).rejects.toThrow("sidecar_resource_handoff_pending");
+    const read = (sessionId: string) => host.execute({ ...authority, action: "messages",
+      request: { sessionId, dir: "/workspace" } }, listener) as Promise<{ messages: unknown[] }>;
+    await expect(read(working)).resolves.toMatchObject({ messages: expect.arrayContaining([expect.objectContaining({ session_id: working })]) });
+    // The idle session has nothing to drain; its history is read once the replacement runtime runs.
+    await expect(read(idle)).rejects.toThrow("claude_persistent_recovery_history_unavailable");
+    await expect(host.execute({ ...authority, action: "transcript", request: { sessionId: idle, dir: "/workspace" } }, listener))
+      .resolves.toEqual({ present: true });
+  });
+
+  it("ends every session on a forced stop but marks a settled session's unacknowledged result as its outcome", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const delivered: ClaudePersistentEvent[] = [];
+    const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
+    const [settled, interrupted] = [randomUUID(), randomUUID()];
+    const operations = new Map<string, string>();
+    for (const sessionId of [settled, interrupted]) {
+      await host.execute({ ...authority, action: "open", replay: "full", request: {
+        queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
+      const operationId = randomUUID();
+      operations.set(sessionId, operationId);
+      await host.execute({ ...authority, action: "send", request: { queryId: sessionId, operationId, content: "Work." } }, listener);
+      await f.sessions.find(session => session.options.sessionId === sessionId)!.emit(lifecycle(sessionId, operationId, "started"));
+    }
+    // Main never acknowledges this result, as when it restarted meanwhile.
+    await f.sessions.find(session => session.options.sessionId === settled)!.emit(result(settled, operations.get(settled)!));
+    await f.stop(true);
+    const [before, after] = evidence(f.archive);
+    expect(before!.phase).toBe("before_shutdown");
+    expect(before!.sessions.map(({ sessionId, liveWork }) => [sessionId, liveWork])).toEqual([[settled, false], [interrupted, true]]);
+    const kinds = (sessionId: string) => after!.sessions.find(session => session.sessionId === sessionId)!.events.map(event => event.messageType ?? event.code);
+    expect(after!.phase).toBe("after_shutdown");
+    expect(kinds(settled)).toEqual(["user", "command_lifecycle", "result", "claude_persistent_operator_stopped_settled"]);
+    expect(kinds(interrupted)).toEqual(["user", "command_lifecycle", "claude_persistent_operator_stopped"]);
+    // An attached main learns that both queries ended.
+    expect(delivered.flatMap(event => event.payload.kind === "failed" ? [[event.sessionId, event.payload.code]] : [])).toEqual([
+      [settled, "claude_persistent_operator_stopped_settled"], [interrupted, "claude_persistent_operator_stopped"],
+    ]);
+  });
+
+  it("records a hard handover when Claude starts work after an unforced stop was confirmed", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const sessionId = randomUUID();
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, () => {});
+    await host.execute({ ...authority, action: "detach", request: { sessionId } }, () => {});
+    expect(host.snapshot().blockers).toEqual([]);
+    const native = f.sessions[0]!;
+    // A task notification wakes Claude while the idle stop reads its history.
+    f.runtime.getSessionInfo.mockImplementationOnce(async () => { await native.emit(running(sessionId)); return undefined; });
+    await expect(host.stop(false, "sidecar_service_replacement")).rejects.toThrow("sidecar_resource_handoff_pending");
+    expect(native.closed).toBe(true);
+    expect(evidence(f.archive)).toEqual([expect.objectContaining({ phase: "before_shutdown", startedAfterConfirmation: true,
+      sessions: [expect.objectContaining({ sessionId, liveWork: true })] })]);
+    // Its retained frame is recovery evidence; once applied, the stop completes.
+    const retained = claudePersistentAttachmentSchema.parse(await host.execute({ ...authority, action: "attach", replay: "unacknowledged", request: { sessionId } }, () => {}));
+    for (const event of retained.events) await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, () => {});
+    await host.stop(false, "sidecar_service_replacement");
+    expect(evidence(f.archive).at(-1)).toMatchObject({ phase: "after_shutdown", startedAfterConfirmation: true });
+  });
+
+  it("writes no abandonment record for an unforced stop that ended nothing", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const sessionId = randomUUID();
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, () => {});
+    await host.stop(false, "sidecar_service_replacement");
+    expect(f.archive).not.toHaveBeenCalled();
+  });
+
+  it("archives a forced stop's evidence only when it interrupts work", async () => {
+    const archived = async (records: readonly unknown[]) => {
+      const root = await mkdtemp(path.join(tmpdir(), "claude-abandonment-"));
+      cleanups.push(() => rm(root, { recursive: true, force: true }));
+      const directory = path.join(root, "abandoned-work");
+      const archive = createSidecarAbandonmentArchive({ directory, scope: { tenantId: scope.tenantId, principalId: scope.principalId,
+        executionEnvironmentId: scope.executionEnvironmentId, installationId: "installation" }, serviceIncarnation: () => "service", onError: vi.fn() });
+      for (const record of records) await archive(record as SidecarAbandonmentRecord);
+      return await readdir(directory).catch(() => []);
+    };
+    const stopped = async (work: boolean) => {
+      const f = await fixture();
+      const attached = await f.attach();
+      const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+      const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+      const sessionId = randomUUID();
+      await host.execute({ ...authority, action: "open", replay: "full", request: {
+        queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, () => {});
+      if (work) {
+        const operationId = randomUUID();
+        await host.execute({ ...authority, action: "send", request: { queryId: sessionId, operationId, content: "Work." } }, () => {});
+        await f.sessions.find(session => session.options.sessionId === sessionId)!.emit(lifecycle(sessionId, operationId, "started"));
+      }
+      await f.stop(true);
+      return f.archive.mock.calls.map(([record]) => record);
+    };
+    // The idle session's own stop marker afterwards is residue, not abandoned work.
+    const idle = await stopped(false);
+    expect(idle.map(record => (record as { evidence: Evidence }).evidence.phase)).toEqual(["before_shutdown", "after_shutdown"]);
+    expect(await archived(idle)).toEqual([]);
+    expect(await archived(await stopped(true))).toHaveLength(2);
   });
 });

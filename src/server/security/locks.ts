@@ -1,13 +1,28 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, realpath, rm } from "node:fs/promises";
 import path from "node:path";
+import {
+  processTableSupported,
+  readBootIdentity,
+  readProcessEntries,
+} from "../runtime/process-table.js";
 
 interface LockMetadata {
   readonly pid: number;
   readonly startedAt: string;
   readonly identityHash: string;
   readonly ownerToken: string;
+  /**
+   * Opaque owner start token and boot identity, where the platform exposes
+   * them cheaply. Records written before these fields existed, and records
+   * from platforms without them, fall back to PID-only liveness.
+   */
+  readonly processStartTime?: string;
+  readonly bootId?: string;
 }
+
+const START_TIME_PATTERN = /^[A-Za-z0-9 :]{1,64}$/u;
+const BOOT_ID_PATTERN = /^[A-Za-z0-9-]{1,80}$/u;
 
 function isProcessRunning(pid: number): boolean {
   try {
@@ -16,6 +31,46 @@ function isProcessRunning(pid: number): boolean {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EPERM";
   }
+}
+
+/**
+ * A live PID keeps the lock unless its start time or boot identity proves the
+ * recorded owner is gone and the PID was reused. Unreadable evidence never
+ * steals a lock.
+ */
+async function isLockOwnerRunning(owner: LockMetadata): Promise<boolean> {
+  if (!isProcessRunning(owner.pid)) return false;
+  if (owner.processStartTime === undefined || !processTableSupported()) {
+    return true;
+  }
+  if (owner.bootId !== undefined) {
+    const bootId = await readBootIdentity();
+    if (bootId !== undefined && bootId !== owner.bootId) return false;
+  }
+  try {
+    const current = (await readProcessEntries([owner.pid])).get(owner.pid);
+    // Absence from a targeted read proves the PID exited after kill(0).
+    return current !== undefined && current.startTime === owner.processStartTime;
+  } catch {
+    return true;
+  }
+}
+
+async function currentProcessLiveness(): Promise<
+  Pick<LockMetadata, "processStartTime" | "bootId">
+> {
+  if (!processTableSupported()) return {};
+  const [entry, bootId] = await Promise.all([
+    readProcessEntries([process.pid])
+      .then((table) => table.get(process.pid))
+      .catch(() => undefined),
+    readBootIdentity(),
+  ]);
+  if (!entry || !START_TIME_PATTERN.test(entry.startTime)) return {};
+  return {
+    processStartTime: entry.startTime,
+    ...(bootId !== undefined ? { bootId } : {}),
+  };
 }
 
 function parseMetadata(value: string): LockMetadata | undefined {
@@ -28,7 +83,13 @@ function parseMetadata(value: string): LockMetadata | undefined {
       typeof parsed.startedAt === "string" &&
       typeof parsed.identityHash === "string" &&
       typeof parsed.ownerToken === "string" &&
-      parsed.ownerToken.length > 0
+      parsed.ownerToken.length > 0 &&
+      (parsed.processStartTime === undefined ||
+        (typeof parsed.processStartTime === "string" &&
+          START_TIME_PATTERN.test(parsed.processStartTime))) &&
+      (parsed.bootId === undefined ||
+        (typeof parsed.bootId === "string" &&
+          BOOT_ID_PATTERN.test(parsed.bootId)))
     ) {
       return parsed as LockMetadata;
     }
@@ -58,6 +119,7 @@ export class ExclusiveProcessLock {
       startedAt: new Date().toISOString(),
       identityHash,
       ownerToken: randomUUID(),
+      ...(await currentProcessLiveness()),
     };
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -87,7 +149,7 @@ export class ExclusiveProcessLock {
             `The Sedes ${resourceLabel} lock (${identityHash.slice(0, 12)}) cannot be recovered safely.`,
           );
         }
-        if (isProcessRunning(existing.pid)) {
+        if (await isLockOwnerRunning(existing)) {
           throw new Error(
             `Another Sedes process owns this ${resourceLabel} (lock ${identityHash.slice(0, 12)}).`,
           );

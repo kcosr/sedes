@@ -105,6 +105,99 @@ describe("Claude assistant response classification", () => {
   });
 });
 
+describe("Claude turn completion from native stop reasons", () => {
+  // Claude Code 2.1.28x writes one row per content block, and every row of a
+  // message carries that message's final stop reason.
+  let time = 0;
+  function row(index: number, id: string, block: unknown, stopReason: string) {
+    time += 1;
+    return {
+      ...assistant(uuid(index), [block]),
+      timestamp: new Date(Date.UTC(2026, 8, 26, 0, 0, time)).toISOString(),
+      message: { role: "assistant", id, content: [block], stop_reason: stopReason },
+    };
+  }
+  const thinking = { type: "thinking", thinking: "Planning", signature: "s" };
+  const toolUse = (id: string) => ({ type: "tool_use", id, name: "Bash", input: { command: "true" } });
+  const toolResult = (index: number, id: string) => user(uuid(index), [{ type: "tool_result", tool_use_id: id, content: "ok" }]);
+  const toolTurn = () => [
+    user(uuid(1), "Inspect"),
+    row(2, "msg-1", thinking, "tool_use"),
+    row(3, "msg-1", { type: "text", text: "Checking" }, "tool_use"),
+    row(4, "msg-1", toolUse("tool-1"), "tool_use"),
+    toolResult(5, "tool-1"),
+  ];
+
+  it("keeps a turn that ended on a tool result unfinished, however its earlier rows ended", () => {
+    const projection = projectClaudeHistory(toolTurn());
+    const id = projection.snapshot.orderedBackendTurnIds[0]!;
+    expect(projection.snapshot.turnsById[id]).toMatchObject({ status: "in_progress" });
+    expect(projection.snapshot.turnsById[id]).not.toHaveProperty("forkUnavailableReason");
+    expect(projection.snapshot).toMatchObject({ runState: "running", activeBackendTurnId: id });
+    expect(projection.terminalCheckpointUuidByBackendTurnId.has(id)).toBe(false);
+    expect(projection.terminalAssistantUuidByBackendTurnId.has(id)).toBe(false);
+  });
+
+  it.each([1, 2])("never ends a turn at the first %s block rows of a message that stopped for a tool call", (rows) => {
+    const projection = projectClaudeHistory(toolTurn().slice(0, rows + 1));
+    const id = projection.snapshot.orderedBackendTurnIds[0]!;
+    expect(projection.snapshot.turnsById[id]?.status).toBe("in_progress");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.has(id)).toBe(false);
+  });
+
+  it("completes that turn at its final answer and forks from the answer's last row", () => {
+    const projection = projectClaudeHistory([...toolTurn(),
+      row(6, "msg-2", thinking, "end_turn"), row(7, "msg-2", { type: "text", text: "Done" }, "end_turn")]);
+    const id = projection.snapshot.orderedBackendTurnIds[0]!;
+    expect(projection.snapshot.turnsById[id]).toMatchObject({ status: "completed", endedBy: "agent_settled" });
+    expect(projection.snapshot.turnsById[id]).not.toHaveProperty("forkUnavailableReason");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.get(id)).toBe(uuid(7));
+    expect(Object.values(projection.snapshot.itemsById).filter(item => item.semanticKind === "assistant_message")
+      .map(item => [item.markdown.text, item.responsePhase])).toEqual([["Checking", "provisional"], ["Done", "final"]]);
+  });
+
+  it("reopens an answered turn that Claude continued (a blocking Stop hook's hidden row)", () => {
+    const projection = projectClaudeHistory([user(uuid(1), "Answer"),
+      row(2, "msg-1", { type: "text", text: "First answer" }, "end_turn"),
+      row(3, "msg-2", toolUse("tool-2"), "tool_use"), toolResult(4, "tool-2")]);
+    const id = projection.snapshot.orderedBackendTurnIds[0]!;
+    expect(projection.snapshot.turnsById[id]?.status).toBe("in_progress");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.has(id)).toBe(false);
+  });
+
+  it("completes a max_tokens response continued to its final answer", () => {
+    const projection = projectClaudeHistory([user(uuid(1), "Write it"),
+      row(2, "msg-1", { type: "text", text: "Part one" }, "max_tokens"),
+      row(3, "msg-2", { type: "text", text: "Part two" }, "end_turn")]);
+    const id = projection.snapshot.orderedBackendTurnIds[0]!;
+    expect(projection.snapshot.turnsById[id]?.status).toBe("completed");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.get(id)).toBe(uuid(3));
+  });
+
+  it("keeps a turn running while a steer folded after its answer awaits a response", () => {
+    const steerOperations = new Map([[uuid(3), uuid(1)]]);
+    const authentication = { ...historyAuthentication, steerOperations };
+    const answered = [user(uuid(1), "Answer"), row(2, "msg-1", { type: "text", text: "Answer" }, "end_turn"),
+      user(uuid(3), "Also this")];
+    const pending = projectClaudeHistory(answered, [], authentication);
+    const id = pending.snapshot.orderedBackendTurnIds[0]!;
+    expect(pending.snapshot.orderedBackendTurnIds).toEqual([id]);
+    expect(pending.snapshot.turnsById[id]).toMatchObject({ status: "in_progress", completionCorrelations: [uuid(1), uuid(3)] });
+    const settled = projectClaudeHistory([...answered, row(4, "msg-2", { type: "text", text: "And that" }, "end_turn")], [], authentication);
+    expect(settled.snapshot.turnsById[id]?.status).toBe("completed");
+    expect(settled.terminalCheckpointUuidByBackendTurnId.get(id)).toBe(uuid(4));
+  });
+
+  it("closes a turn that ended on a tool result as interrupted when Claude Code resumes it", () => {
+    const closure = { ...row(6, "msg-closure", { type: "text", text: "No response requested." }, "stop_sequence"),
+      message: { role: "assistant", id: "msg-closure", model: "<synthetic>", content: [{ type: "text", text: "No response requested." }], stop_reason: "stop_sequence" } };
+    const projection = projectClaudeHistory([...toolTurn(), closure]);
+    const id = projection.snapshot.orderedBackendTurnIds[0]!;
+    expect(projection.snapshot.turnsById[id]).toMatchObject({ status: "interrupted", endedBy: "interrupted" });
+    expect(projection.snapshot.runState).toBe("idle");
+  });
+});
+
 describe("Claude native interruption markers", () => {
   const timestamp = "2026-09-17T07:16:01.463Z";
   const prompt = user(uuid(1), "Keep working");
@@ -1865,6 +1958,135 @@ describe("Claude stable subagent lifecycle ordering", () => {
 });
 
 
+describe("Claude resume closure rows", () => {
+  const notice = "Claude Code exited before this turn finished and closed it without a response when the conversation resumed.";
+  /** Claude Code's resume closure: a zero-usage `<synthetic>` assistant row. */
+  function closure(index: number, overrides: { model?: string; content?: unknown } = {}) {
+    return {
+      ...assistant(uuid(index), overrides.content ?? [{ type: "text", text: "No response requested." }]),
+      timestamp: `2026-09-20T00:00:${String(index).padStart(2, "0")}.000Z`,
+      message: { id: `8d7c6b5a-0000-4000-8000-${String(index).padStart(12, "0")}`, model: overrides.model ?? "<synthetic>",
+        role: "assistant", stop_reason: "stop_sequence", stop_sequence: "", type: "message",
+        content: overrides.content ?? [{ type: "text", text: "No response requested." }],
+        usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    };
+  }
+  const answered = [user(uuid(1), "Explain the parser"), {
+    ...assistant(uuid(2), [{ type: "text", text: "It splits lines." }]),
+    message: { id: "msg-answer", role: "assistant", model: "claude-synthetic-1", stop_reason: "end_turn",
+      content: [{ type: "text", text: "It splits lines." }], usage: { input_tokens: 1, output_tokens: 1 } },
+  }];
+  const texts = (snapshot: ReturnType<typeof projectClaudeHistory>["snapshot"]) =>
+    Object.values(snapshot.itemsById).flatMap((item) =>
+      item.semanticKind === "assistant_message" ? [item.markdown.text] : item.semanticKind === "notice" ? [`notice:${item.text.text}`] : []);
+
+  it("drops closures of the startup message after a settled turn without touching its identity or checkpoint", () => {
+    const original = projectClaudeHistory(answered);
+    for (const closures of [[closure(10)], [closure(10), closure(11), closure(12)]]) {
+      const reopened = projectClaudeHistory([...answered, ...closures]);
+      expect(reopened.snapshot).toEqual(original.snapshot);
+      expect(reopened.usage).toEqual(original.usage);
+      expect(reopened.terminalCheckpointUuidByBackendTurnId).toEqual(new Map([[original.snapshot.orderedBackendTurnIds[0]!, uuid(2)]]));
+      expect(reopened.terminalAssistantUuidByBackendTurnId).toEqual(original.terminalAssistantUuidByBackendTurnId);
+      expect([...reopened.backendTurnIdByMessageUuid.keys()]).toEqual([uuid(2)]);
+      expect(nextClaudeUserMessageOrdinal([...answered, ...closures] as SessionMessage[], markerAuthentication)).toBe(1);
+    }
+  });
+
+  it("projects no turn for a thread that was reopened without ever being sent", () => {
+    const projection = projectClaudeHistory([closure(10), closure(11)]);
+    expect(projection.snapshot.orderedBackendTurnIds).toEqual([]);
+    expect(projection.snapshot.runState).toBe("idle");
+    expect(projection.usage?.counters).toMatchObject({ assistantMessages: 0, totalMessages: 0 });
+    expect(nextClaudeUserMessageOrdinal([closure(10)] as SessionMessage[], markerAuthentication)).toBe(0);
+    const next = projectClaudeHistory([closure(10), closure(11), ...answered]);
+    expect(next.snapshot).toEqual(projectClaudeHistory(answered).snapshot);
+  });
+
+  it("ends an unanswered prompt as interrupted with a stable diagnostic instead of a completed answer", () => {
+    const prompt = user(uuid(1), "A prompt the process never answered");
+    const projection = projectClaudeHistory([prompt, closure(10)]);
+    const [turnId] = projection.snapshot.orderedBackendTurnIds;
+    expect(projection.snapshot.orderedBackendTurnIds).toEqual([projectClaudeHistory([prompt]).snapshot.orderedBackendTurnIds[0]]);
+    expect(projection.snapshot.turnsById[turnId!]).toMatchObject({
+      status: "interrupted", endedBy: "interrupted", completedAt: "2026-09-20T00:00:10.000Z",
+    });
+    expect(texts(projection.snapshot)).toEqual([`notice:${notice}`]);
+    expect(Object.values(projection.snapshot.itemsById).find((item) => item.semanticKind === "notice")).toMatchObject({ tone: "warning" });
+    expect(projection.snapshot.runState).toBe("idle");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.size).toBe(0);
+    expect(projection.terminalAssistantUuidByBackendTurnId.size).toBe(0);
+    expect(projection.nativeUserMessageUuidByBackendTurnId.get(turnId!)).toBe(uuid(1));
+    // Later resumes close the startup message again; the ended turn is unchanged.
+    expect(projectClaudeHistory([prompt, closure(10), closure(11), closure(12)]).snapshot).toEqual(projection.snapshot);
+    const followUp = projectClaudeHistory([prompt, closure(10), closure(11), ...answered.map((message, index) => ({ ...message, uuid: uuid(20 + index) }))]);
+    expect(followUp.snapshot.orderedBackendTurnIds).toHaveLength(2);
+    expect(followUp.snapshot.turnsById[turnId!]).toEqual(projection.snapshot.turnsById[turnId!]);
+  });
+
+  it.each(["completed", "interrupted", "failed"] as const)("defers to a %s Sedes receipt for the closed turn", (status) => {
+    const prompt = user(uuid(1), "Receipt-settled prompt");
+    const turnId = projectClaudeHistory([prompt]).snapshot.orderedBackendTurnIds[0]!;
+    const receipt: ClaudeTerminalReceiptOverride = { backendTurnId: turnId, status, providerTerminalReason: null,
+      providerResultUuid: null, terminalAt: 5_000 };
+    const projection = projectClaudeHistory([prompt, closure(10)], [receipt]);
+    expect(projection.snapshot.turnsById[turnId]).toMatchObject({ status, completedAt: new Date(5_000).toISOString() });
+    expect(texts(projection.snapshot)).toEqual([]);
+  });
+
+  it("ends a turn cut off after a tool result or partial output, settling unresolved tools", () => {
+    const call = { ...assistant(uuid(2), [{ type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "/file" } }]),
+      message: { id: "msg-call", role: "assistant", stop_reason: "tool_use",
+        content: [{ type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "/file" } }] } };
+    const result = user(uuid(3), [{ type: "tool_result", tool_use_id: "tool-1", content: "contents" }]);
+    const afterResult = projectClaudeHistory([user(uuid(1), "Read it"), call, result, closure(10)]).snapshot;
+    expect(Object.values(afterResult.turnsById).map((turn) => turn.status)).toEqual(["interrupted"]);
+    expect(texts(afterResult)).toEqual([`notice:${notice}`]);
+
+    const partial = { ...assistant(uuid(4), [{ type: "text", text: "Starting" }]),
+      message: { id: "msg-partial", role: "assistant", stop_reason: null, content: [{ type: "text", text: "Starting" }] } };
+    const afterPartial = projectClaudeHistory([user(uuid(1), "Read it"), partial, closure(10)]).snapshot;
+    expect(Object.values(afterPartial.turnsById).map((turn) => turn.status)).toEqual(["interrupted"]);
+    expect(texts(afterPartial)).toEqual(["Starting", `notice:${notice}`]);
+
+    const unresolved = projectClaudeHistory([user(uuid(1), "Read it"), call, closure(10)]).snapshot;
+    expect(Object.values(unresolved.turnsById).map((turn) => turn.status)).toEqual(["interrupted"]);
+    expect(Object.values(unresolved.itemsById).find((item) => item.semanticKind === "file_read")?.status).toBe("interrupted");
+  });
+
+  it("keeps an interruption marker's turn as it was", () => {
+    const marker = { ...user(uuid(3), [{ type: "text", text: "[Request interrupted by user]" }]), timestamp: "2026-09-20T00:00:03.000Z" };
+    const history = [user(uuid(1), "Long task"), assistant(uuid(2), [{ type: "text", text: "Working" }]), marker];
+    expect(projectClaudeHistory([...history, closure(10)]).snapshot).toEqual(projectClaudeHistory(history).snapshot);
+  });
+
+  it("drops a closure of an unanswered task notification with the notification itself", () => {
+    const notification = { ...user(uuid(3), "<task-notification>\n<task-id>child</task-id>\n<status>stopped</status>\n<summary>Background agent \"survey\" didn't finish before the previous session ended</summary>\n</task-notification>"),
+      origin: { kind: "task-notification" } };
+    const projection = projectClaudeHistory([...answered, notification, closure(10)]);
+    expect(projection.snapshot).toEqual(projectClaudeHistory(answered).snapshot);
+    expect(projection.terminalCheckpointUuidByBackendTurnId).toEqual(projectClaudeHistory(answered).terminalCheckpointUuidByBackendTurnId);
+  });
+
+  it.each([
+    ["an API error", { content: [{ type: "text", text: "API Error: synthetic failure" }] }],
+    ["a model reply with the same text", { model: "claude-synthetic-1" }],
+    ["extra content", { content: [{ type: "text", text: "No response requested." }, { type: "text", text: "More." }] }],
+    ["different text", { content: [{ type: "text", text: "No response requested" }] }],
+  ])("keeps %s as an ordinary assistant message", (_label, overrides) => {
+    const snapshot = projectClaudeHistory([user(uuid(1), "Prompt"), closure(10, overrides)]).snapshot;
+    expect(Object.values(snapshot.turnsById).map((turn) => turn.status)).toEqual(["completed"]);
+    expect(texts(snapshot).length).toBeGreaterThan(0);
+    expect(texts(snapshot).some((text) => text.startsWith("notice:"))).toBe(false);
+  });
+
+  it("recognizes only the timestamped native closure shape", () => {
+    const { timestamp: _timestamp, ...untimed } = closure(10);
+    const snapshot = projectClaudeHistory([...answered, untimed]).snapshot;
+    expect(texts(snapshot)).toContain("No response requested.");
+  });
+});
+
 describe("Claude internal task notification history", () => {
   const envelope = "<task-notification>\n<task-id>child</task-id>\n<tool-use-id>call</tool-use-id>\n<status>completed</status>\n<summary>Finished</summary>\n</task-notification>";
   const notification = { ...user(uuid(3), envelope), origin: { kind: "task-notification" } };
@@ -1895,6 +2117,106 @@ describe("Claude internal task notification history", () => {
     expect(after.snapshot).toEqual(original.snapshot);
     expect(after.terminalCheckpointUuidByBackendTurnId).toEqual(original.terminalCheckpointUuidByBackendTurnId);
     expect(nextClaudeUserMessageOrdinal([...beginning, notification] as SessionMessage[], markerAuthentication)).toBe(1);
+  });
+
+  it("explains why a completed turn without an exact final entry cannot be a fork boundary", () => {
+    const messages = [user(uuid(1), "Answer"), assistant(uuid(2), [{ type: "text", text: "Answer" }]),
+      user(uuid(3), "Return structured output"),
+      assistant(uuid(4), [{ type: "tool_use", id: "result-tool", name: "StructuredOutput", input: {} }]),
+      user(uuid(5), [{ type: "tool_result", tool_use_id: "result-tool", content: "ok" }])];
+    const [ordinary, structured] = projectClaudeHistory(messages).snapshot.orderedBackendTurnIds;
+    const projection = projectClaudeHistory(messages, [{ backendTurnId: structured!, status: "completed",
+      providerTerminalReason: "success", providerResultUuid: uuid(6), terminalAt: 2_000 }]);
+    expect(projection.snapshot.turnsById[structured!]).toMatchObject({ status: "completed", forkUnavailableReason: { text:
+      "Claude cannot fork exactly after this turn: it ended without a final answer, for example on a tool result or attachment." } });
+    expect(projection.snapshot.turnsById[ordinary!]).not.toHaveProperty("forkUnavailableReason");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.has(structured!)).toBe(false);
+  });
+
+  it("explains why turns before or at Claude's latest compaction cannot be forked", () => {
+    const summary = { ...user(uuid(3), "This session is being continued. Summary: synthetic."), isCompactSummary: true };
+    const messages = [user(uuid(1), "Before"), assistant(uuid(2), [{ type: "text", text: "Earlier answer" }]), summary,
+      user(uuid(4), "After"), assistant(uuid(5), [{ type: "text", text: "Later answer" }])];
+    const projection = projectClaudeHistory(messages);
+    // The summary joins the turn it followed; that turn precedes the compaction.
+    const [earlier, later] = projection.snapshot.orderedBackendTurnIds;
+    expect(projection.snapshot.turnsById[earlier!]).toMatchObject({ status: "completed", forkUnavailableReason: { text:
+      "Claude cannot fork before its latest compaction. Fork a turn after the compaction summary instead." } });
+    expect(projection.snapshot.turnsById[later!]).not.toHaveProperty("forkUnavailableReason");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.get(later!)).toBe(uuid(5));
+    // A summary with no turn to join is its own settled turn, never a fork point.
+    const resumed = projectClaudeHistory(messages.slice(2));
+    const [compaction] = resumed.snapshot.orderedBackendTurnIds;
+    expect(resumed.snapshot.turnsById[compaction!]).toMatchObject({ status: "completed", forkUnavailableReason: { text:
+      "A compaction summary is not a fork point; fork a later turn instead." } });
+  });
+
+  it("shows one notice on the fork-point turn for background work a fork did not carry", () => {
+    const orphan = (id: number) => ({ ...user(uuid(id), "<task-notification>\n<task-id>running</task-id>\n<status>failed</status>\n<summary>Background agent didn't finish</summary>\n</task-notification>"),
+      origin: { kind: "task-notification" } });
+    const messages = [...beginning, orphan(5), orphan(6)] as SessionMessage[];
+    const plain = projectClaudeHistory(beginning);
+    const projection = projectClaudeHistory(messages, [], {
+      attachmentProvenanceKey: new Uint8Array(32), forkBoundaryAuthentication: markerAuthentication,
+      forkOmittedTaskNotifications: new Set([uuid(5), uuid(6)]),
+    });
+    const [turnId] = projection.snapshot.orderedBackendTurnIds;
+    expect(projection.snapshot.orderedBackendTurnIds).toEqual(plain.snapshot.orderedBackendTurnIds);
+    const notices = projection.snapshot.turnsById[turnId!]!.orderedBackendItemIds
+      .map(id => projection.snapshot.itemsById[id]!).filter(item => item.semanticKind === "notice");
+    expect(notices).toEqual([expect.objectContaining({ tone: "warning", text: { text:
+      "Background work started before this fork point was not carried into the fork. Claude was told it did not finish; its results, if any, are in the source thread." } })]);
+    // The fork point stays an exact checkpoint, and nothing reads as running.
+    expect(projection.terminalCheckpointUuidByBackendTurnId).toEqual(plain.terminalCheckpointUuidByBackendTurnId);
+    expect(projection.snapshot.runState).toBe("idle");
+    expect(JSON.stringify(projection.snapshot)).not.toContain("<task-notification>");
+  });
+
+  describe("turns Claude starts itself", () => {
+    const answer = (id: string, messageId: string, text: string) => ({
+      ...assistant(id, [{ type: "text", text }]),
+      message: { id: messageId, role: "assistant", content: [{ type: "text", text }], stop_reason: "end_turn", usage: {} },
+    });
+    const followUp = answer(uuid(4), "msg-notified", "The agent finished");
+    const liveMarker = { type: "system", uuid: uuid(700), session_id: uuid(900),
+      parent_tool_use_id: null, parent_agent_id: null, message: {} };
+    const live = { ...historyAuthentication, providerTurnBoundaries: new Map([[uuid(700), "msg-notified"]]) };
+    const turnShape = (snapshot: ReturnType<typeof projectClaudeHistory>["snapshot"]) =>
+      snapshot.orderedBackendTurnIds.map(id => ({ ...snapshot.turnsById[id],
+        items: snapshot.turnsById[id]!.orderedBackendItemIds.map(itemId => snapshot.itemsById[itemId]) }));
+
+    it("identifies a notification turn by its first response so live and reload agree", () => {
+      const reloaded = projectClaudeLatestSnapshot([...beginning, notification, followUp], [], historyAuthentication);
+      // Claude streams no notification row; the live path marks the boundary.
+      const observed = projectClaudeLatestSnapshot([...beginning, liveMarker, followUp], [], live);
+      expect(reloaded.snapshot.orderedBackendTurnIds).toHaveLength(2);
+      expect(turnShape(observed.snapshot)).toEqual(turnShape(reloaded.snapshot));
+      expect(reloaded.nativeUserMessageUuidByBackendTurnId.size).toBe(1);
+    });
+
+    it("keeps a live marker's turn open before its first complete response", () => {
+      const observed = projectClaudeLatestSnapshot([...beginning, liveMarker], [], live);
+      const id = observed.snapshot.orderedBackendTurnIds.at(-1)!;
+      expect(observed.snapshot.orderedBackendTurnIds).toHaveLength(2);
+      expect(observed.snapshot.turnsById[id]).toMatchObject({ status: "in_progress", orderedBackendItemIds: [] });
+      expect(id).toBe(projectClaudeLatestSnapshot([...beginning, notification, followUp], [], historyAuthentication)
+        .snapshot.orderedBackendTurnIds.at(-1));
+    });
+
+    it("ignores a live marker already covered by merged provider history", () => {
+      const reloaded = projectClaudeLatestSnapshot([...beginning, notification, followUp], [], historyAuthentication);
+      const merged = projectClaudeLatestSnapshot([...beginning, notification, followUp, liveMarker], [], live);
+      expect(turnShape(merged.snapshot)).toEqual(turnShape(reloaded.snapshot));
+    });
+
+    it("opens one turn for coalesced notifications and none when stopped before a response", () => {
+      const second = { ...notification, uuid: uuid(5) };
+      const coalesced = projectClaudeHistory([...beginning, notification, second, followUp]);
+      expect(coalesced.snapshot.orderedBackendTurnIds).toHaveLength(2);
+      const stopped = projectClaudeHistory([...beginning, notification,
+        { ...user(uuid(6), [{ type: "text", text: "[Request interrupted by user]" }]), timestamp: "2026-09-17T07:16:01.463Z" }]);
+      expect(stopped.snapshot).toEqual(projectClaudeHistory(beginning).snapshot);
+    });
   });
 
   it.each([undefined, { kind: "human" }, { kind: "task-notification", subkind: "scheduled-trigger" },

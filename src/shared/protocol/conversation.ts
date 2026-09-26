@@ -139,6 +139,8 @@ export const conversationTurnSchema = z
       .optional(),
     startedAt: z.iso.datetime().optional(),
     completedAt: z.iso.datetime().optional(),
+    /** Why this completed turn cannot be an exact fork boundary. */
+    forkUnavailableReason: boundedDisplayTextSchema.optional(),
     orderedItemIds: z
       .array(z.string().min(1).max(160))
       .max(MAXIMUM_NORMALIZED_ITEMS_PER_TURN),
@@ -146,6 +148,9 @@ export const conversationTurnSchema = z
   .superRefine((turn, context) => {
     if ((turn.status === "failed") !== (turn.failure !== undefined)) {
       context.addIssue({ code: "custom", path: ["failure"], message: "Failure details belong to failed turns and are required for them." });
+    }
+    if (turn.forkUnavailableReason !== undefined && turn.status !== "completed") {
+      context.addIssue({ code: "custom", path: ["forkUnavailableReason"], message: "Only a completed turn can explain why it is not a fork boundary." });
     }
     requireUniqueTimelineIdentifiers(
       turn.orderedItemIds,
@@ -626,6 +631,7 @@ const noParameterOperationIds = [
   "interrupt",
   "retry_submission",
   "recover_uncertain",
+  "discard_fork",
   "archive",
   "settle",
   "acknowledge_attention",
@@ -1122,6 +1128,19 @@ export const normalizedThreadRecoverySchema = z.discriminatedUnion("kind", [
     submissionMayHaveBeenAccepted: z.boolean(),
     forkUncertainty: z.literal("fork_unknown").nullable(),
     possibleProviderOrphan: z.literal("full_native_copy").nullable(),
+    /**
+     * The provider already returned the conversation's identity, so recovery
+     * finishes it locally; a fork in this state cannot be discarded.
+     */
+    conversationIdentified: z.boolean(),
+    /**
+     * Who names a fork's provider child. An application-reserved child is
+     * never imported by discovery after a discard; a provider-assigned one
+     * may be. Null for first-input creation or an unrecorded identity.
+     */
+    forkChildIdentity: z
+      .enum(["application_reserved", "provider_assigned"])
+      .nullable(),
     recoverable: z.boolean(),
   }),
   z.strictObject({

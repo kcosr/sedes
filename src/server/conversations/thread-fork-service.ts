@@ -11,6 +11,7 @@ import type {
   BackendEffectiveSettings,
 } from "../../shared/protocol/backend.js";
 import { BackendError } from "../backends/contracts.js";
+import { reportBackgroundError } from "../report-background-error.js";
 import type { BackendCheckpointRef } from "../backends/contracts.js";
 import type { ConversationActorManager } from "./conversation-actor-manager.js";
 import type { ActorBranchCheckpointSelection } from "./conversation-actor.js";
@@ -56,6 +57,8 @@ export type ThreadForkResult =
       readonly status: "aborted";
       readonly childThreadId: string;
       readonly diagnostic: string;
+      /** False when a new fork of the same boundary would fail the same way. */
+      readonly restartable: boolean;
     };
 
 type ManualForkInputBase = {
@@ -467,6 +470,7 @@ export class ThreadForkService {
   recoverActive(
     scope: RequestScope,
     childThreadId: string,
+    options: { readonly automatic?: boolean } = {},
   ): Promise<ThreadForkResult> | undefined {
     const attempt = this.input.creation.findActiveForThread(
       scope,
@@ -526,6 +530,7 @@ export class ThreadForkService {
           scope,
           sourceThreadId,
           mutationId: creationOperationId,
+          ...(options.automatic ? { automatic: true } : {}),
           sourceKind:
             recoverableOriginKind === "automation_fork"
               ? "automation"
@@ -568,7 +573,20 @@ export class ThreadForkService {
     );
   }
 
-  async recoverAllActive(scope: RequestScope): Promise<void> {
+  /**
+   * Startup recovery. It runs after the server listens and logs every outcome.
+   *
+   * - A fork whose provider child was already returned (identified, or
+   *   awaiting recovery with the child's identity and binding detail) is
+   *   finalized locally, without a provider call.
+   * - A fork a crash interrupted before its provider response (prepared, or
+   *   with its provider call started) is retried under its recovery policy.
+   *
+   * Other attempts already awaiting explicit recovery are left for the user.
+   * Automatic recovery never aborts a fork: a definite failure found here is
+   * kept as a visible recovery rather than discarding the reserved child.
+   */
+  async recoverInterruptedForks(scope: RequestScope): Promise<void> {
     let after:
       | {
           readonly preparedAt: number;
@@ -579,11 +597,30 @@ export class ThreadForkService {
     for (;;) {
       const page = this.input.creation.listActiveForks(scope, 256, after);
       for (const attempt of page) {
+        // Matches #fork's local finalization exactly, so no provider call.
+        const childReturned =
+          (attempt.phase === "conversation_identified" ||
+            attempt.phase === "recovery_required") &&
+          attempt.provisionalBackendConversationId !== null &&
+          attempt.provisionalOpaqueBindingDetail !== null;
+        const interrupted =
+          attempt.phase === "prepared" ||
+          attempt.phase === "external_call_started";
+        if (!childReturned && !interrupted) continue;
         try {
-          await this.recoverActive(scope, attempt.applicationThreadId);
-        } catch {
-          // The durable attempt remains authoritative. A later startup or an
-          // explicit thread recovery retries the same fork operation.
+          const result = await this.recoverActive(scope, attempt.applicationThreadId, { automatic: true });
+          if (result) {
+            console.warn("thread_fork_startup_recovery", {
+              childThreadId: attempt.applicationThreadId,
+              phase: attempt.phase,
+              outcome: result.status,
+              ...(result.status === "created" ? {} : { diagnostic: result.diagnostic }),
+            });
+          }
+        } catch (error) {
+          // The durable attempt remains authoritative; explicit recovery
+          // retries the same operation.
+          reportBackgroundError(`Startup recovery of fork ${attempt.applicationThreadId}`)(error);
         }
       }
       if (page.length < 256) return;
@@ -594,6 +631,64 @@ export class ThreadForkService {
         applicationThreadId: last.applicationThreadId,
       };
     }
+  }
+
+  /**
+   * Explicitly discard an unfinished fork child the user no longer wants,
+   * without re-running its provider call. The reserved child thread is
+   * removed. A fork whose child the provider already returned is refused:
+   * recovery finishes it locally instead. A child the provider may have
+   * created is never adopted into this fork. Discovery never imports an
+   * application-reserved child identity, which stays quarantined; a
+   * provider-assigned child has no reserved identity and may later be
+   * imported as a separate thread.
+   */
+  async discardActive(
+    scope: RequestScope,
+    childThreadId: string,
+  ): Promise<Extract<ThreadForkResult, { readonly status: "aborted" }>> {
+    const attempt = this.input.creation.findActiveForThread(scope, childThreadId);
+    if (!attempt || attempt.creationKind !== "fork") {
+      throw new DomainError("not_found", "There is no unfinished fork to discard.");
+    }
+    if (this.#inFlight.has(forkKey(scope, attempt.mutationId))) {
+      throw new DomainError(
+        "invalid_transition",
+        "This fork is still being created. Wait for it to finish before discarding it.",
+      );
+    }
+    if (attempt.provisionalBackendConversationId !== null) {
+      throw new DomainError(
+        "invalid_transition",
+        "The provider returned this fork's child. Recover the fork to finish it instead.",
+      );
+    }
+    const origin = this.input.lineage.getOrigin(scope, childThreadId);
+    let promotedTaskIds: readonly string[] = [];
+    const abortInput = {
+      creationOperationId: attempt.mutationId,
+      diagnostic: "The fork was discarded.",
+      restartable: true,
+      now: this.#now(),
+      onThreadTasksPromoted: (taskIds: readonly string[]) => {
+        promotedTaskIds = taskIds;
+      },
+    };
+    const aborted =
+      origin.boundaryKind === "provider_snapshot_at_acceptance"
+        ? this.input.lineage.abortPreparedProviderSnapshotFork(scope, childThreadId, abortInput)
+        : this.input.lineage.abortPreparedFork(scope, childThreadId, abortInput);
+    for (const promotedTaskId of promotedTaskIds) {
+      await this.#taskPublications?.publishTaskChange(scope, promotedTaskId);
+    }
+    await this.#collectOutputArtifactGarbage();
+    await this.#publications().publishAuthoritativeReplacement(scope);
+    return {
+      status: "aborted",
+      childThreadId: aborted.reservedChildThreadId,
+      diagnostic: aborted.diagnostic,
+      restartable: aborted.restartable,
+    };
   }
 
   async readRecovery(
@@ -930,6 +1025,8 @@ export class ThreadForkService {
     readonly scope: RequestScope;
     readonly sourceThreadId: string;
     readonly mutationId: string;
+    /** Startup recovery: a definite failure stays a visible recovery. */
+    readonly automatic?: boolean;
     readonly sourceKind: ForkSourceKind;
     readonly originKind: "automation_fork" | UserForkOriginKind;
     readonly initiatingPrincipalId: string;
@@ -950,6 +1047,7 @@ export class ThreadForkService {
         status: "aborted",
         childThreadId: aborted.reservedChildThreadId,
         diagnostic: aborted.diagnostic,
+        restartable: aborted.restartable,
       };
     }
     let attempt = this.input.creation.findByMutationId(
@@ -980,6 +1078,7 @@ export class ThreadForkService {
         status: "aborted",
         childThreadId: attempt.applicationThreadId,
         diagnostic: attempt.diagnostic ?? "The backend fork was not created.",
+        restartable: true,
       };
     }
     if (attempt) {
@@ -1438,6 +1537,7 @@ export class ThreadForkService {
       readonly sourceKind: ForkSourceKind;
       readonly automationId?: string;
       readonly automationRunId?: string;
+      readonly automatic?: boolean;
     },
     captured: CapturedFork,
     initial: ConversationCreationAttemptRecord,
@@ -1451,6 +1551,7 @@ export class ThreadForkService {
         status: "aborted",
         childThreadId: attempt.applicationThreadId,
         diagnostic: attempt.diagnostic ?? "The backend fork was not created.",
+        restartable: true,
       };
     }
     if (
@@ -1578,11 +1679,26 @@ export class ThreadForkService {
         });
       }
     } catch (error) {
-      if (error instanceof BackendError && !error.crossedSubmissionBoundary) {
+      // Only a definite failure may discard the reserved child. On a retry,
+      // an earlier call may already have created it, so a transient definite
+      // failure keeps the recovery; startup recovery never discards at all.
+      const definite =
+        error instanceof BackendError && !error.crossedSubmissionBoundary;
+      const discard =
+        definite &&
+        !input.automatic &&
+        (externalPhase !== "recovery_required" || !error.retryable);
+      reportBackgroundError(
+        `Fork ${attempt.applicationThreadId} creation (${discard ? "aborted" : "needs recovery"}${
+          error instanceof BackendError && error.backendCode ? `, ${error.backendCode}` : ""
+        })`,
+      )(error);
+      if (discard) {
         let promotedTaskIds: readonly string[] = [];
         const abortInput = {
           creationOperationId: input.mutationId,
           diagnostic: safeDiagnostic(error),
+          restartable: error.forkRestart !== "futile",
           now: this.#now(),
           onThreadTasksPromoted: (taskIds: readonly string[]) => {
             promotedTaskIds = taskIds;
@@ -1614,6 +1730,7 @@ export class ThreadForkService {
           status: "aborted",
           childThreadId: aborted.reservedChildThreadId,
           diagnostic: aborted.diagnostic,
+          restartable: aborted.restartable,
         };
       }
       const forkUnknown =

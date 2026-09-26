@@ -726,6 +726,371 @@ plugins = false
     }
   }, 30_000);
 
+  it("returns a steer Codex never drained on Stop as not sent and keeps a drained steer with its turn", async () => {
+    const temporaryRoot = await mkdtemp(
+      path.join(os.homedir(), ".sedes-codex-steer-stop-live-"),
+    );
+    const codexHome = path.join(temporaryRoot, "codex-home");
+    const workingDirectory = path.join(temporaryRoot, "workspace");
+    const secureCodexBinary = path.join(temporaryRoot, "codex");
+    const provider = await startLocalProvider();
+    let supervisor: CodexDaemonSupervisor | undefined;
+    try {
+      await Promise.all([
+        mkdir(codexHome, { recursive: true }),
+        mkdir(workingDirectory, { recursive: true }),
+        link(codexBinary, secureCodexBinary),
+      ]);
+      await writeFile(
+        path.join(codexHome, "config.toml"),
+        `
+model = "sedes-live-fixture"
+model_provider = "sedes_live_fixture"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+[model_providers.sedes_live_fixture]
+name = "Sedes live steer fixture"
+base_url = "${provider.baseUrl}"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+requires_openai_auth = false
+
+[features]
+apps = false
+plugins = false
+`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+      const scope = Object.freeze({
+        tenantId: "tenant-steer-live",
+        principalId: "principal-steer-live",
+      });
+      const instance: AgentBackendInstance = Object.freeze({
+        id: "codex-steer-live",
+        tenantId: scope.tenantId,
+        kind: "codex_app_server",
+        label: "Codex steer live",
+        enabled: true,
+        configurationRevision: 1,
+        protocolRelease: CODEX_APP_SERVER_RELEASE,
+      });
+      const connection: AgentConnectionProfile = Object.freeze({
+        id: "codex-steer-live-profile",
+        tenantId: scope.tenantId,
+        ownerPrincipalId: scope.principalId,
+        templateId: "codex-steer-live-template",
+        kind: "codex_app_server",
+        backendInstanceId: instance.id,
+        executionEnvironmentId: "codex-steer-live-environment",
+        label: "Codex steer live profile",
+        enabled: true,
+        configurationRevision: 1,
+      });
+      const environmentChannel = new LocalEnvironmentChannelProvider({
+        scope,
+        executionEnvironmentId: connection.executionEnvironmentId,
+      });
+      const resolved = await resolveCodexRuntimeConfiguration({
+        scope,
+        instance,
+        connections: [connection],
+        connection: {
+          ownership: "owned",
+          channel: {
+            type: "process_stdio",
+            executablePath: secureCodexBinary,
+            workingDirectory,
+            codexHome,
+          },
+        },
+        environmentChannel,
+        environment: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      });
+      if (
+        resolved.connection.ownership !== "owned" ||
+        resolved.codexHome === undefined ||
+        resolved.nativeStoreHome === undefined ||
+        resolved.childEnvironment === undefined
+      ) {
+        throw new Error("live_test_expected_owned_connection");
+      }
+      const runtimeScope: ProviderTransportScope = Object.freeze({
+        ...resolved.scope,
+        backendInstanceId: resolved.instance.id,
+        executionEnvironmentId: resolved.executionEnvironmentId,
+      });
+      supervisor = new CodexDaemonSupervisor({
+        scope: runtimeScope,
+        expectedCodexHome: resolved.codexHome,
+        transportFactory: new OwnedStdioTransportFactory({
+          scope: runtimeScope,
+          channels: environmentChannel,
+          process: resolved.connection.channel.process,
+          environment: resolved.childEnvironment,
+          sqliteHome: resolved.nativeStoreHome,
+          limits: {
+            gracefulCloseMilliseconds: 500,
+            terminateMilliseconds: 750,
+            killMilliseconds: 1_000,
+          },
+          sensitiveValues: [resolved.codexHome, provider.baseUrl],
+        }),
+        restartDelaysMilliseconds: [25],
+        maximumRestartAttempts: 1,
+        nativeStoreOwnership: new CodexNativeStoreOwnershipGate(),
+      });
+      await supervisor.start();
+      const started = await supervisor.client.request(
+        codexThreadStartMethod,
+        {
+          cwd: workingDirectory,
+          approvalPolicy: "never",
+          sandbox: "read-only",
+          ephemeral: false,
+          threadSource: "sedes_steer_stop_live_fixture",
+        },
+        requestOptions,
+      );
+      const materialized = nextNotification(
+        supervisor.client,
+        "turn/completed",
+        (params) => isRecord(params) && params.threadId === started.thread.id,
+      );
+      await supervisor.client.request(
+        codexTurnStartMethod,
+        {
+          threadId: started.thread.id,
+          clientUserMessageId: "sedes-steer-stop-live-first",
+          input: [
+            {
+              type: "text",
+              text: "Materialize the disposable steer fixture.",
+              text_elements: [],
+            },
+          ],
+        },
+        requestOptions,
+      );
+      await materialized;
+      await supervisor.client.request(
+        codexThreadUnsubscribeMethod,
+        { threadId: started.thread.id },
+        requestOptions,
+      );
+
+      const workspace = Object.freeze({
+        authorityRevision: 1,
+        summary: Object.freeze({
+          id: "12000000-0000-4000-8000-000000000031",
+          environmentId: connection.executionEnvironmentId,
+          displayName: "Codex steer live workspace",
+          displayPath: workingDirectory,
+          availability: "available" as const,
+          trustState: "trusted" as const,
+          revision: 1,
+        }),
+        canonicalPath: workingDirectory,
+      });
+      let selectedSettings: CodexExecutionSettingsTuple = {
+        model: "unselected",
+        reasoningEffort: "low",
+        serviceTier: "standard",
+        ...readOnlyPolicy,
+      };
+      const driver = new CodexConversationBackendDriver({
+        viewedImageCapture: { capture: async () => undefined },
+        usageSink: NO_USAGE_SINK,
+        nativeNamespace: "test-codex-steer-store",
+        instance,
+        connection,
+        client: supervisor.client,
+        serverRequests: supervisor.serverRequests,
+        ownership: new CodexConversationOwnershipRegistry(),
+        toolProvenanceKey: new Uint8Array(32).fill(0x53),
+        modelPolicy: catalogModelPolicy,
+        executionSettings: liveExecutionSettings(() => selectedSettings),
+        outputArtifacts: createInMemoryOutputArtifactPublisher(),
+        fastModeSessions: new CodexFastModeSessionRegistry(),
+        agentToolCliEnvironment:
+          unavailableCodexAgentToolCliEnvironmentProvider,
+      });
+      selectedSettings = selectedCatalogSettings(
+        (await driver.catalog({ scope, workspace })).models,
+      );
+      const binding: ConversationBinding = Object.freeze({
+        tenantId: scope.tenantId,
+        ownerPrincipalId: scope.principalId,
+        applicationThreadId: "13000000-0000-4000-8000-000000000031",
+        backendInstanceId: instance.id,
+        connectionProfileId: connection.id,
+        executionEnvironmentId: connection.executionEnvironmentId,
+        backendConversationId: started.thread.id,
+        createdAt: new Date().toISOString(),
+      });
+      const opaqueBindingDetail = serializeCodexBindingDetail({
+        threadId: started.thread.id,
+        sessionId: started.thread.sessionId,
+        nativeAncestry: null,
+        correlationAncestorThreadIds: [],
+      });
+      const boundInput = { scope, binding, workspace, opaqueBindingDetail };
+      const handle = await driver.attach(boundInput);
+      const events: SequencedBackendEvent[] = [];
+      let unsubscribe = (
+        await handle.establishProjection({ signal: new AbortController().signal })
+      ).subscribeFromNext((event) => events.push(event));
+      const reestablish = async () => {
+        unsubscribe();
+        const projection = await handle.establishProjection({
+          signal: new AbortController().signal,
+        });
+        unsubscribe = projection.subscribeFromNext((event) => events.push(event));
+        return projection.snapshot;
+      };
+      const holdTurn = async (text: string): Promise<string> => {
+        provider.holdNextResponse();
+        const eventStart = events.length;
+        const submitted = await handle.submit({
+          applicationOperationId: `steer-live-submit-${randomUUID()}`,
+          source: { kind: "user" },
+          mutationId: randomUUID(),
+          reconciliationToken: `steer-live-submit-token-${randomUUID()}`,
+          contextExcerpts: [],
+          taskContexts: [],
+          attachments: [],
+          text,
+        });
+        const turnId = submitted.backendTurnId!;
+        await waitUntil(
+          () =>
+            events
+              .slice(eventStart)
+              .some(
+                ({ event }) =>
+                  event.type === "item_updated" &&
+                  event.item.backendTurnId === turnId &&
+                  event.item.semanticKind === "assistant_message" &&
+                  event.item.status === "streaming",
+              ),
+          10_000,
+        );
+        return turnId;
+      };
+      const steerInput = (label: string, turnId: string, text: string) => ({
+        applicationOperationId: `steer-live-${label}`,
+        mutationId: `steer-live-${label}`,
+        reconciliationToken: `steer-live-${label}-token`,
+        target: { kind: "turn" as const, turnId },
+        contextExcerpts: [],
+        taskContexts: [],
+        attachments: [],
+        text,
+      });
+      const reconcileSteer = (input: ReturnType<typeof steerInput>) =>
+        driver.reconcileSubmission({
+          ...boundInput,
+          applicationOperationId: input.applicationOperationId,
+          reconciliationToken: input.reconciliationToken,
+          steerTarget: input.target,
+        });
+      // Stop, then read the settled turn from a fresh projection, as the
+      // actor does after Codex's ambiguous interrupted summary.
+      const stop = async (turnId: string) => {
+        const interrupted = nextNotification(
+          supervisor!.client,
+          "turn/completed",
+          (params) =>
+            isRecord(params) &&
+            params.threadId === started.thread.id &&
+            isRecord(params.turn) &&
+            params.turn.status === "interrupted",
+        );
+        await handle.interrupt({
+          applicationOperationId: `steer-live-stop-${randomUUID()}`,
+          expectedBackendTurnId: turnId,
+        });
+        await interrupted;
+        const snapshot = await reestablish();
+        expect(snapshot.turnsById[turnId]?.status).toBe("interrupted");
+        return snapshot;
+      };
+
+      // 1. Codex admits the steer to the held turn's pending input but has
+      // not drained it when Stop lands: the interrupt clears it.
+      const unusedText = `UNUSED_STEER_${randomUUID()}`;
+      const unusedTurnId = await holdTurn("Hold this turn for an unused steer.");
+      const unused = steerInput("unused", unusedTurnId, unusedText);
+      await expect(handle.steer(unused)).resolves.toMatchObject({
+        status: "pending_materialization",
+        backendTurnId: unusedTurnId,
+      });
+      await expect(reconcileSteer(unused)).resolves.toMatchObject({
+        status: "unresolved",
+      });
+      const afterUnusedStop = await stop(unusedTurnId);
+      await expect(reconcileSteer(unused)).resolves.toEqual({
+        status: "not_accepted",
+        retryable: false,
+        diagnostic: {
+          text: "Codex's turn ended before Codex used this steering message, so it was not sent. Nothing was resent. Restore it to send it again, or dismiss it.",
+        },
+      });
+      expect(
+        provider.requestBodies().some((body) => body.includes(unusedText)),
+      ).toBe(false);
+      expect(
+        Object.values(afterUnusedStop.itemsById).some(
+          (item) =>
+            item.semanticKind === "user_message" &&
+            JSON.stringify(item).includes(unusedText),
+        ),
+      ).toBe(false);
+
+      // 2. Codex drains the steer before Stop: it is recorded in the turn,
+      // sent with the next model request, and stays with the stopped turn.
+      const drainedText = `DRAINED_STEER_${randomUUID()}`;
+      const drainedTurnId = await holdTurn("Hold this turn for a drained steer.");
+      const drained = steerInput("drained", drainedTurnId, drainedText);
+      await expect(handle.steer(drained)).resolves.toMatchObject({
+        status: "pending_materialization",
+      });
+      const requestsBeforeDrain = provider.requestCount();
+      provider.releaseHeldResponse();
+      provider.holdNextResponse();
+      await waitUntil(
+        () => provider.requestCount() > requestsBeforeDrain,
+        10_000,
+      );
+      expect(provider.requestBodies().at(-1)).toContain(drainedText);
+      // The exact userMessage item, not the provider request, is the evidence.
+      await waitUntil(
+        async () => (await handle.steer(drained)).status === "accepted",
+        10_000,
+      );
+      await expect(handle.steer(drained)).resolves.toMatchObject({
+        status: "accepted",
+        backendTurnId: drainedTurnId,
+      });
+      // The steer stays with the stopped turn; paginated reconciliation
+      // proves acceptance without projecting the turn.
+      const afterDrainedStop = await stop(drainedTurnId);
+      expect(
+        afterDrainedStop.turnsById[drainedTurnId]?.completionCorrelations,
+      ).toContain(drained.applicationOperationId);
+      await expect(reconcileSteer(drained)).resolves.toMatchObject({
+        status: "accepted",
+      });
+      unsubscribe();
+      await handle.close();
+    } finally {
+      await supervisor?.close().catch(() => undefined);
+      await provider.close();
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("creates a workspace-profile provider thread and confirms its exact first-turn policy", async () => {
     const temporaryRoot = await mkdtemp(
       path.join(os.homedir(), ".sedes-codex-c3-create-live-"),
@@ -1781,6 +2146,234 @@ plugins = false
     150_000,
   );
 
+  it.skipIf(!configuredSharedUdsLiveEndpoint)(
+    "returns a real Luna steer Codex never drained on Stop as not sent",
+    async () => {
+      const configured = configuredSharedUdsLiveEndpoint!;
+      const workingDirectory = await mkdtemp(
+        path.join(os.tmpdir(), "sedes-codex-steer-stop-uds-live-"),
+      );
+      const scope = Object.freeze({
+        tenantId: "tenant-steer-stop-uds-live",
+        principalId: "principal-steer-stop-uds-live",
+      });
+      const instance: AgentBackendInstance = Object.freeze({
+        id: "codex-steer-stop-uds-live",
+        tenantId: scope.tenantId,
+        kind: "codex_app_server",
+        label: "Codex steer-stop UDS live",
+        enabled: true,
+        configurationRevision: 1,
+        protocolRelease: CODEX_APP_SERVER_RELEASE,
+      });
+      const connection: AgentConnectionProfile = Object.freeze({
+        id: "codex-steer-stop-uds-live-profile",
+        tenantId: scope.tenantId,
+        ownerPrincipalId: scope.principalId,
+        templateId: "codex-steer-stop-uds-live-template",
+        kind: "codex_app_server",
+        backendInstanceId: instance.id,
+        executionEnvironmentId: "codex-steer-stop-uds-live-environment",
+        label: "Codex steer-stop UDS live profile",
+        enabled: true,
+        configurationRevision: 1,
+      });
+      const runtimeScope: ProviderTransportScope = Object.freeze({
+        ...scope,
+        backendInstanceId: instance.id,
+        executionEnvironmentId: connection.executionEnvironmentId,
+      });
+      const environmentChannel = new LocalEnvironmentChannelProvider({
+        scope,
+        executionEnvironmentId: runtimeScope.executionEnvironmentId,
+      });
+      let supervisor: CodexDaemonSupervisor | undefined;
+      let threadId: string | undefined;
+      try {
+        supervisor = externalSupervisor({
+          scope: runtimeScope,
+          transportFactory: new UnixWebSocketTransportFactory({
+            scope: runtimeScope,
+            channels: environmentChannel,
+            socketPath: configured.socketPath,
+          }),
+        });
+        await supervisor.start();
+        const started = await supervisor.client.request(
+          codexThreadStartMethod,
+          {
+            model: configured.model,
+            cwd: workingDirectory,
+            approvalPolicy: "never",
+            sandbox: "read-only",
+            ephemeral: false,
+            threadSource: "sedes_steer_stop_uds_live",
+          },
+          requestOptions,
+        );
+        threadId = started.thread.id;
+        const workspace = Object.freeze({
+          authorityRevision: 1,
+          summary: Object.freeze({
+            id: "12000000-0000-4000-8000-000000000041",
+            environmentId: connection.executionEnvironmentId,
+            displayName: "Codex steer-stop UDS workspace",
+            displayPath: workingDirectory,
+            availability: "available" as const,
+            trustState: "trusted" as const,
+            revision: 1,
+          }),
+          canonicalPath: workingDirectory,
+        });
+        const driver = new CodexConversationBackendDriver({
+          viewedImageCapture: { capture: async () => undefined },
+          usageSink: NO_USAGE_SINK,
+          nativeNamespace: "test-codex-steer-stop-uds",
+          instance,
+          connection,
+          client: supervisor.client,
+          serverRequests: supervisor.serverRequests,
+          ownership: new CodexConversationOwnershipRegistry(),
+          toolProvenanceKey: new Uint8Array(32).fill(0x54),
+          modelPolicy: catalogModelPolicy,
+          executionSettings: liveExecutionSettings(() => ({
+            model: configured.model,
+            reasoningEffort: "low",
+            serviceTier: "standard",
+            ...readOnlyPolicy,
+          })),
+          outputArtifacts: createInMemoryOutputArtifactPublisher(),
+          fastModeSessions: new CodexFastModeSessionRegistry(),
+          agentToolCliEnvironment:
+            unavailableCodexAgentToolCliEnvironmentProvider,
+        });
+        const binding: ConversationBinding = Object.freeze({
+          tenantId: scope.tenantId,
+          ownerPrincipalId: scope.principalId,
+          applicationThreadId: "13000000-0000-4000-8000-000000000041",
+          backendInstanceId: instance.id,
+          connectionProfileId: connection.id,
+          executionEnvironmentId: connection.executionEnvironmentId,
+          backendConversationId: started.thread.id,
+          createdAt: new Date().toISOString(),
+        });
+        const boundInput = {
+          scope,
+          binding,
+          workspace,
+          opaqueBindingDetail: serializeCodexBindingDetail({
+            threadId: started.thread.id,
+            sessionId: started.thread.sessionId,
+            nativeAncestry: null,
+            correlationAncestorThreadIds: [],
+          }),
+        };
+        const handle = await driver.attach(boundInput);
+        const events: SequencedBackendEvent[] = [];
+        let unsubscribe = (
+          await handle.establishProjection({
+            signal: new AbortController().signal,
+          })
+        ).subscribeFromNext((event) => events.push(event));
+        try {
+          const submitted = await handle.submit({
+            applicationOperationId: `steer-stop-uds-submit-${randomFixtureId()}`,
+            source: { kind: "user" },
+            mutationId: `steer-stop-uds-submit-${randomFixtureId()}`,
+            reconciliationToken: `steer-stop-uds-submit-token-${randomFixtureId()}`,
+            contextExcerpts: [],
+            taskContexts: [],
+            attachments: [],
+            text: "Count from 1 to 300, one number per line, and nothing else. Do not use tools.",
+          });
+          const turnId = submitted.backendTurnId!;
+          await waitUntil(
+            () =>
+              events.some(
+                ({ event }) =>
+                  event.type === "item_updated" &&
+                  event.item.backendTurnId === turnId &&
+                  event.item.semanticKind === "assistant_message" &&
+                  event.item.status === "streaming",
+              ),
+            120_000,
+          );
+          // Codex drains steering only after this model response finishes.
+          const steerText = `Reply UNUSED_STEER_${randomFixtureId()} instead.`;
+          const steer = {
+            applicationOperationId: `steer-stop-uds-${randomFixtureId()}`,
+            mutationId: `steer-stop-uds-${randomFixtureId()}`,
+            reconciliationToken: `steer-stop-uds-token-${randomFixtureId()}`,
+            target: { kind: "turn" as const, turnId },
+            contextExcerpts: [],
+            taskContexts: [],
+            attachments: [],
+            text: steerText,
+          };
+          await expect(handle.steer(steer)).resolves.toMatchObject({
+            status: "pending_materialization",
+            backendTurnId: turnId,
+          });
+          const interrupted = nextNotification(
+            supervisor.client,
+            "turn/completed",
+            (params) =>
+              isRecord(params) &&
+              params.threadId === started.thread.id &&
+              isRecord(params.turn) &&
+              params.turn.status === "interrupted",
+            120_000,
+          );
+          await handle.interrupt({
+            applicationOperationId: `steer-stop-uds-stop-${randomFixtureId()}`,
+            expectedBackendTurnId: turnId,
+          });
+          await interrupted;
+          unsubscribe();
+          const projection = await handle.establishProjection({
+            signal: new AbortController().signal,
+          });
+          unsubscribe = projection.subscribeFromNext((event) => events.push(event));
+          expect(projection.snapshot.turnsById[turnId]?.status).toBe(
+            "interrupted",
+          );
+          expect(
+            Object.values(projection.snapshot.itemsById).some(
+              (item) =>
+                item.semanticKind === "user_message" &&
+                JSON.stringify(item).includes(steerText),
+            ),
+          ).toBe(false);
+          await expect(
+            driver.reconcileSubmission({
+              ...boundInput,
+              applicationOperationId: steer.applicationOperationId,
+              reconciliationToken: steer.reconciliationToken,
+              steerTarget: steer.target,
+            }),
+          ).resolves.toMatchObject({ status: "not_accepted", retryable: false });
+        } finally {
+          unsubscribe();
+          await handle.close();
+        }
+      } finally {
+        if (threadId) {
+          await supervisor?.client
+            .request(
+              codexThreadUnsubscribeMethod,
+              { threadId },
+              requestOptions,
+            )
+            .catch(() => undefined);
+        }
+        await supervisor?.close().catch(() => undefined);
+        environmentChannel.close();
+        await rm(workingDirectory, { recursive: true, force: true });
+      }
+    },
+    300_000,
+  );
+
   it.skipIf(!configuredSharedUdsLiveEndpoint || !generatedImageLiveEnabled)(
     "publishes one real generated image through the normalized Codex artifact path",
     async () => {
@@ -2508,23 +3101,36 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 async function startLocalProvider(): Promise<{
   readonly baseUrl: string;
   requestCount(): number;
+  /** Raw model request bodies, in arrival order. */
+  requestBodies(): readonly string[];
   holdNextResponse(): void;
+  /** Finish the currently held response as an ordinary completed answer. */
+  releaseHeldResponse(): void;
   failNextResponse(): void;
   heldResponseCloseCount(): number;
   close(): Promise<void>;
 }> {
   let requests = 0;
+  const bodies: string[] = [];
   let holdNextResponse = false;
   let failNextResponse = false;
   let heldResponseCloses = 0;
+  let heldResponse:
+    | {
+        readonly response: import("node:http").ServerResponse;
+        readonly remaining: readonly Readonly<Record<string, unknown>>[];
+      }
+    | undefined;
   const server = createServer((request, response) => {
     if (request.method !== "POST" || !request.url?.endsWith("/responses")) {
       response.writeHead(404).end();
       return;
     }
-    request.resume();
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
     request.once("end", () => {
       requests += 1;
+      bodies.push(Buffer.concat(chunks).toString("utf8"));
       if (failNextResponse) {
         failNextResponse = false;
         response.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({
@@ -2639,7 +3245,9 @@ async function startLocalProvider(): Promise<{
       if (holdResponse) {
         response.once("close", () => {
           heldResponseCloses += 1;
+          if (heldResponse?.response === response) heldResponse = undefined;
         });
+        heldResponse = { response, remaining: events.slice(4) };
         void writeProviderEvents(response, events.slice(0, 4), false);
         return;
       }
@@ -2661,11 +3269,18 @@ async function startLocalProvider(): Promise<{
   return Object.freeze({
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     requestCount: () => requests,
+    requestBodies: () => [...bodies],
     holdNextResponse: () => {
       if (holdNextResponse) {
         throw new Error("live_test_provider_response_already_held");
       }
       holdNextResponse = true;
+    },
+    releaseHeldResponse: () => {
+      const held = heldResponse;
+      if (!held) throw new Error("live_test_provider_response_not_held");
+      heldResponse = undefined;
+      void writeProviderEvents(held.response, held.remaining, true);
     },
     failNextResponse: () => { failNextResponse = true; },
     heldResponseCloseCount: () => heldResponseCloses,

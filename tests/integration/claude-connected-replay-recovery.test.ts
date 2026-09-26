@@ -174,6 +174,39 @@ describe("connected Claude replay reclamation recovery", () => {
     }
   }, 30_000);
 
+  it.each([false, true])("reports native transcript presence through the remote carrier (stopped=%s)", async stopped => {
+    const f = await fixture();
+    const carrier = await f.attach();
+    const client = f.client();
+    const sessionId = randomUUID();
+    const runtimeId = await carrier.connection.ensure(configuration);
+    carrier.connection.onEvent(runtimeId, () => {});
+    await carrier.connection.execute({ runtimeId, controllerEpoch: carrier.lease.controllerEpoch,
+      action: "open", replay: "full", request: { queryId: sessionId, sessionId, cwd: "/workspace",
+        launch: "new", environment: {}, enableCanUseTool: false } });
+    // Only Sedes' startup message was persisted, so the SDK reports no metadata.
+    f.runtime.getSessionInfo.mockResolvedValue(undefined);
+    f.runtime.hasSessionTranscript.mockResolvedValue(true);
+    if (stopped) {
+      const native = f.sessions[0]!;
+      f.runtime.close.mockImplementationOnce(async () => {
+        await native.emit(delta(sessionId, "late output"));
+        await native.close();
+      });
+      await expect(f.hosts.get(runtimeId).stop()).rejects.toThrow("sidecar_resource_handoff_pending");
+      f.runtime.hasSessionTranscript.mockRejectedValue(new Error("worker has stopped"));
+    }
+    await expect(client.hasSessionTranscript(sessionId, { dir: "/workspace" }, {})).resolves.toBe(true);
+    expect(f.runtime.hasSessionTranscript).toHaveBeenCalledWith(sessionId, { dir: "/workspace" }, {});
+    if (stopped) {
+      await expect(client.hasSessionTranscript(sessionId, { dir: "/elsewhere" }, {}))
+        .rejects.toThrow();
+    } else {
+      f.runtime.hasSessionTranscript.mockResolvedValue(false);
+      await expect(client.hasSessionTranscript(randomUUID(), { dir: "/workspace" }, {})).resolves.toBe(false);
+    }
+  }, 30_000);
+
   it.each([false, true])("hydrates reclaimed history and an unfinished response after main replacement (usage=%s)", async enabled => {
     const f = await fixture();
     const firstCarrier = await f.attach();
@@ -265,5 +298,183 @@ describe("connected Claude replay reclamation recovery", () => {
     expect(f.runtime.createSession).toHaveBeenCalledTimes(1);
     expect(native.send).toHaveBeenCalledTimes(1);
     expect(native.closed).toBe(false);
+  }, 30_000);
+});
+
+function lifecycle(sessionId: string, operationId: string, state: "queued" | "started" | "cancelled"): SDKMessage {
+  return { type: "command_lifecycle", command_uuid: operationId, state, uuid: randomUUID(), session_id: sessionId } as unknown as SDKMessage;
+}
+
+describe("Stop after main replacement", () => {
+  it("withdraws a steer only the replaced main sent, before interrupting, so it never runs after the Stop", async () => {
+    const f = await fixture();
+    const firstCarrier = await f.attach();
+    const firstClient = f.client();
+    const sessionId = randomUUID();
+    // The same query authority a Claude handle opens with.
+    const first = firstClient.createSession(sessionOptions(sessionId, {
+      canUseTool: async () => ({ behavior: "deny", message: "No tool request expected in this fixture." }),
+    }));
+    await first.start();
+    const native = f.sessions[0]!;
+    const turn = { operationId: randomUUID(), content: "Run the long task." };
+    const steer = { operationId: randomUUID(), content: "Also check the lexer.", priority: "next" as const };
+    await first.send(turn);
+    await native.emit({ type: "system", subtype: "session_state_changed", state: "running", uuid: randomUUID(), session_id: sessionId } as SDKMessage);
+    await native.emit(lifecycle(sessionId, turn.operationId, "started"));
+    await first.send(steer);
+    await native.emit(lifecycle(sessionId, steer.operationId, "queued"));
+    f.runtime.getSessionMessages.mockResolvedValue([{ ...acceptedInput(sessionId, turn), parent_agent_id: null } as SessionMessage]);
+    // Main restarts while Claude still holds the steer.
+    await firstClient.close();
+    await firstCarrier.close();
+
+    await f.attach();
+    const database = new Database(":memory:");
+    initializeEmptyBackendNormalizedDatabase(database);
+    // Only provider settings are under test; application inventory is not used.
+    database.pragma("foreign_keys = OFF");
+    cleanups.push(async () => { database.close(); });
+    const settings = new ClaudeThreadRepository(database);
+    const binding = { ...scope, ownerPrincipalId: scope.principalId, applicationThreadId: "thread", connectionProfileId: "profile",
+      backendConversationId: sessionId, createdAt: "2026-09-26T00:00:00.000Z" };
+    settings.initialize(scope, binding.applicationThreadId, binding,
+      { model: "claude-sonnet-4-6", effort: "low", permissionMode: "default" }, 1);
+    const client = f.client();
+    const handle = new ClaudeConversationHandle({
+      usage: NO_USAGE_SINK, nativeNamespace: "test", binding, canonicalWorkspacePath: "/workspace", workspaceId: "workspace",
+      opaqueBindingDetail: '{"version":1}', runtimeClient: client, executablePath: configuration.executablePath, initializationTimeoutMs: 5000,
+      permissionPolicy: { allowedModes: ["default"] }, modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"),
+      queryGeneration: 2, attachmentProvenanceKey: new Uint8Array(32).fill(1), settings,
+      forkBoundaryAuthentication: { installationKey: new Uint8Array(32).fill(2), ...scope }, childEnvironment: {},
+      loadInitialMessages: () => client.getSessionMessages(sessionId, { dir: "/workspace" }, {}), resumeSession: true, releaseSession: () => {},
+    });
+    cleanups.push(async () => { await handle.close(); });
+    const restored = await handle.establishProjection({ signal: new AbortController().signal });
+    expect(restored.snapshot.runState).toBe("running");
+    native.cancelQueuedInput.mockImplementation(async operationId => {
+      await native.emit(lifecycle(sessionId, operationId, "cancelled"));
+      return true;
+    });
+    await handle.interrupt({ applicationOperationId: randomUUID(), expectedBackendTurnId: restored.snapshot.activeBackendTurnId! });
+    // Claude's owner withdrew it exactly once; this handle never knew it.
+    expect(native.cancelQueuedInput.mock.calls).toEqual([[steer.operationId]]);
+    expect(native.interrupt).toHaveBeenCalledOnce();
+    expect(native.cancelQueuedInput.mock.invocationCallOrder[0]).toBeLessThan(native.interrupt.mock.invocationCallOrder[0]!);
+    expect(handle.withdrewSubmission(steer.operationId)).toBe(false);
+    await expect(client.submissionDisposition({ sessionId, cwd: "/workspace", operationId: steer.operationId })).resolves.toBe("cancelled");
+    expect(f.runtime.createSession).toHaveBeenCalledOnce();
+  }, 30_000);
+});
+
+describe("steer placement over the persistent owner", () => {
+  function threadSettings(sessionId: string) {
+    const database = new Database(":memory:");
+    initializeEmptyBackendNormalizedDatabase(database);
+    // Only provider settings are under test; application inventory is not used.
+    database.pragma("foreign_keys = OFF");
+    cleanups.push(async () => { database.close(); });
+    const settings = new ClaudeThreadRepository(database);
+    const binding = { ...scope, ownerPrincipalId: scope.principalId, applicationThreadId: "thread", connectionProfileId: "profile",
+      backendConversationId: sessionId, createdAt: "2026-09-26T00:00:00.000Z" };
+    settings.initialize(scope, binding.applicationThreadId, binding,
+      { model: "claude-sonnet-4-6", effort: "low", permissionMode: "default" }, 1);
+    // This query generation already applied and confirmed every setting.
+    settings.confirmEffectiveModel(scope, binding.applicationThreadId, { expectedRevision: 0, model: "claude-sonnet-4-6", queryGeneration: 2, now: 2 });
+    settings.confirmEffectiveEffort(scope, binding.applicationThreadId, { expectedRevision: 1, effort: "low", queryGeneration: 2, now: 3 });
+    settings.confirmEffectivePermissionMode(scope, binding.applicationThreadId, { expectedRevision: 2, permissionMode: "default",
+      classification: "recognized", queryGeneration: 2, now: 4 });
+    return { settings, binding };
+  }
+  function claudeHandle(client: ClaudePersistentRuntimeClient, thread: ReturnType<typeof threadSettings>, resumeSession: boolean) {
+    const handle = new ClaudeConversationHandle({
+      usage: NO_USAGE_SINK, nativeNamespace: "test", binding: thread.binding, canonicalWorkspacePath: "/workspace", workspaceId: "workspace",
+      opaqueBindingDetail: '{"version":1}', runtimeClient: client, executablePath: configuration.executablePath, initializationTimeoutMs: 5000,
+      permissionPolicy: { allowedModes: ["default"] }, modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"),
+      queryGeneration: 2, attachmentProvenanceKey: new Uint8Array(32).fill(1), settings: thread.settings,
+      forkBoundaryAuthentication: { installationKey: new Uint8Array(32).fill(2), ...scope }, childEnvironment: {},
+      loadInitialMessages: () => client.getSessionMessages(thread.binding.backendConversationId, { dir: "/workspace" }, {}),
+      resumeSession, releaseSession: () => {},
+    });
+    cleanups.push(async () => { await handle.close(); });
+    return handle;
+  }
+  const snapshot = async (handle: ClaudeConversationHandle) => (await handle.establishProjection({ signal: new AbortController().signal })).snapshot;
+  const items = (value: Awaited<ReturnType<typeof snapshot>>) => value.orderedBackendTurnIds.map(turnId =>
+    value.turnsById[turnId]!.orderedBackendItemIds.map(id => {
+      const item = value.itemsById[id]!;
+      return item.semanticKind === "user_message" ? `user:${item.deliveryOperationId}` : item.semanticKind;
+    }));
+
+  it("shows a steer in place when Claude starts it, and a replacement main keeps that placement", async () => {
+    const f = await fixture();
+    const firstCarrier = await f.attach();
+    const sessionId = randomUUID();
+    const thread = threadSettings(sessionId);
+    const first = randomUUID(), steer = randomUUID();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    cleanups.push(async () => { warn.mockRestore(); });
+    f.runtime.getSessionMessages.mockResolvedValue([]);
+    const firstClient = f.client();
+    const handle = claudeHandle(firstClient, thread, false);
+    await snapshot(handle);
+    const native = f.sessions[0]!;
+    const submitted = handle.submit({ applicationOperationId: first, mutationId: "first", reconciliationToken: "first-receipt",
+      source: { kind: "user" }, text: "Run the long task.", contextExcerpts: [], taskContexts: [], attachments: [] });
+    await vi.waitFor(() => expect(native.send).toHaveBeenCalledTimes(1));
+    await native.emit({ type: "system", subtype: "session_state_changed", state: "running", uuid: randomUUID(), session_id: sessionId } as SDKMessage);
+    await native.emit(lifecycle(sessionId, first, "started"));
+    await submitted;
+    const call = { type: "assistant", uuid: randomUUID(), session_id: sessionId, parent_tool_use_id: null,
+      message: { id: "msg-tool", type: "message", role: "assistant", model: "claude-sonnet-4-6",
+        content: [{ type: "tool_use", id: "toolu-fold", name: "Bash", input: { command: "true" } }], stop_reason: "tool_use", stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 } } } as unknown as SDKMessage;
+    const toolResult = { type: "user", uuid: randomUUID(), session_id: sessionId, parent_tool_use_id: null,
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu-fold", content: "done" }] } } as unknown as SDKMessage;
+    const answer = { type: "assistant", uuid: randomUUID(), session_id: sessionId, parent_tool_use_id: null,
+      message: { id: "msg-final", type: "message", role: "assistant", model: "claude-sonnet-4-6",
+        content: [{ type: "text", text: "Done with the correction." }], stop_reason: "end_turn", stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 } } } as unknown as SDKMessage;
+    await native.emit(call);
+    await expect(handle.steer({ applicationOperationId: steer, mutationId: "steer", reconciliationToken: "steer-receipt",
+      target: { kind: "conversation" }, text: "Use the revised approach", contextExcerpts: [], taskContexts: [], attachments: [] }))
+      .resolves.toMatchObject({ status: "pending_materialization" });
+    await vi.waitFor(() => expect(native.send).toHaveBeenCalledTimes(2));
+    await native.emit(lifecycle(sessionId, steer, "queued"));
+    await native.emit(toolResult);
+    await native.emit(lifecycle(sessionId, steer, "started"));
+    // Shown where Claude took it, while the turn still runs.
+    await vi.waitFor(async () => expect(items(await snapshot(handle))).toEqual([[`user:${first}`, "command", `user:${steer}`]]));
+    const turnId = (await snapshot(handle)).orderedBackendTurnIds[0]!;
+    expect(await snapshot(handle)).toMatchObject({ runState: "running", activeBackendTurnId: turnId });
+    expect(handle.hasUnconfirmedSubmission(steer)).toBe(false);
+    expect(thread.settings.listSteerOperations(scope, thread.binding.applicationThreadId).get(steer)).toBe(first);
+
+    // Main is replaced before the turn ends; Claude answers meanwhile.
+    await handle.close();
+    await firstClient.close();
+    await firstCarrier.close();
+    await native.emit(answer);
+    await f.attach();
+    const history = [
+      { ...acceptedInput(sessionId, { operationId: first, content: "Run the long task." }), parent_agent_id: null },
+      { ...call, parent_agent_id: null }, { ...toolResult, parent_agent_id: null },
+      { ...acceptedInput(sessionId, { operationId: steer, content: "Use the revised approach" }), parent_agent_id: null, isQueuedCommand: true },
+      { ...answer, parent_agent_id: null },
+    ] as unknown as SessionMessage[];
+    f.runtime.getSessionMessages.mockResolvedValue(history);
+    const replacement = claudeHandle(f.client(), thread, true);
+    const restored = await snapshot(replacement);
+    expect(items(restored)).toEqual([[`user:${first}`, "command", `user:${steer}`, "assistant_message"]]);
+    expect(restored).toMatchObject({ runState: "running", activeBackendTurnId: turnId });
+    await native.emit({ type: "result", subtype: "success", uuid: randomUUID(), session_id: sessionId,
+      user_message_uuid: steer, user_message_uuids: [first, steer], num_turns: 2, terminal_reason: "completed",
+      result: "Done", is_error: false, usage: {}, modelUsage: {}, permission_denials: [] } as unknown as SDKMessage);
+    await vi.waitFor(async () => expect((await snapshot(replacement)).runState).toBe("idle"));
+    const settled = await snapshot(replacement);
+    expect(items(settled)).toEqual([[`user:${first}`, "command", `user:${steer}`, "assistant_message"]]);
+    expect(settled.turnsById[turnId]).toMatchObject({ status: "completed", completionCorrelations: [first, steer] });
+    expect(warn.mock.calls.filter(([code]) => code === "claude_steer_placement_conflict")).toEqual([]);
+    expect(native.send).toHaveBeenCalledTimes(2);
   }, 30_000);
 });

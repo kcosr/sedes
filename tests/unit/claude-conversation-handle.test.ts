@@ -1,6 +1,7 @@
 import { NO_USAGE_SINK, type UsageSink, type UsageObservation } from "../../src/server/usage/contracts.js";
 import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
 import { claudeSteerOperationsMigration } from "../../src/server/db/migrations/102-claude-steer-operations.js";
+import { claudeForkChildrenMigration } from "../../src/server/db/migrations/117-claude-fork-children.js";
 import { claudeTaskLifecycleMigration } from "../../src/server/db/migrations/100-claude-task-lifecycle.js";
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
@@ -10,16 +11,18 @@ import type {
   PermissionMode,
   Query,
   SDKControlInitializeResponse,
+  SDKControlInterruptResponse,
   SDKMessage,
   SDKUserMessage,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BackendError,
   type ConversationBinding,
 } from "../../src/server/backends/contracts.js";
-import type { BackendConversationEvent } from "../../src/shared/protocol/backend.js";
+import { projectClaudeHistory } from "../../src/server/backends/claude/claude-history-projector.js";
+import { backendConversationSnapshotSchema, backendTurnSchema, type BackendCapabilityDocument, type BackendConversationEvent } from "../../src/shared/protocol/backend.js";
 import {
   ClaudeConversationHandle,
   type ClaudeEffortEvidence,
@@ -43,6 +46,8 @@ import { compileBackendModelPolicy } from "../../src/server/backends/model-polic
 import type { BackendModelPolicy } from "../../src/server/backends/model-policy.js";
 import { renderTaskContextsForModel } from "../../src/server/conversations/delivery-input-projection.js";
 import { claudeSkillId } from "../../src/server/backends/claude/claude-skills.js";
+import { parseClaudeTranscript, resolveClaudeSessionMessages } from "../../src/server/backends/claude/claude-native-transcript.js";
+import { ClaudeTranscriptFixture } from "../helpers/claude-native-transcript-fixture.js";
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const OPERATION_ID = "22222222-2222-4222-8222-222222222222";
@@ -168,6 +173,7 @@ function repository(): ClaudeThreadRepository {
   database.exec(claudeTurnFailureDetailsMigration.sql);
   database.exec(claudeTaskLifecycleMigration.sql);
   database.exec(claudeSteerOperationsMigration.sql);
+  database.exec(claudeForkChildrenMigration.sql);
   const result = new ClaudeThreadRepository(database);
   result.initialize(
     { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId },
@@ -241,11 +247,17 @@ class MessageQueue implements AsyncIterable<SDKMessage> {
   }
 }
 
-function fixture(options: { readonly safeSkill?: boolean } = {}) {
+function fixture(options: {
+  readonly safeSkill?: boolean;
+  /** Claude's reported initial model/mode; differing values force a setter. */
+  readonly initModel?: string;
+  readonly initPermissionMode?: PermissionMode;
+} = {}) {
   const messages = new MessageQueue();
   let queryInput: ClaudeQueryInput | undefined;
   const controls = {
-    interrupt: vi.fn(async () => ({ still_queued: [] })),
+    interrupt: vi.fn(async (): Promise<SDKControlInterruptResponse> => ({ still_queued: [] })),
+    cancelAsyncMessage: vi.fn(async (_messageUuid: string) => true),
     setModel: vi.fn(async () => undefined),
     setPermissionMode: vi.fn(async () => undefined),
     applyFlagSettings: vi.fn(async () => undefined),
@@ -272,7 +284,7 @@ function fixture(options: { readonly safeSkill?: boolean } = {}) {
     },
   } satisfies SDKControlInitializeResponse;
   const sdk = {
-    readCliRelease: vi.fn(async () => "2.1.274"),
+    readCliRelease: vi.fn(async () => "2.1.283"),
     readCliAuthStatus: vi.fn(async () => ({
       loggedIn: true,
       authMethod: "claude.ai",
@@ -281,17 +293,24 @@ function fixture(options: { readonly safeSkill?: boolean } = {}) {
     })),
     createQuery(input: ClaudeQueryInput): Query {
       queryInput = input;
+      // Claude Code completes Sedes' startup message without a model turn.
+      const prompt = input.prompt as unknown as { push(value: SDKUserMessage): void };
+      const push = prompt.push.bind(prompt);
+      prompt.push = (value) => {
+        if (value.isSynthetic && value.shouldQuery === false) messages.push(nativeFrames.lifecycle(value.uuid!, "completed"));
+        push(value);
+      };
       const stream = (async function* () {
         yield {
           type: "system",
           subtype: "init",
           apiKeySource: "oauth",
-          claude_code_version: "2.1.274",
+          claude_code_version: "2.1.283",
           cwd: input.options.cwd!,
           tools: [],
           mcp_servers: [],
-          model: "claude-sonnet-5",
-          permissionMode: "default",
+          model: options.initModel ?? "claude-sonnet-5",
+          permissionMode: options.initPermissionMode ?? "default",
           slash_commands: options.safeSkill ? ["review"] : [],
           output_style: "default",
           skills: options.safeSkill ? ["review"] : [],
@@ -304,6 +323,7 @@ function fixture(options: { readonly safeSkill?: boolean } = {}) {
       return Object.assign(stream, {
         initializationResult: async () => initialization,
         interrupt: controls.interrupt,
+        cancelAsyncMessage: controls.cancelAsyncMessage,
         setModel: controls.setModel,
         setPermissionMode: controls.setPermissionMode,
         applyFlagSettings: controls.applyFlagSettings,
@@ -314,6 +334,9 @@ function fixture(options: { readonly safeSkill?: boolean } = {}) {
     getSessionInfo: vi.fn(async () => undefined),
     getSessionMessages: vi.fn<ClaudeSdkFacade["getSessionMessages"]>(
       async () => [],
+    ),
+    hasSessionTranscript: vi.fn<ClaudeSdkFacade["hasSessionTranscript"]>(
+      async () => false,
     ),
     renameSession: vi.fn(async () => undefined),
   } satisfies ClaudeSdkFacade;
@@ -362,6 +385,14 @@ function createHandle(
     readonly settings?: ClaudeThreadRepository;
     readonly initialMessages?: readonly SessionMessage[];
     readonly loadInitialMessages?: () => Promise<readonly SessionMessage[]>;
+    /**
+     * The launched query reports Claude `running` before history is
+     * installed, as it does while it handles the startup message. A trailing
+     * unfinished turn then stays running until Claude reports idle; without
+     * this, a fresh launch has nothing running and that turn is marked lost.
+     */
+    readonly claudeRunning?: boolean;
+    readonly childEnvironment?: Readonly<Record<string, string>>;
     readonly resumeSession?: boolean;
     readonly allowDangerouslySkipPermissions?: true;
     readonly onPermissionModeEvidence?: (evidence: {
@@ -403,7 +434,7 @@ function createHandle(
       workspaceId: "workspace-a",
       opaqueBindingDetail: '{"version":1}',
       runtimeClient:
-        options.runtimeClient ?? new ClaudeSdkRuntimeAdapter(input.sdk),
+        options.runtimeClient ?? (options.claudeRunning ? runningAtAttach(input) : new ClaudeSdkRuntimeAdapter(input.sdk)),
       ...(options.agentToolCliClosed
         ? { agentToolCliClosed: options.agentToolCliClosed }
         : {}),
@@ -432,7 +463,7 @@ function createHandle(
         principalId: BINDING.ownerPrincipalId,
         backendInstanceId: BINDING.backendInstanceId,
       },
-      childEnvironment: { HOME: "/home/test", PATH: "/usr/bin" },
+      childEnvironment: { HOME: "/home/test", PATH: "/usr/bin", ...options.childEnvironment },
       loadInitialMessages:
         options.loadInitialMessages ??
         (async () => options.initialMessages ?? []),
@@ -461,10 +492,74 @@ function createHandle(
   };
 }
 
+/** A local query whose Claude reports `running` before history is installed. */
+function runningAtAttach(provider: ReturnType<typeof fixture>): ClaudeRuntimeClient {
+  return new (class extends ClaudeSdkRuntimeAdapter {
+    override createSession(options: ClaudeRuntimeSessionOptions) {
+      const session = super.createSession(options);
+      const start = session.start.bind(session);
+      session.start = async () => {
+        const initialization = await start();
+        await options.onMessage(nativeFrames.state("running"));
+        return initialization;
+      };
+      return session;
+    }
+  })(provider.sdk);
+}
+
+/** Frames the real CLI emits without prompt echoes (2.1.281+). */
+const nativeFrames = {
+  lifecycle: (commandUuid: string, state: "queued" | "started" | "completed" | "cancelled" | "refused") => ({
+    type: "command_lifecycle", command_uuid: commandUuid, state,
+    uuid: crypto.randomUUID(), session_id: SESSION_ID,
+  }) as unknown as SDKMessage,
+  state: (state: "idle" | "running" | "requires_action") => ({
+    type: "system", subtype: "session_state_changed", state,
+    uuid: crypto.randomUUID(), session_id: SESSION_ID,
+  }) as SDKMessage,
+  start: (messageId: string, stamps: readonly string[] = []) => ({
+    type: "stream_event", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+    ...stamps.length ? { user_message_uuid: stamps.at(-1), user_message_uuids: stamps } : {},
+    event: { type: "message_start", message: { id: messageId, type: "message", role: "assistant",
+      model: "claude-sonnet-5", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+  }) as unknown as SDKMessage,
+  text: (messageId: string, text: string, stamps: readonly string[] = []) => ({
+    type: "assistant", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+    ...stamps.length ? { user_message_uuid: stamps.at(-1), user_message_uuids: stamps } : {},
+    message: { id: messageId, type: "message", role: "assistant", model: "claude-sonnet-5",
+      content: [{ type: "text", text }], stop_reason: "end_turn", stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 } },
+  }) as unknown as SDKMessage,
+  result: (stamps: readonly string[], extra: Record<string, unknown> = {}) => ({
+    type: "result", subtype: "success", uuid: crypto.randomUUID(), session_id: SESSION_ID,
+    duration_ms: 1, duration_api_ms: 1, is_error: false, num_turns: 1, result: "done",
+    stop_reason: "end_turn", terminal_reason: "completed", total_cost_usd: 0, usage: {}, modelUsage: {},
+    permission_denials: [],
+    ...stamps.length ? { user_message_uuid: stamps.at(-1), user_message_uuids: stamps } : {},
+    ...extra,
+  }) as unknown as SDKMessage,
+  taskNotification: (taskId: string) => ({
+    type: "system", subtype: "task_notification", task_id: taskId, status: "completed",
+    output_file: "/tmp/task-output", summary: "Background command completed",
+    uuid: crypto.randomUUID(), session_id: SESSION_ID,
+  }) as unknown as SDKMessage,
+};
+
+async function projectionSnapshot(handle: ClaudeConversationHandle) {
+  return (await handle.establishProjection({ signal: new AbortController().signal })).snapshot;
+}
+
 function retainedRuntime(
   provider: ReturnType<typeof fixture>,
   replay: SDKMessage[],
   confirmedEffort?: EffortLevel | null,
+  launch: {
+    /** False models a fresh persistent open, whose output the host holds until history is installed. */
+    readonly reattached?: boolean;
+    /** Output the owner retained after this launch's startup message, which it names. */
+    readonly afterStart?: (startupProbeUuid: string) => SDKMessage[];
+  } = {},
 ) {
   let activeOptions: ClaudeRuntimeSessionOptions | undefined;
   let delivery = Promise.resolve();
@@ -487,12 +582,12 @@ function retainedRuntime(
         get safeSkills() {
           return session.safeSkills;
         },
-        reattached: true,
+        reattached: launch.reattached ?? true,
         lifetime: "persistent_service" as const,
         ...(confirmedEffort !== undefined ? { confirmedEffort } : {}),
         async start() {
           const initialization = await session.start();
-          for (const message of replay) {
+          for (const message of [...replay, ...launch.afterStart?.(session.startupProbeUuid!) ?? []]) {
             delivery = delivery.then(async () => {
               await options.onMessage(message);
             });
@@ -501,6 +596,8 @@ function retainedRuntime(
         },
         flushMessages: () => delivery,
         send: session.send.bind(session),
+        // A service-owned owner withdraws unstarted inputs when it handles
+        // the interrupt, so the session offers the caller no withdrawal.
         interrupt: session.interrupt.bind(session),
         setModel: session.setModel.bind(session),
         setEffort: session.setEffort.bind(session),
@@ -802,11 +899,14 @@ describe("ClaudeConversationHandle", () => {
     ).rejects.toMatchObject({
       backendCode: "claude_submission_replay_mismatch",
     });
-    expect(provider.controls.setModel).toHaveBeenCalledWith("claude-sonnet-5");
+    // Initialization confirmed the model and mode, and attach applied the
+    // effort. A send with unchanged settings makes no control round trips.
+    expect(provider.controls.setModel).not.toHaveBeenCalled();
+    expect(provider.controls.applyFlagSettings).toHaveBeenCalledOnce();
     expect(provider.controls.applyFlagSettings).toHaveBeenCalledWith({
       effortLevel: "low",
     });
-    expect(provider.controls.setPermissionMode).toHaveBeenCalledWith("default");
+    expect(provider.controls.setPermissionMode).not.toHaveBeenCalled();
     expect(modelEvidence).toHaveBeenCalledTimes(1);
     expect(modelEvidence).toHaveBeenCalledWith({
       generation: 1,
@@ -1869,7 +1969,7 @@ describe("ClaudeConversationHandle", () => {
   });
 
   it("marks the failed effective axis unknown after an uncertain settings apply", async () => {
-    const provider = fixture();
+    const provider = fixture({ initPermissionMode: "acceptEdits" });
     const axisUnknown = vi.fn();
     provider.controls.setPermissionMode.mockRejectedValueOnce(
       new Error("control response lost"),
@@ -2098,92 +2198,56 @@ describe("ClaudeConversationHandle", () => {
     },
   );
 
-  it("materializes a pending user before an assistant frame when Claude emits no running state", async () => {
+  it("does not accept a pending submit from unstamped output or a bare running state", async () => {
     const provider = fixture();
-    const { handle } = createHandle(provider);
-    await handle.establishProjection({
+    const { handle, settings } = createHandle(provider);
+    const established = await handle.establishProjection({
       signal: new AbortController().signal,
     });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const writeTerminal = vi.spyOn(settings, "writeTerminalReceipt");
+    let settled = false;
     const submitted = handle.submit({
       applicationOperationId: OPERATION_ID,
       mutationId: "mutation-a",
       source: { kind: "user" },
       reconciliationToken: "reconcile-a",
-      text: "Project the answer without a user echo",
+      text: "Wait for this input's own turn",
       contextExcerpts: [],
       attachments: [],
       taskContexts: [],
-    });
+    }).finally(() => { settled = true; });
     await provider.prompt()[Symbol.asyncIterator]().next();
-    provider.messages.push({
-      type: "assistant",
-      uuid: crypto.randomUUID(),
-      session_id: SESSION_ID,
-      parent_tool_use_id: null,
-      message: {
-        id: "msg-no-running-state",
-        type: "message",
-        role: "assistant",
-        model: "claude-sonnet-5",
-        content: [{ type: "text", text: "Done without a running frame" }],
-        stop_reason: "end_turn",
-        stop_sequence: null,
-        usage: { input_tokens: 3, output_tokens: 2 },
-      },
-    } as unknown as SDKMessage);
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "queued"));
+    // Claude is finishing a turn it started itself before dequeuing the input.
+    provider.messages.push(nativeFrames.start("msg-provider"));
+    provider.messages.push(nativeFrames.text("msg-provider", "Background work finished."));
+    await vi.waitFor(async () => expect(JSON.stringify(await projectionSnapshot(handle))).toContain("Background work finished."));
+    expect(settled).toBe(false);
+    expect((await projectionSnapshot(handle)).runState).toBe("running");
+    expect(JSON.stringify(await projectionSnapshot(handle))).not.toContain(OPERATION_ID);
+    provider.messages.push(nativeFrames.result([], { origin: { kind: "task-notification" } }));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    expect(writeTerminal).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
 
-    await expect(submitted).resolves.toMatchObject({
-      accepted: true,
-      completionCorrelation: OPERATION_ID,
-    });
-    await vi.waitFor(async () => {
-      const history = await handle.history({ limit: 10 });
-      const turnId = history.orderedBackendTurnIds.at(-1)!;
-      expect(history.turnsById[turnId]).toMatchObject({
-        status: "completed",
-        completionCorrelations: [OPERATION_ID],
-      });
-    });
-    await handle.close();
-  });
-
-  it("materializes the exact pending user UUID from Claude's authoritative running state", async () => {
-    const provider = fixture();
-    const { handle } = createHandle(provider);
-    await handle.establishProjection({
-      signal: new AbortController().signal,
-    });
-    const submitted = handle.submit({
-      applicationOperationId: OPERATION_ID,
-      mutationId: "mutation-a",
-      source: { kind: "user" },
-      reconciliationToken: "reconcile-a",
-      text: "Materialize the live turn",
-      contextExcerpts: [],
-      attachments: [],
-      taskContexts: [],
-    });
-    await provider.prompt()[Symbol.asyncIterator]().next();
-    provider.messages.push({
-      type: "system",
-      subtype: "session_state_changed",
-      state: "running",
-      uuid: crypto.randomUUID(),
-      session_id: SESSION_ID,
-    });
-
-    await expect(submitted).resolves.toMatchObject({
-      accepted: true,
-      completionCorrelation: OPERATION_ID,
-    });
-    await vi.waitFor(async () => {
-      const history = await handle.history({ limit: 10 });
-      const turnId = history.orderedBackendTurnIds.at(-1)!;
-      expect(history.turnsById[turnId]).toMatchObject({
-        status: "in_progress",
-        completionCorrelations: [OPERATION_ID],
-      });
-    });
+    provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "started"));
+    await expect(submitted).resolves.toMatchObject({ accepted: true, completionCorrelation: OPERATION_ID });
+    expect((await projectionSnapshot(handle)).runState).toBe("running");
+    provider.messages.push(nativeFrames.start("msg-own", [OPERATION_ID]));
+    provider.messages.push(nativeFrames.text("msg-own", "Answered on its own turn.", [OPERATION_ID]));
+    provider.messages.push(nativeFrames.result([OPERATION_ID]));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    const history = await handle.history({ limit: 10 });
+    const own = history.turnsById[history.orderedBackendTurnIds.at(-1)!]!;
+    expect(own).toMatchObject({ status: "completed", completionCorrelations: [OPERATION_ID] });
+    expect(own.orderedBackendItemIds.map(id => JSON.stringify(history.itemsById[id]))).not.toContainEqual(
+      expect.stringContaining("Background work finished."));
+    expect(writeTerminal).toHaveBeenCalledOnce();
+    expect(writeTerminal).toHaveBeenCalledWith(expect.anything(), BINDING.applicationThreadId,
+      expect.objectContaining({ backendTurnId: own.backendTurnId, status: "completed" }));
     await handle.close();
   });
 
@@ -2392,7 +2456,7 @@ describe("ClaudeConversationHandle", () => {
   });
 
   it("reserves submission admission before awaiting provider settings controls", async () => {
-    const provider = fixture();
+    const provider = fixture({ initModel: "claude-opus-5" });
     let resolveModel!: () => void;
     provider.controls.setModel.mockImplementationOnce(async () => {
       await new Promise<void>((resolve) => {
@@ -3574,6 +3638,35 @@ describe("ClaudeConversationHandle", () => {
     await resumed.close();
   });
 
+  it("counts a resumed launch from the totals its startup message reports", async () => {
+    const opened: Parameters<UsageSink["open"]>[0][] = [];
+    const captured: UsageObservation[] = [];
+    const usage: UsageSink = {enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [],
+      open: (source) => { opened.push(source); return {registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: () => {}}; }};
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { usage, resumeSession: true });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const startup = await provider.rawPrompt()[Symbol.asyncIterator]().next();
+    if (startup.done || !startup.value.uuid) throw new Error("startup_probe_missing");
+    expect(opened.map(({ epoch }) => epoch)).toEqual(["history"]);
+    const result = (uuid: string, inputTokens: number, startupMessage?: string) => ({
+      type: "result", subtype: "success", duration_ms: 1, duration_api_ms: 1, is_error: false, num_turns: startupMessage ? 0 : 1,
+      result: "", stop_reason: null, total_cost_usd: inputTokens / 1000, permission_denials: [], uuid, session_id: SESSION_ID,
+      ...(startupMessage ? { user_message_uuid: startupMessage } : {}),
+      usage: { input_tokens: startupMessage ? 0 : 1, output_tokens: startupMessage ? 0 : 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      modelUsage: { "claude-sonnet-5": { inputTokens, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0,
+        costUSD: inputTokens / 1000, contextWindow: 200_000, maxOutputTokens: 32_000 } },
+    }) as unknown as SDKMessage;
+    const startupResult = crypto.randomUUID();
+    provider.messages.push(result(startupResult, 20, startup.value.uuid));
+    provider.messages.push(result(crypto.randomUUID(), 25));
+    await vi.waitFor(() => expect(captured.filter((o) => o.replaceCheckpoint)).toHaveLength(2));
+    expect(opened).toHaveLength(2);
+    expect(opened[1]).toMatchObject({ epoch: startup.value.uuid, initialBaseline: "proven_zero",
+      reportedBaseline: { id: `${startupResult}:baseline`, facts: expect.arrayContaining([expect.objectContaining({ id: "model:claude-sonnet-5", tokens: expect.objectContaining({ uncachedInput: "20" }) })]) } });
+    await handle.close();
+  });
+
   it("renames through the SDK and reconciles from native session metadata", async () => {
     const provider = fixture();
     (provider.sdk as ClaudeSdkFacade).getSessionInfo = vi.fn(async () => ({
@@ -3876,6 +3969,62 @@ describe("Claude outstanding background activity and subagent bookends", () => {
   const inventory = (tasks: unknown[]) => system({ subtype: "background_tasks_changed", tasks });
   const snapshot = async (handle: ClaudeConversationHandle) => (await handle.establishProjection({ signal: new AbortController().signal })).snapshot;
 
+  it("projects a verified fork child's notice and registers its copied turns as inherited usage", async () => {
+    const orphan = { ...native("user", "40000000-0000-4000-8000-000000000009",
+      "<task-notification>\n<task-id>child</task-id>\n<status>failed</status>\n<summary>Background agent didn't finish</summary>\n</task-notification>"),
+      origin: { kind: "task-notification" } } as SessionMessage;
+    const messages = [...initialMessages, finalMessage, orphan] as SessionMessage[];
+    const settings = repository();
+    const childTurns = projectClaudeHistory(messages).usageTurns.map(({ backendTurnId }) => backendTurnId);
+    const inheritedTurns = childTurns.map((backendTurnId, index) => ({ backendTurnId, sourceBackendTurnId: `source-turn-${index}` }));
+    settings.recordForkChild({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId }, {
+      childApplicationThreadId: BINDING.applicationThreadId, childNativeSessionId: SESSION_ID, forkOperationId: "fork-operation",
+      inheritedTurns, omittedTasks: [{ nativeMessageUuid: orphan.uuid, nativeTaskId: "child" }], now: 5 });
+    const registered: unknown[] = [];
+    const usage: UsageSink = { enabled: true, findSubagent: () => null, listSubagentRoots: () => ({ bindings: [], nextCursor: null }),
+      listSubagents: () => [], open: () => ({ registerTurns: (_turns, inherited) => { registered.push(inherited); },
+        capture: () => true, gap: () => {}, reconcile: () => true, seal: () => {} }) };
+    const { handle } = createHandle(fixture(), vi.fn(), { settings, usage, resumeSession: true, initialMessages: messages });
+    const projected = await snapshot(handle);
+    const notices = Object.values(projected.itemsById).filter(item => item.semanticKind === "notice");
+    expect(notices).toEqual([expect.objectContaining({ backendTurnId: childTurns[0], tone: "warning" })]);
+    expect(registered).toContainEqual({ forkOperationId: "fork-operation", turns: inheritedTurns });
+    await handle.close();
+  });
+
+  it("withholds forking while Claude reports background work or its own activity, and says why", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: [...initialMessages, finalMessage] });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const branching: BackendCapabilityDocument["branching"][] = [];
+    established.subscribeFromNext(({ event }) => {
+      if (event.type === "capabilities_changed") branching.push(event.capabilities.branching);
+    });
+    await expect(handle.backendCapabilities()).resolves.toMatchObject({ branching: { availability: "available" } });
+    provider.messages.push(inventory([{ task_id: "child", task_type: "local_agent", description: "Sleep" },
+      { task_id: "shell", task_type: "local_bash", description: "Sleep" }]));
+    await vi.waitFor(() => expect(branching.at(-1)).toEqual({ availability: "unavailable", reason: { text:
+      "Claude has 2 background tasks running in this thread. Fork after they finish; running background work cannot be carried into a fork." } }));
+    // An unchanged blocker does not republish capabilities.
+    const published = branching.length;
+    provider.messages.push(inventory([{ task_id: "child", task_type: "local_agent", description: "Sleep" },
+      { task_id: "shell", task_type: "local_bash", description: "Still sleeping" }]));
+    provider.messages.push(started());
+    provider.messages.push(inventory([]));
+    await vi.waitFor(() => expect(branching.at(-1)).toMatchObject({ availability: "unavailable",
+      reason: { text: "A background task's result is still being recorded. Fork again in a moment." } }));
+    expect(branching).toHaveLength(published + 1);
+    provider.messages.push(system({ subtype: "task_notification", task_id: "child", tool_use_id: "agent-launch",
+      status: "completed", output_file: "/private", summary: "Finished" }));
+    await vi.waitFor(() => expect(branching.at(-1)).toMatchObject({ availability: "available" }));
+    provider.messages.push(system({ subtype: "session_state_changed", state: "running" }));
+    await vi.waitFor(() => expect(branching.at(-1)).toEqual({ availability: "unavailable", reason: { text:
+      "Claude is still working in this thread. Fork after it is idle." } }));
+    provider.messages.push(system({ subtype: "session_state_changed", state: "idle" }));
+    await vi.waitFor(() => expect(branching.at(-1)).toMatchObject({ availability: "available" }));
+    await handle.close();
+  });
+
   it("keeps provider task notifications hidden live and after reopening while retaining the assistant response and outcome row", async () => {
     const provider = fixture();
     const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: [...initialMessages, finalMessage] });
@@ -3908,9 +4057,46 @@ describe("Claude outstanding background activity and subagent bookends", () => {
     await reopened.close();
   });
 
-  it.each(["completed", "failed", "stopped"] as const)("keeps Send independent and persists exactly one %s bookend across reopen", async status => {
+  it("names each background task a resumed query reports its previous process left unfinished, and only those", async () => {
     const provider = fixture();
     const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    // The previous query started this agent; its launch receipt persists.
+    provider.messages.push(started());
+    await vi.waitFor(() => expect(settings.listTaskLifecycleReceipts({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId },
+      BINDING.applicationThreadId, SESSION_ID)).toHaveLength(1));
+    await handle.close();
+    const provider2 = fixture();
+    const resumed = createHandle(provider2, vi.fn(), { settings, resumeSession: true, initialMessages });
+    const reopened = await resumed.handle.establishProjection({ signal: new AbortController().signal });
+    events.length = 0;
+    reopened.subscribeFromNext(({ event }) => events.push(event));
+    const notification = (body: Record<string, unknown>) => system({ subtype: "task_notification", output_file: "/private", summary: "Private summary text", ...body });
+    // A resumed Claude stops or fails the work the previous process left.
+    provider2.messages.push(notification({ task_id: "child", status: "stopped" }));
+    provider2.messages.push(notification({ task_id: "unrecorded-shell", status: "failed" }));
+    // Work this query started and stopped, and ordinary completion, are not orphans.
+    provider2.messages.push(system({ subtype: "task_started", task_id: "own", task_type: "local_bash", description: "Own work" }));
+    provider2.messages.push(notification({ task_id: "own", status: "stopped" }));
+    provider2.messages.push(notification({ task_id: "finished-late", status: "completed" }));
+    // An in-process worker restart says so explicitly, even on a reattachment.
+    provider2.messages.push(notification({ task_id: "restarted", status: "stopped", reason: "worker_restart" }));
+    await vi.waitFor(() => expect(events.filter(event => event.type === "notice")).toHaveLength(3));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const notices = events.flatMap(event => event.type === "notice" ? [event.notice] : []);
+    const text = (task: string) => `Background task ${task} did not finish before the previous Claude session ended, and its result was not reported. Claude may restart it; check its output before relying on it.`;
+    expect(notices.map(notice => [notice.tone, notice.message.text])).toEqual([
+      ["warning", text('"Sleep 20 seconds test"')], ["warning", text("unrecorded-shell")], ["warning", text("restarted")],
+    ]);
+    expect(JSON.stringify(notices)).not.toContain("Private summary text");
+    await resumed.handle.close();
+  });
+
+  it.each(["completed", "failed", "stopped"] as const)("keeps Send independent and persists exactly one %s bookend across reopen", async status => {
+    const provider = fixture();
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages, claudeRunning: true });
     const established = await handle.establishProjection({ signal: new AbortController().signal });
     const events: BackendConversationEvent[] = [];
     established.subscribeFromNext(({ event }) => events.push(event));
@@ -4117,7 +4303,7 @@ describe("Claude asynchronous send admission", () => {
       expect(snapshot.runState).toBe("running");
       expect(Object.values(snapshot.itemsById).filter(item => item.semanticKind === "user_message")).toHaveLength(1);
       await expect(handle.submit(input)).resolves.toMatchObject({ accepted: true });
-      expect(provider.controls.setModel).toHaveBeenCalledTimes(1);
+      expect(provider.controls.setModel).not.toHaveBeenCalled();
       expect(provider.sdk.getSessionMessages).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); await handle.close(); }
   });
@@ -4146,7 +4332,7 @@ describe("Claude asynchronous send admission", () => {
       expect(snapshot.runState).toBe("idle");
       expect(Object.values(snapshot.itemsById).filter(item => item.semanticKind === "user_message")).toHaveLength(1);
       expect(handle.retirementBlocked).toBe(false);
-      expect(provider.controls.setModel).toHaveBeenCalledTimes(1);
+      expect(provider.controls.setModel).not.toHaveBeenCalled();
     } finally { vi.useRealTimers(); await handle.close(); }
   });
 
@@ -4163,7 +4349,7 @@ describe("Claude asynchronous send admission", () => {
       await submitted;
       expect(handle.retirementBlocked).toBe(true);
       await expect(handle.submit(input)).rejects.toMatchObject({ category: "submission_unknown" });
-      expect(provider.controls.setModel).toHaveBeenCalledTimes(1);
+      expect(provider.controls.setModel).not.toHaveBeenCalled();
       expect(handle.forgetProvenUnsentSubmission(OPERATION_ID)).toBe(true);
       expect(handle.retirementBlocked).toBe(false);
       const retried = handle.submit(input);
@@ -4174,7 +4360,7 @@ describe("Claude asynchronous send admission", () => {
       await expect(retried).resolves.toMatchObject({ accepted: true });
       await expect(handle.submit(input)).resolves.toMatchObject({ accepted: true });
       expect(handle.forgetProvenUnsentSubmission(OPERATION_ID)).toBe(false);
-      expect(provider.controls.setModel).toHaveBeenCalledTimes(2);
+      expect(provider.controls.setModel).not.toHaveBeenCalled();
       await handle.close();
       expect(await nativeInputs.next()).toMatchObject({ done: true });
     } finally { vi.useRealTimers(); await handle.close(); }
@@ -4214,10 +4400,38 @@ describe("Claude conversation-scoped native next delivery", () => {
   const result = (ids: string[]) => ({ type: "result", subtype: "success", uuid: crypto.randomUUID(), session_id: SESSION_ID,
     user_message_uuid: ids.at(-1), user_message_uuids: ids, terminal_reason: "completed", num_turns: 1,
     result: "Done", is_error: false, usage: {}, modelUsage: {}, permission_denials: [] }) as unknown as SDKMessage;
+  const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+  /** The identity-bearing shape the application compares across live and reload. */
+  const identities = (value: Awaited<ReturnType<typeof snapshot>>) => value.orderedBackendTurnIds.map(id => ({
+    id, status: value.turnsById[id]!.status, completionCorrelations: value.turnsById[id]!.completionCorrelations,
+    items: value.turnsById[id]!.orderedBackendItemIds.map(itemId => {
+      const { backendItemId, backendTurnId, sourceOrder, semanticKind } = value.itemsById[itemId]!;
+      return { backendItemId, backendTurnId, sourceOrder, semanticKind };
+    }),
+  }));
+
+  /** A local turn this attachment submitted, which Claude has started. */
+  async function startedTurn(text = "Original request") {
+    const provider = fixture();
+    const created = createHandle(provider);
+    const established = await created.handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const input = provider.prompt()[Symbol.asyncIterator]();
+    const submitted = created.handle.submit({ applicationOperationId: OPERATION_ID, mutationId: "original-turn",
+      reconciliationToken: "original-receipt", source: { kind: "user" }, text, contextExcerpts: [], taskContexts: [], attachments: [] });
+    expect((await input.next()).value).toMatchObject({ uuid: OPERATION_ID });
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "queued"));
+    provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "started"));
+    await submitted;
+    const turnId = (await snapshot(created.handle)).activeBackendTurnId!;
+    return { ...created, provider, events, input, turnId };
+  }
 
   it("ignores explicitly child-owned output without requesting a parent resnapshot or accepting a queued steer", async () => {
     const provider = fixture();
-    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: [initialUser] });
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: [initialUser], claudeRunning: true });
     const established = await handle.establishProjection({ signal: new AbortController().signal });
     const events: BackendConversationEvent[] = [];
     established.subscribeFromNext(({ event }) => events.push(event));
@@ -4254,7 +4468,7 @@ describe("Claude conversation-scoped native next delivery", () => {
 
   it.each([false, true])("keeps live controls active between assistant/tool blocks until the native result (steered=%s)", async steering => {
     const provider = fixture();
-    const { handle } = createHandle(provider, vi.fn(), { initialMessages: [initialUser] });
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: [initialUser], claudeRunning: true });
     const established = await handle.establishProjection({ signal: new AbortController().signal });
     const events: BackendConversationEvent[] = [];
     established.subscribeFromNext(({ event }) => events.push(event));
@@ -4292,7 +4506,7 @@ describe("Claude conversation-scoped native next delivery", () => {
 
   it("does not accept old output, then joins exact consumed UUIDs once and survives reopen", async () => {
     const provider = fixture();
-    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: [initialUser] });
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: [initialUser], claudeRunning: true });
     const initial = await snapshot(handle);
     const originalTurn = initial.orderedBackendTurnIds[0]!;
     const input = provider.prompt()[Symbol.asyncIterator]();
@@ -4328,7 +4542,7 @@ describe("Claude conversation-scoped native next delivery", () => {
 
   it("keeps a queued steer pending when the older turn finishes, then observes its new turn", async () => {
     const provider = fixture();
-    const { handle } = createHandle(provider, vi.fn(), { initialMessages: [initialUser] });
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: [initialUser], claudeRunning: true });
     await snapshot(handle);
     await handle.steer(steerInput);
     const native = await provider.prompt()[Symbol.asyncIterator]().next();
@@ -4337,11 +4551,12 @@ describe("Claude conversation-scoped native next delivery", () => {
     expect(JSON.stringify(await snapshot(handle))).not.toContain(steerInput.text);
     expect(handle.retirementBlocked).toBe(true);
     provider.messages.push(result([steerId]));
+    provider.messages.push(nativeFrames.state("idle"));
     await vi.waitFor(async () => expect((await snapshot(handle)).orderedBackendTurnIds).toHaveLength(2));
     const settled = await snapshot(handle);
     expect(settled.turnsById[settled.orderedBackendTurnIds[1]!]!.completionCorrelations).toEqual([steerId]);
     expect(native.value.priority).toBe("next");
-    expect(handle.retirementBlocked).toBe(false);
+    await vi.waitFor(() => expect(handle.retirementBlocked).toBe(false));
     await handle.close();
   });
 
@@ -4463,14 +4678,1123 @@ describe("Claude conversation-scoped native next delivery", () => {
 
   it("does not treat an interrupt acknowledgment as steer materialization or replay it", async () => {
     const provider = fixture();
-    const { handle } = createHandle(provider, vi.fn(), { initialMessages: [initialUser] });
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: [initialUser], claudeRunning: true });
     const original = await snapshot(handle);
     await handle.steer(steerInput);
     await provider.prompt()[Symbol.asyncIterator]().next();
     await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: original.orderedBackendTurnIds[0]! });
     expect(await handle.steer(steerInput)).toMatchObject({ status: "pending_materialization" });
     expect(JSON.stringify(await snapshot(handle))).not.toContain(steerInput.text);
+    // Stop asked Claude to withdraw it, but its answer alone proves nothing.
+    expect(provider.controls.cancelAsyncMessage).toHaveBeenCalledExactlyOnceWith(steerId);
+    expect(provider.controls.interrupt).toHaveBeenCalledExactlyOnceWith();
+    expect(handle.withdrewSubmission(steerId)).toBe(false);
+    await handle.close();
+  });
+
+  it("still stops, and keeps tracking the steer, when a withdrawal request fails", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: [initialUser], claudeRunning: true });
+    const original = await snapshot(handle);
+    await handle.steer(steerInput);
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.controls.cancelAsyncMessage.mockRejectedValueOnce(new Error("claude_control_request_failed"));
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: original.orderedBackendTurnIds[0]! });
     expect(provider.controls.interrupt).toHaveBeenCalledOnce();
+    expect(handle.withdrewSubmission(steerId)).toBe(false);
+    expect(handle.hasPendingSubmissionObservation(steerId)).toBe(true);
+    await handle.close();
+  });
+
+  it("returns a steer Claude withdrew on Stop before starting it as not sent, and never resends it", async () => {
+    const provider = fixture();
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: [initialUser], claudeRunning: true });
+    const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+    const original = await snapshot(handle);
+    const input = provider.prompt()[Symbol.asyncIterator]();
+    await handle.steer(steerInput);
+    expect((await input.next()).value).toMatchObject({ uuid: steerId, priority: "next" });
+    provider.messages.push(nativeFrames.lifecycle(steerId, "queued"));
+    // Claude removes it from its queue and closes it with `cancelled`.
+    provider.controls.cancelAsyncMessage.mockImplementationOnce(async () => {
+      provider.messages.push(nativeFrames.lifecycle(steerId, "cancelled"));
+      return true;
+    });
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: original.orderedBackendTurnIds[0]! });
+    expect(provider.controls.cancelAsyncMessage).toHaveBeenCalledExactlyOnceWith(steerId);
+    expect(provider.controls.interrupt).toHaveBeenCalledExactlyOnceWith();
+    // Withdrawn first, so the interrupted turn's end cannot start it.
+    expect(provider.controls.cancelAsyncMessage.mock.invocationCallOrder[0])
+      .toBeLessThan(provider.controls.interrupt.mock.invocationCallOrder[0]!);
+    await vi.waitFor(() => expect(handle.withdrewSubmission(steerId)).toBe(true));
+    expect(handle.hasUnconfirmedSubmission(steerId)).toBe(false);
+    expect(handle.hasPendingSubmissionObservation(steerId)).toBe(false);
+    // Reconciliation reports it not sent and closes the durable record.
+    expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBeNull();
+    // Claude already holds this identity, so a replay is refused, not resent.
+    await expect(handle.steer(steerInput)).rejects.toMatchObject({ category: "rejected",
+      backendCode: "claude_submission_withdrawn", crossedSubmissionBoundary: false });
+    provider.messages.push(result([OPERATION_ID]));
+    provider.messages.push(nativeFrames.state("idle"));
+    await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+    const settled = await snapshot(handle);
+    expect(JSON.stringify(settled)).not.toContain(steerInput.text);
+    expect(Object.values(settled.turnsById).flatMap(turn => turn.completionCorrelations ?? [])).not.toContain(steerId);
+    await handle.close();
+  });
+
+  it("keeps a steer Claude started before Stop with its turn, although the stopped batch ends cancelled", async () => {
+    const { handle, settings, provider, input, turnId } = await startedTurn();
+    await handle.steer(steerInput);
+    await input.next();
+    provider.messages.push(nativeFrames.lifecycle(steerId, "queued"));
+    // Claude folded it into the running turn before the Stop landed; that
+    // start accepts it into the turn.
+    provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+    await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(steerId)).toBe(false));
+    expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(OPERATION_ID);
+    expect((await snapshot(handle)).turnsById[turnId]!.completionCorrelations).toEqual([OPERATION_ID, steerId]);
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: turnId });
+    // Stop leaves an input Claude started alone.
+    expect(provider.controls.cancelAsyncMessage).not.toHaveBeenCalled();
+    // An interrupted turn closes the inputs it started with `cancelled`.
+    provider.messages.push(nativeFrames.lifecycle(steerId, "cancelled"));
+    provider.messages.push(result([OPERATION_ID, steerId]));
+    provider.messages.push(nativeFrames.state("idle"));
+    await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+    expect(handle.withdrewSubmission(steerId)).toBe(false);
+    expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(OPERATION_ID);
+    const settled = await snapshot(handle);
+    expect(settled.turnsById[turnId]!.completionCorrelations).toEqual([OPERATION_ID, steerId]);
+    await handle.close();
+  });
+
+  describe("placement where Claude starts a steer", () => {
+    const secondId = "99999999-9999-4999-8999-999999999999";
+    const second = { ...steerInput, applicationOperationId: secondId, mutationId: "steer-second",
+      reconciliationToken: "second-receipt", text: "Keep the tests green too" };
+    const toolCall = (id: string) => ({ type: "assistant", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+      message: { id: `msg-${id}`, type: "message", role: "assistant", model: "claude-sonnet-5",
+        content: [{ type: "tool_use", id, name: "Bash", input: { command: "true" } }], stop_reason: "tool_use", usage: {} } }) as unknown as SDKMessage;
+    const toolResult = (id: string) => ({ type: "user", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "done" }] } }) as unknown as SDKMessage;
+    /** Each item of a turn, with a user message named by its Sedes input. */
+    const items = (value: Awaited<ReturnType<typeof snapshot>>, turnId: string) => value.turnsById[turnId]!.orderedBackendItemIds.map(id => {
+      const item = value.itemsById[id]!;
+      return item.semanticKind === "user_message" ? `user:${item.deliveryOperationId}` : item.semanticKind;
+    });
+    let warn: { readonly mock: { readonly calls: unknown[][] }; mockRestore(): void };
+    beforeEach(() => { warn = vi.spyOn(console, "warn").mockImplementation(() => undefined); });
+    afterEach(() => warn.mockRestore());
+    const conflicts = () => warn.mock.calls.filter(([code]) => code === "claude_steer_placement_conflict");
+
+    it("accepts a steer mid-turn when Claude folds it in, then takes another steer into the same turn", async () => {
+      const { handle, settings, provider, input, events, turnId } = await startedTurn();
+      provider.messages.push(toolCall("toolu-first"));
+      await expect(handle.steer(steerInput)).resolves.toMatchObject({ status: "pending_materialization" });
+      await input.next();
+      provider.messages.push(nativeFrames.lifecycle(steerId, "queued"));
+      provider.messages.push(toolResult("toolu-first"));
+      await new Promise(resolve => setTimeout(resolve, 10));
+      // Queued is not taken: nothing is shown until Claude starts it.
+      expect(JSON.stringify(await snapshot(handle))).not.toContain(steerInput.text);
+      expect(handle.hasPendingSubmissionObservation(steerId)).toBe(true);
+      provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+      await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(steerId)).toBe(false));
+      const folded = await snapshot(handle);
+      expect(folded).toMatchObject({ runState: "running", activeBackendTurnId: turnId, orderedBackendTurnIds: [turnId] });
+      // In place, at the fold, not after the turn's final answer.
+      expect(items(folded, turnId)).toEqual([`user:${OPERATION_ID}`, "command", `user:${steerId}`]);
+      expect(folded.turnsById[turnId]!.completionCorrelations).toEqual([OPERATION_ID, steerId]);
+      // Published at once: the application accepts the steer and frees the composer.
+      expect(events).toContainEqual({ type: "turn_updated", turn: expect.objectContaining({
+        backendTurnId: turnId, status: "in_progress", completionCorrelations: [OPERATION_ID, steerId] }) });
+      expect(await handle.steer(steerInput)).toMatchObject({ status: "accepted", backendTurnId: turnId });
+      expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(OPERATION_ID);
+      // The next steer in the same turn.
+      await expect(handle.steer(second)).resolves.toMatchObject({ status: "pending_materialization" });
+      await input.next();
+      provider.messages.push(nativeFrames.lifecycle(secondId, "queued"));
+      provider.messages.push(toolCall("toolu-second"));
+      provider.messages.push(toolResult("toolu-second"));
+      provider.messages.push(nativeFrames.lifecycle(secondId, "started"));
+      await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(secondId)).toBe(false));
+      expect(items(await snapshot(handle), turnId)).toEqual([`user:${OPERATION_ID}`, "command", `user:${steerId}`, "command", `user:${secondId}`]);
+      provider.messages.push(nativeFrames.start("msg-final"));
+      provider.messages.push(nativeFrames.text("msg-final", "Done with both corrections."));
+      provider.messages.push(nativeFrames.lifecycle(steerId, "completed"));
+      provider.messages.push(nativeFrames.lifecycle(secondId, "completed"));
+      provider.messages.push(result([OPERATION_ID, steerId, secondId]));
+      provider.messages.push(nativeFrames.state("idle"));
+      await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+      const settled = await snapshot(handle);
+      expect(settled.orderedBackendTurnIds).toEqual([turnId]);
+      expect(settled.turnsById[turnId]).toMatchObject({ status: "completed", completionCorrelations: [OPERATION_ID, steerId, secondId] });
+      expect(items(settled, turnId)).toEqual([`user:${OPERATION_ID}`, "command", `user:${steerId}`, "command", `user:${secondId}`, "assistant_message"]);
+      expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(secondId)).toBe(OPERATION_ID);
+      expect(events.some(event => event.type === "resnapshot_required")).toBe(false);
+      expect(conflicts()).toEqual([]);
+      await handle.close();
+    });
+
+    it("places several steers Claude starts together in order", async () => {
+      const { handle, settings, provider, input, turnId } = await startedTurn();
+      provider.messages.push(toolCall("toolu-first"));
+      await handle.steer(steerInput);
+      await handle.steer(second);
+      await input.next(); await input.next();
+      provider.messages.push(toolResult("toolu-first"));
+      provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+      provider.messages.push(nativeFrames.lifecycle(secondId, "started"));
+      await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(secondId)).toBe(false));
+      expect(items(await snapshot(handle), turnId)).toEqual([`user:${OPERATION_ID}`, "command", `user:${steerId}`, `user:${secondId}`]);
+      expect([...settings.listSteerOperations(scope, BINDING.applicationThreadId)]).toEqual([[steerId, OPERATION_ID], [secondId, OPERATION_ID]]);
+      provider.messages.push(result([OPERATION_ID, steerId, secondId]));
+      await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+      expect(conflicts()).toEqual([]);
+      await handle.close();
+    });
+
+    it("folds a steer into a turn this attachment saw start only through its consumption stamp", async () => {
+      const provider = fixture();
+      const { handle, settings } = createHandle(provider);
+      await snapshot(handle);
+      const input = provider.prompt()[Symbol.asyncIterator]();
+      const submitted = handle.submit({ applicationOperationId: OPERATION_ID, mutationId: "original-turn",
+        reconciliationToken: "original-receipt", source: { kind: "user" }, text: "Original request", contextExcerpts: [], taskContexts: [], attachments: [] });
+      await input.next();
+      provider.messages.push(nativeFrames.start("msg-first", [OPERATION_ID]));
+      await submitted;
+      const turnId = (await snapshot(handle)).activeBackendTurnId!;
+      await handle.steer(steerInput);
+      await input.next();
+      provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+      await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(steerId)).toBe(false));
+      expect(items(await snapshot(handle), turnId)).toEqual([`user:${OPERATION_ID}`, `user:${steerId}`]);
+      expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(OPERATION_ID);
+      await handle.close();
+    });
+
+    it("starts the next turn with a steer Claude starts after the running turn's result", async () => {
+      const { handle, settings, provider, input, events, turnId } = await startedTurn();
+      await handle.steer(steerInput);
+      await input.next();
+      provider.messages.push(nativeFrames.lifecycle(steerId, "queued"));
+      provider.messages.push(nativeFrames.text("msg-first", "First answer."));
+      provider.messages.push(result([OPERATION_ID]));
+      await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+      expect(JSON.stringify(await snapshot(handle))).not.toContain(steerInput.text);
+      provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+      await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("running"));
+      const next = await snapshot(handle);
+      expect(next.orderedBackendTurnIds).toHaveLength(2);
+      expect(next.orderedBackendTurnIds[0]).toBe(turnId);
+      const steerTurn = next.orderedBackendTurnIds[1]!;
+      expect(next).toMatchObject({ activeBackendTurnId: steerTurn });
+      expect(next.turnsById[steerTurn]).toMatchObject({ status: "in_progress", completionCorrelations: [steerId] });
+      expect(items(next, steerTurn)).toEqual([`user:${steerId}`]);
+      expect(events.filter(event => event.type === "run_state_changed").at(-1)).toMatchObject({ state: "running", activeBackendTurnId: steerTurn });
+      expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(steerId);
+      provider.messages.push(nativeFrames.start("msg-steer", [steerId]));
+      provider.messages.push(nativeFrames.text("msg-steer", "Following the correction.", [steerId]));
+      provider.messages.push(result([steerId]));
+      await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+      expect((await snapshot(handle)).turnsById[steerTurn]).toMatchObject({ status: "completed" });
+      expect(conflicts()).toEqual([]);
+      await handle.close();
+    });
+
+    it("logs, without moving or resending anything, a result that contradicts where Claude started a steer", async () => {
+      const { handle, settings, provider, input, turnId } = await startedTurn();
+      await handle.steer(steerInput);
+      await handle.steer(second);
+      await input.next(); await input.next();
+      provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+      provider.messages.push(nativeFrames.lifecycle(secondId, "started"));
+      await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(secondId)).toBe(false));
+      // The result omits one steer Claude started, and names the other
+      // without the turn it joined.
+      provider.messages.push(result([steerId]));
+      await vi.waitFor(() => expect(conflicts()).toHaveLength(1));
+      expect(conflicts()[0]![1]).toEqual({ misplaced: [steerId], unnamed: [secondId] });
+      expect([...settings.listSteerOperations(scope, BINDING.applicationThreadId)]).toEqual([[steerId, OPERATION_ID], [secondId, OPERATION_ID]]);
+      const kept = await snapshot(handle);
+      expect(kept.orderedBackendTurnIds).toEqual([turnId]);
+      expect(kept.turnsById[turnId]!.completionCorrelations).toEqual([OPERATION_ID, steerId, secondId]);
+      expect(provider.controls.interrupt).not.toHaveBeenCalled();
+      await handle.close();
+    });
+
+    it("projects a steer folded mid-turn live exactly as reload places it, with the same item identities", async () => {
+      // The native transcript Claude Code 2.1.281-2.1.283 writes for this fold:
+      // the steer is a queued-command attachment after the tool result.
+      const transcript = new ClaudeTranscriptFixture();
+      transcript.prompt("Original request", { uuid: OPERATION_ID });
+      const [call] = transcript.reply([{ type: "tool_use", id: "toolu-fold", name: "Bash", input: { command: "true" } }],
+        { stopReason: "tool_use" });
+      const resultRow = transcript.toolResult("toolu-fold", call!, "done");
+      transcript.attachment({ type: "prompt_snapshot" });
+      transcript.attachment({ type: "queued_command", prompt: steerInput.text, source_uuid: steerId, commandMode: "prompt" });
+      transcript.attachment({ type: "total_tokens_reminder", used: 1, total: 2 });
+      const answer = transcript.answer("Done with the correction.");
+      const history = (await resolveClaudeSessionMessages(await parseClaudeTranscript(
+        Buffer.from(transcript.jsonl().replaceAll(transcript.sessionId, SESSION_ID))))).map(message => ({ ...message, parent_agent_id: null }));
+      expect(history.find(message => message.uuid === steerId)).toMatchObject({ isQueuedCommand: true });
+      const row = (uuid: string) => transcript.rows.find(candidate => candidate.uuid === uuid)!;
+      const live = (uuid: string) => ({ type: row(uuid).type, uuid, session_id: SESSION_ID, parent_tool_use_id: null,
+        message: row(uuid).message }) as unknown as SDKMessage;
+
+      const { handle, settings, provider, input, events, turnId } = await startedTurn("Original request");
+      provider.messages.push(live(call!));
+      await handle.steer(steerInput);
+      await input.next();
+      provider.messages.push(nativeFrames.lifecycle(steerId, "queued"));
+      provider.messages.push(live(resultRow));
+      provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+      provider.messages.push(nativeFrames.start(String((row(answer).message as { id: string }).id)));
+      provider.messages.push(live(answer));
+      provider.messages.push(result([OPERATION_ID, steerId]));
+      await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+      const liveSnapshot = await snapshot(handle);
+      expect(events.some(event => event.type === "resnapshot_required")).toBe(false);
+      await handle.close();
+
+      const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: history, resumeSession: true }).handle;
+      const reloadedSnapshot = await snapshot(reloaded);
+      expect(identities(reloadedSnapshot)).toEqual(identities(liveSnapshot));
+      expect(items(reloadedSnapshot, turnId)).toEqual([`user:${OPERATION_ID}`, "command", `user:${steerId}`, "assistant_message"]);
+      expect(reloadedSnapshot.turnsById[turnId]!.completionCorrelations).toEqual([OPERATION_ID, steerId]);
+      expect(conflicts()).toEqual([]);
+      await reloaded.close();
+    });
+
+    it("projects a steer that takes over a notification turn live exactly as reload does", async () => {
+      // Claude Code 2.1.281-2.1.283: a steer folded into a turn Claude started
+      // for a task notification is written as a queued command there, and the
+      // turn's later reply frames and its result name only the steer.
+      const transcript = new ClaudeTranscriptFixture();
+      transcript.prompt("Start background work", { uuid: OPERATION_ID });
+      transcript.answer("Started.");
+      transcript.taskNotification({ status: "completed", summary: "Background command completed", taskIds: ["task-1"] });
+      const [call] = transcript.reply([{ type: "tool_use", id: "toolu-notified", name: "Bash", input: { command: "true" } }],
+        { stopReason: "tool_use" });
+      const resultRow = transcript.toolResult("toolu-notified", call!, "done");
+      transcript.attachment({ type: "queued_command", prompt: steerInput.text, source_uuid: steerId, commandMode: "prompt" });
+      const answer = transcript.answer("Following the correction.");
+      const history = (await resolveClaudeSessionMessages(await parseClaudeTranscript(
+        Buffer.from(transcript.jsonl().replaceAll(transcript.sessionId, SESSION_ID))))).map(message => ({ ...message, parent_agent_id: null }));
+      const row = (uuid: string) => transcript.rows.find(candidate => candidate.uuid === uuid)!;
+      const messageId = (uuid: string) => String((row(uuid).message as { id: string }).id);
+      const live = (uuid: string) => ({ type: row(uuid).type, uuid, session_id: SESSION_ID, parent_tool_use_id: null,
+        message: row(uuid).message }) as unknown as SDKMessage;
+
+      const provider = fixture();
+      const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: history.slice(0, 2), resumeSession: true });
+      const established = await handle.establishProjection({ signal: new AbortController().signal });
+      const events: BackendConversationEvent[] = [];
+      established.subscribeFromNext(({ event }) => events.push(event));
+      provider.messages.push(nativeFrames.taskNotification("task-1"));
+      provider.messages.push(nativeFrames.state("running"));
+      provider.messages.push(nativeFrames.start(messageId(call!)));
+      provider.messages.push(live(call!));
+      provider.messages.push(live(resultRow));
+      await vi.waitFor(async () => expect((await snapshot(handle)).orderedBackendTurnIds).toHaveLength(2));
+      await handle.steer(steerInput);
+      await provider.prompt()[Symbol.asyncIterator]().next();
+      provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+      await vi.waitFor(async () => expect((await snapshot(handle)).orderedBackendTurnIds).toHaveLength(3));
+      const taken = await snapshot(handle);
+      expect(taken).toMatchObject({ runState: "running", activeBackendTurnId: taken.orderedBackendTurnIds[2] });
+      provider.messages.push(nativeFrames.start(messageId(answer), [steerId]));
+      provider.messages.push(live(answer));
+      provider.messages.push(nativeFrames.result([steerId], { origin: { kind: "task-notification" } }));
+      await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+      const liveSnapshot = await snapshot(handle);
+      expect(events.some(event => event.type === "resnapshot_required")).toBe(false);
+      expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(steerId);
+      await handle.close();
+
+      const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: history, resumeSession: true }).handle;
+      const reloadedSnapshot = await snapshot(reloaded);
+      expect(identities(reloadedSnapshot)).toEqual(identities(liveSnapshot));
+      expect(items(reloadedSnapshot, reloadedSnapshot.orderedBackendTurnIds[2]!)).toEqual([`user:${steerId}`, "assistant_message"]);
+      expect(conflicts()).toEqual([]);
+      await reloaded.close();
+    });
+  });
+
+  it("leaves a service-owned query's withdrawals to its owner, and still records Claude's exact evidence", async () => {
+    const provider = fixture();
+    const retained = retainedRuntime(provider, [nativeFrames.state("running")]);
+    const { handle } = createHandle(provider, vi.fn(), { runtimeClient: retained.runtime, initialMessages: [initialUser], resumeSession: true });
+    const original = await snapshot(handle);
+    expect(original.runState).toBe("running");
+    const input = provider.prompt()[Symbol.asyncIterator]();
+    await handle.steer(steerInput);
+    expect((await input.next()).value).toMatchObject({ uuid: steerId, priority: "next" });
+    provider.messages.push(nativeFrames.lifecycle(steerId, "queued"));
+    // The owner withdraws every unstarted input it holds when it handles the
+    // interrupt, including ones an earlier attachment sent.
+    provider.controls.interrupt.mockImplementationOnce(async () => {
+      provider.messages.push(nativeFrames.lifecycle(steerId, "cancelled"));
+      return { still_queued: [] };
+    });
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: original.orderedBackendTurnIds[0]! });
+    expect(provider.controls.cancelAsyncMessage).not.toHaveBeenCalled();
+    expect(provider.controls.interrupt).toHaveBeenCalledExactlyOnceWith();
+    await vi.waitFor(() => expect(handle.withdrewSubmission(steerId)).toBe(true));
+    expect(handle.hasPendingSubmissionObservation(steerId)).toBe(false);
+    await expect(handle.steer(steerInput)).rejects.toMatchObject({ category: "rejected",
+      backendCode: "claude_submission_withdrawn", crossedSubmissionBoundary: false });
     await handle.close();
   });
 });
+
+describe("Claude native run state without prompt echoes", () => {
+  const submitInput = (applicationOperationId: string, text: string) => ({
+    applicationOperationId, mutationId: `mutation-${applicationOperationId}`,
+    source: { kind: "user" as const }, reconciliationToken: `reconcile-${applicationOperationId}`,
+    text, contextExcerpts: [], attachments: [], taskContexts: [],
+  });
+  const settledTurn = [
+    { type: "user", uuid: OPERATION_ID, session_id: SESSION_ID, parent_tool_use_id: null, parent_agent_id: null,
+      message: { role: "user", content: "Start background work" } },
+    { type: "assistant", uuid: "55555555-5555-4555-8555-555555555555", session_id: SESSION_ID,
+      parent_tool_use_id: null, parent_agent_id: null,
+      message: { id: "msg-settled", role: "assistant", content: [{ type: "text", text: "Agents are running." }],
+        stop_reason: "end_turn", usage: {} } },
+  ] as SessionMessage[];
+  const runStates = (events: readonly BackendConversationEvent[]) =>
+    events.flatMap(event => event.type === "run_state_changed" ? [event.state] : []);
+
+  it("fails a send Claude refused before queueing it, as not sent", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider);
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const submitted = handle.submit(submitInput(OPERATION_ID, "Refused input"));
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "refused"));
+    await expect(submitted).rejects.toMatchObject({ category: "rejected", backendCode: "claude_submission_refused",
+      crossedSubmissionBoundary: false, retryable: false });
+    expect(handle.hasUnconfirmedSubmission(OPERATION_ID)).toBe(false);
+    expect((await projectionSnapshot(handle)).runState).toBe("idle");
+    await handle.close();
+  });
+
+  it("fails a send Claude withdrew before starting it, as not sent", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider);
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const submitted = handle.submit(submitInput(OPERATION_ID, "Withdrawn input"));
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "queued"));
+    provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "cancelled"));
+    await expect(submitted).rejects.toMatchObject({ category: "rejected", backendCode: "claude_submission_withdrawn",
+      crossedSubmissionBoundary: false, retryable: false });
+    expect(handle.withdrewSubmission(OPERATION_ID)).toBe(true);
+    expect(handle.hasUnconfirmedSubmission(OPERATION_ID)).toBe(false);
+    expect((await projectionSnapshot(handle)).runState).toBe("idle");
+    await expect(handle.submit(submitInput(OPERATION_ID, "Withdrawn input"))).rejects.toMatchObject({
+      backendCode: "claude_submission_withdrawn", crossedSubmissionBoundary: false });
+    await handle.close();
+  });
+
+  it("publishes running and idle for a turn observed only through consumption stamps", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider);
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const submitted = handle.submit(submitInput(OPERATION_ID, "Answer without an echo"));
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.start("msg-stamped", [OPERATION_ID]));
+    provider.messages.push(nativeFrames.text("msg-stamped", "Stamped answer", [OPERATION_ID]));
+    provider.messages.push(nativeFrames.result([OPERATION_ID]));
+    await expect(submitted).resolves.toMatchObject({ accepted: true });
+    // The shared actor stays transitional until it observes this idle edge.
+    await vi.waitFor(() => expect(runStates(events)).toEqual(["running", "idle"]));
+    const completed = events.findIndex(event => event.type === "turn_completed");
+    expect(completed).toBeGreaterThanOrEqual(0);
+    expect(completed).toBeLessThan(events.findIndex(event => event.type === "run_state_changed" && event.state === "idle"));
+    await handle.close();
+  });
+
+  it("starts a local turn at Claude's exact dequeue, before any model output", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider);
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const submitted = handle.submit(submitInput(OPERATION_ID, "Start before first token"));
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "queued"));
+    provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "started"));
+    await expect(submitted).resolves.toMatchObject({ accepted: true, completionCorrelation: OPERATION_ID });
+    expect(runStates(events)).toEqual(["running"]);
+    expect(events.find(event => event.type === "turn_started")).toMatchObject({
+      turn: { completionCorrelations: [OPERATION_ID], status: "in_progress" },
+    });
+    expect(events.some(event => event.type.startsWith("item_") && "item" in event &&
+      event.item.semanticKind === "assistant_message")).toBe(false);
+    provider.messages.push(nativeFrames.start("msg-late", [OPERATION_ID]));
+    provider.messages.push(nativeFrames.text("msg-late", "First token arrived later", [OPERATION_ID]));
+    provider.messages.push(nativeFrames.result([OPERATION_ID]));
+    provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "completed"));
+    provider.messages.push(nativeFrames.state("idle"));
+    await vi.waitFor(() => expect(runStates(events)).toEqual(["running", "idle"]));
+    await vi.waitFor(() => expect(handle.retirementBlocked).toBe(false));
+    await handle.close();
+  });
+
+  it("models a task-notification turn Claude starts itself as running, then idle, without a receipt", async () => {
+    const provider = fixture();
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const writeTerminal = vi.spyOn(settings, "writeTerminalReceipt");
+    expect(handle.retirementBlocked).toBe(false);
+    provider.messages.push(nativeFrames.taskNotification("task-1"));
+    provider.messages.push(nativeFrames.state("running"));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("running"));
+    expect(handle.retirementBlocked).toBe(true);
+    expect((await projectionSnapshot(handle)).activeBackendTurnId).toBeDefined();
+    // A send while Claude works is refused locally; the actor steers instead.
+    await expect(handle.submit(submitInput("66666666-6666-4666-8666-666666666666", "Wait")))
+      .rejects.toMatchObject({ backendCode: "claude_turn_already_active", crossedSubmissionBoundary: false });
+    const settled = (await projectionSnapshot(handle)).orderedBackendTurnIds[0]!;
+    provider.messages.push(nativeFrames.start("msg-notified"));
+    // Partial text streams under the notification turn, as on reload.
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "turn_started" })));
+    const notificationTurn = events.find(event => event.type === "turn_started")!;
+    const notificationTurnId = notificationTurn.type === "turn_started" ? notificationTurn.turn.backendTurnId : "";
+    expect(notificationTurnId).not.toBe(settled);
+    expect(events.filter(event => event.type === "run_state_changed").at(-1)).toMatchObject({
+      state: "running", activeBackendTurnId: notificationTurnId });
+    provider.messages.push(nativeFrames.text("msg-notified", "The agents finished."));
+    // An empty drain receipt for a coalesced notification does not end it.
+    provider.messages.push(nativeFrames.result([], { origin: { kind: "task-notification" }, num_turns: 0, result: "" }));
+    provider.messages.push(nativeFrames.state("running"));
+    await vi.waitFor(() => expect(handle.retirementBlocked).toBe(true));
+    expect((await projectionSnapshot(handle)).runState).toBe("running");
+    provider.messages.push(nativeFrames.result([], { origin: { kind: "task-notification" } }));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    const live = await projectionSnapshot(handle);
+    expect(live.orderedBackendTurnIds).toEqual([settled, notificationTurnId]);
+    expect(live.turnsById[notificationTurnId]).toMatchObject({ status: "completed" });
+    expect(live.turnsById[notificationTurnId]!.orderedBackendItemIds.map(id => JSON.stringify(live.itemsById[id])))
+      .toEqual([expect.stringContaining("The agents finished.")]);
+    expect(events.some(event => event.type === "resnapshot_required")).toBe(false);
+    expect(writeTerminal).not.toHaveBeenCalled();
+    expect(runStates(events)).toEqual(["running", "running", "idle"]);
+    expect(handle.retirementBlocked).toBe(true);
+    const nudges = events.filter(event => event.type === "background_activity_changed").length;
+    provider.messages.push(nativeFrames.state("idle"));
+    await vi.waitFor(() => expect(handle.retirementBlocked).toBe(false));
+    // Retirement eligibility changed without a run-state edge; re-evaluate it.
+    expect(events.filter(event => event.type === "background_activity_changed").length).toBeGreaterThan(nudges);
+    await handle.close();
+  });
+
+  it("keeps a Stop and its bound when the stopped turn's live boundary opens", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    provider.messages.push(nativeFrames.taskNotification("task-1"));
+    provider.messages.push(nativeFrames.state("running"));
+    await vi.waitFor(() => expect(runStates(events)).toEqual(["running"]));
+    try {
+      vi.useFakeTimers();
+      await handle.interrupt({ applicationOperationId: crypto.randomUUID(),
+        expectedBackendTurnId: (await projectionSnapshot(handle)).activeBackendTurnId! });
+      expect(runStates(events)).toEqual(["running", "stopping"]);
+      // Claude's first response opens the turn's own boundary while stopping.
+      provider.messages.push(nativeFrames.start("msg-notified"));
+      await vi.advanceTimersByTimeAsync(10);
+      const opened = events.find(event => event.type === "turn_started");
+      expect(opened).toBeDefined();
+      expect(runStates(events).at(-1)).toBe("stopping");
+      expect(events.filter(event => event.type === "run_state_changed").at(-1)).toMatchObject({
+        activeBackendTurnId: opened?.type === "turn_started" ? opened.turn.backendTurnId : "" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(runStates(events).at(-1)).toBe("idle");
+    } finally {
+      vi.useRealTimers();
+    }
+    await handle.close();
+  });
+
+  it("projects a live notification turn exactly as reload does, and keeps a peer turn merged as history does", async () => {
+    const turnsOf = (snapshot: Awaited<ReturnType<typeof projectionSnapshot>>) => snapshot.orderedBackendTurnIds.map(id => ({
+      id, status: snapshot.turnsById[id]!.status,
+      items: snapshot.turnsById[id]!.orderedBackendItemIds.map(itemId => {
+        const { backendItemId, backendTurnId, sourceOrder, semanticKind } = snapshot.itemsById[itemId]!;
+        return { backendItemId, backendTurnId, sourceOrder, semanticKind };
+      }),
+    }));
+    const notification = { type: "user", uuid: "88888888-8888-4888-8888-888888888888", session_id: SESSION_ID,
+      parent_tool_use_id: null, parent_agent_id: null, origin: { kind: "task-notification" },
+      message: { role: "user", content: "<task-notification>\n<task-id>task-1</task-id>\n<status>completed</status>\n</task-notification>" } } as SessionMessage;
+    const response = (messageId: string, text: string) => ({ ...nativeFrames.text(messageId, text), uuid: crypto.randomUUID() });
+    for (const kind of ["task-notification", "peer"] as const) {
+      const provider = fixture();
+      const { handle } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+      await handle.establishProjection({ signal: new AbortController().signal });
+      if (kind === "task-notification") provider.messages.push(nativeFrames.taskNotification("task-1"));
+      provider.messages.push(nativeFrames.state("running"));
+      provider.messages.push(nativeFrames.start("msg-follow-up"));
+      const durable = response("msg-follow-up", "Follow-up answer");
+      provider.messages.push(durable);
+      provider.messages.push(nativeFrames.result([], { origin: { kind } }));
+      await vi.waitFor(async () => {
+        const current = await projectionSnapshot(handle);
+        expect(JSON.stringify(current)).toContain("Follow-up answer");
+        expect(current.runState).toBe("idle");
+      });
+      const live = await projectionSnapshot(handle);
+      // Provider history keeps the notification row but drops a peer's isMeta row.
+      const history = [...settledTurn, ...(kind === "task-notification" ? [notification] : []),
+        { ...durable, parent_agent_id: null } as unknown as SessionMessage];
+      const reloaded = createHandle(fixture(), vi.fn(), { initialMessages: history, resumeSession: true }).handle;
+      expect(turnsOf(live)).toEqual(turnsOf(await projectionSnapshot(reloaded)));
+      expect(live.orderedBackendTurnIds).toHaveLength(kind === "task-notification" ? 2 : 1);
+      await reloaded.close();
+      await handle.close();
+    }
+  });
+
+  it.each([
+    { observed: true, origin: "peer", turns: 1 },
+    { observed: false, origin: "task-notification", turns: 2 },
+  ] as const)("corrects a live boundary from exact result provenance (notification frame $observed, $origin)", async ({ observed, origin, turns }) => {
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    if (observed) provider.messages.push(nativeFrames.taskNotification("task-1"));
+    provider.messages.push(nativeFrames.start("msg-follow-up"));
+    provider.messages.push(nativeFrames.text("msg-follow-up", "Follow-up answer"));
+    provider.messages.push(nativeFrames.result([], { origin: { kind: origin } }));
+    await vi.waitFor(() => expect(events).toContainEqual({ type: "resnapshot_required", reason: "history_changed" }));
+    const corrected = await projectionSnapshot(handle);
+    expect(corrected.runState).toBe("idle");
+    expect(corrected.orderedBackendTurnIds).toHaveLength(turns);
+    expect(JSON.stringify(corrected.turnsById[corrected.orderedBackendTurnIds.at(-1)!]!.orderedBackendItemIds
+      .map(id => corrected.itemsById[id]))).toContain("Follow-up answer");
+    await expect(handle.captureSubmissionRetryAnchor()).resolves.toContain('"messageCount":3');
+    await handle.close();
+  });
+
+  it("stops a turn Claude started itself", async () => {
+    const provider = fixture();
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const writeTerminal = vi.spyOn(settings, "writeTerminalReceipt");
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.start("msg-peer"));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("running"));
+    const active = (await projectionSnapshot(handle)).activeBackendTurnId!;
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: active });
+    expect(provider.controls.interrupt).toHaveBeenCalledOnce();
+    expect((await projectionSnapshot(handle)).runState).toBe("stopping");
+    provider.messages.push(nativeFrames.result([], { subtype: "error_during_execution", is_error: true,
+      terminal_reason: "aborted_streaming", errors: [] }));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    expect(writeTerminal).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it("lets a steer take over a turn Claude started and settles it on the steer's own turn", async () => {
+    const provider = fixture();
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const writeTerminal = vi.spyOn(settings, "writeTerminalReceipt");
+    const steerId = "77777777-7777-4777-8777-777777777777";
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.start("msg-meta"));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("running"));
+    await expect(handle.steer({ ...submitInput(steerId, "Use this instead"), target: { kind: "conversation" } }))
+      .resolves.toMatchObject({ status: "pending_materialization" });
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    // A message folded into a meta turn takes it over from its start, and
+    // later takes over its reply stamps.
+    provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+    await vi.waitFor(async () => {
+      const taken = await projectionSnapshot(handle);
+      expect(taken.runState).toBe("running");
+      expect(taken.turnsById[taken.activeBackendTurnId!]!.completionCorrelations).toEqual([steerId]);
+    });
+    expect(settings.listSteerOperations({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId },
+      BINDING.applicationThreadId).get(steerId)).toBe(steerId);
+    provider.messages.push(nativeFrames.start("msg-steered", [steerId]));
+    provider.messages.push(nativeFrames.text("msg-steered", "Following the steer.", [steerId]));
+    provider.messages.push(nativeFrames.result([steerId]));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    const history = await handle.history({ limit: 10 });
+    const steered = history.turnsById[history.orderedBackendTurnIds.at(-1)!]!;
+    expect(steered.completionCorrelations).toEqual([steerId]);
+    expect(writeTerminal).toHaveBeenCalledOnce();
+    expect(writeTerminal).toHaveBeenCalledWith(expect.anything(), BINDING.applicationThreadId,
+      expect.objectContaining({ backendTurnId: steered.backendTurnId, status: "completed" }));
+    await handle.close();
+  });
+
+  it("re-applies only a settings axis the live query has not confirmed", async () => {
+    const provider = fixture({ initModel: "claude-opus-5" });
+    const { handle } = createHandle(provider);
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const inputs = provider.prompt()[Symbol.asyncIterator]();
+    const turn = async (operationId: string) => {
+      const submitted = handle.submit(submitInput(operationId, `Turn ${operationId}`));
+      await inputs.next();
+      provider.messages.push(nativeFrames.lifecycle(operationId, "started"));
+      await submitted;
+      provider.messages.push(nativeFrames.result([operationId]));
+      await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    };
+    await turn("a1111111-1111-4111-8111-111111111111");
+    expect(provider.controls.setModel).toHaveBeenCalledExactlyOnceWith("claude-sonnet-5");
+    expect(provider.controls.setPermissionMode).not.toHaveBeenCalled();
+    expect(provider.controls.applyFlagSettings).toHaveBeenCalledOnce();
+    await turn("a2222222-2222-4222-8222-222222222222");
+    expect(provider.controls.setModel).toHaveBeenCalledOnce();
+    // Claude reports a mode change; the next send restores the desired mode.
+    provider.messages.push({ type: "system", subtype: "status", status: null, permissionMode: "acceptEdits",
+      uuid: crypto.randomUUID(), session_id: SESSION_ID } as SDKMessage);
+    await vi.waitFor(async () => expect((await handle.backendCapabilities()).revision).toContain("acceptEdits"));
+    await turn("a3333333-3333-4333-8333-333333333333");
+    expect(provider.controls.setPermissionMode).toHaveBeenCalledExactlyOnceWith("default");
+    expect(provider.controls.setModel).toHaveBeenCalledOnce();
+    expect(provider.controls.applyFlagSettings).toHaveBeenCalledOnce();
+    await handle.close();
+  });
+
+  it("keeps the first receipt and the attachment when a later result conflicts with it", async () => {
+    const provider = fixture();
+    const onError = vi.fn();
+    const release = vi.fn();
+    const { handle, settings } = createHandle(provider, release, { onError });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const submitted = handle.submit(submitInput(OPERATION_ID, "Conflict"));
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "started"));
+    await submitted;
+    const turnId = (await projectionSnapshot(handle)).activeBackendTurnId!;
+    settings.writeTerminalReceipt({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId },
+      BINDING.applicationThreadId, { backendTurnId: turnId, status: "failed", failureMessage: "Earlier failure",
+        providerResultUuid: crypto.randomUUID(), terminalAt: 1, now: 1 });
+    provider.messages.push(nativeFrames.text("msg-conflict", "Late success", [OPERATION_ID]));
+    provider.messages.push(nativeFrames.result([OPERATION_ID]));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("failed"));
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "claude_terminal_receipt_status_conflict" }));
+    expect(release).not.toHaveBeenCalled();
+    provider.messages.push(nativeFrames.state("idle"));
+    await expect(handle.usage()).resolves.toBeDefined();
+    await handle.close();
+  });
+});
+
+describe("Claude compaction, lost processes, and bounded Stop", () => {
+  const PROMPT_ID = "a1000000-0000-4000-8000-000000000001";
+  const KEPT_CALL = "a1000000-0000-4000-8000-000000000002";
+  const KEPT_RESULT = "a1000000-0000-4000-8000-000000000003";
+  const SUMMARY_ID = "a1000000-0000-4000-8000-000000000004";
+  const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+  const submitInput = (text: string) => ({
+    applicationOperationId: PROMPT_ID, mutationId: "mutation-compacted", source: { kind: "user" as const },
+    reconciliationToken: "reconcile-compacted", text, contextExcerpts: [], attachments: [], taskContexts: [],
+  });
+  const settledTurn = [
+    { type: "user", uuid: OPERATION_ID, session_id: SESSION_ID, parent_tool_use_id: null, parent_agent_id: null,
+      message: { role: "user", content: "Summarize the notes" } },
+    { type: "assistant", uuid: "a1000000-0000-4000-8000-000000000010", session_id: SESSION_ID,
+      parent_tool_use_id: null, parent_agent_id: null,
+      message: { id: "msg-settled", role: "assistant", content: [{ type: "text", text: "Three notes." }],
+        stop_reason: "end_turn", usage: {} } },
+  ] as SessionMessage[];
+  const unanswered = { type: "user", uuid: PROMPT_ID, session_id: SESSION_ID, parent_tool_use_id: null,
+    parent_agent_id: null, message: { role: "user", content: "Refactor the parser" } } as SessionMessage;
+  const keptCall = { type: "assistant", uuid: KEPT_CALL, session_id: SESSION_ID, parent_tool_use_id: null,
+    user_message_uuid: PROMPT_ID, user_message_uuids: [PROMPT_ID],
+    message: { id: "msg-kept", type: "message", role: "assistant", model: "claude-sonnet-5", stop_reason: "tool_use",
+      content: [{ type: "tool_use", id: "toolu_kept", name: "Read", input: { file_path: "/workspace/parser.ts" } }],
+      usage: { input_tokens: 1, output_tokens: 1 } } } as unknown as SDKMessage;
+  const keptResult = { type: "user", uuid: KEPT_RESULT, session_id: SESSION_ID, parent_tool_use_id: null,
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_kept", content: "parser source" }] } } as SDKMessage;
+  const boundary = (preserved: readonly string[]) => ({ type: "system", subtype: "compact_boundary", uuid: crypto.randomUUID(),
+    session_id: SESSION_ID, compact_metadata: { trigger: "auto", pre_tokens: 970_000,
+      preserved_messages: { anchor_uuid: SUMMARY_ID, uuids: [...preserved] } } }) as unknown as SDKMessage;
+  const summary = { type: "user", uuid: SUMMARY_ID, session_id: SESSION_ID, parent_tool_use_id: null, isSynthetic: true,
+    timestamp: "2026-09-26T10:00:00.000Z",
+    message: { role: "user", content: "This session is being continued from a previous conversation. Summary: synthetic." } } as SDKMessage;
+  const runStates = (events: readonly BackendConversationEvent[]) =>
+    events.flatMap(event => event.type === "run_state_changed" ? [event.state] : []);
+  const shape = (snapshot: Awaited<ReturnType<typeof projectionSnapshot>>) => snapshot.orderedBackendTurnIds.map(id => ({
+    id, status: snapshot.turnsById[id]!.status,
+    items: snapshot.turnsById[id]!.orderedBackendItemIds.map(itemId => {
+      const { backendItemId, sourceOrder, semanticKind } = snapshot.itemsById[itemId]!;
+      return { backendItemId, sourceOrder, semanticKind };
+    }),
+  }));
+
+  /** A submitted turn that ran one tool round before Claude compacted it. */
+  async function compactedTurn() {
+    const provider = fixture();
+    const created = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    const established = await created.handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const submitted = created.handle.submit(submitInput("Refactor the parser"));
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.lifecycle(PROMPT_ID, "started"));
+    await submitted;
+    provider.messages.push(keptCall);
+    provider.messages.push(keptResult);
+    provider.messages.push(boundary([KEPT_CALL, KEPT_RESULT, crypto.randomUUID()]));
+    provider.messages.push(summary);
+    await vi.waitFor(() => expect(events).toContainEqual({ type: "resnapshot_required", reason: "history_changed" }));
+    const turnId = (await projectionSnapshot(created.handle)).activeBackendTurnId!;
+    return { ...created, provider, events, turnId };
+  }
+
+  it("keeps a turn Claude compacts, shows the summary as its marker, and settles it with its own result", async () => {
+    const { handle, settings, provider, events, turnId } = await compactedTurn();
+    const compacted = await projectionSnapshot(handle);
+    expect(compacted.orderedBackendTurnIds).toHaveLength(2);
+    expect(compacted).toMatchObject({ runState: "running", activeBackendTurnId: turnId });
+    // History puts the summary before the output the compaction kept; so does the live view.
+    expect(shape(compacted)[1]!.items.map(item => item.semanticKind))
+      .toEqual(["user_message", "compaction", "file_read"]);
+    // The summary is never a prompt.
+    expect(JSON.stringify(Object.values(compacted.itemsById).filter(item => item.semanticKind === "user_message")))
+      .not.toContain("This session is being continued");
+    provider.messages.push(nativeFrames.start("msg-after"));
+    const answer = { ...nativeFrames.text("msg-after", "The parser is refactored."), uuid: "a1000000-0000-4000-8000-000000000005" } as SDKMessage;
+    provider.messages.push(answer);
+    const result = nativeFrames.result([PROMPT_ID]);
+    provider.messages.push(result);
+    provider.messages.push(nativeFrames.state("idle"));
+    await vi.waitFor(() => expect(runStates(events).at(-1)).toBe("idle"));
+    const live = await projectionSnapshot(handle);
+    expect(live.turnsById[turnId]).toMatchObject({ status: "completed" });
+    expect(settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId }))
+      .toMatchObject({ status: "completed", providerResultUuid: (result as { uuid: string }).uuid });
+    expect(live.itemsById[live.turnsById[turnId]!.orderedBackendItemIds[1]!]).toMatchObject({
+      semanticKind: "compaction", summary: { text: expect.stringContaining("Summary: synthetic.") } });
+    expect(await handle.usage()).toMatchObject({ counters: { compactions: 1 } });
+    expect((await handle.backendCapabilities()).branching).toMatchObject({ availability: "available",
+      fidelity: { compaction: true, limitations: expect.arrayContaining([
+        { text: expect.stringContaining("a fork copies only the compaction summary and the turns after it") }]) } });
+    await handle.close();
+
+    // Provider history, read tip-correctly across the boundary, projects the same turns and items.
+    const history = [...settledTurn, { ...unanswered, message: { role: "user", content: "Refactor the parser" } },
+      { ...summary, parent_agent_id: null, isCompactSummary: true },
+      { ...keptCall, parent_agent_id: null }, { ...keptResult, parent_agent_id: null },
+      { ...answer, parent_agent_id: null }] as unknown as SessionMessage[];
+    const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: history, resumeSession: true }).handle;
+    expect(shape(await projectionSnapshot(reloaded))).toEqual(shape(live));
+    await reloaded.close();
+  });
+
+  it("never publishes an unforkable reason on a turn that is still running", async () => {
+    // Claude answered, then compacted before its result: the answer precedes
+    // the compaction, so history calls the turn completed but unforkable.
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const submitted = handle.submit(submitInput("Refactor the parser"));
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.lifecycle(PROMPT_ID, "started"));
+    await submitted;
+    provider.messages.push(nativeFrames.text("msg-answer", "Refactored.", [PROMPT_ID]));
+    provider.messages.push(boundary([]));
+    provider.messages.push(summary);
+    await vi.waitFor(async () => expect(Object.values((await projectionSnapshot(handle)).itemsById)
+      .some(item => item.semanticKind === "compaction")).toBe(true));
+    const live = await projectionSnapshot(handle);
+    const turnId = live.activeBackendTurnId!;
+    expect(live).toMatchObject({ runState: "running" });
+    expect(backendConversationSnapshotSchema.safeParse(live).success).toBe(true);
+    expect(live.turnsById[turnId]).toEqual(expect.objectContaining({ status: "in_progress" }));
+    for (const key of ["forkUnavailableReason", "endedBy", "completedAt"]) {
+      expect(live.turnsById[turnId]).not.toHaveProperty(key);
+    }
+    const turnEvents = events.flatMap(event => "turn" in event ? [event.turn] : []);
+    expect(turnEvents.length).toBeGreaterThan(0);
+    for (const turn of turnEvents) expect(backendTurnSchema.safeParse(turn).success).toBe(true);
+    // The earlier turn became unforkable; that change alone is published.
+    const earlier = live.orderedBackendTurnIds[0]!;
+    expect(events).toContainEqual({ type: "turn_updated", turn: expect.objectContaining({ backendTurnId: earlier,
+      status: "completed", forkUnavailableReason: { text: expect.stringContaining("before its latest compaction") } }) });
+    provider.messages.push(nativeFrames.result([PROMPT_ID]));
+    provider.messages.push(nativeFrames.state("idle"));
+    await vi.waitFor(() => expect(runStates(events).at(-1)).toBe("idle"));
+    expect((await projectionSnapshot(handle)).turnsById[turnId]).toMatchObject({ status: "completed",
+      forkUnavailableReason: { text: expect.stringContaining("before its latest compaction") } });
+    await handle.close();
+  });
+
+  it("settles Stop during a compacted turn with Claude's interrupted result", async () => {
+    const { handle, settings, provider, events, turnId } = await compactedTurn();
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: turnId });
+    expect(runStates(events).at(-1)).toBe("stopping");
+    const result = nativeFrames.result([PROMPT_ID], { terminal_reason: "aborted_streaming" });
+    provider.messages.push(result);
+    await vi.waitFor(() => expect(runStates(events).at(-1)).toBe("idle"));
+    expect(settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId }))
+      .toMatchObject({ status: "interrupted", providerTerminalReason: "aborted_streaming" });
+    await handle.close();
+  });
+
+  it("marks a trailing unfinished turn interrupted once a fresh launch proves its process gone, exactly once", async () => {
+    const settings = repository();
+    const writes = vi.spyOn(settings, "writeTerminalReceipt");
+    const history = [...settledTurn, unanswered, { ...keptCall, parent_agent_id: null } as unknown as SessionMessage];
+    const first = createHandle(fixture(), vi.fn(), { settings, initialMessages: history, resumeSession: true }).handle;
+    const snapshot = await projectionSnapshot(first);
+    const turnId = snapshot.orderedBackendTurnIds[1]!;
+    expect(snapshot.runState).toBe("idle");
+    expect(snapshot.turnsById[turnId]).toMatchObject({ status: "interrupted", endedBy: "interrupted" });
+    expect(snapshot.turnsById[turnId]!.orderedBackendItemIds.map(id => snapshot.itemsById[id])).toEqual([
+      expect.objectContaining({ semanticKind: "user_message" }),
+      expect.objectContaining({ semanticKind: "file_read", status: "interrupted" }),
+      expect.objectContaining({ semanticKind: "notice", tone: "warning", text: { text:
+        "Claude Code stopped before this turn finished. Sedes marked it interrupted when the conversation reopened." } }),
+    ]);
+    expect(settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId }))
+      .toMatchObject({ status: "interrupted", providerTerminalReason: "process_lost", providerResultUuid: null });
+    await first.close();
+    const reopened = createHandle(fixture(), vi.fn(), { settings, initialMessages: history, resumeSession: true }).handle;
+    expect(shape(await projectionSnapshot(reopened))).toEqual(shape(snapshot));
+    expect(writes).toHaveBeenCalledOnce();
+    await reopened.close();
+  });
+
+  it("marks a lost turn that ended on a tool result although its thinking row carries the tool_use stop reason", async () => {
+    // Claude Code 2.1.28x stamps every block row with its message's final stop reason.
+    const thinking = { type: "assistant", uuid: "a1000000-0000-4000-8000-000000000011", session_id: SESSION_ID,
+      parent_tool_use_id: null, parent_agent_id: null, timestamp: "2026-09-26T10:00:00.000Z",
+      message: { id: "msg-kept", role: "assistant", stop_reason: "tool_use",
+        content: [{ type: "thinking", thinking: "Read the parser first.", signature: "s" }], usage: {} } } as SessionMessage;
+    const settings = repository();
+    const history = [...settledTurn, unanswered, thinking, { ...keptCall, parent_agent_id: null },
+      { ...keptResult, parent_agent_id: null }] as unknown as SessionMessage[];
+    const { handle } = createHandle(fixture(), vi.fn(), { settings, initialMessages: history, resumeSession: true });
+    const snapshot = await projectionSnapshot(handle);
+    const turnId = snapshot.orderedBackendTurnIds[1]!;
+    expect(snapshot.runState).toBe("idle");
+    expect(snapshot.turnsById[turnId]).toMatchObject({ status: "interrupted", endedBy: "interrupted" });
+    expect(snapshot.turnsById[turnId]).not.toHaveProperty("forkUnavailableReason");
+    expect(settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId }))
+      .toMatchObject({ status: "interrupted", providerTerminalReason: "process_lost" });
+    await handle.close();
+  });
+
+  it("leaves the turn alone when Claude Code already closed it", async () => {
+    const closure = { type: "assistant", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+      parent_agent_id: null, timestamp: "2026-09-26T10:00:00.000Z", message: { id: crypto.randomUUID(), role: "assistant",
+        model: "<synthetic>", content: [{ type: "text", text: "No response requested." }], stop_reason: "stop_sequence", usage: {} } } as SessionMessage;
+    const settings = repository();
+    const writes = vi.spyOn(settings, "writeTerminalReceipt");
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { settings, resumeSession: true,
+      initialMessages: [...settledTurn, unanswered, closure] });
+    const snapshot = await projectionSnapshot(handle);
+    expect(snapshot.runState).toBe("idle");
+    provider.messages.push(nativeFrames.state("idle"));
+    provider.messages.push(nativeFrames.state("running"));
+    await vi.waitFor(() => expect(handle.retirementBlocked).toBe(true));
+    expect(writes).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it("waits while Claude handles the startup message, then closes the turn when it reports idle", async () => {
+    const provider = fixture();
+    const settings = repository();
+    const { handle } = createHandle(provider, vi.fn(), { settings, initialMessages: [...settledTurn, unanswered],
+      resumeSession: true, claudeRunning: true });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const turnId = established.snapshot.activeBackendTurnId!;
+    expect(established.snapshot.runState).toBe("running");
+    expect(settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId })).toBeUndefined();
+    provider.messages.push(nativeFrames.state("idle"));
+    await vi.waitFor(() => expect(runStates(events)).toEqual(["idle"]));
+    expect(events).toContainEqual(expect.objectContaining({ type: "turn_completed",
+      turn: expect.objectContaining({ backendTurnId: turnId, status: "interrupted" }) }));
+    expect(settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId }))
+      .toMatchObject({ providerTerminalReason: "process_lost" });
+    await handle.close();
+  });
+
+  it("closes the lost turn when Claude starts this attachment's next input first", async () => {
+    // Sedes delivers input to a running thread as Steer; Claude starts it as a
+    // turn of its own because nothing else is running.
+    const steerId = "a1000000-0000-4000-8000-000000000021";
+    const provider = fixture();
+    const settings = repository();
+    const { handle } = createHandle(provider, vi.fn(), { settings, initialMessages: [...settledTurn, unanswered],
+      resumeSession: true, claudeRunning: true });
+    const lostTurn = (await projectionSnapshot(handle)).activeBackendTurnId!;
+    await handle.steer({ applicationOperationId: steerId, mutationId: "steer-after-loss", reconciliationToken: "steer-after-loss",
+      target: { kind: "conversation" }, text: "Try again", contextExcerpts: [], taskContexts: [], attachments: [] });
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.start("msg-steered", [steerId]));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).turnsById[lostTurn]).toMatchObject({ status: "interrupted" }));
+    const snapshot = await projectionSnapshot(handle);
+    expect(snapshot).toMatchObject({ runState: "running" });
+    expect(snapshot.activeBackendTurnId).not.toBe(lostTurn);
+    expect(settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: lostTurn }))
+      .toMatchObject({ providerTerminalReason: "process_lost" });
+    await handle.close();
+  });
+
+  it.each(["idle", "failed"] as const)(
+    "does not treat a fresh persistent launch handling its startup message as a turn Claude started (%s)", async (settled) => {
+      // Claude reports running for Sedes' startup message, answers it with a
+      // result naming only that message, and reports idle; the owner holds
+      // those frames until history is installed.
+      const settings = repository();
+      const provider = fixture();
+      if (settled === "failed") {
+        settings.writeTerminalReceipt({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId }, BINDING.applicationThreadId, {
+          backendTurnId: projectClaudeHistory(settledTurn).snapshot.orderedBackendTurnIds.at(-1)!, status: "failed",
+          failureMessage: "Synthetic failure", providerTerminalReason: "error_during_execution",
+          providerResultUuid: "a1000000-0000-4000-8000-000000000031", terminalAt: 1, now: 1 });
+      }
+      const retained = retainedRuntime(provider, [], undefined, { reattached: false, afterStart: (startup) => [
+        nativeFrames.state("running"), nativeFrames.lifecycle(startup, "started"),
+        nativeFrames.result([startup]), nativeFrames.lifecycle(startup, "completed"), nativeFrames.state("idle")] });
+      const { handle } = createHandle(provider, vi.fn(), { settings, runtimeClient: retained.runtime,
+        initialMessages: settledTurn, resumeSession: true });
+      const events: BackendConversationEvent[] = [];
+      handle.subscribe(event => events.push(event));
+      const snapshot = await projectionSnapshot(handle);
+      expect(snapshot.runState).toBe(settled);
+      expect(snapshot.activeBackendTurnId).toBeUndefined();
+      expect(runStates(events)).toEqual([]);
+      // A turn Claude then starts on its own is still modelled.
+      provider.messages.push(nativeFrames.state("running"));
+      await vi.waitFor(() => expect(runStates(events)).toEqual(["running"]));
+      provider.messages.push(nativeFrames.state("idle"));
+      await vi.waitFor(() => expect(runStates(events)).toEqual(["running", "idle"]));
+      await handle.close();
+    },
+  );
+
+  it("never marks the running turn of a reattached query", async () => {
+    const provider = fixture();
+    const retained = retainedRuntime(provider, []);
+    const settings = repository();
+    const writes = vi.spyOn(settings, "writeTerminalReceipt");
+    const { handle } = createHandle(provider, vi.fn(), { settings, runtimeClient: retained.runtime,
+      initialMessages: [...settledTurn, unanswered], resumeSession: true });
+    expect((await projectionSnapshot(handle)).runState).toBe("running");
+    expect(writes).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  describe("a Stop Claude never settles", () => {
+    afterEach(() => { vi.useRealTimers(); });
+
+    const HELD_STEER_ID = "a1000000-0000-4000-8000-000000000020";
+
+    async function stopping(options: { readonly claudeRunning: boolean; readonly heldSteer?: true }) {
+      const provider = fixture();
+      const settings = repository();
+      const { handle } = createHandle(provider, vi.fn(), { settings, initialMessages: settledTurn, resumeSession: true });
+      const established = await handle.establishProjection({ signal: new AbortController().signal });
+      const events: BackendConversationEvent[] = [];
+      established.subscribeFromNext(({ event }) => events.push(event));
+      const submitted = handle.submit(submitInput("Refactor the parser"));
+      await provider.prompt()[Symbol.asyncIterator]().next();
+      if (options.claudeRunning) provider.messages.push(nativeFrames.state("running"));
+      provider.messages.push(nativeFrames.lifecycle(PROMPT_ID, "started"));
+      await submitted;
+      if (options.claudeRunning) await vi.waitFor(() => expect(handle.retirementBlocked).toBe(true));
+      if (options.heldSteer) {
+        await handle.steer({ applicationOperationId: HELD_STEER_ID, mutationId: "mutation-held-steer",
+          reconciliationToken: "reconcile-held-steer", target: { kind: "conversation" }, text: "Also check the lexer",
+          contextExcerpts: [], attachments: [], taskContexts: [] });
+        provider.messages.push(nativeFrames.lifecycle(HELD_STEER_ID, "queued"));
+      }
+      const turnId = (await projectionSnapshot(handle)).activeBackendTurnId!;
+      vi.useFakeTimers();
+      await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: turnId });
+      expect(runStates(events).at(-1)).toBe("stopping");
+      const receipt = () => settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId });
+      return { handle, provider, events, turnId, receipt };
+    }
+
+    it("ends it after the bound with a truthful receipt", async () => {
+      const { handle, events, turnId, receipt } = await stopping({ claudeRunning: true });
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(runStates(events).at(-1)).toBe("stopping");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(runStates(events).at(-1)).toBe("idle");
+      expect(receipt()).toMatchObject({ status: "interrupted", providerTerminalReason: "interrupt_unconfirmed", providerResultUuid: null });
+      expect((await projectionSnapshot(handle)).turnsById[turnId]).toMatchObject({ status: "interrupted" });
+      await handle.close();
+    });
+
+    it("ends it shortly after Claude reports idle, unless the result lands first", async () => {
+      const idle = await stopping({ claudeRunning: true });
+      idle.provider.messages.push(nativeFrames.state("idle"));
+      await vi.advanceTimersByTimeAsync(999);
+      expect(runStates(idle.events).at(-1)).toBe("stopping");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(runStates(idle.events).at(-1)).toBe("idle");
+      expect(idle.receipt()).toMatchObject({ providerTerminalReason: "interrupt_unconfirmed" });
+      await idle.handle.close();
+      vi.useRealTimers();
+
+      const settled = await stopping({ claudeRunning: true });
+      settled.provider.messages.push(nativeFrames.state("idle"));
+      const result = nativeFrames.result([PROMPT_ID], { terminal_reason: "aborted_streaming" });
+      settled.provider.messages.push(result);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(runStates(settled.events).at(-1)).toBe("idle");
+      await vi.advanceTimersByTimeAsync(STOP_BOUND);
+      expect(settled.receipt()).toMatchObject({ providerTerminalReason: "aborted_streaming",
+        providerResultUuid: (result as { uuid: string }).uuid });
+      expect(runStates(settled.events).filter(state => state === "idle")).toHaveLength(1);
+      await settled.handle.close();
+    });
+
+    it("ends it within the idle grace once Claude withdraws a steer it still held", async () => {
+      const { handle, provider, events, receipt } = await stopping({ claudeRunning: true, heldSteer: true });
+      // Idle alone does not settle it while Sedes still waits on the steer.
+      provider.messages.push(nativeFrames.state("idle"));
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(runStates(events).at(-1)).toBe("stopping");
+      provider.messages.push(nativeFrames.lifecycle(HELD_STEER_ID, "cancelled"));
+      await vi.advanceTimersByTimeAsync(999);
+      expect(runStates(events).at(-1)).toBe("stopping");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(runStates(events).at(-1)).toBe("idle");
+      expect(handle.withdrewSubmission(HELD_STEER_ID)).toBe(true);
+      expect(receipt()).toMatchObject({ status: "interrupted", providerTerminalReason: "interrupt_unconfirmed" });
+      await handle.close();
+    });
+
+    it("ends it quickly when Claude had nothing running", async () => {
+      const { handle, events, receipt } = await stopping({ claudeRunning: false });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(runStates(events).at(-1)).toBe("idle");
+      expect(receipt()).toMatchObject({ status: "interrupted", providerTerminalReason: "interrupt_unconfirmed" });
+      await handle.close();
+    });
+  });
+});
+
+const STOP_BOUND = 30_000;

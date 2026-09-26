@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, realpath, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, realpath, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -36,6 +36,27 @@ describe("embedded Claude sidecar worker", () => {
     expect(second.executableDirectory).not.toBe(first.executableDirectory);
     expect(await readFile(first.executablePath, "utf8")).toBe(input.source);
   });
+
+  it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
+    "prunes superseded unreferenced worker builds after a verified install",
+    async () => {
+      const root = await directory();
+      const workers = path.join(root, "claude-workers");
+      await mkdir(workers, { mode: 0o700 });
+      const superseded = ["a", "b", "c", "d"].map(label => createHash("sha256").update(label).digest("hex"));
+      for (const [index, name] of superseded.entries()) {
+        await mkdir(path.join(workers, name), { mode: 0o700 });
+        await writeFile(path.join(workers, name, "sedes-claude-runtime-worker.mjs"), "old\n", { mode: 0o500 });
+        const time = new Date(Date.now() - (index + 2) * 60 * 60 * 1_000);
+        await utimes(path.join(workers, name), time, time);
+      }
+      const installed = await installClaudeWorkerBundle(root, bundle());
+      // The installed build plus the two newest superseded builds remain.
+      expect((await readdir(workers)).sort()).toEqual(
+        [installed.artifactSha256, superseded[0]!, superseded[1]!].sort(),
+      );
+    },
+  );
 
   it("rejects digest mismatch and malformed manifest before publishing", async () => {
     const root = await directory();

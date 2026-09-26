@@ -210,6 +210,8 @@ export type TurnForkAttempt =
       readonly phase: "aborted";
       readonly childThreadId: string;
       readonly diagnostic: string;
+      /** False when a new fork of the same boundary would fail the same way. */
+      readonly restartable: boolean;
     };
 
 export const LATEST_PROVIDER_SNAPSHOT_FORK_ATTEMPT_KEY =
@@ -1958,6 +1960,7 @@ export class ThreadClientStore {
             phase: "aborted",
             childThreadId: result.childThreadId,
             diagnostic: result.diagnostic,
+            restartable: result.restartable,
           });
           this.#forkRequests.delete(attemptKey);
         }
@@ -2148,6 +2151,19 @@ export class ThreadClientStore {
     });
   }
 
+  /** Remove this unfinished fork child; the server never adopts its provider child. */
+  discardFork(): Promise<void> {
+    return this.#mutate(async () => {
+      this.#requireOperation("discard_fork");
+      const result = await this.#api.operateThread(this.threadId, {
+        kind: "discard_fork",
+      });
+      if (result.status !== "aborted") {
+        throw new Error("Discarding the fork returned an invalid receipt.");
+      }
+    });
+  }
+
   recoverUncertain(): Promise<void> {
     return this.#mutate(async () => {
       const generation = this.normalized.state.generation;
@@ -2155,6 +2171,10 @@ export class ThreadClientStore {
       const result = await this.#api.operateThread(this.threadId, {
         kind: "recover_uncertain",
       });
+      if (result.status === "aborted" && result.diagnostic) {
+        // The recovered creation was discarded; say why before it disappears.
+        throw new Error(`The fork was discarded. ${result.diagnostic}`);
+      }
       if (
         result.status === "delivery_accepted" ||
         result.status === "delivery_pending_materialization"

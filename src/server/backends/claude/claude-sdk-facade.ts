@@ -1,6 +1,5 @@
 import {
   getSessionInfo,
-  getSessionMessages,
   listSessions,
   query,
   renameSession,
@@ -17,6 +16,11 @@ import {
   assertClaudeSdkHelperEnvironment,
   type ClaudeChildEnvironment,
 } from "./claude-child-environment.js";
+import {
+  locateClaudeSessionTranscript,
+  readClaudeSessionMessages,
+  type ClaudeTranscriptReadOptions,
+} from "./claude-native-transcript.js";
 
 export interface ClaudeCliAuthStatus {
   readonly loggedIn: boolean;
@@ -104,7 +108,7 @@ function readOptionalString(
 }
 
 /** Exact SDK release whose exported contracts this backend compiles against. */
-export const CLAUDE_AGENT_SDK_RELEASE = "0.3.274";
+export const CLAUDE_AGENT_SDK_RELEASE = "0.3.283";
 
 export interface ClaudeQueryInput {
   readonly prompt: Parameters<typeof query>[0]["prompt"];
@@ -112,8 +116,9 @@ export interface ClaudeQueryInput {
 }
 
 /**
- * Injectable, provider-private boundary around the official SDK. Tests fake
- * this interface rather than recreating Claude Code's private wire protocol.
+ * Injectable, provider-private boundary around the official SDK and Claude
+ * Code's native store. Tests fake this interface rather than recreating Claude
+ * Code's private wire protocol.
  */
 export interface ClaudeSdkFacade {
   readCliRelease(
@@ -140,11 +145,22 @@ export interface ClaudeSdkFacade {
     options: GetSessionInfoOptions,
     environment: ClaudeChildEnvironment,
   ): Promise<SDKSessionInfo | undefined>;
+  /**
+   * Sedes-owned native history read through the transcript's true tip, never
+   * the SDK's leaf heuristic. `dir` is required. `resumableOnly` is
+   * Sedes-private and never reaches the SDK.
+   */
   getSessionMessages(
     sessionId: string,
-    options: GetSessionMessagesOptions,
+    options: GetSessionMessagesOptions & Pick<ClaudeTranscriptReadOptions, "resumableOnly">,
     environment: ClaudeChildEnvironment,
   ): Promise<SessionMessage[]>;
+  /** Whether Claude Code has a non-empty transcript for this workspace session. */
+  hasSessionTranscript(
+    sessionId: string,
+    options: { readonly dir: string },
+    environment: ClaudeChildEnvironment,
+  ): Promise<boolean>;
   renameSession(
     sessionId: string,
     title: string,
@@ -227,13 +243,24 @@ export class OfficialClaudeSdkFacade implements ClaudeSdkFacade {
     return getSessionInfo(sessionId, options);
   }
 
-  getSessionMessages(
+  async getSessionMessages(
     sessionId: string,
-    options: GetSessionMessagesOptions,
+    options: GetSessionMessagesOptions & Pick<ClaudeTranscriptReadOptions, "resumableOnly">,
     environment: ClaudeChildEnvironment,
   ): Promise<SessionMessage[]> {
     assertClaudeSdkHelperEnvironment(environment);
-    return getSessionMessages(sessionId, options);
+    const { dir, ...readOptions } = options;
+    if (!dir) throw new Error("claude_session_history_directory_required");
+    return await readClaudeSessionMessages(sessionId, { ...readOptions, dir }, environment);
+  }
+
+  async hasSessionTranscript(
+    sessionId: string,
+    options: { readonly dir: string },
+    environment: ClaudeChildEnvironment,
+  ): Promise<boolean> {
+    assertClaudeSdkHelperEnvironment(environment);
+    return (await locateClaudeSessionTranscript(sessionId, options.dir, environment)) !== undefined;
   }
 
   renameSession(

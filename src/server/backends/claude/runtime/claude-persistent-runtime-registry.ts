@@ -3,7 +3,7 @@ import type { RequestScope } from "../../../identity/identity-provider.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../../execution/environment-channel.js";
 import type { ManagedWorkerArtifactRegistration } from "../../../managed-workers/artifact.js";
 import { SidecarResourceHandoffPendingError, type PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
-import type { ClaudeRuntimeClient } from "../claude-runtime-client.js";
+import type { ClaudeOwnedRuntimeClient } from "../claude-runtime-client.js";
 import type { ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v1.js";
 import { ClaudeManagedRuntimeOwner } from "../claude-managed-runtime-owner.js";
 import { ClaudePersistentRuntimeHost } from "./claude-persistent-runtime-host.js";
@@ -19,7 +19,9 @@ export class ClaudePersistentRuntimeRegistry {
     artifact: () => Promise<ManagedWorkerArtifactRegistration>;
     validateQueryEnvironment?: (environment: Readonly<Record<string, string | undefined>>) => void;
     validateAgentToolMcp?: (agentToolMcp: ClaudeRuntimeAgentToolMcp) => void;
-    createRuntime?: (configuration: ClaudePersistentConfiguration) => ClaudeRuntimeClient & { close(): Promise<void> };
+    createRuntime?: (configuration: ClaudePersistentConfiguration) => ClaudeOwnedRuntimeClient & { close(): Promise<void> };
+    /** Residency limit for detached, quiescent queries; tests shorten it. */
+    detachedSessionTtlMs?: number;
   }) {}
 
   ensure(raw: ClaudePersistentConfiguration, epoch: number): ClaudePersistentRuntimeHost {
@@ -45,7 +47,8 @@ export class ClaudePersistentRuntimeRegistry {
       initializationTimeoutMs: configuration.initializationTimeoutMs,
       startupEnvironmentVariables: configuration.startupEnvironmentVariables,
     });
-    const host = new ClaudePersistentRuntimeHost({ configuration, client, close: () => client.close(), services: this.input.services, ...(this.input.validateQueryEnvironment ? { validateQueryEnvironment: this.input.validateQueryEnvironment } : {}), ...(this.input.validateAgentToolMcp ? { validateAgentToolMcp: this.input.validateAgentToolMcp } : {}) });
+    const host = new ClaudePersistentRuntimeHost({ configuration, client, close: () => client.close(), services: this.input.services, ...(this.input.validateQueryEnvironment ? { validateQueryEnvironment: this.input.validateQueryEnvironment } : {}), ...(this.input.validateAgentToolMcp ? { validateAgentToolMcp: this.input.validateAgentToolMcp } : {}),
+      ...(this.input.detachedSessionTtlMs !== undefined ? { detachedSessionTtlMs: this.input.detachedSessionTtlMs } : {}) });
     const unregister = this.input.services.register({
       resourceId: host.runtimeId, kind: "provider", snapshot: () => host.snapshot(),
       onDetach: () => host.detach(),
@@ -74,7 +77,7 @@ export class ClaudePersistentRuntimeRegistry {
 
   inspect(runtimeId: string) {
     const host = this.get(runtimeId);
-    return { ...host.snapshot(), incarnation: host.runtimeId, startupEnvironmentFingerprint: configurationFingerprint(host.input.configuration.startupEnvironmentVariables ?? {}) };
+    return { ...host.snapshot(), ...host.retainedWork(), incarnation: host.runtimeId, startupEnvironmentFingerprint: configurationFingerprint(host.input.configuration.startupEnvironmentVariables ?? {}) };
   }
 
   async stop(runtimeId: string, expectedRevision: string, force: boolean): Promise<void> {

@@ -861,6 +861,7 @@ async function fixture(
     ): Promise<Result> {
       return operation();
     },
+    async releaseProviderResidency() {},
     async captureLoadedRuntime(_scope: RequestScope, threadId: string) {
       const hub = boundHubs.get(threadId);
       const snapshot = hub?.snapshot;
@@ -1045,7 +1046,7 @@ async function fixture(
     repository: new ThreadForceResetRepository(database),
     interactions: {
       listPending: () => [],
-      abandonPending: () => undefined,
+      abandonPending: async () => undefined,
     },
     runtimes: threadRuntimes,
     scheduleThreadPublications: (eventScope, threadIds) => {
@@ -1473,6 +1474,7 @@ async function fixture(
             status: "aborted" as const,
             childThreadId: "11111111-1111-4111-8111-111111111111",
             diagnostic: "Provider proved the fork was not created.",
+            restartable: false,
           };
         }
         return {
@@ -4938,7 +4940,7 @@ describe("normalized HTTP application contract", () => {
           { kind: "conversation_operation", count: 1 },
           { kind: "conversation_runtime", count: 1 },
         ],
-        affectedThreadIds: [created.body.id],
+        affectedThreads: [{ threadId: created.body.id, title: expect.any(String), runtime: expect.any(Object) }],
       });
       expect(
         impact.body.warnings.map(({ code }: { code: string }) => code),
@@ -5254,6 +5256,7 @@ describe("normalized HTTP application contract", () => {
           status: "aborted",
           childThreadId: "11111111-1111-4111-8111-111111111111",
           diagnostic: "Provider proved the fork was not created.",
+          restartable: false,
         });
 
       const childThreadId = "11111111-1111-4111-8111-111111111111";

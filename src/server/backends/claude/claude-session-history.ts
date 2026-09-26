@@ -24,6 +24,8 @@ export interface ClaudeHistoryCursor {
 export type ClaudeHistoryPageOptions = Pick<GetSessionMessagesOptions, "dir" | "includeSystemMessages" | "offset" | "limit"> & {
   readonly cursor?: ClaudeHistoryCursor;
   readonly maintenance?: boolean;
+  /** Only the newest segment, which Claude Code resumes; never for display. */
+  readonly resumableOnly?: boolean;
 };
 export interface ClaudeHistoryPage<Message extends SessionMessage = SessionMessage> {
   readonly messages: Message[];
@@ -61,7 +63,7 @@ export class ClaudeHistoryPager<Message extends SessionMessage = SessionMessage>
   ): Promise<ClaudeHistoryPage<Message>> {
     if (this.#disposal.signal.aborted) throw historyError("closed");
     const scope = JSON.stringify([ownerScope, options.dir ?? null, options.includeSystemMessages ?? false,
-      options.offset ?? 0, options.limit ?? null, options.maintenance ?? false]);
+      options.offset ?? 0, options.limit ?? null, options.maintenance ?? false, options.resumableOnly ?? false]);
     if (options.cursor) {
       const snapshot = this.#snapshots.get(options.cursor.snapshotId);
       if (!snapshot) throw historyError("expired", true);

@@ -476,7 +476,7 @@ describe("in-memory canonical thread stream", () => {
       bindings,
       inventory: inventoryRepository,
       lifecycle,
-      forks: { recoverActive: () => undefined },
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
       queue: queueDispatcher,
       operations: operationRepository,
       completions: completion,

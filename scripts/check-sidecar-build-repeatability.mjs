@@ -22,6 +22,8 @@ const run = promisify(execFile);
 const canonicalInputs = {
   "src/cli/sedes-dynamic-tool-command.ts": {},
   "src/cli/sedes-cli.ts": {},
+  "src/cli/sedes-mcp.ts": {},
+  "src/cli/sedes-mcp-server.ts": {},
   "src/cli/sedes-tool-local-client.ts": {},
   "src/server/composer-attachments/execution-attachment-staging-engine.ts": {},
   "src/server/workspace-files/workspace-files-engine.ts": {},
@@ -39,6 +41,8 @@ const syntheticOutputPath = path.join(
 const canonicalOutputInputs = {
   "src/cli/sedes-dynamic-tool-command.ts": { bytesInOutput: 1 },
   "src/cli/sedes-cli.ts": { bytesInOutput: 1 },
+  "src/cli/sedes-mcp.ts": { bytesInOutput: 1 },
+  "src/cli/sedes-mcp-server.ts": { bytesInOutput: 1 },
   "src/cli/sedes-tool-local-client.ts": { bytesInOutput: 1 },
   "src/server/composer-attachments/execution-attachment-staging-engine.ts": {
     bytesInOutput: 1,

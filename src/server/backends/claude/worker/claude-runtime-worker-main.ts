@@ -159,6 +159,7 @@ async function runInternalWorker(
   });
   const host = new ClaudeRuntimeWorkerHost({
     sdk,
+    queryProcessScope: () => sdk.createQueryScope(),
     peer: {
       call: (definition, request, options) =>
         peer!.call(definition, request, options),
@@ -319,6 +320,9 @@ async function runOuterSupervisor(
   });
   child.once("error", fail);
   child.once("exit", () => {
+    // Orphaned Claude leaders soon see EOF and exit; record their descendants
+    // while ancestry is still visible. close() reads again before signalling.
+    void groups.observe().catch(() => undefined);
     if (!ready)
       settleReady(new Error("claude_runtime_worker_inner_start_failed"));
   });

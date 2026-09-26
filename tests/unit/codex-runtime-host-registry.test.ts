@@ -7,6 +7,7 @@ import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import { CodexRuntimeHostRegistry } from "../../src/server/backends/codex/runtime/codex-runtime-host-registry.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
+import { sidecarAbandonmentEvidenceCarriesWork } from "../../src/server/sidecar/sidecar-abandonment-archive.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execution/environment-channel.js";
 import { CodexSidecarRuntimeConnection, registerCodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-sidecar-runtime.js";
 import { createClaudeFramedCarrier } from "../helpers/persistent-claude-fixture.js";
@@ -66,8 +67,26 @@ it("forces an external unknown runtime closed with retained outcomes, preserving
   expect(native.closes).toBe(1);
   expect(f.services.status().resources).toEqual([]);
   expect(f.archive).toHaveBeenCalledWith(expect.objectContaining({ resourceId: host.runtimeId, kind: "codex_app_server",
-    evidence: expect.objectContaining({ ownership: "external", operations: [expect.objectContaining({ operationId: "unacknowledged" })] }) }));
+    evidence: expect.objectContaining({ phase: "before_shutdown", ownership: "external", state: "unknown", blockers: expect.arrayContaining(["unknown_state", "unsettled_outcome"]),
+      operations: [expect.objectContaining({ operationId: "unacknowledged" })] }) }));
   expect(JSON.stringify(f.archive.mock.calls)).not.toContain("private name");
+});
+
+it("reports an idle runtime's forced stop as idle to the archive, but not while a managed terminal is live", async () => {
+  const f = fixture();
+  const host = await f.hosts.ensure(configuration, f.epoch);
+  await f.hosts.stop(host.runtimeId, (await f.hosts.inspect(host.runtimeId)).revision, true);
+  const idle = f.archive.mock.calls.map(([record]) => (record as { evidence: unknown }).evidence);
+  expect(idle).toEqual([expect.objectContaining({ phase: "before_shutdown", state: "idle", blockers: [], activity: "idle" }), expect.objectContaining({ phase: "after_shutdown" })]);
+  expect(idle.map(sidecarAbandonmentEvidenceCarriesWork)).toEqual([false, false]);
+
+  const g = fixture();
+  const live = await g.hosts.ensure(configuration, g.epoch);
+  vi.spyOn(g.hosts.managedTui, "activity").mockReturnValue({ state: "active", revision: "terminal", blockers: ["live_terminal"] });
+  await g.hosts.stop(live.runtimeId, (await g.hosts.inspect(live.runtimeId)).revision, true);
+  const [before] = g.archive.mock.calls.map(([record]) => (record as { evidence: unknown }).evidence);
+  expect(before).toMatchObject({ phase: "before_shutdown", state: "active", blockers: ["active_work", "live_terminal"], activity: "idle", operations: [], pendingRequests: [] });
+  expect(sidecarAbandonmentEvidenceCarriesWork(before)).toBe(true);
 });
 
 it("closes external native RPC before abandoning local approvals or stopping managed terminals", async () => {

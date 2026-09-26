@@ -24,12 +24,17 @@ import type {
   ManagedWorkerArtifactRegistration,
 } from "../../managed-workers/artifact.js";
 import type {
+  ClaudeOwnedRuntimeClient,
+  ClaudeOwnedRuntimeSession,
   ClaudeRuntimeClient,
   ClaudeRuntimeProbeInput,
   ClaudeRuntimeProbeResult,
   ClaudeRuntimeSession,
   ClaudeRuntimeSessionOptions,
+  ClaudeRuntimeForkOptions,
+  ClaudeRuntimeForkResult,
 } from "./claude-runtime-client.js";
+import { runClaudeForkLaunch } from "./claude-fork-launch.js";
 import { ClaudeRuntimeWorkerClient } from "./claude-runtime-worker-client.js";
 import type { ClaudeSafeSkill } from "./claude-skills.js";
 import type { ClaudeSdkSessionInitialization } from "./claude-sdk-session.js";
@@ -61,7 +66,7 @@ export interface ClaudeManagedRuntimeOwnerOptions {
  * Owns one lazy Claude worker generation at a time. Ordinary proven carrier
  * loss permits a replacement; cleanup-proof loss permanently fences the owner.
  */
-export class ClaudeManagedRuntimeOwner implements ClaudeRuntimeClient {
+export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
   readonly #scope: EnvironmentChannelScope;
   readonly #artifact: Promise<ManagedWorkerArtifactRegistration>;
   readonly #channels: ExecutionEnvironmentChannelProvider;
@@ -141,7 +146,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeRuntimeClient {
     return await this.#observe(async () => await (await this.#client()).probe(input));
   }
 
-  createSession(options: ClaudeRuntimeSessionOptions): ClaudeRuntimeSession {
+  createSession(options: ClaudeRuntimeSessionOptions): ClaudeOwnedRuntimeSession {
     this.#assertRuntimeIdentity(options);
     assertQueryEnvironment(options.environment);
     const lease = this.#residency.retain();
@@ -151,6 +156,10 @@ export class ClaudeManagedRuntimeOwner implements ClaudeRuntimeClient {
       (error) => this.#reportUnavailable(error),
       () => lease.release(true),
     );
+  }
+
+  forkSession(options: ClaudeRuntimeForkOptions): Promise<ClaudeRuntimeForkResult> {
+    return runClaudeForkLaunch((session) => this.createSession(session), options);
   }
 
   async listSessions(
@@ -193,6 +202,15 @@ export class ClaudeManagedRuntimeOwner implements ClaudeRuntimeClient {
   ) {
     assertEmptyEnvironment(environment);
     return await this.#observe(async () => await (await this.#client()).getSessionMessagesPage(sessionId, options));
+  }
+
+  async hasSessionTranscript(
+    sessionId: string,
+    options: { readonly dir: string },
+    environment: Readonly<Record<string, string | undefined>>,
+  ) {
+    assertEmptyEnvironment(environment);
+    return await this.#observe(async () => await (await this.#client()).hasSessionTranscript(sessionId, options));
   }
 
   async renameSession(
@@ -479,17 +497,17 @@ function assertExactHello(
   }
 }
 
-class DeferredManagedClaudeSession implements ClaudeRuntimeSession {
-  readonly #create: () => Promise<ClaudeRuntimeSession>;
+class DeferredManagedClaudeSession implements ClaudeOwnedRuntimeSession {
+  readonly #create: () => Promise<ClaudeOwnedRuntimeSession>;
   readonly #onReady: () => void | Promise<void>;
   readonly #onFailure: (error: unknown) => void;
-  #delegate: ClaudeRuntimeSession | undefined;
-  #starting: Promise<ClaudeRuntimeSession> | undefined;
+  #delegate: ClaudeOwnedRuntimeSession | undefined;
+  #starting: Promise<ClaudeOwnedRuntimeSession> | undefined;
   #closed = false;
   #closePromise: Promise<void> | undefined;
   readonly #release: () => Promise<void>;
   constructor(
-    create: () => Promise<ClaudeRuntimeSession>,
+    create: () => Promise<ClaudeOwnedRuntimeSession>,
     onReady: () => void | Promise<void>,
     onFailure: (error: unknown) => void,
     release: () => Promise<void>,
@@ -521,6 +539,7 @@ class DeferredManagedClaudeSession implements ClaudeRuntimeSession {
   }
   send(input: Parameters<ClaudeRuntimeSession["send"]>[0]): void | Promise<void> { return this.#ready().send(input); }
   interrupt(): Promise<SDKControlInterruptResponse | undefined> { return this.#ready().interrupt(); }
+  cancelQueuedInput(operationId: string): Promise<boolean> { return this.#ready().cancelQueuedInput(operationId); }
   setModel(model?: string): Promise<void> { return this.#ready().setModel(model); }
   setEffort(effort?: EffortLevel): Promise<void> { return this.#ready().setEffort(effort); }
   setPermissionMode(mode: PermissionMode): Promise<void> { return this.#ready().setPermissionMode(mode); }
@@ -534,7 +553,7 @@ class DeferredManagedClaudeSession implements ClaudeRuntimeSession {
     await this.#delegate?.close();
     await this.#release();
   }
-  #ready(): ClaudeRuntimeSession {
+  #ready(): ClaudeOwnedRuntimeSession {
     if (this.#closed || !this.#delegate?.initialization) {
       throw new Error("claude_runtime_session_not_ready");
     }

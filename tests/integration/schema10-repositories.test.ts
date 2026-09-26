@@ -3054,6 +3054,7 @@ describe("inactive schema-10 repositories", () => {
         lineage.abortPreparedFork(fixture.scope, fixture.secondThreadId, {
           creationOperationId: "provider-snapshot-fork",
           diagnostic: "Provider rejected the snapshot fork.",
+          restartable: true,
           now: 590,
         }),
       ).toThrow("Only a proven-uncreated prepared fork can be removed.");
@@ -3063,6 +3064,7 @@ describe("inactive schema-10 repositories", () => {
         {
           creationOperationId: "provider-snapshot-fork",
           diagnostic: "Provider rejected the snapshot fork.",
+          restartable: true,
           now: 590,
         },
       );
@@ -3075,6 +3077,7 @@ describe("inactive schema-10 repositories", () => {
         lineage.abortPreparedFork(fixture.scope, fixture.secondThreadId, {
           creationOperationId: "provider-snapshot-fork",
           diagnostic: "Provider rejected the snapshot fork.",
+          restartable: true,
           now: 590,
         }),
       ).toThrow("The aborted fork operation changed during replay.");
@@ -3134,6 +3137,7 @@ describe("inactive schema-10 repositories", () => {
         lineage.abortPreparedFork(fixture.scope, fixture.secondThreadId, {
           creationOperationId: "aborted-fork-operation",
           diagnostic: "Provider rejected the fork before creation.",
+          restartable: true,
           now: 560,
         }),
       ).toMatchObject({
@@ -3227,6 +3231,7 @@ describe("inactive schema-10 repositories", () => {
       lineage.abortPreparedFork(fixture.scope, fixture.secondThreadId, {
         creationOperationId: "task-abort-operation",
         diagnostic: "Provider rejected the fork before creation.",
+        restartable: true,
         now: 560,
         onThreadTasksPromoted: (taskIds) => promoted.push([...taskIds]),
       });

@@ -6,7 +6,10 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it, vi } from "vitest";
-import { ClaudeSdkSession } from "../../src/server/backends/claude/claude-sdk-session.js";
+import {
+  CLAUDE_STARTUP_MARKER_TEXT,
+  ClaudeSdkSession,
+} from "../../src/server/backends/claude/claude-sdk-session.js";
 import { ClaudeRuntimeInstallationAdvisories } from "../../src/server/backends/claude/claude-runtime-installation-advisories.js";
 import type {
   ClaudeQueryInput,
@@ -90,7 +93,7 @@ function fakeQuery(
   } satisfies SDKControlInitializeResponse;
 
   const sdk = {
-    readCliRelease: vi.fn(async () => input.cliRelease ?? "2.1.274"),
+    readCliRelease: vi.fn(async () => input.cliRelease ?? "2.1.283"),
     readCliAuthStatus: vi.fn(
       async () =>
         input.authStatus ?? {
@@ -110,7 +113,7 @@ function fakeQuery(
             type: "system",
             subtype: "init",
             apiKeySource: "oauth",
-            claude_code_version: input.streamRelease ?? "2.1.274",
+            claude_code_version: input.streamRelease ?? "2.1.283",
             cwd: queryInput.options.cwd!,
             tools: input.streamTools ?? [],
             mcp_servers: [],
@@ -145,6 +148,7 @@ function fakeQuery(
     listSessions: vi.fn(),
     getSessionInfo: vi.fn(),
     getSessionMessages: vi.fn(),
+    hasSessionTranscript: vi.fn(),
     renameSession: vi.fn(),
   } satisfies ClaudeSdkFacade;
 
@@ -276,7 +280,7 @@ describe("ClaudeSdkSession", () => {
           subtype: "init",
           agents: [],
           apiKeySource: "oauth",
-          claude_code_version: "2.1.274",
+          claude_code_version: "2.1.283",
           cwd: "/workspace",
           tools: [],
           mcp_servers: [],
@@ -312,6 +316,55 @@ describe("ClaudeSdkSession", () => {
     await session.close();
   });
 
+  it("keeps Claude's run-state events enabled over an inherited environment value", async () => {
+    const fixture = fakeQuery();
+    let observedOptions: Options | undefined;
+    const session = new ClaudeSdkSession({
+      sdk: fixture.sdk,
+      executablePath: "/home/test/.local/bin/claude",
+      initializationTimeoutMs: 1_000,
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      cwd: "/workspace",
+      launch: "new",
+      environment: { HOME: "/home/test", CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "0" },
+      onMessage: () => undefined,
+    });
+    const originalCreate = fixture.sdk.createQuery.bind(fixture.sdk);
+    fixture.sdk.createQuery = (input) => {
+      observedOptions = input.options;
+      return originalCreate(input);
+    };
+    await session.start();
+    expect(observedOptions?.env?.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS).toBe("1");
+    await session.close();
+  });
+
+  it("withholds an inherited request to re-run interrupted turns", async () => {
+    const fixture = fakeQuery();
+    let observedOptions: Options | undefined;
+    const environment = { HOME: "/home/test", CLAUDE_CODE_RESUME_INTERRUPTED_TURN: "1" };
+    const session = new ClaudeSdkSession({
+      sdk: fixture.sdk,
+      executablePath: "/home/test/.local/bin/claude",
+      initializationTimeoutMs: 1_000,
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      cwd: "/workspace",
+      launch: "resume",
+      environment,
+      onMessage: () => undefined,
+    });
+    const originalCreate = fixture.sdk.createQuery.bind(fixture.sdk);
+    fixture.sdk.createQuery = (input) => {
+      observedOptions = input.options;
+      return originalCreate(input);
+    };
+    await session.start();
+    expect(observedOptions?.env).not.toHaveProperty("CLAUDE_CODE_RESUME_INTERRUPTED_TURN");
+    expect(observedOptions?.env?.HOME).toBe("/home/test");
+    expect(environment.CLAUDE_CODE_RESUME_INTERRUPTED_TURN).toBe("1");
+    await session.close();
+  });
+
   it("uses the external CLI and subscription login without configuring auth", async () => {
     const fixture = fakeQuery();
     let observedOptions: Options | undefined;
@@ -337,7 +390,7 @@ describe("ClaudeSdkSession", () => {
 
     const initialized = await session.start();
     expect(initialized).toMatchObject({
-      cliRelease: "2.1.274",
+      cliRelease: "2.1.283",
       actualModel: "claude-sonnet-5",
       actualPermissionMode: "default",
       account: {
@@ -357,7 +410,11 @@ describe("ClaudeSdkSession", () => {
       includePartialMessages: true,
       settingSources: ["user", "project", "local"],
       disallowedTools: ["EnterPlanMode", "ExitPlanMode"],
-      env: { HOME: "/home/test" },
+    });
+    // Claude reports its own run state only when Sedes asks for it.
+    expect(observedOptions?.env).toEqual({
+      HOME: "/home/test",
+      CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
     });
     expect(fixture.sdk.readCliRelease).toHaveBeenCalledWith(
       "/home/test/.local/bin/claude",
@@ -375,11 +432,12 @@ describe("ClaudeSdkSession", () => {
     );
 
     const promptIterator = fixture.prompt()[Symbol.asyncIterator]();
+    // The startup message carries only the session-start marker.
     expect(await promptIterator.next()).toMatchObject({
       done: false,
       value: {
         type: "user",
-        message: { role: "user", content: "" },
+        message: { role: "user", content: CLAUDE_STARTUP_MARKER_TEXT },
         isSynthetic: true,
         shouldQuery: false,
       },
@@ -498,12 +556,53 @@ describe("ClaudeSdkSession", () => {
       expect.any(AbortSignal),
     );
     expect(onCreate).not.toHaveBeenCalled();
+    expect(session.launched).toBe(false);
+  });
+
+  it("locks a fork launch down and rejects caller permissions or tools", async () => {
+    const onCreate = vi.fn();
+    const fixture = fakeQuery({ onCreate });
+    const fork = {
+      sdk: fixture.sdk,
+      executablePath: "/usr/local/bin/claude",
+      initializationTimeoutMs: 1_000,
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      sourceSessionId: "33333333-3333-4333-8333-333333333333",
+      resumeSessionAt: "44444444-4444-4444-8444-444444444444",
+      cwd: "/workspace",
+      launch: "fork" as const,
+      environment: {},
+      onMessage: () => undefined,
+    };
+    for (const widened of [
+      { permissionMode: "bypassPermissions" as const },
+      { allowDangerouslySkipPermissions: true as const },
+      { canUseTool: async () => ({ behavior: "allow" as const }) },
+      { agentToolMcp: { command: "/usr/bin/sedes", mode: "individual" as const, endpoint: "http://127.0.0.1:4784", sourceCapability: "x".repeat(40) } },
+    ]) {
+      expect(() => new ClaudeSdkSession({ ...fork, ...widened })).toThrow("claude_sdk_fork_options_invalid");
+    }
+    const session = new ClaudeSdkSession(fork);
+    expect(session.launched).toBe(false);
+    await session.start();
+    expect(session.launched).toBe(true);
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+      settingSources: [], settings: { disableAllHooks: true }, strictMcpConfig: true, tools: [],
+      permissionMode: "default", resume: fork.sourceSessionId, forkSession: true, sessionId: fork.sessionId,
+      resumeSessionAt: fork.resumeSessionAt,
+    }));
+    const options = onCreate.mock.calls[0]![0] as Options;
+    expect(options).not.toHaveProperty("allowDangerouslySkipPermissions");
+    expect(options).not.toHaveProperty("mcpServers");
+    await expect(options.canUseTool!("Write", {}, { signal: new AbortController().signal, toolUseID: "tool", requestId: "request" } as never))
+      .resolves.toMatchObject({ behavior: "deny", interrupt: true });
+    await session.close();
   });
 
   it("accepts a newer compatible stream release and reports it", async () => {
     const onFailure = vi.fn();
     const onNewerVersion = vi.fn();
-    const fixture = fakeQuery({ streamRelease: "2.1.275" });
+    const fixture = fakeQuery({ streamRelease: "2.1.284" });
     const session = new ClaudeSdkSession({
       sdk: fixture.sdk,
       executablePath: "/usr/local/bin/claude",
@@ -518,12 +617,12 @@ describe("ClaudeSdkSession", () => {
     });
 
     await expect(session.start()).resolves.toMatchObject({
-      cliRelease: "2.1.275",
+      cliRelease: "2.1.284",
     });
     expect(session.closed).toBe(false);
     expect(onNewerVersion).toHaveBeenCalledWith({
-      testedThroughVersion: "2.1.274",
-      observedVersion: "2.1.275",
+      testedThroughVersion: "2.1.283",
+      observedVersion: "2.1.284",
     });
     expect(onFailure).not.toHaveBeenCalled();
     await session.close();
@@ -535,8 +634,8 @@ describe("ClaudeSdkSession", () => {
     const observation = advisories.beginObservation("conversation_session");
     const onFailure = vi.fn();
     const fixture = fakeQuery({
-      cliRelease: "2.1.275",
-      streamRelease: "2.1.275",
+      cliRelease: "2.1.284",
+      streamRelease: "2.1.284",
       messages: [systemInitMessage("2.1.240")],
     });
     const session = new ClaudeSdkSession({
@@ -569,8 +668,8 @@ describe("ClaudeSdkSession", () => {
     const advisories = new ClaudeRuntimeInstallationAdvisories();
     const observation = advisories.beginObservation("conversation_session");
     const fixture = fakeQuery({
-      cliRelease: "2.1.275",
-      streamRelease: "2.1.275",
+      cliRelease: "2.1.284",
+      streamRelease: "2.1.284",
       streamError: new Error("claude_unrelated_stream_failure"),
     });
     const session = new ClaudeSdkSession({
@@ -588,7 +687,7 @@ describe("ClaudeSdkSession", () => {
 
     await session.start();
     await vi.waitFor(() => expect(session.closed).toBe(true));
-    expect(advisories.active()[0]?.message.text).toContain("Running 2.1.275");
+    expect(advisories.active()[0]?.message.text).toContain("Running 2.1.284");
     vi.restoreAllMocks();
   });
 
@@ -726,7 +825,7 @@ describe("ClaudeSdkSession", () => {
     });
     const fixture = fakeQuery({
       streamGate,
-      streamRelease: "2.1.275",
+      streamRelease: "2.1.284",
     });
     const onNewerVersion = vi.fn();
     const session = new ClaudeSdkSession({
@@ -760,8 +859,8 @@ describe("ClaudeSdkSession", () => {
     expect(outcome).toBe("resolved");
     expect(session.closed).toBe(false);
     expect(onNewerVersion).toHaveBeenCalledWith({
-      testedThroughVersion: "2.1.274",
-      observedVersion: "2.1.275",
+      testedThroughVersion: "2.1.283",
+      observedVersion: "2.1.284",
     });
     await session.close();
   });

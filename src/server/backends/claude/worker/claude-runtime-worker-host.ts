@@ -20,6 +20,10 @@ import type { ClaudeSdkFacade } from "../claude-sdk-facade.js";
 import { probeClaudeSdkDirect } from "../claude-sdk-probe.js";
 import { ClaudeSdkSession } from "../claude-sdk-session.js";
 import {
+  CLAUDE_QUERY_NOT_LAUNCHED_CODE_PREFIX,
+  claudeLaunchRefusal,
+} from "../claude-launch-refusal.js";
+import {
   CLAUDE_RUNTIME_CAPABILITY_ID,
   CLAUDE_RUNTIME_MAJOR_VERSION,
   CLAUDE_RUNTIME_MAXIMUM_JSON_BYTES,
@@ -32,6 +36,7 @@ import {
   claudeRuntimeQueryMessageEventSchema,
   type ClaudeRuntimeV1WorkerHandlers,
 } from "./claude-runtime-v1.js";
+import type { ClaudeQueryProcessScope } from "./tracked-claude-sdk-facade.js";
 
 export interface ClaudeRuntimeWorkerProtocolPeer {
   call<Request, Response>(
@@ -53,12 +58,20 @@ export interface ClaudeRuntimeWorkerHostOptions {
   readonly sdk: ClaudeSdkFacade;
   readonly peer: ClaudeRuntimeWorkerProtocolPeer;
   readonly maximumQueries?: number;
+  /**
+   * Scopes the processes each query launches. A query's native session stays
+   * reserved until its scope settles. Omit only for an SDK that launches no
+   * owned processes.
+   */
+  readonly queryProcessScope?: () => ClaudeQueryProcessScope;
 }
 
 type ActiveQuery = {
   readonly queryId: string;
   readonly sessionId: string;
   readonly session: ClaudeSdkSession;
+  readonly processes: Pick<ClaudeQueryProcessScope, "settled">;
+  retired?: Promise<void>;
 };
 
 type RuntimeConfiguration = {
@@ -84,7 +97,10 @@ export class ClaudeRuntimeWorkerHost {
   readonly #peer: ClaudeRuntimeWorkerProtocolPeer;
   readonly #maximumQueries: number;
   readonly #queries = new Map<string, ActiveQuery>();
+  /** Native session reservations, held until the owning query's processes are gone. */
   readonly #queryBySessionId = new Map<string, string>();
+  readonly #retirements = new Map<string, Promise<void>>();
+  readonly #queryProcessScope: () => ClaudeQueryProcessScope;
   #configuration: RuntimeConfiguration | undefined;
   #initializing: Promise<RuntimeConfiguration> | undefined;
   #closed = false;
@@ -101,6 +117,9 @@ export class ClaudeRuntimeWorkerHost {
       throw new Error("claude_runtime_query_limit_invalid");
     }
     this.#sdk = options.sdk;
+    this.#queryProcessScope =
+      options.queryProcessScope ??
+      (() => ({ sdk: options.sdk, settled: async () => undefined }));
     this.#peer = options.peer;
     this.#maximumQueries = maximumQueries;
     const handlers: ClaudeRuntimeV1WorkerHandlers = {
@@ -111,12 +130,26 @@ export class ClaudeRuntimeWorkerHost {
       getSessionInfo: async (request) => await this.#getSessionInfo(request),
       getSessionMessages: async (request) =>
         await this.#getSessionMessages(request),
+      hasSessionTranscript: async (request) => {
+        this.#assertOpen();
+        return {
+          present: await this.#sdk.hasSessionTranscript(
+            request.sessionId,
+            { dir: request.dir },
+            this.#configured().environment,
+          ),
+        };
+      },
       renameSession: async (request) => await this.#renameSession(request),
       openQuery: async (request, context) =>
         await this.#openQuery(request, context.signal),
       sendQuery: (request) => this.#sendQuery(request),
       interruptQuery: async ({ queryId }) =>
         await this.#interruptQuery(queryId),
+      cancelQueryInput: async ({ queryId, operationId }) => {
+        this.#assertOpen();
+        return { cancelled: await this.#query(queryId).session.cancelQueuedInput(operationId) };
+      },
       setQueryModel: async ({ queryId, model }) => {
         await this.#query(queryId).session.setModel(model ?? undefined);
         return { updated: true as const };
@@ -149,6 +182,7 @@ export class ClaudeRuntimeWorkerHost {
     ).then(() => {
       this.#queries.clear();
       this.#queryBySessionId.clear();
+      this.#retirements.clear();
     });
     return this.#closePromise;
   }
@@ -221,6 +255,12 @@ export class ClaudeRuntimeWorkerHost {
         ...("timestamp" in message && typeof message.timestamp === "string"
           ? { timestamp: message.timestamp }
           : {}),
+        ...("isCompactSummary" in message && message.isCompactSummary === true
+          ? { isCompactSummary: true as const }
+          : {}),
+        ...("isQueuedCommand" in message && message.isQueuedCommand === true
+          ? { isQueuedCommand: true as const }
+          : {}),
       }));
       return projected;
     });
@@ -245,6 +285,23 @@ export class ClaudeRuntimeWorkerHost {
   ) {
     this.#assertOpen();
     signal.throwIfAborted();
+    const retirement = this.#retirements.get(request.sessionId);
+    if (retirement) {
+      // A retired query's Claude process may still be writing this native
+      // session. Never start a second writer before its tree is proven gone.
+      try {
+        await raceAgainstAbort(retirement, signal);
+      } catch (error) {
+        signal.throwIfAborted();
+        throw new SidecarOperationError(
+          "claude_runtime_session_cleanup_unproven",
+          false,
+          { cause: error },
+        );
+      }
+      this.#assertOpen();
+      signal.throwIfAborted();
+    }
     if (
       this.#queries.has(request.queryId) ||
       this.#queryBySessionId.has(request.sessionId)
@@ -261,12 +318,13 @@ export class ClaudeRuntimeWorkerHost {
     const configuration = this.#configured();
     const executionEnvironment = mergeResolvedEnvironment(configuration.environment, request.executionEnvironment ?? {});
     let query!: ActiveQuery;
+    const processes = this.#queryProcessScope();
     const permissionResponseAdoption = new Map<string, boolean>();
     const canUseTool = request.enableCanUseTool
       ? this.#remoteCanUseTool(queryId, permissionResponseAdoption)
       : undefined;
     const session = new ClaudeSdkSession({
-      sdk: this.#sdk,
+      sdk: processes.sdk,
       executablePath: configuration.executablePath,
       initializationTimeoutMs: configuration.initializationTimeoutMs,
       sessionId: request.sessionId,
@@ -339,7 +397,9 @@ export class ClaudeRuntimeWorkerHost {
       },
       onFailure: () => {
         if (this.#queries.get(queryId) !== query) return;
-        this.#forgetQuery(query);
+        void this.#retireQuery(query).catch(() => {
+          // Unproven cleanup keeps the session reserved and is worker-fatal.
+        });
         void this.#peer
           .sendEvent({
             capabilityId: CLAUDE_RUNTIME_CAPABILITY_ID,
@@ -353,7 +413,7 @@ export class ClaudeRuntimeWorkerHost {
           );
       },
     });
-    query = { queryId, sessionId: request.sessionId, session };
+    query = { queryId, sessionId: request.sessionId, session, processes };
     this.#queries.set(queryId, query);
     this.#queryBySessionId.set(request.sessionId, queryId);
     try {
@@ -380,8 +440,17 @@ export class ClaudeRuntimeWorkerHost {
         },
       };
     } catch (error) {
-      this.#forgetQuery(query);
+      void this.#retireQuery(query).catch(() => undefined);
       await session.close().catch(() => undefined);
+      // Closing settles a pending start. If no query exists by then, the
+      // failure preceded any Claude Code launch and wrote no transcript.
+      if (!session.launched) {
+        throw new SidecarOperationError(
+          `${CLAUDE_QUERY_NOT_LAUNCHED_CODE_PREFIX}_${claudeLaunchRefusal(error)}`,
+          false,
+          { cause: error },
+        );
+      }
       throw error;
     }
   }
@@ -424,8 +493,7 @@ export class ClaudeRuntimeWorkerHost {
     this.#assertOpen();
     const query = this.#queries.get(queryId);
     if (!query) return;
-    this.#forgetQuery(query);
-    await query.session.close();
+    await this.#retireQuery(query);
   }
 
   #remoteCanUseTool(
@@ -554,13 +622,35 @@ export class ClaudeRuntimeWorkerHost {
     return configuration;
   }
 
-  #forgetQuery(query: ActiveQuery): void {
+  /**
+   * Makes the query unaddressable now, closes it, and releases its native
+   * session only after every process it launched is proven gone. Unproven
+   * cleanup keeps the session reserved for the rest of this generation.
+   */
+  #retireQuery(query: ActiveQuery): Promise<void> {
     if (this.#queries.get(query.queryId) === query) {
       this.#queries.delete(query.queryId);
     }
+    if (query.retired) return query.retired;
+    const retired = query.session
+      .close()
+      .then(() => query.processes.settled());
+    query.retired = retired;
     if (this.#queryBySessionId.get(query.sessionId) === query.queryId) {
-      this.#queryBySessionId.delete(query.sessionId);
+      this.#retirements.set(query.sessionId, retired);
     }
+    retired.then(
+      () => {
+        if (this.#queryBySessionId.get(query.sessionId) === query.queryId) {
+          this.#queryBySessionId.delete(query.sessionId);
+        }
+        if (this.#retirements.get(query.sessionId) === retired) {
+          this.#retirements.delete(query.sessionId);
+        }
+      },
+      () => undefined,
+    );
+    return retired;
   }
 
   #assertOpen(): void {

@@ -402,6 +402,7 @@ function archiveService(
       },
       runWithRuntimeRetired: async (_scope, _threadId, operation) =>
         operation(),
+      releaseProviderResidency: async () => undefined,
     },
     publications: { publishCommitted: async () => undefined },
     tasks,
@@ -447,7 +448,7 @@ describe("thread force-reset repository", () => {
       expect(impact).toMatchObject({
         resettable: true,
         blockers: [{ kind: "completion_callback", count: 1 }],
-        affectedThreadIds: [current.childId],
+        affectedThreads: [{ threadId: current.childId, title: expect.any(String) }],
       });
 
       expect(() =>
@@ -651,7 +652,7 @@ describe("thread force-reset repository", () => {
     }
   });
 
-  it.each(["source", "child"] as const)(
+  it.each(["source"] as const)(
     "atomically tombstones every blocker from the prepared fork %s and preserves real runtime activity",
     async (invocation) => {
       const current = fixture();
@@ -670,7 +671,7 @@ describe("thread force-reset repository", () => {
           { kind: "fork_origin", count: 1 },
           { kind: "automation_run", count: 1 },
         ]);
-        expect(impact.affectedThreadIds).toEqual(
+        expect(impact.affectedThreads.map(({ threadId }) => threadId)).toEqual(
           [current.rootId, current.childId].sort(),
         );
         expect(impact.warnings.map(({ code }) => code)).toEqual([
@@ -972,6 +973,65 @@ describe("thread force-reset repository", () => {
     },
   );
 
+  it("resets only a prepared fork child when started from it and never reaches its running source", () => {
+    const current = fixture();
+    try {
+      const seeded = prepareRootBlockers(current);
+      const resets = new ThreadForceResetRepository(current.database);
+      const running = { kind: "conversation_runtime" as const, threadId: current.rootId,
+        generation: "source-generation", runState: "running" as const, activeTurnId: "source-turn" };
+      // The source's loaded runtime is not part of a child-scoped reset.
+      expect(() => resets.impact(current.scope, current.childId, [], [running])).toThrow("invalid or stale");
+      const impact = resets.impact(current.scope, current.childId);
+      expect(impact.affectedThreads).toEqual([{ threadId: current.childId, title: expect.any(String) }]);
+      expect(impact.blockers).toEqual([
+        { kind: "creation_attempt", count: 1 },
+        { kind: "thread_creation_state", count: 1 },
+        { kind: "fork_origin", count: 1 },
+      ]);
+      const reset = resets.forceReset(current.scope, current.childId, {
+        expectedBlockerFingerprint: impact.blockerFingerprint,
+        mutationId: "force-reset-child-only",
+        now: 700,
+      });
+      expect(reset.affectedThreadIds).toEqual([current.childId]);
+      // The child's tasks still move to the retained source.
+      expect(reset.promotedTaskIds).toEqual([seeded.taskId, seeded.completedTaskId].sort());
+      expect(new QueuedInputRepository(current.database).get(current.scope, current.rootId, seeded.queueId))
+        .toMatchObject({ state: "dispatching" });
+      expect(new ProviderFeatureMutationRepository(current.database).find(current.scope, seeded.featureMutationId))
+        .not.toMatchObject({ state: "abandoned" });
+      expect(new InventoryRepository(current.database).getThread(current.scope, current.childId).inventory.inventoryState)
+        .toBe("archived");
+      expect(new ConversationCreationRepository(current.database).findActiveForThread(current.scope, current.childId))
+        .toBeUndefined();
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("names affected threads with their loaded runtime's run state and background work", () => {
+    const current = fixture();
+    try {
+      prepareRootBlockers(current);
+      const resets = new ThreadForceResetRepository(current.database);
+      const background = { state: "known" as const, agents: 2, commands: 0, other: 0 };
+      const runtime = { kind: "conversation_runtime" as const, threadId: current.rootId,
+        generation: "source-generation", runState: "idle" as const, backgroundActivity: background };
+      const impact = resets.impact(current.scope, current.rootId, [], [runtime]);
+      expect(impact.affectedThreads.find(({ threadId }) => threadId === current.rootId))
+        .toMatchObject({ runtime: { runState: "idle", backgroundActivity: background } });
+      expect(impact.warnings[0]).toMatchObject({ code: "running_work_will_stop" });
+      const settled = resets.impact(current.scope, current.rootId, [], [{ ...runtime, backgroundActivity:
+        { state: "known", agents: 0, commands: 0, other: 0 } }]);
+      // A change in background work changes what the user reviewed.
+      expect(settled.blockerFingerprint).not.toBe(impact.blockerFingerprint);
+      expect(settled.warnings.map(({ code }) => code)).not.toContain("running_work_will_stop");
+    } finally {
+      current.database.close();
+    }
+  });
+
   it("moves every prepared-fork chain task to the first retained source", () => {
     const current = fixture();
     try {
@@ -1211,7 +1271,7 @@ describe("thread force-reset repository", () => {
       expect(impact).toMatchObject({
         resettable: false,
         blockers: [],
-        affectedThreadIds: [current.rootId],
+        affectedThreads: [{ threadId: current.rootId, title: expect.any(String) }],
       });
       expect(() =>
         resets.forceReset(current.scope, current.rootId, {
@@ -1282,6 +1342,53 @@ describe("thread force-reset repository", () => {
         replayed: true,
         resetConversationRuntimes: [],
       });
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("counts loaded runtimes' background work and makes a changed inventory stale", () => {
+    const current = fixture();
+    try {
+      const resets = new ThreadForceResetRepository(current.database);
+      const runtime = {
+        kind: "conversation_runtime" as const,
+        threadId: current.rootId,
+        generation: "runtime-generation-1",
+        runState: "idle" as const,
+        backgroundActivity: { state: "known" as const, agents: 2, commands: 1, other: 0 },
+      };
+      const impact = resets.impact(current.scope, current.rootId, [], [runtime]);
+      expect(impact).toMatchObject({
+        resettable: true,
+        warnings: expect.arrayContaining([
+          expect.objectContaining({ code: "running_work_will_stop" }),
+          expect.objectContaining({ code: "provider_side_effects_may_remain" }),
+        ]),
+      });
+      expect(impact.affectedThreads.find(({ threadId }) => threadId === current.rootId)?.runtime)
+        .toEqual({ runState: "idle", backgroundActivity: runtime.backgroundActivity });
+      const unknown = { state: "unknown" as const, agents: 0, commands: 0, other: 0 };
+      expect(resets.impact(current.scope, current.rootId, [], [{ ...runtime, backgroundActivity: unknown }])
+        .affectedThreads.find(({ threadId }) => threadId === current.rootId)?.runtime)
+        .toEqual({ runState: "idle", backgroundActivity: unknown });
+      expect(() => resets.impact(current.scope, current.rootId, [], [{ ...runtime,
+        backgroundActivity: { state: "known", agents: -1, commands: 0, other: 0 } }])).toThrow("invalid or stale");
+      // Background work that started or ended after the preview needs a new one.
+      expect(() =>
+        resets.forceReset(current.scope, current.rootId, {
+          expectedBlockerFingerprint: impact.blockerFingerprint,
+          mutationId: "background-stale",
+          now: 500,
+          conversationRuntimes: [{ ...runtime, backgroundActivity: { ...runtime.backgroundActivity, agents: 3 } }],
+        }),
+      ).toThrow("state changed");
+      expect(resets.forceReset(current.scope, current.rootId, {
+        expectedBlockerFingerprint: impact.blockerFingerprint,
+        mutationId: "background-reset",
+        now: 510,
+        conversationRuntimes: [runtime],
+      })).toMatchObject({ replayed: false, resetConversationRuntimes: [runtime] });
     } finally {
       current.database.close();
     }

@@ -114,8 +114,42 @@ export interface BackendDiscoveryAdapter {
   nativeNamespaceKey(connection: AgentConnectionProfile): string;
 }
 
+/** Bounded, provider-neutral counts of work a lifecycle action would interrupt. */
+export interface BackendRuntimeActivity {
+  /** Turns in progress, including ones the provider started itself. */
+  readonly runningTurns: number;
+  readonly pendingInteractions: number;
+  /** Conversations holding output that no main has acknowledged. */
+  readonly unacknowledgedConversations: number;
+  readonly background: {
+    readonly agents: number;
+    readonly commands: number;
+    readonly other: number;
+    /** Conversations whose background inventory is not known. */
+    readonly unknownConversations: number;
+  };
+}
+
+export interface BackendRuntimeInspection {
+  readonly startupEnvironmentFingerprint?: string;
+  readonly state: "idle" | "active" | "unknown";
+  readonly incarnation: string;
+  readonly revision: string;
+  readonly blockers: readonly SidecarUpgradeBlocker[];
+  /** Present when the owner can count its work; absent is not zero. */
+  readonly activity?: BackendRuntimeActivity;
+  /**
+   * Application threads whose provider work outlived main in this
+   * service-owned runtime (a running turn, a pending interaction or input, or
+   * unacknowledged output). Main opens them so that work is applied and
+   * acknowledged instead of accumulating. Absent when the owner retains no
+   * per-thread journal across a main restart.
+   */
+  readonly retainedThreadIds?: readonly string[];
+}
+
 export interface BackendRuntimeAdministration {
-  inspect(): Promise<{ readonly startupEnvironmentFingerprint?: string; readonly state: "idle" | "active" | "unknown"; readonly incarnation: string; readonly revision: string; readonly blockers: readonly SidecarUpgradeBlocker[] }>;
+  inspect(): Promise<BackendRuntimeInspection>;
   stop(input: { readonly expectedRevision: string; readonly force: boolean }): Promise<void>;
   restart(input: { readonly expectedRevision: string; readonly force: boolean }): Promise<void>;
 }

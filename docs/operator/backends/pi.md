@@ -192,6 +192,8 @@ The current driver supports:
 **Stop** clears Pi's generation-volatile Steer and follow-up queue before it
 aborts the active run. It does not remove Sedes's durable next-turn queue, and
 there is no control for retracting one already submitted Steer independently.
+A Steer that Stop cleared before Pi used it was not accepted, so Sedes keeps it
+as ordinary queued work, which runs after the stopped turn.
 If automatic compaction occurs between a tool result and resumed assistant
 output, Sedes keeps streaming that run and refreshes the projection after it
 settles. A failed automatic compaction appears as a bounded warning without

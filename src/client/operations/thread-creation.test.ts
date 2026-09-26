@@ -122,6 +122,7 @@ describe("thread creation operations", () => {
           status: "aborted",
           childThreadId: "child",
           diagnostic: "Fork aborted",
+          restartable: true,
         }),
       presentation,
     });
@@ -132,6 +133,27 @@ describe("thread creation operations", () => {
     expect(getBlockingOperation()?.actions[0]?.label).toBe("Start a new fork");
     expect(openThreadRoute).not.toHaveBeenCalled();
     expect(getBlockingOperation()?.allowCancel).toBe(false);
+    getBlockingOperation()!.cancel();
+    await operation;
+  });
+
+  it("does not offer a new fork when the failure would repeat", async () => {
+    const operation = runThreadFork({
+      fork: vi.fn().mockResolvedValue({
+        status: "aborted",
+        childThreadId: "child",
+        diagnostic: "Claude did not start the fork: this Claude Code version is not supported.",
+        restartable: false,
+      }),
+      presentation,
+    });
+    await vi.waitFor(() =>
+      expect(getBlockingOperation()?.error).toBe(
+        "Claude did not start the fork: this Claude Code version is not supported.",
+      ),
+    );
+    expect(getBlockingOperation()?.retry).toBeUndefined();
+    expect(getBlockingOperation()?.actions).toEqual([]);
     getBlockingOperation()!.cancel();
     await operation;
   });

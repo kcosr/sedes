@@ -112,7 +112,7 @@ covered by its backup boundary. Ownership and evidence foreign keys use
 | `usage_thread_state` | One row per scoped thread: the sole monotonic usage `revision`, the materialized session `report_json`, and any legacy Claude snapshot. |
 | `usage_turn_state` | One row per scoped thread and normalized turn: turn status, materialized turn `report_json`, and optional `origin_thread_id`/`origin_turn_id` for inherited turns. |
 | `usage_sources` | One row per accounting series: owning thread, backend instance, environment, workspace, native namespace and session (hashed into the ID), counter or query `epoch`, normalization version, initial `baseline` (`proven_zero` or `unknown`), `capture_state`, ordered `frontier`, `agent_role` (`main` or `subagent`), and timeline state and receipt. |
-| `usage_observations` | Immutable evidence keyed by source, observation ID, and revision: semantic fingerprint, canonical evidence JSON, normalization version, reported occurrence time, and receipt time. Update and delete triggers abort. |
+| `usage_observations` | Immutable evidence keyed by source, observation ID, and revision: semantic fingerprint, canonical evidence JSON (a series' reported baseline is marked `baseline`), normalization version, reported occurrence time, and receipt time. Update and delete triggers abort. |
 | `usage_records` | Canonical current facts keyed by source and fact ID, referencing the selected observation, with the normalized fact JSON, application turn ID, and integer token columns. Checkpoint replacement is transactional. |
 | `usage_gaps` | Known capture gaps, conflicts, rejected evidence, and limitations per source, with an optional turn subject and whether the gap affects session scope. |
 | `usage_subagents` | Codex child sessions: native session, native parent, root native session, and owning root thread. Each native child has exactly one owner. |
@@ -130,7 +130,7 @@ through module composition and never touch the tables directly.
 
 | Operation | Contract |
 | --- | --- |
-| `open({binding, nativeNamespace, nativeSession, epoch, normalizationVersion, initialBaseline, subagent?})` | Admits the binding and returns a `UsageCapture` for one series. Each call is a new capture incarnation. |
+| `open({binding, nativeNamespace, nativeSession, epoch, normalizationVersion, initialBaseline, reportedBaseline?, subagent?})` | Admits the binding and returns a `UsageCapture` for one series. Each call is a new capture incarnation. See [Reported baselines](#reported-baselines). |
 | `registerTurns(turns, inherited?)` | Registers normalized turn stubs and verified inherited-turn relationships. |
 | `capture(observations)` | Validates and applies a batch in one transaction. Returns `false` on failure without throwing. |
 | `reconcile()` | Called only after authoritative history or a cumulative child snapshot was fully ingested; clears `capture_gap` and `capture_failed` for the source. |
@@ -173,6 +173,36 @@ Money is canonical decimal text with at most 38 significant and 18 fractional
 digits. SDK floats are normalized once by `nativeUsageMoney`; sums use decimal
 arithmetic, and rounding happens only for display.
 
+### Reported baselines
+
+A provider counter can resume above zero, for example from totals a resumed
+process restored from saved state. That starting value is not new work. The
+backend passes it to `open()` as `reportedBaseline`: a whole checkpoint
+snapshot (every fact a `checkpoint`, with no turn or inherited origin).
+
+- It is recorded, as immutable evidence marked `baseline`, only when that call
+  creates the source. A reopened source keeps the baseline it began with, so a
+  reattached series needs none.
+- With `initialBaseline: "proven_zero"` it is exactly where the series began.
+  With `unknown` it is only the first value observed: earlier work in the
+  series is left out, and the source records `unknown_baseline`.
+- Invalid baseline evidence fails every write of that capture incarnation and
+  creates no source, rather than counting from zero.
+- It charges nothing and counts as the series' first accepted checkpoint at its
+  receipt (see [Time placement](#time-placement)). Its order becomes the
+  source frontier.
+
+Each later checkpoint member then counts only its increase over the baseline
+member with the same fact ID, and carries the `derived` basis. A member absent
+from the baseline started from zero. A token metric or cost (matched by
+currency, kind, and provenance) that the baseline member did not report cannot
+be differenced: it is withheld, and the member becomes partial with
+`unknown_baseline`. Pricing components without a comparable start are dropped.
+A baseline member, metric, or cost that falls below its start or is no longer
+reported records `counter_regression` and changes nothing; an increase is
+never negative. Stored observations keep the provider's own values; records
+and the timeline hold the increases.
+
 ### Attribution
 
 `attribution` names the provider-confirmed model and reasoning effort in force
@@ -200,6 +230,8 @@ Each `UsageCapture` call runs one synchronous transaction:
      A different fingerprint for the same identity records
      `conflicting_evidence` (turn-scoped when every fact is turn-owned).
    - A replacing checkpoint older than the source `frontier` is ignored.
+   - In a source with a [reported baseline](#reported-baselines), checkpoint
+     facts are replaced by their increase over it before the checks below.
    - A source locked by a session-scoped `counter_regression` or
      `conflicting_evidence` accepts no further checkpoints.
    - A replacing snapshot whose per-metric sum or per-currency cost decreases
@@ -255,7 +287,7 @@ reports add a `breakdown` of main-agent and subagent summaries.
 | `capture_gap` | Capture was interrupted; work may be missing. |
 | `capture_failed` | A write failed in this process; later evidence may be missing. |
 | `history_partial` | Evidence came from history that cannot cover the whole scope. |
-| `unknown_baseline` | A cumulative series started from an unproven value. |
+| `unknown_baseline` | A cumulative series started from an unproven value, or is counted only from the first value observed. |
 | `counter_regression` | A counter decreased without a proven reset; the last valid value is kept. |
 | `conflicting_evidence` | Two different facts claimed the same identity. |
 | `ordering_unknown` | Evidence order could not be established. |
@@ -284,15 +316,21 @@ clients; it advances atomically with changed reports.
 | Pi | Each usage-bearing native entry: assistant messages (one request each), tool results, compaction and branch summaries, and built-in cache warming. Other extension usage entries are retained without being added. | Additive entries, including inactive branches and idle work | Sum of the turn's entries (`whole_turn`) | Reported per entry; SDK cost estimate per entry | Thinking level from the entry's native branch |
 | Codex | Cumulative `thread/tokenUsage/updated` totals as a session checkpoint, the latest call as lower-scope evidence, and derived turn intervals | Latest valid checkpoint of one native counter series across reconnects | Differences between continuous, owned checkpoints (`main_loop`, or `partial_interval` without a proven baseline) | Not reported; no cost | Provider-confirmed effective model, provider, and effort for the current runtime generation, withheld while a tuple-changing `turn/start` awaits its receipt |
 | Codex subagents | Each child's cumulative lifetime counter under the root thread | Included once in the root session with a main/subagent breakdown | Never allocated to parent turns | Not reported; no cost | None |
-| Claude | Per-query cumulative `modelUsage` checkpoints and the query cost estimate; per-turn result usage; main-loop assistant messages | Sum of disjoint query epochs' latest checkpoints | Result `usage` as `main_loop`; messages until the result arrives | Reported per model; SDK cumulative estimate | Applied effort for the confirmed model's row |
+| Claude | Per-query cumulative `modelUsage` checkpoints and the query cost estimate; per-turn result usage; main-loop assistant messages | Sum of query epochs' latest checkpoints, each counted from its reported baseline | Result `usage` as `main_loop`; messages until the result arrives | Reported per model; SDK cumulative estimate | Applied effort for the confirmed model's row |
 | Grok | None; declares `usageAccounting: "unsupported"` | Unsupported | Unsupported | — | — |
 
 Epochs: Pi uses its native entry store, Codex a single native counter series
-per thread, and Claude one epoch per actual SDK query (its startup probe
+per thread, and Claude one epoch per actual SDK query (its startup message
 identity), preserved across reattachment. A new Claude query starts from a
-proven zero; a retained query reattaches with an unknown baseline. A Claude
-conversation reset seals its segment with `source_reset`; a known synthetic
-startup failure never replaces real counters with zeros.
+proven zero. From Claude Code 2.1.277, a resumed or forked query continues the
+totals its transcript saved, so its first result already carries earlier
+turns. A resumed or reattached query therefore opens its series at the first
+result it observes, as a [reported baseline](#reported-baselines). The startup
+message's own result ran no model turn, so it is a proven start; any other
+first result is an `unknown` one. A reattached query reopens its series, which
+keeps the baseline recorded at launch. A Claude conversation reset seals its
+segment with `source_reset`; a known synthetic startup failure never replaces
+real counters with zeros.
 
 ## Forks, inherited turns, and subagents
 
@@ -404,6 +442,8 @@ counted as unpriced.
 
 Continuity belongs to one `open()` incarnation. The first checkpoint is
 continuous only for a proven-zero source with no accepted checkpoint yet. A
+reported baseline recorded when the source is created is its first accepted
+checkpoint, with a value of zero, so later increases are continuous too. A
 `gap()`, seal, failed write, observation dropped as invalid evidence, or
 rejected checkpoint breaks continuity, since the next delta may then cover an
 unobserved checkpoint. A checkpoint that passes the
@@ -445,7 +485,9 @@ before applying new evidence. The rebuild:
 - writes additive records at their reported or receipt time;
 - replays checkpoint observations in insertion order with the service's
   frontier and regression rules. The first checkpoint is `observed` for a
-  proven-zero source and `unplaced` otherwise; later deltas become intervals;
+  proven-zero source and `unplaced` otherwise; later deltas become intervals.
+  A reported baseline starts the replay, and later checkpoints replay as their
+  increase over it;
 - falls back to one `unplaced` row per current checkpoint record when the replay
   cannot reproduce the current records (for example, a locked source, a
   non-replacing checkpoint, or unreadable evidence).
@@ -572,6 +614,9 @@ explicit null-aware predicates so unknown keys fold into Other correctly.
   update.
 - Claude per-model cost in analytics depends on the SDK's per-model estimates
   adding up to the query estimate.
+- Claude query series recorded before reported baselines existed counted a
+  resumed or forked query's restored totals again. Recorded evidence is
+  immutable, so those session, cost, and analytics totals are not corrected.
 - Pi extension usage entries other than built-in cache warming are retained
   but not added, since their overlap with messages is unproven. Request counts
   exist only for Pi assistant messages and cache warming.

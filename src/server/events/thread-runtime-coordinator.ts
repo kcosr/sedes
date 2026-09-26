@@ -20,6 +20,8 @@ import type {
   ThreadEventEnvelope,
 } from "../../shared/protocol/conversation.js";
 import type { ThreadApplicationActorTargetResolver } from "../conversations/thread-application-service.js";
+import { DomainError } from "../domain/errors.js";
+import { reportBackgroundError } from "../report-background-error.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import type {
   ConversationEventBridge,
@@ -177,6 +179,14 @@ export class ThreadRuntimeNotIdleError extends Error {
   constructor() {
     super("The thread runtime is not idle.");
     this.name = "ThreadRuntimeNotIdleError";
+  }
+}
+
+/** Retained provider output no runtime has applied holds provider residency. */
+export class ThreadProviderOutputUndeliveredError extends Error {
+  constructor() {
+    super("The thread has provider output that has not been applied.");
+    this.name = "ThreadProviderOutputUndeliveredError";
   }
 }
 
@@ -397,6 +407,43 @@ export class ThreadRuntimeCoordinator {
     return this.#runWithRuntimeMaintenance(
       scope, applicationThreadId, { kind: "idle" }, operation,
     );
+  }
+
+  /**
+   * Inside a runtime-retired fence, release provider residency that outlives
+   * Sedes' runtime (a remote query) for this thread. Threads with no bound,
+   * enabled provider conversation have none. Outstanding provider work makes
+   * the thread busy, and provider output that could not be applied is
+   * reported as such; an unreachable provider is reported and left to the
+   * provider's own residency limit.
+   */
+  async releaseProviderResidency(
+    scope: RequestScope,
+    applicationThreadId: string,
+  ): Promise<void> {
+    let target: Awaited<ReturnType<ThreadApplicationActorTargetResolver["resolve"]>>;
+    try {
+      target = await this.#targets.resolve(scope, applicationThreadId);
+    } catch (error) {
+      if (error instanceof DomainError) return;
+      throw error;
+    }
+    const release = target.driver.releaseConversationResidency;
+    if (!release) return;
+    let outcome: "released" | "busy" | "undelivered";
+    try {
+      outcome = await release.call(target.driver, {
+        scope: target.scope,
+        binding: target.binding,
+        workspace: target.workspace,
+        opaqueBindingDetail: target.opaqueBindingDetail,
+      });
+    } catch (error) {
+      reportBackgroundError(`Release of thread ${applicationThreadId} provider residency`)(error);
+      return;
+    }
+    if (outcome === "busy") throw new ThreadRuntimeNotIdleError();
+    if (outcome === "undelivered") throw new ThreadProviderOutputUndeliveredError();
   }
 
   /** Detaches exactly the previewed actor and keeps admission fenced through the operation. */
@@ -885,6 +932,9 @@ export class ThreadRuntimeCoordinator {
         runState: timeline.runState,
         ...(timeline.activeTurnId
           ? { activeTurnId: timeline.activeTurnId }
+          : {}),
+        ...(timeline.backgroundActivity
+          ? { backgroundActivity: timeline.backgroundActivity }
           : {}),
       };
     } finally {

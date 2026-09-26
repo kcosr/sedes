@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "sdkRelease": "0.3.283",
+  "reviewedOn": "2026-09-26",
+  "platform": "linux/x64",
+  "nativeArtifacts": [
+    {
+      "package": "@anthropic-ai/claude-code-linux-x64",
+      "version": "2.1.281",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.281.tgz",
+      "integrity": "sha512-Z7ld7AE2AtvghO0qlNFBGD8S2w+nPVUk8uq4UprAUKJr6HHavXm605iGhbzSOTgXu3F/y540JHVUW9ON87w4IQ==",
+      "tarballSha256": "b0da3c5d8ce19c1084985bca2e49aa4c6e78ad0606c2b4ac7de607d9a31dd74a",
+      "executableRelativePath": "claude",
+      "executableSha256": "56fe3da88458465fb27d7e9299dddb3fead55750fb9c2de795f233b5eea6dce1",
+      "reportedVersion": "2.1.281 (Claude Code)",
+      "qualification": "loopback_fixture"
+    },
+    {
+      "package": "@anthropic-ai/claude-code-linux-x64",
+      "version": "2.1.283",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.283.tgz",
+      "integrity": "sha512-q9+Ke42t/I6oLb/bTmh6sI24jMw4KNwz3QbQLp9dVQ8ipQChfAW5L11SX8jcDzVCW/P2tId7ftI+lgBURvz9uQ==",
+      "tarballSha256": "d14ec0fca400151092c926928fea7e8e38231f7a90e6e1f8eeb2a55c24676afb",
+      "executableRelativePath": "claude",
+      "executableSha256": "1859583ce32920595c61ef868bee52e1b1594f7486db209935e01f1e5e804ae2",
+      "reportedVersion": "2.1.283 (Claude Code)",
+      "qualification": "loopback_fixture_and_authenticated"
+    }
+  ],
+  "sdkArtifact": {
+    "package": "@anthropic-ai/claude-agent-sdk",
+    "version": "0.3.283",
+    "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.283.tgz",
+    "integrity": "sha512-KB+mqU5JLbH2sztlSQeCOu71bK6padYAha3uacBzxFSOVfuRTywYzvsC9P+qV6gXmPXcu98FaPqQv6vBF9j8hA==",
+    "tarballSha256": "cbf20684aced4eca60d99a5eecfc05da1c952ad95a3df25b0182d95a90739b71",
+    "bundledClaudeCodeVersion": "2.1.283",
+    "platformPackage": {
+      "package": "@anthropic-ai/claude-agent-sdk-linux-x64",
+      "version": "0.3.283",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64/-/claude-agent-sdk-linux-x64-0.3.283.tgz",
+      "integrity": "sha512-cE5AebMvTlq7t7Oc0FmP5LzMOEtJ3F8XRGxkc3kTGr4aNcQgXplyYNH2yu1teW1yInuMXHzlCeFRdrmxpe2sRg==",
+      "tarballSha256": "469b80741c37db68999bf89a6de308ff90ea8f58cead9e1e53ad2a161b1b1b84",
+      "executableRelativePath": "claude",
+      "executableSha256": "1859583ce32920595c61ef868bee52e1b1594f7486db209935e01f1e5e804ae2",
+      "usedBySedes": false
+    }
+  },
+  "historyParity": {
+    "oracle": "getSessionMessages",
+    "transcripts": 308,
+    "deepEqual": 305,
+    "compactionContinuation": 2,
+    "explainedDifferences": 1,
+    "projectionChanged": 0
+  },
+  "qualification": {
+    "test": "tests/real-claude/claude-native-boundary.test.ts",
+    "currentRuntimePassed": [
+      "Bash denial",
+      "SDK MCP denial with sdk provenance",
+      "pending-permission interrupt",
+      "streaming interrupt",
+      "opt-in startup timing metadata"
+    ],
+    "minimumRuntimePassed": [
+      "Bash denial",
+      "SDK MCP denial with sdk provenance",
+      "pending-permission interrupt",
+      "streaming interrupt",
+      "opt-in startup timing metadata"
+    ],
+    "authenticatedProvider": true,
+    "nativePermissionHintsObserved": {
+      "mcpServer": true,
+      "defaultToNo": false,
+      "suppressAlwaysAllowRule": false
+    },
+    "notExercised": [
+      "background-task completion coalescing",
+      "startup failure reason",
+      "actual SSH carrier",
+      "per-task Stop UI",
+      "all optional SDK features"
+    ]
+  }
+}

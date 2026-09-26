@@ -100,6 +100,16 @@ export interface UsageSink {
     readonly epoch: string;
     readonly normalizationVersion: string;
     readonly initialBaseline: "proven_zero" | "unknown";
+    /**
+     * Reported checkpoint a cumulative series started from, such as totals a
+     * resumed provider process restored from saved state. It charges nothing:
+     * later checkpoints count only their increase over it. It is recorded only
+     * when this call creates the source; a reopened source keeps its own.
+     * With `proven_zero`, it is exactly where the series began. With `unknown`,
+     * it is merely the first value observed, so earlier work in the series is
+     * unattributable and the source records `unknown_baseline`.
+     */
+    readonly reportedBaseline?: UsageObservation;
     /** Verified native spawn relationship. Binding always names the root application conversation. */
     readonly subagent?: { readonly nativeParentSession: string };
   }): UsageCapture;

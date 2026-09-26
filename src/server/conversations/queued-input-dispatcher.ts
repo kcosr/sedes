@@ -470,6 +470,11 @@ export class QueuedInputDispatcher {
               throw new DomainError("invalid_transition",
                 this.#operations.getSteer(scope, input.mutationId).failureDiagnostic!);
             }
+            if (outcome === "not_sent") {
+              throw new DomainError("invalid_transition",
+                this.#repository.get(scope, applicationThreadId, id).diagnostic ??
+                  "This steering message was not sent.");
+            }
             if (outcome === "not_accepted") {
               return {
                 status: "restored" as const,
@@ -857,7 +862,7 @@ export class QueuedInputDispatcher {
   async #reconcileQueuedSteer(
     scope: RequestScope,
     receipt: QueuedInputSteerOperationRecord,
-  ): Promise<"accepted" | "not_accepted" | "failed_unknown" | "unresolved"> {
+  ): Promise<"accepted" | "not_accepted" | "not_sent" | "failed_unknown" | "unresolved"> {
     let reconciliation;
     try {
       reconciliation = await this.#gateway.reconcileSubmission(
@@ -869,6 +874,7 @@ export class QueuedInputDispatcher {
           ...(receipt.attachments.length > 0
             ? { attachments: receipt.attachments }
             : {}),
+          ...(receipt.target ? { steerTarget: receipt.target } : {}),
         },
       );
     } catch {
@@ -891,6 +897,24 @@ export class QueuedInputDispatcher {
       }).immediate();
       await this.#emitQueueChanged(scope, receipt.threadId);
       return "failed_unknown";
+    }
+    if (reconciliation.status === "not_accepted" && !reconciliation.retryable) {
+      // Proven never sent, but not to be resent automatically (a provider
+      // withdrew it on Stop). Return it to the user as a failed item they can
+      // restore or dismiss; later entries wait for that decision.
+      const diagnostic = safeDiagnostic(reconciliation.diagnostic?.text ??
+        "The backend proved this steering message was not sent. Nothing was resent. Restore it to send it again, or dismiss it.");
+      const now = this.#clock.now();
+      this.#repository.database.transaction(() => {
+        this.#operations.rejectSteerBeforeAcceptance(scope, receipt.mutationId);
+        this.#repository.failSteerNotSent(scope, receipt.threadId, receipt.queuedInputId, {
+          steerOperationId: receipt.mutationId,
+          expectedState: receipt.state === "pending_materialization" ? "dispatching" : "uncertain",
+          diagnostic, now,
+        });
+      }).immediate();
+      await this.#emitQueueChanged(scope, receipt.threadId);
+      return "not_sent";
     }
     if (reconciliation.status === "not_accepted") {
       this.#restoreQueuedSteer(
@@ -1550,7 +1574,22 @@ export class QueuedInputDispatcher {
       return;
     }
     if (options?.acceptanceOnly && reconciliation.status !== "accepted") return;
-    if (reconciliation.status === "unresolved" || reconciliation.status === "failed_unknown") return;
+    if (reconciliation.status === "unresolved") return;
+    if (reconciliation.status === "failed_unknown") {
+      // Tracking is terminal, so the head must not stay uncertain forever.
+      // As with a terminal Steer, the user drops it or restores it for an
+      // explicit resend; later entries wait for that decision.
+      this.#repository.database.transaction(() => {
+        this.#repository.failSubmitUnknown(scope, item.applicationThreadId, item.id, {
+          diagnostic: safeDiagnostic(
+            `Delivery outcome is unknown; the backend may already have received this input. Nothing was resent. Review the conversation, then dismiss it or restore it to send again. ${reconciliation.diagnostic.text}`,
+          ),
+          now: this.#clock.now(),
+        });
+      }).immediate();
+      await this.#emitQueueChanged(scope, item.applicationThreadId);
+      return;
+    }
     if (reconciliation.status === "accepted") {
       const completionIdentity = reconciliation.completionIdentity;
       this.#repository.database.transaction(() => {

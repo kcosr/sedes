@@ -29,6 +29,13 @@ import type {
 } from "./claude-release-guard.js";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v1.js";
+import {
+  runClaudeForkLaunch,
+  type ClaudeRuntimeForkOptions,
+  type ClaudeRuntimeForkResult,
+} from "./claude-fork-launch.js";
+
+export type { ClaudeRuntimeForkOptions, ClaudeRuntimeForkResult };
 
 export interface ClaudeRuntimeProbeInput {
   readonly executablePath: string;
@@ -83,9 +90,22 @@ export interface ClaudeRuntimeSessionOptions {
   readonly onFailure?: (error: unknown) => void;
 }
 
+/**
+ * What a service-owned delivery owner knows about one input. `cancelled`:
+ * Claude admitted it, then withdrew it with a `cancelled` lifecycle frame
+ * before it started, so it never ran. `not_sent`: it never reached Claude.
+ */
+export type ClaudeSubmissionDisposition =
+  | "submitted" | "session_ended" | "not_sent" | "cancelled" | "unknown";
+
 /** Provider-private live query contract implemented identically over local and SSH workers. */
 export interface ClaudeRuntimeSession {
   readonly closed: boolean;
+  /**
+   * In-process sessions only: false while no Claude Code query exists, so a
+   * failed start that leaves it false launched no provider process.
+   */
+  readonly launched?: boolean;
   /** A service-owned query and CLI ingress survive individual SSH carriers. */
   readonly lifetime?: "persistent_service";
   /** True when start attached to a service-owned query already running. */
@@ -109,11 +129,38 @@ export interface ClaudeRuntimeSession {
     readonly shouldQuery?: boolean;
     readonly priority?: "next";
   }): void | Promise<void>;
+  /**
+   * A service-owned session's owner first withdraws every Sedes input it holds
+   * that Claude has not started, as Stop requires, including inputs an earlier
+   * main attachment sent. Otherwise this interrupts only.
+   */
   interrupt(): Promise<SDKControlInterruptResponse | undefined>;
+  /**
+   * Asks Claude to withdraw one input it admitted but has not started. Claude
+   * closes a withdrawn input with a `command_lifecycle` `cancelled` frame
+   * before any `started`; only that frame is evidence. The boolean is Claude's
+   * own answer and proves nothing: `false` also covers an input it will still
+   * withdraw at dequeue, one it is folding into the turn, or one it started.
+   *
+   * Present exactly when the caller owns the query's inputs
+   * ({@link ClaudeOwnedRuntimeSession}), so Stop withdraws them itself before
+   * the interrupt. A service-owned session omits it: its owner outlives main's
+   * attachments and withdraws on `interrupt`.
+   */
+  cancelQueuedInput?(operationId: string): Promise<boolean>;
   setModel(model?: string): Promise<void>;
   setEffort(effort?: EffortLevel): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
   close(options?: { readonly reason: "evicted" }): Promise<void>;
+}
+
+/**
+ * A query whose inputs its caller owns, so the caller withdraws unstarted
+ * inputs itself on Stop: a local query lives exactly as long as the handle
+ * that opened it, and a persistent owner holds the queries it serves.
+ */
+export interface ClaudeOwnedRuntimeSession extends ClaudeRuntimeSession {
+  cancelQueuedInput(operationId: string): Promise<boolean>;
 }
 
 /**
@@ -127,9 +174,20 @@ export interface ClaudeRuntimeClient {
     readonly sessionId: string;
     readonly operationId: string;
     readonly cwd: string;
-  }): Promise<"submitted" | "session_ended" | "not_sent" | "unknown">;
+  }): Promise<ClaudeSubmissionDisposition>;
   probe(input: ClaudeRuntimeProbeInput): Promise<ClaudeRuntimeProbeResult>;
+  /**
+   * Service-owned runtimes only: retire a query no attachment attends, unless
+   * work is outstanding. Local queries never outlive their handle.
+   */
+  retireSession?(input: { readonly sessionId: string; readonly cwd: string }): Promise<"retired" | "absent" | "busy" | "undelivered">;
   createSession(options: ClaudeRuntimeSessionOptions): ClaudeRuntimeSession;
+  /**
+   * One locked-down fork launch that copies the retained source prefix into
+   * the reserved child and exits before returning. It is never adopted as a
+   * conversation runtime; failures carry `claude-fork-launch.ts` codes.
+   */
+  forkSession(options: ClaudeRuntimeForkOptions): Promise<ClaudeRuntimeForkResult>;
   listSessions(
     options: ListSessionsOptions,
     environment: Readonly<Record<string, string | undefined>>,
@@ -149,12 +207,26 @@ export interface ClaudeRuntimeClient {
     options: ClaudeHistoryPageOptions,
     environment: Readonly<Record<string, string | undefined>>,
   ): Promise<ClaudeHistoryPage>;
+  /**
+   * Native existence, independent of session metadata: the SDK reports no
+   * info for a transcript holding only Sedes' startup message.
+   */
+  hasSessionTranscript(
+    sessionId: string,
+    options: { readonly dir: string },
+    environment: Readonly<Record<string, string | undefined>>,
+  ): Promise<boolean>;
   renameSession(
     sessionId: string,
     title: string,
     options: { readonly dir: string },
     environment: Readonly<Record<string, string | undefined>>,
   ): Promise<void>;
+}
+
+/** A runtime whose queries' inputs their caller owns: local workers, including the one a persistent owner runs. */
+export interface ClaudeOwnedRuntimeClient extends ClaudeRuntimeClient {
+  createSession(options: ClaudeRuntimeSessionOptions): ClaudeOwnedRuntimeSession;
 }
 
 /**
@@ -178,6 +250,10 @@ export class ClaudeSdkRuntimeAdapter implements ClaudeRuntimeClient {
 
   createSession(options: ClaudeRuntimeSessionOptions): ClaudeRuntimeSession {
     return new ClaudeSdkSession({ sdk: this.#sdk, ...options });
+  }
+
+  forkSession(options: ClaudeRuntimeForkOptions): Promise<ClaudeRuntimeForkResult> {
+    return runClaudeForkLaunch((session) => this.createSession(session), options);
   }
 
   listSessions(
@@ -212,6 +288,14 @@ export class ClaudeSdkRuntimeAdapter implements ClaudeRuntimeClient {
     return this.#history.getPage(scope, options, async () => structuredClone(
       await this.#sdk.getSessionMessages(sessionId, nativeOptions, environment),
     ));
+  }
+
+  hasSessionTranscript(
+    sessionId: string,
+    options: { readonly dir: string },
+    environment: Readonly<Record<string, string | undefined>>,
+  ): Promise<boolean> {
+    return this.#sdk.hasSessionTranscript(sessionId, options, environment);
   }
 
   renameSession(

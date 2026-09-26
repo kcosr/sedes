@@ -3,7 +3,8 @@ import {
   environmentVariableOverridesSchema,
   environmentVariablesRevisionSchema,
 } from "./environment-variables.js";
-import { steerTargetSchema } from "./conversation.js";
+import { steerTargetSchema, threadRunStateSchema } from "./conversation.js";
+import { backgroundActivitySchema } from "./background-activity.js";
 import { z } from "zod";
 import { questionRequestsResultSchema } from "./questions.js";
 import {
@@ -789,6 +790,7 @@ const threadForceResetBlockerSummariesSchema = z
 
 export const threadForceResetWarningSchema = z.strictObject({
   code: z.enum([
+    "running_work_will_stop",
     "provider_side_effects_may_remain",
     "native_fork_orphan_may_remain",
     "provider_activity_may_reappear",
@@ -804,12 +806,25 @@ const forceResetFingerprintSchema = z
   .length(64)
   .regex(/^[0-9a-f]{64}$/);
 
+/** One thread a force reset would touch, named for the preview. */
+export const threadForceResetAffectedThreadSchema = z.strictObject({
+  threadId: threadIdSchema,
+  title: z.string().min(1).max(240),
+  /** The loaded runtime the reset would replace, if any. */
+  runtime: z
+    .strictObject({
+      runState: threadRunStateSchema,
+      backgroundActivity: backgroundActivitySchema.optional(),
+    })
+    .optional(),
+});
+
 export const threadForceResetImpactSchema = z.strictObject({
   blockerFingerprint: forceResetFingerprintSchema,
   resettable: z.boolean(),
   blockers: threadForceResetBlockerSummariesSchema,
-  affectedThreadIds: z.array(threadIdSchema).min(1).max(10_000),
-  warnings: z.array(threadForceResetWarningSchema).max(3),
+  affectedThreads: z.array(threadForceResetAffectedThreadSchema).min(1).max(10_000),
+  warnings: z.array(threadForceResetWarningSchema).max(4),
 });
 export type ThreadForceResetImpact = z.infer<
   typeof threadForceResetImpactSchema
@@ -901,6 +916,8 @@ export const forkThreadResultSchema = z.discriminatedUnion("status", [
     status: z.literal("aborted"),
     childThreadId: threadIdSchema,
     diagnostic: z.string().min(1).max(500),
+    /** False when a new fork of the same boundary would fail the same way. */
+    restartable: z.boolean(),
   }),
 ]);
 export type ForkThreadResult = z.infer<typeof forkThreadResultSchema>;
@@ -1085,6 +1102,10 @@ export const threadApplicationOperationSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("recover_uncertain"),
   }),
+  /** Remove an unfinished fork child; its provider child is never adopted. */
+  z.strictObject({
+    kind: z.literal("discard_fork"),
+  }),
   z.strictObject({
     kind: z.literal("cancel_queued_input"),
     queuedInputId: z.string().min(1).max(160),
@@ -1203,6 +1224,11 @@ export type ThreadQueueMutationResult = z.infer<
   typeof threadQueueMutationResultSchema
 >;
 
+/** A creation that was proven uncreated and discarded, with its reason when recorded. */
+const abortedMutationResultSchema = z.strictObject({
+  status: z.literal("aborted"),
+  diagnostic: z.string().min(1).max(500).optional(),
+});
 export const threadApplicationMutationResultSchema = z.discriminatedUnion(
   "status",
   [
@@ -1240,7 +1266,7 @@ export const threadApplicationMutationResultSchema = z.discriminatedUnion(
       retryable: z.boolean(),
       draft: normalizedDraftSchema.optional(),
     }),
-    z.strictObject({ status: z.literal("aborted") }),
+    abortedMutationResultSchema,
     z.strictObject({ status: z.literal("completed") }),
     ...threadQueueMutationResultSchema.options,
   ],
@@ -1280,7 +1306,7 @@ export const threadDeliveryMutationResultSchema = z.discriminatedUnion(
       draft: clearedDeliveryDraftSchema,
     }),
     deliveryRecoveryRequiredResultSchema,
-    z.strictObject({ status: z.literal("aborted") }),
+    abortedMutationResultSchema,
   ],
 );
 export type ThreadDeliveryMutationResult = z.infer<

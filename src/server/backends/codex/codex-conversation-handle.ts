@@ -1647,6 +1647,24 @@ export class CodexConversationHandle implements ConversationHandle {
         if (previous.state === "outcome_unknown") {
           throw mutationOutcomeUnknown("steer");
         }
+        if (
+          previous.result.status === "pending_materialization" &&
+          this.#steerMaterialized(
+            input.applicationOperationId,
+            previous.result.backendTurnId,
+          )
+        ) {
+          const accepted = {
+            ...previous.result,
+            status: "accepted",
+            backendTurnId: expectedBackendTurnId,
+          } satisfies SteerTurnResult;
+          this.#steerOperations.set(input.applicationOperationId, {
+            ...previous,
+            result: accepted,
+          });
+          return accepted;
+        }
         return previous.result;
       }
       const thread = this.#assertMutableProjection();
@@ -1776,8 +1794,18 @@ export class CodexConversationHandle implements ConversationHandle {
             true,
           );
         }
+        // The response only admits the input to the turn's pending input.
+        // Codex records its userMessage when the turn next drains that input,
+        // and an interrupt clears it without any event. The Steer stays
+        // pending until its exact item appears, or reconciliation proves the
+        // turn ended without it.
         const result = {
-          status: "accepted",
+          status: this.#steerMaterialized(
+            input.applicationOperationId,
+            expectedBackendTurnId,
+          )
+            ? "accepted"
+            : "pending_materialization",
           reconciliationToken: input.reconciliationToken,
           completionCorrelation: input.applicationOperationId,
           backendTurnId: expectedBackendTurnId,
@@ -1809,6 +1837,20 @@ export class CodexConversationHandle implements ConversationHandle {
         throw mapCodexMutationError(error, "steer");
       }
     });
+  }
+
+  /** Exact authenticated userMessage evidence in the installed projection. */
+  #steerMaterialized(
+    applicationOperationId: string,
+    backendTurnId: string | undefined,
+  ): boolean {
+    return (
+      backendTurnId !== undefined &&
+      (this.#snapshotWindow?.turnsById[
+        backendTurnId
+      ]?.completionCorrelations?.includes(applicationOperationId) ??
+        false)
+    );
   }
 
   async interrupt(input: InterruptTurnInput): Promise<void> {

@@ -470,32 +470,9 @@ export class NormalizedThreadStore {
         // already been clamped against inventory and recovery state at the
         // server boundary, so both positive and negative transitions are
         // authoritative here.
-        const forksByTurnId = Object.fromEntries(
-          Object.entries(snapshot.turnsById).map(([turnId, turn]) => [
-            turnId,
-            {
-              sourceTurnId: turnId,
-              expectedTurnRevision: turn.revision,
-              available:
-                turn.status === "completed" &&
-                turn.endedBy === "agent_settled" &&
-                event.forkSource.selectedCompletedTurn.available,
-              ...(turn.status === "completed" &&
-              turn.endedBy === "agent_settled" &&
-              event.forkSource.selectedCompletedTurn.available
-                ? {}
-                : {
-                    unavailableReason:
-                      turn.status === "completed" &&
-                      turn.endedBy === "agent_settled"
-                        ? event.forkSource.selectedCompletedTurn
-                            .unavailableReason!
-                        : {
-                            text: "Only a successfully completed turn can be forked.",
-                          },
-                  }),
-            },
-          ]),
+        const forksByTurnId = forkCapabilitiesForTurns(
+          snapshot.turnsById,
+          event.forkSource,
         );
         return this.#setSnapshot({
           ...snapshot,
@@ -1112,29 +1089,25 @@ function forkCapabilitiesForTurns(
   forkSource: NormalizedThreadSnapshot["forkSource"],
 ): NormalizedThreadSnapshot["forksByTurnId"] {
   return Object.fromEntries(
-    Object.entries(turnsById).map(([turnId, turn]) => [
-      turnId,
-      {
-        sourceTurnId: turnId,
-        expectedTurnRevision: turn.revision,
-        available:
-          turn.status === "completed" &&
-          turn.endedBy === "agent_settled" &&
-          forkSource.selectedCompletedTurn.available,
-        ...(turn.status === "completed" &&
-        turn.endedBy === "agent_settled" &&
-        forkSource.selectedCompletedTurn.available
-          ? {}
-          : {
-              unavailableReason:
-                turn.status === "completed" && turn.endedBy === "agent_settled"
-                  ? forkSource.selectedCompletedTurn.unavailableReason!
-                  : {
-                      text: "Only a successfully completed turn can be forked.",
-                    },
-            }),
-      },
-    ]),
+    Object.entries(turnsById).map(([turnId, turn]) => {
+      const completed =
+        turn.status === "completed" && turn.endedBy === "agent_settled";
+      const unavailableReason = !completed
+        ? { text: "Only a successfully completed turn can be forked." }
+        : (turn.forkUnavailableReason ??
+          (forkSource.selectedCompletedTurn.available
+            ? undefined
+            : forkSource.selectedCompletedTurn.unavailableReason!));
+      return [
+        turnId,
+        {
+          sourceTurnId: turnId,
+          expectedTurnRevision: turn.revision,
+          available: unavailableReason === undefined,
+          ...(unavailableReason ? { unavailableReason } : {}),
+        },
+      ];
+    }),
   );
 }
 

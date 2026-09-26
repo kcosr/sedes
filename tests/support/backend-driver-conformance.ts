@@ -1040,12 +1040,13 @@ export function describeBackendDriverConformance(
           return latest ? page.turnsById[latest]?.endedBy : undefined;
         })
         .toBe("agent_settled");
+      const settled = await sourceHandle.history({ limit: 1_000 });
       const checkpoint = await fixture.driver.resolveBranchCheckpoint({
         scope: fixture.scope,
         binding: sourceBinding,
         workspace: fixture.workspace,
         opaqueBindingDetail: source.opaqueBindingDetail,
-        selection: { kind: "latest_completed" },
+        selection: { kind: "latest_completed", backendTurnId: settled.orderedBackendTurnIds.at(-1)! },
       });
       const branch = await fixture.driver.branchConversation({
         scope: fixture.scope,

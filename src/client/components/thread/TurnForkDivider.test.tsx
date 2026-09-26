@@ -312,6 +312,30 @@ describe("TurnForkDivider", () => {
     expect(clearForkAttempt).toHaveBeenCalledWith(turn.id);
   });
 
+  it.each([true, false])("offers a new fork after an abort only when it could succeed (restartable=%s)", (restartable) => {
+    const clearForkAttempt = vi.fn();
+    render(
+      <TurnForkDivider
+        turn={turn}
+        turnNumber={1}
+        capability={capability}
+        attempt={{
+          phase: "aborted",
+          childThreadId: "child-1",
+          diagnostic: "Claude did not start the fork.",
+          restartable,
+        }}
+        connected
+        authoritative
+        store={{ forkTurn: vi.fn(), clearForkAttempt } as unknown as ThreadClientStore}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Claude did not start the fork.");
+    expect(screen.queryByRole("button", { name: /Start a new fork/ }) !== null).toBe(restartable);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss fork status" }));
+    expect(clearForkAttempt).toHaveBeenCalledWith(turn.id);
+  });
+
   it("keeps uncertain work on the source and exposes recovery without duplicating it", () => {
     const forkTurn = vi.fn(async () => ({
       status: "created" as const,

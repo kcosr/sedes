@@ -21,8 +21,10 @@ import {
   claudeRuntimeInitializeOperation,
   claudeRuntimeProbeOperation,
   claudeRuntimeQueryOpenOperation,
+  claudeRuntimeQueryCancelInputRequestSchema,
   claudeRuntimeQueryOpenRequestSchema,
   claudeRuntimeQuerySendRequestSchema,
+  claudeRuntimeSessionMessagesResponseSchema,
   claudeRuntimeWorkerOperations,
   registerClaudeRuntimeV1HostOperations,
   registerClaudeRuntimeV1WorkerOperations,
@@ -35,12 +37,22 @@ import {
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const QUERY_ID = "22222222-2222-4222-8222-222222222222";
 const OPERATION_ID = "33333333-3333-4333-8333-333333333333";
+const SUMMARY_ID = "44444444-4444-4444-8444-444444444444";
+const LOCAL_COMMAND_ID = "55555555-5555-4555-8555-555555555555";
 const context = () => ({
   requestId: randomUUID(),
   signal: new AbortController().signal,
 });
 
 describe("claude_runtime@1 protocol", () => {
+  it("names exactly one query and one input identity when withdrawing input", () => {
+    const queryId = randomUUID(), operationId = randomUUID();
+    expect(claudeRuntimeQueryCancelInputRequestSchema.parse({ queryId, operationId })).toEqual({ queryId, operationId });
+    expect(claudeRuntimeQueryCancelInputRequestSchema.safeParse({ queryId }).success).toBe(false);
+    expect(claudeRuntimeQueryCancelInputRequestSchema.safeParse({ queryId, operationId: "not-a-uuid" }).success).toBe(false);
+    expect(claudeRuntimeQueryCancelInputRequestSchema.safeParse({ queryId, operationId, all: true }).success).toBe(false);
+  });
+
   it("admits bounded permission metadata with explicit false hints", () => {
     expect(claudeRuntimeCanUseToolOperation.requestSchema.safeParse({
       queryId: QUERY_ID, toolName: "Read", input: {},
@@ -76,10 +88,12 @@ describe("claude_runtime@1 protocol", () => {
       listSessions: noHandler,
       getSessionInfo: noHandler,
       getSessionMessages: noHandler,
+      hasSessionTranscript: noHandler,
       renameSession: noHandler,
       openQuery: noHandler,
       sendQuery: noHandler,
       interruptQuery: noHandler,
+      cancelQueryInput: noHandler,
       setQueryModel: noHandler,
       setQueryEffort: noHandler,
       setQueryPermissionMode: noHandler,
@@ -90,6 +104,7 @@ describe("claude_runtime@1 protocol", () => {
         capabilityId: "claude_runtime",
         majorVersion: 1,
         operations: [
+          "query.cancel_input",
           "query.close",
           "query.interrupt",
           "query.open",
@@ -103,10 +118,11 @@ describe("claude_runtime@1 protocol", () => {
           "session.list",
           "session.messages",
           "session.rename",
+          "session.transcript",
         ],
       },
     ]);
-    expect(claudeRuntimeWorkerOperations).toHaveLength(13);
+    expect(claudeRuntimeWorkerOperations).toHaveLength(15);
 
     const hostRegistry = new SidecarOperationRegistry();
     registerClaudeRuntimeV1HostOperations(hostRegistry, {
@@ -373,14 +389,59 @@ describe("ClaudeRuntimeWorkerHost", () => {
       ).resolves.toEqual({
         nextCursor: null,
         messages: [
-          expect.objectContaining({
+          // Queued input keeps its marker; the SDK's local-command marker does not cross.
+          {
+            type: "user",
+            uuid: OPERATION_ID,
             session_id: SESSION_ID,
+            message: { role: "user", content: "hello" },
+            parent_tool_use_id: null,
+            parent_agent_id: null,
             timestamp: "2026-08-27T12:00:00.000Z",
             origin: { kind: "task-notification" },
-          }),
+            isQueuedCommand: true,
+          },
+          {
+            type: "user",
+            uuid: LOCAL_COMMAND_ID,
+            session_id: SESSION_ID,
+            message: { role: "user", content: "<command-name>/synthetic</command-name>" },
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+          },
+          // A compaction summary keeps its marker; the SDK's derived is_meta does not cross.
+          {
+            type: "user",
+            uuid: SUMMARY_ID,
+            session_id: SESSION_ID,
+            message: { role: "user", content: "Summary of the earlier conversation." },
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+            timestamp: "2026-08-27T12:00:01.000Z",
+            isCompactSummary: true,
+          },
         ],
       });
+      expect(() => claudeRuntimeSessionMessagesResponseSchema.parse({ nextCursor: null, messages: [
+        { type: "user", uuid: SUMMARY_ID, session_id: SESSION_ID, message: {}, parent_tool_use_id: null,
+          parent_agent_id: null, isCompactSummary: false },
+      ] })).toThrow();
+      expect(() => claudeRuntimeSessionMessagesResponseSchema.parse({ nextCursor: null, messages: [
+        { type: "user", uuid: SUMMARY_ID, session_id: SESSION_ID, message: {}, parent_tool_use_id: null,
+          parent_agent_id: null, isQueuedCommand: false },
+      ] })).toThrow();
       expect(sdk.getSessionMessages).toHaveBeenCalledWith(
+        SESSION_ID,
+        { dir: "/workspace" },
+        expect.objectContaining({ CLAUDE_CONFIG_DIR: configDirectory }),
+      );
+      await expect(
+        host.handlers.hasSessionTranscript(
+          { sessionId: SESSION_ID, dir: "/workspace" },
+          context(),
+        ),
+      ).resolves.toEqual({ present: true });
+      expect(sdk.hasSessionTranscript).toHaveBeenCalledWith(
         SESSION_ID,
         { dir: "/workspace" },
         expect.objectContaining({ CLAUDE_CONFIG_DIR: configDirectory }),
@@ -410,6 +471,46 @@ describe("ClaudeRuntimeWorkerHost", () => {
       await rm(configDirectory, { recursive: true });
       if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = previousConfig;
+    }
+  });
+
+  it("reports a start that failed before launching Claude Code, and only then", async () => {
+    const previousConfig = process.env.CLAUDE_CONFIG_DIR;
+    const configDirectory = await mkdtemp("/tmp/sedes-claude-worker-test-");
+    await chmod(configDirectory, 0o775);
+    const sdk = helperFacade();
+    const host = new ClaudeRuntimeWorkerHost({ sdk, peer: inertPeer() });
+    const open = (queryId: string) => host.handlers.openQuery({
+      queryId, sessionId: randomUUID(), cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {},
+    }, context());
+    try {
+      await host.handlers.initialize({ executablePath: process.execPath, configDirectory, initializationTimeoutMs: 1_000 }, context());
+      // The login check fails before any query exists: nothing was launched.
+      await expect(open(randomUUID())).rejects.toMatchObject({
+        name: "SidecarOperationError", code: "claude_runtime_query_not_launched_login",
+      });
+      expect(sdk.createQuery).not.toHaveBeenCalled();
+      vi.mocked(sdk.readCliAuthStatus).mockResolvedValue({
+        loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max",
+      });
+      // Once the SDK is asked to launch, a failure no longer proves that.
+      await expect(open(randomUUID())).rejects.toThrow("unused");
+      expect(sdk.createQuery).toHaveBeenCalledOnce();
+    } finally {
+      await host.close();
+      await rm(configDirectory, { recursive: true });
+      if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previousConfig;
+    }
+  });
+
+  it("rejects fork launches that would carry permissions, tools, or a query environment", () => {
+    const fork = { queryId: QUERY_ID, sessionId: SESSION_ID, cwd: "/workspace", launch: "fork" as const,
+      sourceSessionId: randomUUID(), resumeSessionAt: randomUUID(), enableCanUseTool: false, environment: {} };
+    expect(claudeRuntimeQueryOpenRequestSchema.safeParse(fork).success).toBe(true);
+    for (const widened of [{ permissionMode: "bypassPermissions" }, { allowDangerouslySkipPermissions: true },
+      { enableCanUseTool: true }, { environment: { SEDES_AGENT_TOOL_ENDPOINT: "http://127.0.0.1:4784", SEDES_AGENT_TOOL_SOURCE_CAPABILITY: "x".repeat(40), SEDES_AGENT_TOOL_CLI_MODE: "progressive", PATH: "/bin" } }]) {
+      expect(claudeRuntimeQueryOpenRequestSchema.safeParse({ ...fork, ...widened }).success).toBe(false);
     }
   });
 
@@ -726,6 +827,13 @@ describe("ClaudeRuntimeWorkerHost", () => {
       expect(peer.close).toHaveBeenCalledWith(
         "claude_runtime_permission_acknowledgement_failed",
       );
+      // Stop withdraws one input through the SDK's `cancel_async_message`.
+      await expect(host.handlers.cancelQueryInput({ queryId: QUERY_ID, operationId: OPERATION_ID }, context()))
+        .resolves.toEqual({ cancelled: true });
+      queryFixture.cancelAsyncMessage.mockResolvedValueOnce(false);
+      await expect(host.handlers.cancelQueryInput({ queryId: QUERY_ID, operationId: OPERATION_ID }, context()))
+        .resolves.toEqual({ cancelled: false });
+      expect(queryFixture.cancelAsyncMessage.mock.calls).toEqual([[OPERATION_ID], [OPERATION_ID]]);
       await host.handlers.closeQuery({ queryId: QUERY_ID }, context());
       expect(host.activeQueryCount).toBe(0);
       expect(queryFixture.close).toHaveBeenCalledOnce();
@@ -1102,7 +1210,7 @@ describe("ClaudeRuntimeWorkerHost", () => {
 
 function helperFacade(): ClaudeSdkFacade {
   return {
-    readCliRelease: vi.fn(async () => "2.1.274"),
+    readCliRelease: vi.fn(async () => "2.1.283"),
     readCliAuthStatus: vi.fn(async () => ({ loggedIn: true })),
     createQuery: vi.fn(() => {
       throw new Error("unused");
@@ -1119,8 +1227,30 @@ function helperFacade(): ClaudeSdkFacade {
         parent_agent_id: null,
         timestamp: "2026-08-27T12:00:00.000Z",
         origin: { kind: "task-notification" },
+        isQueuedCommand: true,
+      } as never,
+      {
+        type: "user",
+        uuid: LOCAL_COMMAND_ID,
+        session_id: SESSION_ID,
+        message: { role: "user", content: "<command-name>/synthetic</command-name>" },
+        parent_tool_use_id: null,
+        parent_agent_id: null,
+        isCompletedLocalCommand: true,
+      } as never,
+      {
+        type: "user",
+        uuid: SUMMARY_ID,
+        session_id: SESSION_ID,
+        message: { role: "user", content: "Summary of the earlier conversation." },
+        parent_tool_use_id: null,
+        parent_agent_id: null,
+        timestamp: "2026-08-27T12:00:01.000Z",
+        isCompactSummary: true,
+        is_meta: true,
       } as never,
     ]),
+    hasSessionTranscript: vi.fn(async () => true),
     renameSession: vi.fn(async () => undefined),
   };
 }
@@ -1132,12 +1262,14 @@ function queryFacade(
 ): {
   readonly sdk: ClaudeSdkFacade;
   readonly close: ReturnType<typeof vi.fn>;
+  readonly cancelAsyncMessage: ReturnType<typeof vi.fn>;
   readonly options: () => Options;
 } {
   let options: Options | undefined;
   const close = vi.fn();
+  const cancelAsyncMessage = vi.fn(async (_messageUuid: string) => true);
   const sdk: ClaudeSdkFacade = {
-    readCliRelease: vi.fn(async () => "2.1.274"),
+    readCliRelease: vi.fn(async () => "2.1.283"),
     readCliAuthStatus: vi.fn(async () => ({
       loggedIn: true,
       authMethod: "claude.ai",
@@ -1160,7 +1292,7 @@ function queryFacade(
           type: "system",
           subtype: "init",
           apiKeySource: "oauth",
-          claude_code_version: "2.1.274",
+          claude_code_version: "2.1.283",
           cwd: "/workspace",
           tools: [],
           mcp_servers: [],
@@ -1178,6 +1310,7 @@ function queryFacade(
       return Object.assign(stream, {
         initializationResult: async () => await initializationResult,
         interrupt: async () => ({ still_queued: [] }),
+        cancelAsyncMessage,
         setModel: async () => undefined,
         setPermissionMode: async () => undefined,
         applyFlagSettings: async () => undefined,
@@ -1190,11 +1323,13 @@ function queryFacade(
     listSessions: vi.fn(async () => []),
     getSessionInfo: vi.fn(async () => undefined),
     getSessionMessages: vi.fn(async () => []),
+    hasSessionTranscript: vi.fn(async () => false),
     renameSession: vi.fn(async () => undefined),
   };
   return {
     sdk,
     close,
+    cancelAsyncMessage,
     options: () => {
       if (!options) throw new Error("query_not_created");
       return options;

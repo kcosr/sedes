@@ -1,6 +1,7 @@
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
 import { claudeSteerOperationsMigration } from "../../src/server/db/migrations/102-claude-steer-operations.js";
+import { claudeForkChildrenMigration } from "../../src/server/db/migrations/117-claude-fork-children.js";
 import { claudeTaskLifecycleMigration } from "../../src/server/db/migrations/100-claude-task-lifecycle.js";
 import Database from "better-sqlite3";
 import type {
@@ -121,6 +122,7 @@ function repository(): ClaudeThreadRepository {
   database.exec(claudeTurnFailureDetailsMigration.sql);
   database.exec(claudeTaskLifecycleMigration.sql);
   database.exec(claudeSteerOperationsMigration.sql);
+  database.exec(claudeForkChildrenMigration.sql);
   const settings = new ClaudeThreadRepository(database);
   const scope = {
     tenantId: BINDING.tenantId,
@@ -167,7 +169,7 @@ function provider(
   interruptReceipt: SDKControlInterruptResponse = {
     still_queued: [],
   },
-  cliRelease = "2.1.274",
+  cliRelease = "2.1.283",
 ) {
   let input: ClaudeQueryInput | undefined;
   let releaseStream!: () => void;
@@ -175,6 +177,7 @@ function provider(
     releaseStream = resolve;
   });
   const interrupt = vi.fn(async () => interruptReceipt);
+  const cancelAsyncMessage = vi.fn(async (_messageUuid: string) => true);
   const initialization = {
     commands: [],
     agents: [],
@@ -221,6 +224,7 @@ function provider(
       return Object.assign(stream, {
         initializationResult: async () => initialization,
         interrupt,
+        cancelAsyncMessage,
         setModel: vi.fn(async () => undefined),
         setPermissionMode: vi.fn(async () => undefined),
         applyFlagSettings: vi.fn(async () => undefined),
@@ -230,12 +234,14 @@ function provider(
     listSessions: vi.fn(),
     getSessionInfo: vi.fn(),
     getSessionMessages: vi.fn(async () => []),
+    hasSessionTranscript: vi.fn(async () => false),
     renameSession: vi.fn(),
   } satisfies ClaudeSdkFacade;
   return {
     sdk,
     runtimeClient: new ClaudeSdkRuntimeAdapter(sdk),
     interrupt,
+    cancelAsyncMessage,
     queryInput: () => {
       if (!input) throw new Error("claude_query_not_started");
       return input;
@@ -347,6 +353,12 @@ describe("Claude conversation-target Steer contract", () => {
     await expect(session.interrupt()).resolves.toEqual(receipt);
     expect(fake.interrupt).toHaveBeenCalledWith();
     expect(fake.queryInput().options).not.toHaveProperty("expectedTurnId");
+    // Stop withdraws one input through the SDK's undeclared `cancelAsyncMessage`.
+    await expect(session.cancelQueuedInput(STEER_OPERATION_ID)).resolves.toBe(true);
+    fake.cancelAsyncMessage.mockResolvedValueOnce(false);
+    await expect(session.cancelQueuedInput(STEER_OPERATION_ID)).resolves.toBe(false);
+    expect(fake.cancelAsyncMessage.mock.calls).toEqual([[STEER_OPERATION_ID], [STEER_OPERATION_ID]]);
+    expect(fake.interrupt).toHaveBeenCalledOnce();
 
     await session.close();
   });

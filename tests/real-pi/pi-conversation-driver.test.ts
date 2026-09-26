@@ -15,6 +15,7 @@ import {
   type PiDriverOptions,
 } from "../../src/server/backends/pi/pi-conversation-driver.js";
 import { PiSessionStore } from "../../src/server/backends/pi/pi-session-store.js";
+import { piSubmissionMarker } from "../../src/server/backends/pi/pi-submission-marker.js";
 import type { BackendAgentToolFacade } from "../../src/server/agent-tools/adapters/backend-facade.js";
 import type {
   AgentBackendInstance,
@@ -1033,5 +1034,132 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
       ),
     ).toBe(true);
     expect(reopened.usage.counters?.userMessages).toBeGreaterThanOrEqual(2);
+  });
+
+  it("returns a steer Pi never used on Stop as not sent", async () => {
+    const fixture = await createFixture();
+    const selectedModel = await resolveEligibleModel(fixture);
+    process.stdout.write(
+      `Real Pi model: ${selectedModel.provider}/${selectedModel.id}; low reasoning and read-only tools verified before prompting.\n`,
+    );
+    const driver = new PiConversationBackendDriver(fixture.driverOptions);
+    const conversation = await createConversation(
+      driver,
+      fixture.workspace,
+      "steer-stop",
+    );
+    const events: SequencedBackendEvent[] = [];
+    let unsubscribe: () => void = () => undefined;
+    const steerText = `Reply UNUSED_STEER_${randomUUID().replaceAll("-", "")} instead.`;
+    const steer = {
+      applicationOperationId: `steer-stop-${randomUUID()}`,
+      mutationId: randomUUID(),
+      reconciliationToken: `steer-stop-token-${randomUUID()}`,
+      contextExcerpts: [],
+      attachments: [],
+      taskContexts: [],
+      text: steerText,
+    };
+    try {
+      await conversation.handle.perform({
+        applicationOperationId: "real-pi-steer-stop-model",
+        action: "set_model",
+        provider: selectedModel.provider,
+        modelId: selectedModel.id,
+      });
+      await conversation.handle.perform({
+        applicationOperationId: "real-pi-steer-stop-thinking",
+        action: "set_thinking_level",
+        level: requiredThinkingLevel,
+      });
+      await conversation.handle.perform({
+        applicationOperationId: "real-pi-steer-stop-tools",
+        action: "set_tool_access",
+        mode: "read_only",
+      });
+      const projection = await conversation.handle.establishProjection({
+        signal: new AbortController().signal,
+      });
+      unsubscribe = projection.subscribeFromNext((event) => {
+        events.push(event);
+      });
+      await conversation.handle.submit({
+        applicationOperationId: `steer-stop-submit-${randomUUID()}`,
+        source: { kind: "user" },
+        mutationId: randomUUID(),
+        reconciliationToken: `steer-stop-submit-token-${randomUUID()}`,
+        contextExcerpts: [],
+        attachments: [],
+        taskContexts: [],
+        text: "Count from 1 to 300, one number per line, and nothing else. Do not use tools.",
+      });
+      await waitFor(
+        () =>
+          events.some(
+            ({ event }) =>
+              (event.type === "item_started" || event.type === "item_updated") &&
+              event.item.semanticKind === "assistant_message" &&
+              event.item.status === "streaming",
+          ),
+        "Timed out waiting for the real Pi turn to stream.",
+      );
+      const turnId = eventOfType(events, "turn_started").at(-1)!.turn
+        .backendTurnId;
+      // Pi drains steering only after this assistant response finishes.
+      await expect(
+        conversation.handle.steer({
+          ...steer,
+          target: { kind: "turn", turnId },
+        }),
+      ).resolves.toMatchObject({ status: "pending_materialization" });
+      await conversation.handle.interrupt({
+        applicationOperationId: `steer-stop-interrupt-${randomUUID()}`,
+        expectedBackendTurnId: turnId,
+      });
+      await waitFor(
+        () =>
+          eventOfType(events, "turn_completed").some(
+            ({ turn }) => turn.status === "interrupted",
+          ) &&
+          eventOfType(events, "run_state_changed").some(
+            ({ state }) => state === "idle",
+          ),
+        "Timed out waiting for the stopped real Pi turn to settle.",
+      );
+      await expect(
+        driver.reconcileSubmission({
+          scope,
+          workspace: fixture.workspace,
+          binding: conversation.binding,
+          applicationOperationId: steer.applicationOperationId,
+          reconciliationToken: steer.reconciliationToken,
+        }),
+      ).resolves.toMatchObject({ status: "not_accepted", retryable: false });
+    } finally {
+      unsubscribe();
+      await conversation.handle.close();
+    }
+    const branch = (await new PiSessionStore({
+      sessionDirectory: fixture.sessionDirectory,
+    }).openPersisted(
+      fixture.workspace,
+      conversation.binding.backendConversationId,
+    ))!.getBranch();
+    expect(
+      branch.flatMap((entry) => {
+        const marker = piSubmissionMarker(entry);
+        return marker?.applicationOperationId === steer.applicationOperationId
+          ? [marker.phase]
+          : [];
+      }),
+    ).toEqual(["intent", "enqueued", "lost"]);
+    expect(
+      branch.some(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message.role === "user" &&
+          JSON.stringify(entry.message.content).includes(steerText),
+      ),
+    ).toBe(false);
   });
 });

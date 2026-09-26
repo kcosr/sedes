@@ -20,12 +20,17 @@ import {
   type ClaudeSafeSkill,
 } from "./claude-skills.js";
 import type {
+  ClaudeOwnedRuntimeClient,
+  ClaudeOwnedRuntimeSession,
   ClaudeRuntimeClient,
+  ClaudeRuntimeForkOptions,
+  ClaudeRuntimeForkResult,
   ClaudeRuntimeProbeInput,
   ClaudeRuntimeProbeResult,
   ClaudeRuntimeSession,
   ClaudeRuntimeSessionOptions,
 } from "./claude-runtime-client.js";
+import { runClaudeForkLaunch } from "./claude-fork-launch.js";
 import {
   CLAUDE_RUNTIME_CAPABILITY_ID,
   CLAUDE_RUNTIME_MAJOR_VERSION,
@@ -33,6 +38,7 @@ import {
   claudeRuntimeCanUseToolOperation,
   claudeRuntimeQueryFailedEventSchema,
   claudeRuntimeQueryInterruptOperation,
+  claudeRuntimeQueryCancelInputOperation,
   claudeRuntimeQueryMessageEventSchema,
   claudeRuntimeQueryOpenOperation,
   claudeRuntimeQuerySendOperation,
@@ -44,6 +50,7 @@ import {
   claudeRuntimeSessionInfoOperation,
   claudeRuntimeSessionListOperation,
   claudeRuntimeSessionMessagesOperation,
+  claudeRuntimeSessionTranscriptOperation,
   claudeRuntimeSessionRenameOperation,
   registerClaudeRuntimeV1HostOperations,
   type ClaudeRuntimeCanUseToolRequest,
@@ -72,7 +79,7 @@ export interface ClaudeRuntimeWorkerClientPeer {
 const CLAUDE_PERMISSION_RESPONSE_ACK_DRAIN_MILLISECONDS = 30_000;
 
 /** One generation-fenced client for the provider-private Claude worker. */
-export class ClaudeRuntimeWorkerClient implements ClaudeRuntimeClient {
+export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
   readonly #peer: ClaudeRuntimeWorkerClientPeer;
   readonly #sessions = new Map<string, WorkerSession>();
   readonly #unsubscribe: readonly (() => void)[];
@@ -154,12 +161,16 @@ export class ClaudeRuntimeWorkerClient implements ClaudeRuntimeClient {
     return result as ClaudeRuntimeProbeResult;
   }
 
-  createSession(options: ClaudeRuntimeSessionOptions): ClaudeRuntimeSession {
+  createSession(options: ClaudeRuntimeSessionOptions): ClaudeOwnedRuntimeSession {
     this.#assertOpen();
     const queryId = randomUUID();
     const session = new WorkerSession(this, queryId, options);
     this.#sessions.set(queryId, session);
     return session;
+  }
+
+  forkSession(options: ClaudeRuntimeForkOptions): Promise<ClaudeRuntimeForkResult> {
+    return runClaudeForkLaunch((session) => this.createSession(session), options);
   }
 
   async listSessions(
@@ -205,6 +216,19 @@ export class ClaudeRuntimeWorkerClient implements ClaudeRuntimeClient {
       },
     );
     return result as ClaudeHistoryPage;
+  }
+
+  async hasSessionTranscript(
+    sessionId: string,
+    options: { readonly dir: string },
+  ): Promise<boolean> {
+    this.#assertOpen();
+    await this.#initialize();
+    const result = await this.#peer.call(
+      claudeRuntimeSessionTranscriptOperation,
+      { sessionId, dir: options.dir },
+    );
+    return result.present;
   }
 
   async renameSession(
@@ -339,7 +363,7 @@ export class ClaudeRuntimeWorkerClient implements ClaudeRuntimeClient {
   }
 }
 
-class WorkerSession implements ClaudeRuntimeSession {
+class WorkerSession implements ClaudeOwnedRuntimeSession {
   readonly #client: ClaudeRuntimeWorkerClient;
   readonly #queryId: string;
   readonly #options: ClaudeRuntimeSessionOptions;
@@ -496,6 +520,16 @@ class WorkerSession implements ClaudeRuntimeSession {
         })
       ).receipt ?? undefined
     );
+  }
+
+  async cancelQueuedInput(operationId: string): Promise<boolean> {
+    this.#assertReady();
+    return (
+      await this.#client.call(claudeRuntimeQueryCancelInputOperation, {
+        queryId: this.#queryId,
+        operationId,
+      })
+    ).cancelled;
   }
 
   async setModel(model?: string): Promise<void> {

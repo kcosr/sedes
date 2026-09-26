@@ -266,7 +266,7 @@ function fixture(
       blockerFingerprint: "a".repeat(64),
       resettable: true,
       blockers: [{ kind: "conversation_operation", count: 1 }],
-      affectedThreadIds: ["thread-1"],
+      affectedThreads: [{ threadId: "thread-1", title: "Thread" }],
       warnings: [],
     })),
     forceResetThread: vi.fn(async () => undefined),

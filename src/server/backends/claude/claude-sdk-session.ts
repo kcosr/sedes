@@ -26,8 +26,54 @@ import {
   type ClaudeSafeSkill,
 } from "./claude-skills.js";
 import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v1.js";
+import { CLAUDE_FORK_LAUNCH_PERMISSION_MODE } from "./claude-fork-launch.js";
 
 const CLAUDE_SETTING_SOURCES = ["user", "project", "local"] as const;
+
+/**
+ * A fork launch only copies a provider prefix into the reserved child and
+ * exits; the child's own runtime later applies its real permission mode. The
+ * launch loads no setting sources (so no user hooks, permission rules, or MCP
+ * servers), disables hooks and every tool, runs in
+ * {@link CLAUDE_FORK_LAUNCH_PERMISSION_MODE}, and denies any permission
+ * request. It never runs with bypass permissions.
+ */
+const denyForkLaunchTool: CanUseTool = async (_toolName, _input, options) => ({
+  behavior: "deny",
+  message: "A Sedes fork launch cannot use tools.",
+  interrupt: true,
+  toolUseID: options.toolUseID,
+});
+
+/**
+ * Claude Code emits `session_state_changed` only when this variable is set.
+ * Sedes owns it for every launch: turns Claude starts itself (task
+ * notifications, peer hand-backs) are otherwise invisible to run state.
+ */
+export const CLAUDE_SESSION_STATE_EVENTS_VARIABLE =
+  "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS";
+
+/**
+ * When set, Claude Code re-runs a turn that a process restart interrupted,
+ * tools included, with no Sedes input. Sedes withholds it from every launch:
+ * such a turn is marked interrupted and the user decides whether to resend.
+ */
+export const CLAUDE_RESUME_INTERRUPTED_TURN_VARIABLE =
+  "CLAUDE_CODE_RESUME_INTERRUPTED_TURN";
+
+/**
+ * The text of the `shouldQuery: false` startup message Sedes sends on every
+ * launch. Nothing reads it: Sedes matches that message by UUID, and history
+ * readers drop the meta row Claude Code persists for it. The model does
+ * receive it, though. Claude Code merges the row into the next prompt, after
+ * its own `[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]` label, and renders
+ * empty text as `(no content)`. Models then took the prompt to be that
+ * non-user message and refused it. So the text only says what it is: it
+ * gives no instruction and says nothing about the surrounding text, since
+ * either would read as an injection from a non-user source.
+ */
+export const CLAUDE_STARTUP_MARKER_TEXT =
+  "Sedes session start marker. It contains no request.";
 
 const SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE =
   "SEDES_AGENT_TOOL_SOURCE_CAPABILITY";
@@ -50,6 +96,26 @@ function sedesMcpServers(mcp: ClaudeRuntimeAgentToolMcp) {
       },
     },
   };
+}
+
+/**
+ * Sends Claude Code's `cancel_async_message` control request for one
+ * uuid-stamped input. The pinned SDK 0.3.274 implements it as
+ * `Query.cancelAsyncMessage`, although its declaration omits the method.
+ * Claude removes a queued input, or marks one already dequeued for the next
+ * turn to be dropped there, and closes it with a `cancelled` lifecycle frame.
+ * It leaves an input it is folding into the running turn, or has started,
+ * alone. The returned boolean only says whether it was still queued.
+ */
+export async function cancelClaudeQueuedInput(
+  query: Query,
+  operationId: string,
+): Promise<boolean> {
+  const cancel = (query as Query & {
+    readonly cancelAsyncMessage?: (messageUuid: string) => Promise<unknown>;
+  }).cancelAsyncMessage;
+  if (typeof cancel !== "function") throw new Error("claude_sdk_cancel_input_unavailable");
+  return (await cancel.call(query, operationId)) === true;
 }
 
 const CLAUDE_RESET_PRODUCING_TOOLS = ["EnterPlanMode", "ExitPlanMode"] as const;
@@ -131,6 +197,7 @@ export class ClaudeSdkSession {
   readonly #input = new ClaudeInputQueue<SDKUserMessage>(16);
   readonly #abortController = new AbortController();
   #query: Query | undefined;
+  #launched = false;
   #consumer: Promise<void> | undefined;
   #closed = false;
   #closing = false;
@@ -144,7 +211,13 @@ export class ClaudeSdkSession {
   constructor(options: ClaudeSdkSessionOptions) {
     if (
       (options.launch === "fork" &&
-        (!options.sourceSessionId || !options.resumeSessionAt)) ||
+        (!options.sourceSessionId ||
+          !options.resumeSessionAt ||
+          // The lockdown owns the fork launch's permissions and tools.
+          options.permissionMode !== undefined ||
+          options.allowDangerouslySkipPermissions !== undefined ||
+          options.canUseTool !== undefined ||
+          options.agentToolMcp !== undefined)) ||
       (options.launch !== "fork" &&
         (options.sourceSessionId !== undefined ||
           options.resumeSessionAt !== undefined))
@@ -168,6 +241,15 @@ export class ClaudeSdkSession {
 
   get safeSkills(): readonly ClaudeSafeSkill[] {
     return this.#safeSkills;
+  }
+
+  /**
+   * False until Sedes asks the SDK to launch Claude Code. A start that failed
+   * while this is false (CLI version, login, or subscription checks) launched
+   * no provider process and wrote no transcript.
+   */
+  get launched(): boolean {
+    return this.#launched;
   }
 
   async start(): Promise<ClaudeSdkSessionInitialization> {
@@ -218,6 +300,8 @@ export class ClaudeSdkSession {
     if (this.closed) throw new Error("claude_sdk_session_closed");
     assertClaudeSubscriptionAuthStatus(authStatus);
     if (this.closed) throw new Error("claude_sdk_session_closed");
+    const forkLaunch = this.#options.launch === "fork";
+    this.#launched = true;
     const query = this.#options.sdk.createQuery({
       prompt: this.#input,
       options: {
@@ -225,7 +309,16 @@ export class ClaudeSdkSession {
         cwd: this.#options.cwd,
         pathToClaudeCodeExecutable: this.#options.executablePath,
         systemPrompt: { type: "preset", preset: "claude_code" },
-        settingSources: [...CLAUDE_SETTING_SOURCES],
+        ...(forkLaunch
+          ? {
+              settingSources: [],
+              settings: { disableAllHooks: true },
+              strictMcpConfig: true,
+              tools: [],
+              permissionMode: CLAUDE_FORK_LAUNCH_PERMISSION_MODE,
+              canUseTool: denyForkLaunchTool,
+            }
+          : { settingSources: [...CLAUDE_SETTING_SOURCES] }),
         disallowedTools: [...CLAUDE_RESET_PRODUCING_TOOLS],
         persistSession: true,
         includePartialMessages: true,
@@ -256,13 +349,17 @@ export class ClaudeSdkSession {
           ? { mcpServers: sedesMcpServers(this.#options.agentToolMcp) }
           : {}),
         env: {
-          ...this.#options.environment,
+          ...withoutVariable(
+            this.#options.environment,
+            CLAUDE_RESUME_INTERRUPTED_TURN_VARIABLE,
+          ),
           ...(this.#options.agentToolMcp
             ? {
                 [SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE]:
                   this.#options.agentToolMcp.sourceCapability,
               }
             : {}),
+          [CLAUDE_SESSION_STATE_EVENTS_VARIABLE]: "1",
         },
       },
     });
@@ -278,14 +375,14 @@ export class ClaudeSdkSession {
       onNewerVersion,
     );
     // Claude Code does not emit its stream init until it receives stream
-    // input. A synthetic empty append starts the transport without querying a
-    // model; the matching replay is provider-private and filtered below.
+    // input. A synthetic marker append starts the transport without querying
+    // a model; the matching replay is provider-private and filtered below.
     this.#input.push({
       type: "user",
       session_id: this.#options.sessionId,
       parent_tool_use_id: null,
       uuid: this.#startupProbeUuid,
-      message: { role: "user", content: "" },
+      message: { role: "user", content: CLAUDE_STARTUP_MARKER_TEXT },
       isSynthetic: true,
       shouldQuery: false,
     });
@@ -381,6 +478,13 @@ export class ClaudeSdkSession {
       throw new Error("claude_sdk_session_not_ready");
     }
     return this.#query.interrupt();
+  }
+
+  async cancelQueuedInput(operationId: string): Promise<boolean> {
+    if (!this.#query || !this.#initialization || this.closed) {
+      throw new Error("claude_sdk_session_not_ready");
+    }
+    return cancelClaudeQueuedInput(this.#query, operationId);
   }
 
   async setModel(model?: string): Promise<void> {
@@ -579,4 +683,13 @@ async function withTimeout<T>(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+function withoutVariable(
+  environment: Readonly<Record<string, string | undefined>>,
+  name: string,
+): Record<string, string | undefined> {
+  const copy = { ...environment };
+  delete copy[name];
+  return copy;
 }

@@ -25,11 +25,25 @@ const impact: ThreadForceResetImpact = {
     { kind: "conversation_runtime", count: 1 },
     { kind: "fork_origin", count: 1 },
   ],
-  affectedThreadIds: [
-    "11111111-1111-4111-8111-111111111111",
-    "22222222-2222-4222-8222-222222222222",
+  affectedThreads: [
+    {
+      threadId: "11111111-1111-4111-8111-111111111111",
+      title: "Stuck fork",
+    },
+    {
+      threadId: "22222222-2222-4222-8222-222222222222",
+      title: "Its unfinished child",
+      runtime: {
+        runState: "running",
+        backgroundActivity: { state: "known", agents: 1, commands: 1, other: 0 },
+      },
+    },
   ],
   warnings: [
+    {
+      code: "running_work_will_stop",
+      message: "Force reset replaces the loaded runtimes listed below, which stops their running turns and background work.",
+    },
     {
       code: "provider_side_effects_may_remain",
       message: "A provider operation may already have taken effect.",
@@ -64,14 +78,63 @@ describe("ForceResetDialog", () => {
     expect(within(dialog).getByText("2 conversation operations")).toBeVisible();
     expect(within(dialog).getByText("1 conversation runtime")).toBeVisible();
     expect(within(dialog).getByText("1 fork operation")).toBeVisible();
-    expect(
-      within(dialog).getByText("This affects 2 related threads."),
-    ).toBeVisible();
+    expect(within(dialog).getByText("Affected threads (2)")).toBeVisible();
+    const threads = within(dialog).getAllByRole("listitem").filter(
+      (item) => item.closest("ul")?.classList.contains("force-reset-threads"),
+    );
+    expect(threads.map((item) => item.textContent)).toEqual([
+      "Stuck fork",
+      "Its unfinished childRuntime running, 2 background tasks; resetting stops this work.",
+    ]);
+    expect(dialog).toHaveTextContent("stops their running turns and background work");
     expect(dialog).toHaveTextContent(
       "without waiting for provider reconciliation",
     );
     expect(dialog).toHaveTextContent("provider work may already have happened");
     expect(dialog).toHaveTextContent("A native fork orphan may remain.");
+    expect(within(dialog).getByTestId("force-reset-background")).toHaveTextContent(
+      "Running in the affected conversations: 1 background agent, 1 background command. Replacing their runtimes may stop this work.",
+    );
+  });
+
+  it("reports unknown background inventories and omits the note when there is none", async () => {
+    const { unmount } = render(
+      <ForceResetDialog
+        open
+        onOpenChange={vi.fn()}
+        loadImpact={vi.fn().mockResolvedValue({
+          ...impact,
+          affectedThreads: [
+            impact.affectedThreads[0],
+            {
+              ...impact.affectedThreads[1],
+              runtime: { runState: "idle", backgroundActivity: { state: "unknown", agents: 0, commands: 0, other: 0 } },
+            },
+          ],
+        })}
+        onForceReset={vi.fn()}
+      />,
+    );
+    expect(await screen.findByTestId("force-reset-background")).toHaveTextContent(
+      "Background work is unknown in one conversation.",
+    );
+    unmount();
+    render(
+      <ForceResetDialog
+        open
+        onOpenChange={vi.fn()}
+        loadImpact={vi.fn().mockResolvedValue({
+          ...impact,
+          affectedThreads: [
+            impact.affectedThreads[0],
+            { ...impact.affectedThreads[1], runtime: { runState: "idle" } },
+          ],
+        })}
+        onForceReset={vi.fn()}
+      />,
+    );
+    await screen.findByText("Affected threads (2)");
+    expect(screen.queryByTestId("force-reset-background")).toBeNull();
   });
 
   it("keeps load failures in the dialog and retries", async () => {

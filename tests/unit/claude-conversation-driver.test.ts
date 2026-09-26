@@ -8,8 +8,12 @@ import type {
   SDKSessionInfo,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { getSessionMessages } from "@anthropic-ai/claude-agent-sdk";
 import { createHash } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentBackendInstance,
   AgentConnectionProfile,
@@ -17,11 +21,14 @@ import type {
 } from "../../src/server/backends/contracts.js";
 import { BackendError } from "../../src/server/backends/contracts.js";
 import { ClaudeConversationBackendDriver } from "../../src/server/backends/claude/claude-conversation-driver.js";
-import type {
-  ClaudeQueryInput,
-  ClaudeSdkFacade,
+import {
+  OfficialClaudeSdkFacade,
+  type ClaudeQueryInput,
+  type ClaudeSdkFacade,
 } from "../../src/server/backends/claude/claude-sdk-facade.js";
+import { ClaudeTranscriptFixture } from "../helpers/claude-native-transcript-fixture.js";
 import { ClaudeSdkRuntimeAdapter, type ClaudeRuntimeClient } from "../../src/server/backends/claude/claude-runtime-client.js";
+import type { ClaudeInputQueue } from "../../src/server/backends/claude/claude-input-queue.js";
 import type { ClaudeThreadRepository } from "../../src/server/backends/claude/claude-thread-repository.js";
 import type { ClaudePermissionMode } from "../../src/server/backends/claude/claude-permission-policy.js";
 import { projectClaudeHistory } from "../../src/server/backends/claude/claude-history-projector.js";
@@ -58,7 +65,7 @@ const instance: AgentBackendInstance = {
   label: "Claude",
   enabled: true,
   configurationRevision: 1,
-  protocolRelease: "0.3.274",
+  protocolRelease: "0.3.283",
 };
 const connection: AgentConnectionProfile = {
   id: "claude-profile-1",
@@ -441,6 +448,53 @@ describe("ClaudeConversationBackendDriver", () => {
     expect(sdk.createQuery).not.toHaveBeenCalled();
   });
 
+  it("returns input the remote owner saw Claude withdraw before starting as not sent, without retry permission", async () => {
+    const sdk = fakeSdk(); sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
+    sdk.getSessionMessages.mockResolvedValue([]);
+    const forgetUnconsumedSteerOperation = vi.fn();
+    const driver = createDriver(sdk, { submissionDisposition: async () => "cancelled", forgetUnconsumedSteerOperation,
+      steerOperations: new Map([[operationId, null]]) });
+    const input = { scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), applicationOperationId: operationId };
+    await expect(driver.reconcileSubmission(input)).resolves.toEqual({ status: "not_accepted", retryable: false,
+      diagnostic: { text: expect.stringContaining("withdrew this message before starting it") } });
+    expect(forgetUnconsumedSteerOperation).toHaveBeenCalledWith(scope, binding().applicationThreadId, operationId);
+    // A native row with its identity contradicts the withdrawal.
+    sdk.getSessionMessages.mockResolvedValue([user(operationId, "queued steer")]);
+    await expect(driver.reconcileSubmission(input)).resolves.toMatchObject({ status: "unresolved" });
+    expect(sdk.createQuery).not.toHaveBeenCalled();
+  });
+
+  it("returns a local steer Claude withdrew before starting it as not sent, unless native evidence contradicts it", async () => {
+    const sdk = fakeSdk(); sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId, cwd: workspace.canonicalPath });
+    sdk.getSessionMessages.mockResolvedValue([]);
+    const steerOperations = new Map<string, string | null>([[operationId, null]]);
+    const forgetUnconsumedSteerOperation = vi.fn();
+    const driver = createDriver(sdk, { steerOperations, forgetUnconsumedSteerOperation, confirmSettings: true });
+    const input = { scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) };
+    const handle = await driver.attach(input);
+    try {
+      await handle.establishProjection({ signal: new AbortController().signal });
+      await handle.steer({ applicationOperationId: operationId, mutationId: "withdrawn-steer", reconciliationToken: "withdrawn-receipt",
+        target: { kind: "conversation" }, text: "Correction", contextExcerpts: [], attachments: [], taskContexts: [] });
+      const reconcile = { ...input, applicationOperationId: operationId };
+      await expect(driver.reconcileSubmission(reconcile)).resolves.toMatchObject({ status: "unresolved" });
+      const withdrew = vi.spyOn(handle as ClaudeConversationHandle, "withdrewSubmission").mockReturnValue(true);
+      steerOperations.set(operationId, "a0000000-0000-4000-8000-00000000c0de");
+      await expect(driver.reconcileSubmission(reconcile)).resolves.toMatchObject({ status: "unresolved" });
+      steerOperations.set(operationId, null);
+      sdk.getSessionMessages.mockResolvedValue([user(operationId, "Correction")]);
+      await expect(driver.reconcileSubmission(reconcile)).resolves.toMatchObject({ status: "unresolved" });
+      expect(forgetUnconsumedSteerOperation).not.toHaveBeenCalled();
+      sdk.getSessionMessages.mockResolvedValue([]);
+      await expect(driver.reconcileSubmission(reconcile)).resolves.toEqual({ status: "not_accepted", retryable: false,
+        diagnostic: { text: expect.stringContaining("so it was not sent. Nothing was resent.") } });
+      expect(withdrew).toHaveBeenCalledWith(operationId);
+      expect(forgetUnconsumedSteerOperation).toHaveBeenCalledWith(scope, binding().applicationThreadId, operationId);
+      expect(nativeInputCount(sdk)).toBe(1);
+    } finally { await driver.close(); }
+  });
+
   it.each(["submitted", "unknown"] as const)("does not infer nonacceptance without an anchor when the owner reports %s", async disposition => {
     const sdk = fakeSdk(); sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
     sdk.getSessionMessages.mockResolvedValue([]);
@@ -469,6 +523,53 @@ describe("ClaudeConversationBackendDriver", () => {
     expect(sdk.createQuery).not.toHaveBeenCalled();
   });
 
+  it("releases a service-owned query only for an unloaded session and reports outstanding work as busy", async () => {
+    const sdk = fakeSdk();
+    sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId, cwd: workspace.canonicalPath });
+    sdk.getSessionMessages.mockResolvedValue([]);
+    const residency = { scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) };
+    // A local runtime owns no query beyond its handle.
+    await expect(createDriver(sdk).releaseConversationResidency(residency)).resolves.toBe("released");
+
+    const outcomes: ("retired" | "absent" | "busy")[] = ["busy", "absent", "retired"];
+    const retireSession = vi.fn(async () => outcomes.shift()!);
+    const driver = createDriver(sdk, { confirmSettings: true, retireSession });
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("busy");
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("released");
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("released");
+    expect(retireSession).toHaveBeenCalledWith({ sessionId, cwd: workspace.canonicalPath });
+
+    const handle = await driver.attach(residency);
+    retireSession.mockClear();
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("busy");
+    expect(retireSession).not.toHaveBeenCalled();
+    await handle.close({ reason: "evicted" });
+    retireSession.mockResolvedValueOnce("retired");
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("released");
+    expect(retireSession).toHaveBeenCalledOnce();
+    await expect(driver.releaseConversationResidency({ ...residency, binding: { ...binding(), backendInstanceId: "other" } }))
+      .rejects.toThrow();
+  });
+
+  it("applies a retained query's undelivered output before releasing it, and says so when it cannot", async () => {
+    const sdk = fakeSdk();
+    sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId, cwd: workspace.canonicalPath });
+    sdk.getSessionMessages.mockResolvedValue([]);
+    const residency = { scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) };
+    const outcomes: ("retired" | "absent" | "busy" | "undelivered")[] = ["undelivered", "retired"];
+    const retireSession = vi.fn(async () => outcomes.shift()!);
+    const driver = createDriver(sdk, { confirmSettings: true, retireSession });
+    // Only output no main has applied holds the query: attach once to apply it.
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("released");
+    expect(sdk.createQuery).toHaveBeenCalledOnce();
+    expect(retireSession).toHaveBeenCalledTimes(2);
+    outcomes.push("undelivered", "undelivered");
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("undelivered");
+    sdk.createQuery.mockImplementationOnce(() => { throw new Error("claude_persistent_session_configuration_conflict"); });
+    outcomes.push("undelivered", "undelivered");
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("undelivered");
+  });
+
   it.each(["local", "not_sent", "session_ended"] as const)("reconciles an ordinary retained waiter using %s authority without inferring absence from the old anchor", async authority => {
     const sdk = fakeSdk();
     sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId, cwd: workspace.canonicalPath });
@@ -488,7 +589,9 @@ describe("ClaudeConversationBackendDriver", () => {
       await submitted;
       expect(handle.retirementBlocked).toBe(true);
       const reconcile = { ...attachment, applicationOperationId: operationId, retryAnchor: retryAnchor([]) };
-      await expect(driver.reconcileSubmission(reconcile)).resolves.toMatchObject({ status: authority === "not_sent" ? "not_accepted" : "unresolved" });
+      await expect(driver.reconcileSubmission(reconcile)).resolves.toMatchObject({
+        status: authority === "not_sent" ? "not_accepted" : authority === "session_ended" ? "failed_unknown" : "unresolved",
+      });
       expect(handle.retirementBlocked).toBe(authority === "local");
       if (authority === "not_sent") {
         // A legitimate explicit retry must reach the session, rather than
@@ -498,10 +601,10 @@ describe("ClaudeConversationBackendDriver", () => {
         await vi.advanceTimersByTimeAsync(30_001);
         await retried;
         await expect(handle.submit(input)).resolves.toMatchObject({ accepted: true });
-        expect(sdk.createQuery.mock.results.at(-1)!.value.setModel).toHaveBeenCalledTimes(2);
+        expect(nativeInputCount(sdk)).toBe(2);
       } else {
         await expect(handle.submit(input)).rejects.toMatchObject({ category: "submission_unknown" });
-        expect(sdk.createQuery.mock.results.at(-1)!.value.setModel).toHaveBeenCalledTimes(1);
+        expect(nativeInputCount(sdk)).toBe(1);
         if (authority === "local") {
           // The runtime may end before its callback closes the handle. Release
           // its retirement hold, but keep the outcome unknown and forbid retry.
@@ -509,7 +612,7 @@ describe("ClaudeConversationBackendDriver", () => {
           await expect(driver.reconcileSubmission(reconcile)).resolves.toMatchObject({ status: "unresolved" });
           expect(handle.retirementBlocked).toBe(false);
           await expect(handle.submit(input)).rejects.toMatchObject({ backendCode: "claude_submission_tracking_ended" });
-          expect(sdk.createQuery.mock.results.at(-1)!.value.setModel).toHaveBeenCalledTimes(1);
+          expect(nativeInputCount(sdk)).toBe(1);
         }
       }
     } finally { vi.useRealTimers(); await driver.close(); }
@@ -540,18 +643,52 @@ describe("ClaudeConversationBackendDriver", () => {
     } finally { await driver.close(); }
   });
 
-  it("ends delivery tracking without retry permission when the exact admitted owner session ended", async () => {
+  it.each([
+    ["steer", "steering message could be confirmed. Claude may have received it."],
+    ["ordinary", "history shows no acceptance. Claude may still have received it."],
+  ] as const)("ends %s delivery tracking without retry permission when the exact admitted owner session ended", async (kind, diagnostic) => {
     const sdk = fakeSdk(); sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
     sdk.getSessionMessages.mockResolvedValue([]);
-    const steerOperations = new Map<string, string | null>([[operationId, null]]);
+    const steerOperations = new Map<string, string | null>(kind === "steer" ? [[operationId, null]] : []);
     const forgetUnconsumedSteerOperation = vi.fn();
     const driver = createDriver(sdk, { steerOperations, forgetUnconsumedSteerOperation,
       submissionDisposition: async () => "session_ended" });
+    // Even a matching idle-submit anchor cannot prove the ended owner never delivered it.
     await expect(driver.reconcileSubmission({ scope, workspace, binding: binding(),
-      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), applicationOperationId: operationId }))
-      .resolves.toMatchObject({ status: "failed_unknown", diagnostic: { text: expect.stringContaining("may have received") } });
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), applicationOperationId: operationId,
+      retryAnchor: retryAnchor([]) }))
+      .resolves.toMatchObject({ status: "failed_unknown", diagnostic: { text: expect.stringContaining(diagnostic) } });
     expect(forgetUnconsumedSteerOperation).not.toHaveBeenCalled();
     expect(sdk.createQuery).not.toHaveBeenCalled();
+  });
+
+  it.each(["local", "session_ended"] as const)(
+    "finds an accepted submission older than the latest turns (%s authority)", async (authority) => {
+      const sdk = fakeSdk(); sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
+      // The accepted turn, then more turns than the latest snapshot holds.
+      const later = Array.from({ length: 12 }, (_, index) => {
+        const id = (offset: number) => `33333333-3333-4333-8333-${String(index * 2 + offset).padStart(12, "0")}`;
+        return [user(id(0), `Later ${index}`), assistant(id(1), `Answer ${index}`)];
+      }).flat();
+      sdk.getSessionMessages.mockResolvedValue([user(operationId, "Accepted"),
+        assistant("44444444-4444-4444-8444-444444444444", "Done"), ...later]);
+      const driver = createDriver(sdk, authority === "local" ? {} : { submissionDisposition: async () => authority });
+      const result = await driver.reconcileSubmission({ scope, workspace, binding: binding(),
+        opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), applicationOperationId: operationId,
+        retryAnchor: retryAnchor([]) });
+      expect(result).toMatchObject({ status: "accepted",
+        backendTurn: { status: "completed", completionCorrelations: [operationId] } });
+    },
+  );
+
+  it("never reports no acceptance for an ended owner while history holds the message", async () => {
+    const sdk = fakeSdk(); sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
+    // A native row with the input's identity that no turn correlates.
+    sdk.getSessionMessages.mockResolvedValue([{ ...user(operationId, "Accepted"), parent_agent_id: "agent-1" }]);
+    const driver = createDriver(sdk, { submissionDisposition: async () => "session_ended" });
+    await expect(driver.reconcileSubmission({ scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), applicationOperationId: operationId }))
+      .resolves.toMatchObject({ status: "unresolved" });
   });
 
   it("preserves exact consumption that races an ended-owner response", async () => {
@@ -815,6 +952,8 @@ describe("ClaudeConversationBackendDriver", () => {
           env: {
             HOME: "/operator",
             CLAUDE_CONFIG_DIR: "/operator/.claude",
+            // Sedes-owned: every launch reports Claude's own run state.
+            CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
           },
         }),
       }),
@@ -1128,6 +1267,23 @@ describe("ClaudeConversationBackendDriver", () => {
         }),
       }),
     );
+    // The launch only copies the prefix: no setting sources, hooks, MCP
+    // servers, or tools, a deny-all permission callback, and never bypass.
+    const forkOptions = sdk.createQuery.mock.calls[0]![0].options;
+    expect(forkOptions).toMatchObject({
+      settingSources: [],
+      settings: { disableAllHooks: true },
+      strictMcpConfig: true,
+      tools: [],
+      permissionMode: "default",
+      model: "claude-sonnet-5",
+      effort: "low",
+    });
+    expect(forkOptions).not.toHaveProperty("allowDangerouslySkipPermissions");
+    expect(forkOptions).not.toHaveProperty("mcpServers");
+    await expect(forkOptions.canUseTool!("Bash", { command: "true" }, {
+      signal: new AbortController().signal, toolUseID: "tool-1", requestId: "request-1",
+    } as never)).resolves.toMatchObject({ behavior: "deny", interrupt: true, toolUseID: "tool-1" });
     expect(copySkillInvocationsForFork).toHaveBeenCalledWith(scope, {
       sourceApplicationThreadId: "thread-1",
       childApplicationThreadId: "child-thread",
@@ -1156,7 +1312,10 @@ describe("ClaudeConversationBackendDriver", () => {
       ? undefined : { sessionId: id, summary: "Session", lastModified: 1, cwd: workspace.canonicalPath });
     sdk.getSessionMessages.mockImplementation(async (id) => id === sessionId ? sourceMessages
       : prefix.map(message => ({ ...message, uuid: crypto.randomUUID(), session_id: childSessionId })));
-    const driver = createDriver(sdk, { copyTaskLifecycleReceiptsForFork });
+    const receipt = (nativeTaskId: string, nativeToolUseId: string) => ({ nativeTaskId, nativeToolUseId, description: "Audit",
+      startedAt: 1, terminalStatus: "completed" as const, terminalAt: 2 });
+    const driver = createDriver(sdk, { copyTaskLifecycleReceiptsForFork,
+      listTaskLifecycleReceipts: () => [receipt("agent-1", "retained-call"), receipt("agent-2", "excluded-call")] });
     const selectedTurnId = [...projectClaudeHistory(sourceMessages).terminalCheckpointUuidByBackendTurnId.keys()][0]!;
     const checkpoint = await driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
@@ -1165,11 +1324,151 @@ describe("ClaudeConversationBackendDriver", () => {
       sourceBinding: binding(), sourceOpaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
       sourceCheckpoint: checkpoint, requestedBackendConversationId: childSessionId,
       inheritedSettings: { model: { provider: connection.id, id: "claude-sonnet-5" }, thinkingLevel: "low" }, source: { kind: "user" } });
+    // A foreground launch's result inside the prefix is its terminal evidence.
     expect(copyTaskLifecycleReceiptsForFork).toHaveBeenCalledExactlyOnceWith(scope, {
-      sourceApplicationThreadId: "thread-1", sourceNativeSessionId: sessionId,
+      sourceApplicationThreadId: "thread-1",
       childApplicationThreadId: "child-thread", childNativeSessionId: childSessionId,
-      nativeToolUseIds: new Set(["retained-call"]),
+      receipts: [receipt("agent-1", "retained-call")],
     });
+  });
+
+  it("resolves the latest completed boundary past a later interrupted turn, as the actor does", async () => {
+    const sdk = fakeSdk();
+    const answer = assistant("44444444-4444-4444-8444-444444444444", "answer");
+    const messages: SessionMessage[] = [user(operationId, "first"), answer,
+      user("55555555-5555-4555-8555-555555555555", "second"),
+      { ...user("66666666-6666-4666-8666-666666666666", ""), timestamp: "2026-08-08T12:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] } } as SessionMessage];
+    expect(Object.values(projectClaudeHistory(messages).snapshot.turnsById).map(({ status }) => status))
+      .toEqual(["completed", "interrupted"]);
+    sdk.getSessionInfo.mockImplementation(async (id) => ({ sessionId: id, summary: "Session", lastModified: 1, cwd: workspace.canonicalPath }));
+    sdk.getSessionMessages.mockImplementation(async () => messages);
+    const checkpoint = await createDriver(sdk).resolveBranchCheckpoint({ scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: latestCompleted(messages) });
+    expect(JSON.parse(Buffer.from(checkpoint.opaqueReference, "base64url").toString())).toMatchObject({
+      retainedLeafUuid: answer.uuid, retainedPrefixCount: 2 });
+  });
+
+  it("never forks another turn than the latest completed turn the actor resolved", async () => {
+    const sdk = fakeSdk();
+    const messages = [user(operationId, "first"), assistant(crypto.randomUUID(), "First answer"),
+      user(crypto.randomUUID(), "second"), assistant(crypto.randomUUID(), "Second answer")];
+    sdk.getSessionInfo.mockImplementation(async (id) => ({ sessionId: id, summary: "Session", lastModified: 1, cwd: workspace.canonicalPath }));
+    sdk.getSessionMessages.mockImplementation(async () => messages);
+    const driver = createDriver(sdk);
+    // The actor recorded the first turn, but Claude's newest completed turn is the second.
+    await expect(driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: latestCompleted(messages.slice(0, 2)) }))
+      .rejects.toMatchObject({ category: "invalid_state", retryable: true, backendCode: "claude_fork_latest_turn_changed" });
+  });
+
+  it("fails a latest-completed fork with the newest completed turn's reason instead of forking an older turn", async () => {
+    const sdk = fakeSdk();
+    const messages: SessionMessage[] = [user(operationId, "ordinary prompt"),
+      assistant("44444444-4444-4444-8444-444444444444", "ordinary answer"),
+      user("55555555-5555-4555-8555-555555555555", "structured output"),
+      { ...assistant("66666666-6666-4666-8666-666666666666", ""),
+        message: { role: "assistant", content: [{ type: "tool_use", id: "result-tool", name: "StructuredOutput", input: {} }] } },
+      { ...user("77777777-7777-4777-8777-777777777777", ""),
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "result-tool", content: "ok" }] } } as SessionMessage];
+    const [ordinary, structured] = projectClaudeHistory(messages).snapshot.orderedBackendTurnIds;
+    const terminalReceipts = [{ backendTurnId: structured!, status: "completed" as const,
+      providerTerminalReason: "success", providerResultUuid: "88888888-8888-4888-8888-888888888888", terminalAt: 2_000 }];
+    expect(projectClaudeHistory(messages, terminalReceipts).snapshot.turnsById[structured!])
+      .toMatchObject({ status: "completed", forkUnavailableReason: { text: expect.stringContaining("without a final answer") } });
+    sdk.getSessionInfo.mockImplementation(async (id) => ({ sessionId: id, summary: "Session", lastModified: 1, cwd: workspace.canonicalPath }));
+    sdk.getSessionMessages.mockImplementation(async () => messages);
+    const driver = createDriver(sdk, {
+      terminalReceipts: terminalReceipts as unknown as ReturnType<ClaudeThreadRepository["listTerminalReceipts"]>,
+    });
+    const resolve = (selection: Parameters<typeof driver.resolveBranchCheckpoint>[0]["selection"]) =>
+      driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
+        opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection });
+    for (const selection of [latestCompleted(messages, terminalReceipts),
+      { kind: "selected_completed_turn" as const, backendTurnId: structured!, boundary: "completed_turn_inclusive" as const }]) {
+      await expect(resolve(selection)).rejects.toMatchObject({
+        category: "invalid_state",
+        backendCode: "claude_fork_checkpoint_unavailable",
+        safeMessage: expect.stringContaining("Claude cannot fork exactly after this turn"),
+      });
+    }
+    // The older ordinary turn is still forkable when selected explicitly.
+    const checkpoint = await resolve({ kind: "selected_completed_turn", backendTurnId: ordinary!, boundary: "completed_turn_inclusive" });
+    expect(JSON.parse(Buffer.from(checkpoint.opaqueReference, "base64url").toString()))
+      .toMatchObject({ backendTurnId: ordinary, retainedPrefixCount: 2 });
+  });
+
+  it("forks a compacted conversation only after its latest summary and verifies the child from there", async () => {
+    const sdk = fakeSdk();
+    const copyTaskLifecycleReceiptsForFork = vi.fn(() => undefined);
+    const childSessionId = "33333333-3333-4333-8333-333333333333";
+    const call = (id: string): SessionMessage => ({ ...assistant(crypto.randomUUID(), ""),
+      message: { role: "assistant", content: [{ type: "tool_use", id, name: "Agent", input: { description: "Audit", prompt: "Audit" } }] } });
+    const result = (id: string): SessionMessage => ({ ...user(crypto.randomUUID(), ""),
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "Done" }] } });
+    const summary = { ...user(crypto.randomUUID(), "This session is being continued. Summary: synthetic."), isCompactSummary: true } as SessionMessage;
+    // Sedes reads across the boundary; Claude Code resumes, and copies, only from the summary.
+    const sourceMessages = [user(operationId, "First"), call("summarized-call"), result("summarized-call"),
+      assistant(crypto.randomUUID(), "First answer"), user(crypto.randomUUID(), "Later"), summary,
+      call("retained-call"), result("retained-call"), assistant(crypto.randomUUID(), "Later answer")];
+    const resumable = sourceMessages.slice(5);
+    sdk.getSessionInfo.mockImplementation(async (id) => id === childSessionId && !sdk.createQuery.mock.calls.length
+      ? undefined : { sessionId: id, summary: "Session", lastModified: 1, cwd: workspace.canonicalPath });
+    sdk.getSessionMessages.mockImplementation(async (id) => id === sessionId ? sourceMessages
+      : resumable.map(message => ({ ...message, session_id: childSessionId })));
+    const receipt = (nativeTaskId: string, nativeToolUseId: string) => ({ nativeTaskId, nativeToolUseId, description: "Audit",
+      startedAt: 1, terminalStatus: "completed" as const, terminalAt: 2 });
+    const recordForkChild = vi.fn();
+    const copyTerminalReceiptsForFork = vi.fn();
+    const driver = createDriver(sdk, { copyTaskLifecycleReceiptsForFork, recordForkChild, copyTerminalReceiptsForFork,
+      listTaskLifecycleReceipts: () => [receipt("summarized", "summarized-call"), receipt("retained", "retained-call")] });
+    const [summarizedTurn, compactedTurn] = projectClaudeHistory(sourceMessages).snapshot.orderedBackendTurnIds;
+    const resolve = (backendTurnId: string) => driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
+      selection: { kind: "selected_completed_turn", backendTurnId, boundary: "completed_turn_inclusive" } });
+    await expect(resolve(summarizedTurn!)).rejects.toMatchObject({ backendCode: "claude_fork_checkpoint_unavailable" });
+    const checkpoint = await resolve(compactedTurn!);
+    expect(JSON.parse(Buffer.from(checkpoint.opaqueReference, "base64url").toString())).toMatchObject({ retainedPrefixCount: resumable.length });
+    await driver.branchConversation({ scope, workspace, childApplicationThreadId: "child-thread", applicationOperationId: operationId,
+      sourceBinding: binding(), sourceOpaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
+      sourceCheckpoint: checkpoint, requestedBackendConversationId: childSessionId,
+      inheritedSettings: { model: { provider: connection.id, id: "claude-sonnet-5" }, thinkingLevel: "low" }, source: { kind: "user" } });
+    expect(copyTaskLifecycleReceiptsForFork).toHaveBeenCalledExactlyOnceWith(scope, expect.objectContaining({
+      receipts: [receipt("retained", "retained-call")] }));
+    // The child's copy starts at the summary, which opens a turn of its own
+    // there; in the source it belongs to the turn Claude compacted.
+    const [childTurn] = projectClaudeHistory(resumable.map(message => ({ ...message, session_id: childSessionId })))
+      .snapshot.orderedBackendTurnIds;
+    const inheritedTurns = [{ backendTurnId: childTurn, sourceBackendTurnId: compactedTurn }];
+    expect(recordForkChild).toHaveBeenCalledExactlyOnceWith(scope, expect.objectContaining({ inheritedTurns }));
+    expect(copyTerminalReceiptsForFork).toHaveBeenCalledExactlyOnceWith(scope, expect.objectContaining({ turns: inheritedTurns }));
+  });
+
+  it("recovers an existing child after the source compacted, but never launches one Claude can no longer resume", async () => {
+    const sdk = fakeSdk();
+    const childSessionId = "33333333-3333-4333-8333-333333333333";
+    const sourceMessages: SessionMessage[] = [user(operationId, "prompt"), assistant("44444444-4444-4444-8444-444444444444", "answer")];
+    let childExists = true;
+    sdk.getSessionInfo.mockImplementation(async (id) => id === childSessionId && !childExists ? undefined
+      : { sessionId: id, summary: "Session", lastModified: 1, cwd: workspace.canonicalPath });
+    sdk.getSessionMessages.mockImplementation(async (id) => id === sessionId ? sourceMessages
+      : [{ ...user(crypto.randomUUID(), "prompt"), session_id: id }, { ...assistant(crypto.randomUUID(), "answer"), session_id: id }]);
+    const driver = createDriver(sdk);
+    const checkpoint = await driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: latestCompleted(sourceMessages) });
+    // The source runs on and Claude compacts it after the fork point.
+    sourceMessages.push(user(crypto.randomUUID(), "Later"),
+      { ...user(crypto.randomUUID(), "This session is being continued. Summary: synthetic."), isCompactSummary: true } as SessionMessage,
+      assistant(crypto.randomUUID(), "Later answer"));
+    const branchInput = { scope, workspace, childApplicationThreadId: "child-thread", applicationOperationId: operationId,
+      sourceBinding: binding(), sourceOpaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), sourceCheckpoint: checkpoint,
+      requestedBackendConversationId: childSessionId,
+      inheritedSettings: { model: { provider: connection.id, id: "claude-sonnet-5" }, thinkingLevel: "low" }, source: { kind: "user" as const } };
+    await expect(driver.branchConversation(branchInput)).resolves.toMatchObject({ backendConversationId: childSessionId });
+    childExists = false;
+    await expect(driver.branchConversation(branchInput)).rejects.toMatchObject({ backendCode: "claude_fork_checkpoint_changed",
+      message: expect.stringContaining("compacted") });
+    expect(sdk.createQuery).not.toHaveBeenCalled();
   });
 
   it("rejects provider-snapshot checkpoints before reading Claude history", async () => {
@@ -1193,7 +1492,7 @@ describe("ClaudeConversationBackendDriver", () => {
     expect(sdk.getSessionMessages).not.toHaveBeenCalled();
   });
 
-  it("recovers an existing reserved child idempotently and rejects a semantic identity conflict", async () => {
+  it("recovers an existing reserved child idempotently and names a mismatched earlier attempt", async () => {
     const sdk = fakeSdk();
     const copySkillInvocationsForFork = vi.fn(() => undefined);
     const childSessionId = "33333333-3333-4333-8333-333333333333";
@@ -1226,7 +1525,7 @@ describe("ClaudeConversationBackendDriver", () => {
       workspace,
       binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
-      selection: { kind: "latest_completed" },
+      selection: latestCompleted(sourceMessages),
     });
     const branchInput = {
       scope,
@@ -1256,11 +1555,20 @@ describe("ClaudeConversationBackendDriver", () => {
     });
 
     childText = "different history";
-    await expect(driver.branchConversation(branchInput)).rejects.toMatchObject({
+    const mismatch = await driver.branchConversation(branchInput).catch((error: unknown) => error);
+    expect(mismatch).toMatchObject({
       category: "invalid_state",
-      backendCode: "claude_fork_identity_conflict",
+      backendCode: "claude_fork_history_mismatch",
       crossedSubmissionBoundary: false,
+      retryable: false,
+      message: expect.stringContaining("An earlier attempt of this fork already created its Claude session"),
     });
+    // A new fork launches a new child, so it is still worth offering.
+    expect((mismatch as BackendError).forkRestart).toBeUndefined();
+    expect(((mismatch as Error).cause as Error).message).toMatch(
+      /the first 2 messages differ from the retained prefix; first difference at index 1 \(source 44444444-4444-4444-8444-444444444444, child [0-9a-f-]{36}\)/u,
+    );
+    expect(sdk.createQuery).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1310,7 +1618,7 @@ describe("ClaudeConversationBackendDriver", () => {
       workspace,
       binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
-      selection: { kind: "latest_completed" },
+      selection: latestCompleted(sourceMessages),
     });
 
     await expect(
@@ -1329,7 +1637,7 @@ describe("ClaudeConversationBackendDriver", () => {
         },
         source: { kind: "user" },
       }),
-    ).rejects.toMatchObject({ backendCode, crossedSubmissionBoundary: false });
+    ).rejects.toMatchObject({ backendCode, crossedSubmissionBoundary: false, retryable: false, forkRestart: "futile" });
   });
 
   it("rejects source-prefix drift before mutation and denies attachment-ended checkpoints", async () => {
@@ -1351,7 +1659,7 @@ describe("ClaudeConversationBackendDriver", () => {
       workspace,
       binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
-      selection: { kind: "latest_completed" },
+      selection: latestCompleted(sourceMessages),
     });
     sourceMessages[1] = assistant(
       "44444444-4444-4444-8444-444444444444",
@@ -1412,20 +1720,21 @@ describe("ClaudeConversationBackendDriver", () => {
       },
     ];
     sdk.getSessionMessages.mockImplementation(async () => toolMessages);
+    const attachmentEnded = projectClaudeHistory(toolMessages).snapshot.orderedBackendTurnIds.at(-1)!;
     await expect(
       driver.resolveBranchCheckpoint({
         scope,
         workspace,
         binding: binding(),
         opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
-        selection: { kind: "latest_completed" },
+        selection: { kind: "selected_completed_turn", backendTurnId: attachmentEnded, boundary: "completed_turn_inclusive" },
       }),
     ).rejects.toMatchObject({
       backendCode: "claude_fork_checkpoint_unavailable",
     });
   });
 
-  it("classifies a failed fork boot as crossed and releases child admission", async () => {
+  it("classifies a failed fork boot that left no child as definite and releases child admission", async () => {
     const sdk = fakeSdk();
     const childSessionId = "33333333-3333-4333-8333-333333333333";
     const sourceMessages = [
@@ -1453,7 +1762,7 @@ describe("ClaudeConversationBackendDriver", () => {
       workspace,
       binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
-      selection: { kind: "latest_completed" },
+      selection: latestCompleted(sourceMessages),
     });
     await expect(
       driver.branchConversation({
@@ -1476,10 +1785,11 @@ describe("ClaudeConversationBackendDriver", () => {
         },
       }),
     ).rejects.toMatchObject({
-      category: "submission_unknown",
-      backendCode: "claude_fork_outcome_unknown",
-      crossedSubmissionBoundary: true,
-      retryable: false,
+      category: "unavailable",
+      backendCode: "claude_fork_launch_failed",
+      crossedSubmissionBoundary: false,
+      retryable: true,
+      message: "Claude could not create the fork. No child was created.",
     });
     expect(release).toHaveBeenCalledOnce();
   });
@@ -1526,7 +1836,7 @@ describe("ClaudeConversationBackendDriver", () => {
       workspace,
       binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
-      selection: { kind: "latest_completed" },
+      selection: latestCompleted(sourceMessages),
     });
 
     await expect(
@@ -1554,6 +1864,134 @@ describe("ClaudeConversationBackendDriver", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  const forkChildSessionId = "33333333-3333-4333-8333-333333333333";
+  async function forkAttempt(input: {
+    readonly sdk: ReturnType<typeof fakeSdk>;
+    readonly source: readonly SessionMessage[];
+    /** Child history once the launch ran; undefined keeps the child absent. */
+    readonly child?: (prefix: readonly SessionMessage[]) => SessionMessage[];
+    readonly driver?: Parameters<typeof createDriver>[1];
+  }) {
+    const { sdk, source } = input;
+    const launched = () => sdk.createQuery.mock.calls.some(([call]) => call.options.forkSession === true);
+    sdk.getSessionInfo.mockImplementation(async (id) => id === forkChildSessionId && (!launched() || !input.child)
+      ? undefined : { sessionId: id, summary: "Session", lastModified: 1, cwd: workspace.canonicalPath });
+    sdk.getSessionMessages.mockImplementation(async (id) => id === sessionId ? [...source]
+      : input.child!(source).map(message => ({ ...message, session_id: forkChildSessionId })));
+    const driver = createDriver(sdk, input.driver);
+    const checkpoint = await driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: latestCompleted(source) });
+    return driver.branchConversation({ scope, workspace, childApplicationThreadId: "child-thread", applicationOperationId: operationId,
+      sourceBinding: binding(), sourceOpaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
+      sourceCheckpoint: checkpoint, requestedBackendConversationId: forkChildSessionId,
+      inheritedSettings: { model: { provider: connection.id, id: "claude-sonnet-5" }, thinkingLevel: "low" }, source: { kind: "user" } });
+  }
+  const renumbered = (messages: readonly SessionMessage[]) => messages.map(message => ({ ...message, uuid: crypto.randomUUID() }));
+  const orphanNotification = (taskId: string): SessionMessage => ({ ...user(crypto.randomUUID(),
+    `<task-notification>\n<task-id>${taskId}</task-id>\n<output-file>/tmp/out</output-file>\n<status>failed</status>\n<summary>Background agent "Audit" didn't finish before the previous session ended</summary>\n</task-notification>`),
+    origin: { kind: "task-notification" } } as SessionMessage);
+  const noResponseRequested = (): SessionMessage => ({ ...assistant(crypto.randomUUID(), "No response requested."),
+    message: { role: "assistant", model: "<synthetic>", content: [{ type: "text", text: "No response requested." }] } });
+
+  it.each([
+    ["login", { authStatus: { loggedIn: false } }, "claude_fork_launch_refused_login", "the Claude subscription login is unavailable"],
+    ["version", { cliRelease: "2.1.100" }, "claude_fork_launch_refused_version", "this Claude Code version is not supported"],
+  ] as const)("maps a %s refusal before launch to a definite futile failure", async (_label, sdkOptions, backendCode, text) => {
+    const sdk = fakeSdk(sdkOptions);
+    const release = vi.fn();
+    await expect(forkAttempt({ sdk, source: [user(operationId, "prompt"), assistant(crypto.randomUUID(), "answer")],
+      driver: { acquireSession: () => release } })).rejects.toMatchObject({
+      backendCode, crossedSubmissionBoundary: false, retryable: false, forkRestart: "futile",
+      message: expect.stringContaining(text),
+    });
+    expect(sdk.createQuery).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("adopts a child whose provider-appended rows are exact orphan notices and carries only in-prefix task outcomes", async () => {
+    const sdk = fakeSdk();
+    const copyTaskLifecycleReceiptsForFork = vi.fn(() => undefined);
+    const agent = (id: string, background: boolean): SessionMessage => ({ ...assistant(crypto.randomUUID(), ""),
+      message: { role: "assistant", content: [{ type: "tool_use", id, name: "Agent",
+        input: { description: "Audit", prompt: "Audit", ...(background ? { run_in_background: true } : {}) } }] } });
+    const result = (id: string): SessionMessage => ({ ...user(crypto.randomUUID(), ""),
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } });
+    const source = [user(operationId, "Audit"), agent("background-call", true), result("background-call"),
+      agent("finished-background-call", true), result("finished-background-call"),
+      agent("foreground-call", false), result("foreground-call"),
+      { ...user(crypto.randomUUID(), "<task-notification>\n<task-id>finished</task-id>\n<tool-use-id>finished-background-call</tool-use-id>\n<status>completed</status>\n</task-notification>"),
+        origin: { kind: "task-notification" } } as SessionMessage,
+      assistant(crypto.randomUUID(), "Audit launched")];
+    const receipt = (nativeTaskId: string, nativeToolUseId: string) => ({ nativeTaskId, nativeToolUseId, description: "Audit",
+      startedAt: 1, terminalStatus: "completed" as const, terminalAt: 2 });
+    const orphan = orphanNotification("running");
+    const recordForkChild = vi.fn();
+    const copyTerminalReceiptsForFork = vi.fn();
+    let childRows: SessionMessage[] = [];
+    const created = await forkAttempt({ sdk, source,
+      child: (prefix) => (childRows = childRows.length ? childRows : [...renumbered(prefix), orphan, noResponseRequested()]),
+      driver: { copyTaskLifecycleReceiptsForFork, recordForkChild, copyTerminalReceiptsForFork,
+        // Bypass is admitted for threads, but never for the fork launch.
+        permissionPolicy: { allowedModes: ["default", "bypassPermissions"], defaultMode: "default" } as never,
+        listTaskLifecycleReceipts: () => [receipt("running", "background-call"), receipt("finished", "finished-background-call"),
+          receipt("foreground", "foreground-call")] } });
+    expect(created.backendConversationId).toBe(forkChildSessionId);
+    expect(sdk.createQuery.mock.calls[0]![0].options).not.toHaveProperty("allowDangerouslySkipPermissions");
+    expect(copyTaskLifecycleReceiptsForFork).toHaveBeenCalledExactlyOnceWith(scope, expect.objectContaining({
+      receipts: [receipt("finished", "finished-background-call"), receipt("foreground", "foreground-call")],
+    }));
+    // Copied turns map to their source turns by position.
+    const sourceTurns = projectClaudeHistory(source).usageTurns.map(({ backendTurnId }) => backendTurnId);
+    const childTurns = projectClaudeHistory(childRows.slice(0, source.length).map(message => ({ ...message, session_id: forkChildSessionId })))
+      .usageTurns.map(({ backendTurnId }) => backendTurnId);
+    expect(sourceTurns.length).toBeGreaterThan(1);
+    const inheritedTurns = childTurns.map((backendTurnId, index) => ({ backendTurnId, sourceBackendTurnId: sourceTurns[index] }));
+    expect(recordForkChild).toHaveBeenCalledExactlyOnceWith(scope, {
+      childApplicationThreadId: "child-thread", childNativeSessionId: forkChildSessionId, forkOperationId: operationId,
+      inheritedTurns, omittedTasks: [{ nativeMessageUuid: orphan.uuid, nativeTaskId: "running" }], now: expect.any(Number),
+    });
+    expect(copyTerminalReceiptsForFork).toHaveBeenCalledExactlyOnceWith(scope, {
+      sourceApplicationThreadId: "thread-1", childApplicationThreadId: "child-thread", turns: inheritedTurns, now: expect.any(Number),
+    });
+  });
+
+  it("rejects any other row after the retained prefix as a futile history mismatch", async () => {
+    const sdk = fakeSdk();
+    const extra = assistant("66666666-6666-4666-8666-666666666666", "model output");
+    const failure = await forkAttempt({ sdk, source: [user(operationId, "prompt"), assistant(crypto.randomUUID(), "answer")],
+      child: (prefix) => [...renumbered(prefix), extra] }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ backendCode: "claude_fork_history_mismatch", crossedSubmissionBoundary: false,
+      retryable: false, forkRestart: "futile", message: "Claude created the fork, but its history does not match the selected turn." });
+    expect(((failure as Error).cause as Error).message).toBe(
+      "claude_fork_history_mismatch: unexpected assistant row 66666666-6666-4666-8666-666666666666 at index 2 after the retained prefix");
+  });
+
+  it("stops a fork launch that begins a model turn and fails it as futile", async () => {
+    const sdk = fakeSdk({ modelOutputAfterInit: true });
+    await expect(forkAttempt({ sdk, source: [user(operationId, "prompt"), assistant(crypto.randomUUID(), "answer")],
+      child: (prefix) => renumbered(prefix) })).rejects.toMatchObject({
+      backendCode: "claude_fork_launch_started_turn", crossedSubmissionBoundary: false, forkRestart: "futile",
+      message: "Claude began a model turn while creating the fork, so it was stopped. The child session it created will not be used.",
+    });
+  });
+
+  it("keeps the outcome unknown when history cannot be read before the launch", async () => {
+    const sdk = fakeSdk();
+    const source = [user(operationId, "prompt"), assistant(crypto.randomUUID(), "answer")];
+    sdk.getSessionInfo.mockImplementation(async (id) => ({ sessionId: id, summary: "Session", lastModified: 1, cwd: workspace.canonicalPath }));
+    sdk.getSessionMessages.mockImplementation(async () => source);
+    const driver = createDriver(sdk);
+    const checkpoint = await driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: latestCompleted(source) });
+    sdk.getSessionInfo.mockRejectedValue(new Error("worker unavailable"));
+    await expect(driver.branchConversation({ scope, workspace, childApplicationThreadId: "child-thread", applicationOperationId: operationId,
+      sourceBinding: binding(), sourceOpaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
+      sourceCheckpoint: checkpoint, requestedBackendConversationId: forkChildSessionId,
+      inheritedSettings: { model: { provider: connection.id, id: "claude-sonnet-5" }, thinkingLevel: "low" }, source: { kind: "user" } }))
+      .rejects.toMatchObject({ backendCode: "claude_fork_outcome_unknown", crossedSubmissionBoundary: true });
+    expect(sdk.createQuery).not.toHaveBeenCalled();
+  });
+
   it("fails closed for a wrong principal scope", async () => {
     const driver = createDriver(fakeSdk());
     await expect(
@@ -1566,6 +2004,146 @@ describe("ClaudeConversationBackendDriver", () => {
     ).rejects.toBeInstanceOf(BackendError);
   });
 });
+
+describe("ClaudeConversationBackendDriver native history", () => {
+  let configDirectory: string;
+
+  beforeEach(async () => {
+    configDirectory = await realpath(await mkdtemp(path.join(tmpdir(), "sedes-claude-driver-native-")));
+    vi.stubEnv("CLAUDE_CONFIG_DIR", configDirectory);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(configDirectory, { recursive: true, force: true });
+  });
+
+  /** Query fakes over the real native store: SDK session info and Sedes' tip-correct reader. */
+  function nativeStoreDriver(options: Parameters<typeof createDriver>[1] = {}) {
+    const sdk = fakeSdk();
+    const native = new OfficialClaudeSdkFacade();
+    sdk.getSessionInfo.mockImplementation((...input) => native.getSessionInfo(...input));
+    sdk.getSessionMessages.mockImplementation((...input) => native.getSessionMessages(...input));
+    sdk.hasSessionTranscript.mockImplementation((...input) => native.hasSessionTranscript(...input));
+    const driver = createDriver(sdk, { ...options, childEnvironment: { HOME: "/operator", CLAUDE_CONFIG_DIR: configDirectory } });
+    return { sdk, driver };
+  }
+
+  function transcript(id = sessionId): ClaudeTranscriptFixture {
+    const fixture = new ClaudeTranscriptFixture(workspace.canonicalPath);
+    Object.defineProperty(fixture, "sessionId", { value: id });
+    return fixture;
+  }
+
+  const attachment = () => ({ scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) });
+
+  it("resumes and reads a session whose transcript holds only startup messages", async () => {
+    const fixture = transcript();
+    fixture.startupMessage();
+    await fixture.write(configDirectory, workspace.canonicalPath);
+    const { sdk, driver } = nativeStoreDriver();
+    // The SDK exposes no metadata for this transcript, but Claude Code rejects a fresh launch reusing its ID.
+    await expect(sdk.getSessionInfo(sessionId, { dir: workspace.canonicalPath }, process.env)).resolves.toBeUndefined();
+
+    await expect(driver.read(attachment())).resolves.toMatchObject({ snapshot: { orderedBackendTurnIds: [] } });
+    const handle = await driver.attach(attachment());
+    try {
+      const options = sdk.createQuery.mock.calls.at(-1)![0].options;
+      expect(options).toMatchObject({ resume: sessionId });
+      expect(options).not.toHaveProperty("sessionId");
+      expect(sdk.getSessionMessages).toHaveBeenCalled();
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("launches a new session only when no native transcript exists", async () => {
+    const { sdk, driver } = nativeStoreDriver();
+    await expect(driver.read(attachment())).rejects.toMatchObject({ backendCode: "claude_session_not_found" });
+    const handle = await driver.attach(attachment());
+    try {
+      const options = sdk.createQuery.mock.calls.at(-1)![0].options;
+      expect(options).toMatchObject({ sessionId });
+      expect(options).not.toHaveProperty("resume");
+      expect(sdk.getSessionMessages).not.toHaveBeenCalled();
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("resolves creation reconciliation from a transcript holding only the startup message", async () => {
+    const fixture = transcript();
+    fixture.startupMessage();
+    await fixture.write(configDirectory, workspace.canonicalPath);
+    const { driver } = nativeStoreDriver();
+    const input = { ...attachment(), applicationOperationId: operationId, retryAnchor: retryAnchor([]) };
+    // The first prompt never reached the transcript before its process ended.
+    await expect(driver.reconcileSubmission(input)).resolves.toEqual({ status: "not_accepted", retryable: true });
+
+    fixture.prompt("First prompt.", { uuid: operationId });
+    fixture.text("First answer.");
+    await fixture.write(configDirectory, workspace.canonicalPath);
+    await expect(driver.reconcileSubmission(input)).resolves.toMatchObject({ status: "accepted" });
+  });
+
+  it("never authorizes a resend of a prompt persisted before a later startup message", async () => {
+    // Earlier turns with parallel tool calls leave dead-end tool results.
+    const fixture = transcript();
+    fixture.startupMessage();
+    fixture.prompt("Survey the synthetic repository.");
+    fixture.parallelToolCalls("survey");
+    fixture.text("Two modules found.");
+    fixture.startupMessage();
+    fixture.prompt("Compare them.");
+    const compare = fixture.parallelToolCalls("compare");
+    fixture.text("They differ in one function.");
+    fixture.startupMessage();
+    await fixture.write(configDirectory, workspace.canonicalPath);
+    const { driver } = nativeStoreDriver();
+    const view = await readViaDriver(driver);
+    // SDK 0.3.283 resolves a startup-message tip like Sedes. 0.3.274 read this
+    // transcript only to its last dead end; an anchor may come from that view.
+    expect(await getSessionMessages(sessionId, { dir: workspace.canonicalPath })).toEqual(view);
+    const truncatedView = view.slice(0, view.findIndex(({ uuid }) => uuid === compare.deadEnd) + 1);
+    expect(truncatedView.length).toBeLessThan(view.length);
+
+    // Sedes submits; Claude Code persists the prompt, then the process dies
+    // before replying. The next attach appends another startup message.
+    fixture.prompt("Rename the differing function.", { uuid: operationId });
+    fixture.startupMessage();
+    await fixture.write(configDirectory, workspace.canonicalPath);
+
+    for (const anchor of [retryAnchor(view), retryAnchor(truncatedView)]) {
+      await expect(driver.reconcileSubmission({ ...attachment(), applicationOperationId: operationId, retryAnchor: anchor }))
+        .resolves.toMatchObject({ status: "accepted", backendTurn: { completionCorrelations: [operationId] } });
+    }
+  });
+
+  it("reconciles a prompt Claude Code closed unanswered on resume as interrupted, not completed", async () => {
+    const fixture = transcript();
+    fixture.startupMessage();
+    const anchor = retryAnchor([]);
+    fixture.prompt("Rename the synthetic function.", { uuid: operationId });
+    // The process died before replying; the next attach resumes the session.
+    expect(fixture.resume().closure).toBeDefined();
+    await fixture.write(configDirectory, workspace.canonicalPath);
+    const { driver } = nativeStoreDriver();
+    const reconciled = await driver.reconcileSubmission({ ...attachment(), applicationOperationId: operationId, retryAnchor: anchor });
+    expect(reconciled).toMatchObject({ status: "accepted", backendTurn: { status: "interrupted", completionCorrelations: [operationId] } });
+    expect(reconciled.status === "accepted" && reconciled.completionIdentity).toMatch(/:interrupted$/u);
+    expect(JSON.stringify(reconciled)).not.toContain("No response requested.");
+  });
+
+  async function readViaDriver(driver: ClaudeConversationBackendDriver): Promise<SessionMessage[]> {
+    const native = new OfficialClaudeSdkFacade();
+    await driver.read(attachment());
+    return await native.getSessionMessages(sessionId, { dir: workspace.canonicalPath }, process.env);
+  }
+});
+
+function uuids(messages: readonly SessionMessage[]): string[] {
+  return messages.map(({ uuid }) => uuid);
+}
 
 function createDriver(
   sdk: ReturnType<typeof fakeSdk>,
@@ -1580,9 +2158,16 @@ function createDriver(
     readonly sourceCapabilities?: AgentToolSourceCapabilityIssuer;
     readonly copySkillInvocationsForFork?: ClaudeThreadRepository["copySkillInvocationsForFork"];
     readonly copyTaskLifecycleReceiptsForFork?: ClaudeThreadRepository["copyTaskLifecycleReceiptsForFork"];
+    readonly listTaskLifecycleReceipts?: () => ReturnType<ClaudeThreadRepository["listTaskLifecycleReceipts"]>;
+    readonly recordForkChild?: ClaudeThreadRepository["recordForkChild"];
+    readonly copyTerminalReceiptsForFork?: ClaudeThreadRepository["copyTerminalReceiptsForFork"];
+    readonly permissionPolicy?: ConstructorParameters<typeof ClaudeConversationBackendDriver>[0]["permissionPolicy"];
     readonly submissionDisposition?: ClaudeRuntimeClient["submissionDisposition"];
+    readonly retireSession?: ClaudeRuntimeClient["retireSession"];
+    readonly terminalReceipts?: ReturnType<ClaudeThreadRepository["listTerminalReceipts"]>;
     readonly steerOperations?: ReadonlyMap<string, string | null>;
     readonly forgetUnconsumedSteerOperation?: ClaudeThreadRepository["forgetUnconsumedSteerOperation"];
+    readonly childEnvironment?: Readonly<Record<string, string | undefined>>;
   } = {},
 ) {
   let settingsRecord: Partial<ReturnType<ClaudeThreadRepository["get"]>> & {
@@ -1609,11 +2194,12 @@ function createDriver(
     connection,
     runtimeClient: Object.assign(new ClaudeSdkRuntimeAdapter(sdk), {
       ...(options.submissionDisposition ? { submissionDisposition: options.submissionDisposition } : {}),
+      ...(options.retireSession ? { retireSession: options.retireSession } : {}),
     }),
     executablePath: "/usr/local/bin/claude",
     initializationTimeoutMs: 1_000,
     probeDirectory: "/operator/.claude",
-    permissionPolicy: { allowedModes: ["default"] },
+    permissionPolicy: options.permissionPolicy ?? { allowedModes: ["default"] },
     modelPolicy: compileBackendModelPolicy(
       options.modelPolicy ?? { type: "catalog" },
       "model_effort",
@@ -1632,7 +2218,7 @@ function createDriver(
       : agentTools,
     ...(options.agentToolCli ? { agentToolCli: options.agentToolCli } : {}),
     attachmentProvenanceKey: new Uint8Array(32).fill(0x42),
-    childEnvironment: {
+    childEnvironment: options.childEnvironment ?? {
       HOME: "/operator",
       CLAUDE_CONFIG_DIR: "/operator/.claude",
     },
@@ -1678,13 +2264,16 @@ function createDriver(
       copySkillInvocationsForFork:
         options.copySkillInvocationsForFork ?? vi.fn(() => undefined),
       copyTaskLifecycleReceiptsForFork: options.copyTaskLifecycleReceiptsForFork ?? vi.fn(() => undefined),
-      listTaskLifecycleReceipts: vi.fn(() => []),
+      findForkChild: vi.fn(() => undefined),
+      recordForkChild: options.recordForkChild ?? vi.fn(),
+      copyTerminalReceiptsForFork: options.copyTerminalReceiptsForFork ?? vi.fn(),
+      listTaskLifecycleReceipts: vi.fn(options.listTaskLifecycleReceipts ?? (() => [])),
       listSteerOperations: vi.fn(() => new Map(options.steerOperations ?? [])),
       recordSteerOperation: vi.fn(),
       forgetUnconsumedSteerOperation: options.forgetUnconsumedSteerOperation ?? vi.fn(),
       copySteerOperationsForFork: vi.fn(),
       associateSteerOperation: vi.fn(),
-      listTerminalReceipts: vi.fn(() => []),
+      listTerminalReceipts: vi.fn(() => options.terminalReceipts ?? []),
       findTerminalReceipt: vi.fn(() => undefined),
       findUsageLedger: vi.fn(() => undefined),
       writeUsageLedger: vi.fn((_scope, applicationThreadId, usage) => ({
@@ -1711,6 +2300,10 @@ function fakeSdk(
     readonly terminalCommands?: readonly string[];
     readonly includeEffortless?: boolean;
     readonly defaultAliasEfforts?: readonly EffortLevel[];
+    readonly authStatus?: { readonly loggedIn: boolean };
+    readonly cliRelease?: string;
+    /** A fork launch that begins a model turn right after initializing. */
+    readonly modelOutputAfterInit?: boolean;
   } = {},
 ) {
   const initialization = {
@@ -1763,8 +2356,8 @@ function fakeSdk(
     },
   } satisfies SDKControlInitializeResponse;
   const sdk = {
-    readCliRelease: vi.fn(async () => "2.1.274"),
-    readCliAuthStatus: vi.fn(async () => ({
+    readCliRelease: vi.fn(async () => options.cliRelease ?? "2.1.283"),
+    readCliAuthStatus: vi.fn(async () => options.authStatus ?? ({
       loggedIn: true,
       authMethod: "claude.ai",
       apiProvider: "firstParty",
@@ -1782,7 +2375,7 @@ function fakeSdk(
           type: "system",
           subtype: "init",
           apiKeySource: "oauth",
-          claude_code_version: "2.1.274",
+          claude_code_version: "2.1.283",
           cwd: "/workspace",
           tools: [],
           mcp_servers: [],
@@ -1798,6 +2391,10 @@ function fakeSdk(
           uuid: crypto.randomUUID(),
           session_id: querySessionId,
         };
+        if (options.modelOutputAfterInit) {
+          yield { type: "assistant", uuid: crypto.randomUUID(), session_id: querySessionId, parent_tool_use_id: null,
+            message: { role: "assistant", content: [{ type: "text", text: "Unrequested" }] } } as unknown as SDKMessage;
+        }
         await closed;
       })();
       return Object.assign(stream, {
@@ -1817,11 +2414,19 @@ function fakeSdk(
     getSessionMessages: vi.fn<ClaudeSdkFacade["getSessionMessages"]>(
       async () => [],
     ),
+    hasSessionTranscript: vi.fn<ClaudeSdkFacade["hasSessionTranscript"]>(
+      async () => false,
+    ),
     renameSession: vi.fn<ClaudeSdkFacade["renameSession"]>(
       async () => undefined,
     ),
   } satisfies ClaudeSdkFacade;
   return sdk;
+}
+
+/** Inputs written to the unread fake query, excluding the startup probe. */
+function nativeInputCount(sdk: ReturnType<typeof fakeSdk>): number {
+  return (sdk.createQuery.mock.calls.at(-1)![0].prompt as ClaudeInputQueue<unknown>).size - 1;
 }
 
 function exposeSessionMessages(
@@ -1887,6 +2492,16 @@ function assistant(uuid: string, text: string): SessionMessage {
     parent_tool_use_id: null,
     parent_agent_id: null,
   };
+}
+
+/** The actor's `latest_completed` selection: the newest completed turn it resolved. */
+function latestCompleted(
+  messages: readonly SessionMessage[],
+  terminalReceipts: Parameters<typeof projectClaudeHistory>[1] = [],
+): { readonly kind: "latest_completed"; readonly backendTurnId: string } {
+  const turn = projectClaudeHistory(messages, terminalReceipts).usageTurns
+    .findLast(({ status, endedBy }) => status === "completed" && endedBy === "agent_settled");
+  return { kind: "latest_completed", backendTurnId: turn?.backendTurnId ?? "no-completed-turn" };
 }
 
 function retryAnchor(messages: readonly SessionMessage[]): string {

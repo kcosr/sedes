@@ -100,7 +100,7 @@ describe("Claude acknowledged replay retention", () => {
     const f = await fixture();
     const operationId = randomUUID();
     await f.host.execute({ ...f.authority, action: "send", request: { queryId: sessionId, operationId, content: "hello" } }, f.listener);
-    await f.emit(complete());
+    await f.emit(message({ ...complete(), user_message_uuid: operationId }));
     const synthetic = (await f.snapshot()).events.find(event => event.payload.kind === "message" && event.payload.message.type === "user")!;
     await f.ack(synthetic.sequence);
     for (let index = 0; index < 8200; index++) {
@@ -113,6 +113,10 @@ describe("Claude acknowledged replay retention", () => {
     expect(snapshot.events.at(-1)?.payload).toMatchObject({ kind: "message", message: { subtype: "thinking_tokens", user_message_uuid: operationId, estimated_tokens: 8200 } });
     expect(f.session.close).not.toHaveBeenCalled();
   }, 15_000);
+  it("treats an acknowledged native command lifecycle frame as transient", () => {
+    const event = events([message({ type: "command_lifecycle", command_uuid: randomUUID(), state: "started" })]).get(1)!;
+    expect(isTransientReplay(event)).toBe(true);
+  });
   it("does not discard private consumption wrappers or unadmitted plural thinking stamps", () => {
     const event = events([message({ type: "system", subtype: "thinking_tokens", estimated_tokens: 1, estimated_tokens_delta: 1 })]).get(1)!;
     expect(isTransientReplay(event)).toBe(true);
@@ -280,6 +284,8 @@ describe("Claude acknowledged replay retention", () => {
     expect(f.runtime.getSessionMessagesPage).toHaveBeenCalledTimes(2);
     expect(f.runtime.getSessionMessagesPage.mock.calls[0]![1].includeSystemMessages).toBe(false);
     expect(f.runtime.getSessionMessagesPage.mock.calls[0]![1].maintenance).toBe(true);
+    // Replay covers only what the live query produced: the resumable segment.
+    expect(f.runtime.getSessionMessagesPage.mock.calls[0]![1].resumableOnly).toBe(true);
     expect(f.session.close).not.toHaveBeenCalled();
   });
   it("runs only one history sweep at a time across sessions and advances queued work", async () => {

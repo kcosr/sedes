@@ -324,8 +324,6 @@ test("saved prompts flow from principal settings through desktop and mobile deli
     ),
   ).toBeVisible();
 
-  await selectDeliveryMode(page, "Queue");
-  await expect(page.locator("body")).not.toHaveCSS("pointer-events", "none");
   await page.setViewportSize({ width: 390, height: 844 });
   await expectNoPageOverflow(page);
   await expect(promptTab).toHaveClass(/composer-prompt-toolbar/u);
@@ -447,6 +445,26 @@ test("saved prompts flow from principal settings through desktop and mobile deli
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "canned-prompts-picker-mobile.png");
 
+  // A steer Codex has not recorded yet withholds further delivery, so let it
+  // materialize before queueing the next prompt.
+  await page.keyboard.press("Escape");
+  await expect(mobilePicker).toBeHidden();
+  expect(
+    (
+      await page.request.post("/__e2e/codex/steer-materialization/release")
+    ).ok(),
+  ).toBe(true);
+  await expect(
+    page.getByRole("region", { name: "Pending inputs" }).getByText(
+      "Keep this existing draft.\n\nReview the current changes and report concrete correctness risks.\n\nExplain the architecture and the important ownership boundaries.",
+      { exact: true },
+    ),
+  ).toHaveCount(0);
+  await selectDeliveryMode(page, "Queue");
+  await expect(page.locator("body")).not.toHaveCSS("pointer-events", "none");
+  await promptTab.click();
+  await expect(mobilePicker).toBeVisible();
+
   const queuedDelivery = page.waitForResponse(
     (response) => isDeliveryRequest(response.request()) && response.ok(),
   );
@@ -468,11 +486,6 @@ test("saved prompts flow from principal settings through desktop and mobile deli
   ).toBeVisible();
   await expectNoPageOverflow(page);
 
-  expect(
-    (
-      await page.request.post("/__e2e/codex/steer-materialization/release")
-    ).ok(),
-  ).toBe(true);
   expect(
     (await page.request.post("/__e2e/codex/turn-completion/release")).status(),
   ).toBe(204);

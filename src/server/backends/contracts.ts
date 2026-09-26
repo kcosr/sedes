@@ -351,7 +351,15 @@ export interface ResolveBranchCheckpointInput {
 }
 
 export type BranchCheckpointSelection =
-  | { readonly kind: "latest_completed" }
+  | {
+      readonly kind: "latest_completed";
+      /**
+       * The newest completed turn the actor resolved and records as the fork
+       * source. The backend resolves its own newest completed turn and fails
+       * when that differs; it never forks another turn.
+       */
+      readonly backendTurnId: string;
+    }
   | { readonly kind: "latest_provider_snapshot" }
   | {
       readonly kind: "selected_completed_turn";
@@ -398,6 +406,13 @@ export interface ReconcileSubmissionInput {
   readonly retryAnchor?: string;
   /** Ordered, path-free attachment identity re-resolved under durable ownership. */
   readonly attachmentEvidence?: readonly CanonicalComposerAttachmentEvidence[];
+  /**
+   * Present only when reconciling a Steer: the exact target durably recorded
+   * when it crossed the provider boundary. A backend may use it to prove that
+   * the targeted turn ended without using the input. It never authorizes a
+   * resend.
+   */
+  readonly steerTarget?: SteerTarget;
 }
 
 export type SubmissionReconciliation =
@@ -406,7 +421,16 @@ export type SubmissionReconciliation =
       readonly backendTurn?: BackendTurn;
       readonly completionIdentity?: string;
     }
-  | { readonly status: "not_accepted"; readonly retryable: boolean }
+  /**
+   * Proven never accepted. `retryable: false` forbids an automatic resend:
+   * the application returns the input to the user, with `diagnostic` when
+   * given (for example, a provider withdrew queued input on Stop).
+   */
+  | {
+      readonly status: "not_accepted";
+      readonly retryable: boolean;
+      readonly diagnostic?: BoundedDisplayText;
+    }
   /** Tracking is terminal, but prior consumption is unknown. Never auto-retry. */
   | { readonly status: "failed_unknown"; readonly diagnostic: BoundedDisplayText }
   | { readonly status: "unresolved"; readonly diagnostic: BoundedDisplayText };
@@ -687,6 +711,24 @@ export interface ConversationBackendDriver {
   reconcileSubmission(
     input: ReconcileSubmissionInput,
   ): Promise<SubmissionReconciliation>;
+  /**
+   * Release provider-owned residency (a service-owned remote query) for a
+   * conversation Sedes has no runtime for, such as one being archived.
+   * Backends whose provider state never outlives a handle omit this. It must
+   * never stop outstanding provider work: it reports `busy` instead. It first
+   * applies retained provider output no runtime has applied, and reports
+   * `undelivered` if that output still holds the residency.
+   */
+  releaseConversationResidency?(
+    input: ReleaseConversationResidencyInput,
+  ): Promise<"released" | "busy" | "undelivered">;
+}
+
+export interface ReleaseConversationResidencyInput {
+  readonly scope: ExecutionScope;
+  readonly binding: ConversationBinding;
+  readonly workspace: ValidatedWorkspace;
+  readonly opaqueBindingDetail: string;
 }
 
 export interface BackendErrorShape {
@@ -710,6 +752,12 @@ export interface BackendErrorShape {
    * may preserve the same durable input as ordinary next-turn queue work.
    */
   readonly steerRejectionReason?: "target_no_longer_active";
+  /**
+   * A definite fork failure that a new fork of the same boundary would repeat
+   * (for example an unsupported runtime or a deterministic history mismatch).
+   * The application then does not offer to start another fork.
+   */
+  readonly forkRestart?: "futile";
 }
 
 export class BackendError extends Error implements BackendErrorShape {
@@ -718,6 +766,7 @@ export class BackendError extends Error implements BackendErrorShape {
   readonly crossedSubmissionBoundary: boolean;
   readonly backendCode?: string;
   readonly steerRejectionReason?: BackendErrorShape["steerRejectionReason"];
+  readonly forkRestart?: BackendErrorShape["forkRestart"];
   /**
    * Bounded, server-only evidence that an external mutation whose immediate
    * result was uncertain may later become authoritative. The owning mutation
@@ -739,6 +788,7 @@ export class BackendError extends Error implements BackendErrorShape {
     this.crossedSubmissionBoundary = input.crossedSubmissionBoundary;
     this.backendCode = input.backendCode;
     this.steerRejectionReason = input.steerRejectionReason;
+    this.forkRestart = input.forkRestart;
     this.lateMutationReconciliation = options?.lateMutationReconciliation;
   }
 
