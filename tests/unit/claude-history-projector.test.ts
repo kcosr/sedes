@@ -2026,6 +2026,53 @@ describe("Claude internal task notification history", () => {
     expect(nextClaudeUserMessageOrdinal([...beginning, notification] as SessionMessage[], markerAuthentication)).toBe(1);
   });
 
+  describe("turns Claude starts itself", () => {
+    const answer = (id: string, messageId: string, text: string) => ({
+      ...assistant(id, [{ type: "text", text }]),
+      message: { id: messageId, role: "assistant", content: [{ type: "text", text }], stop_reason: "end_turn", usage: {} },
+    });
+    const followUp = answer(uuid(4), "msg-notified", "The agent finished");
+    const liveMarker = { type: "system", uuid: uuid(700), session_id: uuid(900),
+      parent_tool_use_id: null, parent_agent_id: null, message: {} };
+    const live = { ...historyAuthentication, providerTurnBoundaries: new Map([[uuid(700), "msg-notified"]]) };
+    const turnShape = (snapshot: ReturnType<typeof projectClaudeHistory>["snapshot"]) =>
+      snapshot.orderedBackendTurnIds.map(id => ({ ...snapshot.turnsById[id],
+        items: snapshot.turnsById[id]!.orderedBackendItemIds.map(itemId => snapshot.itemsById[itemId]) }));
+
+    it("identifies a notification turn by its first response so live and reload agree", () => {
+      const reloaded = projectClaudeLatestSnapshot([...beginning, notification, followUp], [], historyAuthentication);
+      // Claude streams no notification row; the live path marks the boundary.
+      const observed = projectClaudeLatestSnapshot([...beginning, liveMarker, followUp], [], live);
+      expect(reloaded.snapshot.orderedBackendTurnIds).toHaveLength(2);
+      expect(turnShape(observed.snapshot)).toEqual(turnShape(reloaded.snapshot));
+      expect(reloaded.nativeUserMessageUuidByBackendTurnId.size).toBe(1);
+    });
+
+    it("keeps a live marker's turn open before its first complete response", () => {
+      const observed = projectClaudeLatestSnapshot([...beginning, liveMarker], [], live);
+      const id = observed.snapshot.orderedBackendTurnIds.at(-1)!;
+      expect(observed.snapshot.orderedBackendTurnIds).toHaveLength(2);
+      expect(observed.snapshot.turnsById[id]).toMatchObject({ status: "in_progress", orderedBackendItemIds: [] });
+      expect(id).toBe(projectClaudeLatestSnapshot([...beginning, notification, followUp], [], historyAuthentication)
+        .snapshot.orderedBackendTurnIds.at(-1));
+    });
+
+    it("ignores a live marker already covered by merged provider history", () => {
+      const reloaded = projectClaudeLatestSnapshot([...beginning, notification, followUp], [], historyAuthentication);
+      const merged = projectClaudeLatestSnapshot([...beginning, notification, followUp, liveMarker], [], live);
+      expect(turnShape(merged.snapshot)).toEqual(turnShape(reloaded.snapshot));
+    });
+
+    it("opens one turn for coalesced notifications and none when stopped before a response", () => {
+      const second = { ...notification, uuid: uuid(5) };
+      const coalesced = projectClaudeHistory([...beginning, notification, second, followUp]);
+      expect(coalesced.snapshot.orderedBackendTurnIds).toHaveLength(2);
+      const stopped = projectClaudeHistory([...beginning, notification,
+        { ...user(uuid(6), [{ type: "text", text: "[Request interrupted by user]" }]), timestamp: "2026-09-17T07:16:01.463Z" }]);
+      expect(stopped.snapshot).toEqual(projectClaudeHistory(beginning).snapshot);
+    });
+  });
+
   it.each([undefined, { kind: "human" }, { kind: "task-notification", subkind: "scheduled-trigger" },
     { kind: "task-notification", subkind: "peer-send-message" }])("preserves identical text when origin is %j", origin => {
     const projection = projectClaudeHistory([{ ...notification, origin }]);

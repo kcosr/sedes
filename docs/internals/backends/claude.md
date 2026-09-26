@@ -118,6 +118,31 @@ escalates a query close from SIGTERM to SIGKILL only after 5 s, so a closing
 leader can outlive its query for that long. If the inner worker dies, the outer
 supervisor applies the same rules to every registered leader.
 
+Sedes sets `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` for every Claude launch
+it makes: local and remote workers, the persistent host, and transient fork
+sessions. The value is Sedes-owned, is set where Sedes builds the SDK options,
+and overrides an inherited value; it is not part of the admitted per-query
+environment. Claude then emits `session_state_changed` (`running`,
+`requires_action`, `idle`), which it otherwise suppresses. For every
+uuid-stamped input, Claude Code also emits a stream-json `command_lifecycle`
+frame: `queued` on admission, `started` when a turn dequeues the input or folds
+it into the running turn (before any model request), then `completed`,
+`cancelled`, or `discarded`. The pinned SDK forwards this frame verbatim
+without typing it; Sedes validates its exact shape and ignores anything else.
+Sedes does not pass `--replay-user-messages`. Its echoes arrive only with a
+turn's first model output, no earlier than the `user_message_uuid` stamp, and
+it does not echo task-notification rows. The fixture suite
+`tests/real-claude/claude-run-state-native.test.ts` pins these frames on Claude
+Code 2.1.281 through 2.1.283.
+
+A send applies model, permission mode, and effort only for an axis that the live
+query generation has not already applied and confirmed. Contrary evidence
+(a model fallback, a `status` permission mode, or a failed setter) or a new
+query generation reapplies it. Main applies persistent-runtime events strictly
+in order, but does not wait for each acknowledgement round trip. At most 16
+acknowledgements per client are in flight. They name exact sequences, and
+`flushMessages` still waits for them.
+
 Worker permission delivery uses an application-level round trip: after the
 worker receives a `can_use_tool` result, it acknowledges the exact query,
 request, and tool-use identity before releasing that result to the Claude SDK.
@@ -326,6 +351,45 @@ An intermediate SDK `session_state_changed: idle` frame cannot settle an
 otherwise in-progress normalized turn. These rules prevent duplicate or
 misplaced live text, premature turn footers, and Stop-button flicker between
 blocks, including after reload.
+
+### Input acceptance and turns Claude starts
+
+An ordinary input is accepted, materialized, and running when its
+`command_lifecycle` `started` frame arrives; the persistent owner synthesizes the
+exact user row at that point. Submit therefore returns at Claude's dequeue, not
+at first model output. A `user_message_uuid(s)` stamp remains exact evidence,
+and it is the only evidence that names a steer's receiving turn. Unstamped
+output, a result without input identity, and a bare `running` state never accept
+a pending input. A second ordinary input is refused as not sent while another
+still awaits its start, because Claude merges inputs queued together into one
+turn.
+
+Claude starts turns itself for background-task notifications and peer
+hand-backs. Sedes models such a turn as running from one of two events. The
+first is Claude's `running` edge, when no Sedes input awaits its start. The
+second is the turn's first unstamped main-thread response. The turn ends at its
+result, or at Claude's `idle` if no result came. Stop targets it. Its result
+writes no terminal receipt, and an uncorrelated result never receipts or settles
+the previous application turn. A contradictory later result for an already
+receipted turn keeps the first write-once outcome without failing the
+attachment. Output from such a turn cannot claim a queued send; that input
+starts after the turn's result, on its own turn. Input the actor resolves to
+Steer can take over the turn, and Claude's reply stamps then name the steer.
+Claude's own non-idle state blocks automatic retirement and counts as
+persistent-host active work. This includes a backgrounded agent's wait, during
+which Claude stays `running` after the foreground result with no idle edge.
+
+Provider history starts a task-notification turn at its notification row, which
+Claude does not stream, and omits a peer hand-back's `isMeta` row entirely.
+Both the live and the reloaded projection therefore identify a turn Claude
+started by its first Anthropic message ID. If a non-ambient `task_notification`
+preceded the turn, the live path opens it with a private in-memory boundary
+marker, so partial text streams under the same turn that reload shows. Otherwise
+its output extends the settled previous turn, as reload does for a peer. The
+result's exact `origin` confirms the choice or corrects it with one resnapshot.
+Markers never enter provider history or submission retry anchors. Threads
+created before this rule re-identify their task-notification turns once; no
+receipts are keyed to those turns.
 
 Reviewed retry, rate-limit, and informational events produce bounded notices
 without exposing provider payloads.
@@ -619,6 +683,8 @@ reattachment can still drain final receipts without classifying the stopped
 query as an unexpected failure or requiring another forced stop.
 
 Claude advertises conversation-targeted Steer using native `priority: "next"`.
+Stop interrupts the current turn only. Claude reports a queued steer as
+`still_queued` and runs it as the next turn; Sedes does not withdraw it.
 Steer needs 2.1.274 or newer, below the 2.1.281 runtime minimum. Testing
 2.1.241 showed that it can consume guidance but omits the second input’s
 consumption UUID, which cannot establish safe delivery tracking. Older
@@ -677,6 +743,9 @@ normalized integration surface:
   agent-tool environment tests cover input projection and optional surfaces;
 - persistent-runtime tests cover exact-session attachment, event replay,
   permissions, stale controllers, cleanup, and disconnect without resubmit;
+- `claude-run-state-native.test.ts` qualifies the lifecycle and session-state
+  frames described under runtime ownership against the actual executable and a
+  loopback Messages fixture, including turns Claude starts itself;
 - `claude-background-activity-native.test.ts` runs the pinned SDK and actual
   Claude executable against an isolated loopback Messages fixture. Its finite
   gated Bash and Agent jobs prove the foreground result precedes background

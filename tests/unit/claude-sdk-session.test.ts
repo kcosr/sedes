@@ -313,6 +313,29 @@ describe("ClaudeSdkSession", () => {
     await session.close();
   });
 
+  it("keeps Claude's run-state events enabled over an inherited environment value", async () => {
+    const fixture = fakeQuery();
+    let observedOptions: Options | undefined;
+    const session = new ClaudeSdkSession({
+      sdk: fixture.sdk,
+      executablePath: "/home/test/.local/bin/claude",
+      initializationTimeoutMs: 1_000,
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      cwd: "/workspace",
+      launch: "new",
+      environment: { HOME: "/home/test", CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "0" },
+      onMessage: () => undefined,
+    });
+    const originalCreate = fixture.sdk.createQuery.bind(fixture.sdk);
+    fixture.sdk.createQuery = (input) => {
+      observedOptions = input.options;
+      return originalCreate(input);
+    };
+    await session.start();
+    expect(observedOptions?.env?.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS).toBe("1");
+    await session.close();
+  });
+
   it("uses the external CLI and subscription login without configuring auth", async () => {
     const fixture = fakeQuery();
     let observedOptions: Options | undefined;
@@ -358,7 +381,11 @@ describe("ClaudeSdkSession", () => {
       includePartialMessages: true,
       settingSources: ["user", "project", "local"],
       disallowedTools: ["EnterPlanMode", "ExitPlanMode"],
-      env: { HOME: "/home/test" },
+    });
+    // Claude reports its own run state only when Sedes asks for it.
+    expect(observedOptions?.env).toEqual({
+      HOME: "/home/test",
+      CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
     });
     expect(fixture.sdk.readCliRelease).toHaveBeenCalledWith(
       "/home/test/.local/bin/claude",

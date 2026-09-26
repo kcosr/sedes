@@ -12,6 +12,31 @@ export function claudeResultUserMessageIds(
   ];
 }
 
+export type ClaudeCommandLifecycleState =
+  | "queued" | "started" | "completed" | "cancelled" | "discarded";
+const COMMAND_LIFECYCLE_STATES: ReadonlySet<string> = new Set<ClaudeCommandLifecycleState>([
+  "queued", "started", "completed", "cancelled", "discarded",
+]);
+const COMMAND_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+/**
+ * Claude Code's stream-json lifecycle frame for a uuid-stamped input. The SDK
+ * forwards it verbatim but does not type it. `queued` proves native admission;
+ * `started` is emitted when a turn dequeues the input or folds it into the
+ * running turn, before any model request. Any other shape is not evidence.
+ */
+export function claudeCommandLifecycle(message: unknown): {
+  readonly commandUuid: string;
+  readonly state: ClaudeCommandLifecycleState;
+} | undefined {
+  if (typeof message !== "object" || message === null) return undefined;
+  const frame = message as Record<string, unknown>;
+  if (frame.type !== "command_lifecycle" || typeof frame.command_uuid !== "string" ||
+      !COMMAND_UUID.test(frame.command_uuid) || typeof frame.state !== "string" ||
+      !COMMAND_LIFECYCLE_STATES.has(frame.state)) return undefined;
+  return { commandUuid: frame.command_uuid, state: frame.state as ClaudeCommandLifecycleState };
+}
+
 /** A background queue receipt cannot settle an unrelated application turn. */
 export function claudeResultIsUnrelated(
   message: SDKResultMessage,

@@ -102,6 +102,8 @@ class ToolDisabledOfficialClaudeSdkFacade extends OfficialClaudeSdkFacade {
   readonly persistentQueryOptions: ClaudeQueryInput["options"][] = [];
   readonly authStatuses: ClaudeCliAuthStatus[] = [];
   readonly resultMessages: SDKResultMessage[] = [];
+  /** Every frame the persistent query produced, in order. */
+  readonly observedMessages: SDKMessage[] = [];
 
   override async readCliAuthStatus(
     executablePath: string,
@@ -130,6 +132,7 @@ class ToolDisabledOfficialClaudeSdkFacade extends OfficialClaudeSdkFacade {
       this.persistentQueryOptions.push(options);
     }
     return observeQuery(super.createQuery({ ...input, options }), (message) => {
+      if (options.persistSession !== false) this.observedMessages.push(message);
       if (message.type === "result") this.resultMessages.push(message);
     });
   }
@@ -401,6 +404,9 @@ describe.sequential("real Claude subscription driver", () => {
           prematureTerminalEvents.push(event);
         }
       });
+      const modelOutput = () => sdk.observedMessages.some(message =>
+        message.type === "assistant" || (message.type === "stream_event" && message.event.type === "message_start"));
+      let outputBeforeAcceptance: boolean | undefined;
       try {
         await firstHandle.submit({
           applicationOperationId: submissionOperationId,
@@ -412,6 +418,12 @@ describe.sequential("real Claude subscription driver", () => {
           attachments: [],
           taskContexts: [],
         });
+        // Claude's exact dequeue accepts the input and starts the running
+        // turn before the model's first token.
+        outputBeforeAcceptance = modelOutput();
+        expect(events.filter(event => event.type === "run_state_changed")).toEqual([
+          expect.objectContaining({ state: "running" }),
+        ]);
         await waitFor(
           () =>
             sdk.resultMessages.some((message) => message.num_turns > 0) &&
@@ -450,6 +462,14 @@ describe.sequential("real Claude subscription driver", () => {
 
       expect(prematureTerminalEvents).toEqual([]);
       expect(events.filter(event => event.type === "turn_completed")).toHaveLength(1);
+      expect(outputBeforeAcceptance).toBe(false);
+      expect(sdk.observedMessages).toContainEqual(expect.objectContaining({
+        type: "command_lifecycle", command_uuid: submissionOperationId, state: "started" }));
+      // Sedes sets CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS for every launch.
+      expect(sdk.observedMessages).toContainEqual(expect.objectContaining({
+        type: "system", subtype: "session_state_changed", state: "running" }));
+      expect(events.flatMap(event => event.type === "run_state_changed" ? [event.state] : []))
+        .toEqual(["running", "idle"]);
 
       // Claude may deliver a short response as one complete assistant message
       // even when partial messages are requested.
