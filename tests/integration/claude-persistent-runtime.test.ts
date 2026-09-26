@@ -109,7 +109,7 @@ function delta(sessionId: string, text: string): SDKMessage {
 function firstDelta(sessionId: string, text: string, operationId: string): SDKMessage {
   return { ...delta(sessionId, text), user_message_uuid: operationId, user_message_uuids: [operationId] } as SDKMessage;
 }
-function lifecycle(sessionId: string, operationId: string, state: "queued" | "started" | "completed"): SDKMessage {
+function lifecycle(sessionId: string, operationId: string, state: "queued" | "started" | "completed" | "refused"): SDKMessage {
   return { type: "command_lifecycle", command_uuid: operationId, state, uuid: randomUUID(), session_id: sessionId } as unknown as SDKMessage;
 }
 function acceptedInput(sessionId: string, operation: { operationId: string; content: string }) {
@@ -1510,6 +1510,21 @@ describe("persistent host shutdown evidence", () => {
   type Evidence = { phase: string; startedAfterConfirmation?: boolean;
     sessions: { sessionId: string; liveWork: boolean; events: { kind: string; messageType?: string; code?: string }[] }[] };
   const evidence = (archive: ReturnType<typeof vi.fn>) => archive.mock.calls.map(([record]) => (record as { evidence: Evidence }).evidence);
+
+  it("does not hold an input Claude refused as outstanding work", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const listener = (_event: ClaudePersistentEvent) => undefined;
+    const sessionId = randomUUID(), operationId = randomUUID();
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
+    await host.execute({ ...authority, action: "send", request: { queryId: sessionId, operationId, content: "Refused." } }, listener);
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ liveWork: true, pendingInputIds: [operationId] });
+    await f.sessions.find(session => session.options.sessionId === sessionId)!.emit(lifecycle(sessionId, operationId, "refused"));
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ liveWork: false, pendingInputIds: [] });
+  });
 
   it("tells a retire request apart when only undelivered output holds the query", async () => {
     const f = await fixture();

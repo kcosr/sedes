@@ -505,7 +505,7 @@ function runningAtAttach(provider: ReturnType<typeof fixture>): ClaudeRuntimeCli
 
 /** Frames the real CLI emits without prompt echoes (2.1.281+). */
 const nativeFrames = {
-  lifecycle: (commandUuid: string, state: "queued" | "started" | "completed") => ({
+  lifecycle: (commandUuid: string, state: "queued" | "started" | "completed" | "refused") => ({
     type: "command_lifecycle", command_uuid: commandUuid, state,
     uuid: crypto.randomUUID(), session_id: SESSION_ID,
   }) as unknown as SDKMessage,
@@ -4642,6 +4642,20 @@ describe("Claude native run state without prompt echoes", () => {
   ] as SessionMessage[];
   const runStates = (events: readonly BackendConversationEvent[]) =>
     events.flatMap(event => event.type === "run_state_changed" ? [event.state] : []);
+
+  it("fails a send Claude refused before queueing it, as not sent", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider);
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const submitted = handle.submit(submitInput(OPERATION_ID, "Refused input"));
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "refused"));
+    await expect(submitted).rejects.toMatchObject({ category: "rejected", backendCode: "claude_submission_refused",
+      crossedSubmissionBoundary: false, retryable: false });
+    expect(handle.hasUnconfirmedSubmission(OPERATION_ID)).toBe(false);
+    expect((await projectionSnapshot(handle)).runState).toBe("idle");
+    await handle.close();
+  });
 
   it("publishes running and idle for a turn observed only through consumption stamps", async () => {
     const provider = fixture();

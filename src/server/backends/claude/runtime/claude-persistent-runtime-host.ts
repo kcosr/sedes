@@ -656,6 +656,11 @@ export class ClaudePersistentRuntimeHost {
       ? claudeResultUserMessageIds(message) : [];
     const lifecycle = claudeCommandLifecycle(message);
     const started = lifecycle?.state === "started" ? lifecycle.commandUuid : undefined;
+    // Claude declined this input before queueing it; it never runs here.
+    if (lifecycle?.state === "refused" && session.pendingInputs.has(lifecycle.commandUuid)) {
+      this.#forgetPendingInput(session, lifecycle.commandUuid);
+      session.active.delete(lifecycle.commandUuid);
+    }
     // Only exact native evidence materializes an admitted input: Claude's
     // dequeue of an ordinary input, or a consumption stamp. Unstamped output
     // can belong to a turn Claude started itself, and a steer's receiving turn

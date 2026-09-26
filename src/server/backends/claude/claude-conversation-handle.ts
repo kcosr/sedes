@@ -1999,8 +1999,18 @@ export class ClaudeConversationHandle implements ConversationHandle {
   /** `started` is emitted when Claude dequeues an input into a turn. */
   #consumeCommandLifecycle(lifecycle: NonNullable<ReturnType<typeof claudeCommandLifecycle>>): void {
     if (lifecycle.commandUuid === this.#session.startupProbeUuid &&
-        (lifecycle.state === "completed" || lifecycle.state === "cancelled" || lifecycle.state === "discarded")) {
+        (lifecycle.state === "completed" || lifecycle.state === "cancelled" ||
+          lifecycle.state === "discarded" || lifecycle.state === "refused")) {
       this.#startupSettled = true;
+    }
+    if (lifecycle.state === "refused") {
+      // Declined before queueing: it never runs in this session.
+      const refused = this.#submissions.get(lifecycle.commandUuid);
+      if (!refused || refused.accepted) return;
+      this.#submissions.delete(lifecycle.commandUuid);
+      if (refused.steering) this.#settings.forgetUnconsumedSteerOperation(this.#scope, this.binding.applicationThreadId, lifecycle.commandUuid);
+      refused.reject(claudeError("rejected", "Claude declined this input before queueing it. It was not sent.", "claude_submission_refused"));
+      return;
     }
     if (lifecycle.state !== "started") return;
     const submission = this.#submissions.get(lifecycle.commandUuid);

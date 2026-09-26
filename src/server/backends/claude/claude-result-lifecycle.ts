@@ -13,9 +13,9 @@ export function claudeResultUserMessageIds(
 }
 
 export type ClaudeCommandLifecycleState =
-  | "queued" | "started" | "completed" | "cancelled" | "discarded";
+  | "queued" | "started" | "completed" | "cancelled" | "discarded" | "refused";
 const COMMAND_LIFECYCLE_STATES: ReadonlySet<string> = new Set<ClaudeCommandLifecycleState>([
-  "queued", "started", "completed", "cancelled", "discarded",
+  "queued", "started", "completed", "cancelled", "discarded", "refused",
 ]);
 const COMMAND_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
@@ -23,7 +23,10 @@ const COMMAND_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  * Claude Code's stream-json lifecycle frame for a uuid-stamped input. The SDK
  * forwards it verbatim but does not type it. `queued` proves native admission;
  * `started` is emitted when a turn dequeues the input or folds it into the
- * running turn, before any model request. Any other shape is not evidence.
+ * running turn, before any model request. `refused` means the session's
+ * receive-side policy declined the input before queueing it: it is not
+ * preceded by `queued` and never runs in this session. Any other shape is not
+ * evidence.
  */
 export function claudeCommandLifecycle(message: unknown): {
   readonly commandUuid: string;

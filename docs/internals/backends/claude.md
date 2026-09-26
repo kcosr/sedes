@@ -173,7 +173,10 @@ environment. Claude then emits `session_state_changed` (`running`,
 uuid-stamped input, Claude Code also emits a stream-json `command_lifecycle`
 frame: `queued` on admission, `started` when a turn dequeues the input or folds
 it into the running turn (before any model request), then `completed`,
-`cancelled`, or `discarded`. The pinned SDK forwards this frame verbatim
+`cancelled`, or `discarded`. `refused` instead means the session's receive-side
+policy declined the input before queueing it; it never runs in that session,
+so Sedes fails the send as not sent and the persistent owner stops holding it
+as outstanding work. The pinned SDK forwards this frame verbatim
 without typing it; Sedes validates its exact shape and ignores anything else.
 Sedes does not pass `--replay-user-messages`. Its echoes arrive only with a
 turn's first model output, no earlier than the `user_message_uuid` stamp, and
