@@ -152,6 +152,15 @@
   backends, Send, Steer, and Queue on that thread wait while a steer is
   pending, so several Codex steers now go one at a time.
 
+- A Claude **Steer** now resolves as soon as Claude takes it, usually when the
+  tool call it is running finishes, instead of when the turn ends. The message
+  appears at that point in the running turn, where it also appears after a
+  reload, instead of after Claude's final answer. Send, Steer, and Queue return
+  at once, so you can steer the same turn again, and steers Claude takes
+  together appear in order. A remote Claude thread keeps that placement across
+  reconnects; it takes effect once the sidecar runs this build, and the sidecar
+  runtime protocol is unchanged.
+
 - Create Claude forks with one locked-down Claude Code launch. It loads no
   settings, hooks, MCP servers, or tools and denies any permission request.
   It no longer uses the thread's permission mode, so it cannot act for the

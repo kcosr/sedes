@@ -2059,8 +2059,13 @@ backends. Codex's provider-private adapter recognizes only its exact reviewed
 unknown wording fails closed. Both remain pending until provider
 materialization is observed: an accepted receipt only admits the input to the
 provider's volatile queue for that turn. Claude implements conversation-targeted Steer via
-native `priority: "next"`. Native enqueue is pending materialization until exact
-user-message UUID evidence identifies incorporation and the receiving turn.
+native `priority: "next"`. Native enqueue is pending materialization until
+exact per-input evidence that Claude took the steer: its own `started`
+lifecycle frame, or a consumption stamp. The frame's position before or after
+the running turn's result identifies the receiving turn, so the steer
+materializes where Claude took it, mid-turn when folded, and later Steer can
+follow in the same turn. The turn's result only cross-checks that placement;
+a contradiction is logged and never rewrites it or causes a resend.
 Earlier assistant activity is never acceptance evidence for a new steer.
 The owner-scoped operation and native message identity survive reconnects;
 uncertain delivery never triggers a replacement send. Grok advertises no Steer;

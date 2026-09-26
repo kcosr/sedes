@@ -217,9 +217,10 @@ The composer action changes with thread state and provider capability.
 | **Stop** | Ask the provider to interrupt the active turn. |
 
 Pi and Codex steer the exact turn that is running. Claude's Steer goes to the
-conversation: Claude delivers it at its next opportunity, which may join the
-running turn or start the next one, and it never interrupts work. Grok has no
-Steer, so active-turn input waits in Queue.
+conversation: Claude takes it at its next opportunity, usually when the tool
+call it is running finishes, and it never interrupts work. If the turn is still
+running, the message joins it at that point; otherwise it starts the next turn.
+Grok has no Steer, so active-turn input waits in Queue.
 
 The selector shows only modes the current backend supports; temporarily
 unavailable modes remain visible but disabled. A temporary change in thread
@@ -276,6 +277,11 @@ order. A Steer card shows **Steering** until its exact message appears in
 history, and then disappears. While it waits for the provider to use it, the
 composer waits too: Send, Steer, and Queue return when it appears, or when
 Stop returns it to you.
+
+On Claude, the message appears as soon as Claude takes it, at that point in
+the running turn rather than after Claude's final answer, and it stays there
+after a reload. You can then steer the same turn again. Several steers Claude
+takes together appear in the order you sent them.
 
 ### Stop a turn
 

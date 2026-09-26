@@ -179,7 +179,9 @@ environment. Claude then emits `session_state_changed` (`running`,
 uuid-stamped input, Claude Code also emits a stream-json `command_lifecycle`
 frame: `queued` on admission, `started` when a turn dequeues the input or folds
 it into the running turn (before any model request), then `completed`,
-`cancelled`, or `discarded`. `cancelled` before any `started` means Claude
+`cancelled`, or `discarded`. The position of `started` in the stream places
+the input: before the running turn's result it joins that turn, after it the
+input starts the next one. `cancelled` before any `started` means Claude
 withdrew the input, as Stop does (see
 [Recovery and unsupported mutations](#recovery-and-unsupported-mutations)), so
 it never ran. After `started`, an interrupted turn ends the inputs it started
@@ -524,12 +526,43 @@ query's state is not assumed idle until Claude reports it.
 An ordinary input is accepted, materialized, and running when its
 `command_lifecycle` `started` frame arrives; the persistent owner synthesizes the
 exact user row at that point. Submit therefore returns at Claude's dequeue, not
-at first model output. A `user_message_uuid(s)` stamp remains exact evidence,
-and it is the only evidence that names a steer's receiving turn. Unstamped
-output, a result without input identity, and a bare `running` state never accept
-a pending input. A second ordinary input is refused as not sent while another
-still awaits its start, because Claude merges inputs queued together into one
-turn.
+at first model output. A `user_message_uuid(s)` stamp remains exact evidence.
+Unstamped output, a result without input identity, and a bare `running` state
+never accept a pending input. A second ordinary input is refused as not sent
+while another still awaits its start, because Claude merges inputs queued
+together into one turn.
+
+A steer is accepted the same way, at its own `started` frame, which Claude
+emits exactly when it takes the steer: folded into the running turn before
+its next model request (usually after a tool call), or dequeued as the start
+of the next turn. Stream order places it. The owner of the query's inputs (the
+handle for a local query, the persistent owner for a remote one) tracks the
+native root of the turn Claude is running: an input that starts a turn sets
+it, and any result except a notification-drain receipt clears it.
+
+- A steer started while a root is set joins that turn. Its durable association
+  names that root, and its user row is inserted at the current point of the
+  live projection, so the steer's item and turn update are published at once.
+  The queue then accepts it, and Send, Steer, and Queue return while the turn
+  still runs.
+- A steer started with no root starts the next turn, or takes over a turn
+  Claude started itself, and becomes the root.
+- Several steers Claude starts together keep their order.
+
+Claude Code writes a folded steer as an answered queued-command attachment at
+the fold, which the reader converts to a user row with the steer's own
+identity. Reload therefore projects the same turn, position, and item
+identities as the live path. The persistent owner retains the synthesized row
+with its turn root until the turn's result is acknowledged, so a replacement
+main replays the same placement.
+
+The turn's result still names every input it consumed. It is a cross-check
+only. When it agrees, nothing more happens. When it contradicts the placement
+(it names a steer without that steer's recorded turn root, or omits a steer
+Claude started in that turn), Sedes logs `claude_steer_placement_conflict`. It
+never rewrites the recorded association or resends anything; history and
+reconciliation keep deciding. A stamp still places a steer whose start the
+current attachment never saw, in the turn of the stamp's first input.
 
 Claude starts turns itself for background-task notifications and peer
 hand-backs. Sedes models such a turn as running from one of two events. The
@@ -546,7 +579,8 @@ the previous application turn. A contradictory later result for an already
 receipted turn keeps the first write-once outcome without failing the
 attachment. Output from such a turn cannot claim a queued send; that input
 starts after the turn's result, on its own turn. Input the actor resolves to
-Steer can take over the turn, and Claude's reply stamps then name the steer.
+Steer takes the turn over from the steer's start, and Claude's later reply
+stamps and result name the steer.
 Claude's own non-idle state blocks automatic retirement and counts as
 persistent-host active work. This includes a backgrounded agent's wait, during
 which Claude stays `running` after the foreground result with no idle edge.
@@ -1088,20 +1122,23 @@ Stop also withdraws every input Sedes sent that Claude has not started:
   Claude ends it `cancelled`.
 
 `tests/real-claude/claude-steer-native.test.ts` pins both cases on 2.1.281 and
-2.1.283.
+2.1.283, as well as two steers Claude folds at one tool boundary.
 
 Steer needs 2.1.274 or newer, below the 2.1.281 runtime minimum. Testing
 2.1.241 showed that it can consume guidance but omits the second input’s
 consumption UUID, which cannot establish safe delivery tracking. Older
 runtimes fail the common admission guard; there is no separate compatibility
 path or version-specific Steer capability.
-The target contains no turn ID. Native enqueue stays pending until exact
-user-message UUID evidence confirms incorporation; normalized history associates
-that input with the actual receiving turn. This can be the current turn or the
-next one if current work has completed. Transport loss cannot justify replay or
-an invented receiving turn. Existing assistant output cannot confirm a newly
-enqueued steer. Queue remains application-owned next-turn work. Native `now`
-interruption semantics are not exposed by this feature.
+The target contains no turn ID. Native enqueue stays pending until Claude
+starts the steer, which its own `started` lifecycle frame (or, failing that, a
+consumption stamp) proves. Stream order then associates it with the actual
+receiving turn, as described under
+[Input acceptance](#input-acceptance-and-turns-claude-starts). This can be the
+current turn or the next one if current work has completed. Transport loss
+cannot justify replay or an invented receiving turn. Existing assistant output
+cannot confirm a newly enqueued steer. Queue remains application-owned
+next-turn work. Native `now` interruption semantics are not exposed by this
+feature.
 
 Manual compaction is also unavailable. `/compact` is a Claude Code local
 command, and a command result cannot be recovered as one durable normalized
