@@ -558,11 +558,22 @@ it, and any result except a notification-drain receipt clears it.
 - A steer started while a root is set joins that turn. Its durable association
   names that root, and its user row is inserted at the current point of the
   live projection, so the steer's item and turn update are published at once.
-  The queue then accepts it, and Send, Steer, and Queue return while the turn
-  still runs.
+  The queue then accepts it while the turn still runs.
 - A steer started with no root starts the next turn, or takes over a turn
   Claude started itself, and becomes the root.
 - Several steers Claude starts together keep their order.
+
+Several steers can be enqueued and unstarted at once. The application still
+sends them one at a time: the handle refuses an input that overlaps another
+send (`claude_turn_already_active`), and the application's queue sends the
+next steer only after the previous one returned from Claude's enqueue. Each
+unstarted steer is tracked by its own input identity, both in the handle's
+submission map and in the persistent owner's pending inputs, and is accepted
+or withdrawn only by its own lifecycle frame. An ordinary send never waits
+behind them inside Claude: the application admits it as queue work and
+dispatches it only after every earlier steer is resolved and the conversation
+has settled, because a steer Claude dequeues after a result starts the next
+turn itself.
 
 Claude Code writes a folded steer as an answered queued-command attachment at
 the fold, which the reader converts to a user row with the steer's own
@@ -1137,7 +1148,8 @@ Stop also withdraws every input Sedes sent that Claude has not started:
   Claude ends it `cancelled`.
 
 `tests/real-claude/claude-steer-native.test.ts` pins both cases on 2.1.281 and
-2.1.283, as well as two steers Claude folds at one tool boundary.
+2.1.283, as well as two steers Claude folds at one tool boundary, three steers
+unconfirmed at once in one turn, and Stop withdrawing several unstarted steers.
 
 Steer needs 2.1.274 or newer, below the 2.1.281 runtime minimum. Testing
 2.1.241 showed that it can consume guidance but omits the second input’s

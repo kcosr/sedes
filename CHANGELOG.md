@@ -5,8 +5,8 @@
 ### Breaking Changes
 
 - Codex viewed images use a new `viewed_image` transcript item, introduced
-  in client protocol 123. This build requires client protocol 124; see the
-  client protocol entry below. (#11)
+  in client protocol 123. This build requires client protocol 125; see the
+  client protocol entries below. (#11)
 
 - Claude backends require Claude Code 2.1.281 or newer and are tested through
   2.1.283. Earlier releases added a hidden "Continue" prompt when resuming
@@ -20,6 +20,11 @@
   transcript presence. It also runs Claude forks as one-shot launches and
   retires remote Claude queries by session. Upgrade existing sidecars
   explicitly before reconnecting with this server version. (#12)
+
+- Browser and packaged clients must use client protocol 125, which marks a
+  queue entry a provider returned as not sent with a normalized
+  `failureReason`. Migration 118 records that reason; entries failed before
+  the upgrade have none and keep their previous label.
 
 - Browser and packaged clients must use client protocol 124, which carries
   per-turn fork availability, restartable fork aborts, the **Discard this
@@ -39,6 +44,16 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Steer a running turn several times without waiting, on Claude, Pi, and
+  Codex. Each Steer gets its own **Steering** card, in the order sent, and
+  clears on its own when its message appears; the composer stays available
+  for more Steer or Queue input. Sedes still sends Steers to the provider one
+  at a time. **Stop** returns every Steer the provider had not used as not
+  sent, and never resends one. When the turn ends while Steers are still
+  unconfirmed, **Send** is available and waits in the queue behind them, so it
+  never runs ahead of input you sent earlier. Previously any unconfirmed
+  Steer disabled Send, Steer, and Queue on the thread.
 
 - Show a collapsed **Viewed image** row, named by file, when Codex views a
   local image; expand it to see the snapshot. Sedes reads the file once
@@ -84,6 +99,11 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- A Steer returned by **Stop** now shows a neutral **Not sent** label instead
+  of a red **Steer failed**. A failed or not-sent queue entry offers
+  **Restore** and **Dismiss**; **Delete** remains only for entries not yet
+  sent, and each entry, not just the first, can be dismissed.
 
 - Make recorded usage accounting experimental and disabled by default. Set
   `SEDES_EXPERIMENTAL_USAGE=1` on the main server and restart to enable capture,
@@ -152,16 +172,13 @@
   accepted but had not used, while showing it as delivered. A Codex steer now
   shows **Steering** until its message appears in history. If Codex's turn
   ends without it, it returns as a failed queue entry marked not sent, to
-  restore to the composer or dismiss, and it is never resent. As on other
-  backends, Send, Steer, and Queue on that thread wait while a steer is
-  pending, so several Codex steers now go one at a time. (#12)
+  restore to the composer or dismiss, and it is never resent. (#12)
 
 - A Claude **Steer** now resolves as soon as Claude takes it, usually when the
   tool call it is running finishes, instead of when the turn ends. The message
   appears at that point in the running turn, where it also appears after a
-  reload, instead of after Claude's final answer. Send, Steer, and Queue return
-  at once, so you can steer the same turn again, and steers Claude takes
-  together appear in order. A remote Claude thread keeps that placement across
+  reload, instead of after Claude's final answer. Steers Claude takes together
+  appear in order. A remote Claude thread keeps that placement across
   reconnects; it takes effect once the sidecar runs this build, and the sidecar
   runtime protocol is unchanged. (#12)
 

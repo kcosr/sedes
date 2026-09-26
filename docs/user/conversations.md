@@ -261,9 +261,11 @@ bookmarkable, forkable, or eligible for context capture.
 ### Work with queued input
 
 Queued entries are shown in order. An entry that has not crossed the provider
-boundary can be removed or restored to an empty composer. Once delivery is
+boundary can be deleted or restored to an empty composer. Once delivery is
 dispatching or uncertain, Sedes cannot safely retract it and does not offer a
-cosmetic dismiss action.
+cosmetic dismiss action. A failed or not-sent entry offers **Restore**, which
+returns its text to an empty composer without sending, and **Dismiss**, which
+removes it; each entry clears on its own.
 
 When Steer is supported, you can convert the user-created queue head to
 **Steer** without changing the current draft. An ordinary Queue entry already
@@ -272,16 +274,25 @@ direct Steer can be admitted.
 
 ### Send more than one Steer
 
-Sedes sends Steers to the provider one at a time, in first-in, first-out
-order. A Steer card shows **Steering** until its exact message appears in
-history, and then disappears. While it waits for the provider to use it, the
-composer waits too: Send, Steer, and Queue return when it appears, or when
-Stop returns it to you.
+You can steer a running turn several times without waiting. Each Steer gets
+its own card in the pending-input strip, in the order you sent them, and the
+composer stays available for another Steer or Queue.
+
+Sedes still sends Steers to the provider one at a time, in first-in,
+first-out order: each crosses to the provider before the next is sent. A card
+shows **Steering** until its own message appears in history, and then
+disappears, independently of the others. Several steers the provider takes
+together appear in the order you sent them.
 
 On Claude, the message appears as soon as Claude takes it, at that point in
 the running turn rather than after Claude's final answer, and it stays there
-after a reload. You can then steer the same turn again. Several steers Claude
-takes together appear in the order you sent them.
+after a reload.
+
+If the turn ends while Steers are still waiting (on Claude, a Steer that
+arrives after the final answer starts the next turn itself), **Send** is
+available again. Your new message waits in the queue behind those Steers and
+is sent only after each of them has appeared or been returned to you, so it
+never runs ahead of them.
 
 ### Stop a turn
 
@@ -295,10 +306,9 @@ Stop means stop, on every backend:
 - Sedes's own Queue is untouched: queued entries keep their order and run
   after the stopped turn. A Steer card Sedes has not yet sent to the provider
   is also still Sedes's own work.
-- A Steer the provider received but has not used yet never runs. Its card
-  shows **Steer failed** and says it was not sent. Restore it to the composer
-  or dismiss it; later queued entries wait for that choice. Sedes never
-  resends it.
+- Every Steer the provider received but has not used yet never runs. Each
+  card shows **Not sent**. Restore it to the composer or dismiss it; later
+  queued entries wait for those choices. Sedes never resends it.
 - A Steer the provider already used stays with the stopped turn.
 
 If the provider's runtime ends or Sedes restarts before the provider used a
