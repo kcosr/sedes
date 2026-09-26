@@ -167,8 +167,10 @@
 - End a Claude turn left running after its Claude process was lost, for
   example when the server, worker, or sidecar stopped mid-turn. The next launch
   marks it interrupted with a notice; a reattached remote query that is still
-  running is unaffected. **Stop** no longer stays "stopping" without a result:
-  the turn ends a second after Claude reports idle, or after 30 seconds.
+  running is unaffected. A turn that stopped after a tool call or its result
+  no longer reads as finished or offers a fork. **Stop** no longer stays
+  "stopping" without a result: the turn ends a second after Claude reports
+  idle, or after 30 seconds.
 
 - Show turns Claude starts itself, such as after a background task or peer
   hand-back, as running with **Stop**, and keep idle retirement, eviction and

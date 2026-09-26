@@ -5031,6 +5031,26 @@ describe("Claude compaction, lost processes, and bounded Stop", () => {
     await reopened.close();
   });
 
+  it("marks a lost turn that ended on a tool result although its thinking row carries the tool_use stop reason", async () => {
+    // Claude Code 2.1.28x stamps every block row with its message's final stop reason.
+    const thinking = { type: "assistant", uuid: "a1000000-0000-4000-8000-000000000011", session_id: SESSION_ID,
+      parent_tool_use_id: null, parent_agent_id: null, timestamp: "2026-09-26T10:00:00.000Z",
+      message: { id: "msg-kept", role: "assistant", stop_reason: "tool_use",
+        content: [{ type: "thinking", thinking: "Read the parser first.", signature: "s" }], usage: {} } } as SessionMessage;
+    const settings = repository();
+    const history = [...settledTurn, unanswered, thinking, { ...keptCall, parent_agent_id: null },
+      { ...keptResult, parent_agent_id: null }] as unknown as SessionMessage[];
+    const { handle } = createHandle(fixture(), vi.fn(), { settings, initialMessages: history, resumeSession: true });
+    const snapshot = await projectionSnapshot(handle);
+    const turnId = snapshot.orderedBackendTurnIds[1]!;
+    expect(snapshot.runState).toBe("idle");
+    expect(snapshot.turnsById[turnId]).toMatchObject({ status: "interrupted", endedBy: "interrupted" });
+    expect(snapshot.turnsById[turnId]).not.toHaveProperty("forkUnavailableReason");
+    expect(settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId }))
+      .toMatchObject({ status: "interrupted", providerTerminalReason: "process_lost" });
+    await handle.close();
+  });
+
   it("leaves the turn alone when Claude Code already closed it", async () => {
     const closure = { type: "assistant", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
       parent_agent_id: null, timestamp: "2026-09-26T10:00:00.000Z", message: { id: crypto.randomUUID(), role: "assistant",

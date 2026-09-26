@@ -642,9 +642,7 @@ function buildTimeline(
     const compactionOnly = turnItems.length > 0 &&
       turnItems.every((id) => itemsById[id]!.semanticKind === "compaction");
     const completed =
-      current.interruptedAt === undefined &&
-      (compactionOnly || (current.terminalAssistantUuid !== undefined &&
-        current.unresolvedToolIds.size === 0));
+      current.interruptedAt === undefined && (compactionOnly || isAnsweredTurn(current));
     turnsById[current.backendTurnId] = {
       backendTurnId: current.backendTurnId,
       ...(current.completionCorrelations.length > 0
@@ -891,8 +889,12 @@ function buildTimeline(
         ? (nextAssistantBlockIndexByMessageId.get(message.assistantMessageId) ??
           0)
         : 0;
+      // Claude Code stamps every block row with its message's final stop
+      // reason, so a thinking or text row before a tool call carries
+      // `tool_use`: the turn continues after that call's result.
       if (
         message.assistantStopReason !== null &&
+        message.assistantStopReason !== "tool_use" &&
         !content.some((block) => block.type === "tool_use")
       ) {
         current.terminalAssistantUuid = message.uuid;
@@ -1325,9 +1327,19 @@ function isResumeClosure(message: ParsedSessionMessage, content: readonly Parsed
 function isUnsettledTurn(turn: MutableTurn): boolean {
   if (turn.interruptedAt !== undefined) return false;
   if (turn.taskNotificationBoundary && turn.orderedBackendItemIds.length === 0) return false;
-  return !(turn.terminalAssistantUuid !== undefined &&
+  return !isAnsweredTurn(turn);
+}
+
+/**
+ * A turn is answered only when its newest visible row is a terminal assistant
+ * row. Anything after an answer (a tool call, its result, or a steer folded
+ * in) means Claude continued, for example after a blocking Stop hook or a
+ * max_tokens continuation, whose prompting rows history hides.
+ */
+function isAnsweredTurn(turn: MutableTurn): boolean {
+  return turn.terminalAssistantUuid !== undefined &&
     turn.lastRetainedMessageUuid === turn.terminalAssistantUuid &&
-    turn.unresolvedToolIds.size === 0);
+    turn.unresolvedToolIds.size === 0;
 }
 
 /** Receipts are validated where applied; this lookup only defers to them. */

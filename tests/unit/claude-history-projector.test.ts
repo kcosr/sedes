@@ -105,6 +105,99 @@ describe("Claude assistant response classification", () => {
   });
 });
 
+describe("Claude turn completion from native stop reasons", () => {
+  // Claude Code 2.1.28x writes one row per content block, and every row of a
+  // message carries that message's final stop reason.
+  let time = 0;
+  function row(index: number, id: string, block: unknown, stopReason: string) {
+    time += 1;
+    return {
+      ...assistant(uuid(index), [block]),
+      timestamp: new Date(Date.UTC(2026, 8, 26, 0, 0, time)).toISOString(),
+      message: { role: "assistant", id, content: [block], stop_reason: stopReason },
+    };
+  }
+  const thinking = { type: "thinking", thinking: "Planning", signature: "s" };
+  const toolUse = (id: string) => ({ type: "tool_use", id, name: "Bash", input: { command: "true" } });
+  const toolResult = (index: number, id: string) => user(uuid(index), [{ type: "tool_result", tool_use_id: id, content: "ok" }]);
+  const toolTurn = () => [
+    user(uuid(1), "Inspect"),
+    row(2, "msg-1", thinking, "tool_use"),
+    row(3, "msg-1", { type: "text", text: "Checking" }, "tool_use"),
+    row(4, "msg-1", toolUse("tool-1"), "tool_use"),
+    toolResult(5, "tool-1"),
+  ];
+
+  it("keeps a turn that ended on a tool result unfinished, however its earlier rows ended", () => {
+    const projection = projectClaudeHistory(toolTurn());
+    const id = projection.snapshot.orderedBackendTurnIds[0]!;
+    expect(projection.snapshot.turnsById[id]).toMatchObject({ status: "in_progress" });
+    expect(projection.snapshot.turnsById[id]).not.toHaveProperty("forkUnavailableReason");
+    expect(projection.snapshot).toMatchObject({ runState: "running", activeBackendTurnId: id });
+    expect(projection.terminalCheckpointUuidByBackendTurnId.has(id)).toBe(false);
+    expect(projection.terminalAssistantUuidByBackendTurnId.has(id)).toBe(false);
+  });
+
+  it.each([1, 2])("never ends a turn at the first %s block rows of a message that stopped for a tool call", (rows) => {
+    const projection = projectClaudeHistory(toolTurn().slice(0, rows + 1));
+    const id = projection.snapshot.orderedBackendTurnIds[0]!;
+    expect(projection.snapshot.turnsById[id]?.status).toBe("in_progress");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.has(id)).toBe(false);
+  });
+
+  it("completes that turn at its final answer and forks from the answer's last row", () => {
+    const projection = projectClaudeHistory([...toolTurn(),
+      row(6, "msg-2", thinking, "end_turn"), row(7, "msg-2", { type: "text", text: "Done" }, "end_turn")]);
+    const id = projection.snapshot.orderedBackendTurnIds[0]!;
+    expect(projection.snapshot.turnsById[id]).toMatchObject({ status: "completed", endedBy: "agent_settled" });
+    expect(projection.snapshot.turnsById[id]).not.toHaveProperty("forkUnavailableReason");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.get(id)).toBe(uuid(7));
+    expect(Object.values(projection.snapshot.itemsById).filter(item => item.semanticKind === "assistant_message")
+      .map(item => [item.markdown.text, item.responsePhase])).toEqual([["Checking", "provisional"], ["Done", "final"]]);
+  });
+
+  it("reopens an answered turn that Claude continued (a blocking Stop hook's hidden row)", () => {
+    const projection = projectClaudeHistory([user(uuid(1), "Answer"),
+      row(2, "msg-1", { type: "text", text: "First answer" }, "end_turn"),
+      row(3, "msg-2", toolUse("tool-2"), "tool_use"), toolResult(4, "tool-2")]);
+    const id = projection.snapshot.orderedBackendTurnIds[0]!;
+    expect(projection.snapshot.turnsById[id]?.status).toBe("in_progress");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.has(id)).toBe(false);
+  });
+
+  it("completes a max_tokens response continued to its final answer", () => {
+    const projection = projectClaudeHistory([user(uuid(1), "Write it"),
+      row(2, "msg-1", { type: "text", text: "Part one" }, "max_tokens"),
+      row(3, "msg-2", { type: "text", text: "Part two" }, "end_turn")]);
+    const id = projection.snapshot.orderedBackendTurnIds[0]!;
+    expect(projection.snapshot.turnsById[id]?.status).toBe("completed");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.get(id)).toBe(uuid(3));
+  });
+
+  it("keeps a turn running while a steer folded after its answer awaits a response", () => {
+    const steerOperations = new Map([[uuid(3), uuid(1)]]);
+    const authentication = { ...historyAuthentication, steerOperations };
+    const answered = [user(uuid(1), "Answer"), row(2, "msg-1", { type: "text", text: "Answer" }, "end_turn"),
+      user(uuid(3), "Also this")];
+    const pending = projectClaudeHistory(answered, [], authentication);
+    const id = pending.snapshot.orderedBackendTurnIds[0]!;
+    expect(pending.snapshot.orderedBackendTurnIds).toEqual([id]);
+    expect(pending.snapshot.turnsById[id]).toMatchObject({ status: "in_progress", completionCorrelations: [uuid(1), uuid(3)] });
+    const settled = projectClaudeHistory([...answered, row(4, "msg-2", { type: "text", text: "And that" }, "end_turn")], [], authentication);
+    expect(settled.snapshot.turnsById[id]?.status).toBe("completed");
+    expect(settled.terminalCheckpointUuidByBackendTurnId.get(id)).toBe(uuid(4));
+  });
+
+  it("closes a turn that ended on a tool result as interrupted when Claude Code resumes it", () => {
+    const closure = { ...row(6, "msg-closure", { type: "text", text: "No response requested." }, "stop_sequence"),
+      message: { role: "assistant", id: "msg-closure", model: "<synthetic>", content: [{ type: "text", text: "No response requested." }], stop_reason: "stop_sequence" } };
+    const projection = projectClaudeHistory([...toolTurn(), closure]);
+    const id = projection.snapshot.orderedBackendTurnIds[0]!;
+    expect(projection.snapshot.turnsById[id]).toMatchObject({ status: "interrupted", endedBy: "interrupted" });
+    expect(projection.snapshot.runState).toBe("idle");
+  });
+});
+
 describe("Claude native interruption markers", () => {
   const timestamp = "2026-09-17T07:16:01.463Z";
   const prompt = user(uuid(1), "Keep working");

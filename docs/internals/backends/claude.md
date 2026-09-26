@@ -430,7 +430,15 @@ identity.
 
 Claude can emit one completed assistant wrapper per completed content block.
 Those wrappers share the Anthropic message ID and can use `stop_reason: null`
-while later blocks or tools still follow. Sedes therefore:
+while later blocks or tools still follow. Claude Code 2.1.28x instead stamps
+every block row with its message's final stop reason, so a thinking or text
+row before a tool call carries `tool_use`. History treats a row as a turn's
+answer only when its stop reason is neither null nor `tool_use` and it has no
+tool call. A turn is complete only when such a row is its newest visible row:
+anything after an answer, such as a tool call, its result, or a steer Claude
+folded in, means Claude continued, for example after a blocking Stop hook or
+a `max_tokens` continuation, whose prompting rows history hides. Sedes
+therefore:
 
 - keys partial and durable blocks by that shared message identity;
 - assigns each later live segment the next durable turn order;
