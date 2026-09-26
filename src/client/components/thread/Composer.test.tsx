@@ -1250,6 +1250,27 @@ describe("Composer delivery guards", () => {
     expect(store.deliver).not.toHaveBeenCalled();
   });
 
+  it("shows activity optimistically from Send until the submitted message settles", () => {
+    const store = new FakeComposerStore(snapshot("idle"), "");
+    const { container } = render(
+      <Composer store={store as unknown as ThreadClientStore} />,
+    );
+    const activityBar = container.querySelector(".input-activity-bar");
+    expect(activityBar).not.toHaveClass("visible");
+    const draft = { text: "Start", contextExcerpts: [], attachments: [], taskReferences: [], revision: 1 };
+    act(() => store.stageComposerTransfer("submit-in-flight", "submit", draft));
+    expect(activityBar).toHaveClass("visible");
+    act(() => store.updateTransfer("submit-in-flight", { requestState: "request_failed" }));
+    expect(activityBar).not.toHaveClass("visible");
+    act(() => store.updateTransfer("submit-in-flight", { requestState: "receipt_received" }));
+    expect(activityBar).toHaveClass("visible");
+    act(() => store.updateTransfer("submit-in-flight", { authorityState: "materialized" }));
+    expect(activityBar).not.toHaveClass("visible");
+    // Queued input is waiting, not being worked on.
+    act(() => store.stageComposerTransfer("queued", "queue", draft));
+    expect(activityBar).not.toHaveClass("visible");
+  });
+
   it("suppresses stale activity while reconnecting until live authority returns", () => {
     const store = new FakeComposerStore(snapshot("running"), "");
     const { container } = render(
