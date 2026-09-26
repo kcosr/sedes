@@ -19,7 +19,8 @@
 
 - Browser and packaged clients must use client protocol 123, which carries
   per-turn fork availability, restartable fork aborts, the **Discard this
-  fork** action, the affected threads in the force reset preview, and
+  fork** action and whether a fork's provider child was returned and how it
+  is identified, the affected threads in the force reset preview, and
   background work in Stop, Restart, and Upgrade previews.
 
 - Sidecars must use runtime protocol 13, which serves `sedes mcp` and accepts
@@ -100,6 +101,14 @@
   to Claude Code. A turn interrupted by a lost process is marked interrupted
   instead of re-running its tools unattended; resend it to continue.
 
+- **Force reset** now cancels the approvals and questions it abandons at the
+  provider, for every backend, instead of only removing them from Sedes, so a
+  provider is not left waiting on a prompt nobody can answer. Claude and Pi
+  receive a denial or dismissal. A Codex approval that offers **Cancel turn**
+  receives it, which also cancels that turn; a Codex question, which has no
+  cancel, fails when the runtime is replaced. The reset waits up to 10 seconds
+  for these answers before it replaces the runtime.
+
 ### Fixed
 
 - Create Claude forks with one locked-down Claude Code launch. It loads no
@@ -123,17 +132,20 @@
 - Log every fork failure with its backend code and cause. A retry that fails
   transiently keeps the fork recoverable instead of discarding a child an
   earlier attempt may have created. Startup fork recovery runs after the
-  server listens, retries only forks a crash interrupted, and never discards
-  one. Aborted and discarded forks keep their reserved provider identity, so
-  discovery never imports an orphaned fork child under the source's title
-  (migration 116). Add **Discard this fork** to abandon an unfinished fork.
+  server listens. It finishes forks whose provider child was already returned
+  without contacting the provider, retries only forks a crash interrupted
+  before a response, and never discards one. Aborted and discarded Pi and
+  Claude forks keep their reserved provider identity, so discovery never
+  imports an orphaned fork child under the source's title (migration 116).
+  Add **Discard this fork** to abandon an unfinished fork whose provider copy
+  was not returned; its confirmation says whether an orphaned copy can still
+  appear as a separate thread, as a Codex copy can.
 
 - Scope **Force reset** to the thread it starts from and its unfinished forks.
   Resetting a fork no longer resets its source and sibling forks or stops the
   source's running turn. The preview names each affected thread with its run
   state and background work and totals the background agents and commands it
-  may stop; a change in that work makes the preview stale. Abandoned approvals
-  and questions are answered as denied at the provider.
+  may stop; a change in that work makes the preview stale.
 
 - Release remote Claude queries that are no longer useful. A failed query is
   retired once its output is delivered, so reopening the thread no longer

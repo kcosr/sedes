@@ -24,7 +24,18 @@ export function ThreadRecoveryCallout({
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const creation = recovery.kind === "conversation_creation";
   const forkCreation = creation && recovery.creationType === "fork";
-  const canDiscard = forkCreation && discardOperation?.available === true && onDiscard !== undefined;
+  // The server refuses to discard a fork whose child the provider returned.
+  const canDiscard =
+    forkCreation &&
+    !recovery.conversationIdentified &&
+    discardOperation?.available === true &&
+    onDiscard !== undefined;
+  // Discovery never imports an application-reserved child after a discard; a
+  // provider-assigned (or unrecorded) child identity carries no such promise.
+  const discardedCopyDisposition =
+    forkCreation && recovery.forkChildIdentity === "application_reserved"
+      ? "Anything the provider already copied is left untouched and never imported as a thread."
+      : "Anything the provider already copied is left untouched and may later appear as a separate thread.";
   return (
     <div className="materialization-recovery" role="alert">
       <strong>
@@ -52,8 +63,7 @@ export function ThreadRecoveryCallout({
       {confirmingDiscard ? (
         <div className="materialization-recovery-confirm">
           <small>
-            Discard removes this fork thread. Anything the provider already
-            copied is left untouched and never adopted.
+            Discard removes this fork thread. {discardedCopyDisposition}
           </small>
           <Button
             variant="destructive"

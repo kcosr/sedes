@@ -241,6 +241,68 @@ describe("ThreadForceResetService", () => {
     expect(order).toEqual(["interactions-abandoned", "provider-denied"]);
   });
 
+  it("replaces the runtime after a bounded wait when a provider cancellation never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const never = new Promise<void>(() => undefined);
+      const interactions = {
+        listPending: vi.fn(() => [{ id: "stuck-approval" }]),
+        abandonPending: vi.fn(() => never),
+      };
+      const forceResetLoadedRuntime = vi.fn(async () => true);
+      const scheduleThreadPublications = vi.fn();
+      const service = new ThreadForceResetService({
+        repository: {
+          impact: vi.fn(() => impact()),
+          forceReset: vi.fn(() => ({
+            ...committed(),
+            resetConversationRuntimes: [runtime],
+          })),
+        } as never,
+        interactions,
+        runtimes: {
+          captureLoadedRuntime: vi.fn(async () => runtime),
+          forceResetLoadedRuntime,
+        },
+        scheduleThreadPublications,
+        now: () => 400,
+      });
+      let settled = false;
+      const reset = service
+        .forceReset(scope, "thread-1", {
+          expectedBlockerFingerprint: "fingerprint",
+          mutationId: "stuck-cancellation",
+        })
+        .finally(() => {
+          settled = true;
+        });
+
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(interactions.abandonPending).toHaveBeenCalledWith(
+        scope,
+        "thread-1",
+        ["stuck-approval"],
+      );
+      expect(forceResetLoadedRuntime).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(reset).resolves.toMatchObject({
+        affectedThreadIds: ["thread-1"],
+      });
+      expect(forceResetLoadedRuntime).toHaveBeenCalledWith(
+        scope,
+        "thread-1",
+        runtime,
+      );
+      expect(scheduleThreadPublications).toHaveBeenCalledWith(scope, [
+        "thread-1",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not abandon interactions opened after a force-reset receipt replay", async () => {
     const interactions = {
       listPending: vi.fn(() => [{ id: "new-approval" }]),

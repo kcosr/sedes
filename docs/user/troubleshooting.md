@@ -281,7 +281,9 @@ background work. It also totals the background agents and commands running in
 those conversations, or says when that work is unknown. Resetting a thread
 also resets its unfinished forks, but resetting a fork does not reset its
 source or sibling forks. Pending approvals and questions it abandons are
-answered as denied at the provider.
+cancelled at the provider, which usually reads as a denial. Where the provider
+ties cancellation to the turn, as some Codex approvals do, that turn is
+cancelled too. Force reset waits up to 10 seconds for these answers.
 
 When the preview warns that running work will stop, force reset replaces those
 loaded runtimes, which stops their running turns and background work.

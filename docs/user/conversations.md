@@ -431,8 +431,12 @@ shows a notice saying so, and any results appear in the source thread.
 
 If a fork fails or needs recovery, its thread explains why. **Recover fork** retries
 the same fork. **Discard this fork** removes the unfinished fork without
-retrying it; confirm with **Discard fork**. **Start a new fork** appears only
-when another attempt could succeed.
+retrying it; confirm with **Discard fork**. It is not offered once the provider
+has returned the fork's copy, because **Recover fork** can then finish it
+without contacting the provider again. A copy the provider already made is
+left untouched. For Pi and Claude forks Sedes never imports it as a thread; a
+Codex copy may later appear as a separate thread. **Start a new fork** appears
+only when another attempt could succeed.
 
 ## Respond to approvals and questions
 

@@ -16,9 +16,10 @@ export interface ThreadForceResetInteractionState {
     applicationThreadId: string,
   ): readonly { readonly id: string }[];
   /**
-   * Abandon the exact pending interactions in Sedes and deny any provider
-   * request still waiting on them. The returned promise settles once those
-   * denials are delivered or have failed.
+   * Abandon the exact pending interactions in Sedes and send each
+   * provider-owned one the backend-neutral cancel response. The returned
+   * promise never rejects; it settles once those cancellations are delivered
+   * or have failed.
    */
   abandonPending(
     scope: RequestScope,
@@ -27,7 +28,10 @@ export interface ThreadForceResetInteractionState {
   ): Promise<void>;
 }
 
-/** Bound on waiting for provider denials before the runtime is replaced. */
+/**
+ * Bound on waiting for provider cancellations of abandoned interactions before
+ * the runtime is replaced. The durable reset has already committed.
+ */
 const PROVIDER_DENIAL_WAIT_MILLISECONDS = 10_000;
 
 export interface ThreadForceResetRuntimeState {
@@ -138,7 +142,8 @@ export class ThreadForceResetService {
         this.#reportPostCommitError(error);
       }
       // A replaced remote runtime would otherwise leave the provider waiting
-      // on a prompt that nobody can answer. Deny it first, within a bound.
+      // on a prompt that nobody can answer. Cancel it first, within a bound;
+      // a backend that cannot cancel a kind releases it with the runtime.
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
         Promise.allSettled(denials),

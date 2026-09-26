@@ -1119,6 +1119,19 @@ export const normalizedThreadRecoverySchema = z.discriminatedUnion("kind", [
     submissionMayHaveBeenAccepted: z.boolean(),
     forkUncertainty: z.literal("fork_unknown").nullable(),
     possibleProviderOrphan: z.literal("full_native_copy").nullable(),
+    /**
+     * The provider already returned the conversation's identity, so recovery
+     * finishes it locally; a fork in this state cannot be discarded.
+     */
+    conversationIdentified: z.boolean(),
+    /**
+     * Who names a fork's provider child. An application-reserved child is
+     * never imported by discovery after a discard; a provider-assigned one
+     * may be. Null for first-input creation or an unrecorded identity.
+     */
+    forkChildIdentity: z
+      .enum(["application_reserved", "provider_assigned"])
+      .nullable(),
     recoverable: z.boolean(),
   }),
   z.strictObject({

@@ -33,11 +33,14 @@ discovery may identify and quarantine the correlated native child, but it does
 not adopt that child or import it as an unrelated thread, and it never repeats
 the fork RPC. The user can abandon the unresolved Sedes child.
 
-Startup recovery runs after the server begins listening. It retries only
-attempts a crash interrupted, those still `prepared` or whose provider call had
-started, and logs each outcome. It never aborts a fork: a definite failure it
-finds becomes a visible recovery. Attempts already awaiting recovery wait for
-the user.
+Startup recovery runs after the server begins listening and logs each outcome.
+It finalizes, locally and without a provider call, every fork whose provider
+child was already returned: an identified attempt, or one awaiting recovery
+that recorded the child's identity and binding detail. It retries only the
+attempts a crash interrupted before a response, those still `prepared` or
+whose provider call had started. It never aborts a fork: a definite failure it
+finds becomes a visible recovery. Other attempts awaiting recovery wait for the
+user.
 
 An explicit recovery aborts the reservation only on a definite failure, one
 that did not cross the provider submission boundary. On an attempt already
@@ -51,11 +54,19 @@ offer **Start a new fork**.
 
 **Discard this fork** abandons an unfinished fork explicitly without repeating
 its provider call. It is offered while no provider child identity has been
-returned and the creation is not in flight. It removes the reserved child thread
-and publishes the replacement snapshot. An aborted or discarded fork keeps its
-application-reserved native child identity, and discovery never imports a
-provider conversation with that identity, so an orphaned provider child cannot
-reappear under the source's title.
+returned and the creation is not in flight; the normalized recovery reports
+`conversationIdentified`, and a fork with a returned child is finished by
+recovery instead. Discard removes the reserved child thread and publishes the
+replacement snapshot. What happens to a child the provider may already have
+created depends on the backend's child identity, which the recovery reports as
+`forkChildIdentity` so the confirmation can say which applies:
+
+- An application-reserved identity (Pi, Claude) is kept by the aborted or
+  discarded fork, and discovery never imports a provider conversation with
+  that identity, so an orphaned child cannot reappear under the source's title.
+- A provider-assigned identity (Codex) has nothing to reserve. Sedes never
+  adopts the orphan into the discarded fork, but discovery may later import it
+  as a separate thread.
 
 Provider markers and native IDs stay private. The browser sees normalized
 lineage and transcript history but cannot supply or edit provider ancestry.

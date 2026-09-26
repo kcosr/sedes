@@ -574,11 +574,17 @@ export class ThreadForkService {
   }
 
   /**
-   * Startup recovery of forks a crash interrupted: prepared attempts and
-   * those whose provider call had started. It runs after the server listens.
-   * Attempts already awaiting explicit recovery are left for the user, and a
-   * definite failure found here is kept as a visible recovery rather than
-   * discarding the reserved child automatically. Every outcome is logged.
+   * Startup recovery. It runs after the server listens and logs every outcome.
+   *
+   * - A fork whose provider child was already returned (identified, or
+   *   awaiting recovery with the child's identity and binding detail) is
+   *   finalized locally, without a provider call.
+   * - A fork a crash interrupted before its provider response (prepared, or
+   *   with its provider call started) is retried under its recovery policy.
+   *
+   * Other attempts already awaiting explicit recovery are left for the user.
+   * Automatic recovery never aborts a fork: a definite failure found here is
+   * kept as a visible recovery rather than discarding the reserved child.
    */
   async recoverInterruptedForks(scope: RequestScope): Promise<void> {
     let after:
@@ -591,12 +597,22 @@ export class ThreadForkService {
     for (;;) {
       const page = this.input.creation.listActiveForks(scope, 256, after);
       for (const attempt of page) {
-        if (attempt.phase !== "prepared" && attempt.phase !== "external_call_started") continue;
+        // Matches #fork's local finalization exactly, so no provider call.
+        const childReturned =
+          (attempt.phase === "conversation_identified" ||
+            attempt.phase === "recovery_required") &&
+          attempt.provisionalBackendConversationId !== null &&
+          attempt.provisionalOpaqueBindingDetail !== null;
+        const interrupted =
+          attempt.phase === "prepared" ||
+          attempt.phase === "external_call_started";
+        if (!childReturned && !interrupted) continue;
         try {
           const result = await this.recoverActive(scope, attempt.applicationThreadId, { automatic: true });
           if (result) {
             console.warn("thread_fork_startup_recovery", {
               childThreadId: attempt.applicationThreadId,
+              phase: attempt.phase,
               outcome: result.status,
               ...(result.status === "created" ? {} : { diagnostic: result.diagnostic }),
             });
@@ -620,8 +636,12 @@ export class ThreadForkService {
   /**
    * Explicitly discard an unfinished fork child the user no longer wants,
    * without re-running its provider call. The reserved child thread is
-   * removed and its provider identity is quarantined from discovery; a child
-   * the provider may have created is never adopted.
+   * removed. A fork whose child the provider already returned is refused:
+   * recovery finishes it locally instead. A child the provider may have
+   * created is never adopted into this fork. Discovery never imports an
+   * application-reserved child identity, which stays quarantined; a
+   * provider-assigned child has no reserved identity and may later be
+   * imported as a separate thread.
    */
   async discardActive(
     scope: RequestScope,

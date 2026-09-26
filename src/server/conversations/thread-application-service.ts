@@ -872,11 +872,13 @@ function composeCapabilities(input: {
   );
   const reason = (available: boolean, message: string) =>
     available ? {} : { unavailableReason: { text: message } };
-  // An identified child finishes through recovery; everything earlier can be
+  // A child the provider already returned finishes through recovery, and the
+  // fork service refuses to discard it; an unfinished fork without one can be
   // discarded without crossing the provider boundary again.
   const discardableFork =
     input.recovery?.kind === "conversation_creation" &&
     input.recovery.creationType === "fork" &&
+    !input.recovery.conversationIdentified &&
     input.recovery.phase !== "conversation_identified" &&
     input.recovery.phase !== "accepted_unpersisted";
   const operation = (
