@@ -237,9 +237,9 @@ export class WorkspaceFilesSidecarHost {
             ? { status: "resolved" as const, path: resolved }
             : { status: "not_found" as const };
         }),
-      discoverLinkRoot: (request) =>
+      discoverLinkRoot: (request, context) =>
         this.#guard(() =>
-          this.#discoverLinkRoot(request.absolutePath, request.policyRootPath),
+          this.#discoverLinkRoot(request.absolutePath, request.policyRootPath, context.signal),
         ),
       discoverLinkedWorktrees: (request, context) =>
         this.#guard(() =>
@@ -614,7 +614,8 @@ export class WorkspaceFilesSidecarHost {
     return { closed: true };
   }
 
-  async #discoverLinkRoot(absolutePath: string, policyRootPath: string) {
+  async #discoverLinkRoot(absolutePath: string, policyRootPath: string, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     this.#assertOpen();
     if (!isWithin(policyRootPath, absolutePath)) {
       return { status: "not_found" as const };
@@ -626,7 +627,7 @@ export class WorkspaceFilesSidecarHost {
     if (!canonicalCandidate || !isWithin(canonicalPolicy, canonicalCandidate)) {
       return { status: "not_found" as const };
     }
-    const discovered = await this.#engine.discoverFileLinkRoot(absolutePath);
+    const discovered = await this.#engine.discoverFileLinkRoot(absolutePath, signal);
     if (!discovered || !isWithin(canonicalPolicy, discovered.canonicalPath)) {
       return { status: "not_found" as const };
     }

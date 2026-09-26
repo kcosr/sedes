@@ -9,6 +9,7 @@ import {
   workspaceFilesDownloadCancelOperation,
   workspaceFilesDownloadStartOperation,
   workspaceFilesListDirectoryOperation,
+  workspaceFilesRootCloseOperation,
   workspaceFilesRootOpenOperation,
   workspaceFilesRootValidateOperation,
   workspaceFilesResolveLinkOperation,
@@ -32,6 +33,7 @@ import {
   WorkspaceFileWriteOutcomeUnknownError,
   WorkspaceFileProviderUnavailableError,
   WorkspaceFileRootUnavailableError,
+  WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID,
   type WorkspaceFileRootTarget,
 } from "../../src/server/workspace-files/contracts.js";
 import { SidecarWorkspaceFileProvider } from "../../src/server/workspace-files/sidecar-workspace-file-provider.js";
@@ -66,6 +68,101 @@ const root: WorkspaceFileRootTarget = {
 };
 
 describe("SidecarWorkspaceFileProvider", () => {
+  it("recovers a candidate root admitted by an interrupted open and never waits for its close", async () => {
+    const openRoots = new Set<string>();
+    const handlesByAdmission = new Map<string, string>();
+    let stallOpen = true;
+    let closes = 0;
+    const session = {
+      call: vi.fn((definition: unknown, input: { admissionId?: string; rootHandle?: string },
+        options?: { signal?: AbortSignal }) => {
+        if (definition === workspaceFilesRootOpenOperation) {
+          // The host admits the root even when the caller stops waiting.
+          const rootHandle = handlesByAdmission.get(input.admissionId!) ??
+            `de8e220b-0000-4000-8000-${String(handlesByAdmission.size + 1).padStart(12, "0")}`;
+          handlesByAdmission.set(input.admissionId!, rootHandle);
+          openRoots.add(rootHandle);
+          if (!stallOpen) return Promise.resolve({ rootHandle });
+          return new Promise((_resolve, reject) => options?.signal?.addEventListener("abort",
+            () => reject(new SidecarProtocolDeliveryError("cancelled", "sent_outcome_unknown")), { once: true }));
+        }
+        if (definition === workspaceFilesRootCloseOperation) {
+          closes += 1;
+          openRoots.delete(input.rootHandle!);
+          return new Promise(() => undefined);
+        }
+        if (definition === workspaceFilesResolveLinkOperation) return Promise.resolve({ status: "resolved", path: "image.png" });
+        return Promise.reject(new Error("unexpected_operation"));
+      }),
+    } as unknown as SidecarClientSession;
+    const runtime = {
+      acquireOperation: vi.fn(async () => ({ session, carrierGeneration: 1, serviceStatus, release: vi.fn() })),
+    } as unknown as SidecarRuntimeOwner<SidecarClientSession>;
+    const provider = providerFor(runtime);
+    const candidate = { ...root, rootId: WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID, canonicalPath: "/srv/captures/slow" };
+    const reference = { kind: "absolute" as const, path: "/srv/captures/slow/image.png" };
+    const aborted = new AbortController();
+    const interrupted = provider.resolveFileLink(scope, candidate, reference, aborted.signal);
+    await vi.waitFor(() => expect(openRoots.size).toBe(1));
+    aborted.abort(new Error("capture_deadline"));
+    await expect(interrupted).rejects.toThrow("capture_deadline");
+    expect(openRoots.size).toBe(1);
+    stallOpen = false;
+    // The same admission recovers the orphaned root; its close never answers.
+    await expect(provider.resolveFileLink(scope, candidate, reference)).resolves.toBe("image.png");
+    expect(closes).toBe(1);
+    expect(openRoots.size).toBe(0);
+    await provider.close();
+  });
+
+  it("closes transient link-candidate root handles after their operations while retaining listed roots", async () => {
+    // Mirrors the sidecar root table: one handle per admission until root.close.
+    const openRoots = new Map<string, string>();
+    const handlesByAdmission = new Map<string, string>();
+    let nextHandle = 0;
+    const session = {
+      call: vi.fn(async (definition: unknown, input: { admissionId?: string; rootId?: string; rootHandle?: string }) => {
+        if (definition === workspaceFilesRootOpenOperation) {
+          const existing = handlesByAdmission.get(input.admissionId!);
+          if (existing) return { rootHandle: existing };
+          const rootHandle = `de8e220b-0000-4000-8000-${String(++nextHandle).padStart(12, "0")}`;
+          handlesByAdmission.set(input.admissionId!, rootHandle);
+          openRoots.set(rootHandle, input.rootId!);
+          return { rootHandle };
+        }
+        if (definition === workspaceFilesRootCloseOperation) {
+          openRoots.delete(input.rootHandle!);
+          for (const [admission, handle] of handlesByAdmission) {
+            if (handle === input.rootHandle) handlesByAdmission.delete(admission);
+          }
+          return { closed: true };
+        }
+        if (definition === workspaceFilesResolveLinkOperation) return { status: "resolved", path: "image.png" };
+        throw new Error("unexpected_operation");
+      }),
+    } as unknown as SidecarClientSession;
+    const runtime = {
+      acquireOperation: vi.fn(async () => ({ session, carrierGeneration: 1, serviceStatus, release: vi.fn() })),
+    } as unknown as SidecarRuntimeOwner<SidecarClientSession>;
+    const provider = providerFor(runtime);
+    const candidates = ["one", "two", "three"].map(name => ({
+      root: { ...root, rootId: WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID, canonicalPath: `/srv/captures/${name}` },
+      reference: { kind: "absolute" as const, path: `/srv/captures/${name}/image.png` },
+    }));
+    for (const { root: candidate, reference } of candidates) {
+      await expect(provider.resolveFileLink(scope, candidate, reference)).resolves.toBe("image.png");
+    }
+    await Promise.all(Array.from({ length: 3 }, () =>
+      provider.resolveFileLink(scope, candidates[0]!.root, candidates[0]!.reference)));
+    await provider.resolveFileLink(scope, root, { kind: "absolute", path: "/srv/worktrees/project/image.png" });
+    await provider.resolveFileLink(scope, root, { kind: "absolute", path: "/srv/worktrees/project/image.png" });
+    expect([...openRoots.values()]).toEqual(["primary"]);
+    // Concurrent users of one candidate share its handle and close it once.
+    expect(vi.mocked(session.call).mock.calls.filter(([definition]) => definition === workspaceFilesRootCloseOperation))
+      .toHaveLength(4);
+    await provider.close();
+  });
+
   it("discovers linked worktrees through one bounded remote operation lease", async () => {
     const release = vi.fn();
     const expected = {
