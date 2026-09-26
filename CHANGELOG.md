@@ -88,6 +88,12 @@
   the existing session instead of failing with "Session ID … is already in
   use", and first-send recovery can resolve it.
 
+- Stop showing Claude Code's "No response requested." resume placeholder as a
+  reply. Reopening a Claude thread no longer adds a phantom turn or displaces a
+  turn's final answer, and forks and usage ignore the placeholder. A prompt
+  left unanswered because Claude Code exited now ends as interrupted with an
+  explanation instead of completed.
+
 - Preserve underlying Claude read errors in gated thread-load diagnostics and
   identify failed persistent-runtime commands without logging conversation content.
 

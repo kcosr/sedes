@@ -265,6 +265,28 @@ does not distinguish an unannotated external input that exactly copies the
 native sentinel shape; that reserved shape is interpreted as native control
 history. A late interrupt acknowledgment never overwrites a settled run state.
 
+Claude Code closes a trailing user or attachment row when it resumes a session.
+That row can be the previous attach's startup message, an unanswered prompt, a
+tool result, or an interruption sentinel. The closure is a timestamped
+assistant row with the `<synthetic>` model and exactly one text block,
+`No response requested.`, and no model call is made for it. The projector
+matches that exact shape, as Claude Code itself does. It never projects the
+closure as an answer, a turn, a usage source, or a fork checkpoint. Most
+closures follow a settled turn and answer a hidden startup message, so history
+is unchanged; a thread reopened before its first prompt shows no turn.
+
+A closure can instead follow a turn that had not settled, meaning its last
+visible row is not a terminal assistant reply. If that turn also has no Sedes
+terminal receipt, it ends `interrupted` at the closure's timestamp. It carries
+a warning notice keyed to the closure row: "Claude Code exited before this turn
+finished and closed it without a response when the conversation resumed." A
+dangling Sedes submission therefore reconciles as interrupted, not completed.
+A terminal receipt stays authoritative. An unanswered resume task notification
+and its later closure remain hidden. Synthetic API-error rows share the model
+but carry other text, so they stay ordinary assistant messages. Usage
+accounting ignores every `<synthetic>` row, because none records a model
+request.
+
 SDK 0.3.274 can emit intermediate results while draining background task
 notifications. Only successful empty zero-turn results carrying native
 `task-notification` provenance are classified as those drain receipts, regardless
