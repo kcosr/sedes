@@ -77,7 +77,10 @@ matching complete native messages. Paced history reads then retire acknowledged
 complete messages whose native identity and content match provider history.
 Unfinished or ambiguous streams, uncovered messages, and unsettled control or
 terminal evidence remain retained. Acknowledged transient progress notices are
-discarded; replaceable state retains its current value.
+discarded; replaceable state retains its current value. Pruning after an
+acknowledged result keeps Claude's latest run-state and permission-status
+frames, because Claude can chain a result straight into a turn of its own with
+no idle edge, and a newly attaching main must see that it is still running.
 
 Each retained event counts once toward a query's bound of 8,190 events and
 64 MiB, although an unacknowledged message is both a journal and a replay

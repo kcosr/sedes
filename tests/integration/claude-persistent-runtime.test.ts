@@ -1510,6 +1510,37 @@ describe("persistent host shutdown evidence", () => {
     sessions: { sessionId: string; liveWork: boolean; events: { kind: string; messageType?: string; code?: string }[] }[] };
   const evidence = (archive: ReturnType<typeof vi.fn>) => archive.mock.calls.map(([record]) => (record as { evidence: Evidence }).evidence);
 
+  it("replays Claude's running state after pruning a result Claude chained into a turn of its own", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const delivered: ClaudePersistentEvent[] = [];
+    const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
+    const sessionId = randomUUID(), operationId = randomUUID();
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
+    await host.execute({ ...authority, action: "send", request: { queryId: sessionId, operationId, content: "Work." } }, listener);
+    const native = f.sessions.find(session => session.options.sessionId === sessionId)!;
+    await native.emit(running(sessionId));
+    await native.emit(lifecycle(sessionId, operationId, "started"));
+    await native.emit(result(sessionId, operationId));
+    // Claude goes straight on to a turn of its own: no idle edge follows.
+    for (const event of [...delivered]) {
+      await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, listener);
+    }
+    const replayed = await host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, listener) as
+      { events: ClaudePersistentEvent[] };
+    const states = replayed.events.flatMap(event => {
+      const message = event.payload.kind === "message" ? event.payload.message as { type?: string; subtype?: string; state?: string } : undefined;
+      return message?.type === "system" && message.subtype === "session_state_changed" ? [message.state] : [];
+    });
+    // The result's pruning keeps Claude's current state for a new main.
+    expect(states).toEqual(["running"]);
+    expect(replayed.events.some(event => event.payload.kind === "message" &&
+      (event.payload.message as { type?: string }).type === "result")).toBe(false);
+  });
+
   it("ends every session on a forced stop but marks a settled session's unacknowledged result as its outcome", async () => {
     const f = await fixture();
     const attached = await f.attach();

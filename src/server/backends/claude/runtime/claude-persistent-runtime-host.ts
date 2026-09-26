@@ -361,8 +361,12 @@ export class ClaudePersistentRuntimeHost {
           if (session.terminalResultSequences.delete(event.sequence)) session.pendingTerminalSequence = event.sequence;
           const terminalSequence = session.pendingTerminalSequence;
           if (terminalSequence !== undefined && ![...session.events.values()].some(retained => retained.sequence <= terminalSequence && retained.payload.kind === "message")) {
+            // Claude's current run and permission state outlive the turn: it can
+            // chain a result straight into a turn of its own with no idle edge.
+            const currentState = new Set([...session.replayStateSequences]
+              .flatMap(([key, sequence]) => key.startsWith("state:") || key.startsWith("status:") ? [sequence] : []));
             for (const [sequence, retained] of session.replay) {
-              if (sequence > terminalSequence || sequence === session.backgroundSequence) continue;
+              if (sequence > terminalSequence || sequence === session.backgroundSequence || currentState.has(sequence)) continue;
               this.#removeReplay(session, sequence);
             }
             session.pendingTerminalSequence = undefined;
