@@ -17,6 +17,14 @@
 
 ### Added
 
+- Show a **Viewed file snapshot** after Codex's "viewed a local image" notice.
+  Sedes reads the file once through the thread's execution environment
+  (local, or an SSH or outbound sidecar with `workspace_files`) within its
+  allowed roots and keeps the snapshot with the thread, so later file changes
+  do not alter it. Viewed paths are assumed to be on the thread's configured
+  execution host; Codex-native additional executor environments are
+  unsupported.
+
 - Let Codex and Claude threads use Native Sedes agent tools. Choose
   **Native tools** in **Agent tools…**; Sedes adds a per-thread `sedes` MCP
   server (`sedes mcp`) that presents Progressive gateways or one tool per

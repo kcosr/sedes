@@ -8,7 +8,8 @@ normalized tool-result card.
 
 The current durable output-artifact implementation is deliberately narrow. It
 supports completed Codex `imageGeneration` items whose reviewed native result
-contains an in-band PNG and exact completed Grok `ImageGen` or `ImageEdit` tool
+contains an in-band PNG, snapshots of files named by completed Codex
+`imageView` items, and exact completed Grok `ImageGen` or `ImageEdit` tool
 results whose JPEG is available inside the owned local Grok session directory.
 It does not add image-generation controls or make other provider-generated or
 generic tool-result images durable.
@@ -22,6 +23,7 @@ the contributor requirements that apply when extending this contract, see the
 - [Normalized contract](#normalized-contract)
 - [Ownership and access](#ownership-and-access)
 - [Codex byte authority](#codex-byte-authority-and-topology)
+- [Codex viewed-image capture](#codex-viewed-image-capture)
 - [Grok byte authority](#grok-byte-authority-and-topology)
 - [Cross-backend disposition](#cross-backend-disposition)
 - [Related documentation](#related-documentation)
@@ -46,7 +48,9 @@ history pages, and SSE carry the same descriptor-only representation.
 The normalized backend capability document reports
 `providerOutputArtifacts.nativeImage: true` for the reviewed Codex and local
 owned-Grok paths. Pi and Claude report `false`; input-image or bounded
-tool-result-image behavior does not imply this durable output capability.
+tool-result-image behavior does not imply this durable output capability. The
+flag is not evidence of Files availability or native-executor attribution for
+viewed-image capture.
 
 The content route supports both methods:
 
@@ -127,16 +131,74 @@ provider-private convenience state and may not name the Sedes server's
 filesystem.
 
 Because the reviewed bytes travel through the Codex app-server protocol, the
-artifact path does not require Files, composer staging, or an SSH sidecar. A
-provider contract that exposes output only as an execution-environment path
-requires a separately reviewed local reader and an explicit managed-SSH sidecar
-adapter. That adapter is not implemented: Sedes must not treat a
-remote path as local or silently fall back to another environment.
+generated-image path does not require Files, composer staging, or an SSH
+sidecar. It never reads `savedPath`, including through the path-based
+[viewed-image capture](#codex-viewed-image-capture) below. Sedes must not treat
+a remote path as local or silently fall back to another environment.
 
 Repeated observation of the same native item through live events, history
 replacement, pagination, or reconnect resolves the same immutable artifact.
 The common history item is durable and path-free; transient provider content
 is not browser authority.
+
+## Codex viewed-image capture
+
+A completed Codex 0.153.0 `imageView` item carries only an ID and an absolute
+path. Sedes keeps its neutral notice and, once capture succeeds, adds a
+separate final image item immediately after it with the alt text
+`Viewed file snapshot`. The image is a snapshot of the file when Sedes read it,
+not proof of the bytes or pixels supplied to the model: the file can change
+after Codex reads it, Codex may prepare or resize the image, and a first
+capture during a later history read can come much later. A denied, invalid, or
+unavailable capture leaves only the notice; failure diagnostics stay out of
+the transcript. Adapter ordering and delivery are described in
+[Codex internals](backends/codex.md#viewed-image-capture).
+
+The publication key is `codex-viewed-image:` plus the adapter's hashed item
+coordinate: native thread, turn, item ordinal, item type, and an `image`
+subkey. It never uses the path, filename, bytes, or raw native item ID, which
+Codex may rewrite when persisting a live turn. Repeated views of one path are
+separate associations whose equal bytes share one principal-scoped blob. A fork
+or import is another Sedes thread and captures its own association instead of
+borrowing the source thread's artifact.
+
+Capture happens once. Every live and history projection looks up the thread's
+persisted association before any path admission or filesystem request. A
+retained artifact remains the snapshot after the source is modified or
+deleted or its sidecar becomes unavailable, and an integrity failure never
+triggers replacement from the current file. Bytes and associations use the
+same blob directory, `overlay.sqlite` records, thread deletion, reconciliation,
+and backup rules as other artifacts; there is no separate path cache.
+
+The backend-neutral `ViewedImageCaptureService` owns first capture. It
+receives the scoped binding, opaque publication key, absolute path, and
+cancellation, and derives workspace and environment from server state. It reads
+through the Files
+[absolute-image admission](workspace-files.md#viewed-image-capture-reads),
+accepts only a complete available PNG, JPEG, GIF, or WebP of at most 16 MiB,
+and publishes through `OutputArtifactService`. At most two reads run per
+process and one per thread, 32 jobs may queue, and each capture has 10 seconds
+including queue wait. Observations with the same principal, thread, exact
+binding, and publication key share one read, which is aborted only when its
+last subscriber leaves.
+
+Capture authority is the exact binding, including its creation time; the
+thread's workspace and canonical path; workspace and environment availability;
+and the environment's configuration and operations-configuration revisions.
+The service rechecks it before and after the read and synchronously inside
+the SQLite transaction that records the association. If that commit fails, the
+newly written blob is removed unless another association references it.
+Production also fences affected jobs when a backend runtime is retired,
+detached, or stopped, when an environment runtime is withdrawn, when an
+outbound host pairing is revoked, and at shutdown.
+
+Paths are assumed to belong to the thread's configured Sedes execution
+environment, which is the only one read: locally, or through the SSH or
+outbound Files sidecar with its `workspace_files` grant. Codex can also route
+image views to additional native executor environments, but `imageView` does
+not identify the executor, so a same-named file on the configured host cannot
+be distinguished from the one Codex viewed. Codex-native additional executor
+environments are unsupported for this feature.
 
 ## Grok byte authority and topology
 
@@ -167,7 +229,7 @@ Any native output shape other than the exact completed `ImageGen` or
 
 | Backend | Durable standalone artifact support |
 | --- | --- |
-| Codex | **Supported:** completed native `imageGeneration` with a valid in-band PNG. |
+| Codex | **Supported:** completed native `imageGeneration` with a valid in-band PNG, and snapshots of completed `imageView` paths readable through the thread's execution-environment Files provider. |
 | Grok | **Supported for owned-local sessions:** exact completed `ImageGen` or `ImageEdit` with a valid JPEG at the scoped session path. |
 | Pi | **Intentionally unsupported.** |
 | Claude | **Intentionally unsupported.** |
@@ -175,8 +237,8 @@ Any native output shape other than the exact completed `ImageGen` or
 The boundaries outside that table remain important:
 
 - Codex MCP tool-result images remain metadata-only tool-result entries.
-  Dynamic-tool image output is omitted, and `imageView` remains a notice rather
-  than reading a native path.
+  Dynamic-tool image output is omitted. Viewed-image capture from Codex-native
+  additional executor environments is unsupported.
 - Grok remote or SSH path capture, unreviewed tool output, image-generation
   controls, and a separate download flow are unsupported. Generic ACP image
   result parsing does not create an artifact implicitly.
@@ -197,6 +259,8 @@ about its output contract.
   byte and delivery contract
 - [Architecture](architecture.md#persistence) — storage ownership and backup
   boundary
+- [Workspace Files](workspace-files.md#viewed-image-capture-reads) — the
+  absolute-path admission and bounded read used by viewed-image capture
 - [Backend integration contract rules](backend-integration-contract-rules.md#provider-output-artifacts)
   — requirements for extending output support
 - [Codex internals](backends/codex.md) and [Grok internals](backends/grok.md) —

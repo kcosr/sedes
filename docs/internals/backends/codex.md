@@ -19,6 +19,7 @@ troubleshooting, see the [Codex operator guide](../../operator/backends/codex.md
 - [Asynchronous question items](#asynchronous-question-items)
 - [Delivery and interaction routing](#delivery-and-interaction-routing)
 - [Generated image artifacts](#generated-image-artifacts)
+- [Viewed-image capture](#viewed-image-capture)
 - [Execution settings and feature persistence](#execution-settings-and-feature-persistence)
 - [Forks and recovery](#forks-and-recovery)
 - [Agent-tool integration](#agent-tool-integration)
@@ -445,8 +446,8 @@ The in-band `result` is the reviewed byte authority. Sedes does not read
 `savedPath`; generated images do not depend on Files, attachment staging, or a
 server-local interpretation of a provider path. This also applies over SSH
 UDS: the result crosses the existing carrier and the sidecar contributes no
-output-artifact operation. A future path-only output needs a separately
-reviewed sidecar adapter; none exists.
+output-artifact operation. Generated images never use the path-based
+[viewed-image capture](#viewed-image-capture).
 
 Live updates and later history use the same native item identity to resolve one
 immutable artifact. The browser fetches bytes through the common scoped route
@@ -455,6 +456,51 @@ missing, malformed, oversized, or non-PNG results remain unavailable without
 exposing rejected values. This adds no generation control, dedicated download
 action, or durable promotion for ordinary tool-result images. See
 [Provider output artifacts](../output-artifacts.md).
+
+## Viewed-image capture
+
+A native `imageView` item still projects as its neutral notice, and that
+terminal notice is never mutated. Live, history, and page projections and
+their coordinate indexes reserve two source-order positions for every
+`imageView`: the notice and an optional final image child at notice + 1, whose
+item ID is the hashed coordinate with an `image` subkey. Later items keep their
+order whether or not capture succeeds, and an unused position never becomes a
+browser item.
+Publication identity, the shared capture service, authority, and snapshot
+meaning are in
+[Provider output artifacts](../output-artifacts.md#codex-viewed-image-capture).
+Capture uses the thread's persisted binding; provider-assigned first send,
+retry, and recovery reuse that durable binding, including its creation time,
+rather than a provisional copy.
+
+A completed notice without a retained child becomes a candidate only when the
+planning pass can reserve the child's per-turn item slot and serialized
+descriptor bytes. Transcript items take precedence; without room for every
+eventual child, that pass schedules no capture and keeps its notices rather
+than failing, shrinking, or replacing the projection. Incremental live appends
+that would need reserved capacity release those reservations instead of forcing
+a resnapshot; a later child that no longer fits stays a notice.
+
+Capture runs outside the serialized notification queue, so a slow read never
+delays deltas, turn completion, or Stop. Success enqueues a short completion on
+the projection work queue. Once no notification projection is pending,
+establishment has finished, and the runtime generation is unchanged, it
+reprojects notice-only items from current cached native state, rechecks
+capacity, and inserts each new child by source order, including into completed
+turns. It emits every added child's `item_completed` before the affected
+`turn_updated`; a duplicate emits nothing, and a child that no longer fits
+stays retained for a later read. Live reprojection never absorbs a retained
+child that subscribers have not received: it keeps the notice and installs the
+child with its own events.
+
+Live projection schedules at most 32 candidates, newest first, or four during
+establishment; children captured then join the baseline or follow it as
+events. A candidate beyond those caps or one that failed is not retried
+automatically while it stays in the retained window. History pages, targeted
+turn reads, and detached reads reuse retained artifacts first, then wait for at
+most four uncaptured candidates, newest first, within two seconds and return
+successful children with that response. Such an explicit read or a new attach
+may retry an eligible failure. Closing the handle aborts its subscriptions.
 
 ## Execution settings and feature persistence
 
