@@ -164,6 +164,42 @@ export class ClaudeTranscriptFixture {
     return { boundary, summary: this.prompt(summary, { isCompactSummary: true, isVisibleInTranscriptOnly: true }) };
   }
 
+  /**
+   * An automatic compaction as Claude Code 2.1.28x persists it. The boundary
+   * has a null parent and names the last row it summarized; three context
+   * attachments follow, then the summary (the model's whole context for what
+   * came before), then attachments that reload files. `preserved` lists the
+   * newest rows the model keeps verbatim, oldest first: readers relink them
+   * after the summary, and rows written later continue after them. A
+   * `segment` without listed rows is the shape where nothing is relinked.
+   */
+  autoCompaction(options: {
+    readonly preserved?: readonly string[];
+    readonly segment?: { readonly headUuid: string; readonly tailUuid: string };
+    readonly summary?: string;
+  } = {}): { readonly boundary: string; readonly summary: string } {
+    const logicalParentUuid = this.#tip;
+    const summaryUuid = randomUUID();
+    const preserved = options.preserved ?? [];
+    const segment = preserved.length > 0
+      ? { headUuid: preserved[0], anchorUuid: summaryUuid, tailUuid: preserved.at(-1) }
+      : options.segment ? { ...options.segment, anchorUuid: summaryUuid } : undefined;
+    const boundary = this.from(null).#append({ type: "system", subtype: "compact_boundary", content: "Conversation compacted",
+      level: "info", logicalParentUuid, compactMetadata: {
+        trigger: "auto", preTokens: 973_392, postTokens: 10_502, cumulativeDroppedTokens: 962_890, durationMs: 181_136,
+        ...(segment ? { preservedSegment: segment } : {}),
+        preservedMessages: { anchorUuid: summaryUuid, uuids: [...preserved], allUuids: [...preserved] },
+      } });
+    for (const type of ["instructions", "session_context", "date"]) this.attachment({ type });
+    const summary = this.#append({ type: "user", uuid: summaryUuid, promptId: randomUUID(), isVisibleInTranscriptOnly: true,
+      isCompactSummary: true, message: { role: "user", content: "This session is being continued from a previous conversation " +
+        "that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n" +
+        `${options.summary ?? "1. Synthetic request: refactor the synthetic parser."}\n\nContinue the conversation from where it left off.` } });
+    this.attachment({ type: "compact_file_reference", filename: "/synthetic/file.ts" });
+    this.attachment({ type: "prompt_snapshot" });
+    return { boundary, summary };
+  }
+
   bookkeeping(row: Row): void {
     this.#bookkeeping(row);
   }

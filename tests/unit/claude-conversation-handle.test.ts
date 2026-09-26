@@ -4769,3 +4769,120 @@ describe("Claude native run state without prompt echoes", () => {
     await handle.close();
   });
 });
+
+describe("Claude automatic compaction live", () => {
+  const PROMPT_ID = "a1000000-0000-4000-8000-000000000001";
+  const KEPT_CALL = "a1000000-0000-4000-8000-000000000002";
+  const KEPT_RESULT = "a1000000-0000-4000-8000-000000000003";
+  const SUMMARY_ID = "a1000000-0000-4000-8000-000000000004";
+  const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+  const submitInput = (text: string) => ({
+    applicationOperationId: PROMPT_ID, mutationId: "mutation-compacted", source: { kind: "user" as const },
+    reconciliationToken: "reconcile-compacted", text, contextExcerpts: [], attachments: [], taskContexts: [],
+  });
+  const settledTurn = [
+    { type: "user", uuid: OPERATION_ID, session_id: SESSION_ID, parent_tool_use_id: null, parent_agent_id: null,
+      message: { role: "user", content: "Summarize the notes" } },
+    { type: "assistant", uuid: "a1000000-0000-4000-8000-000000000010", session_id: SESSION_ID,
+      parent_tool_use_id: null, parent_agent_id: null,
+      message: { id: "msg-settled", role: "assistant", content: [{ type: "text", text: "Three notes." }],
+        stop_reason: "end_turn", usage: {} } },
+  ] as SessionMessage[];
+  const unanswered = { type: "user", uuid: PROMPT_ID, session_id: SESSION_ID, parent_tool_use_id: null,
+    parent_agent_id: null, message: { role: "user", content: "Refactor the parser" } } as SessionMessage;
+  const keptCall = { type: "assistant", uuid: KEPT_CALL, session_id: SESSION_ID, parent_tool_use_id: null,
+    user_message_uuid: PROMPT_ID, user_message_uuids: [PROMPT_ID],
+    message: { id: "msg-kept", type: "message", role: "assistant", model: "claude-sonnet-5", stop_reason: "tool_use",
+      content: [{ type: "tool_use", id: "toolu_kept", name: "Read", input: { file_path: "/workspace/parser.ts" } }],
+      usage: { input_tokens: 1, output_tokens: 1 } } } as unknown as SDKMessage;
+  const keptResult = { type: "user", uuid: KEPT_RESULT, session_id: SESSION_ID, parent_tool_use_id: null,
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_kept", content: "parser source" }] } } as SDKMessage;
+  const boundary = (preserved: readonly string[]) => ({ type: "system", subtype: "compact_boundary", uuid: crypto.randomUUID(),
+    session_id: SESSION_ID, compact_metadata: { trigger: "auto", pre_tokens: 970_000,
+      preserved_messages: { anchor_uuid: SUMMARY_ID, uuids: [...preserved] } } }) as unknown as SDKMessage;
+  const summary = { type: "user", uuid: SUMMARY_ID, session_id: SESSION_ID, parent_tool_use_id: null, isSynthetic: true,
+    timestamp: "2026-09-26T10:00:00.000Z",
+    message: { role: "user", content: "This session is being continued from a previous conversation. Summary: synthetic." } } as SDKMessage;
+  const runStates = (events: readonly BackendConversationEvent[]) =>
+    events.flatMap(event => event.type === "run_state_changed" ? [event.state] : []);
+  const shape = (snapshot: Awaited<ReturnType<typeof projectionSnapshot>>) => snapshot.orderedBackendTurnIds.map(id => ({
+    id, status: snapshot.turnsById[id]!.status,
+    items: snapshot.turnsById[id]!.orderedBackendItemIds.map(itemId => {
+      const { backendItemId, sourceOrder, semanticKind } = snapshot.itemsById[itemId]!;
+      return { backendItemId, sourceOrder, semanticKind };
+    }),
+  }));
+
+  /** A submitted turn that ran one tool round before Claude compacted it. */
+  async function compactedTurn() {
+    const provider = fixture();
+    const created = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    const established = await created.handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const submitted = created.handle.submit(submitInput("Refactor the parser"));
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.lifecycle(PROMPT_ID, "started"));
+    await submitted;
+    provider.messages.push(keptCall);
+    provider.messages.push(keptResult);
+    provider.messages.push(boundary([KEPT_CALL, KEPT_RESULT, crypto.randomUUID()]));
+    provider.messages.push(summary);
+    await vi.waitFor(() => expect(events).toContainEqual({ type: "resnapshot_required", reason: "history_changed" }));
+    const turnId = (await projectionSnapshot(created.handle)).activeBackendTurnId!;
+    return { ...created, provider, events, turnId };
+  }
+
+  it("keeps a turn Claude compacts, shows the summary as its marker, and settles it with its own result", async () => {
+    const { handle, settings, provider, events, turnId } = await compactedTurn();
+    const compacted = await projectionSnapshot(handle);
+    expect(compacted.orderedBackendTurnIds).toHaveLength(2);
+    expect(compacted).toMatchObject({ runState: "running", activeBackendTurnId: turnId });
+    // History puts the summary before the output the compaction kept; so does the live view.
+    expect(shape(compacted)[1]!.items.map(item => item.semanticKind))
+      .toEqual(["user_message", "compaction", "file_read"]);
+    // The summary is never a prompt.
+    expect(JSON.stringify(Object.values(compacted.itemsById).filter(item => item.semanticKind === "user_message")))
+      .not.toContain("This session is being continued");
+    provider.messages.push(nativeFrames.start("msg-after"));
+    const answer = { ...nativeFrames.text("msg-after", "The parser is refactored."), uuid: "a1000000-0000-4000-8000-000000000005" } as SDKMessage;
+    provider.messages.push(answer);
+    const result = nativeFrames.result([PROMPT_ID]);
+    provider.messages.push(result);
+    provider.messages.push(nativeFrames.state("idle"));
+    await vi.waitFor(() => expect(runStates(events).at(-1)).toBe("idle"));
+    const live = await projectionSnapshot(handle);
+    expect(live.turnsById[turnId]).toMatchObject({ status: "completed" });
+    expect(settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId }))
+      .toMatchObject({ status: "completed", providerResultUuid: (result as { uuid: string }).uuid });
+    expect(live.itemsById[live.turnsById[turnId]!.orderedBackendItemIds[1]!]).toMatchObject({
+      semanticKind: "compaction", summary: { text: expect.stringContaining("Summary: synthetic.") } });
+    expect(await handle.usage()).toMatchObject({ counters: { compactions: 1 } });
+    expect((await handle.backendCapabilities()).branching).toMatchObject({ availability: "available",
+      fidelity: { compaction: true, limitations: expect.arrayContaining([
+        { text: expect.stringContaining("a fork copies only the compaction summary and the turns after it") }]) } });
+    await handle.close();
+
+    // Provider history, read tip-correctly across the boundary, projects the same turns and items.
+    const history = [...settledTurn, { ...unanswered, message: { role: "user", content: "Refactor the parser" } },
+      { ...summary, parent_agent_id: null, isCompactSummary: true },
+      { ...keptCall, parent_agent_id: null }, { ...keptResult, parent_agent_id: null },
+      { ...answer, parent_agent_id: null }] as unknown as SessionMessage[];
+    const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: history, resumeSession: true }).handle;
+    expect(shape(await projectionSnapshot(reloaded))).toEqual(shape(live));
+    await reloaded.close();
+  });
+
+  it("settles Stop during a compacted turn with Claude's interrupted result", async () => {
+    const { handle, settings, provider, events, turnId } = await compactedTurn();
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: turnId });
+    expect(runStates(events).at(-1)).toBe("stopping");
+    const result = nativeFrames.result([PROMPT_ID], { terminal_reason: "aborted_streaming" });
+    provider.messages.push(result);
+    await vi.waitFor(() => expect(runStates(events).at(-1)).toBe("idle"));
+    expect(settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId }))
+      .toMatchObject({ status: "interrupted", providerTerminalReason: "aborted_streaming" });
+    await handle.close();
+  });
+});

@@ -19,8 +19,15 @@ import { claudeConfigDirectory, type ClaudeChildEnvironment } from "./claude-chi
  * parallel tool call. This reader walks from the true tip and otherwise
  * reproduces the SDK's conversion exactly: compaction relinking, parallel
  * fragment re-insertion, queued-command conversion, filtering, origin mapping,
- * and offset/limit slicing. It deliberately keeps the SDK's stop at a compact
- * boundary, whose `parentUuid` is null.
+ * and offset/limit slicing.
+ *
+ * The SDK, like Claude Code's own loader, stops at a compact boundary, whose
+ * `parentUuid` is null: that segment is exactly what the model sees after the
+ * compaction. This reader returns it unchanged as the newest segment and
+ * prepends the conversation that the compaction summarized, so earlier turns
+ * stay visible. Each earlier segment continues from the last conversation row
+ * Claude Code wrote before the boundary. Rows that a later compaction
+ * preserved appear once, in the later segment, where the model sees them.
  */
 
 const TRANSCRIPT_ENTRY_TYPES: ReadonlySet<string> = new Set(["user", "assistant", "progress", "system", "attachment"]);
@@ -164,26 +171,79 @@ async function resolveActiveChain(entries: readonly ClaudeTranscriptEntry[]): Pr
     byUuid.set(entry.uuid, entry);
     lastIndex.set(entry.uuid, index);
   });
-  await relinkPreservedCompaction(byUuid);
-  const tip = activeTip(entries, lastIndex);
+  // Relinking replaces map values, so the file's own parents stay available.
+  const written = new Map(byUuid);
+  const relinkedTails = await relinkPreservedCompaction(byUuid);
+  // A summary written last still precedes the rows relinked after it.
+  const continued = (entry: ClaudeTranscriptEntry | undefined) =>
+    entry && byUuid.get(relinkedTails.get(entry.uuid) ?? entry.uuid);
+  const tip = continued(activeTip(entries, lastIndex, entries.length));
   if (!tip) return [];
-  const chain: ClaudeTranscriptEntry[] = [];
   const onChain = new Set<string>();
+  // The newest segment is the SDK's chain: what the model sees now.
+  const newest: ClaudeTranscriptEntry[] = [];
   for (let entry = byUuid.get(tip.uuid); entry && !onChain.has(entry.uuid); entry = parentOf(entry, byUuid)) {
     onChain.add(entry.uuid);
-    chain.push(entry);
+    newest.push(entry);
   }
-  chain.reverse();
+  const segments = [newest.reverse()];
+  for (let boundary = newest[0]; boundary && isCompactBoundary(boundary);) {
+    const previousTip = continued(activeTip(entries, lastIndex, lastIndex.get(boundary.uuid)!));
+    if (!previousTip) break;
+    await yieldToEventLoop();
+    const segment = summarizedSegment(previousTip, byUuid, written, onChain);
+    if (segment.length === 0) break;
+    segments.push(segment);
+    boundary = segment[0];
+  }
+  const chain = segments.reverse().flat();
   await yieldToEventLoop();
   return reinsertParallelFragments(byUuid, chain, onChain);
 }
 
-/** The last main-conversation user or assistant row, including meta rows. */
+/**
+ * The conversation before a compact boundary, walked back from the last row
+ * written before it. Rows a newer segment already holds are skipped: a
+ * preserved row appears where the model sees it, after that compaction's
+ * summary. A parent relinked into a newer segment is replaced by the parent
+ * Claude Code wrote, so the walk stays in the summarized conversation.
+ */
+function summarizedSegment(
+  tip: ClaudeTranscriptEntry,
+  byUuid: ReadonlyMap<string, ClaudeTranscriptEntry>,
+  written: ReadonlyMap<string, ClaudeTranscriptEntry>,
+  onChain: Set<string>,
+): ClaudeTranscriptEntry[] {
+  const newer = new Set(onChain);
+  const visited = new Set<string>();
+  const segment: ClaudeTranscriptEntry[] = [];
+  for (let entry = byUuid.get(tip.uuid); entry && !visited.has(entry.uuid);) {
+    visited.add(entry.uuid);
+    if (!newer.has(entry.uuid)) {
+      onChain.add(entry.uuid);
+      segment.push(entry);
+    }
+    const parent = parentOf(entry, byUuid);
+    entry = parent && !newer.has(parent.uuid) ? parent : parentOf(written.get(entry.uuid) ?? entry, byUuid);
+  }
+  return segment.reverse();
+}
+
+function isCompactBoundary(entry: ClaudeTranscriptEntry): boolean {
+  return entry.type === "system" && entry.subtype === "compact_boundary" && !entry.parentUuid;
+}
+
+/**
+ * The last main-conversation user or assistant row written before `end`,
+ * including meta rows. Claude Code appends each row of the active
+ * conversation as a child of the row it last wrote.
+ */
 function activeTip(
   entries: readonly ClaudeTranscriptEntry[],
   lastIndex: ReadonlyMap<string, number>,
+  end: number,
 ): ClaudeTranscriptEntry | undefined {
-  for (let index = entries.length - 1; index >= 0; index--) {
+  for (let index = end - 1; index >= 0; index--) {
     const entry = entries[index]!;
     if (lastIndex.get(entry.uuid) !== index) continue;
     if ((entry.type === "user" || entry.type === "assistant") && !entry.isSidechain && !entry.teamName) return entry;
@@ -199,10 +259,12 @@ function parentOf(
 }
 
 /**
- * Applies the SDK's compact-boundary relinking of preserved rows. A boundary
- * without preserved rows keeps its null parent, so the chain stops there.
+ * Applies the SDK's compact-boundary relinking of preserved rows: they follow
+ * the summary, as the model sees them. The boundary keeps its null parent.
+ * Returns each relinked anchor with the preserved tail that now follows it.
  */
-async function relinkPreservedCompaction(byUuid: Map<string, ClaudeTranscriptEntry>): Promise<void> {
+async function relinkPreservedCompaction(byUuid: Map<string, ClaudeTranscriptEntry>): Promise<Map<string, string>> {
+  const tails = new Map<string, string>();
   let visited = 0;
   for (const boundary of byUuid.values()) {
     if (boundary.type !== "system" || boundary.subtype !== "compact_boundary") continue;
@@ -226,19 +288,25 @@ async function relinkPreservedCompaction(byUuid: Map<string, ClaudeTranscriptEnt
         if (++visited % RELINK_YIELD_ENTRIES === 0) await yieldToEventLoop();
         if (entry.parentUuid === anchorUuid && uuid !== head) byUuid.set(uuid, { ...entry, parentUuid: tail });
       }
+      if (typeof anchorUuid === "string") tails.set(anchorUuid, tail as string);
     } else if (segment) {
       const headUuid = property(segment, "headUuid");
       const anchorUuid = property(segment, "anchorUuid");
+      const tailUuid = property(segment, "tailUuid");
       const head = byUuid.get(headUuid as string);
       if (head) byUuid.set(head.uuid, { ...head, parentUuid: anchorUuid });
       for (const [uuid, entry] of byUuid) {
         if (++visited % RELINK_YIELD_ENTRIES === 0) await yieldToEventLoop();
         if (entry.parentUuid === anchorUuid && uuid !== headUuid) {
-          byUuid.set(uuid, { ...entry, parentUuid: property(segment, "tailUuid") });
+          byUuid.set(uuid, { ...entry, parentUuid: tailUuid });
         }
+      }
+      if (head && typeof anchorUuid === "string" && typeof tailUuid === "string" && byUuid.has(tailUuid)) {
+        tails.set(anchorUuid, tailUuid);
       }
     }
   }
+  return tails;
 }
 
 /**

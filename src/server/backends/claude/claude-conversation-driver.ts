@@ -43,6 +43,7 @@ import {
 import { ClaudeConversationHandle } from "./claude-conversation-handle.js";
 import {
   assertClaudeHistorySession,
+  claudeResumableHistoryStart,
   ClaudeHistoryProjectionError,
   projectClaudeHistory,
   type ClaudeHistoryAuthentication,
@@ -699,14 +700,16 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
       const retainedLeafIndex = retainedLeafUuid
         ? messages.findIndex((message) => message.uuid === retainedLeafUuid)
         : -1;
-      if (!backendTurnId || !retainedLeafUuid || retainedLeafIndex < 0) {
+      const resumableStart = claudeResumableHistoryStart(messages);
+      if (!backendTurnId || !retainedLeafUuid || retainedLeafIndex < resumableStart) {
         throw claudeError(
           "invalid_state",
           "The selected Claude turn is not a durable successfully completed fork boundary.",
           "claude_fork_checkpoint_unavailable",
         );
       }
-      const prefix = messages.slice(0, retainedLeafIndex + 1);
+      // The child holds only what Claude Code resumes: history from the latest compaction.
+      const prefix = messages.slice(resumableStart, retainedLeafIndex + 1);
       return {
         backendInstanceId: this.instance.id,
         kind: "conversation_leaf",
@@ -784,9 +787,10 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
     const retainedLeafIndex = sourceMessages.findIndex(
       ({ uuid }) => uuid === checkpoint.retainedLeafUuid,
     );
-    const prefix = sourceMessages.slice(0, retainedLeafIndex + 1);
+    const resumableStart = claudeResumableHistoryStart(sourceMessages);
+    const prefix = sourceMessages.slice(resumableStart, retainedLeafIndex + 1);
     if (
-      retainedLeafIndex < 0 ||
+      retainedLeafIndex < resumableStart ||
       prefix.length !== checkpoint.retainedPrefixCount ||
       transcriptFingerprint(prefix) !== checkpoint.retainedPrefixDigest ||
       transcriptContentFingerprint(prefix) !== checkpoint.retainedContentDigest
