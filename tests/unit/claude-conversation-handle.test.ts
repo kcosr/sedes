@@ -4741,6 +4741,36 @@ describe("Claude native run state without prompt echoes", () => {
     await handle.close();
   });
 
+  it("keeps a Stop and its bound when the stopped turn's live boundary opens", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    provider.messages.push(nativeFrames.taskNotification("task-1"));
+    provider.messages.push(nativeFrames.state("running"));
+    await vi.waitFor(() => expect(runStates(events)).toEqual(["running"]));
+    try {
+      vi.useFakeTimers();
+      await handle.interrupt({ applicationOperationId: crypto.randomUUID(),
+        expectedBackendTurnId: (await projectionSnapshot(handle)).activeBackendTurnId! });
+      expect(runStates(events)).toEqual(["running", "stopping"]);
+      // Claude's first response opens the turn's own boundary while stopping.
+      provider.messages.push(nativeFrames.start("msg-notified"));
+      await vi.advanceTimersByTimeAsync(10);
+      const opened = events.find(event => event.type === "turn_started");
+      expect(opened).toBeDefined();
+      expect(runStates(events).at(-1)).toBe("stopping");
+      expect(events.filter(event => event.type === "run_state_changed").at(-1)).toMatchObject({
+        activeBackendTurnId: opened?.type === "turn_started" ? opened.turn.backendTurnId : "" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(runStates(events).at(-1)).toBe("idle");
+    } finally {
+      vi.useRealTimers();
+    }
+    await handle.close();
+  });
+
   it("projects a live notification turn exactly as reload does, and keeps a peer turn merged as history does", async () => {
     const turnsOf = (snapshot: Awaited<ReturnType<typeof projectionSnapshot>>) => snapshot.orderedBackendTurnIds.map(id => ({
       id, status: snapshot.turnsById[id]!.status,

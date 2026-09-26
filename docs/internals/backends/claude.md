@@ -458,7 +458,8 @@ becomes `idle` afterwards, the turn settles after a one-second grace, which
 lets a result Claude already emitted land. Otherwise it settles after 30
 seconds. A Sedes turn then gets an `interrupted` receipt with the reason
 `interrupt_unconfirmed`. A turn Claude started ends without one, as its result
-would. A result that arrives first settles the turn normally. A reattached
+would. When a stopped turn Claude started opens its own live turn, the Stop
+and its remaining bound move to that turn. A result that arrives first settles the turn normally. A reattached
 query's state is not assumed idle until Claude reports it.
 
 ### Input acceptance and turns Claude starts

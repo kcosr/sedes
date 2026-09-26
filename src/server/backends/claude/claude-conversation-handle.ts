@@ -295,7 +295,11 @@ export class ClaudeConversationHandle implements ConversationHandle {
   /** A fresh launch's trailing unfinished turn, until Claude shows it is not running it. */
   #processLostTurnId: string | undefined;
   /** Bounds a Stop that Claude acknowledged but has not settled with a result. */
-  #stopConfirmation: { readonly backendTurnId: string; readonly timer: ReturnType<typeof setTimeout> } | undefined;
+  #stopConfirmation: {
+    readonly backendTurnId: string;
+    readonly deadline: number;
+    readonly timer: ReturnType<typeof setTimeout>;
+  } | undefined;
   /** A live compact boundary; its summary is the next main-thread synthetic user row. */
   #liveCompaction: LiveCompaction | undefined;
   /** A live turn Claude started itself; it carries no Sedes input identity. */
@@ -1251,7 +1255,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       this.#endUnconfirmedStop(backendTurnId);
     }, delayMs);
     timer.unref?.();
-    this.#stopConfirmation = { backendTurnId, timer };
+    this.#stopConfirmation = { backendTurnId, deadline: Date.now() + delayMs, timer };
   }
 
   #clearStopConfirmation(): void {
@@ -2064,7 +2068,12 @@ export class ClaudeConversationHandle implements ConversationHandle {
       this.#refreshProjection();
       this.#emitProjectionDelta(previous, this.#projection.snapshot);
     }
-    this.#setRunState("running", true);
+    // A Stop of this turn stays in effect, bounded as before, for its own turn.
+    const stop = this.#stopConfirmation;
+    if (this.#runState === "stopping" && stop) {
+      this.#awaitStopConfirmation(this.#activeBackendTurnId() ?? stop.backendTurnId, Math.max(0, stop.deadline - Date.now()));
+    }
+    this.#setRunState(this.#runState === "stopping" ? "stopping" : "running", true);
   }
 
   /** Exact result provenance confirms the live boundary: provider history
