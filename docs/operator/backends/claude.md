@@ -321,6 +321,18 @@ Claude can start a turn on its own. Sedes shows that turn as running, offers
 A message sent during that turn joins it as Steer or runs as its own next turn;
 the turn's output is never attributed to that message.
 
+When Claude automatically compacts a long conversation, the thread keeps every
+earlier turn. **Conversation compacted** marks the point where it happened and
+expands to the summary Claude continues from. A turn that was running when
+Claude compacted it keeps its prompt and settles normally.
+
+If the Claude process running a turn is lost (for example, the server, worker,
+or sidecar stopped mid-turn), the next launch marks that turn interrupted with
+a notice instead of leaving it running. A reattached remote query that is still
+running is never marked. **Stop** ends with Claude's result. If Claude reports
+that it is idle without one, the turn ends a second later, and otherwise after
+30 seconds.
+
 ## Current limits
 
 Claude does not support:
@@ -330,6 +342,9 @@ Claude does not support:
   slash commands;
 - active-source forks or latest-provider-snapshot forks;
 - forks from attachment-ended structured-output turns;
+- forks from turns before Claude's latest automatic compaction. Claude Code
+  resumes only from its compaction summary, so a later fork copies that summary
+  instead of the earlier turns;
 - guaranteed file-history or attachment fidelity across a native fork;
 - provider-output image artifacts;
 - the shared Pi `set_tool_access` action; or
@@ -341,9 +356,9 @@ turn only while the source is idle and records an inclusive completed-turn
 boundary. Transcript and agent-tool forks select an exact completed turn.
 
 Claude Steer targets the conversation; it does not provide Codex’s exact-turn
-guarantee. A separate interrupt-and-send action is not exposed. Public history can
-erase the boundary needed to recover manual compaction as one normalized
-operation. Automatic provider folding remains provider-owned history behavior.
+guarantee. A separate interrupt-and-send action is not exposed. Manual
+compaction is a Claude Code local command, which Sedes does not send.
+Automatic compaction remains Claude's own decision; Sedes displays it.
 The [internal integration contract](../../internals/backends/claude.md) records
 the complete reasoning and recovery rules.
 
@@ -387,7 +402,9 @@ workspace, and do not use sensitive files merely to validate connectivity.
 | An ordinary file is visible but its contents were not used   | Sedes sends the authenticated staged path, not the file body. Ask Claude to read it explicitly; native images use a separate SDK image-block path.                                                                                                                                                                                 |
 | History ends at an older tool call, or a fork cannot be verified | Earlier versions read history with the SDK's leaf heuristic. It stops at a parallel tool call once Sedes' startup message is the newest transcript row. Upgrade main and any SSH or outbound sidecar to runtime protocol 14, then reload the thread. |
 | Reopening a thread that was never sent to fails with "Session ID … is already in use" | Earlier versions launched a new session because the SDK reports no metadata for a transcript holding only the startup message. The current version resumes any existing transcript. |
-| Fork is missing                                              | The source must be idle and the boundary must be an exact successfully completed ordinary turn. Attachment-ended structured-output boundaries and active sources are unforkable.                                                                                                                                                   |
+| Earlier turns disappeared, or a "This session is being continued…" message appeared as a prompt | Claude compacted the conversation automatically. Earlier versions stopped reading at the compaction. Upgrade main and any SSH or outbound sidecar to runtime protocol 14, then reload the thread. |
+| A turn shows "Claude Code stopped before this turn finished" | The Claude process running that turn was lost, and a fresh launch found the turn unfinished. Check the server, worker, or sidecar logs for the stop; resend the prompt if its work is still needed. |
+| Fork is missing                                              | The source must be idle and the boundary must be an exact successfully completed ordinary turn. Attachment-ended structured-output boundaries, turns before Claude's latest compaction, and active sources are unforkable.                                                                                                                                                   |
 
 Use [Debug diagnostics](../../developer/diagnostics.md) for safe inspection.
 Do not attach Claude credentials, complete provider payloads, or native
