@@ -1883,7 +1883,7 @@ describe("ClaudeConversationBackendDriver", () => {
     await expect(forkAttempt({ sdk, source: [user(operationId, "prompt"), assistant(crypto.randomUUID(), "answer")],
       child: (prefix) => renumbered(prefix) })).rejects.toMatchObject({
       backendCode: "claude_fork_launch_started_turn", crossedSubmissionBoundary: false, forkRestart: "futile",
-      message: "Claude began a model turn while creating the fork, so it was stopped. Its unverified child was discarded.",
+      message: "Claude began a model turn while creating the fork, so it was stopped. The child session it created will not be used.",
     });
   });
 

@@ -1778,7 +1778,8 @@ function claudeForkLaunchRefusal(code: ClaudeForkLaunchFailureCode, cause: unkno
 }
 
 function claudeForkLaunchFailed(code: ClaudeForkLaunchFailureCode, created: boolean, cause: unknown): BackendError {
-  const outcome = created ? "Its unverified child was discarded." : "No child was created.";
+  // The child transcript stays on disk; an aborted fork only hides it from discovery.
+  const outcome = created ? "The child session it created will not be used." : "No child was created.";
   switch (code) {
     case "claude_fork_effective_settings_mismatch":
       return claudeForkFailed(`Claude did not start the fork with the child's model. ${outcome}`, code, { retryable: false, futile: true, cause });
