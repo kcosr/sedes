@@ -13,19 +13,19 @@
   after an interrupted tool call, and failed Agent SDK turns after an
   assistant message with plain-string content. Update Claude Code on
   every local and remote execution host before upgrading; an older release
-  fails backend startup.
+  fails backend startup. (#12)
 
 - Sidecars must use runtime protocol 14, which reads Claude history through the
   transcript's true tip and across automatic compactions, and reports
   transcript presence. It also runs Claude forks as one-shot launches and
   retires remote Claude queries by session. Upgrade existing sidecars
-  explicitly before reconnecting with this server version.
+  explicitly before reconnecting with this server version. (#12)
 
 - Browser and packaged clients must use client protocol 124, which carries
   per-turn fork availability, restartable fork aborts, the **Discard this
   fork** action and whether a fork's provider child was returned and how it
   is identified, the affected threads in the force reset preview, and
-  background work in Stop, Restart, and Upgrade previews.
+  background work in Stop, Restart, and Upgrade previews. (#12)
 
 - Sidecars must use runtime protocol 13, which serves `sedes mcp` and accepts
   Claude's Native agent-tool entry. Upgrade existing sidecars explicitly
@@ -99,11 +99,11 @@
 - Claude sends show running as soon as Claude dequeues the input instead of
   after its first output. The composer activity bar starts at Send for every
   backend. Claude skips settings calls the live session already confirmed and
-  applies sidecar events without one acknowledgement round trip each.
+  applies sidecar events without one acknowledgement round trip each. (#12)
 
 - Sedes no longer passes an inherited `CLAUDE_CODE_RESUME_INTERRUPTED_TURN`
   to Claude Code. A turn interrupted by a lost process is marked interrupted
-  instead of re-running its tools unattended; resend it to continue.
+  instead of re-running its tools unattended; resend it to continue. (#12)
 
 - **Force reset** now cancels the approvals and questions it abandons at the
   provider, for every backend, instead of only removing them from Sedes, so a
@@ -111,7 +111,7 @@
   receive a denial or dismissal. A Codex approval that offers **Cancel turn**
   receives it, which also cancels that turn; a Codex question, which has no
   cancel, fails when the runtime is replaced. The reset waits up to 10 seconds
-  for these answers before it replaces the runtime.
+  for these answers before it replaces the runtime. (#12)
 
 - **Stop** on a Claude thread also withdraws steering messages Claude has
   received but not yet started, including, on a remote host, ones sent before
@@ -122,21 +122,21 @@
   message Claude already started stays with the stopped turn, and Claude's own
   queued work, such as a finished background task's notification, is not
   withdrawn. Sedes' own Queue is still untouched by Stop. Remote Claude needs
-  a sidecar built from this version (runtime protocol 14).
+  a sidecar built from this version (runtime protocol 14). (#12)
 
 - **Stop** on a Pi thread no longer re-sends a steering message Pi received
   but had not used as the next turn. Like Claude's, it returns as a failed
   queue entry marked not sent, to restore to the composer or dismiss, and
   later queued messages wait for that choice. The same applies when Sedes
   retires or restarts the Pi runtime before Pi used it. A message Pi already
-  used stays with the stopped turn.
+  used stays with the stopped turn. (#12)
 
 - A sidecar's `abandoned-work/` archive records only resources whose Stop,
   Restart, or Upgrade interrupted or abandoned work; idle resources no longer
   fill it. When full it removes its oldest records instead of ignoring new
   ones, logging `sidecar_abandonment_archive_rotated` once per sidecar run.
   Files other than its records are never removed. Sidecars apply this once
-  upgraded to this version.
+  upgraded to this version. (#12)
 
 - Claude backends use Agent SDK 0.3.283 (was 0.3.274). Claude history now
   reads task notifications Claude received while running a tool, and other
@@ -146,7 +146,7 @@
   Upgrade sidecars together with the server: the sidecar build changes and
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
-### Fixed
+### Fixed (#12)
 
 - **Stop** on a Codex thread no longer silently loses a steering message Codex
   accepted but had not used, while showing it as delivered. A Codex steer now
@@ -154,7 +154,7 @@
   ends without it, it returns as a failed queue entry marked not sent, to
   restore to the composer or dismiss, and it is never resent. As on other
   backends, Send, Steer, and Queue on that thread wait while a steer is
-  pending, so several Codex steers now go one at a time.
+  pending, so several Codex steers now go one at a time. (#12)
 
 - A Claude **Steer** now resolves as soon as Claude takes it, usually when the
   tool call it is running finishes, instead of when the turn ends. The message
@@ -163,7 +163,7 @@
   at once, so you can steer the same turn again, and steers Claude takes
   together appear in order. A remote Claude thread keeps that placement across
   reconnects; it takes effect once the sidecar runs this build, and the sidecar
-  runtime protocol is unchanged.
+  runtime protocol is unchanged. (#12)
 
 - Claude now refuses the first prompt after a session start less often.
   Claude Code merges Sedes' startup message into that prompt under its "NON-USER
@@ -171,25 +171,25 @@
   of no text, which Claude Code showed as "(no content)". Claude can still
   refuse that prompt, so resend it if it does. A remote Claude thread gets the
   marker once its sidecar runs this build. The sidecar runtime protocol is
-  unchanged.
+  unchanged. (#12)
 
 - Create Claude forks with one locked-down Claude Code launch. It loads no
   settings, hooks, MCP servers, or tools and denies any permission request.
   It no longer uses the thread's permission mode, so it cannot act for the
   child. A launch that starts a model turn is stopped and fails. Launch
   failures are classified: a refused launch creates nothing, and a
-  deterministic failure is not offered as **Start a new fork**.
+  deterministic failure is not offered as **Start a new fork**. (#12)
 
 - Withhold Claude forking while background agents or commands still run in the
   source, with a reason on the fork action. A fork of an earlier turn whose
   background work had not finished is allowed; its child shows that the work
   was not carried over, instead of failing verification. Each turn Claude
   cannot fork at shows why, and generic **Fork** fails with that reason when
-  it is the newest completed turn instead of forking an older one.
+  it is the newest completed turn instead of forking an older one. (#12)
 
 - Claude fork children inherit the source turns' usage and terminal results,
   and copy background task results only when the copied history shows them
-  finished. Migration 117 records this child evidence.
+  finished. Migration 117 records this child evidence. (#12)
 
 - Count a resumed or forked Claude query's usage once. Claude Code 2.1.277 and
   newer continue such a query's totals from those its transcript saved, and
@@ -197,7 +197,7 @@
   page. Each query is now counted from the totals its startup message reported,
   and a reattached query keeps that starting point. If the start was not
   observed, earlier work is left out and the usage is marked partial. Totals
-  already recorded are not corrected.
+  already recorded are not corrected. (#12)
 
 - Log every fork failure with its backend code and cause. A retry that fails
   transiently keeps the fork recoverable instead of discarding a child an
@@ -209,13 +209,13 @@
   imports an orphaned fork child under the source's title (migration 116).
   Add **Discard this fork** to abandon an unfinished fork whose provider copy
   was not returned; its confirmation says whether an orphaned copy can still
-  appear as a separate thread, as a Codex copy can.
+  appear as a separate thread, as a Codex copy can. (#12)
 
 - Scope **Force reset** to the thread it starts from and its unfinished forks.
   Resetting a fork no longer resets its source and sibling forks or stops the
   source's running turn. The preview names each affected thread with its run
   state and background work and totals the background agents and commands it
-  may stop; a change in that work makes the preview stale.
+  may stop; a change in that work makes the preview stale. (#12)
 
 - Release remote Claude queries that are no longer useful. A failed query is
   retired once its output is delivered, so reopening the thread no longer
@@ -223,21 +223,22 @@
   outstanding is retired, and archiving a thread retires its query, first
   applying any output Sedes had not yet applied. Hitting
   the sidecar's 32-session limit reports the limit and how to free sessions.
+  (#12)
 
 - Read Claude history through the transcript's newest row. After a resume,
   history no longer stops at an earlier parallel tool call, forks from such
   threads verify, and reconciliation no longer compares against a truncated
-  history that could resend a prompt Claude had already received.
+  history that could resend a prompt Claude had already received. (#12)
 
 - Reopen a Claude thread that was opened but never sent to. Sedes now resumes
   the existing session instead of failing with "Session ID … is already in
-  use", and first-send recovery can resolve it.
+  use", and first-send recovery can resolve it. (#12)
 
 - Stop showing Claude Code's "No response requested." resume placeholder as a
   reply. Reopening a Claude thread no longer adds a phantom turn or displaces a
   turn's final answer, and forks and usage ignore the placeholder. A prompt
   left unanswered because Claude Code exited now ends as interrupted with an
-  explanation instead of completed.
+  explanation instead of completed. (#12)
 
 - Keep earlier Claude turns visible after Claude automatically compacts a long
   conversation. **Conversation compacted** marks the point and expands to
@@ -247,7 +248,7 @@
   the former summary turn once. Only turns after the latest compaction can be
   forked, because Claude resumes from its summary. Sidecar replay cleanup
   reads only the conversation Claude resumes, and a sidecar stop or upgrade
-  no longer fails because idle threads have long compacted histories.
+  no longer fails because idle threads have long compacted histories. (#12)
 
 - End a Claude turn left running after its Claude process was lost, for
   example when the server, worker, or sidecar stopped mid-turn. The next launch
@@ -255,49 +256,50 @@
   running is unaffected. A turn that stopped after a tool call or its result
   no longer reads as finished or offers a fork. **Stop** no longer stays
   "stopping" without a result: the turn ends a second after Claude reports
-  idle, or after 30 seconds.
+  idle, or after 30 seconds. (#12)
 
 - Show turns Claude starts itself, such as after a background task or peer
   hand-back, as running with **Stop**, and keep idle retirement, eviction and
   sidecar replacement from ending them. Sedes now launches Claude with
-  `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`.
+  `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`. (#12)
 
 - Accept a Claude input only on Claude's exact dequeue or consumption evidence,
   so output from a turn Claude started no longer claims a queued message or
   writes its receipt. Local Claude threads now enter running and settle, so a
-  second message is accepted.
+  second message is accepted. (#12)
 
 - Keep a conflicting Claude result from failing the thread; the first recorded
-  outcome is kept.
+  outcome is kept. (#12)
 
 - Distinguish, in sidecar abandonment records, a remote Claude session whose
   work had finished (its unacknowledged result is its outcome) from work the
   stop interrupted. An automatic sidecar replacement that ends Claude work
-  started after its idle check now leaves an abandonment record.
+  started after its idle check now leaves an abandonment record. (#12)
 
 - Warn, naming each task, when a resumed Claude session reports background
   work the previous session left unfinished; its result never arrived and
-  Claude may run it again.
+  Claude may run it again. (#12)
 
 - Show background work before it is interrupted. Backend and environment
   Stop, Restart, and Upgrade previews list running turns, background work,
   pending approvals, and undelivered output that remote Claude reports,
-  including for threads nobody has open.
+  including for threads nobody has open. (#12)
 
 - Stop a Claude message whose remote session ended unconfirmed from pausing
   the queue indefinitely. **Reconcile delivery** now marks it failed with an
   unknown outcome, so you can review the conversation and dismiss it or
-  restore it to send again; later queued messages wait for that choice.
+  restore it to send again; later queued messages wait for that choice. (#12)
 
 - Let a remote Claude turn run twice as long while main is away before its
   retained output overflows. The sidecar counts each retained event once and
   folds streamed text that no main has seen yet into fewer events. After a
   restart or reconnection, Sedes now opens threads whose remote Claude work is
   still running or undelivered, within the conversation-runtime budget, so
-  their output is applied without waiting for someone to open them.
+  their output is applied without waiting for someone to open them. (#12)
 
 - Show a Claude task-notification turn as its own turn while it streams, as
   reload does. Existing threads re-identify those turns once on first load.
+  (#12)
 
 - Preserve underlying Claude read errors in gated thread-load diagnostics and
   identify failed persistent-runtime commands without logging conversation content.
@@ -345,23 +347,23 @@
 - Stop Claude Bash tool processes with their Claude process. The Claude worker
   now tracks descendants that run in their own sessions and reports cleanup as
   proven only after they are gone; previously they could outlive a stopped or
-  crashed Claude process.
+  crashed Claude process. (#12)
 
 - Reopen a Claude session only after its previous Claude process has exited.
   Closing or failing a query no longer releases the session while the old
-  process can still write its transcript.
+  process can still write its transcript. (#12)
 
 - Recover a stale state or native-store lock whose PID was reused by an
   unrelated process. New lock records include the owner's process start time
   and boot identity on Linux and macOS; existing PID-only records keep the
-  previous PID check.
+  previous PID check. (#12)
 
 - Remove superseded sidecar and Claude worker builds that no live process
   uses after a sidecar starts or installs a new worker, keeping recent builds
   for rollback. Persistent sidecar delivery diagnostics keep captures from
   only the four most recent earlier daemon PIDs. Diagnostics remain opt-in.
 
-### Removed
+### Removed (#12)
 
 ## [0.1.1] - 2026-09-21
 
