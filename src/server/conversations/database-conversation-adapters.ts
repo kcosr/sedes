@@ -682,6 +682,9 @@ export class DatabaseThreadApplicationRecoveryReader implements ThreadApplicatio
             attempt.forkUncertaintyKind === "fork_unknown"
               ? ("full_native_copy" as const)
               : null,
+          conversationIdentified:
+            attempt.provisionalBackendConversationId !== null,
+          forkChildIdentity: attempt.forkChildIdentity,
           recoverable,
         };
       }
@@ -722,6 +725,8 @@ export class DatabaseThreadApplicationRecoveryReader implements ThreadApplicatio
         submissionMayHaveBeenAccepted: possibleAcceptance,
         forkUncertainty: null,
         possibleProviderOrphan: null,
+        conversationIdentified: attempt.provisionalBackendConversationId !== null,
+        forkChildIdentity: null,
         recoverable,
       };
     }

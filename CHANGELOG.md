@@ -19,7 +19,8 @@
 
 - Browser and packaged clients must use client protocol 123, which carries
   per-turn fork availability, restartable fork aborts, the **Discard this
-  fork** action, the affected threads in the force reset preview, and
+  fork** action and whether a fork's provider child was returned and how it
+  is identified, the affected threads in the force reset preview, and
   background work in Stop, Restart, and Upgrade previews.
 
 - Sidecars must use runtime protocol 13, which serves `sedes mcp` and accepts
@@ -133,9 +134,12 @@
   earlier attempt may have created. Startup fork recovery runs after the
   server listens. It finishes forks whose provider child was already returned
   without contacting the provider, retries only forks a crash interrupted
-  before a response, and never discards one. Aborted and discarded forks keep their reserved provider identity, so
-  discovery never imports an orphaned fork child under the source's title
-  (migration 116). Add **Discard this fork** to abandon an unfinished fork.
+  before a response, and never discards one. Aborted and discarded Pi and
+  Claude forks keep their reserved provider identity, so discovery never
+  imports an orphaned fork child under the source's title (migration 116).
+  Add **Discard this fork** to abandon an unfinished fork whose provider copy
+  was not returned; its confirmation says whether an orphaned copy can still
+  appear as a separate thread, as a Codex copy can.
 
 - Scope **Force reset** to the thread it starts from and its unfinished forks.
   Resetting a fork no longer resets its source and sibling forks or stops the

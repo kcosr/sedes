@@ -2281,6 +2281,15 @@ snapshot-boundary proof. Authenticated operation-only discovery evidence must
 still quarantine the possible child; dropping that correlation and importing
 the child as unrelated would violate application ownership.
 
+An explicit discard removes only the unfinished Sedes child and never repeats
+the provider call. It is unavailable once the provider returned the child,
+which the normalized recovery reports as `conversationIdentified`; recovery
+then finishes the fork locally, and the capability and the fork service must
+agree. After an abort or discard, keep an application-reserved child identity
+quarantined from discovery. A provider-assigned child has no reserved identity,
+so the recovery reports `forkChildIdentity` and discard wording must not
+promise that such a child stays hidden.
+
 A backend without reviewed native fork semantics must report unsupported. It
 must not approximate a native fork by replaying history as fresh user input.
 Fork fidelity must account for provider-history leaves the backend cannot copy,

@@ -1460,6 +1460,8 @@ describe("ThreadForkService", () => {
         submissionMayHaveBeenAccepted: true,
         forkUncertainty: "fork_unknown",
         possibleProviderOrphan: "full_native_copy",
+        conversationIdentified: false,
+        forkChildIdentity: "provider_assigned",
         recoverable: false,
       });
       current.targets.actor.mockRejectedValueOnce(
@@ -1900,6 +1902,18 @@ describe("ThreadForkService", () => {
       const returned = await current.service.forkManual(current.manual("provider-returned"));
       await expect(current.service.discardActive(current.scope, returned.childThreadId)).rejects.toMatchObject({
         code: "invalid_transition" });
+      // The recovery the capability document is built from reports the
+      // returned child, so Discard is not offered for it.
+      const recoveryReader = new DatabaseThreadApplicationRecoveryReader({
+        creation: current.creation,
+        operations: new ConversationOperationRepository(current.database),
+        targets: {} as never,
+        registry: {} as never,
+        forks: current.service,
+      });
+      await expect(recoveryReader.read(current.scope, returned.childThreadId)).resolves.toMatchObject({
+        creationType: "fork", phase: "recovery_required", conversationIdentified: true,
+        forkChildIdentity: "provider_assigned", recoverable: true });
       expect(current.bindings.findThreadDefinition(current.scope, returned.childThreadId)).toBeDefined();
     } finally {
       stderr.mockRestore();

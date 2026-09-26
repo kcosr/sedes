@@ -636,8 +636,12 @@ export class ThreadForkService {
   /**
    * Explicitly discard an unfinished fork child the user no longer wants,
    * without re-running its provider call. The reserved child thread is
-   * removed and its provider identity is quarantined from discovery; a child
-   * the provider may have created is never adopted.
+   * removed. A fork whose child the provider already returned is refused:
+   * recovery finishes it locally instead. A child the provider may have
+   * created is never adopted into this fork. Discovery never imports an
+   * application-reserved child identity, which stays quarantined; a
+   * provider-assigned child has no reserved identity and may later be
+   * imported as a separate thread.
    */
   async discardActive(
     scope: RequestScope,

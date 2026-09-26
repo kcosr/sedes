@@ -1662,6 +1662,8 @@ describe("ThreadApplicationService", () => {
         submissionMayHaveBeenAccepted: true,
         forkUncertainty: null,
         possibleProviderOrphan: null,
+        conversationIdentified: false,
+        forkChildIdentity: null,
         recoverable: true,
       },
     });
@@ -1707,6 +1709,8 @@ describe("ThreadApplicationService", () => {
         submissionMayHaveBeenAccepted: false,
         forkUncertainty: null,
         possibleProviderOrphan: null,
+        conversationIdentified: false,
+        forkChildIdentity: null,
         recoverable: true,
       },
     });
@@ -1731,6 +1735,8 @@ describe("ThreadApplicationService", () => {
         submissionMayHaveBeenAccepted: false,
         forkUncertainty: null,
         possibleProviderOrphan: null,
+        conversationIdentified: false,
+        forkChildIdentity: "application_reserved",
         recoverable: true,
       },
     });
@@ -1751,6 +1757,43 @@ describe("ThreadApplicationService", () => {
       creationSnapshot.capabilities.operations.find(({ id }) => id === "discard_fork"),
     ).toBeUndefined();
 
+    // The provider already returned this child: recovery finishes it
+    // locally, and the fork service refuses to discard it.
+    const returnedFork = createService({
+      runState: "idle",
+      recovery: {
+        kind: "conversation_creation",
+        creationType: "fork",
+        phase: "recovery_required",
+        diagnostic: { text: "Fork binding is awaiting recovery." },
+        submissionMayHaveBeenAccepted: false,
+        forkUncertainty: null,
+        possibleProviderOrphan: null,
+        conversationIdentified: true,
+        forkChildIdentity: "provider_assigned",
+        recoverable: true,
+      },
+    });
+    const returnedSnapshot = await returnedFork.service.snapshot(
+      scope,
+      "thread-1",
+    );
+    expect(
+      returnedSnapshot.capabilities.operations.find(
+        ({ id }) => id === "recover_uncertain",
+      ),
+    ).toMatchObject({ available: true, label: { text: "Recover fork" } });
+    expect(
+      returnedSnapshot.capabilities.operations.find(
+        ({ id }) => id === "discard_fork",
+      ),
+    ).toMatchObject({
+      available: false,
+      unavailableReason: {
+        text: "Only an unfinished fork whose provider child was not returned can be discarded.",
+      },
+    });
+
     const terminalCreation = createService({
       runState: "failed",
       recovery: {
@@ -1761,6 +1804,8 @@ describe("ThreadApplicationService", () => {
         submissionMayHaveBeenAccepted: false,
         forkUncertainty: null,
         possibleProviderOrphan: null,
+        conversationIdentified: false,
+        forkChildIdentity: null,
         recoverable: false,
       },
     });
