@@ -99,6 +99,7 @@ export class TrackedClaudeSdkFacade implements ClaudeSdkFacade {
       listSessions: (...input) => this.listSessions(...input),
       getSessionInfo: (...input) => this.getSessionInfo(...input),
       getSessionMessages: (...input) => this.getSessionMessages(...input),
+      hasSessionTranscript: (...input) => this.hasSessionTranscript(...input),
       renameSession: (...input) => this.renameSession(...input),
     };
     return Object.freeze({
