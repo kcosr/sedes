@@ -282,6 +282,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
   #providerState: "idle" | "running" | "requires_action" = "idle";
   /** A reattached query's state is unknown until Claude reports it. */
   #providerStateReported = false;
+  /** A fresh launch's trailing unfinished turn, until Claude shows it is not running it. */
+  #processLostTurnId: string | undefined;
   /** Bounds a Stop that Claude acknowledged but has not settled with a result. */
   #stopConfirmation: { readonly backendTurnId: string; readonly timer: ReturnType<typeof setTimeout> } | undefined;
   /** A live compact boundary; its summary is the next main-thread synthetic user row. */
@@ -487,7 +489,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       this.#resolveInitialHistory();
       await this.#session.flushMessages?.();
       // Held output is applied, so Claude's own state report is current.
-      if (this.#session.reattached !== true) this.#closeProcessLostTurn();
+      if (this.#session.reattached !== true) this.#watchProcessLostTurn();
       if (
         this.#session.reattached &&
         this.#session.confirmedEffort !== undefined
@@ -1662,25 +1664,36 @@ export class ClaudeConversationHandle implements ConversationHandle {
   /**
    * A fresh launch proves that the process which ran a trailing unfinished
    * turn is gone: no result will settle it. Claude Code may close it with a
-   * synthetic row when it resumes, but not necessarily before this read. A
-   * reattached query may still be running its turn and is never marked, nor
-   * is a turn the new process reports running.
+   * synthetic row when it resumes, but not necessarily before this read. The
+   * new process reports `running` while it handles Sedes' startup message, so
+   * the turn is closed once Claude reports idle, or once it starts an input
+   * of this attachment. A reattached query may still be running its turn and
+   * is never watched.
    */
-  #closeProcessLostTurn(): void {
-    if (this.#closed || this.#projectionInvalidated) return;
+  #watchProcessLostTurn(): void {
     const { snapshot } = this.#projection;
-    const backendTurnId = snapshot.activeBackendTurnId;
-    if (snapshot.runState !== "running" || backendTurnId === undefined || this.#providerState !== "idle") return;
     // Claude Code itself re-runs an interrupted turn when this is set.
-    if (environmentFlag(this.#childEnvironment.CLAUDE_CODE_RESUME_INTERRUPTED_TURN)) return;
-    const receipt = { applicationThreadId: this.binding.applicationThreadId, backendTurnId };
-    if (this.#settings.findTerminalReceipt(this.#scope, receipt)) return;
+    if (snapshot.runState !== "running" || environmentFlag(this.#childEnvironment.CLAUDE_CODE_RESUME_INTERRUPTED_TURN)) return;
+    this.#processLostTurnId = snapshot.activeBackendTurnId;
+    this.#closeProcessLostTurn(false);
+  }
+
+  #closeProcessLostTurn(startedOther: boolean): void {
+    const backendTurnId = this.#processLostTurnId;
+    if (backendTurnId === undefined || this.#closed || this.#projectionInvalidated) return;
+    if (!startedOther && this.#providerState !== "idle") return;
+    this.#processLostTurnId = undefined;
+    const previous = this.#projection.snapshot;
+    if (previous.turnsById[backendTurnId]?.status !== "in_progress" ||
+        this.#settings.findTerminalReceipt(this.#scope, { applicationThreadId: this.binding.applicationThreadId, backendTurnId })) return;
     const terminalAt = this.#now();
     this.#settings.writeTerminalReceipt(this.#scope, this.binding.applicationThreadId, {
       backendTurnId, status: "interrupted", providerTerminalReason: CLAUDE_PROCESS_LOST_REASON,
       terminalAt, now: terminalAt,
     });
     this.#refreshProjection(true);
+    this.#emitProjectionDelta(previous, this.#projection.snapshot, backendTurnId);
+    if (previous.orderedBackendTurnIds.at(-1) !== backendTurnId) return;
     this.#providerTurn = undefined;
     this.#setRunState(this.#projection.snapshot.runState);
   }
@@ -1942,6 +1955,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
   }
 
   #beginSedesTurn(): void {
+    // Claude runs this input, not the turn a lost process left unfinished.
+    this.#closeProcessLostTurn(true);
     // A Sedes input can take over a turn Claude started, for example a steer
     // folded into a notification turn. Publish the new active turn either way.
     this.#providerTurn = undefined;
@@ -2045,6 +2060,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const previous = this.#providerState;
     this.#providerState = state;
     this.#providerStateReported = true;
+    if (state === "idle") this.#closeProcessLostTurn(false);
     if (this.#initialHistoryLoaded) {
       if (state !== "idle") {
         // Claude began work while no Sedes input is awaiting its turn: a task

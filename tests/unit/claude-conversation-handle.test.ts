@@ -371,9 +371,10 @@ function createHandle(
     readonly initialMessages?: readonly SessionMessage[];
     readonly loadInitialMessages?: () => Promise<readonly SessionMessage[]>;
     /**
-     * The launched query reports that Claude is running the trailing turn of
-     * the initial history. Otherwise a fresh launch has nothing running, so
-     * that turn's process is gone and the turn is marked interrupted.
+     * The launched query reports Claude `running` before history is
+     * installed, as it does while it handles the startup message. A trailing
+     * unfinished turn then stays running until Claude reports idle; without
+     * this, a fresh launch has nothing running and that turn is marked lost.
      */
     readonly claudeRunning?: boolean;
     readonly childEnvironment?: Readonly<Record<string, string>>;
@@ -4934,22 +4935,67 @@ describe("Claude compaction, lost processes, and bounded Stop", () => {
     await reopened.close();
   });
 
-  it("leaves the turn alone when Claude Code already closed it, re-runs it itself, or reports it running", async () => {
+  it("leaves the turn alone when Claude Code already closed it or re-runs it itself", async () => {
     const closure = { type: "assistant", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
       parent_agent_id: null, timestamp: "2026-09-26T10:00:00.000Z", message: { id: crypto.randomUUID(), role: "assistant",
         model: "<synthetic>", content: [{ type: "text", text: "No response requested." }], stop_reason: "stop_sequence", usage: {} } } as SessionMessage;
-    for (const variant of ["closed", "rerun", "running"] as const) {
+    for (const variant of ["closed", "rerun"] as const) {
       const settings = repository();
       const writes = vi.spyOn(settings, "writeTerminalReceipt");
-      const { handle } = createHandle(fixture(), vi.fn(), { settings, resumeSession: true,
+      const provider = fixture();
+      const { handle } = createHandle(provider, vi.fn(), { settings, resumeSession: true,
         initialMessages: [...settledTurn, unanswered, ...(variant === "closed" ? [closure] : [])],
-        ...(variant === "rerun" ? { childEnvironment: { CLAUDE_CODE_RESUME_INTERRUPTED_TURN: "1" } } : {}),
-        ...(variant === "running" ? { claudeRunning: true } : {}) });
+        ...(variant === "rerun" ? { childEnvironment: { CLAUDE_CODE_RESUME_INTERRUPTED_TURN: "1" } } : {}) });
       const snapshot = await projectionSnapshot(handle);
       expect(snapshot.runState).toBe(variant === "closed" ? "idle" : "running");
+      provider.messages.push(nativeFrames.state("idle"));
+      provider.messages.push(nativeFrames.state("running"));
+      await vi.waitFor(() => expect(handle.retirementBlocked).toBe(true));
       expect(writes).not.toHaveBeenCalled();
       await handle.close();
     }
+  });
+
+  it("waits while Claude handles the startup message, then closes the turn when it reports idle", async () => {
+    const provider = fixture();
+    const settings = repository();
+    const { handle } = createHandle(provider, vi.fn(), { settings, initialMessages: [...settledTurn, unanswered],
+      resumeSession: true, claudeRunning: true });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const turnId = established.snapshot.activeBackendTurnId!;
+    expect(established.snapshot.runState).toBe("running");
+    expect(settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId })).toBeUndefined();
+    provider.messages.push(nativeFrames.state("idle"));
+    await vi.waitFor(() => expect(runStates(events)).toEqual(["idle"]));
+    expect(events).toContainEqual(expect.objectContaining({ type: "turn_completed",
+      turn: expect.objectContaining({ backendTurnId: turnId, status: "interrupted" }) }));
+    expect(settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId }))
+      .toMatchObject({ providerTerminalReason: "process_lost" });
+    await handle.close();
+  });
+
+  it("closes the lost turn when Claude starts this attachment's next input first", async () => {
+    // Sedes delivers input to a running thread as Steer; Claude starts it as a
+    // turn of its own because nothing else is running.
+    const steerId = "a1000000-0000-4000-8000-000000000021";
+    const provider = fixture();
+    const settings = repository();
+    const { handle } = createHandle(provider, vi.fn(), { settings, initialMessages: [...settledTurn, unanswered],
+      resumeSession: true, claudeRunning: true });
+    const lostTurn = (await projectionSnapshot(handle)).activeBackendTurnId!;
+    await handle.steer({ applicationOperationId: steerId, mutationId: "steer-after-loss", reconciliationToken: "steer-after-loss",
+      target: { kind: "conversation" }, text: "Try again", contextExcerpts: [], taskContexts: [], attachments: [] });
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.start("msg-steered", [steerId]));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).turnsById[lostTurn]).toMatchObject({ status: "interrupted" }));
+    const snapshot = await projectionSnapshot(handle);
+    expect(snapshot).toMatchObject({ runState: "running" });
+    expect(snapshot.activeBackendTurnId).not.toBe(lostTurn);
+    expect(settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: lostTurn }))
+      .toMatchObject({ providerTerminalReason: "process_lost" });
+    await handle.close();
   });
 
   it("never marks the running turn of a reattached query", async () => {

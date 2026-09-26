@@ -335,17 +335,19 @@ request.
 
 A fresh launch proves that the process that ran any earlier turn is gone, but
 Claude Code writes its closure only when it resumes, which can be after the
-handle reads history. When the handle starts a query that is not a reattachment,
-it waits until held output is applied. If the newest turn is then unfinished,
-has no terminal receipt, and Claude does not report `running`, the handle writes
-an `interrupted` receipt with the Sedes-owned reason `process_lost` and no
-result UUID. The projector adds a warning notice: "Claude Code stopped before
-this turn finished. Sedes marked it interrupted when the conversation
-reopened." A reattached persistent query is never marked, because its turn may
-still be running. A turn is also left alone when the child environment sets
-`CLAUDE_CODE_RESUME_INTERRUPTED_TURN`, because Claude Code then re-runs it. The
-receipt is write-once, so a later closure row or result cannot change the
-outcome.
+handle reads history. When the handle starts a query that is not a reattachment
+and the newest turn in history is unfinished, it watches that turn. A resumed
+Claude reports `running` while it handles the startup message, then `idle`; the
+startup message's result names only itself. Once Claude reports idle, or starts
+an input of this attachment instead, a watched turn that is still unfinished and
+has no terminal receipt gets an `interrupted` receipt. The receipt has the
+Sedes-owned reason `process_lost` and no result UUID. The projector adds a
+warning notice: "Claude Code stopped before this turn finished. Sedes marked it
+interrupted when the conversation reopened." A reattached persistent query is
+never watched, because its turn may still be running. A turn is also left
+alone when the child environment sets `CLAUDE_CODE_RESUME_INTERRUPTED_TURN`,
+because Claude Code then re-runs it. The receipt is write-once, so a later
+closure row or result cannot change the outcome.
 
 SDK 0.3.274 can emit intermediate results while draining background task
 notifications. Only successful empty zero-turn results carrying native
