@@ -37,6 +37,7 @@ const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const QUERY_ID = "22222222-2222-4222-8222-222222222222";
 const OPERATION_ID = "33333333-3333-4333-8333-333333333333";
 const SUMMARY_ID = "44444444-4444-4444-8444-444444444444";
+const LOCAL_COMMAND_ID = "55555555-5555-4555-8555-555555555555";
 const context = () => ({
   requestId: randomUUID(),
   signal: new AbortController().signal,
@@ -377,11 +378,26 @@ describe("ClaudeRuntimeWorkerHost", () => {
       ).resolves.toEqual({
         nextCursor: null,
         messages: [
-          expect.objectContaining({
+          // Queued input keeps its marker; the SDK's local-command marker does not cross.
+          {
+            type: "user",
+            uuid: OPERATION_ID,
             session_id: SESSION_ID,
+            message: { role: "user", content: "hello" },
+            parent_tool_use_id: null,
+            parent_agent_id: null,
             timestamp: "2026-08-27T12:00:00.000Z",
             origin: { kind: "task-notification" },
-          }),
+            isQueuedCommand: true,
+          },
+          {
+            type: "user",
+            uuid: LOCAL_COMMAND_ID,
+            session_id: SESSION_ID,
+            message: { role: "user", content: "<command-name>/synthetic</command-name>" },
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+          },
           // A compaction summary keeps its marker; the SDK's derived is_meta does not cross.
           {
             type: "user",
@@ -398,6 +414,10 @@ describe("ClaudeRuntimeWorkerHost", () => {
       expect(() => claudeRuntimeSessionMessagesResponseSchema.parse({ nextCursor: null, messages: [
         { type: "user", uuid: SUMMARY_ID, session_id: SESSION_ID, message: {}, parent_tool_use_id: null,
           parent_agent_id: null, isCompactSummary: false },
+      ] })).toThrow();
+      expect(() => claudeRuntimeSessionMessagesResponseSchema.parse({ nextCursor: null, messages: [
+        { type: "user", uuid: SUMMARY_ID, session_id: SESSION_ID, message: {}, parent_tool_use_id: null,
+          parent_agent_id: null, isQueuedCommand: false },
       ] })).toThrow();
       expect(sdk.getSessionMessages).toHaveBeenCalledWith(
         SESSION_ID,
@@ -1189,6 +1209,16 @@ function helperFacade(): ClaudeSdkFacade {
         parent_agent_id: null,
         timestamp: "2026-08-27T12:00:00.000Z",
         origin: { kind: "task-notification" },
+        isQueuedCommand: true,
+      } as never,
+      {
+        type: "user",
+        uuid: LOCAL_COMMAND_ID,
+        session_id: SESSION_ID,
+        message: { role: "user", content: "<command-name>/synthetic</command-name>" },
+        parent_tool_use_id: null,
+        parent_agent_id: null,
+        isCompletedLocalCommand: true,
       } as never,
       {
         type: "user",

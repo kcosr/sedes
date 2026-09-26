@@ -24,7 +24,9 @@ const baseFact = {
 } as const;
 
 /**
- * SDK 0.3.274 pipeline totals replace a complete map for one query incarnation.
+ * Pipeline totals replace a complete map for one query incarnation. The
+ * `claude-agent-sdk-0.3.274/usage-v1` normalization and its provenance label
+ * are persisted evidence identifiers; SDK 0.3.283 did not change them.
  * `reasoningEffort` is the handle-confirmed effort when the result arrived, for
  * the confirmed `model`; other models in the pipeline (helpers, subagents) are
  * not attributed that effort.

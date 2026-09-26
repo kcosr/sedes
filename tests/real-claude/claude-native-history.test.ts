@@ -33,7 +33,7 @@ const MODEL_TURN_TIMEOUT_MS = 240_000;
 const scope = { tenantId: "real-claude-tenant", principalId: "real-claude-principal" };
 const instance: AgentBackendInstance = {
   id: "real-claude-instance", tenantId: scope.tenantId, kind: "claude_agent_sdk", label: "Real Claude",
-  enabled: true, configurationRevision: 1, protocolRelease: "0.3.274",
+  enabled: true, configurationRevision: 1, protocolRelease: "0.3.283",
 };
 const connection: AgentConnectionProfile = {
   id: "real-claude-connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,

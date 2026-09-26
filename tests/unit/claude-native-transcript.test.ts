@@ -70,7 +70,7 @@ function refactorShaped(): { fixture: ClaudeTranscriptFixture; lastReply: string
 }
 
 describe("Claude native transcript reader", () => {
-  it("reads a startup-message tip through its true chain where the SDK stops at a parallel dead end", async () => {
+  it("reads a startup-message tip through its true chain, as the pinned SDK now does", async () => {
     const { fixture, lastReply, deadEnds } = refactorShaped();
     fixture.startupMessage();
 
@@ -79,12 +79,28 @@ describe("Claude native transcript reader", () => {
     expect(uuids(messages)).toEqual(expect.arrayContaining(deadEnds));
     expect(messages.some((message) => message.type === "user" && typeof message.message === "object" &&
       JSON.stringify(message.message).includes("NON-USER SOURCE"))).toBe(false);
+    // SDK 0.3.274 skipped the meta tip and stopped at the file-latest dead end;
+    // 0.3.283 walks from the meta tip too.
+    expect(messages).toEqual(await sdk(fixture));
+  });
 
-    // The pinned SDK's leaf heuristic skips the meta tip and picks the file-latest dead end.
+  it("reads to the true tip when a trailing system notice is attached to an old row", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.prompt("First synthetic task.");
+    fixture.answer("First synthetic answer.");
+    const staleDuration = fixture.system("turn_duration", { durationMs: 883 });
+    fixture.prompt("Second synthetic task.");
+    const lastAnswer = fixture.answer("Second synthetic answer.");
+    // Claude Code can write a later warning against a stale row, e.g. when
+    // Remote Control disconnects at the end of a session.
+    fixture.from(staleDuration).system("informational", { level: "warning" });
+
+    const messages = await ours(fixture);
+    expect(messages.at(-1)?.uuid).toBe(lastAnswer);
+    // The pinned SDK walks up from the latest childless row, that notice, so
+    // it stops at the first answer.
     const truncated = await sdk(fixture);
-    expect(truncated.length).toBeLessThan(messages.length);
-    expect(uuids(truncated)).not.toContain(lastReply);
-    expect(uuids(truncated)).toContain(deadEnds[1]);
+    expect(truncated).toEqual(messages.slice(0, 2));
   });
 
   it("matches the pinned SDK exactly when the tip is not a startup message", async () => {
@@ -146,7 +162,7 @@ describe("Claude native transcript reader", () => {
     expect(messages).toEqual(await sdk(fixture));
   });
 
-  it("converts answered human queued commands and drops unanswered, meta, and forwarded ones", async () => {
+  it("converts answered queued commands and drops unanswered, meta, and forwarded ones", async () => {
     const fixture = new ClaudeTranscriptFixture(workspace);
     fixture.prompt("Start a long task.");
     const sourceUuid = randomUUID();
@@ -155,17 +171,67 @@ describe("Claude native transcript reader", () => {
     fixture.attachment({ type: "queued_command", commandMode: "prompt", prompt: "Meta note.", isMeta: true });
     fixture.attachment({ type: "queued_command", commandMode: "prompt", prompt: "Forwarded.",
       forwardedIntent: { lineage: "synthetic-lineage", source: "relay" } });
+    // A background task finished while Claude was running a tool.
+    const notification = fixture.attachment({ type: "queued_command", commandMode: "task-notification",
+      prompt: "<task-notification>\n<task-id>bsynthetic1</task-id>\n<status>completed</status>\n</task-notification>" });
+    const scheduled = fixture.attachment({ type: "queued_command", commandMode: "task-notification", prompt: "Scheduled check.",
+      origin: { kind: "task-notification", subkind: "scheduled-trigger", fireReason: "manual", taskId: "private" } });
+    const peer = fixture.attachment({ type: "queued_command", commandMode: "prompt", prompt: "Peer note.", origin: { kind: "peer" } });
     fixture.text("Checked both.");
     fixture.attachment({ type: "queued_command", commandMode: "prompt", prompt: [{ type: "text", text: "Unanswered." }] });
     fixture.prompt("Next prompt.");
 
     const messages = await ours(fixture);
     const converted = messages.find(({ uuid }) => uuid === sourceUuid);
-    expect(converted).toMatchObject({ type: "user", message: { role: "user", content: "Also check tests." }, origin: { kind: "human" } });
+    expect(converted).toMatchObject({ type: "user", message: { role: "user", content: "Also check tests." },
+      origin: { kind: "human" }, isQueuedCommand: true });
     expect(uuids(messages)).not.toContain(queued);
+    expect(messages.find(({ uuid }) => uuid === notification)).toMatchObject({
+      type: "user", origin: { kind: "task-notification" }, isQueuedCommand: true });
+    expect(messages.find(({ uuid }) => uuid === scheduled)).toMatchObject({
+      origin: { kind: "task-notification", subkind: "scheduled-trigger", fireReason: "manual" } });
+    expect(messages.find(({ uuid }) => uuid === scheduled)).not.toHaveProperty("origin.taskId");
+    expect(messages.find(({ uuid }) => uuid === peer)).toMatchObject({ origin: { kind: "peer" }, isQueuedCommand: true });
     expect(JSON.stringify(messages)).not.toContain("Meta note.");
     expect(JSON.stringify(messages)).not.toContain("Forwarded.");
     expect(JSON.stringify(messages)).not.toContain("Unanswered.");
+    expect(messages).toEqual(await sdk(fixture));
+  });
+
+  it("marks a completed local command's rows and does not treat them as a prompt", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.prompt("Start a synthetic task.");
+    const unanswered = fixture.attachment({ type: "queued_command", commandMode: "prompt", prompt: "Queued before the command." });
+    fixture.prompt("<local-command-caveat>Caveat: synthetic.</local-command-caveat>", { isMeta: true, origin: undefined });
+    const record = fixture.prompt("<command-name>/synthetic</command-name>\n<command-message>synthetic</command-message>",
+      { origin: undefined });
+    const output = fixture.prompt("<local-command-stdout>Synthetic output.</local-command-stdout>", { origin: undefined });
+    fixture.text("Continuing.");
+
+    const messages = await ours(fixture);
+    expect(messages.find(({ uuid }) => uuid === record)).toMatchObject({ isCompletedLocalCommand: true });
+    expect(messages.find(({ uuid }) => uuid === output)).toMatchObject({ isCompletedLocalCommand: true });
+    // The command rows are not a prompt, so the reply answers the queued command.
+    expect(messages.find(({ uuid }) => uuid === unanswered)).toMatchObject({ isQueuedCommand: true });
+    expect(messages).toEqual(await sdk(fixture));
+  });
+
+  it("re-inserts a parallel tool result linked to its call only by provenance", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.prompt("Read two synthetic files.");
+    const [, first, second] = fixture.reply([
+      { type: "text", text: "Reading both." },
+      { type: "tool_use", id: "toolu_indirect_1", name: "Read", input: { file_path: "/synthetic/1" } },
+      { type: "tool_use", id: "toolu_indirect_2", name: "Read", input: { file_path: "/synthetic/2" } },
+    ]);
+    // The second result hangs off a hook attachment, naming its call by source.
+    const hook = fixture.from(second!).attachment({ type: "hook_success", hookName: "PostToolUse" });
+    const indirect = fixture.toolResult("toolu_indirect_2", hook, undefined, { sourceToolAssistantUUID: second });
+    fixture.toolResult("toolu_indirect_1", first!);
+    fixture.answer("Both read.");
+
+    const messages = await ours(fixture);
+    expect(uuids(messages)).toContain(indirect);
     expect(messages).toEqual(await sdk(fixture));
   });
 
@@ -466,6 +532,39 @@ describe("Claude Code resume shapes", () => {
     const projection = await project(fixture);
     expect(statuses(projection)).toEqual(["interrupted"]);
     expect(transcript(projection)).toEqual([["user: Start a long synthetic task.", "assistant: Working on the synthetic task"]]);
+  });
+
+  it("keeps a task notification Claude read while running a tool inside that turn", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.startupMessage();
+    fixture.prompt("Run the synthetic build, then check the synthetic lint.");
+    const [call] = fixture.reply([{ type: "tool_use", id: "toolu_synthetic_lint", name: "Bash", input: { command: "true" } }],
+      { stopReason: "tool_use" });
+    fixture.toolResult("toolu_synthetic_lint", call!);
+    const folded = fixture.attachment({ type: "queued_command", commandMode: "task-notification",
+      prompt: "<task-notification>\n<task-id>bsynthetic1</task-id>\n<status>completed</status>\n</task-notification>" });
+    fixture.answer("Build and lint both passed.");
+
+    const messages = await ours(fixture);
+    expect(messages.find(({ uuid }) => uuid === folded)).toMatchObject({ origin: { kind: "task-notification" }, isQueuedCommand: true });
+    const projection = await project(fixture);
+    expect(statuses(projection)).toEqual(["completed"]);
+    expect(transcript(projection)).toEqual([["user: Run the synthetic build, then check the synthetic lint.", "command",
+      "assistant: Build and lint both passed."]]);
+  });
+
+  it("counts a queued command followed by an interrupted-call marker as answered", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.prompt("Start a synthetic task.");
+    fixture.reply([{ type: "tool_use", id: "toolu_synthetic_lost", name: "Bash", input: { command: "true" } }],
+      { stopReason: "tool_use" });
+    const steer = fixture.attachment({ type: "queued_command", commandMode: "prompt", prompt: "Also check the synthetic docs.",
+      origin: { kind: "human" } });
+    const marker = "[Tool call interrupted: the session ended before this call's result was recorded, so its outcome is " +
+      "unknown. Check whether it took effect before relying on it or running it again.]";
+    fixture.prompt(marker, { origin: undefined, promptId: undefined, message: { role: "user", content: [{ type: "text", text: marker }] } });
+    expect(uuids(await ours(fixture))).toContain(steer);
+    expect(await ours(fixture)).toEqual(await sdk(fixture));
   });
 
   describe("unfinished background work reported on resume", () => {

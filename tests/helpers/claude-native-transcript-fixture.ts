@@ -127,10 +127,10 @@ export class ClaudeTranscriptFixture {
       origin: { kind: "task-notification" }, promptSource: "system", queueSkipAttachments: true, queueTranscriptOnly: true });
   }
 
-  toolResult(toolUseId: string, parentUuid: string, text = `result of ${toolUseId}`): string {
+  toolResult(toolUseId: string, parentUuid: string, text = `result of ${toolUseId}`, extra: Row = {}): string {
     return this.from(parentUuid).#append({ type: "user", message: { role: "user", content: [
       { type: "tool_result", tool_use_id: toolUseId, content: text },
-    ] }, sourceToolAssistantUUID: parentUuid, toolUseResult: { stdout: text } });
+    ] }, sourceToolAssistantUUID: parentUuid, toolUseResult: { stdout: text }, ...extra });
   }
 
   /**

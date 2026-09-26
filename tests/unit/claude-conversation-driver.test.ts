@@ -65,7 +65,7 @@ const instance: AgentBackendInstance = {
   label: "Claude",
   enabled: true,
   configurationRevision: 1,
-  protocolRelease: "0.3.274",
+  protocolRelease: "0.3.283",
 };
 const connection: AgentConnectionProfile = {
   id: "claude-profile-1",
@@ -2048,25 +2048,25 @@ describe("ClaudeConversationBackendDriver native history", () => {
     fixture.text("Two modules found.");
     fixture.startupMessage();
     fixture.prompt("Compare them.");
-    fixture.parallelToolCalls("compare");
+    const compare = fixture.parallelToolCalls("compare");
     fixture.text("They differ in one function.");
     fixture.startupMessage();
     await fixture.write(configDirectory, workspace.canonicalPath);
     const { driver } = nativeStoreDriver();
     const view = await readViaDriver(driver);
-    // The SDK's leaf heuristic reads this transcript only to its last dead end.
-    const sdkView = await getSessionMessages(sessionId, { dir: workspace.canonicalPath });
-    expect(sdkView.length).toBeLessThan(view.length);
+    // SDK 0.3.283 resolves a startup-message tip like Sedes. 0.3.274 read this
+    // transcript only to its last dead end; an anchor may come from that view.
+    expect(await getSessionMessages(sessionId, { dir: workspace.canonicalPath })).toEqual(view);
+    const truncatedView = view.slice(0, view.findIndex(({ uuid }) => uuid === compare.deadEnd) + 1);
+    expect(truncatedView.length).toBeLessThan(view.length);
 
     // Sedes submits; Claude Code persists the prompt, then the process dies
     // before replying. The next attach appends another startup message.
     fixture.prompt("Rename the differing function.", { uuid: operationId });
     fixture.startupMessage();
     await fixture.write(configDirectory, workspace.canonicalPath);
-    // The SDK's truncated view still matches an anchor captured from itself.
-    expect(uuids(await getSessionMessages(sessionId, { dir: workspace.canonicalPath }))).toEqual(uuids(sdkView));
 
-    for (const anchor of [retryAnchor(view), retryAnchor(sdkView)]) {
+    for (const anchor of [retryAnchor(view), retryAnchor(truncatedView)]) {
       await expect(driver.reconcileSubmission({ ...attachment(), applicationOperationId: operationId, retryAnchor: anchor }))
         .resolves.toMatchObject({ status: "accepted", backendTurn: { completionCorrelations: [operationId] } });
     }
