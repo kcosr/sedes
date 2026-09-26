@@ -1318,7 +1318,7 @@ describe("InteractionBroker", () => {
     expect(conversation.respond).toHaveBeenCalledOnce();
   });
 
-  it("force-resets exact pending interactions locally and suppresses stale backend replay", () => {
+  it("force-resets exact pending interactions, denies them at the provider, and suppresses stale backend replay", async () => {
     const conversation = new FakeConversation();
     const publisher = { opened: vi.fn(), resolved: vi.fn() };
     const broker = new InteractionBroker({ publisher });
@@ -1326,10 +1326,16 @@ describe("InteractionBroker", () => {
     conversation.emit(opened());
     const interaction = broker.listPending(scope, "thread-1")[0]!;
 
-    broker.abandonPending(scope, "thread-1", [interaction.id]);
+    const denied = broker.abandonPending(scope, "thread-1", [interaction.id]);
 
     expect(broker.listPending(scope, "thread-1")).toEqual([]);
-    expect(conversation.responses).toEqual([]);
+    await denied;
+    // The provider is told no, so a replaced runtime is not left waiting.
+    expect(conversation.responses).toEqual([{
+      applicationOperationId: `force-reset:${interaction.id}`,
+      interactionId: "backend-interaction-1",
+      kind: "cancel",
+    }]);
     expect(publisher.resolved).toHaveBeenCalledWith(
       scope,
       "thread-1",

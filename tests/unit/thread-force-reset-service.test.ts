@@ -28,14 +28,14 @@ function impact() {
     blockerFingerprint: "fingerprint",
     resettable: true,
     blockers: [{ kind: "conversation_operation" as const, count: 1 }],
-    affectedThreadIds: ["thread-1"],
+    affectedThreads: [{ threadId: "thread-1", title: "Thread" }],
     warnings: [],
   };
 }
 
 const noPendingInteractions = {
   listPending: () => [],
-  abandonPending: () => undefined,
+  abandonPending: async () => undefined,
 };
 
 const noLoadedRuntimes = {
@@ -168,7 +168,7 @@ describe("ThreadForceResetService", () => {
             pendingInteractions.length === 0
               ? []
               : [{ kind: "pending_interaction" as const, count: 1 }],
-          affectedThreadIds: ["thread-1"],
+          affectedThreads: [{ threadId: "thread-1", title: "Thread" }],
           warnings: [],
         }),
       ),
@@ -182,9 +182,14 @@ describe("ThreadForceResetService", () => {
         resetConversationRuntimes: [],
       })),
     };
+    const denied = deferred();
     const interactions = {
       listPending: vi.fn(() => pending),
-      abandonPending: vi.fn(() => order.push("interactions-abandoned")),
+      abandonPending: vi.fn(async () => {
+        order.push("interactions-abandoned");
+        await denied.promise;
+        order.push("provider-denied");
+      }),
     };
     const service = new ThreadForceResetService({
       repository: repository as never,
@@ -204,12 +209,14 @@ describe("ThreadForceResetService", () => {
       blockerFingerprint: "combined",
       blockers: [{ kind: "pending_interaction", count: 1 }],
     });
-    await expect(
-      service.forceReset(scope, "thread-1", {
-        expectedBlockerFingerprint: "combined",
-        mutationId: "mutation-pending",
-      }),
-    ).resolves.toMatchObject({
+    const reset = service.forceReset(scope, "thread-1", {
+      expectedBlockerFingerprint: "combined",
+      mutationId: "mutation-pending",
+    });
+    await vi.waitFor(() => expect(order).toEqual(["interactions-abandoned"]));
+    // The provider denial is delivered before the runtime can be replaced.
+    denied.resolve();
+    await expect(reset).resolves.toMatchObject({
       resetBlockers: [{ kind: "pending_interaction", count: 1 }],
     });
 
@@ -231,13 +238,13 @@ describe("ThreadForceResetService", () => {
       "thread-1",
       ["pending-approval"],
     );
-    expect(order).toEqual(["interactions-abandoned"]);
+    expect(order).toEqual(["interactions-abandoned", "provider-denied"]);
   });
 
   it("does not abandon interactions opened after a force-reset receipt replay", async () => {
     const interactions = {
       listPending: vi.fn(() => [{ id: "new-approval" }]),
-      abandonPending: vi.fn(),
+      abandonPending: vi.fn(async () => undefined),
     };
     const forceResetLoadedRuntime = vi.fn(async () => true);
     const service = new ThreadForceResetService({

@@ -447,7 +447,7 @@ describe("thread force-reset repository", () => {
       expect(impact).toMatchObject({
         resettable: true,
         blockers: [{ kind: "completion_callback", count: 1 }],
-        affectedThreadIds: [current.childId],
+        affectedThreads: [{ threadId: current.childId, title: expect.any(String) }],
       });
 
       expect(() =>
@@ -651,7 +651,7 @@ describe("thread force-reset repository", () => {
     }
   });
 
-  it.each(["source", "child"] as const)(
+  it.each(["source"] as const)(
     "atomically tombstones every blocker from the prepared fork %s and preserves real runtime activity",
     async (invocation) => {
       const current = fixture();
@@ -670,7 +670,7 @@ describe("thread force-reset repository", () => {
           { kind: "fork_origin", count: 1 },
           { kind: "automation_run", count: 1 },
         ]);
-        expect(impact.affectedThreadIds).toEqual(
+        expect(impact.affectedThreads.map(({ threadId }) => threadId)).toEqual(
           [current.rootId, current.childId].sort(),
         );
         expect(impact.warnings.map(({ code }) => code)).toEqual([
@@ -972,6 +972,65 @@ describe("thread force-reset repository", () => {
     },
   );
 
+  it("resets only a prepared fork child when started from it and never reaches its running source", () => {
+    const current = fixture();
+    try {
+      const seeded = prepareRootBlockers(current);
+      const resets = new ThreadForceResetRepository(current.database);
+      const running = { kind: "conversation_runtime" as const, threadId: current.rootId,
+        generation: "source-generation", runState: "running" as const, activeTurnId: "source-turn" };
+      // The source's loaded runtime is not part of a child-scoped reset.
+      expect(() => resets.impact(current.scope, current.childId, [], [running])).toThrow("invalid or stale");
+      const impact = resets.impact(current.scope, current.childId);
+      expect(impact.affectedThreads).toEqual([{ threadId: current.childId, title: expect.any(String) }]);
+      expect(impact.blockers).toEqual([
+        { kind: "creation_attempt", count: 1 },
+        { kind: "thread_creation_state", count: 1 },
+        { kind: "fork_origin", count: 1 },
+      ]);
+      const reset = resets.forceReset(current.scope, current.childId, {
+        expectedBlockerFingerprint: impact.blockerFingerprint,
+        mutationId: "force-reset-child-only",
+        now: 700,
+      });
+      expect(reset.affectedThreadIds).toEqual([current.childId]);
+      // The child's tasks still move to the retained source.
+      expect(reset.promotedTaskIds).toEqual([seeded.taskId, seeded.completedTaskId].sort());
+      expect(new QueuedInputRepository(current.database).get(current.scope, current.rootId, seeded.queueId))
+        .toMatchObject({ state: "dispatching" });
+      expect(new ProviderFeatureMutationRepository(current.database).find(current.scope, seeded.featureMutationId))
+        .not.toMatchObject({ state: "abandoned" });
+      expect(new InventoryRepository(current.database).getThread(current.scope, current.childId).inventory.inventoryState)
+        .toBe("archived");
+      expect(new ConversationCreationRepository(current.database).findActiveForThread(current.scope, current.childId))
+        .toBeUndefined();
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("names affected threads with their loaded runtime's run state and background work", () => {
+    const current = fixture();
+    try {
+      prepareRootBlockers(current);
+      const resets = new ThreadForceResetRepository(current.database);
+      const background = { state: "known" as const, agents: 2, commands: 0, other: 0 };
+      const runtime = { kind: "conversation_runtime" as const, threadId: current.rootId,
+        generation: "source-generation", runState: "idle" as const, backgroundActivity: background };
+      const impact = resets.impact(current.scope, current.rootId, [], [runtime]);
+      expect(impact.affectedThreads.find(({ threadId }) => threadId === current.rootId))
+        .toMatchObject({ runtime: { runState: "idle", backgroundActivity: background } });
+      expect(impact.warnings[0]).toMatchObject({ code: "running_work_will_stop" });
+      const settled = resets.impact(current.scope, current.rootId, [], [{ ...runtime, backgroundActivity:
+        { state: "known", agents: 0, commands: 0, other: 0 } }]);
+      // A change in background work changes what the user reviewed.
+      expect(settled.blockerFingerprint).not.toBe(impact.blockerFingerprint);
+      expect(settled.warnings.map(({ code }) => code)).not.toContain("running_work_will_stop");
+    } finally {
+      current.database.close();
+    }
+  });
+
   it("moves every prepared-fork chain task to the first retained source", () => {
     const current = fixture();
     try {
@@ -1211,7 +1270,7 @@ describe("thread force-reset repository", () => {
       expect(impact).toMatchObject({
         resettable: false,
         blockers: [],
-        affectedThreadIds: [current.rootId],
+        affectedThreads: [{ threadId: current.rootId, title: expect.any(String) }],
       });
       expect(() =>
         resets.forceReset(current.scope, current.rootId, {

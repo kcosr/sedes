@@ -32,6 +32,25 @@ const blockerLabels: Record<
   conversation_runtime: ["conversation runtime", "conversation runtimes"],
 };
 
+function runtimeDescription(
+  runtime: NonNullable<ThreadForceResetImpact["affectedThreads"][number]["runtime"]>,
+): string {
+  const activity = runtime.backgroundActivity;
+  const background =
+    activity?.state === "unknown"
+      ? "background work unknown"
+      : activity && activity.agents + activity.commands + activity.other > 0
+        ? `${activity.agents + activity.commands + activity.other} background ${
+            activity.agents + activity.commands + activity.other === 1 ? "task" : "tasks"
+          }`
+        : undefined;
+  const active = runtime.runState !== "idle" && runtime.runState !== "failed";
+  const state = active ? `${runtime.runState.replaceAll("_", " ")}` : "loaded";
+  return active || background
+    ? `Runtime ${state}${background ? `, ${background}` : ""}; resetting stops this work.`
+    : "Loaded runtime will be replaced.";
+}
+
 export function ForceResetDialog({
   open,
   onOpenChange,
@@ -196,11 +215,21 @@ export function ForceResetDialog({
                       );
                     })}
                   </ul>
-                  <p>
-                    {impact.affectedThreadIds.length === 1
-                      ? "This affects this thread."
-                      : `This affects ${impact.affectedThreadIds.length.toLocaleString()} related threads.`}
-                  </p>
+                  <h3>
+                    {impact.affectedThreads.length === 1
+                      ? "Affected thread"
+                      : `Affected threads (${impact.affectedThreads.length.toLocaleString()})`}
+                  </h3>
+                  <ul className="force-reset-threads">
+                    {impact.affectedThreads.map((thread) => (
+                      <li key={thread.threadId}>
+                        <span>{thread.title}</span>
+                        {thread.runtime && (
+                          <small>{runtimeDescription(thread.runtime)}</small>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
                 </>
               ) : (
                 <p role="status">No unresolved Sedes work was found.</p>

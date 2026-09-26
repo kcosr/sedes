@@ -11865,6 +11865,20 @@ tr.diff-hunk td {
   padding-left: 20px;
 }
 
+.force-reset-threads {
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.force-reset-threads li {
+  display: grid;
+  overflow-wrap: anywhere;
+}
+
+.force-reset-threads small {
+  color: var(--destructive);
+}
+
 .force-reset-warnings {
   display: grid;
   grid-template-columns: auto 1fr;

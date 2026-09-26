@@ -371,7 +371,7 @@ describe("ApplicationClientStore lineage", () => {
       blockerFingerprint: "f".repeat(64),
       resettable: true,
       blockers: [{ kind: "fork_origin" as const, count: 1 }],
-      affectedThreadIds: ["root"],
+      affectedThreads: [{ threadId: "root", title: "Root" }],
       warnings: [],
     };
     const getThreadForceResetImpact = vi.fn(async () => impact);
@@ -379,7 +379,7 @@ describe("ApplicationClientStore lineage", () => {
       resetAt: 1,
       blockerFingerprint: impact.blockerFingerprint,
       resetBlockers: impact.blockers,
-      affectedThreadIds: impact.affectedThreadIds,
+      affectedThreadIds: impact.affectedThreads.map(({ threadId }) => threadId),
     }));
     const api = {
       session: vi.fn(async () => session()),

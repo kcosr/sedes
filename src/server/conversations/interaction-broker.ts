@@ -595,11 +595,18 @@ export class InteractionBroker {
    * Locally abandons exact browser interactions after a durable force reset.
    * This deliberately publishes no response or cancellation to the backend.
    */
+  /**
+   * Force reset: abandon exact pending interactions in Sedes, and deny any
+   * provider request still waiting on one, so a runtime that is replaced or
+   * reattached later does not keep the provider waiting on a prompt that
+   * nobody can answer. Validation is synchronous; the returned promise
+   * settles when the denials are delivered or have failed.
+   */
   abandonPending(
     scope: RequestScope,
     applicationThreadId: string,
     interactionIds: readonly string[],
-  ): void {
+  ): Promise<void> {
     this.#assertOpen();
     if (new Set(interactionIds).size !== interactionIds.length) {
       throw new Error("interaction_broker_force_reset_evidence_changed");
@@ -615,6 +622,7 @@ export class InteractionBroker {
       }
       return current;
     });
+    const denials: Promise<void>[] = [];
     for (const current of pending) {
       if (current.owner === "provider") {
         this.#abandonedBackend.add(
@@ -623,6 +631,17 @@ export class InteractionBroker {
             current.applicationThreadId,
             current.backendInteractionId,
           ),
+        );
+        denials.push(
+          current.conversation
+            .respond({
+              applicationOperationId: `force-reset:${current.interaction.id}`,
+              interactionId: current.backendInteractionId,
+              kind: "cancel",
+            })
+            .catch(() => {
+              // The abandoned marker still drops any replay of this request.
+            }),
         );
       }
       this.#remove(current);
@@ -634,6 +653,7 @@ export class InteractionBroker {
         current.interaction.id,
       );
     }
+    return Promise.all(denials).then(() => undefined);
   }
 
   hasPending(

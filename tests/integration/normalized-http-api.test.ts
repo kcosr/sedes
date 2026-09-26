@@ -1045,7 +1045,7 @@ async function fixture(
     repository: new ThreadForceResetRepository(database),
     interactions: {
       listPending: () => [],
-      abandonPending: () => undefined,
+      abandonPending: async () => undefined,
     },
     runtimes: threadRuntimes,
     scheduleThreadPublications: (eventScope, threadIds) => {
@@ -4939,7 +4939,7 @@ describe("normalized HTTP application contract", () => {
           { kind: "conversation_operation", count: 1 },
           { kind: "conversation_runtime", count: 1 },
         ],
-        affectedThreadIds: [created.body.id],
+        affectedThreads: [{ threadId: created.body.id, title: expect.any(String), runtime: expect.any(Object) }],
       });
       expect(
         impact.body.warnings.map(({ code }: { code: string }) => code),

@@ -15,12 +15,20 @@ export interface ThreadForceResetInteractionState {
     scope: RequestScope,
     applicationThreadId: string,
   ): readonly { readonly id: string }[];
+  /**
+   * Abandon the exact pending interactions in Sedes and deny any provider
+   * request still waiting on them. The returned promise settles once those
+   * denials are delivered or have failed.
+   */
   abandonPending(
     scope: RequestScope,
     applicationThreadId: string,
     interactionIds: readonly string[],
-  ): void;
+  ): Promise<void>;
 }
+
+/** Bound on waiting for provider denials before the runtime is replaced. */
+const PROVIDER_DENIAL_WAIT_MILLISECONDS = 10_000;
 
 export interface ThreadForceResetRuntimeState {
   captureLoadedRuntime(
@@ -62,13 +70,16 @@ export class ThreadForceResetService {
     threadId: string,
   ): Promise<ThreadForceResetImpact> {
     const repositoryImpact = this.input.repository.impact(scope, threadId);
+    const affectedThreadIds = repositoryImpact.affectedThreads.map(
+      ({ threadId: affectedThreadId }) => affectedThreadId,
+    );
     const pendingInteractions = this.#pendingInteractions(
       scope,
-      repositoryImpact.affectedThreadIds,
+      affectedThreadIds,
     );
     const conversationRuntimes = await this.#conversationRuntimes(
       scope,
-      repositoryImpact.affectedThreadIds,
+      affectedThreadIds,
     );
     return pendingInteractions.length === 0 && conversationRuntimes.length === 0
       ? repositoryImpact
@@ -86,13 +97,16 @@ export class ThreadForceResetService {
     input: ThreadForceResetRequest,
   ): Promise<ThreadForceResetResult> {
     const repositoryImpact = this.input.repository.impact(scope, threadId);
+    const affectedThreadIds = repositoryImpact.affectedThreads.map(
+      ({ threadId: affectedThreadId }) => affectedThreadId,
+    );
     const pendingInteractions = this.#pendingInteractions(
       scope,
-      repositoryImpact.affectedThreadIds,
+      affectedThreadIds,
     );
     const conversationRuntimes = await this.#conversationRuntimes(
       scope,
-      repositoryImpact.affectedThreadIds,
+      affectedThreadIds,
     );
     const committed = this.input.repository.forceReset(scope, threadId, {
       ...input,
@@ -101,6 +115,7 @@ export class ThreadForceResetService {
       conversationRuntimes,
     });
     if (!committed.replayed && pendingInteractions.length > 0) {
+      const denials: Promise<void>[] = [];
       try {
         for (const affectedThreadId of committed.affectedThreadIds) {
           const interactionIds = pendingInteractions
@@ -110,16 +125,28 @@ export class ThreadForceResetService {
             )
             .map(({ id }) => id);
           if (interactionIds.length > 0) {
-            this.input.interactions.abandonPending(
-              scope,
-              affectedThreadId,
-              interactionIds,
+            denials.push(
+              this.input.interactions.abandonPending(
+                scope,
+                affectedThreadId,
+                interactionIds,
+              ),
             );
           }
         }
       } catch (error) {
         this.#reportPostCommitError(error);
       }
+      // A replaced remote runtime would otherwise leave the provider waiting
+      // on a prompt that nobody can answer. Deny it first, within a bound.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.allSettled(denials),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, PROVIDER_DENIAL_WAIT_MILLISECONDS);
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
     }
     // A receipt replay is observational: it must never retire a newer runtime
     // generation that appeared after the original commit.

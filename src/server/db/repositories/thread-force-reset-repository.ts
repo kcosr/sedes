@@ -8,6 +8,11 @@ import type {
   ThreadForceResetWarning,
 } from "../../../shared/protocol/api.js";
 import {
+  backgroundActivitySchema,
+  hasOutstandingBackgroundActivity,
+  type BackgroundActivity,
+} from "../../../shared/protocol/background-activity.js";
+import {
   threadRunStateSchema,
   type ThreadRunState,
 } from "../../../shared/protocol/conversation.js";
@@ -48,6 +53,8 @@ export interface ThreadForceResetConversationRuntimeBlocker {
   readonly generation: string;
   readonly runState: ThreadRunState;
   readonly activeTurnId?: string;
+  /** Background work the loaded runtime reports; replacing it stops that work. */
+  readonly backgroundActivity?: BackgroundActivity;
 }
 
 type PreparedFork = {
@@ -58,6 +65,7 @@ type PreparedFork = {
 
 type Capture = {
   readonly affectedThreadIds: readonly string[];
+  readonly affectedThreads: ThreadForceResetImpact["affectedThreads"];
   readonly blockers: readonly Blocker[];
   readonly preparedForks: readonly PreparedFork[];
   readonly blockerFingerprint: string;
@@ -160,11 +168,24 @@ export class ThreadForceResetRepository {
       message:
         "Force reset does not stop provider work or claim that the provider is idle; authoritative activity may appear again.",
     });
+    if (
+      capture.conversationRuntimes.some(
+        (runtime) =>
+          !["idle", "failed"].includes(runtime.runState) ||
+          hasOutstandingBackgroundActivity(runtime.backgroundActivity),
+      )
+    ) {
+      warnings.unshift({
+        code: "running_work_will_stop",
+        message:
+          "Force reset replaces the loaded runtimes listed below, which stops their running turns and background work.",
+      });
+    }
     return {
       blockerFingerprint: capture.blockerFingerprint,
       resettable: capture.blockers.length > 0,
       blockers: [...capture.summaries],
-      affectedThreadIds: [...capture.affectedThreadIds],
+      affectedThreads: [...capture.affectedThreads],
       warnings,
     };
   }
@@ -547,11 +568,12 @@ export class ThreadForceResetRepository {
           sourceThreadId: row.sourceThreadId,
           branchMethod: row.branchMethod,
         });
-        for (const id of [row.childThreadId, row.sourceThreadId]) {
-          if (!affected.has(id)) {
-            affected.add(id);
-            changed = true;
-          }
+        // Resetting a thread abandons the incomplete forks it is the source
+        // of, but never reaches up: a reset started from a fork child leaves
+        // its source, and the source's runtime and sibling forks, untouched.
+        if (!affected.has(row.childThreadId)) {
+          affected.add(row.childThreadId);
+          changed = true;
         }
       }
       if (affected.size > MAXIMUM_AFFECTED_THREADS) {
@@ -749,6 +771,15 @@ export class ThreadForceResetRepository {
           );
         }
         runtimeThreads.add(runtime.threadId);
+        if (
+          runtime.backgroundActivity !== undefined &&
+          !backgroundActivitySchema.safeParse(runtime.backgroundActivity).success
+        ) {
+          throw new DomainError(
+            "conflict",
+            "The conversation-runtime force-reset evidence is invalid or stale.",
+          );
+        }
         const normalized = {
           kind: "conversation_runtime" as const,
           threadId: runtime.threadId,
@@ -757,7 +788,11 @@ export class ThreadForceResetRepository {
           ...(runtime.activeTurnId
             ? { activeTurnId: runtime.activeTurnId }
             : {}),
+          ...(runtime.backgroundActivity
+            ? { backgroundActivity: runtime.backgroundActivity }
+            : {}),
         };
+        const background = normalized.backgroundActivity;
         blockers.push({
           kind: normalized.kind,
           id: normalized.generation,
@@ -765,10 +800,13 @@ export class ThreadForceResetRepository {
           state: JSON.stringify([
             normalized.runState,
             normalized.activeTurnId ?? null,
+            ...(background
+              ? [background.state, background.agents, background.commands, background.other]
+              : []),
           ]),
-          mayHaveProviderSideEffect: !["idle", "failed"].includes(
-            normalized.runState,
-          ),
+          mayHaveProviderSideEffect:
+            !["idle", "failed"].includes(normalized.runState) ||
+            hasOutstandingBackgroundActivity(background),
         });
         return normalized;
       },
@@ -808,8 +846,38 @@ export class ThreadForceResetRepository {
             readonly threadId: string;
             readonly revision: number;
           }[]);
+    const titles = new Map(
+      (this.database
+        .prepare(
+          `SELECT id, title FROM application_threads
+           WHERE tenant_id = ? AND owner_principal_id = ? AND id IN (${placeholders})`,
+        )
+        .all(...args) as readonly { readonly id: string; readonly title: string }[])
+        .map(({ id, title }) => [id, title]),
+    );
+    const runtimeByThread = new Map(
+      normalizedConversationRuntimes.map((runtime) => [runtime.threadId, runtime]),
+    );
+    const affectedThreads = threadIds.map((affectedThreadId) => {
+      const runtime = runtimeByThread.get(affectedThreadId);
+      return {
+        threadId: affectedThreadId,
+        title: (titles.get(affectedThreadId) ?? "").slice(0, 240) || "Untitled thread",
+        ...(runtime
+          ? {
+              runtime: {
+                runState: runtime.runState,
+                ...(runtime.backgroundActivity
+                  ? { backgroundActivity: runtime.backgroundActivity }
+                  : {}),
+              },
+            }
+          : {}),
+      };
+    });
     return {
       affectedThreadIds: threadIds,
+      affectedThreads,
       blockers,
       preparedForks: [...preparedForks.values()].sort((left, right) =>
         left.childThreadId.localeCompare(right.childThreadId),

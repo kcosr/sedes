@@ -1171,7 +1171,7 @@ describe("ApiClient normalized contract", () => {
       blockerFingerprint,
       resettable: true,
       blockers: [{ kind: "conversation_operation" as const, count: 2 }],
-      affectedThreadIds: [threadId],
+      affectedThreads: [{ threadId, title: "Thread" }],
       warnings: [
         {
           code: "provider_side_effects_may_remain" as const,

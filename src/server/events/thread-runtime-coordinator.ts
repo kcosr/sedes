@@ -886,6 +886,9 @@ export class ThreadRuntimeCoordinator {
         ...(timeline.activeTurnId
           ? { activeTurnId: timeline.activeTurnId }
           : {}),
+        ...(timeline.backgroundActivity
+          ? { backgroundActivity: timeline.backgroundActivity }
+          : {}),
       };
     } finally {
       this.#release(key, entry);

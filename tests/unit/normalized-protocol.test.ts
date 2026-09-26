@@ -854,7 +854,8 @@ describe("thread force-reset protocol", () => {
         blockerFingerprint,
         resettable: true,
         blockers,
-        affectedThreadIds: [threadId],
+        affectedThreads: [{ threadId, title: "Thread", runtime: { runState: "running",
+          backgroundActivity: { state: "known", agents: 1, commands: 0, other: 0 } } }],
         warnings: [
           {
             code: "provider_side_effects_may_remain",
@@ -884,7 +885,7 @@ describe("thread force-reset protocol", () => {
       blockerFingerprint,
       resettable: true,
       blockers: [blockers[0], blockers[0]],
-      affectedThreadIds: [threadId],
+      affectedThreads: [{ threadId, title: "Thread" }],
       warnings: [],
     };
     expect(threadForceResetImpactSchema.safeParse(impact).success).toBe(false);

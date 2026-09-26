@@ -3,7 +3,8 @@ import {
   environmentVariableOverridesSchema,
   environmentVariablesRevisionSchema,
 } from "./environment-variables.js";
-import { steerTargetSchema } from "./conversation.js";
+import { steerTargetSchema, threadRunStateSchema } from "./conversation.js";
+import { backgroundActivitySchema } from "./background-activity.js";
 import { z } from "zod";
 import { questionRequestsResultSchema } from "./questions.js";
 import {
@@ -789,6 +790,7 @@ const threadForceResetBlockerSummariesSchema = z
 
 export const threadForceResetWarningSchema = z.strictObject({
   code: z.enum([
+    "running_work_will_stop",
     "provider_side_effects_may_remain",
     "native_fork_orphan_may_remain",
     "provider_activity_may_reappear",
@@ -804,12 +806,25 @@ const forceResetFingerprintSchema = z
   .length(64)
   .regex(/^[0-9a-f]{64}$/);
 
+/** One thread a force reset would touch, named for the preview. */
+export const threadForceResetAffectedThreadSchema = z.strictObject({
+  threadId: threadIdSchema,
+  title: z.string().min(1).max(240),
+  /** The loaded runtime the reset would replace, if any. */
+  runtime: z
+    .strictObject({
+      runState: threadRunStateSchema,
+      backgroundActivity: backgroundActivitySchema.optional(),
+    })
+    .optional(),
+});
+
 export const threadForceResetImpactSchema = z.strictObject({
   blockerFingerprint: forceResetFingerprintSchema,
   resettable: z.boolean(),
   blockers: threadForceResetBlockerSummariesSchema,
-  affectedThreadIds: z.array(threadIdSchema).min(1).max(10_000),
-  warnings: z.array(threadForceResetWarningSchema).max(3),
+  affectedThreads: z.array(threadForceResetAffectedThreadSchema).min(1).max(10_000),
+  warnings: z.array(threadForceResetWarningSchema).max(4),
 });
 export type ThreadForceResetImpact = z.infer<
   typeof threadForceResetImpactSchema
