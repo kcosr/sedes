@@ -104,6 +104,7 @@ import {
   piUsage,
   type PiSdkSession,
   type PiSdkSessionFactory,
+  type PiSteerAdmission,
 } from "./pi-sdk-session.js";
 import { type RemotePiWorkspaceServices } from "./pi-remote-workspace.js";
 import { WorkspaceSkillReaderError } from "../../workspace-skills/contracts.js";
@@ -2194,10 +2195,9 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
       if (!found) continue;
       if (!found.userEntryId) {
         const active = this.#openHandles.get(candidateId);
-        if (
-          active?.ownsPendingSteer(input.applicationOperationId) &&
-          !active.authoritativelySettled
-        ) {
+        // Only this exact input's own state decides: other Steers pending in
+        // the same generation neither hold nor release it.
+        if (active?.holdsUnmaterializedSteer(input.applicationOperationId)) {
           return {
             status: "unresolved",
             diagnostic: {
@@ -2487,10 +2487,24 @@ class PiConversationHandle implements ConversationHandle {
   #terminalOutcome?: "interrupted" | "failed";
   #terminalFailure?: BackendTurn["failure"];
   #automaticCompactionProjectionPending = false;
-  #livePendingSteer?: {
-    readonly applicationOperationId: string;
-    readonly backendTurnId: string;
-  };
+  /**
+   * Steers Pi accepted from this handle that have neither materialized nor
+   * been closed as lost, keyed by application operation in admission order.
+   * Pi persists their user entries in the same FIFO order.
+   */
+  readonly #livePendingSteers = new Map<
+    string,
+    {
+      readonly applicationOperationId: string;
+      readonly backendTurnId: string;
+    }
+  >();
+  /**
+   * The one Steer whose intent is recorded while Pi is still admitting it.
+   * Sedes invokes Steer serially, so at most one is in this state. Only the
+   * admitting call records its outcome.
+   */
+  #admittingSteer?: string;
   #closed = false;
 
   constructor(options: PiConversationHandleOptions) {
@@ -2596,9 +2610,15 @@ class PiConversationHandle implements ConversationHandle {
     );
   }
 
-  ownsPendingSteer(applicationOperationId: string): boolean {
+  /**
+   * True while this handle's Pi generation can still use this exact Steer:
+   * Pi is admitting it, or Pi accepted it and the run has not settled.
+   */
+  holdsUnmaterializedSteer(applicationOperationId: string): boolean {
     return (
-      this.#livePendingSteer?.applicationOperationId === applicationOperationId
+      this.#admittingSteer === applicationOperationId ||
+      (this.#livePendingSteers.has(applicationOperationId) &&
+        !this.authoritativelySettled)
     );
   }
 
@@ -2606,10 +2626,7 @@ class PiConversationHandle implements ConversationHandle {
     readonly marker: PiSubmissionMarker;
     readonly providerTurnId?: string;
   }): void {
-    if (
-      this.ownsPendingSteer(found.marker.applicationOperationId) &&
-      !this.authoritativelySettled
-    ) {
+    if (this.holdsUnmaterializedSteer(found.marker.applicationOperationId)) {
       throw new Error("pi_submission_intent_still_active");
     }
     this.#session.sessionManager.appendCustomEntry(piSubmissionMarkerType, {
@@ -2625,11 +2642,7 @@ class PiConversationHandle implements ConversationHandle {
           }
         : { phase: "rejected" as const }),
     } satisfies PiSubmissionMarker);
-    if (
-      this.#livePendingSteer?.applicationOperationId ===
-      found.marker.applicationOperationId
-    ) {
-      this.#livePendingSteer = undefined;
+    if (this.#livePendingSteers.delete(found.marker.applicationOperationId)) {
       this.#steerResults.delete(found.marker.applicationOperationId);
     }
   }
@@ -3070,8 +3083,7 @@ class PiConversationHandle implements ConversationHandle {
         }
         if (
           repeated?.status === "pending_materialization" &&
-          this.#livePendingSteer?.applicationOperationId ===
-            input.applicationOperationId
+          this.#livePendingSteers.has(input.applicationOperationId)
         ) {
           return repeated;
         }
@@ -3102,13 +3114,6 @@ class PiConversationHandle implements ConversationHandle {
       };
       this.#steerResults.set(input.applicationOperationId, result);
       return result;
-    }
-    if (this.#livePendingSteer) {
-      throw error(
-        "invalid_state",
-        "Wait for the previous Pi steer to appear before steering again.",
-        "pi_steer_materialization_pending",
-      );
     }
     if (this.#session.isIdle) {
       throw piSteerTargetUnavailable(
@@ -3172,48 +3177,65 @@ class PiConversationHandle implements ConversationHandle {
         "pi_steer_target_changed",
       );
     }
-    if (prepared.contextExcerptMarker) {
-      this.#session.sessionManager.appendCustomEntry(
-        piContextExcerptMarkerType,
-        prepared.contextExcerptMarker,
+    if (this.#admittingSteer !== undefined) {
+      // Sedes invokes Steer serially. Concurrent admissions could reach Pi's
+      // FIFO steering queue out of intent order, so refuse before intent.
+      throw error(
+        "invalid_state",
+        "Another Pi steering input is still being admitted.",
+        "pi_steer_admission_in_progress",
       );
     }
-    this.#session.sessionManager.appendCustomEntry(
-      piSubmissionMarkerType,
-      prepared.submissionMarker,
-    );
+    // Earlier Steers may still be pending for this turn. Pi queues this one
+    // behind them, and each keeps its own per-input evidence.
+    this.#admittingSteer = input.applicationOperationId;
+    let admission: PiSteerAdmission;
     try {
-      await this.#session.steer(
-        prepared.promptText,
-        prepared.expandPromptTemplates,
-        prepared.images,
-      );
-      acceptedByPi = true;
-      this.#livePendingSteer = {
-        applicationOperationId: input.applicationOperationId,
-        backendTurnId: expectedBackendTurnId,
-      };
+      if (prepared.contextExcerptMarker) {
+        this.#session.sessionManager.appendCustomEntry(
+          piContextExcerptMarkerType,
+          prepared.contextExcerptMarker,
+        );
+      }
       this.#session.sessionManager.appendCustomEntry(
         piSubmissionMarkerType,
-        createPiSubmissionMarker({
-          ...input,
-          mode: "steer",
-          phase: "enqueued",
-          backendTurnId: expectedBackendTurnId,
-        }),
+        prepared.submissionMarker,
       );
-    } catch (cause) {
-      if (!acceptedByPi) {
+      try {
+        admission = await this.#session.steer(
+          prepared.promptText,
+          prepared.expandPromptTemplates,
+          prepared.images,
+        );
+        acceptedByPi = true;
+        this.#livePendingSteers.set(input.applicationOperationId, {
+          applicationOperationId: input.applicationOperationId,
+          backendTurnId: expectedBackendTurnId,
+        });
         this.#session.sessionManager.appendCustomEntry(
           piSubmissionMarkerType,
           createPiSubmissionMarker({
             ...input,
             mode: "steer",
-            phase: "rejected",
+            phase: "enqueued",
+            backendTurnId: expectedBackendTurnId,
           }),
         );
+      } catch (cause) {
+        if (!acceptedByPi) {
+          this.#session.sessionManager.appendCustomEntry(
+            piSubmissionMarkerType,
+            createPiSubmissionMarker({
+              ...input,
+              mode: "steer",
+              phase: "rejected",
+            }),
+          );
+        }
+        throw mappedError(cause, acceptedByPi);
       }
-      throw mappedError(cause, acceptedByPi);
+    } finally {
+      this.#admittingSteer = undefined;
     }
     const durable = findSubmission(
       this.#session.sessionManager.getBranch(),
@@ -3252,12 +3274,25 @@ class PiConversationHandle implements ConversationHandle {
     if (!durable.userEntryId && (this.#closed || this.#session.isIdle)) {
       // Pi accepted the input, but the run it targeted ended first (runtime
       // retirement or an extension abort landed during admission). An idle Pi
-      // keeps queued steering for its next run, so withdraw it before
-      // recording the loss.
+      // keeps queued steering for its next run, so withdraw it, and any
+      // earlier Steer still queued with it, before recording each loss.
       // It stays pending here; reconciliation after settlement returns it to
       // the user as not sent and never resends it.
       if (!this.#closed) this.#session.clearQueue();
-      this.#closeLivePendingSteerAsLost();
+      this.#closeLivePendingSteersAsLost();
+      return {
+        status: "pending_materialization",
+        reconciliationToken: input.reconciliationToken,
+        completionCorrelation: input.applicationOperationId,
+        backendTurnId,
+      };
+    }
+    if (!durable.userEntryId && !admission.queued) {
+      // Pi accepted the input without queueing it (an extension input handler
+      // or command consumed it), so no user entry can follow. Close it now:
+      // left pending, it would claim a later Steer's user entry in FIFO
+      // correlation. Reconciliation returns it to the user as not sent.
+      this.#closeLivePendingSteersAsLost(input.applicationOperationId);
       return {
         status: "pending_materialization",
         reconciliationToken: input.reconciliationToken,
@@ -3288,7 +3323,9 @@ class PiConversationHandle implements ConversationHandle {
       completionCorrelation: input.applicationOperationId,
       backendTurnId,
     };
-    if (result.status === "accepted") this.#livePendingSteer = undefined;
+    if (result.status === "accepted") {
+      this.#livePendingSteers.delete(input.applicationOperationId);
+    }
     this.#steerResults.set(input.applicationOperationId, result);
     return result;
   }
@@ -3758,7 +3795,7 @@ class PiConversationHandle implements ConversationHandle {
       captureFailure(cause);
     }
     try {
-      this.#closeLivePendingSteerAsLost();
+      this.#closeLivePendingSteersAsLost();
     } catch (cause) {
       captureFailure(cause);
     }
@@ -3911,7 +3948,10 @@ class PiConversationHandle implements ConversationHandle {
             createPiCancelledRetryMarker(latest.id, this.#toolIdentityAuthentication));
         }
       }
-      this.#closeLivePendingSteerAsLost();
+      // Pi drains its steering queue before a run ends on its own, so a Steer
+      // still pending here was withdrawn (Stop or an extension abort cleared
+      // the queue first). Record each one's exact outcome.
+      this.#closeLivePendingSteersAsLost();
       for (const projected of this.#liveTools.settlementCheck()) {
         this.#emit(projected);
       }
@@ -4138,32 +4178,63 @@ class PiConversationHandle implements ConversationHandle {
     }
   }
 
-  #closeLivePendingSteerAsLost(): void {
-    const live = this.#livePendingSteer;
-    if (!live) return;
-    const found = findSubmission(
+  /**
+   * Records the exact outcome of every Steer this handle still holds, or of
+   * only the named one: accepted when Pi persisted its user entry, otherwise
+   * an authenticated `lost` marker for that input alone. Callers closing the
+   * whole set have already withdrawn Pi's steering queue (Stop, retirement,
+   * and extension aborts clear it before aborting, and Pi drains it before a
+   * run ends on its own).
+   */
+  #closeLivePendingSteersAsLost(applicationOperationId?: string): void {
+    const live =
+      applicationOperationId === undefined
+        ? [...this.#livePendingSteers.values()]
+        : [this.#livePendingSteers.get(applicationOperationId)].flatMap(
+            (pending) => (pending ? [pending] : []),
+          );
+    if (live.length === 0) return;
+    const correlations = correlatePiSubmissions(
       this.#session.sessionManager.getBranch(),
-      live.applicationOperationId,
     );
-    if (found?.userEntryId) {
-      this.#steerResults.set(live.applicationOperationId, {
-        status: "accepted",
-        reconciliationToken: found.marker.reconciliationToken,
-        completionCorrelation: found.marker.applicationOperationId,
-        backendTurnId: found.providerTurnId ?? live.backendTurnId,
-      });
-      this.#livePendingSteer = undefined;
-      return;
+    let failed = false;
+    let failure: unknown;
+    for (const pending of live) {
+      const found = correlations.get(pending.applicationOperationId);
+      if (found?.userEntryId) {
+        this.#steerResults.set(pending.applicationOperationId, {
+          status: "accepted",
+          reconciliationToken: found.marker.reconciliationToken,
+          completionCorrelation: found.marker.applicationOperationId,
+          backendTurnId: found.providerTurnId ?? pending.backendTurnId,
+        });
+        this.#livePendingSteers.delete(pending.applicationOperationId);
+        continue;
+      }
+      try {
+        if (found && !found.rejected && !found.invalid) {
+          this.#session.sessionManager.appendCustomEntry(
+            piSubmissionMarkerType,
+            {
+              ...found.marker,
+              phase: "lost",
+              backendTurnId: found.providerTurnId ?? pending.backendTurnId,
+            } satisfies PiSubmissionMarker,
+          );
+        }
+      } catch (cause) {
+        // Keep this input held; reconciliation records its loss later. Still
+        // record every other input's own outcome.
+        if (!failed) {
+          failed = true;
+          failure = cause;
+        }
+        continue;
+      }
+      this.#steerResults.delete(pending.applicationOperationId);
+      this.#livePendingSteers.delete(pending.applicationOperationId);
     }
-    if (found && !found.rejected && !found.invalid) {
-      this.#session.sessionManager.appendCustomEntry(piSubmissionMarkerType, {
-        ...found.marker,
-        phase: "lost",
-        backendTurnId: found.providerTurnId ?? live.backendTurnId,
-      } satisfies PiSubmissionMarker);
-    }
-    this.#steerResults.delete(live.applicationOperationId);
-    this.#livePendingSteer = undefined;
+    if (failed) throw failure;
   }
 
   #assistantItem(
@@ -4261,7 +4332,7 @@ class PiConversationHandle implements ConversationHandle {
         correlatedSubmission?.marker.applicationOperationId;
       if (
         completionCorrelation &&
-        this.#livePendingSteer?.applicationOperationId === completionCorrelation
+        this.#livePendingSteers.has(completionCorrelation)
       ) {
         const acceptedResult: SteerTurnResult = {
           status: "accepted",
@@ -4270,7 +4341,7 @@ class PiConversationHandle implements ConversationHandle {
           backendTurnId,
         };
         this.#steerResults.set(completionCorrelation, acceptedResult);
-        this.#livePendingSteer = undefined;
+        this.#livePendingSteers.delete(completionCorrelation);
       }
       const sourceOrder = steeringExistingTurn
         ? this.#nextAssistantSourceOrderBase++

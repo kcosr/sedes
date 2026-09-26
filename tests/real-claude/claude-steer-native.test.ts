@@ -19,18 +19,22 @@ import { projectClaudeHistory } from "../../src/server/backends/claude/claude-hi
  * `stop-pending`: a steer Claude has not started never reaches the provider or
  * history. `stop-after-fold`: one Claude folded into the turn before Stop
  * stays with that turn. `two-folded`: Claude starts two steers at one tool
- * boundary, which is where Sedes accepts and places each of them. */
-it.each(["tool-boundary", "two-folded", "turn-finished", "stop-pending", "stop-after-fold", "slow-provider-history"] as const)("native next delivers at %s without preempting or duplicating", async scenario => {
+ * boundary, which is where Sedes accepts and places each of them.
+ * `three-queued`: three steers stay queued and unstarted at once during one
+ * tool call, then start in order at its boundary. `stop-three-pending`: Stop
+ * withdraws each of three unstarted steers on its own evidence. */
+it.each(["tool-boundary", "two-folded", "three-queued", "turn-finished", "stop-pending", "stop-three-pending", "stop-after-fold", "slow-provider-history"] as const)("native next delivers at %s without preempting or duplicating", async scenario => {
   const root = await mkdtemp(path.join(os.tmpdir(), "sedes-steer-native-"));
   const home = path.join(root, "home"); const cwd = path.join(root, "workspace");
   await mkdir(home); await mkdir(cwd);
   const marker = path.join(cwd, "started"), release = path.join(cwd, "release"), finished = path.join(cwd, "finished");
   const command = `: > '${marker}'; i=0; while [ "$i" -lt 150 ]; do if [ -f '${release}' ]; then : > '${finished}'; printf 'TOOL_FINISHED'; exit 0; fi; i=$((i+1)); sleep 0.1; done; exit 42`;
-  const toolScenario = scenario === "tool-boundary" || scenario === "two-folded" || scenario === "stop-pending" || scenario === "stop-after-fold";
-  const persistSession = scenario === "slow-provider-history" || scenario === "stop-pending" || scenario === "two-folded";
+  const severalSteers = scenario === "three-queued" || scenario === "stop-three-pending";
+  const toolScenario = scenario === "tool-boundary" || scenario === "two-folded" || scenario === "stop-pending" || scenario === "stop-after-fold" || severalSteers;
+  const persistSession = scenario === "slow-provider-history" || scenario === "stop-pending" || scenario === "two-folded" || severalSteers;
   let releaseProvider!: () => void;
   const providerGate = new Promise<void>(resolve => { releaseProvider = resolve; });
-  const requests: { released: boolean; correction: boolean; followUp: boolean; finished: boolean }[] = [];
+  const requests: { released: boolean; correction: boolean; followUp: boolean; third: boolean; finished: boolean }[] = [];
   const errors: unknown[] = [];
   let released = false;
   const stream = (response: ServerResponse, ordinal: number, command?: string) => {
@@ -51,7 +55,7 @@ it.each(["tool-boundary", "two-folded", "turn-finished", "stop-pending", "stop-a
       const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const messages = JSON.stringify(JSON.parse(Buffer.concat(chunks).toString()).messages);
       requests.push({ released, correction: messages.includes("STEER_CORRECTION"), followUp: messages.includes("STEER_FOLLOW_UP"),
-        finished: messages.includes("TOOL_FINISHED") });
+        third: messages.includes("STEER_THIRD"), finished: messages.includes("TOOL_FINISHED") });
       expect(requests.length).toBeLessThanOrEqual(3);
       if ((scenario === "slow-provider-history" && requests.length === 1) ||
           (scenario === "stop-after-fold" && requests.length === 2)) await providerGate;
@@ -64,7 +68,7 @@ it.each(["tool-boundary", "two-folded", "turn-finished", "stop-pending", "stop-a
   const address = server.address(); if (!address || typeof address === "string") throw new Error("address_missing");
   const env: Record<string, string | undefined> = Object.fromEntries(Object.keys(process.env).map(key => [key, undefined]));
   Object.assign(env, { PATH: process.env.PATH, HOME: home, TMPDIR: root, CLAUDE_CONFIG_DIR: path.join(home, ".claude"), ANTHROPIC_API_KEY: "sedes-local-fixture-only", ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_AUTOUPDATER: "1" });
-  const input = new ClaudeInputQueue<SDKUserMessage>(); const firstId = randomUUID(), secondId = randomUUID(), thirdId = randomUUID();
+  const input = new ClaudeInputQueue<SDKUserMessage>(); const firstId = randomUUID(), secondId = randomUUID(), thirdId = randomUUID(), fourthId = randomUUID();
   const user = (uuid: ReturnType<typeof randomUUID>, content: string, priority?: "next"): SDKUserMessage => ({ type: "user", uuid, session_id: "", parent_tool_use_id: null, message: { role: "user", content }, ...(priority ? { priority } : {}) });
   const abortController = new AbortController(); const timeout = setTimeout(() => abortController.abort(), 30_000);
   const session = query({ prompt: input, options: {
@@ -108,11 +112,27 @@ it.each(["tool-boundary", "two-folded", "turn-finished", "stop-pending", "stop-a
     if (toolScenario) await waitFor(() => stat(marker).then(() => true, () => false));
     else await waitFor(() => events.some(event => event.type === "result"));
     input.push(user(secondId, "STEER_CORRECTION", "next"));
-    if (scenario === "two-folded") input.push(user(thirdId, "STEER_FOLLOW_UP", "next"));
+    if (scenario === "two-folded" || severalSteers) input.push(user(thirdId, "STEER_FOLLOW_UP", "next"));
+    if (severalSteers) input.push(user(fourthId, "STEER_THIRD", "next"));
     if (toolScenario) {
       await new Promise(resolve => setTimeout(resolve, 200));
       expect(requests).toHaveLength(1);
       expect(events.filter(event => event.type === "result")).toHaveLength(0);
+      if (severalSteers) {
+        // All three are queued and unconfirmed at once: none has started,
+        // and the provider has seen none of them.
+        for (const id of [secondId, thirdId, fourthId]) await waitFor(() => lifecycleOf(id).includes("queued"));
+        for (const id of [secondId, thirdId, fourthId]) expect(lifecycleOf(id)).toEqual(["queued"]);
+        expect(requests).toHaveLength(1);
+      }
+      if (scenario === "stop-three-pending") {
+        // Sedes' Stop withdraws each unstarted input, then interrupts.
+        for (const id of [secondId, thirdId, fourthId]) await expect(cancelClaudeQueuedInput(session, id)).resolves.toBe(true);
+        for (const id of [secondId, thirdId, fourthId]) await waitFor(() => lifecycleOf(id).includes("cancelled"));
+        for (const id of [secondId, thirdId, fourthId]) expect(lifecycleOf(id)).toEqual(["queued", "cancelled"]);
+        const receipt = await session.interrupt();
+        for (const id of [secondId, thirdId, fourthId]) expect(receipt?.still_queued ?? []).not.toContain(id);
+      }
       if (scenario === "stop-pending") {
         await waitFor(() => lifecycleOf(secondId).includes("queued"));
         await expect(cancelClaudeQueuedInput(session, secondId)).resolves.toBe(true);
@@ -169,6 +189,80 @@ it.each(["tool-boundary", "two-folded", "turn-finished", "stop-pending", "stop-a
         const item = projected.itemsById[id]!;
         return item.semanticKind === "user_message" ? item.deliveryOperationId : item.semanticKind;
       })).toEqual([firstId, "command", secondId, thirdId, "assistant_message"]);
+      expect(errors).toEqual([]);
+      return;
+    }
+    if (scenario === "three-queued") {
+      await waitFor(() => events.some(event => event.type === "result"));
+      const resultAt = events.findIndex(event => event.type === "result");
+      const toolResultAt = events.findIndex(event => event.type === "user" && JSON.stringify(event.message.content).includes("TOOL_FINISHED"));
+      const answerAt = events.findIndex(event => event.type === "assistant" && JSON.stringify(event.message.content).includes("STEER_DONE"));
+      // Each of the three is accepted at its own `started`, in order, at the
+      // tool boundary and before the next reply; all join the running turn.
+      for (const id of [secondId, thirdId, fourthId]) expect(lifecycleOf(id)).toEqual(["queued", "started", "completed"]);
+      expect(toolResultAt).toBeLessThan(lifecycleAt(secondId, "started"));
+      expect(lifecycleAt(secondId, "started")).toBeLessThan(lifecycleAt(thirdId, "started"));
+      expect(lifecycleAt(thirdId, "started")).toBeLessThan(lifecycleAt(fourthId, "started"));
+      expect(lifecycleAt(fourthId, "started")).toBeLessThan(answerAt);
+      expect(answerAt).toBeLessThan(resultAt);
+      const results = events.filter(event => event.type === "result");
+      expect(results).toHaveLength(1);
+      expect(claudeResultUserMessageIds(results[0]!)).toEqual([firstId, secondId, thirdId, fourthId]);
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toMatchObject({ correction: true, followUp: true, third: true, finished: true });
+      const nativeSessionId = events.find(event => event.type === "system" && event.subtype === "init")!.session_id;
+      const history = await readClaudeSessionMessages(nativeSessionId, { dir: cwd }, env);
+      const blocks = (message: { readonly message: unknown }) => {
+        const content = (message.message as { content?: unknown }).content;
+        return Array.isArray(content) ? content.map(block => (block as { type: string }).type).join(",") : "text";
+      };
+      const steerIds = [firstId, secondId, thirdId, fourthId];
+      expect(history.map(message => steerIds.some(id => id === message.uuid) ? message.uuid : `${message.type}:${blocks(message)}`))
+        .toEqual([firstId, "assistant:tool_use", "user:tool_result", secondId, thirdId, fourthId, "assistant:text"]);
+      const projected = projectClaudeHistory(history, [], {
+        steerOperations: new Map([[secondId, firstId], [thirdId, firstId], [fourthId, firstId]]),
+        attachmentProvenanceKey: new Uint8Array(32),
+        forkBoundaryAuthentication: { installationKey: new Uint8Array(32).fill(1), tenantId: "fixture", principalId: "fixture", backendInstanceId: "fixture" },
+      }).snapshot;
+      expect(projected.orderedBackendTurnIds).toHaveLength(1);
+      const turn = projected.turnsById[projected.orderedBackendTurnIds[0]!]!;
+      expect(turn.completionCorrelations).toEqual(steerIds);
+      expect(turn.orderedBackendItemIds.map(id => {
+        const item = projected.itemsById[id]!;
+        return item.semanticKind === "user_message" ? item.deliveryOperationId : item.semanticKind;
+      })).toEqual([firstId, "command", secondId, thirdId, fourthId, "assistant_message"]);
+      expect(errors).toEqual([]);
+      return;
+    }
+    if (scenario === "stop-three-pending") {
+      await waitFor(() => events.some(event => event.type === "result"));
+      // None of the three was left to run: no later turn, request, or row.
+      await new Promise(resolve => setTimeout(resolve, 1_500));
+      const results = events.filter(event => event.type === "result");
+      expect(results).toHaveLength(1);
+      expect(results[0]!.terminal_reason).toBe("aborted_tools");
+      for (const id of [secondId, thirdId, fourthId]) {
+        expect(claudeResultUserMessageIds(results[0]!)).not.toContain(id);
+        expect(lifecycleOf(id)).toEqual(["queued", "cancelled"]);
+      }
+      expect(requests).toHaveLength(1);
+      const history = await nativeHistory();
+      for (const id of [secondId, thirdId, fourthId]) expect(history.some(message => message.uuid === id)).toBe(false);
+      for (const text of ["STEER_CORRECTION", "STEER_FOLLOW_UP", "STEER_THIRD"]) expect(JSON.stringify(history)).not.toContain(text);
+      // The call Stop aborted projects as interrupted, not failed: Claude
+      // wrote its exact stop result and then the tool-use interruption marker.
+      const nativeSessionId = events.find(event => event.type === "system" && event.subtype === "init")!.session_id;
+      const transcript = await readClaudeSessionMessages(nativeSessionId, { dir: cwd }, env);
+      const stopped = projectClaudeHistory(transcript, [], {
+        steerOperations: new Map(),
+        attachmentProvenanceKey: new Uint8Array(32),
+        forkBoundaryAuthentication: { installationKey: new Uint8Array(32).fill(1), tenantId: "fixture", principalId: "fixture", backendInstanceId: "fixture" },
+      }).snapshot;
+      expect(transcript.some(message => message.type === "user" &&
+        JSON.stringify(message.message).includes('"is_error":true'))).toBe(true);
+      const commands = Object.values(stopped.itemsById).filter(item => item.semanticKind === "command");
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toMatchObject({ status: "interrupted" });
       expect(errors).toEqual([]);
       return;
     }

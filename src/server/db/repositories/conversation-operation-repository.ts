@@ -1503,10 +1503,12 @@ export class ConversationOperationRepository {
         }
         return replay;
       }
-      if (this.hasBlockingSteer(scope, threadId)) {
+      // Queue-owned Steers awaiting materialization may coexist; the provider
+      // is still invoked serially, so an in-flight or uncertain one blocks.
+      if (this.hasBlockingSteer(scope, threadId, "steer")) {
         throw new DomainError(
           "invalid_transition",
-          "Wait for the previous steering input to appear before steering again.",
+          "Wait for the previous steering input to reach the backend before steering again.",
         );
       }
       if (
@@ -2056,7 +2058,17 @@ export class ConversationOperationRepository {
     `).get(scope.tenantId, scope.principalId, receipt.threadId, receipt.queuedInputId) !== undefined;
   }
 
-  hasBlockingSteer(scope: RequestScope, threadId: string): boolean {
+  /**
+   * A steering operation that blocks provider dispatch for the thread. For
+   * `steer` dispatch, a queued Steer awaiting materialization does not block:
+   * several may be unconfirmed at once, ordered by the durable queue. It still
+   * blocks ordinary Submit dispatch, which must never race ahead of it.
+   */
+  hasBlockingSteer(
+    scope: RequestScope,
+    threadId: string,
+    purpose: "submit" | "steer" = "submit",
+  ): boolean {
     const row = this.database
       .prepare(
         `
@@ -2064,13 +2076,20 @@ export class ConversationOperationRepository {
           FROM mutation_receipts
           WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
             AND operation_kind = 'conversation_steer'
-            AND result_code IN (
-              'prepared', 'uncertain', 'pending_materialization'
+            AND (
+              result_code IN ('prepared', 'uncertain')
+              OR (
+                result_code = 'pending_materialization'
+                AND (
+                  ? = 'submit'
+                  OR json_extract(result_json, '$.source') <> 'queued_input'
+                )
+              )
             )
           LIMIT 1
         `,
       )
-      .get(scope.tenantId, scope.principalId, threadId);
+      .get(scope.tenantId, scope.principalId, threadId, purpose);
     return row !== undefined;
   }
 
@@ -2079,6 +2098,32 @@ export class ConversationOperationRepository {
     threadId: string,
   ): boolean {
     return this.findPendingMaterializationSteer(scope, threadId) !== undefined;
+  }
+
+  /**
+   * A legacy draft-source Steer (admitted before queue-owned Steer) awaiting
+   * materialization. It keeps its exclusive delivery barrier; queue-owned
+   * Steers do not.
+   */
+  hasPendingMaterializationDraftSteer(
+    scope: RequestScope,
+    threadId: string,
+  ): boolean {
+    return (
+      this.database
+        .prepare(
+          `
+            SELECT 1
+            FROM mutation_receipts
+            WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
+              AND operation_kind = 'conversation_steer'
+              AND result_code = 'pending_materialization'
+              AND json_extract(result_json, '$.source') = 'draft'
+            LIMIT 1
+          `,
+        )
+        .get(scope.tenantId, scope.principalId, threadId) !== undefined
+    );
   }
 
   listPendingMaterializationSteers(
@@ -2100,10 +2145,14 @@ export class ConversationOperationRepository {
     ).map((row) => this.#parseSteer(scope, row));
   }
 
-  hasBlockingThreadOperation(scope: RequestScope, threadId: string): boolean {
+  hasBlockingThreadOperation(
+    scope: RequestScope,
+    threadId: string,
+    purpose: "submit" | "steer" = "submit",
+  ): boolean {
     return (
       this.findUncertainThreadOperation(scope, threadId) !== undefined ||
-      this.hasBlockingSteer(scope, threadId)
+      this.hasBlockingSteer(scope, threadId, purpose)
     );
   }
 

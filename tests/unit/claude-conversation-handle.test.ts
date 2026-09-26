@@ -2792,6 +2792,82 @@ describe("ClaudeConversationHandle", () => {
     await reopened.close();
   });
 
+  it("replaces the snapshot when Stop interrupts one call of a batch whose sibling failed on its own, live and on reload", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider);
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    const unsubscribe = handle.subscribe((event) => events.push(event));
+    const submitted = handle.submit({
+      applicationOperationId: OPERATION_ID, mutationId: "mutation-stop-tool", source: { kind: "user" },
+      reconciliationToken: "reconcile-stop-tool", text: "Run it", contextExcerpts: [], attachments: [], taskContexts: [],
+    });
+    const prompt = await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(prompt.value as SDKMessage);
+    await submitted;
+    // Claude Code streams one row per parallel call, then each result: one
+    // command exits 1 on its own, then Stop aborts the other.
+    const call = (uuid: string, id: string, command: string) => ({
+      type: "assistant", uuid, session_id: SESSION_ID, parent_tool_use_id: null,
+      message: { role: "assistant", id: "msg-stop-tool", stop_reason: "tool_use", usage: { input_tokens: 1, output_tokens: 1 },
+        content: [{ type: "tool_use", id, name: "Bash", input: { command } }] },
+    }) as unknown as SDKMessage;
+    const calls = [call("33333333-3333-4333-8333-333333333333", "tool-failed", "cat missing.txt"),
+      call("44444444-4444-4444-8444-444444444444", "tool-stopped", "sleep 60")];
+    const failedResult = {
+      type: "user", uuid: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", session_id: SESSION_ID, parent_tool_use_id: null,
+      timestamp: "2026-09-26T10:00:03.000Z", tool_use_result: "Error: Exit code 1\ncat: missing.txt: No such file or directory",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-failed", is_error: true,
+        content: "Exit code 1\ncat: missing.txt: No such file or directory" }] },
+    } as unknown as SDKMessage;
+    const stoppedResult = {
+      type: "user", uuid: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", session_id: SESSION_ID, parent_tool_use_id: null,
+      timestamp: "2026-09-26T10:00:04.000Z", tool_use_result: "User rejected tool use",
+      tool_result_meta: [{ id: "tool-stopped", non_execution_kind: "user-rejected" }],
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-stopped", is_error: true,
+        content: "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed." }] },
+    } as unknown as SDKMessage;
+    for (const message of [...calls, failedResult]) provider.messages.push(message);
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+      type: "item_completed", item: expect.objectContaining({ semanticKind: "command", status: "failed" }) })));
+    const published = (events.find(event => event.type === "item_completed" &&
+      event.item.semanticKind === "command") as Extract<BackendConversationEvent, { type: "item_completed" }>).item;
+    const backendTurnId = (await handle.history({ limit: 10 })).orderedBackendTurnIds.at(-1)!;
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: backendTurnId });
+    provider.messages.push(stoppedResult);
+    const marker = {
+      type: "user" as const, uuid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" as const, session_id: SESSION_ID,
+      parent_tool_use_id: null, timestamp: "2026-09-26T10:00:05.000Z",
+      message: { role: "user" as const, content: [{ type: "text" as const, text: "[Request interrupted by user for tool use]" }] },
+    };
+    provider.messages.push(marker);
+    await vi.waitFor(() => expect(events).toContainEqual({ type: "resnapshot_required", reason: "history_changed" }));
+    expect(events).not.toContainEqual(expect.objectContaining({
+      type: "item_updated", item: expect.objectContaining({ semanticKind: "command" }) }));
+    const live = (await handle.establishProjection({ signal: new AbortController().signal })).snapshot;
+    const commands = Object.values(live.itemsById).filter(item => item.semanticKind === "command");
+    expect(commands).toHaveLength(2);
+    // The failure keeps what Claude reported and was published: no Stop
+    // status or time. Only the call Stop aborted is interrupted.
+    expect(commands[0]).toEqual(published);
+    expect(commands[0]).not.toHaveProperty("completedAt");
+    expect(commands[1]).toMatchObject({ status: "interrupted", phase: "interrupted", completedAt: marker.timestamp });
+    unsubscribe();
+    await handle.close();
+
+    const reopened = createHandle(fixture(), vi.fn(), {
+      initialMessages: [
+        { type: "user", uuid: OPERATION_ID, session_id: SESSION_ID, message: (prompt.value as SDKUserMessage).message,
+          parent_tool_use_id: null, parent_agent_id: null },
+        ...[...calls, failedResult, stoppedResult, marker].map(message => ({ ...message, parent_agent_id: null }) as unknown as SessionMessage),
+      ],
+      resumeSession: true,
+    }).handle;
+    const recovered = (await reopened.establishProjection({ signal: new AbortController().signal })).snapshot;
+    for (const command of commands) expect(recovered.itemsById[command.backendItemId]).toEqual(command);
+    await reopened.close();
+  });
+
   it("terminates an attached query when action metadata changes native session", async () => {
     const provider = fixture();
     (provider.sdk as ClaudeSdkFacade).getSessionInfo = vi.fn(async () => ({
@@ -4766,6 +4842,49 @@ describe("Claude conversation-scoped native next delivery", () => {
     expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(OPERATION_ID);
     const settled = await snapshot(handle);
     expect(settled.turnsById[turnId]!.completionCorrelations).toEqual([OPERATION_ID, steerId]);
+    await handle.close();
+  });
+
+  it("holds three unstarted steers at once and on Stop withdraws each unstarted one on its own evidence", async () => {
+    const { handle, settings, provider, input, turnId } = await startedTurn();
+    const ids = [
+      "a7000000-0000-4000-8000-000000000001",
+      "a7000000-0000-4000-8000-000000000002",
+      "a7000000-0000-4000-8000-000000000003",
+    ];
+    // Sent one at a time; each returns while the earlier ones are unstarted.
+    for (const [index, id] of ids.entries()) {
+      await expect(handle.steer({ ...steerInput, applicationOperationId: id, mutationId: `steer-${index}`,
+        reconciliationToken: `steer-receipt-${index}`, text: `Steer ${index}` }))
+        .resolves.toMatchObject({ status: "pending_materialization" });
+      expect((await input.next()).value).toMatchObject({ uuid: id, priority: "next" });
+      provider.messages.push(nativeFrames.lifecycle(id, "queued"));
+    }
+    await vi.waitFor(() => expect(ids.every(id => handle.hasUnconfirmedSubmission(id))).toBe(true));
+    // Claude folds only the first before Stop lands; the others stay queued.
+    provider.messages.push(nativeFrames.lifecycle(ids[0]!, "started"));
+    await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(ids[0]!)).toBe(false));
+    expect(handle.hasUnconfirmedSubmission(ids[1]!)).toBe(true);
+    expect(handle.hasUnconfirmedSubmission(ids[2]!)).toBe(true);
+    provider.controls.cancelAsyncMessage.mockImplementation(async (uuid: string) => {
+      provider.messages.push(nativeFrames.lifecycle(uuid, "cancelled"));
+      return true;
+    });
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: turnId });
+    expect(provider.controls.cancelAsyncMessage.mock.calls.map(([uuid]) => uuid)).toEqual([ids[1], ids[2]]);
+    await vi.waitFor(() => expect(handle.withdrewSubmission(ids[1]!) && handle.withdrewSubmission(ids[2]!)).toBe(true));
+    expect(handle.withdrewSubmission(ids[0]!)).toBe(false);
+    provider.messages.push(nativeFrames.lifecycle(ids[0]!, "cancelled"));
+    provider.messages.push(result([OPERATION_ID, ids[0]!]));
+    provider.messages.push(nativeFrames.state("idle"));
+    await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+    const settled = await snapshot(handle);
+    expect(settled.turnsById[turnId]!.completionCorrelations).toEqual([OPERATION_ID, ids[0]]);
+    expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(ids[0]!)).toBe(OPERATION_ID);
+    for (const id of [ids[1]!, ids[2]!]) {
+      expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(id)).toBeNull();
+      expect(JSON.stringify(settled)).not.toContain(`Steer ${ids.indexOf(id)}`);
+    }
     await handle.close();
   });
 

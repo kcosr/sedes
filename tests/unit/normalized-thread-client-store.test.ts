@@ -1280,6 +1280,202 @@ describe("ThreadClientStore normalized operations", () => {
     ]);
   });
 
+  it("admits a second and third Steer while earlier Steers await materialization and clears each by exact evidence", async () => {
+    const receipt = (index: number) => ({
+      status: "delivery_queued" as const,
+      resolvedDeliveryMode: "steer" as const,
+      queuedInputId: `steer-row-${index}`,
+      threadRevision: 7 + index,
+      draft: {
+        ...composerDraft(""),
+        revision: 4 + index,
+        updatedAt: "2026-08-13T22:00:00.000Z",
+      },
+    });
+    const operateThread = vi
+      .fn()
+      .mockResolvedValueOnce(receipt(1))
+      .mockResolvedValueOnce(receipt(2))
+      .mockResolvedValueOnce(receipt(3));
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore(
+      "thread-1",
+      { operateThread } as unknown as ApiClient,
+      transport,
+    );
+    await store.start();
+    installSnapshot(transport, snapshotWithDeliveryModes("running"));
+    const row = (index: number) => ({
+      id: `steer-row-${index}`,
+      deliveryOperationId: `steer-${index}`,
+      resolvedDeliveryMode: "steer" as const,
+      requestedDeliveryMode: "steer" as const,
+      sequence: index,
+      origin: "user" as const,
+      isHead: index === 1,
+      state: "dispatching" as const,
+      deliveryMode: "steer" as const,
+      attachmentCount: 0,
+      taskCount: 0,
+      preview: { text: `Steer ${index}` },
+      createdAt: "2026-08-13T22:00:00.000Z",
+    });
+    let eventSequence = 0;
+    const publishQueue = (threadRevision: number, indexes: number[]) => {
+      eventSequence += 1;
+      transport.thread?.onEnvelope({
+        eventId: `${hubId}.${eventSequence}`,
+        projectionGeneration: "projection-1",
+        event: {
+          type: "queue_changed",
+          generation: "projection-1",
+          threadRevision,
+          items: indexes.map(row),
+        },
+      });
+    };
+
+    for (const index of [1, 2, 3]) {
+      const draft = { ...composerDraft(`Steer ${index}`), revision: 3 + index };
+      store.stageComposerTransfer(`steer-${index}`, "steer", draft);
+      await store.deliver("steer", draft, `steer-${index}`);
+      expect(store.getSnapshot().pendingDeliveryThreadRevision).toBe(7 + index);
+      publishQueue(
+        7 + index,
+        Array.from({ length: index }, (_, offset) => offset + 1),
+      );
+      // Only the receipt revision fences the next Steer; the earlier Steers
+      // are still unconfirmed when it is admitted.
+      await vi.waitFor(() =>
+        expect(
+          store.getSnapshot().pendingDeliveryThreadRevision,
+        ).toBeUndefined(),
+      );
+    }
+    expect(operateThread).toHaveBeenCalledTimes(3);
+    expect(operateThread).toHaveBeenLastCalledWith(
+      "thread-1",
+      expect.objectContaining({
+        mode: "steer",
+        mutationId: "steer-3",
+        expectedThreadRevision: 9,
+      }),
+    );
+    expect(
+      store.getSnapshot().pendingComposerTransfers.map((transfer) => ({
+        operationId: transfer.operationId,
+        authorityState: transfer.authorityState,
+        steerPhase: transfer.steerPhase,
+      })),
+    ).toEqual([
+      { operationId: "steer-1", authorityState: "queue_owned", steerPhase: "steering" },
+      { operationId: "steer-2", authorityState: "queue_owned", steerPhase: "steering" },
+      { operationId: "steer-3", authorityState: "queue_owned", steerPhase: "steering" },
+    ]);
+
+    // Evidence for the middle Steer clears only that Steer.
+    eventSequence += 1;
+    emitMaterializedSteer(transport, "steer-2", eventSequence);
+    await vi.waitFor(() =>
+      expect(
+        store.getSnapshot().pendingComposerTransfers.map(
+          ({ operationId }) => operationId,
+        ),
+      ).toEqual(["steer-1", "steer-3"]),
+    );
+    publishQueue(11, [1, 3]);
+    eventSequence += 1;
+    emitMaterializedSteer(transport, "steer-1", eventSequence);
+    await vi.waitFor(() =>
+      expect(
+        store.getSnapshot().pendingComposerTransfers.map(
+          ({ operationId }) => operationId,
+        ),
+      ).toEqual(["steer-3"]),
+    );
+    eventSequence += 1;
+    emitMaterializedSteer(transport, "steer-3", eventSequence);
+    await vi.waitFor(() =>
+      expect(store.getSnapshot().pendingComposerTransfers).toEqual([]),
+    );
+  });
+
+  it("drops a queue-owned Steer transfer when its unsent row is cancelled", async () => {
+    const operateThread = vi.fn(
+      async (_threadId: string, operation: ThreadApplicationOperation) => {
+        if (operation.kind === "deliver") {
+          return {
+            status: "delivery_queued" as const,
+            resolvedDeliveryMode: "steer" as const,
+            queuedInputId: "pending-steer-row",
+            threadRevision: 8,
+            draft: {
+              ...composerDraft(""),
+              revision: 5,
+              updatedAt: "2026-08-13T22:00:00.000Z",
+            },
+          };
+        }
+        if (operation.kind !== "cancel_queued_input") {
+          throw new Error("unexpected operation");
+        }
+        return {
+          status: "queue_cancelled" as const,
+          queuedInputId: operation.queuedInputId,
+          mutationId: operation.mutationId,
+          threadRevision: 9,
+          queue: [],
+        };
+      },
+    );
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore(
+      "thread-1",
+      { operateThread } as unknown as ApiClient,
+      transport,
+    );
+    await store.start();
+    installSnapshot(transport, snapshotWithDeliveryModes("running"));
+    const draft = composerDraft("Wait behind the earlier Steer");
+    store.stageComposerTransfer("pending-steer", "steer", draft);
+    await store.deliver("steer", draft, "pending-steer");
+    transport.thread?.onEnvelope({
+      eventId: `${hubId}.1`,
+      projectionGeneration: "projection-1",
+      event: {
+        type: "queue_changed",
+        generation: "projection-1",
+        threadRevision: 8,
+        items: [
+          {
+            id: "pending-steer-row",
+            deliveryOperationId: "pending-steer",
+            resolvedDeliveryMode: "steer" as const,
+            requestedDeliveryMode: "steer",
+            sequence: 2,
+            origin: "user",
+            isHead: false,
+            state: "pending",
+            attachmentCount: 0,
+            taskCount: 0,
+            preview: { text: "Wait behind the earlier Steer" },
+            createdAt: "2026-08-13T22:00:00.000Z",
+          },
+        ],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(store.getSnapshot().pendingComposerTransfers).toMatchObject([
+        { operationId: "pending-steer", authorityState: "queue_owned" },
+      ]),
+    );
+
+    await store.cancelQueuedInput("pending-steer-row");
+
+    expect(store.getSnapshot().pendingComposerTransfers).toEqual([]);
+    expect(store.getSnapshot().snapshot?.queue).toEqual([]);
+  });
+
   it("keeps submit demotion sticky across retry-to-dispatching events in one flush", async () => {
     const transport = new FakeTransport();
     const store = new ThreadClientStore("thread-1", {} as ApiClient, transport);
@@ -2045,7 +2241,7 @@ describe("ThreadClientStore normalized operations", () => {
     });
   });
 
-  it("keeps delivery gated when recovery returns a pending queued Steer", async () => {
+  it("applies a pending queued Steer from recovery without gating the next Steer", async () => {
     const operateThread = vi.fn(async () => ({
       status: "queue_steer_pending_materialization" as const,
       queuedInputId: "queued-1",
@@ -2079,8 +2275,8 @@ describe("ThreadClientStore normalized operations", () => {
 
     await expect(store.recoverUncertain()).resolves.toBeUndefined();
 
+    expect(store.getSnapshot().pendingDeliveryThreadRevision).toBeUndefined();
     expect(store.getSnapshot()).toMatchObject({
-      pendingDeliveryThreadRevision: 8,
       snapshot: {
         thread: { threadRevision: 8, queuedInputCount: 1 },
         queue: [
@@ -2092,6 +2288,11 @@ describe("ThreadClientStore normalized operations", () => {
         ],
       },
     });
+    // The recovered Steer still awaits its exact user item, yet another Steer
+    // can be staged at once.
+    expect(() =>
+      store.stageComposerTransfer("next-steer", "steer", composerDraft("Next")),
+    ).not.toThrow();
   });
 
   it("applies an authoritative queued-input cancellation receipt", async () => {
@@ -2372,7 +2573,7 @@ describe("ThreadClientStore normalized operations", () => {
     expect(store.getSnapshot().pendingComposerTransfers).toEqual([]);
   });
 
-  it("retains a pending-materialization draft until its revisioned snapshot arrives", async () => {
+  it("fences a pending-materialization receipt only until its revision arrives", async () => {
     const retained = {
       text: "Continue",
       contextExcerpts: [],
@@ -2427,44 +2628,21 @@ describe("ThreadClientStore normalized operations", () => {
         items: [],
       },
     });
-    expect(store.getSnapshot().pendingDeliveryThreadRevision).toBe(8);
-    transport.thread?.onEnvelope({
-      eventId: `${hubId}.2`,
-      projectionGeneration: "projection-1",
-      event: {
-        type: "queue_changed",
-        generation: "projection-1",
-        threadRevision: 9,
-        items: [],
-      },
-    });
-    await vi.waitFor(() => {
-      expect(store.getSnapshot().snapshot?.thread.threadRevision).toBe(9);
-    });
-    expect(store.getSnapshot().pendingDeliveryThreadRevision).toBe(8);
-    const current = store.getSnapshot().snapshot!;
-    transport.thread?.onEnvelope({
-      eventId: `${hubId}.3`,
-      projectionGeneration: "projection-1",
-      event: {
-        type: "capabilities_changed",
-        generation: "projection-1",
-        threadRevision: 9,
-        capabilities: {
-          ...current.capabilities,
-          revision: "cap-pending",
-          deliveryModes: current.capabilities.deliveryModes.map((mode) => ({
-            ...mode,
-            available: false,
-            unavailableReason: { text: "Waiting for Pi materialization." },
-          })),
-        },
-        providerFeatures: current.providerFeatures,
-      },
-    });
+    // Reaching the receipt revision lifts the fence even though the Steer has
+    // not materialized; the server's capabilities decide what is available.
     await vi.waitFor(() => {
       expect(store.getSnapshot().pendingDeliveryThreadRevision).toBeUndefined();
     });
+    expect(store.getSnapshot().pendingComposerTransfers).toMatchObject([
+      {
+        operationId: "delivery-1",
+        steerPhase: "steering",
+        acceptanceEvidence: "pending_materialization",
+      },
+    ]);
+    expect(() =>
+      store.stageComposerTransfer("queue-after-fence", "queue", retained),
+    ).not.toThrow();
   });
 
   it("keeps a Queue-to-Steer notification until exact materialization", async () => {
@@ -2530,9 +2708,11 @@ describe("ThreadClientStore normalized operations", () => {
     await expect(store.steerQueuedInput("queued-1")).resolves.toBeUndefined();
     const pendingOperationId =
       store.getSnapshot().pendingQueuedSteers[0]!.operationId;
+    // The receipt's queue projection is already at its revision, so nothing
+    // fences the next delivery while this Steer awaits materialization.
+    expect(store.getSnapshot().pendingDeliveryThreadRevision).toBeUndefined();
     expect(store.getSnapshot()).toMatchObject({
       actionPending: false,
-      pendingDeliveryThreadRevision: 8,
       pendingQueuedSteers: [
         {
           queuedInputId: "queued-1",
@@ -2565,31 +2745,12 @@ describe("ThreadClientStore normalized operations", () => {
     await vi.waitFor(() => {
       expect(store.getSnapshot().snapshot?.thread.threadRevision).toBe(9);
     });
-    expect(store.getSnapshot().pendingDeliveryThreadRevision).toBe(8);
-    const current = store.getSnapshot().snapshot!;
-    transport.thread?.onEnvelope({
-      eventId: `${hubId}.2`,
-      projectionGeneration: "projection-1",
-      event: {
-        type: "capabilities_changed",
-        generation: "projection-1",
-        threadRevision: 9,
-        capabilities: {
-          ...current.capabilities,
-          revision: "cap-pending",
-          deliveryModes: current.capabilities.deliveryModes.map((mode) => ({
-            ...mode,
-            available: false,
-            unavailableReason: { text: "Waiting for Pi materialization." },
-          })),
-        },
-        providerFeatures: current.providerFeatures,
-      },
-    });
-    await vi.waitFor(() => {
-      expect(store.getSnapshot().pendingDeliveryThreadRevision).toBeUndefined();
-    });
-    emitMaterializedSteer(transport, pendingOperationId, 3);
+    // The accepted row left the queue, but the card stays until its exact
+    // user item arrives.
+    expect(store.getSnapshot().pendingQueuedSteers).toMatchObject([
+      { operationId: pendingOperationId, phase: "steering" },
+    ]);
+    emitMaterializedSteer(transport, pendingOperationId, 2);
     await vi.waitFor(() =>
       expect(store.getSnapshot().pendingQueuedSteers).toEqual([]),
     );
@@ -3020,6 +3181,137 @@ describe("ThreadClientStore normalized operations", () => {
     });
     await expect(store.recoverUncertain()).resolves.toBeUndefined();
     expect(store.getSnapshot().pendingComposerTransfers).toEqual([]);
+  });
+
+  it("recovers each of several pending Steers by its exact operation", async () => {
+    const operateThread = vi.fn(
+      async (): Promise<ThreadApplicationMutationResult> => {
+        throw new TypeError("response lost");
+      },
+    );
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore(
+      "thread-1",
+      { operateThread } as unknown as ApiClient,
+      transport,
+    );
+    await store.start();
+    installSnapshot(transport, snapshotWithDeliveryModes("running"));
+    for (const operationId of ["steer-a", "steer-b"]) {
+      const draft = composerDraft(operationId);
+      store.stageComposerTransfer(operationId, "steer", draft);
+      await expect(
+        store.deliver("steer", draft, operationId),
+      ).rejects.toThrow("response lost");
+    }
+    const phases = () =>
+      store.getSnapshot().pendingComposerTransfers.map((transfer) => ({
+        operationId: transfer.operationId,
+        steerPhase: transfer.steerPhase,
+        requestState: transfer.requestState,
+        acceptanceEvidence: transfer.acceptanceEvidence,
+      }));
+    expect(phases()).toEqual([
+      {
+        operationId: "steer-a",
+        steerPhase: "unconfirmed",
+        requestState: "request_failed",
+        acceptanceEvidence: "none",
+      },
+      {
+        operationId: "steer-b",
+        steerPhase: "unconfirmed",
+        requestState: "request_failed",
+        acceptanceEvidence: "none",
+      },
+    ]);
+
+    // Recovery reports the later Steer; the earlier one is untouched and no
+    // "another pending steer" error is raised.
+    operateThread.mockResolvedValueOnce({
+      status: "delivery_accepted",
+      resolvedDeliveryMode: "steer",
+      operationId: "steer-b",
+      threadRevision: 8,
+      draft: {
+        text: "",
+        contextExcerpts: [],
+        attachments: [],
+        taskReferences: [],
+        revision: 5,
+        updatedAt: "2026-08-07T07:01:00.000Z",
+      },
+    });
+    await expect(store.recoverUncertain()).resolves.toBeUndefined();
+    expect(phases()).toEqual([
+      {
+        operationId: "steer-a",
+        steerPhase: "unconfirmed",
+        requestState: "request_failed",
+        acceptanceEvidence: "none",
+      },
+      {
+        operationId: "steer-b",
+        steerPhase: "steering",
+        requestState: "receipt_received",
+        acceptanceEvidence: "accepted",
+      },
+    ]);
+
+    operateThread.mockResolvedValueOnce({
+      status: "delivery_pending_materialization",
+      resolvedDeliveryMode: "steer",
+      operationId: "steer-a",
+      threadRevision: 8,
+      draft: { ...composerDraft("steer-a"), revision: 5 },
+    });
+    await expect(store.recoverUncertain()).resolves.toBeUndefined();
+    expect(phases()[0]).toEqual({
+      operationId: "steer-a",
+      steerPhase: "steering",
+      requestState: "receipt_received",
+      acceptanceEvidence: "pending_materialization",
+    });
+
+    // A receipt that names no operation never picks one of several Steers.
+    operateThread.mockResolvedValueOnce({
+      status: "recovery_required",
+      retryable: true,
+      draft: { ...composerDraft(""), revision: 5 },
+    });
+    await expect(store.recoverUncertain()).resolves.toBeUndefined();
+    expect(phases().map(({ steerPhase }) => steerPhase)).toEqual([
+      "steering",
+      "steering",
+    ]);
+
+    // An operation this client does not hold changes neither transfer.
+    operateThread.mockResolvedValueOnce({
+      status: "delivery_accepted",
+      resolvedDeliveryMode: "submit",
+      operationId: "another-client-operation",
+      threadRevision: 8,
+      draft: {
+        text: "",
+        contextExcerpts: [],
+        attachments: [],
+        taskReferences: [],
+        revision: 5,
+        updatedAt: "2026-08-07T07:02:00.000Z",
+      },
+    });
+    await expect(store.recoverUncertain()).resolves.toBeUndefined();
+    expect(phases().map(({ steerPhase }) => steerPhase)).toEqual([
+      "steering",
+      "steering",
+    ]);
+
+    emitMaterializedSteer(transport, "steer-b");
+    await vi.waitFor(() =>
+      expect(phases().map(({ operationId }) => operationId)).toEqual([
+        "steer-a",
+      ]),
+    );
   });
 
   it("rejects delivery recovery without a current draft receipt", async () => {

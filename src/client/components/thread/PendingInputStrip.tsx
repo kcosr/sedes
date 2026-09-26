@@ -33,10 +33,19 @@ function statusLabel(item: QueuedInputSummary): string | undefined {
   if (item.state === "uncertain" && item.deliveryMode === "steer") {
     return "Steer unconfirmed";
   }
+  // A proven-unused input (for example, a Steer that Stop withdrew) did not
+  // fail; it simply never reached the conversation.
+  if (item.state === "failed" && item.failureReason === "not_sent") {
+    return "Not sent";
+  }
   if (item.state === "failed" && item.resolvedDeliveryMode === "steer") {
     return "Steer failed";
   }
   return STATE_LABELS[item.state];
+}
+
+function isSteerRow(item: QueuedInputSummary): boolean {
+  return item.resolvedDeliveryMode === "steer" || item.deliveryMode === "steer";
 }
 
 function errorMessage(error: unknown): string {
@@ -243,6 +252,13 @@ export function PendingInputStrip({
       state.pendingQueuedSteers,
     ],
   );
+  // Steers are delivered first-in, first-out, so a Steer card not yet backed
+  // by its queue row belongs after the earlier Steer rows already queued and
+  // ahead of ordinary queued input that waits for the turn to end.
+  const leadingSteerRowCount = useMemo(() => {
+    const index = queue.findIndex((item) => !isSteerRow(item));
+    return index < 0 ? queue.length : index;
+  }, [queue]);
   const steerCapability = state.snapshot?.capabilities.deliveryModes.find(
     ({ id }) => id === "steer",
   );
@@ -268,7 +284,6 @@ export function PendingInputStrip({
       setReconciling(false);
     }
   };
-  const queueFailure = state.snapshot?.attention.queueFailure;
   const [pendingActions, setPendingActions] = useState<
     Readonly<Record<string, RowAction>>
   >({});
@@ -374,7 +389,9 @@ export function PendingInputStrip({
       } else {
         await store.dismissQueueFailure(item.id);
         setAnnouncement(
-          `Dismissed queued input ${item.sequence} failure: ${item.preview.text}`,
+          item.failureReason === "not_sent"
+            ? `Dismissed not-sent input ${item.sequence}: ${item.preview.text}`
+            : `Dismissed queued input ${item.sequence} failure: ${item.preview.text}`,
         );
       }
     } catch (error) {
@@ -390,6 +407,225 @@ export function PendingInputStrip({
         return remaining;
       });
     }
+  };
+
+  const renderPendingSteer = (
+    pendingSteer: (typeof pendingSteers)[number],
+  ): React.JSX.Element => (
+    <li
+      className="pending-input-row pending-steer-row"
+      data-pending-steer-operation-id={pendingSteer.operationId}
+      aria-busy={pendingSteer.phase === "sending"}
+      key={`steer:${pendingSteer.operationId}`}
+    >
+      <span className="pending-input-origin">You</span>
+      <span className="pending-input-preview" title={pendingSteer.preview}>
+        {pendingSteer.preview}
+      </span>
+      {pendingSteer.attachmentCount > 0 && (
+        <span className="pending-input-attachment-count">
+          {pendingSteer.attachmentCount}{" "}
+          {pendingSteer.attachmentCount === 1 ? "file" : "files"}
+        </span>
+      )}
+      {pendingSteer.taskCount > 0 && (
+        <span className="pending-input-attachment-count">
+          {pendingSteer.taskCount}{" "}
+          {pendingSteer.taskCount === 1 ? "task" : "tasks"}
+        </span>
+      )}
+      <span
+        className="pending-input-state"
+        data-state={pendingSteer.phase}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {pendingSteer.phase === "sending"
+          ? "Sending steer"
+          : pendingSteer.phase === "steering"
+            ? "Steering"
+            : "Steer unconfirmed"}
+      </span>
+    </li>
+  );
+
+  const renderQueueItem = (item: QueuedInputSummary): React.JSX.Element => {
+    // Delete cancels queued work that has not been sent. A failed row was
+    // never delivered either, so it offers Restore and Dismiss instead; each
+    // failed row is dismissed on its own.
+    const userMutable =
+      item.origin === "user" &&
+      (item.state === "pending" || item.state === "retry_wait");
+    const userRestorable =
+      userMutable || (item.origin === "user" && item.state === "failed");
+    const failed = item.state === "failed";
+    const notSent = failed && item.failureReason === "not_sent";
+    const pendingAction = pendingActions[item.id];
+    const rowPending = pendingAction !== undefined;
+    const awaitingProjection = !state.snapshot?.queue.some(
+      (projected) => projected.id === item.id,
+    );
+    const steerUnavailableReason =
+      steerCapability?.unavailableReason?.text ??
+      "Steer is unavailable right now.";
+    const canOfferSteer =
+      userMutable && item.isHead && item.resolvedDeliveryMode !== "steer";
+    const stateLabel = statusLabel(item);
+    const preview =
+      item.inputOrigin?.kind === "question_response"
+        ? item.inputOrigin.answers
+            .map(({ question, answer }) => `${question}: ${answer}`)
+            .join(" · ")
+        : item.preview.text;
+    return (
+      <li
+        className="pending-input-row"
+        data-input-origin={item.origin}
+        data-queued-input-id={item.id}
+        data-delivery-operation-id={item.deliveryOperationId}
+        key={item.id}
+        ref={(element) => {
+          if (element) rows.current.set(item.id, element);
+          else rows.current.delete(item.id);
+        }}
+        aria-busy={rowPending}
+      >
+        <span
+          className="pending-input-origin"
+          title={
+            item.inputOrigin?.kind === "question_response"
+              ? "Question answered"
+              : item.inputOrigin
+                ? `${item.inputOrigin.kind === "agent_message" ? "Agent message" : "Agent result"} · ${item.inputOrigin.sourceThreadLabel.text}`
+                : undefined
+          }
+        >
+          {item.inputOrigin?.kind === "question_response"
+            ? "Question answered"
+            : item.origin === "user"
+            ? "You"
+            : item.origin === "agent_result"
+              ? `Agent result · ${item.inputOrigin?.sourceThreadLabel.text ?? "Agent"}`
+            : item.origin === "automation"
+              ? "Automation"
+              : item.origin === "agent_control"
+                ? `Agent message · ${item.inputOrigin?.sourceThreadLabel.text ?? "Agent"}`
+                : "Tool client"}
+        </span>
+        <span className="pending-input-preview" title={preview}>
+          {preview}
+        </span>
+        {item.attachmentCount > 0 && (
+          <span className="pending-input-attachment-count">
+            {item.attachmentCount}{" "}
+            {item.attachmentCount === 1 ? "file" : "files"}
+          </span>
+        )}
+        {item.taskCount > 0 && (
+          <span className="pending-input-attachment-count">
+            {item.taskCount} {item.taskCount === 1 ? "task" : "tasks"}
+          </span>
+        )}
+        {stateLabel && (
+          <span
+            className="pending-input-state"
+            data-state={item.state}
+            data-delivery-mode={item.deliveryMode}
+            data-failure-reason={failed ? item.failureReason : undefined}
+          >
+            {stateLabel}
+          </span>
+        )}
+        <span className="pending-input-actions">
+          {userMutable && (
+            <button
+              type="button"
+              className="pending-input-action pending-input-delete"
+              aria-label={`Delete queued input: ${item.preview.text}`}
+              title="Delete queued input"
+              disabled={disabled || awaitingProjection || rowPending}
+              onClick={(event) =>
+                void runAction(item, "delete", event.currentTarget)
+              }
+            >
+              <Trash2 size={15} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          )}
+          {userRestorable && (
+            <button
+              type="button"
+              className="pending-input-action pending-input-restore"
+              aria-label={`Restore queued input to composer: ${item.preview.text}`}
+              title={
+                restoreAvailable ? "Restore to composer" : restoreUnavailableReason
+              }
+              disabled={
+                disabled || awaitingProjection || rowPending || !restoreAvailable
+              }
+              onClick={(event) =>
+                void runAction(item, "restore", event.currentTarget)
+              }
+            >
+              <Undo size={15} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          )}
+          {canOfferSteer && steerCapability && (
+            <button
+              type="button"
+              className="pending-input-action pending-input-steer"
+              aria-label={`Steer queued input into active turn: ${item.preview.text}`}
+              title={
+                steerCapability.available
+                  ? "Send this queued input into the active turn"
+                  : steerUnavailableReason
+              }
+              disabled={
+                disabled ||
+                awaitingProjection ||
+                rowPending ||
+                !steerCapability.available
+              }
+              onClick={(event) =>
+                void runAction(item, "steer", event.currentTarget)
+              }
+            >
+              <Forward size={15} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          )}
+          {failed && (
+            <button
+              type="button"
+              className="pending-input-action pending-input-dismiss"
+              aria-label={
+                notSent
+                  ? `Dismiss not-sent input: ${item.preview.text}`
+                  : `Dismiss queued input failure: ${item.preview.text}`
+              }
+              disabled={disabled || awaitingProjection || rowPending}
+              onClick={(event) =>
+                void runAction(item, "dismiss", event.currentTarget)
+              }
+            >
+              {pendingAction === "dismiss" ? "Dismissing…" : "Dismiss"}
+            </button>
+          )}
+        </span>
+        {canOfferSteer && steerCapability && !steerCapability.available && (
+          <span className="pending-input-unavailable">
+            {steerUnavailableReason}
+          </span>
+        )}
+        {failed && item.diagnostic && (
+          <span className="pending-input-detail">{item.diagnostic.text}</span>
+        )}
+        {rowErrors[item.id] && (
+          <span className="pending-input-error" role="alert">
+            {rowErrors[item.id]}
+          </span>
+        )}
+      </li>
+    );
   };
 
   return (
@@ -443,216 +679,9 @@ export function PendingInputStrip({
             </span>
           </li>
         ))}
-        {pendingSteers.map((pendingSteer) => (
-          <li
-            className="pending-input-row pending-steer-row"
-            data-pending-steer-operation-id={pendingSteer.operationId}
-            aria-busy={pendingSteer.phase === "sending"}
-            key={`steer:${pendingSteer.operationId}`}
-          >
-            <span className="pending-input-origin">You</span>
-            <span
-              className="pending-input-preview"
-              title={pendingSteer.preview}
-            >
-              {pendingSteer.preview}
-            </span>
-            {pendingSteer.attachmentCount > 0 && (
-              <span className="pending-input-attachment-count">
-                {pendingSteer.attachmentCount}{" "}
-                {pendingSteer.attachmentCount === 1 ? "file" : "files"}
-              </span>
-            )}
-            {pendingSteer.taskCount > 0 && (
-              <span className="pending-input-attachment-count">
-                {pendingSteer.taskCount}{" "}
-                {pendingSteer.taskCount === 1 ? "task" : "tasks"}
-              </span>
-            )}
-            <span
-              className="pending-input-state"
-              data-state={pendingSteer.phase}
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-            >
-              {pendingSteer.phase === "sending"
-                ? "Sending steer"
-                : pendingSteer.phase === "steering"
-                  ? "Steering"
-                  : "Steer unconfirmed"}
-            </span>
-          </li>
-        ))}
-        {queue.map((item) => {
-          const userMutable =
-            item.origin === "user" &&
-            (item.state === "pending" || item.state === "retry_wait");
-          const userReversible =
-            userMutable || (item.origin === "user" && item.state === "failed");
-          const pendingAction = pendingActions[item.id];
-          const rowPending = pendingAction !== undefined;
-          const awaitingProjection = !state.snapshot?.queue.some(
-            (projected) => projected.id === item.id,
-          );
-          const steerUnavailableReason =
-            steerCapability?.unavailableReason?.text ??
-            "Steer is unavailable right now.";
-          const canOfferSteer =
-            userMutable &&
-            item.isHead &&
-            item.resolvedDeliveryMode !== "steer";
-          const failureAcknowledgement =
-            item.state === "failed" && queueFailure?.queuedInputId === item.id;
-          const stateLabel = statusLabel(item);
-          const preview = item.inputOrigin?.kind === "question_response"
-            ? item.inputOrigin.answers.map(({ question, answer }) => `${question}: ${answer}`).join(" · ")
-            : item.preview.text;
-          return (
-            <li
-              className="pending-input-row"
-              data-input-origin={item.origin}
-              data-queued-input-id={item.id}
-              data-delivery-operation-id={item.deliveryOperationId}
-              key={item.id}
-              ref={(element) => {
-                if (element) rows.current.set(item.id, element);
-                else rows.current.delete(item.id);
-              }}
-              aria-busy={rowPending}
-            >
-              <span
-                className="pending-input-origin"
-                title={
-                  item.inputOrigin?.kind === "question_response"
-                    ? "Question answered"
-                    : item.inputOrigin
-                      ? `${item.inputOrigin.kind === "agent_message" ? "Agent message" : "Agent result"} · ${item.inputOrigin.sourceThreadLabel.text}`
-                      : undefined
-                }
-              >
-                {item.inputOrigin?.kind === "question_response"
-                  ? "Question answered"
-                  : item.origin === "user"
-                  ? "You"
-                  : item.origin === "agent_result"
-                    ? `Agent result · ${item.inputOrigin?.sourceThreadLabel.text ?? "Agent"}`
-                  : item.origin === "automation"
-                    ? "Automation"
-                    : item.origin === "agent_control"
-                      ? `Agent message · ${item.inputOrigin?.sourceThreadLabel.text ?? "Agent"}`
-                      : "Tool client"}
-              </span>
-              <span className="pending-input-preview" title={preview}>
-                {preview}
-              </span>
-              {item.attachmentCount > 0 && (
-                <span className="pending-input-attachment-count">
-                  {item.attachmentCount}{" "}
-                  {item.attachmentCount === 1 ? "file" : "files"}
-                </span>
-              )}
-              {item.taskCount > 0 && (
-                <span className="pending-input-attachment-count">
-                  {item.taskCount} {item.taskCount === 1 ? "task" : "tasks"}
-                </span>
-              )}
-              {stateLabel && (
-                <span
-                  className="pending-input-state"
-                  data-state={item.state}
-                  data-delivery-mode={item.deliveryMode}
-                >
-                  {stateLabel}
-                </span>
-              )}
-              <span className="pending-input-actions">
-                {userReversible && (
-                  <button
-                    type="button"
-                    className="pending-input-action pending-input-delete"
-                    aria-label={`Delete queued input: ${item.preview.text}`}
-                    title="Delete queued input"
-                    disabled={disabled || awaitingProjection || rowPending}
-                    onClick={(event) =>
-                      void runAction(item, "delete", event.currentTarget)
-                    }
-                  >
-                    <Trash2 size={15} strokeWidth={1.9} aria-hidden="true" />
-                  </button>
-                )}
-                {userReversible && (
-                  <button
-                    type="button"
-                    className="pending-input-action pending-input-restore"
-                    aria-label={`Restore queued input to composer: ${item.preview.text}`}
-                    title={
-                      restoreAvailable
-                        ? "Restore to composer"
-                        : restoreUnavailableReason
-                    }
-                    disabled={disabled || awaitingProjection || rowPending || !restoreAvailable}
-                    onClick={(event) =>
-                      void runAction(item, "restore", event.currentTarget)
-                    }
-                  >
-                    <Undo size={15} strokeWidth={1.9} aria-hidden="true" />
-                  </button>
-                )}
-                {canOfferSteer && steerCapability && (
-                  <button
-                    type="button"
-                    className="pending-input-action pending-input-steer"
-                    aria-label={`Steer queued input into active turn: ${item.preview.text}`}
-                    title={
-                      steerCapability.available
-                        ? "Send this queued input into the active turn"
-                        : steerUnavailableReason
-                    }
-                    disabled={
-                      disabled || awaitingProjection || rowPending || !steerCapability.available
-                    }
-                    onClick={(event) =>
-                      void runAction(item, "steer", event.currentTarget)
-                    }
-                  >
-                    <Forward size={15} strokeWidth={1.9} aria-hidden="true" />
-                  </button>
-                )}
-                {failureAcknowledgement && (
-                  <button
-                    type="button"
-                    className="pending-input-action"
-                    aria-label={`Dismiss queued input failure: ${item.preview.text}`}
-                    disabled={disabled || awaitingProjection || rowPending}
-                    onClick={(event) =>
-                      void runAction(item, "dismiss", event.currentTarget)
-                    }
-                  >
-                    {rowPending ? "Dismissing…" : "Dismiss"}
-                  </button>
-                )}
-              </span>
-              {canOfferSteer &&
-                steerCapability &&
-                !steerCapability.available && (
-                  <span className="pending-input-unavailable">
-                    {steerUnavailableReason}
-                  </span>
-                )}
-              {item.state === "failed" && item.diagnostic && (
-                <span className="pending-input-detail">
-                  {item.diagnostic.text}
-                </span>
-              )}
-              {rowErrors[item.id] && (
-                <span className="pending-input-error" role="alert">
-                  {rowErrors[item.id]}
-                </span>
-              )}
-            </li>
-          );
-        })}
+        {queue.slice(0, leadingSteerRowCount).map(renderQueueItem)}
+        {pendingSteers.map(renderPendingSteer)}
+        {queue.slice(leadingSteerRowCount).map(renderQueueItem)}
         {localQueueTransfers.map((transfer) => {
           const preview = transferPreview(transfer);
           return (

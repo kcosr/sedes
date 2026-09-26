@@ -341,8 +341,6 @@ export class ThreadClientStore {
   #questionStatusRevision = -1;
   #publishedBookmarkRevision = 0;
   #historyLoad?: Promise<void>;
-  #capabilityThreadRevision?: number;
-  #pendingDeliveryBridgeKind?: "revision" | "pending_materialization";
   #nextTransferPresentationSequence = 1;
   readonly #historySeeks = new Map<string, Promise<ThreadHistorySeekResult>>();
   readonly #forkRequests = new Map<string, ForkThreadRequest>();
@@ -427,7 +425,6 @@ export class ThreadClientStore {
     this.#pendingEnvelopes = [];
     this.#historyLoad = undefined;
     this.#historySeeks.clear();
-    this.#capabilityThreadRevision = undefined;
     if (this.#resubscribeTimer !== undefined) {
       globalThis.clearTimeout(this.#resubscribeTimer);
       this.#resubscribeTimer = undefined;
@@ -963,7 +960,7 @@ export class ThreadClientStore {
       if (this.#state.pendingDeliveryThreadRevision !== undefined) {
         this.#recordComposerTransferFailure(operationId, false);
         throw new Error(
-          "Wait for the pending steer to appear before delivering more input.",
+          "Wait for the pending delivery to resolve before delivering more input.",
         );
       }
       const snapshot = this.#requireSnapshot();
@@ -1043,7 +1040,7 @@ export class ThreadClientStore {
             : {}),
         });
         this.#retireTerminalMaterializedTransfer(operationId);
-        this.#setPendingDeliveryBridge(result.threadRevision, "revision");
+        this.#setPendingDeliveryBridge(result.threadRevision);
         return result.draft;
       }
       if (result.status === "delivery_pending_materialization") {
@@ -1071,10 +1068,7 @@ export class ThreadClientStore {
         });
         this.#retireTerminalMaterializedTransfer(operationId);
         const current = this.#state.snapshot;
-        this.#setPendingDeliveryBridge(
-          result.threadRevision,
-          "pending_materialization",
-        );
+        this.#setPendingDeliveryBridge(result.threadRevision);
         return current && current.draft.revision > authoritative.data.revision
           ? current.draft
           : authoritative.data;
@@ -1147,6 +1141,7 @@ export class ThreadClientStore {
       }
       this.#queuedInputMutationIds.delete(requestKey);
       this.#removePendingQueuedSteersForInput(queuedInputId);
+      this.#removeQueueOwnedTransfersForInput(queuedInputId);
       this.#applyQueueMutationResult(generation, result);
     });
   }
@@ -1188,6 +1183,7 @@ export class ThreadClientStore {
       }
       this.#queuedInputMutationIds.delete(requestKey);
       this.#removePendingQueuedSteersForInput(queuedInputId);
+      this.#removeQueueOwnedTransfersForInput(queuedInputId);
       this.#applyQueueMutationResult(generation, {
         ...result,
         draft: authoritative.data,
@@ -1240,7 +1236,7 @@ export class ThreadClientStore {
       if (this.#state.pendingDeliveryThreadRevision !== undefined) {
         this.#removePendingQueuedSteer(mutationId);
         throw new Error(
-          "Wait for the previous steering input to appear before steering again.",
+          "Wait for the pending delivery to resolve before steering queued input.",
         );
       }
       let result;
@@ -1285,13 +1281,10 @@ export class ThreadClientStore {
             : "steering",
         requestState: "receipt_received",
       });
+      // The receipt's queue projection is applied at its revision, so an
+      // unconfirmed Steer needs no delivery fence; its card waits for its own
+      // exact materialization while later Steer and Queue stay available.
       this.#applyQueueMutationResult(generation, result);
-      if (result.status === "queue_steer_pending_materialization") {
-        this.#setPendingDeliveryBridge(
-          result.threadRevision,
-          "pending_materialization",
-        );
-      }
       if (result.status === "queue_steer_recovery_required") {
         throw new Error(
           "Steer delivery is unconfirmed. Use recovery before sending more input.",
@@ -2179,12 +2172,11 @@ export class ThreadClientStore {
         result.status === "delivery_accepted" ||
         result.status === "delivery_pending_materialization"
       ) {
-        const pending = this.#liveSteerTransfer();
-        if (pending && result.operationId !== pending.operationId) {
-          throw new Error(
-            "Delivery recovery returned another pending steer operation.",
-          );
-        }
+        // Other Steers may be unconfirmed too; only the exact returned
+        // operation's transfer takes this outcome.
+        const pending = this.#liveSteerTransfers().find(
+          (transfer) => transfer.operationId === result.operationId,
+        );
         if (pending) {
           this.#applyResolvedDeliveryMode(
             pending.operationId,
@@ -2201,17 +2193,20 @@ export class ThreadClientStore {
                 : "accepted",
           });
         }
-        this.#setPendingDeliveryBridge(
-          result.threadRevision,
-          result.status === "delivery_pending_materialization"
-            ? "pending_materialization"
-            : "revision",
-        );
+        this.#setPendingDeliveryBridge(result.threadRevision);
       }
       if (result.status === "recovery_required") {
-        const pending = this.#liveSteerTransfer();
-        if (pending) {
-          this.#setPendingSteerPhase(pending.operationId, "unconfirmed");
+        // This receipt names no operation. Mark a transfer unconfirmed only
+        // when exactly one sent, non-queued Steer could be its subject; with
+        // several, none is chosen by position.
+        const candidates = this.#liveSteerTransfers().filter(
+          (transfer) =>
+            transfer.acceptanceEvidence !== "durably_queued" &&
+            (transfer.requestState === "receipt_received" ||
+              transfer.requestState === "request_failed"),
+        );
+        if (candidates.length === 1) {
+          this.#setPendingSteerPhase(candidates[0]!.operationId, "unconfirmed");
         }
       }
       if (
@@ -2221,12 +2216,6 @@ export class ThreadClientStore {
         result.status === "queue_steer_restored"
       ) {
         this.#applyQueueMutationResult(generation, result);
-        if (result.status === "queue_steer_pending_materialization") {
-          this.#setPendingDeliveryBridge(
-            result.threadRevision,
-            "pending_materialization",
-          );
-        }
       }
     });
   }
@@ -2670,7 +2659,6 @@ export class ThreadClientStore {
             this.#questionStatusProjectionKey = "";
             void this.loadQuestionRequests();
           }
-          this.#observeCapabilityProjection(envelope);
           this.#observeComposerQueuePresentation(envelope);
           applied += 1;
           if (envelope.event.type !== "snapshot") madeProgress = true;
@@ -2760,7 +2748,6 @@ export class ThreadClientStore {
       result = this.normalized.applyCheckpoint(checkpoint);
       if (result.kind === "applied") {
         this.usage.invalidate();
-        this.#capabilityThreadRevision = this.normalized.capabilityThreadRevision;
         this.#questionStatusProjectionKey = "";
         void this.loadQuestionRequests();
         this.#observeComposerQueuePresentation({
@@ -2842,19 +2829,11 @@ export class ThreadClientStore {
     }
     const pendingDeliveryThreadRevision =
       this.#state.pendingDeliveryThreadRevision !== undefined &&
-      (this.#pendingDeliveryBridgeKind === "pending_materialization"
-        ? this.#needsPendingDeliveryBridge(
-            this.#state.pendingDeliveryThreadRevision,
-            snapshot,
-          )
-        : !snapshot ||
-          snapshot.thread.threadRevision <
-            this.#state.pendingDeliveryThreadRevision)
+      (!snapshot ||
+        snapshot.thread.threadRevision <
+          this.#state.pendingDeliveryThreadRevision)
         ? this.#state.pendingDeliveryThreadRevision
         : undefined;
-    if (pendingDeliveryThreadRevision === undefined) {
-      this.#pendingDeliveryBridgeKind = undefined;
-    }
     const {
       pendingDeliveryThreadRevision: _pendingDeliveryThreadRevision,
       ...currentState
@@ -3066,21 +3045,6 @@ export class ThreadClientStore {
     if (!unchanged) this.#setPendingComposerTransfers(transfers);
   }
 
-  #observeCapabilityProjection(envelope: ThreadEventEnvelope): void {
-    const event = envelope.event;
-    if (event.type === "snapshot") {
-      this.#capabilityThreadRevision = event.snapshot.thread.threadRevision;
-      return;
-    }
-    if (event.type === "capabilities_changed") {
-      this.#capabilityThreadRevision = event.threadRevision;
-      return;
-    }
-    if (event.type === "application_state_changed") {
-      this.#capabilityThreadRevision = event.state.thread.threadRevision;
-    }
-  }
-
   #observeComposerQueuePresentation(envelope: ThreadEventEnvelope): void {
     const event = envelope.event;
     const queue =
@@ -3116,29 +3080,19 @@ export class ThreadClientStore {
     }
   }
 
-  #needsPendingDeliveryBridge(
-    threadRevision: number,
-    snapshot = this.#state.snapshot,
-  ): boolean {
-    if (!snapshot || this.#capabilityThreadRevision === undefined) return true;
-    if (this.#capabilityThreadRevision < threadRevision) return true;
-    if (this.#capabilityThreadRevision > threadRevision) return false;
-    return snapshot.capabilities.deliveryModes.some(
-      ({ available }) => available,
-    );
-  }
-
-  #setPendingDeliveryBridge(
-    threadRevision: number,
-    kind: "revision" | "pending_materialization",
-  ): void {
-    const needed =
-      kind === "pending_materialization"
-        ? this.#needsPendingDeliveryBridge(threadRevision)
-        : !this.#state.snapshot ||
-          this.#state.snapshot.thread.threadRevision < threadRevision;
-    if (!needed) return;
-    this.#pendingDeliveryBridgeKind = kind;
+  /**
+   * Fences further delivery until the receipt's thread revision reaches this
+   * client, so the next request carries a current expected revision. A Steer
+   * still awaiting materialization does not hold the fence: several may be
+   * unconfirmed at once, and the server's capabilities decide what is next.
+   */
+  #setPendingDeliveryBridge(threadRevision: number): void {
+    if (
+      this.#state.snapshot &&
+      this.#state.snapshot.thread.threadRevision >= threadRevision
+    ) {
+      return;
+    }
     this.#replaceState({
       ...this.#state,
       pendingDeliveryThreadRevision: threadRevision,
@@ -3236,8 +3190,31 @@ export class ThreadClientStore {
     this.#replaceState({ ...this.#state, pendingQueuedSteers: pending });
   }
 
-  #liveSteerTransfer(): PendingComposerTransfer | undefined {
-    return this.#state.pendingComposerTransfers.find(
+  /**
+   * A successful cancel or restore retires that exact queue row, so a
+   * queue-owned transfer correlated to it can never materialize. Removing it
+   * keeps a withdrawn Steer card from lingering beside later Steers.
+   */
+  #removeQueueOwnedTransfersForInput(queuedInputId: string): void {
+    const transfers = this.#state.pendingComposerTransfers.filter(
+      (transfer) =>
+        transfer.authorityState !== "queue_owned" ||
+        transfer.queuedInputId !== queuedInputId ||
+        transfer.lateMaterializationRequiresComposerReconciliation,
+    );
+    if (transfers.length === this.#state.pendingComposerTransfers.length) {
+      return;
+    }
+    this.#setPendingComposerTransfers(transfers);
+  }
+
+  /**
+   * Client-owned Steer transfers whose outcome a delivery recovery can
+   * report. Several can be unconfirmed at once; recovery matches its returned
+   * operation exactly and never picks one by position.
+   */
+  #liveSteerTransfers(): readonly PendingComposerTransfer[] {
+    return this.#state.pendingComposerTransfers.filter(
       (transfer) =>
         (transfer.resolvedDeliveryMode ?? transfer.mode) === "steer" &&
         transfer.presentation === "pending_steer" &&

@@ -1036,7 +1036,7 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
     expect(reopened.usage.counters?.userMessages).toBeGreaterThanOrEqual(2);
   });
 
-  it("returns a steer Pi never used on Stop as not sent", async () => {
+  it("returns every steer Pi never used on Stop as not sent", async () => {
     const fixture = await createFixture();
     const selectedModel = await resolveEligibleModel(fixture);
     process.stdout.write(
@@ -1050,16 +1050,16 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
     );
     const events: SequencedBackendEvent[] = [];
     let unsubscribe: () => void = () => undefined;
-    const steerText = `Reply UNUSED_STEER_${randomUUID().replaceAll("-", "")} instead.`;
-    const steer = {
+    // Two Steers are pending at once; Stop withdraws each individually.
+    const steers = [1, 2].map(() => ({
       applicationOperationId: `steer-stop-${randomUUID()}`,
       mutationId: randomUUID(),
       reconciliationToken: `steer-stop-token-${randomUUID()}`,
       contextExcerpts: [],
       attachments: [],
       taskContexts: [],
-      text: steerText,
-    };
+      text: `Reply UNUSED_STEER_${randomUUID().replaceAll("-", "")} instead.`,
+    }));
     try {
       await conversation.handle.perform({
         applicationOperationId: "real-pi-steer-stop-model",
@@ -1106,12 +1106,14 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
       const turnId = eventOfType(events, "turn_started").at(-1)!.turn
         .backendTurnId;
       // Pi drains steering only after this assistant response finishes.
-      await expect(
-        conversation.handle.steer({
-          ...steer,
-          target: { kind: "turn", turnId },
-        }),
-      ).resolves.toMatchObject({ status: "pending_materialization" });
+      for (const steer of steers) {
+        await expect(
+          conversation.handle.steer({
+            ...steer,
+            target: { kind: "turn", turnId },
+          }),
+        ).resolves.toMatchObject({ status: "pending_materialization" });
+      }
       await conversation.handle.interrupt({
         applicationOperationId: `steer-stop-interrupt-${randomUUID()}`,
         expectedBackendTurnId: turnId,
@@ -1126,15 +1128,18 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
           ),
         "Timed out waiting for the stopped real Pi turn to settle.",
       );
-      await expect(
-        driver.reconcileSubmission({
-          scope,
-          workspace: fixture.workspace,
-          binding: conversation.binding,
-          applicationOperationId: steer.applicationOperationId,
-          reconciliationToken: steer.reconciliationToken,
-        }),
-      ).resolves.toMatchObject({ status: "not_accepted", retryable: false });
+      for (const steer of steers) {
+        await expect(
+          driver.reconcileSubmission({
+            scope,
+            workspace: fixture.workspace,
+            binding: conversation.binding,
+            applicationOperationId: steer.applicationOperationId,
+            reconciliationToken: steer.reconciliationToken,
+            steerTarget: { kind: "turn", turnId },
+          }),
+        ).resolves.toMatchObject({ status: "not_accepted", retryable: false });
+      }
     } finally {
       unsubscribe();
       await conversation.handle.close();
@@ -1145,21 +1150,24 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
       fixture.workspace,
       conversation.binding.backendConversationId,
     ))!.getBranch();
-    expect(
-      branch.flatMap((entry) => {
-        const marker = piSubmissionMarker(entry);
-        return marker?.applicationOperationId === steer.applicationOperationId
-          ? [marker.phase]
-          : [];
-      }),
-    ).toEqual(["intent", "enqueued", "lost"]);
-    expect(
-      branch.some(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message.role === "user" &&
-          JSON.stringify(entry.message.content).includes(steerText),
-      ),
-    ).toBe(false);
+    for (const steer of steers) {
+      expect(
+        branch.flatMap((entry) => {
+          const marker = piSubmissionMarker(entry);
+          return marker?.applicationOperationId ===
+            steer.applicationOperationId
+            ? [marker.phase]
+            : [];
+        }),
+      ).toEqual(["intent", "enqueued", "lost"]);
+      expect(
+        branch.some(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message.role === "user" &&
+            JSON.stringify(entry.message.content).includes(steer.text),
+        ),
+      ).toBe(false);
+    }
   });
 });

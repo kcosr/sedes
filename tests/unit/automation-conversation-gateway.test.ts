@@ -61,6 +61,7 @@ function queued(state: QueuedInputRecord["state"]): QueuedInputRecord {
     invalidStateRequeues: 0,
     nextAttemptAt: state === "retry_wait" ? 2_000 : null,
     diagnostic: state === "uncertain" ? "Unknown acceptance" : null,
+    failureReason: null,
     failureAcknowledgedAt: null,
     cancellationMutationId: null,
     cancellationRequestFingerprint: null,

@@ -10435,6 +10435,11 @@ tr.diff-hunk td {
   color: var(--destructive);
 }
 
+/* A proven-unused input was withdrawn, not rejected: keep it neutral. */
+.pending-input-state[data-state="failed"][data-failure-reason="not_sent"] {
+  color: var(--muted-foreground);
+}
+
 .pending-input-preview {
   min-width: 0;
   overflow: hidden;

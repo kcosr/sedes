@@ -211,6 +211,30 @@ export function completeClaudeTool(
   }
 }
 
+/**
+ * Settle a call whose error result Claude Code wrote because the user's
+ * interrupt stopped it. The caller supplies that proof: the call's exact stop
+ * result and Claude Code's native tool-use interruption marker following the
+ * call's batch. The result stays visible; only the outcome differs from a
+ * failure.
+ */
+export function interruptClaudeToolResult(
+  existing: BackendItem,
+  content: unknown,
+  completedAt: string,
+): BackendItem {
+  if (existing.semanticKind === "collaboration") {
+    return settleInterruptedClaudeTool(existing, "interrupted", completedAt);
+  }
+  const settled = completeClaudeTool(existing, content, true);
+  return {
+    ...settled,
+    status: "interrupted",
+    phase: "interrupted",
+    completedAt,
+  } as BackendItem;
+}
+
 export function settleInterruptedClaudeTool(
   item: BackendItem,
   status: "interrupted" | "failed",

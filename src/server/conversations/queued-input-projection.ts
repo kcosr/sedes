@@ -109,5 +109,8 @@ export function projectQueuedInputSummaries(
     ...(item.diagnostic === null
       ? {}
       : { diagnostic: boundDisplayText(item.diagnostic) }),
+    ...(item.state === "failed" && item.failureReason !== null
+      ? { failureReason: item.failureReason }
+      : {}),
   }));
 }

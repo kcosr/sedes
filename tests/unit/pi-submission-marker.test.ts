@@ -178,6 +178,150 @@ describe("Pi submission markers", () => {
     });
   });
 
+  it("keeps earlier pending steers when a later steer intent is recorded and correlates each FIFO", () => {
+    const steers = [1, 2, 3].map((index) => ({
+      ...input,
+      applicationOperationId: `steer-${index}`,
+      mutationId: `steer-${index}`,
+      reconciliationToken: `steer-${index}`,
+      text: `Steer ${index}`,
+    }));
+    const enqueued = (steer: (typeof steers)[number]) =>
+      createPiSubmissionMarker({
+        ...steer,
+        phase: "enqueued",
+        backendTurnId: "root",
+      });
+    const correlations = correlatePiSubmissions([
+      user("root", "Root"),
+      custom("intent-1", createPiSubmissionMarker(steers[0]!)),
+      custom("enqueued-1", enqueued(steers[0]!)),
+      custom("intent-2", createPiSubmissionMarker(steers[1]!)),
+      // Pi can use an earlier Steer while a later one is being admitted.
+      user("user-1", "Transformed steer 1"),
+      custom("enqueued-2", enqueued(steers[1]!)),
+      custom("intent-3", createPiSubmissionMarker(steers[2]!)),
+      custom("enqueued-3", enqueued(steers[2]!)),
+      user("user-2", "Transformed steer 2"),
+      user("user-3", "Transformed steer 3"),
+    ]);
+
+    steers.forEach((steer, index) => {
+      const correlated = correlations.get(steer.applicationOperationId);
+      expect(correlated).toMatchObject({
+        marker: { phase: "enqueued" },
+        userEntryId: `user-${index + 1}`,
+        providerTurnId: "root",
+        rejected: false,
+      });
+      expect(correlated).not.toHaveProperty("invalid");
+    });
+  });
+
+  it("closes each of several pending steers individually by its own loss marker", () => {
+    const steers = [1, 2, 3].map((index) => ({
+      ...input,
+      applicationOperationId: `steer-${index}`,
+      mutationId: `steer-${index}`,
+      reconciliationToken: `steer-${index}`,
+      text: `Steer ${index}`,
+    }));
+    const phase = (
+      steer: (typeof steers)[number],
+      value: "enqueued" | "lost",
+    ) =>
+      createPiSubmissionMarker({ ...steer, phase: value, backendTurnId: "root" });
+    const correlations = correlatePiSubmissions([
+      user("root", "Root"),
+      ...steers.flatMap((steer, index) => [
+        custom(`intent-${index + 1}`, createPiSubmissionMarker(steer)),
+        custom(`enqueued-${index + 1}`, phase(steer, "enqueued")),
+      ]),
+      // The first was used before Stop; the rest are lost, in any order.
+      user("user-1", "Transformed steer 1"),
+      custom("lost-3", phase(steers[2]!, "lost")),
+      custom("lost-2", phase(steers[1]!, "lost")),
+      user("later", "Unrelated later input"),
+    ]);
+
+    expect(correlations.get("steer-1")).toMatchObject({
+      userEntryId: "user-1",
+      providerTurnId: "root",
+      rejected: false,
+    });
+    for (const id of ["steer-2", "steer-3"]) {
+      const correlated = correlations.get(id);
+      expect(correlated).toMatchObject({
+        marker: { phase: "lost" },
+        invalid: "lost_steer",
+        rejected: true,
+      });
+      expect(correlated).not.toHaveProperty("userEntryId");
+    }
+  });
+
+  it("lets a later steer take the next user entry after an earlier one is closed as lost", () => {
+    const first = { ...input, applicationOperationId: "first" };
+    const second = {
+      ...input,
+      applicationOperationId: "second",
+      mutationId: "second",
+      reconciliationToken: "second",
+    };
+    const correlations = correlatePiSubmissions([
+      user("root", "Root"),
+      custom("intent-1", createPiSubmissionMarker(first)),
+      custom(
+        "lost-1",
+        createPiSubmissionMarker({ ...first, phase: "lost", backendTurnId: "root" }),
+      ),
+      custom("intent-2", createPiSubmissionMarker(second)),
+      user("user-2", "Second"),
+    ]);
+
+    expect(correlations.get("first")).toMatchObject({
+      invalid: "lost_steer",
+      rejected: true,
+    });
+    expect(correlations.get("second")).toMatchObject({
+      userEntryId: "user-2",
+      providerTurnId: "root",
+    });
+  });
+
+  it("still invalidates every pending steer displaced by a true submit", () => {
+    const steers = [1, 2].map((index) => ({
+      ...input,
+      applicationOperationId: `steer-${index}`,
+      mutationId: `steer-${index}`,
+      reconciliationToken: `steer-${index}`,
+    }));
+    const submit = {
+      ...input,
+      applicationOperationId: "next-submit",
+      mutationId: "next-submit",
+      reconciliationToken: "next-submit",
+      mode: "submit" as const,
+    };
+    const correlations = correlatePiSubmissions([
+      user("root", "Root"),
+      custom("steer-1", createPiSubmissionMarker(steers[0]!)),
+      custom("steer-2", createPiSubmissionMarker(steers[1]!)),
+      custom("submit", createPiSubmissionMarker(submit)),
+      user("next-root", "Next root"),
+    ]);
+
+    for (const steer of steers) {
+      expect(correlations.get(steer.applicationOperationId)).toMatchObject({
+        invalid: "displaced_steer",
+      });
+    }
+    expect(correlations.get(submit.applicationOperationId)).toMatchObject({
+      userEntryId: "next-root",
+      providerTurnId: "next-root",
+    });
+  });
+
   it("does not trust an optional v1 backendTurnId hint over position", () => {
     const hinted = { ...input, backendTurnId: "arbitrary-user" };
     expect(

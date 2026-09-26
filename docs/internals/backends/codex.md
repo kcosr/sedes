@@ -293,6 +293,10 @@ as interrupted. Idle and `notLoaded` metadata project every historical
 the same rule, so an abandoned shell cannot manufacture an active run or a
 Stop/Steer target.
 
+Tool items in an interrupted turn keep Codex's own status. Codex gives no
+exact per-item evidence that Stop aborted a call, and a background terminal
+can outlive its turn and complete later.
+
 Authenticated boundary-only turns are discarded as each native page is
 inspected. A request-local deadline bounds a long hidden-only seek without
 retaining intervening pages.
@@ -430,8 +434,13 @@ with its `clientId`) when the turn loop next drains that input, before the
 next model request. The handle therefore returns `pending_materialization`
 unless the exact authenticated item is already in its projection, and the
 shared queue waits for that item's `completionCorrelations` evidence; a replay
-upgrades to accepted once the item appears. Like every pending Steer, it
-withholds further Send, Steer, and Queue on that thread until it resolves.
+upgrades to accepted once the item appears. Several Steers can await their
+items at once: the handle keeps one record per application operation, and the
+shared queue sends the next `turn/steer` as soon as the previous one returned,
+still one call at a time through the actor's mutation mailbox. Codex drains
+the turn's pending input in order, so their items appear in the order sent,
+often several at one drain; each resolves on its own item. Ordinary Send and
+Queue work waits in the shared queue until every earlier Steer has resolved.
 
 Reviewed 0.153.0 behaviour for input that was admitted but not yet drained:
 
@@ -463,7 +472,8 @@ requires.
 An in-progress or missing target turn, an unstable or unavailable read, or a
 duplicate identity stays unresolved. A matching item is accepted with its
 turn, which is how a Steer Codex drained before Stop stays with the stopped
-turn.
+turn. Each pending Steer reconciles by its own client identity, so after Stop
+every undrained one returns as not sent while any drained one stays.
 
 The evidence is absence in final history, because Codex exposes no per-input
 drop event. One Codex-internal path can make it wrong: an interrupt waits

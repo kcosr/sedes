@@ -155,6 +155,12 @@ events without exposing native entries to the browser. Streaming assistant
 text, reasoning, tool arguments, execution updates, results, interruption, and
 persisted history reconcile into normalized semantic items.
 
+A tool Stop aborted keeps `failed`. Pi records it as an ordinary error
+result ("Operation aborted", or the tool's own thrown message) with no abort
+flag, and a sibling that failed on its own in the same batch looks the same,
+so only text would tell them apart. A call with no result when the run ends is
+`interrupted`, as before.
+
 Compaction or a persisted branch/window change can replace the projection with
 a fresh generation. Abandoned Pi branches are never flattened into one
 transcript.
@@ -232,31 +238,55 @@ evidence before allowing a conflicting retry.
 ## Steer and fork invariants
 
 Sedes durably admits multiple exact-target Steer intents and invokes Pi
-serially. A Steer can remain pending until Pi materializes its user entry;
-later FIFO intents wait behind that evidence. Pi exposes no normalized
+serially: it sends the next Steer once Pi has accepted the previous one,
+without waiting for that one to materialize. Each conversation handle holds an
+ordered set of the Steers Pi accepted but has not yet materialized, keyed by
+application operation. Pi queues each accepted Steer and persists one user
+entry per queued Steer, in queue order, in either of its steering modes.
+Authenticated submission markers therefore correlate Pi's user entries to the
+pending Steers FIFO. A Steer intent waits behind the Steers already pending
+for the same turn. A Submit intent, which cannot occur while Steers are pending
+through the application, still displaces every earlier pending input, which
+then reconciles `not_accepted` with retry permission. Pi exposes no normalized
 operation for retracting one selected Steer after it crosses the provider
 boundary. Stop and runtime retirement are generation-wide: they clear Pi's
 volatile Steer and follow-up queues before aborting, without modifying Sedes's
 durable next-turn queue.
 
 Authenticated submission markers record each Steer as `intent`, `enqueued`
-once Pi accepts it, and then either its materialized user entry or `lost`.
-Settlement, retirement, and restart reconciliation write `lost` for an
-accepted Steer whose run ended without using it; Pi drains queued steering
-before a run ends on its own, so only an abort (Stop, retirement, or an
-extension abort, each clearing the queue first) or loss of the Sedes process
-leaves one unused. Sedes's own Stop waits in the conversation actor behind
-an in-flight Steer, so it withdraws only admitted input. If retirement or an
-extension abort ends the targeted run while Pi is still admitting the input,
-the handle clears Pi's idle queue before writing `lost`, because an idle Pi
-hands queued steering to its next run; if another run is already active, the
-Steer fails closed as uncertain instead. Reconciliation reports a
-materialized Steer accepted and a `lost` one `not_accepted` without retry
-permission and with a not-sent diagnostic, so the queue returns it to the user
-to restore or dismiss and never resends it, as the backend-neutral
+once Pi accepts it, and then either its materialized user entry or its own
+`lost` marker, which closes that input alone. Settlement, retirement, and
+restart reconciliation write `lost` for every accepted Steer whose run ended
+without using it, and none for a Steer Pi already used. Pi drains queued
+steering before a run ends on its own, so only an abort (Stop, retirement, or
+an extension abort, each clearing the queue first) or loss of the Sedes
+process leaves one unused. Stop may therefore keep the Steers Pi already used
+with the stopped turn and return the rest as not sent. Pi can also accept
+steering input without queueing it, when an extension input handler or command
+consumes it. The SDK session reports whether Pi's steering queue grew during
+admission, and the handle writes `lost` for such input at once, so it cannot
+claim a later Steer's user entry.
+
+Sedes's own Stop waits in the conversation actor behind an in-flight Steer, so
+it withdraws only admitted input. If retirement or an extension abort ends the
+targeted run while Pi is still admitting an input, the handle clears Pi's idle
+queue and writes `lost` for that input and every earlier pending Steer, because
+an idle Pi hands queued steering to its next run. If another run is already
+active, the Steer fails closed as uncertain instead.
+
+Reconciliation is per operation. It reports a materialized Steer accepted and
+a `lost` one `not_accepted` without retry permission and with a not-sent
+diagnostic, so the queue returns it to the user to restore or dismiss and never
+resends it, as the backend-neutral
 [Stop rule](../backend-integration-contract-rules.md#interactions-input-and-interruption)
-requires. Absence of a user entry is never the evidence on its own: an owned
-Steer whose run has not settled stays unresolved.
+requires. Absence of a user entry is never the evidence on its own: a Steer
+stays unresolved while the live handle that admitted it is still admitting it,
+or still holds it pending and its run has not settled. Other Steers pending in
+the same generation never decide its outcome. A Steer from a gone generation
+(the Sedes process restarted, or its handle closed without recording the loss)
+that has neither a user entry nor a `lost` marker gets its own `lost` marker
+when it is reconciled, so several such Steers reconcile individually, in any
+order.
 
 When Pi proves before that boundary that the exact target is no longer active,
 the adapter returns normalized stale-target evidence and Sedes preserves the
@@ -351,8 +381,9 @@ For Pi changes, test the affected paths across:
   trusted semantic-marker downgrade behavior;
 - direct, isolated, and managed SSH execution, including unsupported and
   fail-closed paths;
-- Steer FIFO materialization, stale-target conversion, and crossed-boundary
-  uncertainty;
+- Steer FIFO materialization with several Steers pending at once, per-input
+  `lost` evidence on Stop, retirement, and restart, stale-target conversion,
+  and crossed-boundary uncertainty;
 - selected-turn/latest-completed forks, recovery idempotence, and isolated
   rejection; and
 - Native/CLI surface and Progressive/Individual mode combinations admitted by

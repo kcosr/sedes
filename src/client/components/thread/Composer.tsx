@@ -333,7 +333,12 @@ export function Composer({
         transfer.requestState === "saving" ||
         transfer.requestState === "requesting"),
   );
-  const hasUnconfirmedSteerTransfer = state.pendingComposerTransfers.some(
+  // Only a Steer whose request outcome is unknown before any durable receipt
+  // fences delivery; its draft barrier holds until the queue or a rollback
+  // proves the outcome. Steers awaiting materialization are queue-owned or
+  // `steering` here, so any number of them leaves Steer, Queue, and idle Send
+  // to the server's capabilities.
+  const hasAmbiguousSteerTransfer = state.pendingComposerTransfers.some(
     (transfer) =>
       transfer.mode === "steer" &&
       transfer.authorityState === "client_only" &&
@@ -1317,7 +1322,7 @@ export function Composer({
   const promptSendDisabled =
     state.actionPending ||
     state.pendingDeliveryThreadRevision !== undefined ||
-    hasUnconfirmedSteerTransfer ||
+    hasAmbiguousSteerTransfer ||
     missingTaskReferences.length > 0 ||
     snapshot?.runState === "stopping" ||
     !availableDeliveryModes.some(
@@ -1334,7 +1339,7 @@ export function Composer({
       effectiveDisabled ||
       state.actionPending ||
       state.pendingDeliveryThreadRevision !== undefined ||
-      hasUnconfirmedSteerTransfer ||
+      hasAmbiguousSteerTransfer ||
       draftMutationPending ||
       attachmentUploadPending ||
       missingTaskReferences.length > 0 ||
@@ -1494,7 +1499,7 @@ export function Composer({
       if (
         state.actionPending ||
         state.pendingDeliveryThreadRevision !== undefined ||
-        hasUnconfirmedSteerTransfer ||
+        hasAmbiguousSteerTransfer ||
         draftMutationPending ||
         draftMutationRunning.current ||
         queueRestorePending ||
@@ -1522,7 +1527,7 @@ export function Composer({
       draftConflict,
       draftMutationPending,
       effectiveDisabled,
-      hasUnconfirmedSteerTransfer,
+      hasAmbiguousSteerTransfer,
       missingTaskReferences.length,
       queueRestorePending,
       state.actionPending,
@@ -2338,7 +2343,7 @@ export function Composer({
     : draftConflict
       ? "Resolve the draft conflict before restoring a queued input."
       : state.pendingDeliveryThreadRevision !== undefined ||
-          hasUnconfirmedSteerTransfer
+          hasAmbiguousSteerTransfer
         ? "Wait for the current delivery to settle before restoring a queued input."
         : draftMutationPending
           ? "Wait for the current composer action to finish."
@@ -2352,7 +2357,7 @@ export function Composer({
     !effectiveDisabled &&
     !draftConflict &&
     !draftMutationPending &&
-    !hasUnconfirmedSteerTransfer &&
+    !hasAmbiguousSteerTransfer &&
     state.pendingDeliveryThreadRevision === undefined &&
     !retainedAuthoritativeDraft;
 

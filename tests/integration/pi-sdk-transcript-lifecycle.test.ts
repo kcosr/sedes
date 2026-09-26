@@ -364,6 +364,202 @@ describe("Pi 0.86 transcript and lifecycle compatibility", () => {
     expect(source.session.isIdle).toBe(true);
   });
 
+  function branchUserTexts(manager: SessionManager): string[] {
+    return manager.getBranch().flatMap((entry) =>
+      entry.type === "message" && entry.message.role === "user"
+        ? [JSON.stringify(entry.message.content)]
+        : [],
+    );
+  }
+
+  it("queues several RPC steers and persists one user entry for each in FIFO order", async () => {
+    const f = await fixture();
+    const source = await f.open(f.reserved.manager);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    source.stream.mockImplementation((_model, context) => {
+      source.outbound.push(structuredClone(context));
+      const first = source.outbound.length === 1;
+      const message = source.reply(
+        first ? "Visible initial response" : "Visible steered response",
+      );
+      const result = async () => {
+        if (first) await gate;
+        return message;
+      };
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "done", reason: "stop", message: await result() };
+        },
+        result,
+      } as unknown as ReturnType<
+        typeof source.native.modelRuntime.streamSimple
+      >;
+    });
+    const steers = ["FIRST_STEER", "SECOND_STEER", "THIRD_STEER"];
+    const running = source.prompt("Visible original request");
+    try {
+      await vi.waitFor(() => expect(source.outbound).toHaveLength(1));
+      for (const steer of steers) {
+        await expect(source.session.steer(steer)).resolves.toEqual({
+          queued: true,
+        });
+      }
+      expect(source.native.getSteeringMessages()).toEqual(steers);
+    } finally {
+      release();
+      await running;
+    }
+    const users = branchUserTexts(f.reserved.manager);
+    expect(users).toHaveLength(1 + steers.length);
+    steers.forEach((steer, index) => {
+      expect(users[index + 1]).toContain(steer);
+    });
+    expect(source.native.getSteeringMessages()).toEqual([]);
+    expect(source.session.isIdle).toBe(true);
+  });
+
+  it("withdraws the unused queued steers on clearQueue before abort and keeps a used one", async () => {
+    const f = await fixture();
+    const source = await f.open(f.reserved.manager);
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let secondStarted!: () => void;
+    const secondRequest = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
+    source.stream.mockImplementation((_model, context, options) => {
+      source.outbound.push(structuredClone(context));
+      if (source.outbound.length === 2) {
+        // Pi used the first steer and now streams its response until Stop.
+        const stream = new AssistantMessageEventStream();
+        options?.signal?.addEventListener(
+          "abort",
+          () => {
+            const message: AssistantMessage = {
+              ...source.reply(""),
+              stopReason: "error",
+              errorMessage: "request cancelled",
+            };
+            stream.push({ type: "error", reason: "error", error: message });
+            stream.end(message);
+          },
+          { once: true },
+        );
+        secondStarted();
+        return stream;
+      }
+      const first = source.outbound.length === 1;
+      const message = source.reply(
+        first ? "Visible initial response" : "Visible later response",
+      );
+      const result = async () => {
+        if (first) await firstGate;
+        return message;
+      };
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "done", reason: "stop", message: await result() };
+        },
+        result,
+      } as unknown as ReturnType<
+        typeof source.native.modelRuntime.streamSimple
+      >;
+    });
+    const steers = ["USED_STEER", "UNUSED_STEER_ONE", "UNUSED_STEER_TWO"];
+    const running = source.session.prompt("Visible original request", {
+      source: "rpc",
+      preflightResult: vi.fn(),
+    });
+    await vi.waitFor(() => expect(source.outbound).toHaveLength(1));
+    for (const steer of steers) {
+      await expect(source.session.steer(steer)).resolves.toEqual({
+        queued: true,
+      });
+    }
+    releaseFirst();
+    await secondRequest;
+    // Pi's default one-at-a-time mode used only the first steer so far.
+    expect(source.session.clearQueue().steering).toEqual(steers.slice(1));
+    await source.session.abort();
+    await running;
+    expect(source.session.isIdle).toBe(true);
+
+    const users = branchUserTexts(f.reserved.manager);
+    expect(users.filter((text) => text.includes("USED_STEER"))).toHaveLength(1);
+    expect(users.join("\n")).not.toContain("UNUSED_STEER");
+    // A withdrawn steer never reaches a later run.
+    const next = await source.prompt("Visible next request");
+    expect(JSON.stringify(next.messages)).not.toContain("UNUSED_STEER");
+    expect(branchUserTexts(f.reserved.manager).join("\n")).not.toContain(
+      "UNUSED_STEER",
+    );
+  });
+
+  it("reports steering input an extension consumed as not queued", async () => {
+    const f = await fixture();
+    const extensions = path.join(f.root, "agent", "extensions");
+    await mkdir(extensions);
+    await writeFile(
+      path.join(extensions, "consume-steer.ts"),
+      [
+        "export default function (pi: any) {",
+        '  pi.on("input", (event: { text: string }) =>',
+        '    event.text.includes("CONSUMED_BY_EXTENSION")',
+        '      ? { action: "handled" }',
+        '      : { action: "continue" },',
+        "  );",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const source = await f.open(f.reserved.manager);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    source.stream.mockImplementation((_model, context) => {
+      source.outbound.push(structuredClone(context));
+      const first = source.outbound.length === 1;
+      const message = source.reply(
+        first ? "Visible initial response" : "Visible steered response",
+      );
+      const result = async () => {
+        if (first) await gate;
+        return message;
+      };
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "done", reason: "stop", message: await result() };
+        },
+        result,
+      } as unknown as ReturnType<
+        typeof source.native.modelRuntime.streamSimple
+      >;
+    });
+    const running = source.prompt("Visible original request");
+    try {
+      await vi.waitFor(() => expect(source.outbound).toHaveLength(1));
+      await expect(
+        source.session.steer("CONSUMED_BY_EXTENSION steer"),
+      ).resolves.toEqual({ queued: false });
+      await expect(source.session.steer("QUEUED_STEER")).resolves.toEqual({
+        queued: true,
+      });
+      expect(source.native.getSteeringMessages()).toEqual(["QUEUED_STEER"]);
+    } finally {
+      release();
+      await running;
+    }
+    const users = branchUserTexts(f.reserved.manager).join("\n");
+    expect(users).toContain("QUEUED_STEER");
+    expect(users).not.toContain("CONSUMED_BY_EXTENSION");
+  });
+
   it("aborts an in-progress compaction and waits for idle without persisting a partial checkpoint", async () => {
     const f = await fixture();
     const source = await f.open(f.reserved.manager);

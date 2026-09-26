@@ -468,7 +468,7 @@ function fakeSessionFactory(
             capturePendingSteer(() => {
               for (const persistedText of messages) persist(persistedText);
             });
-            return;
+            return { queued: true };
           }
           if (steerPersistenceDelayMilliseconds > 0 && messages.length > 1) {
             persist(messages[0]!);
@@ -477,7 +477,7 @@ function fakeSessionFactory(
                 persist(persistedText);
               }
             }, steerPersistenceDelayMilliseconds);
-            return;
+            return { queued: true };
           }
           for (const persistedText of messages) {
             persist(persistedText);
@@ -485,6 +485,7 @@ function fakeSessionFactory(
           if (settleBeforeSteerReturns) {
             emit({ type: "agent_settled" } as never);
           }
+          return { queued: true };
         },
         clearQueue: () => ({ steering: [], followUp: [] }),
         async abort() {
@@ -690,6 +691,117 @@ function binding(
     connectionProfileId: connection.id,
     executionEnvironmentId: connection.executionEnvironmentId,
     createdAt: "2026-07-30T12:00:00.000Z",
+  };
+}
+
+/**
+ * One attached Pi conversation with an active turn, for Steer tests that hold
+ * several pending Steers at once.
+ */
+async function activeSteerConversation(
+  name: string,
+  sessionFactory: PiSdkSessionFactory,
+) {
+  const fixture = await workspace();
+  const driverFor = (factory = sessionFactory) =>
+    new PiConversationBackendDriver({
+      instance,
+      connection,
+      usage: NO_USAGE_SINK,
+      nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
+      toolProvenanceKey,
+      agentTools: noAgentTools,
+      toolAccessPolicy: fullToolAccessPolicy,
+      sessionDirectory: fixture.sessions,
+      sessionFactory: factory,
+    });
+  const driver = driverFor();
+  const created = await driver.create({
+    scope,
+    workspace: fixture.workspace,
+    applicationThreadId: `${name}-create`,
+    applicationOperationId: `${name}-create`,
+    source: { kind: "user" },
+  });
+  const manager = await new PiSessionStore({
+    sessionDirectory: fixture.sessions,
+  }).openPersisted(fixture.workspace, created.backendConversationId);
+  const activeTurnId = manager!.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: "Active work" }],
+    timestamp: Date.now(),
+  });
+  const target = binding(created.backendConversationId);
+  const attach = (attachingDriver = driver) =>
+    attachingDriver.attach({
+      scope,
+      workspace: fixture.workspace,
+      binding: target,
+      opaqueBindingDetail: created.opaqueBindingDetail,
+    });
+  const handle = await attach();
+  const steerInput = (index: number) => ({
+    applicationOperationId: `${name}-steer-${index}`,
+    mutationId: `${name}-mutation-${index}`,
+    reconciliationToken: `${name}-token-${index}`,
+    target: { kind: "turn" as const, turnId: activeTurnId },
+    contextExcerpts: [],
+    attachments: [],
+    taskContexts: [],
+    text: `${name} steer ${index}`,
+  });
+  const reconcile = (
+    input: ReturnType<typeof steerInput>,
+    reconciler = driver,
+  ) =>
+    reconciler.reconcileSubmission({
+      scope,
+      workspace: fixture.workspace,
+      binding: target,
+      applicationOperationId: input.applicationOperationId,
+      reconciliationToken: input.reconciliationToken,
+      steerTarget: input.target,
+    });
+  const phases = async (input: ReturnType<typeof steerInput>) =>
+    (await new PiSessionStore({
+      sessionDirectory: fixture.sessions,
+    }).openPersisted(fixture.workspace, created.backendConversationId))!
+      .getBranch()
+      .flatMap((entry) => {
+        const marker = piSubmissionMarker(entry);
+        return marker?.applicationOperationId === input.applicationOperationId
+          ? [marker.phase]
+          : [];
+      });
+  const userItems = async () => {
+    const { snapshot } = await driver.read({
+      scope,
+      workspace: fixture.workspace,
+      binding: target,
+      opaqueBindingDetail: created.opaqueBindingDetail,
+    });
+    return Object.values(snapshot.itemsById).flatMap((item) =>
+      item.semanticKind === "user_message" && item.deliveryOperationId
+        ? [
+            {
+              deliveryOperationId: item.deliveryOperationId,
+              backendTurnId: item.backendTurnId,
+              content: JSON.stringify(item.content),
+            },
+          ]
+        : [],
+    );
+  };
+  return {
+    driverFor,
+    driver,
+    handle,
+    attach,
+    activeTurnId,
+    steerInput,
+    reconcile,
+    phases,
+    userItems,
   };
 }
 
@@ -3245,7 +3357,7 @@ describe("Pi conversation backend driver", () => {
 
   it("acknowledges Pi enqueue before materialization and closes the exact lifecycle", async () => {
     const fixture = await workspace();
-    let materialize: (() => void) | undefined;
+    const materialize: Array<() => void> = [];
     let steerCalls = 0;
     const driver = new PiConversationBackendDriver({
       instance,
@@ -3270,7 +3382,7 @@ describe("Pi conversation backend driver", () => {
         undefined,
         undefined,
         (release) => {
-          materialize = release;
+          materialize.push(release);
         },
       ),
     });
@@ -3341,18 +3453,24 @@ describe("Pi conversation backend driver", () => {
         reconciliationToken: input.reconciliationToken,
       }),
     ).resolves.toMatchObject({ status: "unresolved" });
-    await expect(
-      handle.steer({
-        ...input,
-        applicationOperationId: "second-pending-steer",
-        mutationId: "second-pending-steer",
-        reconciliationToken: "second-pending-steer",
-      }),
-    ).rejects.toMatchObject({
-      backendCode: "pi_steer_materialization_pending",
+    // A later Steer is admitted behind the pending one instead of waiting
+    // for its materialization.
+    const second = {
+      ...input,
+      applicationOperationId: "second-pending-steer",
+      mutationId: "second-pending-steer",
+      reconciliationToken: "second-pending-steer",
+      text: "Then also this",
+    };
+    await expect(handle.steer(second)).resolves.toEqual({
+      status: "pending_materialization",
+      reconciliationToken: second.reconciliationToken,
+      completionCorrelation: second.applicationOperationId,
+      backendTurnId: activeTurnId,
     });
+    expect(steerCalls).toBe(2);
 
-    materialize?.();
+    materialize[0]!();
     await vi.waitFor(async () => {
       await expect(
         driver.reconcileSubmission({
@@ -3366,6 +3484,31 @@ describe("Pi conversation backend driver", () => {
     });
     await expect(handle.steer(input)).resolves.toMatchObject({
       status: "accepted",
+    });
+    await expect(
+      driver.reconcileSubmission({
+        scope,
+        workspace: fixture.workspace,
+        binding: target,
+        applicationOperationId: second.applicationOperationId,
+        reconciliationToken: second.reconciliationToken,
+      }),
+    ).resolves.toMatchObject({ status: "unresolved" });
+    materialize[1]!();
+    await vi.waitFor(async () => {
+      await expect(
+        driver.reconcileSubmission({
+          scope,
+          workspace: fixture.workspace,
+          binding: target,
+          applicationOperationId: second.applicationOperationId,
+          reconciliationToken: second.reconciliationToken,
+        }),
+      ).resolves.toMatchObject({ status: "accepted" });
+    });
+    await expect(handle.steer(second)).resolves.toMatchObject({
+      status: "accepted",
+      backendTurnId: activeTurnId,
     });
     const materialized = await driver.read({
       scope,
@@ -3651,9 +3794,10 @@ describe("Pi conversation backend driver", () => {
             {
               ...session,
               async steer(...args: Parameters<typeof session.steer>) {
-                await session.steer(...args);
+                const admission = await session.steer(...args);
                 // Pi queued the input, then its run settled before using it.
                 settled = true;
+                return admission;
               },
               clearQueue() {
                 order.push("clear_queue");
@@ -3759,7 +3903,7 @@ describe("Pi conversation backend driver", () => {
               },
               async steer(...args: Parameters<typeof session.steer>) {
                 nativeSteer();
-                await session.steer(...args);
+                return session.steer(...args);
               },
             },
             { isIdle: { get: () => stopped } },
@@ -4190,6 +4334,422 @@ describe("Pi conversation backend driver", () => {
       }),
     ).resolves.toEqual({ status: "not_accepted", retryable: true });
     await handle.close();
+  });
+
+  it.each([2, 3])(
+    "holds %i Steers pending at once and materializes each in FIFO order",
+    async (count) => {
+      const releases: Array<() => void> = [];
+      let steerCalls = 0;
+      const conversation = await activeSteerConversation(
+        `fifo-${count}`,
+        fakeSessionFactory(
+          1,
+          false,
+          () => undefined,
+          0,
+          (text) => {
+            steerCalls += 1;
+            return [`Transformed: ${text}`];
+          },
+          0,
+          undefined,
+          undefined,
+          undefined,
+          (release) => {
+            releases.push(release);
+          },
+        ),
+      );
+      const steers = Array.from({ length: count }, (_, index) =>
+        conversation.steerInput(index + 1),
+      );
+
+      for (const steer of steers) {
+        await expect(conversation.handle.steer(steer)).resolves.toEqual({
+          status: "pending_materialization",
+          reconciliationToken: steer.reconciliationToken,
+          completionCorrelation: steer.applicationOperationId,
+          backendTurnId: conversation.activeTurnId,
+        });
+      }
+      // A replay of a held Steer returns its receipt without handing it over.
+      await expect(conversation.handle.steer(steers[0]!)).resolves.toMatchObject(
+        { status: "pending_materialization" },
+      );
+      expect(steerCalls).toBe(count);
+      for (const steer of steers) {
+        await expect(conversation.reconcile(steer)).resolves.toMatchObject({
+          status: "unresolved",
+        });
+      }
+
+      for (const [index, release] of releases.entries()) {
+        release();
+        await vi.waitFor(async () => {
+          await expect(
+            conversation.reconcile(steers[index]!),
+          ).resolves.toMatchObject({ status: "accepted" });
+        });
+        for (const later of steers.slice(index + 1)) {
+          await expect(conversation.reconcile(later)).resolves.toMatchObject({
+            status: "unresolved",
+          });
+        }
+      }
+
+      for (const steer of steers) {
+        await expect(conversation.handle.steer(steer)).resolves.toMatchObject({
+          status: "accepted",
+          backendTurnId: conversation.activeTurnId,
+        });
+        expect(await conversation.phases(steer)).toEqual(["intent", "enqueued"]);
+      }
+      expect(steerCalls).toBe(count);
+      // Each user entry carries its own Steer's operation and text.
+      const items = await conversation.userItems();
+      for (const steer of steers) {
+        const item = items.find(
+          ({ deliveryOperationId }) =>
+            deliveryOperationId === steer.applicationOperationId,
+        );
+        expect(item?.backendTurnId).toBe(conversation.activeTurnId);
+        expect(item?.content).toContain(`Transformed: ${steer.text}`);
+      }
+      await conversation.handle.close();
+    },
+  );
+
+  it("withdraws every unstarted Steer on Stop and returns each as not sent", async () => {
+    const order: string[] = [];
+    const base = fakeSessionFactory(
+      1,
+      false,
+      () => undefined,
+      0,
+      () => [],
+      0,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      true,
+    );
+    const conversation = await activeSteerConversation("stop-all", {
+      async create(input) {
+        const session = await base.create(input);
+        return {
+          ...session,
+          async steer(...args: Parameters<typeof session.steer>) {
+            order.push("steer");
+            return session.steer(...args);
+          },
+          clearQueue() {
+            order.push("clear_queue");
+            return { steering: ["one", "two", "three"], followUp: [] };
+          },
+          async abort() {
+            order.push("abort");
+            await session.abort();
+          },
+        };
+      },
+    });
+    const steers = [1, 2, 3].map(conversation.steerInput);
+    for (const steer of steers) {
+      await expect(conversation.handle.steer(steer)).resolves.toMatchObject({
+        status: "pending_materialization",
+      });
+    }
+
+    await conversation.handle.interrupt({
+      applicationOperationId: "stop-all-interrupt",
+      expectedBackendTurnId: conversation.activeTurnId,
+    });
+
+    expect(order).toEqual(["steer", "steer", "steer", "clear_queue", "abort"]);
+    for (const steer of steers) {
+      await expect(conversation.reconcile(steer)).resolves.toEqual(
+        piWithdrawnSteer,
+      );
+      expect(await conversation.phases(steer)).toEqual([
+        "intent",
+        "enqueued",
+        "lost",
+      ]);
+    }
+    // Nothing is resent.
+    expect(order.filter((step) => step === "steer")).toHaveLength(3);
+    await conversation.handle.close();
+  });
+
+  it("keeps a Steer Pi used with the stopped turn and withdraws the unstarted rest", async () => {
+    const releases: Array<() => void> = [];
+    const conversation = await activeSteerConversation(
+      "stop-mixed",
+      fakeSessionFactory(
+        1,
+        false,
+        () => undefined,
+        0,
+        (text) => [text],
+        0,
+        undefined,
+        undefined,
+        undefined,
+        (release) => {
+          releases.push(release);
+        },
+        undefined,
+        false,
+        true,
+      ),
+    );
+    const steers = [1, 2, 3].map(conversation.steerInput);
+    for (const steer of steers) {
+      await expect(conversation.handle.steer(steer)).resolves.toMatchObject({
+        status: "pending_materialization",
+      });
+    }
+    releases[0]!();
+    await vi.waitFor(async () => {
+      await expect(conversation.reconcile(steers[0]!)).resolves.toMatchObject({
+        status: "accepted",
+      });
+    });
+
+    await conversation.handle.interrupt({
+      applicationOperationId: "stop-mixed-interrupt",
+      expectedBackendTurnId: conversation.activeTurnId,
+    });
+
+    await expect(conversation.reconcile(steers[0]!)).resolves.toMatchObject({
+      status: "accepted",
+    });
+    expect(await conversation.phases(steers[0]!)).toEqual([
+      "intent",
+      "enqueued",
+    ]);
+    for (const steer of steers.slice(1)) {
+      await expect(conversation.reconcile(steer)).resolves.toEqual(
+        piWithdrawnSteer,
+      );
+      expect(await conversation.phases(steer)).toEqual([
+        "intent",
+        "enqueued",
+        "lost",
+      ]);
+    }
+    expect(
+      (await conversation.userItems()).map(
+        ({ deliveryOperationId }) => deliveryOperationId,
+      ),
+    ).toEqual([steers[0]!.applicationOperationId]);
+    await conversation.handle.close();
+  });
+
+  it("withdraws every earlier pending Steer when a later one's run settles during enqueue", async () => {
+    const order: string[] = [];
+    let settled = false;
+    let steerCalls = 0;
+    const base = fakeSessionFactory(
+      1,
+      false,
+      () => undefined,
+      0,
+      () => [],
+    );
+    const conversation = await activeSteerConversation("settle-set", {
+      async create(input) {
+        const session = await base.create(input);
+        return Object.defineProperties(
+          {
+            ...session,
+            async steer(...args: Parameters<typeof session.steer>) {
+              const admission = await session.steer(...args);
+              steerCalls += 1;
+              // Pi queued the second input, then its run settled before
+              // using either queued Steer.
+              if (steerCalls === 2) settled = true;
+              return admission;
+            },
+            clearQueue() {
+              order.push("clear_queue");
+              return { steering: ["one", "two"], followUp: [] };
+            },
+          },
+          { isIdle: { get: () => settled } },
+        );
+      },
+    });
+    const steers = [1, 2].map(conversation.steerInput);
+    for (const steer of steers) {
+      await expect(conversation.handle.steer(steer)).resolves.toMatchObject({
+        status: "pending_materialization",
+        backendTurnId: conversation.activeTurnId,
+      });
+    }
+
+    expect(order).toEqual(["clear_queue"]);
+    for (const steer of steers) {
+      await expect(conversation.reconcile(steer)).resolves.toEqual(
+        piWithdrawnSteer,
+      );
+      expect(await conversation.phases(steer)).toEqual([
+        "intent",
+        "enqueued",
+        "lost",
+      ]);
+    }
+    await conversation.handle.close();
+  });
+
+  it("closes a Steer Pi consumed without queueing so a later Steer keeps its own user entry", async () => {
+    const releases: Array<() => void> = [];
+    const base = fakeSessionFactory(
+      1,
+      false,
+      () => undefined,
+      0,
+      (text) => [text],
+      0,
+      undefined,
+      undefined,
+      undefined,
+      (release) => {
+        releases.push(release);
+      },
+    );
+    const conversation = await activeSteerConversation("consumed", {
+      async create(input) {
+        const session = await base.create(input);
+        return {
+          ...session,
+          async steer(...args: Parameters<typeof session.steer>) {
+            // An extension input handler consumes this input: Pi accepts it
+            // without queueing it, and no user entry follows.
+            if (args[0].includes("steer 1")) return { queued: false };
+            return session.steer(...args);
+          },
+        };
+      },
+    });
+    const [consumed, later] = [1, 2].map(conversation.steerInput);
+
+    await expect(conversation.handle.steer(consumed!)).resolves.toMatchObject({
+      status: "pending_materialization",
+    });
+    expect(await conversation.phases(consumed!)).toEqual([
+      "intent",
+      "enqueued",
+      "lost",
+    ]);
+    // Exact loss evidence proves it was not sent, even while the run is active.
+    await expect(conversation.reconcile(consumed!)).resolves.toEqual(
+      piWithdrawnSteer,
+    );
+    await expect(conversation.handle.steer(later!)).resolves.toMatchObject({
+      status: "pending_materialization",
+    });
+    releases[0]!();
+    await vi.waitFor(async () => {
+      await expect(conversation.reconcile(later!)).resolves.toMatchObject({
+        status: "accepted",
+      });
+    });
+    expect(await conversation.userItems()).toEqual([
+      expect.objectContaining({
+        deliveryOperationId: later!.applicationOperationId,
+        content: expect.stringContaining(later!.text),
+      }),
+    ]);
+    await expect(conversation.reconcile(consumed!)).resolves.toEqual(
+      piWithdrawnSteer,
+    );
+    await conversation.handle.close();
+  });
+
+  it("records a loss for every pending Steer when retirement closes the handle", async () => {
+    const conversation = await activeSteerConversation(
+      "retire-set",
+      fakeSessionFactory(1, false, () => undefined, 0, () => []),
+    );
+    const steers = [1, 2, 3].map(conversation.steerInput);
+    for (const steer of steers) {
+      await expect(conversation.handle.steer(steer)).resolves.toMatchObject({
+        status: "pending_materialization",
+      });
+    }
+
+    await conversation.handle.close();
+
+    const reattached = await conversation.attach();
+    for (const steer of steers) {
+      expect(await conversation.phases(steer)).toEqual([
+        "intent",
+        "enqueued",
+        "lost",
+      ]);
+      await expect(conversation.reconcile(steer)).resolves.toEqual(
+        piWithdrawnSteer,
+      );
+    }
+    await reattached.close();
+  });
+
+  it("reconciles several pending Steers individually after their process generation disappears", async () => {
+    const sessionFactory = fakeSessionFactory(
+      1,
+      false,
+      () => undefined,
+      0,
+      () => [],
+    );
+    const conversation = await activeSteerConversation(
+      "restart-set",
+      sessionFactory,
+    );
+    const steers = [1, 2, 3].map(conversation.steerInput);
+    for (const steer of steers) {
+      await expect(conversation.handle.steer(steer)).resolves.toMatchObject({
+        status: "pending_materialization",
+      });
+    }
+
+    const restarted = conversation.driverFor();
+    // Out of queue order, and before any runtime is attached again.
+    await expect(
+      conversation.reconcile(steers[1]!, restarted),
+    ).resolves.toEqual(piWithdrawnSteer);
+    expect(await conversation.phases(steers[1]!)).toEqual([
+      "intent",
+      "enqueued",
+      "lost",
+    ]);
+    for (const steer of [steers[0]!, steers[2]!]) {
+      expect(await conversation.phases(steer)).toEqual(["intent", "enqueued"]);
+    }
+    // A reattached runtime does not hold the gone generation's Steers.
+    const reattached = await conversation.attach(restarted);
+    for (const steer of [steers[2]!, steers[0]!]) {
+      await expect(conversation.reconcile(steer, restarted)).resolves.toEqual(
+        piWithdrawnSteer,
+      );
+    }
+    for (const steer of steers) {
+      expect(await conversation.phases(steer)).toEqual([
+        "intent",
+        "enqueued",
+        "lost",
+      ]);
+      await expect(conversation.reconcile(steer, restarted)).resolves.toEqual(
+        piWithdrawnSteer,
+      );
+    }
+    await reattached.close();
+    await conversation.handle.close();
   });
 
   it("returns the establishment history boundary without a second provider read", async () => {

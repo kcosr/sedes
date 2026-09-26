@@ -381,6 +381,8 @@ class FakeGateway implements QueuedInputConversationGateway {
   > = [];
   readonly reconciliationBehaviors: Array<SubmissionReconciliation | Error> =
     [];
+  /** Per-operation evidence, consulted before the FIFO behaviours. */
+  readonly reconciliationByOperation = new Map<string, SubmissionReconciliation>();
   readonly calls: string[] = [];
   readonly submitted: Parameters<QueuedInputConversation["submit"]>[0][] = [];
   readonly steered: Array<
@@ -483,10 +485,12 @@ class FakeGateway implements QueuedInputConversationGateway {
         input.reconciliationToken ?? "no-token"
       }`,
     );
-    const behavior = this.reconciliationBehaviors.shift() ?? {
-      status: "unresolved" as const,
-      diagnostic: { text: "unresolved" },
-    };
+    const behavior =
+      this.reconciliationByOperation.get(input.applicationOperationId) ??
+      this.reconciliationBehaviors.shift() ?? {
+        status: "unresolved" as const,
+        diagnostic: { text: "unresolved" },
+      };
     if (behavior instanceof Error) throw behavior;
     this.onReconciliation?.(behavior);
     return behavior;
@@ -531,6 +535,7 @@ function createDispatcher(
     readonly isDispatchBlocked?: (
       scope: RequestScope,
       threadId: string,
+      purpose: "submit" | "steer",
     ) => boolean;
   },
 ): {
@@ -564,8 +569,8 @@ function createDispatcher(
       },
       isDispatchBlocked:
         input.isDispatchBlocked ??
-        ((scope, threadId) =>
-          operations.hasBlockingThreadOperation(scope, threadId)),
+        ((scope, threadId, purpose) =>
+          operations.hasBlockingThreadOperation(scope, threadId, purpose)),
       clock: { now: () => input.now.value },
       ...(input.scheduler ? { scheduler: input.scheduler } : {}),
     }),
@@ -1464,6 +1469,313 @@ describe("QueuedInputDispatcher", () => {
       await dispatcher.close();
       fixture.database.close();
     }
+  });
+
+  describe("several unconfirmed Steers", () => {
+    const enqueueComposerSteer = async (
+      dispatcher: QueuedInputDispatcher,
+      fixture: Fixture,
+      threadId: string,
+      id: string,
+      at: number,
+      target: SteerTarget = { kind: "turn", turnId: "active-turn-1" },
+    ) => {
+      const drafts = new ConversationDraftRepository(fixture.database);
+      const draft = drafts.save(fixture.scope, threadId, {
+        text: `Steer ${id}`, contextExcerpts: [], attachmentIds: [], taskReferenceIds: [],
+        expectedRevision: drafts.get(fixture.scope, threadId).revision, now: at,
+      });
+      return dispatcher.enqueue(fixture.scope, threadId, {
+        id, mutationId: `operation-${id}`, text: draft.text,
+        contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: {
+          kind: "composer", requestedDeliveryMode: "steer", resolvedDeliveryMode: "steer",
+          requestedSteerTarget: target, resolvedSteerTarget: target,
+          expectedThreadRevision: revision(fixture, threadId), expectedDraftRevision: draft.revision,
+        },
+        now: at + 1,
+      });
+    };
+    const enqueueComposerSend = async (
+      dispatcher: QueuedInputDispatcher,
+      fixture: Fixture,
+      threadId: string,
+      id: string,
+      at: number,
+    ) => {
+      const drafts = new ConversationDraftRepository(fixture.database);
+      const draft = drafts.save(fixture.scope, threadId, {
+        text: `Send ${id}`, contextExcerpts: [], attachmentIds: [], taskReferenceIds: [],
+        expectedRevision: drafts.get(fixture.scope, threadId).revision, now: at,
+      });
+      return dispatcher.enqueue(fixture.scope, threadId, {
+        id, mutationId: `operation-${id}`, text: draft.text,
+        contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: {
+          kind: "composer", requestedDeliveryMode: "submit", resolvedDeliveryMode: "submit",
+          expectedThreadRevision: revision(fixture, threadId), expectedDraftRevision: draft.revision,
+        },
+        now: at + 1,
+      });
+    };
+    const pending = (operation: string): SteerTurnResult => ({
+      status: "pending_materialization",
+      reconciliationToken: operation,
+      completionCorrelation: operation,
+    });
+    const notSent: SubmissionReconciliation = {
+      status: "not_accepted",
+      retryable: false,
+      diagnostic: { text: "The turn ended before the backend used this steering message, so it was not sent." },
+    };
+
+    it.each([2, 3])(
+      "delivers %i Steers serially while earlier ones await materialization and settles each on its own evidence",
+      async (count) => {
+        const fixture = createFixture();
+        const repository = new QueuedInputRepository(fixture.database);
+        const operations = new ConversationOperationRepository(fixture.database);
+        const gateway = new FakeGateway();
+        gateway.authoritativelySettled = false;
+        const ids = Array.from({ length: count }, (_, index) => `steer-${index + 1}`);
+        for (const id of ids) gateway.steerBehaviors.push(pending(`operation-${id}`));
+        const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 900 } });
+        const [threadId] = fixture.threadIds;
+        try {
+          await dispatcher.recover(fixture.scope);
+          for (const [index, id] of ids.entries()) {
+            await enqueueComposerSteer(dispatcher, fixture, threadId, id, 810 + index * 10);
+            // Each Steer crosses the provider boundary while every earlier one
+            // is still unconfirmed; none waits for another's materialization.
+            await vi.waitFor(() =>
+              expect(operations.getSteer(fixture.scope, `operation-${id}`).state).toBe("pending_materialization"));
+          }
+          expect(gateway.steered.map(({ applicationOperationId }) => applicationOperationId))
+            .toEqual(ids.map((id) => `operation-${id}`));
+          expect(repository.list(fixture.scope, threadId).map(({ id, state }) => [id, state]))
+            .toEqual(ids.map((id) => [id, "dispatching"]));
+          expect(projectQueuedInputSummaries(repository.list(fixture.scope, threadId))
+            .map(({ state, deliveryMode }) => [state, deliveryMode]))
+            .toEqual(ids.map(() => ["dispatching", "steer"]));
+
+          // Materialization evidence arrives out of queue order for the last
+          // Steer: it clears alone and the others stay unconfirmed.
+          const last = ids.at(-1)!;
+          await expect(dispatcher.observeAuthoritativeSubmission(fixture.scope, threadId, `operation-${last}`))
+            .resolves.toBe(true);
+          expect(repository.get(fixture.scope, threadId, last).state).toBe("accepted");
+          for (const id of ids.slice(0, -1)) {
+            expect(repository.get(fixture.scope, threadId, id).state).toBe("dispatching");
+          }
+          for (const id of ids.slice(0, -1)) {
+            await dispatcher.observeAuthoritativeSubmission(fixture.scope, threadId, `operation-${id}`);
+          }
+          expect(repository.list(fixture.scope, threadId).every(({ state }) => state === "accepted")).toBe(true);
+          expect(gateway.steered).toHaveLength(count);
+          expect(gateway.submitted).toEqual([]);
+        } finally {
+          await dispatcher.close();
+          fixture.database.close();
+        }
+      },
+    );
+
+    it("admits an idle Send behind unconfirmed conversation Steers and dispatches it only after they resolve", async () => {
+      const fixture = createFixture();
+      const repository = new QueuedInputRepository(fixture.database);
+      const operations = new ConversationOperationRepository(fixture.database);
+      const gateway = new FakeGateway();
+      gateway.authoritativelySettled = false;
+      gateway.steerTargetKind = "conversation";
+      gateway.activeTurnId = null;
+      gateway.steerBehaviors.push(pending("operation-late-1"), pending("operation-late-2"));
+      const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 900 } });
+      const [threadId] = fixture.threadIds;
+      try {
+        await dispatcher.recover(fixture.scope);
+        await enqueueComposerSteer(dispatcher, fixture, threadId, "late-1", 810, { kind: "conversation" });
+        await vi.waitFor(() => expect(gateway.steered).toHaveLength(1));
+        await enqueueComposerSteer(dispatcher, fixture, threadId, "late-2", 820, { kind: "conversation" });
+        await vi.waitFor(() =>
+          expect(operations.getSteer(fixture.scope, "operation-late-2").state).toBe("pending_materialization"));
+
+        // The turn ends before the provider takes either Steer: each may still
+        // start the next turn itself, so neither is resolved by the settle.
+        gateway.authoritativelySettled = true;
+        await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+        expect(gateway.reconciled.map(({ applicationOperationId }) => applicationOperationId))
+          .toEqual(["operation-late-1", "operation-late-2"]);
+        await enqueueComposerSend(dispatcher, fixture, threadId, "send", 830);
+        await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+        expect(gateway.submitted).toEqual([]);
+        expect(repository.list(fixture.scope, threadId).map(({ id, state }) => [id, state])).toEqual([
+          ["late-1", "dispatching"], ["late-2", "dispatching"], ["send", "pending"],
+        ]);
+
+        // The first Steer starts the next turn; the Send still waits behind the second.
+        await dispatcher.observeAuthoritativeSubmission(fixture.scope, threadId, "operation-late-1");
+        await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+        expect(gateway.submitted).toEqual([]);
+        await dispatcher.observeAuthoritativeSubmission(fixture.scope, threadId, "operation-late-2");
+        await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+        expect(gateway.submitted.map(({ applicationOperationId }) => applicationOperationId))
+          .toEqual(["operation-send"]);
+        expect(gateway.steered).toHaveLength(2);
+      } finally {
+        await dispatcher.close();
+        fixture.database.close();
+      }
+    });
+
+    it("returns every unstarted Steer as not sent on Stop, keeps a used one, and resends nothing", async () => {
+      const fixture = createFixture();
+      const repository = new QueuedInputRepository(fixture.database);
+      const operations = new ConversationOperationRepository(fixture.database);
+      const gateway = new FakeGateway();
+      gateway.authoritativelySettled = false;
+      const ids = ["used", "unused-1", "unused-2"];
+      for (const id of ids) gateway.steerBehaviors.push(pending(`operation-${id}`));
+      const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 900 } });
+      const [threadId] = fixture.threadIds;
+      try {
+        await dispatcher.recover(fixture.scope);
+        for (const [index, id] of ids.entries()) {
+          await enqueueComposerSteer(dispatcher, fixture, threadId, id, 810 + index * 10);
+          await vi.waitFor(() =>
+            expect(operations.getSteer(fixture.scope, `operation-${id}`).state).toBe("pending_materialization"));
+        }
+        await enqueueComposerSend(dispatcher, fixture, threadId, "queued-after", 850);
+        gateway.reconciliationByOperation.set("operation-used", {
+          status: "accepted",
+          backendTurn: { backendTurnId: "active-turn-1", status: "interrupted", completionCorrelations: ["operation-used"], orderedBackendItemIds: [] },
+        });
+        gateway.reconciliationByOperation.set("operation-unused-1", notSent);
+        gateway.reconciliationByOperation.set("operation-unused-2", notSent);
+        // Stop ends the target turn.
+        gateway.authoritativelySettled = true;
+        gateway.activeTurnId = null;
+        await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+
+        expect(repository.list(fixture.scope, threadId).map(({ id, state, failureReason }) => [id, state, failureReason]))
+          .toEqual([
+            ["used", "accepted", null],
+            ["unused-1", "failed", "not_sent"],
+            ["unused-2", "failed", "not_sent"],
+            ["queued-after", "pending", null],
+          ]);
+        expect(operations.findSteer(fixture.scope, "operation-unused-1")).toBeUndefined();
+        expect(operations.findSteer(fixture.scope, "operation-unused-2")).toBeUndefined();
+        expect(projectQueuedInputSummaries(repository.list(fixture.scope, threadId)).map(
+          ({ id, state, failureReason }) => ({ id, state, failureReason }),
+        )).toEqual([
+          { id: "unused-1", state: "failed", failureReason: "not_sent" },
+          { id: "unused-2", state: "failed", failureReason: "not_sent" },
+          { id: "queued-after", state: "pending", failureReason: undefined },
+        ]);
+        // Sedes' own Queue waits for the user's decision on the not-sent rows.
+        expect(gateway.submitted).toEqual([]);
+        expect(gateway.steered).toHaveLength(3);
+        await dispatcher.acknowledgeFailure(fixture.scope, threadId, "unused-2", 950);
+        expect(gateway.submitted).toEqual([]);
+        await dispatcher.acknowledgeFailure(fixture.scope, threadId, "unused-1", 951);
+        expect(gateway.submitted.map(({ applicationOperationId }) => applicationOperationId))
+          .toEqual(["operation-queued-after"]);
+        expect(gateway.steered).toHaveLength(3);
+      } finally {
+        await dispatcher.close();
+        fixture.database.close();
+      }
+    });
+
+    it("keeps an unresolved Steer pending while settling the others on their own evidence", async () => {
+      const fixture = createFixture();
+      const repository = new QueuedInputRepository(fixture.database);
+      const operations = new ConversationOperationRepository(fixture.database);
+      const gateway = new FakeGateway();
+      gateway.authoritativelySettled = false;
+      for (const id of ["a", "b", "c"]) gateway.steerBehaviors.push(pending(`operation-${id}`));
+      const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 900 } });
+      const [threadId] = fixture.threadIds;
+      try {
+        await dispatcher.recover(fixture.scope);
+        for (const [index, id] of ["a", "b", "c"].entries()) {
+          await enqueueComposerSteer(dispatcher, fixture, threadId, id, 810 + index * 10);
+          await vi.waitFor(() =>
+            expect(operations.getSteer(fixture.scope, `operation-${id}`).state).toBe("pending_materialization"));
+        }
+        gateway.reconciliationByOperation.set("operation-b", notSent);
+        gateway.reconciliationByOperation.set("operation-c", {
+          status: "accepted",
+          backendTurn: { backendTurnId: "active-turn-1", status: "completed", completionCorrelations: ["operation-c"], orderedBackendItemIds: [] },
+        });
+        gateway.authoritativelySettled = true;
+        await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+        expect(repository.list(fixture.scope, threadId).map(({ id, state }) => [id, state])).toEqual([
+          ["a", "dispatching"], ["b", "failed"], ["c", "accepted"],
+        ]);
+        expect(operations.getSteer(fixture.scope, "operation-a").state).toBe("pending_materialization");
+        expect(gateway.steered).toHaveLength(3);
+      } finally {
+        await dispatcher.close();
+        fixture.database.close();
+      }
+    });
+
+    it.each(["turn", "conversation"] as const)(
+      "recovers several %s-targeted pending Steers individually after restart without resending",
+      async (kind) => {
+        const fixture = createFixture();
+        const repository = new QueuedInputRepository(fixture.database);
+        const operations = new ConversationOperationRepository(fixture.database);
+        const gateway = new FakeGateway();
+        gateway.authoritativelySettled = false;
+        gateway.steerTargetKind = kind;
+        const target: SteerTarget = kind === "turn"
+          ? { kind: "turn", turnId: "active-turn-1" }
+          : { kind: "conversation" };
+        for (const id of ["r1", "r2", "r3"]) gateway.steerBehaviors.push(pending(`operation-${id}`));
+        const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 900 } });
+        const [threadId] = fixture.threadIds;
+        try {
+          await dispatcher.recover(fixture.scope);
+          for (const [index, id] of ["r1", "r2", "r3"].entries()) {
+            await enqueueComposerSteer(dispatcher, fixture, threadId, id, 810 + index * 10, target);
+            await vi.waitFor(() =>
+              expect(operations.getSteer(fixture.scope, `operation-${id}`).state).toBe("pending_materialization"));
+          }
+          await dispatcher.close();
+          const replacementGateway = new FakeGateway();
+          replacementGateway.authoritativelySettled = false;
+          replacementGateway.steerTargetKind = kind;
+          replacementGateway.reconciliationByOperation.set("operation-r1", {
+            status: "accepted",
+            backendTurn: { backendTurnId: "active-turn-1", status: "in_progress", completionCorrelations: ["operation-r1"], orderedBackendItemIds: [] },
+          });
+          replacementGateway.reconciliationByOperation.set("operation-r3", notSent);
+          const replacement = createDispatcher(repository, replacementGateway, { now: { value: 950 } }).dispatcher;
+          try {
+            await replacement.recover(fixture.scope);
+            expect(replacementGateway.reconciled.map(({ applicationOperationId }) => applicationOperationId))
+              .toEqual(["operation-r1", "operation-r2", "operation-r3"]);
+            expect(repository.get(fixture.scope, threadId, "r1").state).toBe("accepted");
+            expect(repository.get(fixture.scope, threadId, "r3")).toMatchObject({ state: "failed", failureReason: "not_sent" });
+            // An unresolved conversation Steer is uncertain after restart; an
+            // exact-turn Steer stays pending for its target turn's evidence.
+            expect(repository.get(fixture.scope, threadId, "r2").state)
+              .toBe(kind === "conversation" ? "uncertain" : "dispatching");
+            expect(operations.getSteer(fixture.scope, "operation-r2").state)
+              .toBe(kind === "conversation" ? "uncertain" : "pending_materialization");
+            expect(replacementGateway.steered).toEqual([]);
+            expect(replacementGateway.submitted).toEqual([]);
+          } finally {
+            await replacement.close();
+          }
+        } finally {
+          await dispatcher.close();
+          fixture.database.close();
+        }
+      },
+    );
   });
 
   it("resumes a durable target-bound Steer after restart without submitting it as a new turn", async () => {

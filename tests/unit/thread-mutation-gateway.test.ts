@@ -224,6 +224,9 @@ function fixture(input?: {
     hasPendingMaterializationSteer: vi.fn(
       () => input?.pendingMaterializationSteerSource !== undefined,
     ),
+    hasPendingMaterializationDraftSteer: vi.fn(
+      () => input?.pendingMaterializationSteerSource === "draft",
+    ),
     findPendingMaterializationSteer: vi.fn(() =>
       input?.pendingMaterializationSteerSource
         ? { source: input.pendingMaterializationSteerSource }
@@ -1381,6 +1384,63 @@ describe("ThreadMutationGateway creation recovery", () => {
   });
 });
 
+describe("ThreadMutationGateway several uncertain Steers", () => {
+  it("reconciles each uncertain queued Steer in order until one stays uncertain", async () => {
+    const database = {};
+    const receipts = ["steer-a", "steer-b", "steer-c"].map((mutationId, index) => ({
+      threadId: "thread-1",
+      mutationId,
+      applicationOperationId: mutationId,
+      source: "queued_input" as const,
+      queuedInputId: `queued-${index}`,
+      expectedThreadRevision: 7,
+    }));
+    const uncertain = [...receipts];
+    const steerUserInput = vi.fn(async (_scope: RequestScope, _threadId: string, queuedInputId: string) => {
+      const index = uncertain.findIndex((receipt) => receipt.queuedInputId === queuedInputId);
+      // The last Steer has no evidence yet and stays uncertain.
+      if (queuedInputId === "queued-2") {
+        return { status: "recovery_required" as const, retryable: true, threadRevision: 8, queue: [] };
+      }
+      uncertain.splice(index, 1);
+      return {
+        status: queuedInputId === "queued-0" ? "accepted" as const : "restored" as const,
+        threadRevision: 8,
+        queue: [],
+      };
+    });
+    const gateway = new ThreadMutationGateway({
+      bindings: { database } as never,
+      inventory: { database, getThread: vi.fn(() => ({ thread: { availability: "available" } })) } as never,
+      lifecycle: {} as never,
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
+      queue: { steerUserInput, onAuthoritativeSettled: vi.fn(async () => undefined) } as never,
+      operations: {
+        database,
+        findUncertainThreadOperation: vi.fn(() => uncertain[0]
+          ? { threadId: "thread-1", mutationId: uncertain[0].mutationId, operationKind: "conversation_steer" }
+          : undefined),
+        getSteer: vi.fn((_scope: RequestScope, mutationId: string) =>
+          receipts.find((receipt) => receipt.mutationId === mutationId)),
+      } as never,
+      completions: { database } as never,
+      queueGateway: {} as never,
+      runtimes: {} as never,
+      interactions: {} as never,
+      presentation: {} as never,
+      agentToolPolicies: testThreadAgentToolPolicyRepository(database),
+      actionPersistence: new Map(),
+      publishThreadSnapshot: vi.fn(async () => undefined),
+      now: () => 1_800_000_000_000,
+    });
+
+    await expect(gateway.mutate(scope, "thread-1", { kind: "recover_uncertain" }))
+      .resolves.toMatchObject({ status: "queue_steer_recovery_required", queuedInputId: "queued-2" });
+    expect(steerUserInput.mock.calls.map(([, , queuedInputId]) => queuedInputId))
+      .toEqual(["queued-0", "queued-1", "queued-2"]);
+  });
+});
+
 describe("ThreadMutationGateway delivery readiness", () => {
   it("rejects unresolved required settings before durable enqueue", async () => {
     const database = {};
@@ -1413,6 +1473,7 @@ describe("ThreadMutationGateway delivery readiness", () => {
         database,
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
+        hasPendingMaterializationDraftSteer: vi.fn(() => false),
         findSteer: vi.fn(() => undefined),
       } as never,
       completions: { database } as never,
@@ -1524,6 +1585,7 @@ describe("ThreadMutationGateway delivery readiness", () => {
         database,
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
+        hasPendingMaterializationDraftSteer: vi.fn(() => false),
         findSteer: vi.fn(() => undefined),
       } as never,
       completions: { database } as never,
@@ -1859,6 +1921,7 @@ describe("ThreadMutationGateway incremental publication", () => {
         database,
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
+        hasPendingMaterializationDraftSteer: vi.fn(() => false),
         findSteer: vi.fn(() => undefined),
       } as never,
       completions: { database } as never,
@@ -1958,6 +2021,78 @@ describe("ThreadMutationGateway incremental publication", () => {
     expect(subject.enqueue).toHaveBeenCalledOnce();
   });
 
+  it("admits another Steer while queue-owned Steers await provider materialization", async () => {
+    const subject = fixture({
+      runState: "running",
+      deliveryMode: "steer",
+      pendingMaterializationSteerSource: "queued_input",
+    });
+    subject.enqueue.mockResolvedValueOnce({
+      item: {
+        id: "second-steer",
+        mutationId: "steer-behind-pending-steer",
+        resolvedDeliveryMode: "steer",
+        createdAt: 1_800_000_000_000,
+      },
+      replayed: false,
+    });
+
+    await expect(
+      subject.gateway.mutate(scope, "thread-1", {
+        kind: "deliver",
+        mode: "steer",
+        steerTarget: { kind: "turn", turnId: "turn-1" },
+        mutationId: "steer-behind-pending-steer",
+        expectedThreadRevision: 4,
+        expectedDraftRevision: 2,
+      }),
+    ).resolves.toMatchObject({
+      status: "delivery_queued",
+      resolvedDeliveryMode: "steer",
+    });
+    expect(subject.enqueue).toHaveBeenCalledWith(
+      scope,
+      "thread-1",
+      expect.objectContaining({
+        source: expect.objectContaining({
+          resolvedDeliveryMode: "steer",
+          resolvedSteerTarget: { kind: "turn", turnId: "turn-1" },
+        }),
+      }),
+    );
+  });
+
+  it("admits an idle Send as queue work behind queue-owned Steers awaiting materialization", async () => {
+    const subject = fixture({
+      runState: "idle",
+      deliveryMode: "submit",
+      pendingMaterializationSteerSource: "queued_input",
+    });
+    subject.enqueue.mockResolvedValueOnce({
+      item: {
+        id: "send-behind-steers",
+        mutationId: "send-behind-pending-steer",
+        resolvedDeliveryMode: "submit",
+        createdAt: 1_800_000_000_000,
+      },
+      replayed: false,
+    });
+
+    await expect(
+      subject.gateway.mutate(scope, "thread-1", {
+        kind: "deliver",
+        mode: "submit",
+        mutationId: "send-behind-pending-steer",
+        expectedThreadRevision: 4,
+        expectedDraftRevision: 2,
+      }),
+    ).resolves.toMatchObject({
+      status: "delivery_queued",
+      queuedInputId: "send-behind-steers",
+      resolvedDeliveryMode: "submit",
+    });
+  });
+
   it("retains the legacy draft barrier while a draft-source Pi Steer awaits materialization", async () => {
     const subject = fixture({
       runState: "running",
@@ -2025,6 +2160,7 @@ describe("ThreadMutationGateway incremental publication", () => {
         database,
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
+        hasPendingMaterializationDraftSteer: vi.fn(() => false),
         findSteer: vi.fn(() => undefined),
       } as never,
       completions: { database } as never,
@@ -2148,6 +2284,7 @@ describe("ThreadMutationGateway incremental publication", () => {
         database,
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
+        hasPendingMaterializationDraftSteer: vi.fn(() => false),
         findSteer: vi.fn(() => undefined),
       } as never,
       completions: { database } as never,
@@ -2264,6 +2401,7 @@ describe("ThreadMutationGateway incremental publication", () => {
         database,
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
+        hasPendingMaterializationDraftSteer: vi.fn(() => false),
         findSteer: vi.fn(() => undefined),
       } as never,
       completions: { database } as never,
@@ -2409,6 +2547,7 @@ describe("ThreadMutationGateway incremental publication", () => {
         database,
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
+        hasPendingMaterializationDraftSteer: vi.fn(() => false),
         findSteer: vi.fn(() => undefined),
         prepareSteer: vi.fn(() => receipt),
         markSteerSubmissionStarted: vi.fn(() => receipt),
@@ -2787,6 +2926,7 @@ describe("ThreadMutationGateway incremental publication", () => {
         database,
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
+        hasPendingMaterializationDraftSteer: vi.fn(() => false),
         findSteer: vi.fn(() => undefined),
         prepareSteer: vi.fn(() => receipt()),
         markSteerSubmissionStarted: vi.fn(() => {
@@ -2899,6 +3039,7 @@ describe("ThreadMutationGateway incremental publication", () => {
         database,
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
+        hasPendingMaterializationDraftSteer: vi.fn(() => false),
         findSteer: vi.fn(() => undefined),
         prepareSteer: vi.fn(() => receipt),
         rejectSteerBeforeAcceptance,
@@ -3007,6 +3148,7 @@ describe("ThreadMutationGateway incremental publication", () => {
           operationKind: "conversation_steer",
         })),
         hasPendingMaterializationSteer: vi.fn(() => false),
+        hasPendingMaterializationDraftSteer: vi.fn(() => false),
         findSteer: vi.fn((_scope: RequestScope, mutationId: string) =>
           mutationId === "prior-steer" ? { source: priorSource } : undefined,
         ),
@@ -3792,6 +3934,7 @@ function unboundSettingFixture(input?: {
       database,
       findUncertainThreadOperation: vi.fn(() => undefined),
       hasPendingMaterializationSteer: vi.fn(() => false),
+      hasPendingMaterializationDraftSteer: vi.fn(() => false),
       findSteer: vi.fn(() => undefined),
       findBackendAction: vi.fn(() =>
         state === undefined ? undefined : { ...receipt, state },
@@ -4729,6 +4872,7 @@ function providerFeatureMutationFixture(input: {
       database,
       findUncertainThreadOperation: vi.fn(() => undefined),
       hasPendingMaterializationSteer: vi.fn(() => false),
+      hasPendingMaterializationDraftSteer: vi.fn(() => false),
       findSteer: vi.fn(() => undefined),
     } as never,
     completions: { database } as never,

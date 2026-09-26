@@ -86,6 +86,8 @@ export type QueuedInputRecord = {
   readonly invalidStateRequeues: 0 | 1;
   readonly nextAttemptAt: number | null;
   readonly diagnostic: string | null;
+  /** Normalized reason recorded with a failure; `not_sent` is a proven-unused Steer. */
+  readonly failureReason: "not_sent" | null;
   readonly failureAcknowledgedAt: number | null;
   readonly cancellationMutationId: string | null;
   readonly cancellationRequestFingerprint: string | null;
@@ -103,6 +105,28 @@ export function isResolvedSteer(
   item: Pick<QueuedInputRecord, "resolvedDeliveryMode">,
 ): boolean {
   return item.resolvedDeliveryMode === "steer";
+}
+
+/**
+ * SQL predicate for a queued Steer that crossed its provider boundary and now
+ * awaits exact materialization evidence (its receipt is
+ * `pending_materialization`). Such a row stays in the ordered queue until its
+ * own evidence resolves it, but a later resolved Steer may be delivered behind
+ * it. Nothing else may pass it: ordinary Submit and Queue work waits.
+ */
+function awaitingSteerMaterialization(alias: string): string {
+  return `(
+    ${alias}.state = 'dispatching' AND ${alias}.delivery_mode = 'steer'
+    AND EXISTS (
+      SELECT 1 FROM mutation_receipts AS awaiting_steer
+      WHERE awaiting_steer.tenant_id = ${alias}.tenant_id
+        AND awaiting_steer.principal_id = ${alias}.owner_principal_id
+        AND awaiting_steer.thread_id = ${alias}.application_thread_id
+        AND awaiting_steer.mutation_id = ${alias}.reconciliation_token
+        AND awaiting_steer.operation_kind = 'conversation_steer'
+        AND awaiting_steer.result_code = 'pending_materialization'
+    )
+  )`;
 }
 
 export type QueueFailureAttention = {
@@ -153,6 +177,7 @@ const columns = `
   invalid_state_requeues AS invalidStateRequeues,
   next_attempt_at AS nextAttemptAt,
   diagnostic,
+  failure_reason AS failureReason,
   failure_acknowledged_at AS failureAcknowledgedAt,
   cancellation_mutation_id AS cancellationMutationId,
   cancellation_request_fingerprint AS cancellationRequestFingerprint
@@ -200,6 +225,7 @@ const qualifiedColumns = `
   q.invalid_state_requeues AS invalidStateRequeues,
   q.next_attempt_at AS nextAttemptAt,
   q.diagnostic,
+  q.failure_reason AS failureReason,
   q.failure_acknowledged_at AS failureAcknowledgedAt,
   q.cancellation_mutation_id AS cancellationMutationId,
   q.cancellation_request_fingerprint AS cancellationRequestFingerprint
@@ -1502,6 +1528,10 @@ export class QueuedInputRepository {
                     OR (earlier.state = 'failed'
                       AND earlier.failure_acknowledged_at IS NULL)
                   )
+                  AND (
+                    queued_inputs.resolved_delivery_mode <> 'steer'
+                    OR NOT ${awaitingSteerMaterialization("earlier")}
+                  )
               )
           `,
         )
@@ -1518,7 +1548,7 @@ export class QueuedInputRepository {
       if (changed.changes !== 1) {
         throw new DomainError(
           "invalid_transition",
-          "Only the current queued-input head can be steered.",
+          "Only the current queued-input head, or a resolved Steer behind Steers awaiting materialization, can be steered.",
         );
       }
       this.#touchThread(scope, applicationThreadId, input.now, false);
@@ -1688,7 +1718,7 @@ export class QueuedInputRepository {
     },
   ): QueuedInputRecord {
     return this.#failDispatchedSteer(scope, applicationThreadId, id, input,
-      "The queued Steer changed before its unknown outcome was recorded.");
+      null, "The queued Steer changed before its unknown outcome was recorded.");
   }
 
   /** Proven never sent, but not to be resent automatically (for example,
@@ -1706,7 +1736,7 @@ export class QueuedInputRepository {
     },
   ): QueuedInputRecord {
     return this.#failDispatchedSteer(scope, applicationThreadId, id, input,
-      "The queued Steer changed before it was returned as not sent.");
+      "not_sent", "The queued Steer changed before it was returned as not sent.");
   }
 
   #failDispatchedSteer(
@@ -1719,6 +1749,7 @@ export class QueuedInputRepository {
       readonly diagnostic: string;
       readonly now: number;
     },
+    failureReason: "not_sent" | null,
     conflict: string,
   ): QueuedInputRecord {
     return this.database.transaction(() => {
@@ -1726,11 +1757,12 @@ export class QueuedInputRepository {
         UPDATE queued_inputs
         SET state = 'failed', resolved_at = ?, next_attempt_at = NULL,
           reconciliation_token = NULL, retry_anchor = NULL,
-          delivery_mode = NULL, backend_correlation = NULL, diagnostic = ?
+          delivery_mode = NULL, backend_correlation = NULL, diagnostic = ?,
+          failure_reason = ?
         WHERE tenant_id = ? AND owner_principal_id = ?
           AND application_thread_id = ? AND id = ? AND state = ?
           AND delivery_mode = 'steer' AND reconciliation_token = ?
-      `).run(input.now, input.diagnostic, scope.tenantId, scope.principalId,
+      `).run(input.now, input.diagnostic, failureReason, scope.tenantId, scope.principalId,
         applicationThreadId, id, input.expectedState, input.steerOperationId);
       if (changed.changes !== 1) {
         throw new DomainError("invalid_transition", conflict);
@@ -2189,6 +2221,58 @@ export class QueuedInputRepository {
         `,
       )
       .all(scope.tenantId, scope.principalId) as QueuedInputRow[];
+    return rows.map((row) => this.#hydrate(scope, row));
+  }
+
+  /**
+   * The first ordering-relevant row of one thread that is not a Steer awaiting
+   * materialization. When it is a pending resolved Steer, it may be delivered
+   * now even though earlier Steers are still unconfirmed; any other row keeps
+   * its ordinary head semantics.
+   */
+  findSteerDispatchFrontier(
+    scope: RequestScope,
+    applicationThreadId: string,
+  ): QueuedInputRecord | undefined {
+    const row = this.database
+      .prepare(
+        `
+          SELECT ${qualifiedColumns}
+          FROM queued_inputs AS q
+          WHERE q.tenant_id = ? AND q.owner_principal_id = ?
+            AND q.application_thread_id = ?
+            AND (
+              q.state IN ('pending', 'retry_wait', 'dispatching', 'uncertain')
+              OR (q.state = 'failed' AND q.failure_acknowledged_at IS NULL)
+            )
+            AND NOT ${awaitingSteerMaterialization("q")}
+          ORDER BY q.sequence
+          LIMIT 1
+        `,
+      )
+      .get(scope.tenantId, scope.principalId, applicationThreadId) as
+      QueuedInputRow | undefined;
+    return row ? this.#hydrate(scope, row) : undefined;
+  }
+
+  /** Every queued Steer of one thread awaiting materialization, in queue order. */
+  listSteersAwaitingMaterialization(
+    scope: RequestScope,
+    applicationThreadId: string,
+  ): QueuedInputRecord[] {
+    const rows = this.database
+      .prepare(
+        `
+          SELECT ${qualifiedColumns}
+          FROM queued_inputs AS q
+          WHERE q.tenant_id = ? AND q.owner_principal_id = ?
+            AND q.application_thread_id = ?
+            AND ${awaitingSteerMaterialization("q")}
+          ORDER BY q.sequence
+        `,
+      )
+      .all(scope.tenantId, scope.principalId, applicationThreadId) as
+      QueuedInputRow[];
     return rows.map((row) => this.#hydrate(scope, row));
   }
 

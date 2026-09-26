@@ -334,6 +334,16 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
   readonly #steerPrompts = new Map<string, string>();
   /** Steers Claude folded into the running steer-fixture turn, in order. */
   readonly #foldedSteers = new Map<string, string[]>();
+  /**
+   * Steers Claude has queued (`command_lifecycle` `queued`) but not started,
+   * per session and in order. Like Claude Code, it holds several at once and
+   * starts them together at its next tool boundary, or withdraws each one
+   * `cancel_async_message` names.
+   */
+  readonly #heldSteers = new Map<string, {
+    readonly user: ClaudeSessionMessage & ClaudeMessage;
+    readonly queue: ClaudeE2eMessageQueue;
+  }[]>();
   readonly #backgroundTasks = new Map<string, { taskId: string; toolId: string }>();
 
   async readCliRelease(): Promise<string> {
@@ -401,6 +411,16 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
         this.#interruptions.get(sessionId)?.();
         return { still_queued: [] };
       },
+      // Claude Code's undeclared `Query.cancelAsyncMessage`: withdraw one
+      // still-queued input and close it with its own `cancelled` frame.
+      cancelAsyncMessage: async (messageUuid: string) => {
+        const held = this.#heldSteers.get(sessionId) ?? [];
+        const index = held.findIndex(({ user }) => user.uuid === messageUuid);
+        if (index < 0) return false;
+        held.splice(index, 1);
+        queue.push(claudeCommandLifecycle(sessionId, messageUuid, "cancelled"));
+        return true;
+      },
       setModel: async () => undefined,
       setPermissionMode: async () => undefined,
       applyFlagSettings: async () => undefined,
@@ -410,6 +430,46 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
 
   async listSessions() {
     return [];
+  }
+
+  heldSteerCount(): number {
+    return [...this.#heldSteers.values()].reduce((count, held) => count + held.length, 0);
+  }
+
+  /**
+   * Claude reaches the steer fixture's next tool boundary: it starts every
+   * queued steer together, in order, and finishes the turn with them.
+   */
+  foldHeldSteers(): void {
+    for (const [sessionId, held] of this.#heldSteers) {
+      const originalUuid = this.#steerPrompts.get(sessionId);
+      if (!originalUuid || held.length === 0) continue;
+      const messages = this.#sessions.get(sessionId) ?? [];
+      const folded = this.#foldedSteers.get(sessionId) ?? [];
+      const queue = held[0]!.queue;
+      for (const { user } of held.splice(0)) {
+        messages.push({ ...user, isQueuedCommand: true } as unknown as ClaudeSessionMessage & ClaudeMessage);
+        queue.push(claudeCommandLifecycle(sessionId, user.uuid!, "started"));
+        folded.push(user.uuid!);
+      }
+      this.#heldSteers.delete(sessionId);
+      this.#steerPrompts.delete(sessionId);
+      this.#foldedSteers.delete(sessionId);
+      const text = "Claude incorporated every correction.";
+      const assistantUuid = crypto.randomUUID();
+      const answer = { type: "assistant", uuid: assistantUuid, session_id: sessionId,
+        parent_tool_use_id: null, parent_agent_id: null,
+        message: { id: `steered-${assistantUuid}`, role: "assistant", stop_reason: "end_turn",
+          content: [{ type: "text", text }] },
+      } as unknown as ClaudeSessionMessage & ClaudeMessage;
+      messages.push(answer); queue.push(answer);
+      queue.push({ type: "result", subtype: "success", uuid: crypto.randomUUID(),
+        session_id: sessionId, duration_ms: 1, duration_api_ms: 1, is_error: false,
+        num_turns: 1, result: text, stop_reason: "end_turn",
+        total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [],
+        user_message_uuid: originalUuid, user_message_uuids: [originalUuid, ...folded],
+      } as unknown as ClaudeMessage);
+    }
   }
 
   async getSessionInfo(sessionId: string) {
@@ -459,10 +519,21 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
       // Like Claude Code, the steer fixture neither echoes nor records a steer
       // until Claude takes it; its lifecycle reports that point.
       const foldedSteer = prompt.priority === "next" &&
-        (promptText === "Use the revised Claude approach" || promptText === "Also keep the Claude tests green");
-      const messages = [...(this.#sessions.get(sessionId) ?? []), ...(foldedSteer ? [] : [user])];
+        promptText === "Use the revised Claude approach";
+      // Later steers, and any steer during the Stop fixture's tool, wait in
+      // Claude's queue until its next tool boundary (or Stop withdraws them).
+      const heldSteer = prompt.priority === "next" && !foldedSteer &&
+        (CLAUDE_E2E_HELD_STEERS.has(promptText) || this.#interruptions.has(sessionId));
+      const messages = [...(this.#sessions.get(sessionId) ?? []), ...(foldedSteer || heldSteer ? [] : [user])];
       this.#sessions.set(sessionId, messages);
-      if (!foldedSteer) queue.push(user);
+      if (!foldedSteer && !heldSteer) queue.push(user);
+      if (heldSteer) {
+        const held = this.#heldSteers.get(sessionId) ?? [];
+        held.push({ user, queue });
+        this.#heldSteers.set(sessionId, held);
+        queue.push(claudeCommandLifecycle(sessionId, prompt.uuid!, "queued"));
+        continue;
+      }
       if (promptText === "Exercise Claude Steer") {
         this.#steerPrompts.set(sessionId, prompt.uuid!);
         const working = {
@@ -478,41 +549,23 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
       }
       if (foldedSteer) {
         const originalUuid = this.#steerPrompts.get(sessionId);
-        const folded = this.#foldedSteers.get(sessionId) ?? [];
-        const first = promptText === "Use the revised Claude approach";
-        if (!originalUuid || folded.length !== (first ? 0 : 1)) throw new Error("claude_steer_fixture_out_of_order");
-        queue.push(claudeCommandLifecycle(sessionId, prompt.uuid!, "queued"));
-        if (first) {
-          const toolResult = { type: "user", uuid: crypto.randomUUID(), session_id: sessionId,
-            parent_tool_use_id: null, parent_agent_id: null,
-            message: { role: "user", content: [{ type: "tool_result", tool_use_id: `steer-tool-${originalUuid}`,
-              content: "Command completed without interruption." }] },
-          } as unknown as ClaudeSessionMessage & ClaudeMessage;
-          messages.push(toolResult); queue.push(toolResult);
+        if (!originalUuid || (this.#foldedSteers.get(sessionId)?.length ?? 0) !== 0) {
+          throw new Error("claude_steer_fixture_out_of_order");
         }
+        queue.push(claudeCommandLifecycle(sessionId, prompt.uuid!, "queued"));
+        const toolResult = { type: "user", uuid: crypto.randomUUID(), session_id: sessionId,
+          parent_tool_use_id: null, parent_agent_id: null,
+          message: { role: "user", content: [{ type: "tool_result", tool_use_id: `steer-tool-${originalUuid}`,
+            content: "Command completed without interruption." }] },
+        } as unknown as ClaudeSessionMessage & ClaudeMessage;
+        messages.push(toolResult); queue.push(toolResult);
         // Claude folds the steer into the running turn before its next model
         // request, recording it there as a queued command.
         messages.push({ ...user, isQueuedCommand: true } as unknown as ClaudeSessionMessage & ClaudeMessage);
         queue.push(claudeCommandLifecycle(sessionId, prompt.uuid!, "started"));
-        folded.push(prompt.uuid!);
-        this.#foldedSteers.set(sessionId, folded);
-        // The turn keeps running until the second steer, so the browser can
-        // show the first one taken mid-turn and send another.
-        if (first) continue;
-        this.#steerPrompts.delete(sessionId);
-        this.#foldedSteers.delete(sessionId);
-        const answer = { type: "assistant", uuid: assistantUuid, session_id: sessionId,
-          parent_tool_use_id: null, parent_agent_id: null,
-          message: { id: `steered-${assistantUuid}`, role: "assistant", stop_reason: "end_turn",
-            content: [{ type: "text", text: "Claude incorporated both corrections." }] },
-        } as unknown as ClaudeSessionMessage & ClaudeMessage;
-        messages.push(answer); queue.push(answer);
-        queue.push({ type: "result", subtype: "success", uuid: crypto.randomUUID(),
-          session_id: sessionId, duration_ms: 1, duration_api_ms: 1, is_error: false,
-          num_turns: 1, result: "Claude incorporated both corrections.", stop_reason: "end_turn",
-          total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [],
-          user_message_uuid: prompt.uuid, user_message_uuids: [originalUuid, ...folded],
-        } as unknown as ClaudeMessage);
+        this.#foldedSteers.set(sessionId, [prompt.uuid!]);
+        // The turn keeps running, so the browser can show the first steer
+        // taken mid-turn and send several more.
         continue;
       }
       if (promptText === "Exercise Claude Stop") {
@@ -526,6 +579,15 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
         queue.push(working);
         this.#interruptions.set(sessionId, () => {
           this.#interruptions.delete(sessionId);
+          // Like Claude Code, Stop writes its exact stop result for the call
+          // it aborted, then its tool-use interruption marker.
+          const aborted = { type: "user", uuid: crypto.randomUUID(), session_id: sessionId,
+            parent_tool_use_id: null, parent_agent_id: null, timestamp: new Date().toISOString(),
+            message: { role: "user", content: [{ type: "tool_result", tool_use_id: `stop-tool-${assistantUuid}`,
+              is_error: true, content: "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed." }] },
+          } as unknown as ClaudeSessionMessage & ClaudeMessage;
+          messages.push(aborted);
+          queue.push(aborted);
           const marker = { type: "user", uuid: crypto.randomUUID(), session_id: sessionId,
             parent_tool_use_id: null, parent_agent_id: null, timestamp: new Date().toISOString(),
             message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] },
@@ -896,7 +958,13 @@ function claudeFixtureResult(sessionId: string, operationId: string): ClaudeMess
 }
 
 /** Claude Code's stream-json lifecycle frame for a uuid-stamped input. */
-function claudeCommandLifecycle(sessionId: string, commandUuid: string, state: "queued" | "started"): ClaudeMessage {
+/** Steers the offline Claude fixture keeps queued until its next tool boundary. */
+const CLAUDE_E2E_HELD_STEERS = new Set([
+  "Also keep the Claude tests green",
+  "Mention the Claude changelog too",
+]);
+
+function claudeCommandLifecycle(sessionId: string, commandUuid: string, state: "queued" | "started" | "cancelled"): ClaudeMessage {
   return { type: "command_lifecycle", command_uuid: commandUuid, state, uuid: crypto.randomUUID(),
     session_id: sessionId } as unknown as ClaudeMessage;
 }
@@ -4423,11 +4491,12 @@ async function main(): Promise<void> {
       baseDelayMilliseconds: 25,
       maximumDelayMilliseconds: 100,
     },
-    isDispatchBlocked: (eventScope, applicationThreadId) =>
+    isDispatchBlocked: (eventScope, applicationThreadId, purpose) =>
         inventoryRepository.isWorkspaceRemoved(eventScope, inventoryRepository.getThread(eventScope, applicationThreadId).thread.workspaceId) ||
       operationRepository.hasBlockingThreadOperation(
         eventScope,
         applicationThreadId,
+        purpose,
       ),
   });
   questions = new QuestionRequestService({
@@ -5096,6 +5165,13 @@ async function main(): Promise<void> {
   app.post("/__e2e/forks/reset", (_request, response) => {
     forkControl?.release?.();
     forkControl = undefined;
+    response.status(204).end();
+  });
+  app.get("/__e2e/claude/steers/state", (_request, response) => {
+    response.json({ heldCount: claudeSdk.heldSteerCount() });
+  });
+  app.post("/__e2e/claude/steers/fold", (_request, response) => {
+    claudeSdk.foldHeldSteers();
     response.status(204).end();
   });
   app.post("/__e2e/codex/arm-create-outcome-unknown", (_request, response) => {

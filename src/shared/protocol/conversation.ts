@@ -1031,8 +1031,21 @@ export const queuedInputSummarySchema = z
     createdAt: z.iso.datetime(),
     nextAttemptAt: z.iso.datetime().optional(),
     diagnostic: boundedDisplayTextSchema.optional(),
+    /**
+     * Normalized reason for a failed item. `not_sent`: the provider accepted a
+     * Steer but proved it never used it (for example, Stop withdrew it), so
+     * nothing reached the conversation and nothing was resent.
+     */
+    failureReason: z.enum(["not_sent"]).optional(),
   })
   .superRefine((item, context) => {
+    if (item.failureReason !== undefined && item.state !== "failed") {
+      context.addIssue({
+        code: "custom",
+        message: "A failure reason is present only on a failed queued input.",
+        path: ["failureReason"],
+      });
+    }
     const hasAgentThread = item.initiatingAgentThreadId !== undefined;
     const hasToolClient = item.initiatingToolClientId !== undefined;
     if (

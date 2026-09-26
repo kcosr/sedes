@@ -155,6 +155,10 @@ export function createPiSubmissionMarker(
  * corresponding user message enters branch history. Input handlers may
  * transform the persisted text, so correlations are positional and assigned
  * FIFO rather than matched against the caller's original text.
+ *
+ * Several Steers for one provider turn may be pending at once. Each closes
+ * individually: by its own user entry, in FIFO order, or by its own `lost` or
+ * `rejected` marker, which removes only that input from the FIFO.
  */
 export function correlatePiSubmissions(
   entries: readonly SessionEntry[],
@@ -298,18 +302,33 @@ export function correlatePiSubmissions(
       if (previous && !previous.rejected) {
         throw new Error("pi_submission_intent_marker_duplicate");
       }
-      for (const displaced of pending.splice(0)) {
-        results.set(displaced.marker.applicationOperationId, {
-          marker: displaced.marker,
+      const providerTurnId =
+        marker.mode === "steer" ? currentProviderTurnId : undefined;
+      // Pi queues each accepted Steer and later persists one user entry per
+      // queued Steer, in queue order. A Steer intent therefore waits behind
+      // the Steers still pending for the same provider turn. Any other new
+      // intent (a true Submit, or a Steer for another turn) proves that no
+      // earlier pending input can still precede it, so it displaces them.
+      const retained: typeof pending = [];
+      for (const candidate of pending.splice(0)) {
+        if (
+          marker.mode === "steer" &&
+          providerTurnId !== undefined &&
+          candidate.marker.mode === "steer" &&
+          candidate.providerTurnId === providerTurnId
+        ) {
+          retained.push(candidate);
+          continue;
+        }
+        results.set(candidate.marker.applicationOperationId, {
+          marker: candidate.marker,
           rejected: false,
-          ...(displaced.marker.mode === "steer"
+          ...(candidate.marker.mode === "steer"
             ? { invalid: "displaced_steer" as const }
             : {}),
         });
       }
-      const providerTurnId =
-        marker.mode === "steer" ? currentProviderTurnId : undefined;
-      pending.push({ marker, providerTurnId });
+      pending.push(...retained, { marker, providerTurnId });
       results.set(marker.applicationOperationId, {
         marker,
         rejected: false,
