@@ -432,6 +432,26 @@ describe("ConversationProjector", () => {
         }).available,
       ).toBe(available);
     }
+    // A backend can withhold one completed turn that has no exact boundary.
+    const reason = { text: "This turn has no exact fork boundary." };
+    expect(projectedTurnForkCapability({
+      turn: { id: "turn-unforkable", revision: 2, status: "completed", endedBy: "agent_settled", forkUnavailableReason: reason, orderedItemIds: [] },
+      branching,
+      sourceRunState: "idle",
+    })).toEqual({ sourceTurnId: "turn-unforkable", expectedTurnRevision: 2, available: false, unavailableReason: reason });
+  });
+
+  it("carries a backend turn's fork unavailability into the normalized turn", () => {
+    const backend = snapshot();
+    const reason = { text: "This turn has no exact fork boundary." };
+    backend.turnsById["user-1"] = { ...backend.turnsById["user-1"]!, forkUnavailableReason: reason };
+    const projector = new ConversationProjector({ backendInstanceId: "backend", bindingIdentity: "binding" });
+    const initial = projector.replace(backend, -1);
+    const [turnId] = initial.orderedTurnIds;
+    expect(initial.turnsById[turnId!]).toMatchObject({ forkUnavailableReason: reason });
+    const page = projector.projectHistoryPage({ orderedBackendTurnIds: backend.orderedBackendTurnIds, itemsById: backend.itemsById,
+      turnsById: backend.turnsById }, { branching: { availability: "unavailable", reason: { text: "Unavailable" } }, sourceRunState: "idle" });
+    expect(page.turnsById[turnId!]).toMatchObject({ forkUnavailableReason: reason });
   });
 
   it("allows active historical forks but keeps reconciling fail-closed", () => {

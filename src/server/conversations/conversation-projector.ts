@@ -106,9 +106,14 @@ export function projectedTurnForkCapability(input: {
   const sourceStateAllowed =
     branchingAllowsSelectedCompletedTurnForSourceState(input);
   const available =
-    turnCompleted && selectedTurnSupported && sourceStateAllowed;
+    turnCompleted &&
+    input.turn.forkUnavailableReason === undefined &&
+    selectedTurnSupported &&
+    sourceStateAllowed;
   const unavailableReason = !turnCompleted
     ? { text: "Only a successfully completed turn can be forked." }
+    : input.turn.forkUnavailableReason
+      ? input.turn.forkUnavailableReason
     : input.branching.availability === "unavailable"
       ? input.branching.reason
       : !input.branching.boundaries.includes("selected_completed_turn")
@@ -924,6 +929,9 @@ export class ConversationProjector {
       ...(backendTurn.startedAt ? { startedAt: backendTurn.startedAt } : {}),
       ...(backendTurn.completedAt
         ? { completedAt: backendTurn.completedAt }
+        : {}),
+      ...(backendTurn.forkUnavailableReason
+        ? { forkUnavailableReason: backendTurn.forkUnavailableReason }
         : {}),
       orderedItemIds: backendTurn.orderedBackendItemIds.map((backendItemId) => {
         const itemId = itemIds.get(backendItemId);

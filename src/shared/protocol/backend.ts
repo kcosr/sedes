@@ -81,6 +81,12 @@ export const backendTurnSchema = z
       .optional(),
     startedAt: z.iso.datetime().optional(),
     completedAt: z.iso.datetime().optional(),
+    /**
+     * Why this successfully completed turn cannot be an exact fork boundary
+     * for this backend. Absent means the backend's branching capability
+     * alone decides.
+     */
+    forkUnavailableReason: boundedDisplayTextSchema.optional(),
     orderedBackendItemIds: z
       .array(z.string().min(1).max(512))
       .max(MAXIMUM_BACKEND_ITEMS_PER_TURN),
@@ -88,6 +94,9 @@ export const backendTurnSchema = z
   .superRefine((turn, context) => {
     if (turn.failure !== undefined && turn.status !== "failed") {
       context.addIssue({ code: "custom", path: ["failure"], message: "Failure details belong to failed turns only." });
+    }
+    if (turn.forkUnavailableReason !== undefined && turn.status !== "completed") {
+      context.addIssue({ code: "custom", path: ["forkUnavailableReason"], message: "Only a completed turn can explain why it is not a fork boundary." });
     }
     if (turn.completionCorrelations) {
       requireUniqueIdentifiers(

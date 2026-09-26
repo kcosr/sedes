@@ -168,6 +168,8 @@ export interface ClaudeHistoryAuthentication {
   readonly forkOmittedTaskNotifications?: ReadonlySet<string>;
 }
 
+const UNFORKABLE_TURN_REASON =
+  "Claude cannot fork exactly after this turn: it ended without a final answer, for example on a tool result or attachment.";
 const FORK_OMITTED_BACKGROUND_NOTICE =
   "Background work started before this fork point was not carried into the fork. Claude was told it did not finish; its results, if any, are in the source thread.";
 
@@ -887,6 +889,13 @@ function buildTimeline(
   );
 
   applyTaskLifecycleReceipts(authentication?.taskLifecycleReceipts ?? [], toolItemsByNativeId, turnsById, itemsById);
+  // A native fork resumes at one exact chain entry. A completed turn whose
+  // last visible entry is not its terminal answer has no such boundary.
+  for (const [backendTurnId, turn] of Object.entries(turnsById)) {
+    if (turn.status === "completed" && !terminalCheckpointUuidByBackendTurnId.has(backendTurnId)) {
+      turnsById[backendTurnId] = { ...turn, forkUnavailableReason: boundText(UNFORKABLE_TURN_REASON) };
+    }
+  }
 
   const usage = usageSnapshotSchema.parse({
     counters: {

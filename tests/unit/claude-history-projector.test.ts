@@ -1897,6 +1897,20 @@ describe("Claude internal task notification history", () => {
     expect(nextClaudeUserMessageOrdinal([...beginning, notification] as SessionMessage[], markerAuthentication)).toBe(1);
   });
 
+  it("explains why a completed turn without an exact final entry cannot be a fork boundary", () => {
+    const messages = [user(uuid(1), "Answer"), assistant(uuid(2), [{ type: "text", text: "Answer" }]),
+      user(uuid(3), "Return structured output"),
+      assistant(uuid(4), [{ type: "tool_use", id: "result-tool", name: "StructuredOutput", input: {} }]),
+      user(uuid(5), [{ type: "tool_result", tool_use_id: "result-tool", content: "ok" }])];
+    const [ordinary, structured] = projectClaudeHistory(messages).snapshot.orderedBackendTurnIds;
+    const projection = projectClaudeHistory(messages, [{ backendTurnId: structured!, status: "completed",
+      providerTerminalReason: "success", providerResultUuid: uuid(6), terminalAt: 2_000 }]);
+    expect(projection.snapshot.turnsById[structured!]).toMatchObject({ status: "completed", forkUnavailableReason: { text:
+      "Claude cannot fork exactly after this turn: it ended without a final answer, for example on a tool result or attachment." } });
+    expect(projection.snapshot.turnsById[ordinary!]).not.toHaveProperty("forkUnavailableReason");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.has(structured!)).toBe(false);
+  });
+
   it("shows one notice on the fork-point turn for background work a fork did not carry", () => {
     const orphan = (id: number) => ({ ...user(uuid(id), "<task-notification>\n<task-id>running</task-id>\n<status>failed</status>\n<summary>Background agent didn't finish</summary>\n</task-notification>"),
       origin: { kind: "task-notification" } });

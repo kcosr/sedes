@@ -1203,6 +1203,28 @@ describe("NormalizedThreadStore", () => {
     expect(store.snapshotSerializedBytes).toBe(serializedUtf8Bytes(store.state.snapshot));
   });
 
+  it("keeps a backend's per-turn fork unavailability when fork availability changes", () => {
+    const store = new NormalizedThreadStore();
+    const initial = snapshot();
+    const reason = { text: "Claude cannot fork exactly after this turn." };
+    initial.turnsById = {
+      "turn-1": { ...initial.turnsById["turn-1"]!, status: "completed", endedBy: "agent_settled" },
+      "turn-2": { id: "turn-2", revision: 0, status: "completed", endedBy: "agent_settled", forkUnavailableReason: reason, orderedItemIds: [] },
+    };
+    initial.orderedTurnIds = ["turn-1", "turn-2"];
+    initial.forksByTurnId = {
+      ...initial.forksByTurnId,
+      "turn-2": { sourceTurnId: "turn-2", expectedTurnRevision: 0, available: false, unavailableReason: reason },
+    };
+    store.apply(envelope(0, { type: "snapshot", generation: "projection-1", snapshot: initial }));
+    store.apply(envelope(1, { type: "fork_source_state_changed", generation: "projection-1", forkSource: {
+      selectedCompletedTurn: { available: true }, latestProviderSnapshot: { available: true },
+    } }));
+    const forks = store.state.snapshot!.forksByTurnId;
+    expect(forks["turn-1"]).toMatchObject({ available: true });
+    expect(forks["turn-2"]).toEqual({ sourceTurnId: "turn-2", expectedTurnRevision: 0, available: false, unavailableReason: reason });
+  });
+
   it("keeps exact metadata byte counts across growth, shrinkage and optional fields", () => {
     const store = new NormalizedThreadStore();
     const base = snapshot();

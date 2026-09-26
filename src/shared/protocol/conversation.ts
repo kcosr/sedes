@@ -138,6 +138,8 @@ export const conversationTurnSchema = z
       .optional(),
     startedAt: z.iso.datetime().optional(),
     completedAt: z.iso.datetime().optional(),
+    /** Why this completed turn cannot be an exact fork boundary. */
+    forkUnavailableReason: boundedDisplayTextSchema.optional(),
     orderedItemIds: z
       .array(z.string().min(1).max(160))
       .max(MAXIMUM_NORMALIZED_ITEMS_PER_TURN),
@@ -145,6 +147,9 @@ export const conversationTurnSchema = z
   .superRefine((turn, context) => {
     if ((turn.status === "failed") !== (turn.failure !== undefined)) {
       context.addIssue({ code: "custom", path: ["failure"], message: "Failure details belong to failed turns and are required for them." });
+    }
+    if (turn.forkUnavailableReason !== undefined && turn.status !== "completed") {
+      context.addIssue({ code: "custom", path: ["forkUnavailableReason"], message: "Only a completed turn can explain why it is not a fork boundary." });
     }
     requireUniqueTimelineIdentifiers(
       turn.orderedItemIds,
