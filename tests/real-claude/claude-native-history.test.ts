@@ -112,9 +112,8 @@ describe.sequential("real Claude native history", () => {
       expect(ours.at(-1)).toMatchObject({ type: "assistant" });
       expect(JSON.stringify(ours.at(-1)?.message)).toContain("SEDES_ALPHA_7F3 SEDES_BETA_2C9");
       expect(ours.map(({ uuid }) => uuid)).toEqual(expect.arrayContaining(deadEnds.map(({ uuid }) => uuid as string)));
-      // The pinned SDK's leaf heuristic stops at the dead end instead.
-      expect(theirs.at(-1)?.uuid).not.toBe(ours.at(-1)?.uuid);
-      expect(theirs.length).toBeLessThan(ours.length);
+      // SDK 0.3.274 stopped at the dead end; 0.3.283 reads through the meta tip too.
+      expect(theirs).toEqual(ours);
       console.info(`[real-claude] parallel resume: ${ours.length} messages through the true tip; SDK ${theirs.length}; dead ends ${deadEnds.length}`);
     } finally {
       await handle.close();
