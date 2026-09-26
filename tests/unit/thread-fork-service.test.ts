@@ -439,6 +439,7 @@ function fixture(withEnvironmentVariables = false) {
     secondSource,
     sourceTurnId,
     sourceBackendTurnId,
+    binding: target.binding,
     reconciliationScope: {
       connectionProfileIds: [target.driver.connection.id],
       executionEnvironmentId: environment.id,
@@ -1702,6 +1703,102 @@ describe("ThreadForkService", () => {
       ).rejects.toMatchObject({ code: "conflict" });
       expect(current.branchConversation).toHaveBeenCalledOnce();
     } finally {
+      current.database.close();
+    }
+  });
+
+  it("records a futile abort, quarantines its reserved child, and logs the cause", async () => {
+    const current = fixture();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      let reserved: string | undefined;
+      current.branchConversation.mockImplementation(async (input) => {
+        reserved = input.requestedBackendConversationId;
+        throw new BackendError({
+          category: "invalid_state", retryable: false, crossedSubmissionBoundary: false,
+          safeMessage: "Claude created the fork, but its history does not match the selected turn.",
+          backendCode: "claude_fork_history_mismatch", forkRestart: "futile",
+        }, { cause: new Error("claude_fork_history_mismatch: expected 4 retained messages, found 3") });
+      });
+      const request = current.manual("futile-abort");
+      const result = await current.service.forkManual(request);
+      expect(result).toMatchObject({ status: "aborted", restartable: false,
+        diagnostic: "Claude created the fork, but its history does not match the selected turn." });
+      await expect(current.service.forkManual(request)).resolves.toEqual(result);
+      expect(current.lineage.isReservedForkChild(current.scope, {
+        backendInstanceId: current.binding.backendInstanceId, backendConversationId: reserved!,
+      })).toBe(true);
+      expect(current.lineage.isReservedForkChild(current.scope, {
+        backendInstanceId: current.binding.backendInstanceId, backendConversationId: uuid(77_777),
+      })).toBe(false);
+      const logged = stderr.mock.calls.map(([line]) => String(line)).join("");
+      expect(logged).toContain(`Fork ${result.childThreadId} creation (aborted, claude_fork_history_mismatch) failed: Claude created the fork`);
+      expect(logged).toContain("cause: claude_fork_history_mismatch: expected 4 retained messages, found 3");
+    } finally {
+      stderr.mockRestore();
+      current.database.close();
+    }
+  });
+
+  it("keeps a retried fork recoverable after a transient definite failure, since an earlier call may have created it", async () => {
+    const current = fixture();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      current.branchConversation
+        .mockRejectedValueOnce(new BackendError({ category: "submission_unknown", retryable: false,
+          crossedSubmissionBoundary: true, safeMessage: "outcome unknown" }))
+        .mockRejectedValueOnce(new BackendError({ category: "unavailable", retryable: true,
+          crossedSubmissionBoundary: false, safeMessage: "Claude session data is temporarily unavailable." }));
+      const request = current.manual("retry-transient");
+      await expect(current.service.forkManual(request)).resolves.toMatchObject({ status: "recovery_required", retryable: true });
+      const retried = await current.service.forkManual(request);
+      expect(retried).toMatchObject({ status: "recovery_required", retryable: true,
+        diagnostic: "Claude session data is temporarily unavailable." });
+      expect(current.bindings.findThreadDefinition(current.scope, retried.childThreadId)).toBeDefined();
+      expect(current.lineage.isReservedForkChild(current.scope, {
+        backendInstanceId: current.binding.backendInstanceId,
+        backendConversationId: current.branchConversation.mock.calls[0]![0].requestedBackendConversationId!,
+      })).toBe(true);
+    } finally {
+      stderr.mockRestore();
+      current.database.close();
+    }
+  });
+
+  it("recovers only crash-interrupted forks at startup and never discards one automatically", async () => {
+    const current = fixture();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      current.branchConversation.mockRejectedValueOnce(new BackendError({ category: "submission_unknown", retryable: false,
+        crossedSubmissionBoundary: true, safeMessage: "outcome unknown" }));
+      const awaiting = await current.service.forkManual(current.manual("awaiting-user"));
+      expect(awaiting).toMatchObject({ status: "recovery_required" });
+      // A crash left this attempt with its provider call started.
+      let interruptedId!: string;
+      current.branchConversation.mockImplementationOnce(async (input) => {
+        interruptedId = input.childApplicationThreadId;
+        throw new Error("process_crashed_before_response");
+      });
+      const crashed = await current.service.forkManual(current.manual("crash-interrupted"));
+      expect(crashed).toMatchObject({ status: "recovery_required" });
+      current.database.prepare(`UPDATE conversation_creation_attempts SET phase = 'external_call_started', diagnostic = NULL,
+        fork_uncertainty_kind = NULL WHERE application_thread_id = ?`).run(interruptedId);
+      current.branchConversation.mockClear();
+      current.branchConversation.mockRejectedValue(new BackendError({ category: "invalid_state", retryable: false,
+        crossedSubmissionBoundary: false, safeMessage: "Claude did not start the fork: this Claude Code version is not supported.",
+        backendCode: "claude_fork_launch_refused_version", forkRestart: "futile" }));
+      await current.service.recoverInterruptedForks(current.scope);
+      expect(current.branchConversation).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ childApplicationThreadId: interruptedId }));
+      expect(current.creation.findActiveForThread(current.scope, interruptedId)).toMatchObject({
+        phase: "recovery_required", diagnostic: "Claude did not start the fork: this Claude Code version is not supported." });
+      expect(current.bindings.findThreadDefinition(current.scope, interruptedId)).toBeDefined();
+      expect(current.creation.findActiveForThread(current.scope, awaiting.childThreadId)).toMatchObject({ phase: "recovery_required" });
+      expect(warn).toHaveBeenCalledWith("thread_fork_startup_recovery", expect.objectContaining({
+        childThreadId: interruptedId, outcome: "recovery_required" }));
+    } finally {
+      stderr.mockRestore();
+      warn.mockRestore();
       current.database.close();
     }
   });

@@ -901,6 +901,8 @@ export const forkThreadResultSchema = z.discriminatedUnion("status", [
     status: z.literal("aborted"),
     childThreadId: threadIdSchema,
     diagnostic: z.string().min(1).max(500),
+    /** False when a new fork of the same boundary would fail the same way. */
+    restartable: z.boolean(),
   }),
 ]);
 export type ForkThreadResult = z.infer<typeof forkThreadResultSchema>;
@@ -1203,6 +1205,11 @@ export type ThreadQueueMutationResult = z.infer<
   typeof threadQueueMutationResultSchema
 >;
 
+/** A creation that was proven uncreated and discarded, with its reason when recorded. */
+const abortedMutationResultSchema = z.strictObject({
+  status: z.literal("aborted"),
+  diagnostic: z.string().min(1).max(500).optional(),
+});
 export const threadApplicationMutationResultSchema = z.discriminatedUnion(
   "status",
   [
@@ -1240,7 +1247,7 @@ export const threadApplicationMutationResultSchema = z.discriminatedUnion(
       retryable: z.boolean(),
       draft: normalizedDraftSchema.optional(),
     }),
-    z.strictObject({ status: z.literal("aborted") }),
+    abortedMutationResultSchema,
     z.strictObject({ status: z.literal("completed") }),
     ...threadQueueMutationResultSchema.options,
   ],
@@ -1280,7 +1287,7 @@ export const threadDeliveryMutationResultSchema = z.discriminatedUnion(
       draft: clearedDeliveryDraftSchema,
     }),
     deliveryRecoveryRequiredResultSchema,
-    z.strictObject({ status: z.literal("aborted") }),
+    abortedMutationResultSchema,
   ],
 );
 export type ThreadDeliveryMutationResult = z.infer<

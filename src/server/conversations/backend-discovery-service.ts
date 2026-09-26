@@ -409,6 +409,14 @@ export class BackendDiscoveryService {
           changed.add(existing.applicationThreadId);
           continue;
         }
+        if (input.lineage.isReservedForkChild(scope, {
+          backendInstanceId: target.connection.backendInstanceId,
+          backendConversationId: discovered.backendConversationId,
+        })) {
+          // An unfinished fork may still bind this reserved child; an aborted
+          // fork never will. Neither is an unrelated conversation to import.
+          continue;
+        }
         const now = this.#now();
         let attemptedCreatedId: string | undefined;
         let createdId: string | undefined;

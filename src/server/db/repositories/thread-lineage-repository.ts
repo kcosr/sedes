@@ -57,7 +57,8 @@ const abortedColumns = `
   source_automation_id AS sourceAutomationId,
   source_automation_run_id AS sourceAutomationRunId,
   diagnostic,
-  aborted_at AS abortedAt
+  aborted_at AS abortedAt,
+  restartable
 `;
 
 const placementColumns = `
@@ -583,7 +584,7 @@ export class ThreadLineageRepository {
     scope: RequestScope,
     creationOperationId: string,
   ): AbortedThreadForkRecord | undefined {
-    return this.database
+    const row = this.database
       .prepare(
         `
       SELECT ${abortedColumns}
@@ -593,7 +594,38 @@ export class ThreadLineageRepository {
     `,
       )
       .get(scope.tenantId, scope.principalId, creationOperationId) as
-      AbortedThreadForkRecord | undefined;
+      | (Omit<AbortedThreadForkRecord, "restartable"> & { readonly restartable: number })
+      | undefined;
+    return row ? { ...row, restartable: row.restartable === 1 } : undefined;
+  }
+
+  /**
+   * True when a native conversation is the application-reserved child of an
+   * unfinished or aborted fork. Discovery must not import it as a separate
+   * thread: an unfinished fork may still bind it, and an aborted one never will.
+   */
+  isReservedForkChild(
+    scope: RequestScope,
+    input: { readonly backendInstanceId: string; readonly backendConversationId: string },
+  ): boolean {
+    return this.database
+      .prepare(
+        `
+      SELECT 1 FROM conversation_creation_attempts
+      WHERE tenant_id = ? AND owner_principal_id = ? AND backend_instance_id = ?
+        AND creation_kind = 'fork' AND fork_child_identity = 'application_reserved'
+        AND backend_creation_correlation = ? AND phase <> 'bound'
+      UNION ALL
+      SELECT 1 FROM aborted_thread_forks
+      WHERE tenant_id = ? AND owner_principal_id = ?
+        AND reserved_backend_instance_id = ? AND reserved_backend_conversation_id = ?
+      LIMIT 1
+    `,
+      )
+      .get(
+        scope.tenantId, scope.principalId, input.backendInstanceId, input.backendConversationId,
+        scope.tenantId, scope.principalId, input.backendInstanceId, input.backendConversationId,
+      ) !== undefined;
   }
 
   abortPreparedFork(
@@ -602,6 +634,8 @@ export class ThreadLineageRepository {
     input: {
       readonly creationOperationId: string;
       readonly diagnostic: string;
+      /** False when a new fork of the same boundary would fail the same way. */
+      readonly restartable: boolean;
       readonly now: number;
       readonly onThreadTasksPromoted?: (taskIds: readonly string[]) => void;
     },
@@ -620,6 +654,8 @@ export class ThreadLineageRepository {
     input: {
       readonly creationOperationId: string;
       readonly diagnostic: string;
+      /** False when a new fork of the same boundary would fail the same way. */
+      readonly restartable: boolean;
       readonly now: number;
       readonly onThreadTasksPromoted?: (taskIds: readonly string[]) => void;
     },
@@ -638,6 +674,7 @@ export class ThreadLineageRepository {
     input: {
       readonly creationOperationId: string;
       readonly diagnostic: string;
+      readonly restartable: boolean;
       readonly now: number;
       /**
        * Receives task ids promoted off the deleted child (still inside this
@@ -656,7 +693,8 @@ export class ThreadLineageRepository {
         if (
           replay.reservedChildThreadId !== childThreadId ||
           replay.boundaryKind !== boundaryKind ||
-          replay.diagnostic !== input.diagnostic
+          replay.diagnostic !== input.diagnostic ||
+          replay.restartable !== input.restartable
         ) {
           throw new DomainError(
             "conflict",
@@ -676,7 +714,10 @@ export class ThreadLineageRepository {
           initiating_tool_client_id AS initiatingToolClientId,
           source_automation_id AS sourceAutomationId,
           source_automation_run_id AS sourceAutomationRunId,
-          phase, provisional_backend_conversation_id AS provisionalId
+          phase, provisional_backend_conversation_id AS provisionalId,
+          backend_instance_id AS backendInstanceId,
+          fork_child_identity AS forkChildIdentity,
+          backend_creation_correlation AS backendCreationCorrelation
         FROM conversation_creation_attempts
         WHERE tenant_id = ? AND owner_principal_id = ?
           AND application_thread_id = ? AND mutation_id = ?
@@ -703,6 +744,9 @@ export class ThreadLineageRepository {
             sourceAutomationRunId: string | null;
             phase: string;
             provisionalId: string | null;
+            backendInstanceId: string;
+            forkChildIdentity: string | null;
+            backendCreationCorrelation: string | null;
           }
         | undefined;
       if (
@@ -732,6 +776,9 @@ export class ThreadLineageRepository {
           "Only a proven-uncreated prepared fork can be removed.",
         );
       }
+      const reservedChild =
+        attempt.forkChildIdentity === "application_reserved" &&
+        attempt.backendCreationCorrelation !== null;
       this.database
         .prepare(
           `
@@ -740,8 +787,9 @@ export class ThreadLineageRepository {
           reserved_child_thread_id, source_thread_id, source_turn_id,
           source_turn_revision, boundary_kind, source_kind, source_automation_id,
           source_automation_run_id, initiating_agent_thread_id,
-          initiating_tool_client_id, diagnostic, aborted_at, environment_variables_fingerprint
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          initiating_tool_client_id, diagnostic, aborted_at, environment_variables_fingerprint,
+          reserved_backend_instance_id, reserved_backend_conversation_id, restartable
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -761,6 +809,11 @@ export class ThreadLineageRepository {
           input.diagnostic,
           input.now,
           attempt.environmentVariablesFingerprint,
+          // An application-reserved child may already exist natively. Keep
+          // its identity so discovery never imports the orphan.
+          reservedChild ? attempt.backendInstanceId : null,
+          reservedChild ? attempt.backendCreationCorrelation : null,
+          input.restartable ? 1 : 0,
         );
       const scopedDelete = (table: string, threadColumn: string): void => {
         this.database

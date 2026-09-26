@@ -710,6 +710,23 @@ describe("ThreadClientStore normalized operations", () => {
     ]);
   });
 
+  it("surfaces why a recovered fork was discarded", async () => {
+    const operateThread = vi.fn(async () => ({
+      status: "aborted" as const,
+      diagnostic: "An earlier attempt of this fork already created its Claude session, but that history does not match the selected turn.",
+    }));
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { operateThread } as unknown as ApiClient, transport);
+    await store.start();
+    installSnapshot(transport, snapshotWithDeliveryModes("idle"));
+    await expect(store.recoverUncertain()).rejects.toThrow(
+      "The fork was discarded. An earlier attempt of this fork already created its Claude session",
+    );
+    expect(operateThread).toHaveBeenCalledWith("thread-1", { kind: "recover_uncertain" });
+    expect(store.getSnapshot().actionError).toContain("The fork was discarded.");
+    store.dispose();
+  });
+
   it("captures conversation targeting without binding delivery to the observed turn", async () => {
     const draft = composerDraft("Use the revised approach");
     const cleared = { ...composerDraft(""), revision: draft.revision + 1 };

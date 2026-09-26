@@ -1387,7 +1387,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         return result.status === "recovery_required"
           ? { status: "recovery_required", retryable: result.retryable }
           : result.status === "aborted"
-            ? { status: "aborted" }
+            ? { status: "aborted", diagnostic: result.diagnostic }
             : { status: "completed" };
       }
       const creation = this.input.lifecycle.recoverActiveFirstSend(

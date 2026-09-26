@@ -1473,6 +1473,7 @@ async function fixture(
             status: "aborted" as const,
             childThreadId: "11111111-1111-4111-8111-111111111111",
             diagnostic: "Provider proved the fork was not created.",
+            restartable: false,
           };
         }
         return {
@@ -5254,6 +5255,7 @@ describe("normalized HTTP application contract", () => {
           status: "aborted",
           childThreadId: "11111111-1111-4111-8111-111111111111",
           diagnostic: "Provider proved the fork was not created.",
+          restartable: false,
         });
 
       const childThreadId = "11111111-1111-4111-8111-111111111111";

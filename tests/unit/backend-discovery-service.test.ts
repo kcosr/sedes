@@ -13,7 +13,7 @@ const scope: RequestScope = {
 };
 const neverAbortedSignal = new AbortController().signal;
 
-function fixture() {
+function fixture(options: { readonly reservedForkChildren?: readonly string[] } = {}) {
   const database = {
     transaction: <Result>(operation: () => Result) => operation,
   };
@@ -29,6 +29,9 @@ function fixture() {
     async (_scope: RequestScope, _applicationThreadId: string) => undefined,
   );
   const recordImportedNativeOrigin = vi.fn();
+  const createUnboundThread = vi.fn(() => { throw new Error("test_unexpected_import"); });
+  const isReservedForkChild = vi.fn((_scope: RequestScope, input: { readonly backendConversationId: string }) =>
+    options.reservedForkChildren?.includes(input.backendConversationId) === true);
   const inventory = {
     database,
     getWorkspace: vi.fn(() => ({ environmentId: "environment-1" })),
@@ -66,15 +69,18 @@ function fixture() {
           _backendInstanceId: string,
           backendConversationId: string,
         ) =>
-          backendConversationId.startsWith("parent-")
+          backendConversationId.startsWith("parent-") ||
+          options.reservedForkChildren?.includes(backendConversationId)
             ? undefined
             : { applicationThreadId: `application-${backendConversationId}` },
       ),
+      createUnboundThread,
     } as never,
     lineage: {
       database,
       findOrigin: vi.fn(() => undefined),
       recordImportedNativeOrigin,
+      isReservedForkChild,
     } as never,
     forks: { reconcileDiscoveredFork: async () => undefined },
     persistence: new Map([
@@ -93,6 +99,8 @@ function fixture() {
     onThreadChanged,
   });
   return {
+    createUnboundThread,
+    isReservedForkChild,
     discover,
     finishDiscovery,
     markDiscoveredAvailable,
@@ -116,6 +124,20 @@ function discoveredConversation(id: string) {
 }
 
 describe("BackendDiscoveryService scan policy", () => {
+  it("never imports the reserved native child of an unfinished or aborted fork", async () => {
+    const current = fixture({ reservedForkChildren: ["reserved-child"] });
+    current.discover.mockResolvedValueOnce({
+      conversations: [{ ...discoveredConversation("reserved-child"), nativeAncestry: undefined, title: "Source title" }],
+    });
+    await expect(current.service.discoverWorkspace(scope, "workspace-1", EXHAUSTIVE_DISCOVERY_SCAN, neverAbortedSignal))
+      .resolves.toMatchObject({ completion: "complete", conversationsSeen: 1 });
+    expect(current.isReservedForkChild).toHaveBeenCalledWith(scope, {
+      backendInstanceId: "backend-1", backendConversationId: "reserved-child",
+    });
+    expect(current.createUnboundThread).not.toHaveBeenCalled();
+    expect(current.onThreadChanged).not.toHaveBeenCalled();
+  });
+
   it("keeps ignored-signal provider work owned, then returns partial without mutation", async () => {
     const current = fixture();
     let release!: (page: DiscoveredConversationPage) => void;

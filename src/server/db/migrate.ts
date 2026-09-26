@@ -4,6 +4,7 @@ import { usageSubagentsMigration } from "./migrations/112-usage-subagents.js";
 import { usageTimelineMigration } from "./migrations/113-usage-timeline.js";
 import { usageSubagentRecoveryIndexesMigration } from "./migrations/114-usage-subagent-recovery-indexes.js";
 import { nativeMcpAgentToolDefaultsMigration } from "./migrations/115-native-mcp-agent-tool-defaults.js";
+import { abortedForkReservationsMigration } from "./migrations/116-aborted-fork-reservations.js";
 import { claudeTurnFailureDetailsMigration } from "./migrations/109-claude-turn-failure-details.js";
 import { forkEnvironmentFingerprintsMigration } from "./migrations/108-fork-environment-fingerprints.js";
 import { scopedEnvironmentVariablesMigration } from "./migrations/107-scoped-environment-variables.js";
@@ -244,6 +245,7 @@ export const backendNormalizedMigrations = [
   usageTimelineMigration,
   usageSubagentRecoveryIndexesMigration,
   nativeMcpAgentToolDefaultsMigration,
+  abortedForkReservationsMigration,
 ] as const;
 
 export type DatabaseMigration = {

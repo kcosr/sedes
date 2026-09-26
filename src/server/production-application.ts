@@ -1638,7 +1638,6 @@ export async function startProductionApplication(
       publisher: automations,
     });
 
-    await forks.recoverAllActive(scope);
     await queueDispatcher.recover(scope);
     await completionCallbackDispatcher.deliverReady(scope);
     await mutations.recoverUncertain(scope);
@@ -2815,6 +2814,10 @@ export async function startProductionApplication(
     process.stdout.write(
       `Sedes listening on http://${listening.host}:${listening.port}\n`,
     );
+    // Fork recovery can launch providers; it never delays serving requests.
+    void forks
+      .recoverInterruptedForks(scope)
+      .catch(reportBackgroundError("Startup fork recovery"));
     void discoveryOperations
       .admit((signal) => discoverRecentWorkspaces(signal))
       ?.catch(reportBackgroundError("Startup conversation discovery"));

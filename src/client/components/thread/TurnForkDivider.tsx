@@ -260,7 +260,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
               Open recovery thread
             </Button>
           )}
-          {attempt.phase === "aborted" && (
+          {attempt.phase === "aborted" && attempt.restartable && (
             <Button
               variant="outline"
               size="xs"

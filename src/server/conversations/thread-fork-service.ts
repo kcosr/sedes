@@ -11,6 +11,7 @@ import type {
   BackendEffectiveSettings,
 } from "../../shared/protocol/backend.js";
 import { BackendError } from "../backends/contracts.js";
+import { reportBackgroundError } from "../report-background-error.js";
 import type { BackendCheckpointRef } from "../backends/contracts.js";
 import type { ConversationActorManager } from "./conversation-actor-manager.js";
 import type { ActorBranchCheckpointSelection } from "./conversation-actor.js";
@@ -56,6 +57,8 @@ export type ThreadForkResult =
       readonly status: "aborted";
       readonly childThreadId: string;
       readonly diagnostic: string;
+      /** False when a new fork of the same boundary would fail the same way. */
+      readonly restartable: boolean;
     };
 
 type ManualForkInputBase = {
@@ -467,6 +470,7 @@ export class ThreadForkService {
   recoverActive(
     scope: RequestScope,
     childThreadId: string,
+    options: { readonly automatic?: boolean } = {},
   ): Promise<ThreadForkResult> | undefined {
     const attempt = this.input.creation.findActiveForThread(
       scope,
@@ -526,6 +530,7 @@ export class ThreadForkService {
           scope,
           sourceThreadId,
           mutationId: creationOperationId,
+          ...(options.automatic ? { automatic: true } : {}),
           sourceKind:
             recoverableOriginKind === "automation_fork"
               ? "automation"
@@ -568,7 +573,14 @@ export class ThreadForkService {
     );
   }
 
-  async recoverAllActive(scope: RequestScope): Promise<void> {
+  /**
+   * Startup recovery of forks a crash interrupted: prepared attempts and
+   * those whose provider call had started. It runs after the server listens.
+   * Attempts already awaiting explicit recovery are left for the user, and a
+   * definite failure found here is kept as a visible recovery rather than
+   * discarding the reserved child automatically. Every outcome is logged.
+   */
+  async recoverInterruptedForks(scope: RequestScope): Promise<void> {
     let after:
       | {
           readonly preparedAt: number;
@@ -579,11 +591,20 @@ export class ThreadForkService {
     for (;;) {
       const page = this.input.creation.listActiveForks(scope, 256, after);
       for (const attempt of page) {
+        if (attempt.phase !== "prepared" && attempt.phase !== "external_call_started") continue;
         try {
-          await this.recoverActive(scope, attempt.applicationThreadId);
-        } catch {
-          // The durable attempt remains authoritative. A later startup or an
-          // explicit thread recovery retries the same fork operation.
+          const result = await this.recoverActive(scope, attempt.applicationThreadId, { automatic: true });
+          if (result) {
+            console.warn("thread_fork_startup_recovery", {
+              childThreadId: attempt.applicationThreadId,
+              outcome: result.status,
+              ...(result.status === "created" ? {} : { diagnostic: result.diagnostic }),
+            });
+          }
+        } catch (error) {
+          // The durable attempt remains authoritative; explicit recovery
+          // retries the same operation.
+          reportBackgroundError(`Startup recovery of fork ${attempt.applicationThreadId}`)(error);
         }
       }
       if (page.length < 256) return;
@@ -930,6 +951,8 @@ export class ThreadForkService {
     readonly scope: RequestScope;
     readonly sourceThreadId: string;
     readonly mutationId: string;
+    /** Startup recovery: a definite failure stays a visible recovery. */
+    readonly automatic?: boolean;
     readonly sourceKind: ForkSourceKind;
     readonly originKind: "automation_fork" | UserForkOriginKind;
     readonly initiatingPrincipalId: string;
@@ -950,6 +973,7 @@ export class ThreadForkService {
         status: "aborted",
         childThreadId: aborted.reservedChildThreadId,
         diagnostic: aborted.diagnostic,
+        restartable: aborted.restartable,
       };
     }
     let attempt = this.input.creation.findByMutationId(
@@ -980,6 +1004,7 @@ export class ThreadForkService {
         status: "aborted",
         childThreadId: attempt.applicationThreadId,
         diagnostic: attempt.diagnostic ?? "The backend fork was not created.",
+        restartable: true,
       };
     }
     if (attempt) {
@@ -1438,6 +1463,7 @@ export class ThreadForkService {
       readonly sourceKind: ForkSourceKind;
       readonly automationId?: string;
       readonly automationRunId?: string;
+      readonly automatic?: boolean;
     },
     captured: CapturedFork,
     initial: ConversationCreationAttemptRecord,
@@ -1451,6 +1477,7 @@ export class ThreadForkService {
         status: "aborted",
         childThreadId: attempt.applicationThreadId,
         diagnostic: attempt.diagnostic ?? "The backend fork was not created.",
+        restartable: true,
       };
     }
     if (
@@ -1578,11 +1605,26 @@ export class ThreadForkService {
         });
       }
     } catch (error) {
-      if (error instanceof BackendError && !error.crossedSubmissionBoundary) {
+      // Only a definite failure may discard the reserved child. On a retry,
+      // an earlier call may already have created it, so a transient definite
+      // failure keeps the recovery; startup recovery never discards at all.
+      const definite =
+        error instanceof BackendError && !error.crossedSubmissionBoundary;
+      const discard =
+        definite &&
+        !input.automatic &&
+        (externalPhase !== "recovery_required" || !error.retryable);
+      reportBackgroundError(
+        `Fork ${attempt.applicationThreadId} creation (${discard ? "aborted" : "needs recovery"}${
+          error instanceof BackendError && error.backendCode ? `, ${error.backendCode}` : ""
+        })`,
+      )(error);
+      if (discard) {
         let promotedTaskIds: readonly string[] = [];
         const abortInput = {
           creationOperationId: input.mutationId,
           diagnostic: safeDiagnostic(error),
+          restartable: error.forkRestart !== "futile",
           now: this.#now(),
           onThreadTasksPromoted: (taskIds: readonly string[]) => {
             promotedTaskIds = taskIds;
@@ -1614,6 +1656,7 @@ export class ThreadForkService {
           status: "aborted",
           childThreadId: aborted.reservedChildThreadId,
           diagnostic: aborted.diagnostic,
+          restartable: aborted.restartable,
         };
       }
       const forkUnknown =

@@ -84,6 +84,8 @@ export type AbortedThreadForkRecord = {
   readonly sourceAutomationRunId: string | null;
   readonly diagnostic: string;
   readonly abortedAt: number;
+  /** False when a new fork of the same boundary would fail the same way. */
+  readonly restartable: boolean;
 };
 
 export type ThreadLineagePlacementRecord = {
