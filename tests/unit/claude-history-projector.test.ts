@@ -1897,6 +1897,27 @@ describe("Claude internal task notification history", () => {
     expect(nextClaudeUserMessageOrdinal([...beginning, notification] as SessionMessage[], markerAuthentication)).toBe(1);
   });
 
+  it("shows one notice on the fork-point turn for background work a fork did not carry", () => {
+    const orphan = (id: number) => ({ ...user(uuid(id), "<task-notification>\n<task-id>running</task-id>\n<status>failed</status>\n<summary>Background agent didn't finish</summary>\n</task-notification>"),
+      origin: { kind: "task-notification" } });
+    const messages = [...beginning, orphan(5), orphan(6)] as SessionMessage[];
+    const plain = projectClaudeHistory(beginning);
+    const projection = projectClaudeHistory(messages, [], {
+      attachmentProvenanceKey: new Uint8Array(32), forkBoundaryAuthentication: markerAuthentication,
+      forkOmittedTaskNotifications: new Set([uuid(5), uuid(6)]),
+    });
+    const [turnId] = projection.snapshot.orderedBackendTurnIds;
+    expect(projection.snapshot.orderedBackendTurnIds).toEqual(plain.snapshot.orderedBackendTurnIds);
+    const notices = projection.snapshot.turnsById[turnId!]!.orderedBackendItemIds
+      .map(id => projection.snapshot.itemsById[id]!).filter(item => item.semanticKind === "notice");
+    expect(notices).toEqual([expect.objectContaining({ tone: "warning", text: { text:
+      "Background work started before this fork point was not carried into the fork. Claude was told it did not finish; its results, if any, are in the source thread." } })]);
+    // The fork point stays an exact checkpoint, and nothing reads as running.
+    expect(projection.terminalCheckpointUuidByBackendTurnId).toEqual(plain.terminalCheckpointUuidByBackendTurnId);
+    expect(projection.snapshot.runState).toBe("idle");
+    expect(JSON.stringify(projection.snapshot)).not.toContain("<task-notification>");
+  });
+
   describe("turns Claude starts itself", () => {
     const answer = (id: string, messageId: string, text: string) => ({
       ...assistant(id, [{ type: "text", text }]),

@@ -1,6 +1,7 @@
 import { NO_USAGE_SINK, type UsageSink, type UsageObservation } from "../../src/server/usage/contracts.js";
 import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
 import { claudeSteerOperationsMigration } from "../../src/server/db/migrations/102-claude-steer-operations.js";
+import { claudeForkChildrenMigration } from "../../src/server/db/migrations/117-claude-fork-children.js";
 import { claudeTaskLifecycleMigration } from "../../src/server/db/migrations/100-claude-task-lifecycle.js";
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
@@ -19,6 +20,7 @@ import {
   BackendError,
   type ConversationBinding,
 } from "../../src/server/backends/contracts.js";
+import { projectClaudeHistory } from "../../src/server/backends/claude/claude-history-projector.js";
 import type { BackendCapabilityDocument, BackendConversationEvent } from "../../src/shared/protocol/backend.js";
 import {
   ClaudeConversationHandle,
@@ -168,6 +170,7 @@ function repository(): ClaudeThreadRepository {
   database.exec(claudeTurnFailureDetailsMigration.sql);
   database.exec(claudeTaskLifecycleMigration.sql);
   database.exec(claudeSteerOperationsMigration.sql);
+  database.exec(claudeForkChildrenMigration.sql);
   const result = new ClaudeThreadRepository(database);
   result.initialize(
     { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId },
@@ -3892,6 +3895,29 @@ describe("Claude outstanding background activity and subagent bookends", () => {
     task_type: "local_agent", description: "Sleep 20 seconds test", is_backgrounded: true });
   const inventory = (tasks: unknown[]) => system({ subtype: "background_tasks_changed", tasks });
   const snapshot = async (handle: ClaudeConversationHandle) => (await handle.establishProjection({ signal: new AbortController().signal })).snapshot;
+
+  it("projects a verified fork child's notice and registers its copied turns as inherited usage", async () => {
+    const orphan = { ...native("user", "40000000-0000-4000-8000-000000000009",
+      "<task-notification>\n<task-id>child</task-id>\n<status>failed</status>\n<summary>Background agent didn't finish</summary>\n</task-notification>"),
+      origin: { kind: "task-notification" } } as SessionMessage;
+    const messages = [...initialMessages, finalMessage, orphan] as SessionMessage[];
+    const settings = repository();
+    const childTurns = projectClaudeHistory(messages).usageTurns.map(({ backendTurnId }) => backendTurnId);
+    const inheritedTurns = childTurns.map((backendTurnId, index) => ({ backendTurnId, sourceBackendTurnId: `source-turn-${index}` }));
+    settings.recordForkChild({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId }, {
+      childApplicationThreadId: BINDING.applicationThreadId, childNativeSessionId: SESSION_ID, forkOperationId: "fork-operation",
+      inheritedTurns, omittedTasks: [{ nativeMessageUuid: orphan.uuid, nativeTaskId: "child" }], now: 5 });
+    const registered: unknown[] = [];
+    const usage: UsageSink = { enabled: true, findSubagent: () => null, listSubagentRoots: () => ({ bindings: [], nextCursor: null }),
+      listSubagents: () => [], open: () => ({ registerTurns: (_turns, inherited) => { registered.push(inherited); },
+        capture: () => true, gap: () => {}, reconcile: () => true, seal: () => {} }) };
+    const { handle } = createHandle(fixture(), vi.fn(), { settings, usage, resumeSession: true, initialMessages: messages });
+    const projected = await snapshot(handle);
+    const notices = Object.values(projected.itemsById).filter(item => item.semanticKind === "notice");
+    expect(notices).toEqual([expect.objectContaining({ backendTurnId: childTurns[0], tone: "warning" })]);
+    expect(registered).toContainEqual({ forkOperationId: "fork-operation", turns: inheritedTurns });
+    await handle.close();
+  });
 
   it("withholds forking while Claude reports background work or its own activity, and says why", async () => {
     const provider = fixture();

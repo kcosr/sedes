@@ -701,10 +701,14 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
           input.binding.backendConversationId,
         ),
       );
+      // The newest successfully completed turn, chosen exactly as the actor
+      // chose the application turn it records; it must itself be forkable.
       const backendTurnId =
         input.selection.kind === "selected_completed_turn"
           ? input.selection.backendTurnId
-          : projection.snapshot.orderedBackendTurnIds.at(-1);
+          : projection.usageTurns.findLast(
+              (turn) => turn.status === "completed" && turn.endedBy === "agent_settled",
+            )?.backendTurnId;
       const retainedLeafUuid = backendTurnId
         ? projection.terminalCheckpointUuidByBackendTurnId.get(backendTurnId)
         : undefined;
@@ -882,6 +886,33 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
           ).filter(({ nativeToolUseId }) => retainedProjection.nativeToolUseIds.has(nativeToolUseId)),
           omittedTasks: verification.omittedTasks,
         }),
+      });
+      // The child's copy of the prefix projects to the same turns in the same
+      // order as the source prefix; map them by position.
+      const sourceTurnIds = retainedProjection.usageTurns.map(({ backendTurnId }) => backendTurnId);
+      const childTurnIds = projectClaudeHistory(retained, [], this.#historyAuthentication(
+        input.scope, input.childApplicationThreadId, childSessionId,
+      )).usageTurns.map(({ backendTurnId }) => backendTurnId);
+      const inheritedTurns = childTurnIds.length === sourceTurnIds.length
+        ? childTurnIds.map((backendTurnId, index) => ({ backendTurnId, sourceBackendTurnId: sourceTurnIds[index]! }))
+        : [];
+      const now = Date.parse(this.#now());
+      this.#settings.recordForkChild(input.scope, {
+        childApplicationThreadId: input.childApplicationThreadId,
+        childNativeSessionId: childSessionId,
+        forkOperationId: input.applicationOperationId,
+        inheritedTurns,
+        omittedTasks: verification.omittedTasks.map((task, index) => ({
+          nativeMessageUuid: verification.omittedTaskNotificationUuids[index]!,
+          nativeTaskId: task.taskId,
+        })),
+        now,
+      });
+      this.#settings.copyTerminalReceiptsForFork(input.scope, {
+        sourceApplicationThreadId: input.sourceBinding.applicationThreadId,
+        childApplicationThreadId: input.childApplicationThreadId,
+        turns: inheritedTurns,
+        now,
       });
       return {
         backendConversationId: childSessionId,
@@ -1270,7 +1301,11 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
   ): ClaudeHistoryAuthentication {
     const permittedByOperationId = new Map<string, boolean>();
     const skillByNativeUserUuid = new Map<string, string | null>();
+    const forkChild = this.#settings.findForkChild(scope, applicationThreadId);
     return {
+      ...(forkChild?.nativeSessionId === nativeSessionId
+        ? { forkOmittedTaskNotifications: forkChild.omittedTaskNotificationUuids }
+        : {}),
       steerOperations: this.#settings.listSteerOperations(scope, applicationThreadId),
       taskLifecycleReceipts: this.#settings.listTaskLifecycleReceipts(scope, applicationThreadId, nativeSessionId),
       attachmentProvenanceKey: this.#attachmentProvenanceKey,

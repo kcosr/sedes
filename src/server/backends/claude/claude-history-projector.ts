@@ -160,7 +160,16 @@ export interface ClaudeHistoryAuthentication {
    * Claude does not stream the notification row that starts such a turn.
    */
   readonly providerTurnBoundaries?: ReadonlyMap<string, string>;
+  /**
+   * Rows a fork launch appended to report background tasks from before the
+   * fork point as unfinished. They are transcript-only; the fork-point turn
+   * shows one notice that this work was not carried into the fork.
+   */
+  readonly forkOmittedTaskNotifications?: ReadonlySet<string>;
 }
+
+const FORK_OMITTED_BACKGROUND_NOTICE =
+  "Background work started before this fork point was not carried into the fork. Claude was told it did not finish; its results, if any, are in the source thread.";
 
 /** A turn Claude started is identified by its first response, which both
  * live observation and provider history carry; its trigger row is not live. */
@@ -536,6 +545,7 @@ function buildTimeline(
   const lastResponseGroupByTurn = new Map<string, AssistantResponseGroup>();
   // Notification rows open a provider-started turn at their first response.
   let pendingProviderBoundary: { readonly messageIndex: number } | undefined;
+  let forkNoticeAdded = false;
   const openTurn = (backendTurnId: string, messageIndex: number, taskNotificationBoundary: boolean): MutableTurn => {
     if (seenTurnIds.has(backendTurnId)) {
       throw new ClaudeHistoryProjectionError("claude_history_invalid");
@@ -658,6 +668,17 @@ function buildTimeline(
       continue;
     }
     const taskNotification = isTaskNotification(message, content);
+    if (taskNotification && authentication?.forkOmittedTaskNotifications?.has(message.uuid)) {
+      if (current && !forkNoticeAdded) {
+        forkNoticeAdded = true;
+        addItem(current, itemsById, message, 0, {
+          semanticKind: "notice",
+          tone: "warning",
+          text: boundText(FORK_OMITTED_BACKGROUND_NOTICE),
+        });
+      }
+      continue;
+    }
     if (taskNotification) {
       finishTurn();
       pendingProviderBoundary ??= { messageIndex };

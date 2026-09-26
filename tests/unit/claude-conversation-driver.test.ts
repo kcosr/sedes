@@ -1209,6 +1209,23 @@ describe("ClaudeConversationBackendDriver", () => {
     });
   });
 
+  it("resolves the latest completed boundary past a later interrupted turn, as the actor does", async () => {
+    const sdk = fakeSdk();
+    const answer = assistant("44444444-4444-4444-8444-444444444444", "answer");
+    const messages: SessionMessage[] = [user(operationId, "first"), answer,
+      user("55555555-5555-4555-8555-555555555555", "second"),
+      { ...user("66666666-6666-4666-8666-666666666666", ""), timestamp: "2026-08-08T12:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] } } as SessionMessage];
+    expect(Object.values(projectClaudeHistory(messages).snapshot.turnsById).map(({ status }) => status))
+      .toEqual(["completed", "interrupted"]);
+    sdk.getSessionInfo.mockImplementation(async (id) => ({ sessionId: id, summary: "Session", lastModified: 1, cwd: workspace.canonicalPath }));
+    sdk.getSessionMessages.mockImplementation(async () => messages);
+    const checkpoint = await createDriver(sdk).resolveBranchCheckpoint({ scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: { kind: "latest_completed" } });
+    expect(JSON.parse(Buffer.from(checkpoint.opaqueReference, "base64url").toString())).toMatchObject({
+      retainedLeafUuid: answer.uuid, retainedPrefixCount: 2 });
+  });
+
   it("rejects provider-snapshot checkpoints before reading Claude history", async () => {
     const sdk = fakeSdk();
     const driver = createDriver(sdk);
@@ -1458,13 +1475,14 @@ describe("ClaudeConversationBackendDriver", () => {
       },
     ];
     sdk.getSessionMessages.mockImplementation(async () => toolMessages);
+    const attachmentEnded = projectClaudeHistory(toolMessages).snapshot.orderedBackendTurnIds.at(-1)!;
     await expect(
       driver.resolveBranchCheckpoint({
         scope,
         workspace,
         binding: binding(),
         opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
-        selection: { kind: "latest_completed" },
+        selection: { kind: "selected_completed_turn", backendTurnId: attachmentEnded, boundary: "completed_turn_inclusive" },
       }),
     ).rejects.toMatchObject({
       backendCode: "claude_fork_checkpoint_unavailable",
@@ -1661,9 +1679,13 @@ describe("ClaudeConversationBackendDriver", () => {
       assistant(crypto.randomUUID(), "Audit launched")];
     const receipt = (nativeTaskId: string, nativeToolUseId: string) => ({ nativeTaskId, nativeToolUseId, description: "Audit",
       startedAt: 1, terminalStatus: "completed" as const, terminalAt: 2 });
+    const orphan = orphanNotification("running");
+    const recordForkChild = vi.fn();
+    const copyTerminalReceiptsForFork = vi.fn();
+    let childRows: SessionMessage[] = [];
     const created = await forkAttempt({ sdk, source,
-      child: (prefix) => [...renumbered(prefix), orphanNotification("running"), noResponseRequested()],
-      driver: { copyTaskLifecycleReceiptsForFork,
+      child: (prefix) => (childRows = childRows.length ? childRows : [...renumbered(prefix), orphan, noResponseRequested()]),
+      driver: { copyTaskLifecycleReceiptsForFork, recordForkChild, copyTerminalReceiptsForFork,
         // Bypass is admitted for threads, but never for the fork launch.
         permissionPolicy: { allowedModes: ["default", "bypassPermissions"], defaultMode: "default" } as never,
         listTaskLifecycleReceipts: () => [receipt("running", "background-call"), receipt("finished", "finished-background-call"),
@@ -1673,6 +1695,19 @@ describe("ClaudeConversationBackendDriver", () => {
     expect(copyTaskLifecycleReceiptsForFork).toHaveBeenCalledExactlyOnceWith(scope, expect.objectContaining({
       receipts: [receipt("finished", "finished-background-call"), receipt("foreground", "foreground-call")],
     }));
+    // Copied turns map to their source turns by position.
+    const sourceTurns = projectClaudeHistory(source).usageTurns.map(({ backendTurnId }) => backendTurnId);
+    const childTurns = projectClaudeHistory(childRows.slice(0, source.length).map(message => ({ ...message, session_id: forkChildSessionId })))
+      .usageTurns.map(({ backendTurnId }) => backendTurnId);
+    expect(sourceTurns.length).toBeGreaterThan(1);
+    const inheritedTurns = childTurns.map((backendTurnId, index) => ({ backendTurnId, sourceBackendTurnId: sourceTurns[index] }));
+    expect(recordForkChild).toHaveBeenCalledExactlyOnceWith(scope, {
+      childApplicationThreadId: "child-thread", childNativeSessionId: forkChildSessionId, forkOperationId: operationId,
+      inheritedTurns, omittedTasks: [{ nativeMessageUuid: orphan.uuid, nativeTaskId: "running" }], now: expect.any(Number),
+    });
+    expect(copyTerminalReceiptsForFork).toHaveBeenCalledExactlyOnceWith(scope, {
+      sourceApplicationThreadId: "thread-1", childApplicationThreadId: "child-thread", turns: inheritedTurns, now: expect.any(Number),
+    });
   });
 
   it("rejects any other row after the retained prefix as a futile history mismatch", async () => {
@@ -1864,6 +1899,8 @@ function createDriver(
     readonly copySkillInvocationsForFork?: ClaudeThreadRepository["copySkillInvocationsForFork"];
     readonly copyTaskLifecycleReceiptsForFork?: ClaudeThreadRepository["copyTaskLifecycleReceiptsForFork"];
     readonly listTaskLifecycleReceipts?: () => ReturnType<ClaudeThreadRepository["listTaskLifecycleReceipts"]>;
+    readonly recordForkChild?: ClaudeThreadRepository["recordForkChild"];
+    readonly copyTerminalReceiptsForFork?: ClaudeThreadRepository["copyTerminalReceiptsForFork"];
     readonly permissionPolicy?: ConstructorParameters<typeof ClaudeConversationBackendDriver>[0]["permissionPolicy"];
     readonly submissionDisposition?: ClaudeRuntimeClient["submissionDisposition"];
     readonly steerOperations?: ReadonlyMap<string, string | null>;
@@ -1964,6 +2001,9 @@ function createDriver(
       copySkillInvocationsForFork:
         options.copySkillInvocationsForFork ?? vi.fn(() => undefined),
       copyTaskLifecycleReceiptsForFork: options.copyTaskLifecycleReceiptsForFork ?? vi.fn(() => undefined),
+      findForkChild: vi.fn(() => undefined),
+      recordForkChild: options.recordForkChild ?? vi.fn(),
+      copyTerminalReceiptsForFork: options.copyTerminalReceiptsForFork ?? vi.fn(),
       listTaskLifecycleReceipts: vi.fn(options.listTaskLifecycleReceipts ?? (() => [])),
       listSteerOperations: vi.fn(() => new Map(options.steerOperations ?? [])),
       recordSteerOperation: vi.fn(),

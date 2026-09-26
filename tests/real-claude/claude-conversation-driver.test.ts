@@ -2,6 +2,7 @@ import { type UsageObservation } from "../../src/server/usage/contracts.js";
 import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
 import { claudeResultUserMessageIds } from "../../src/server/backends/claude/claude-result-lifecycle.js";
 import { claudeSteerOperationsMigration } from "../../src/server/db/migrations/102-claude-steer-operations.js";
+import { claudeForkChildrenMigration } from "../../src/server/db/migrations/117-claude-fork-children.js";
 import { claudeTaskLifecycleMigration } from "../../src/server/db/migrations/100-claude-task-lifecycle.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
@@ -289,6 +290,7 @@ describe.sequential("real Claude subscription driver", () => {
     database.exec(claudeTurnFailureDetailsMigration.sql);
     database.exec(claudeTaskLifecycleMigration.sql);
   database.exec(claudeSteerOperationsMigration.sql);
+  database.exec(claudeForkChildrenMigration.sql);
     const settings = new ClaudeThreadRepository(database);
     const usageObservations: UsageObservation[] = [];
     const driver = new ClaudeConversationBackendDriver({

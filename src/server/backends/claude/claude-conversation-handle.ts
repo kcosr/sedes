@@ -209,6 +209,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   readonly #usageTurnByMessageUuid = new Map<string, string>();
   readonly #usageTurnByInputUuid = new Map<string, string>();
   #inheritedUsage: ClaudeHistoryProjection["inheritedUsage"];
+  readonly #forkOmittedTaskNotifications: ReadonlySet<string>;
   readonly binding: ConversationBinding;
   readonly #canonicalWorkspacePath: string;
   readonly #workspaceId: string;
@@ -321,6 +322,15 @@ export class ClaudeConversationHandle implements ConversationHandle {
       tenantId: input.binding.tenantId,
       principalId: input.binding.ownerPrincipalId,
     };
+    // A verified fork child's copied turns are inherited, not its own work.
+    const forkChild = this.#settings.findForkChild(this.#scope, input.binding.applicationThreadId);
+    if (forkChild && forkChild.nativeSessionId !== input.binding.backendConversationId) {
+      throw new Error("claude_fork_child_session_mismatch");
+    }
+    this.#inheritedUsage = forkChild?.inheritedTurns.length
+      ? { forkOperationId: forkChild.forkOperationId, turns: forkChild.inheritedTurns }
+      : undefined;
+    this.#forkOmittedTaskNotifications = forkChild?.omittedTaskNotificationUuids ?? new Set();
     this.#releaseSession = input.releaseSession;
     this.#releaseAgentToolCli = input.releaseAgentToolCli ?? (() => undefined);
     this.#now = input.now ?? Date.now;
@@ -657,6 +667,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const skillByNativeUserUuid = new Map<string, string | null>();
     return {
       providerTurnBoundaries: this.#providerTurnBoundaries,
+      forkOmittedTaskNotifications: this.#forkOmittedTaskNotifications,
       steerOperations: this.#settings.listSteerOperations(this.#scope, this.binding.applicationThreadId),
       taskLifecycleReceipts: this.#settings.listTaskLifecycleReceipts(this.#scope, this.binding.applicationThreadId, this.binding.backendConversationId),
       attachmentProvenanceKey: this.#attachmentProvenanceKey,
