@@ -1117,7 +1117,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(f.hosts.get(runtimeId).snapshot().blockers).toEqual([]);
   });
 
-  it("keeps submission disposition unknown after its admission journal retires and the native session resumes", async () => {
+  it("resolves a healthy retired query's inputs from its journal, and lets a resumed query answer first without ever proving not sent", async () => {
     const f = await fixture();
     const attached = await f.attach();
     const runtimeId = await attached.connection.ensure(configuration);
@@ -1135,17 +1135,25 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     for (const event of seen) await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, () => {});
     await attached.connection.execute({ ...authority, action: "evict", request: { sessionId } });
     expect(f.sessions[0]!.closed).toBe(true);
+    const disposition = (operationId: string) => attached.connection.execute({ ...authority, action: "submission_disposition",
+      request: { sessionId, operationId, cwd: "/workspace" } });
+    // The healthy query's complete journal outlives it.
+    await expect(disposition(operation.operationId)).resolves.toEqual({ disposition: "session_ended" });
+    const absent = randomUUID();
+    await expect(disposition(absent)).resolves.toEqual({ disposition: "not_sent" });
     await attached.connection.execute({ ...authority, action: "open", replay: "full", request: { ...request, launch: "resume" } });
     expect(f.runtime.createSession).toHaveBeenCalledTimes(2);
-    await expect(attached.connection.execute({ ...authority, action: "submission_disposition", request: {
-      sessionId, operationId: operation.operationId, cwd: "/workspace",
-    } })).resolves.toEqual({ disposition: "unknown" });
-    // Even after this replacement fails, its empty admission journal cannot
-    // prove that an earlier incarnation never submitted the same operation.
+    // The resumed query could still admit an absent input.
+    await expect(disposition(absent)).resolves.toEqual({ disposition: "unknown" });
+    await expect(disposition(operation.operationId)).resolves.toEqual({ disposition: "session_ended" });
+    // The newest incarnation answers first for an identity it admitted.
+    await attached.connection.execute({ ...authority, action: "send", request: { ...operation, priority: "next" } });
+    await expect(disposition(operation.operationId)).resolves.toEqual({ disposition: "submitted" });
+    // Even after this replacement fails, its resumed admission journal cannot
+    // prove that an earlier incarnation never submitted an input.
     f.sessions[1]!.closed = true;
-    await expect(attached.connection.execute({ ...authority, action: "submission_disposition", request: {
-      sessionId, operationId: operation.operationId, cwd: "/workspace",
-    } })).resolves.toEqual({ disposition: "session_ended" });
+    await expect(disposition(absent)).resolves.toEqual({ disposition: "session_ended" });
+    await expect(disposition(operation.operationId)).resolves.toEqual({ disposition: "session_ended" });
   });
 
   it("retains provider-initiated permission cancellation outside an intentional shutdown", async () => {
@@ -1317,6 +1325,60 @@ describe("remote query residency", () => {
     await expect(other.retireSession({ sessionId: busyId, cwd: "/workspace" })).resolves.toBe("busy");
     expect(f.sessions[1]!.closed).toBe(false);
     await expect(other.retireSession({ sessionId: randomUUID(), cwd: "/workspace" })).resolves.toBe("absent");
+  });
+
+  it.each(["the residency limit", "eviction", "retire"] as const)("keeps a withdrawal main acknowledged but never reconciled after %s retires its settled query", async path => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      const f = await fixture({ detachedSessionTtlMs: 1_000 });
+      const carrier = await f.attach();
+      const client = f.client();
+      const sessionId = randomUUID();
+      const remote = client.createSession(sessionOptions(sessionId));
+      await remote.start();
+      const native = f.sessions[0]!;
+      const turn = { operationId: randomUUID(), content: "Run the long task." };
+      const steer = { operationId: randomUUID(), content: "Also check the lexer.", priority: "next" as const };
+      await remote.send(turn);
+      await native.emit(lifecycle(sessionId, turn.operationId, "started"));
+      await remote.send(steer);
+      await native.emit(lifecycle(sessionId, steer.operationId, "queued"));
+      native.cancelQueuedInput.mockImplementation(async operationId => {
+        await native.emit(lifecycle(sessionId, operationId, "cancelled"));
+        return true;
+      });
+      await remote.interrupt();
+      await native.emit({ type: "result", session_id: sessionId, uuid: randomUUID(), user_message_uuid: turn.operationId } as SDKMessage);
+      // Main applied and acknowledged the cancellation, then detached before
+      // its queue reconciliation committed.
+      await remote.flushMessages!();
+      const host = f.hosts.get(f.services.status().resources[0]!.resourceId);
+      await vi.waitFor(() => expect(host.snapshot().blockers).toEqual([]));
+      if (path === "eviction") await remote.close({ reason: "evicted" });
+      await client.close();
+      await carrier.close();
+      const replacement = f.client();
+      await f.attach();
+      if (path === "the residency limit") await vi.advanceTimersByTimeAsync(2_000);
+      if (path === "retire") await expect(replacement.retireSession({ sessionId, cwd: "/workspace" })).resolves.toBe("retired");
+      await vi.waitFor(() => expect(host.abandonmentEvidence().sessionCount).toBe(0));
+      expect(native.closed).toBe(true);
+      const query = { sessionId, cwd: "/workspace" };
+      await expect(replacement.submissionDisposition({ ...query, operationId: steer.operationId })).resolves.toBe("cancelled");
+      await expect(replacement.submissionDisposition({ ...query, operationId: turn.operationId })).resolves.toBe("session_ended");
+      await expect(replacement.submissionDisposition({ ...query, operationId: randomUUID() })).resolves.toBe("not_sent");
+      await expect(replacement.submissionDisposition({ ...query, cwd: "/other", operationId: steer.operationId })).resolves.toBe("unknown");
+      // A later incarnation that also retires keeps the earlier evidence.
+      const resumed = replacement.createSession(sessionOptions(sessionId, { launch: "resume" }));
+      await resumed.start();
+      await expect(replacement.submissionDisposition({ ...query, operationId: steer.operationId })).resolves.toBe("cancelled");
+      await resumed.close({ reason: "evicted" });
+      await vi.waitFor(() => expect(host.abandonmentEvidence().sessionCount).toBe(0));
+      await expect(replacement.submissionDisposition({ ...query, operationId: steer.operationId })).resolves.toBe("cancelled");
+      await expect(replacement.submissionDisposition({ ...query, operationId: turn.operationId })).resolves.toBe("session_ended");
+      // The resumed incarnation's journal is incomplete, so absence proves nothing.
+      await expect(replacement.submissionDisposition({ ...query, operationId: randomUUID() })).resolves.toBe("session_ended");
+    } finally { vi.useRealTimers(); }
   });
 
   it("retires a detached query after the residency limit only once nothing is outstanding", async () => {

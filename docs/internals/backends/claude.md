@@ -58,8 +58,14 @@ A remote query stays resident only while it can be useful. Main evicts a
 handle that fails or whose projection is invalidated, and the host retires that
 query once its events are acknowledged and nothing is outstanding, so reopening
 the thread starts a fresh query instead of requiring a backend restart. The host
-keeps the admission journal of up to 256 queries it retired after a failure, so
-submission reconciliation still resolves their inputs. A query detached for 30
+keeps the admission journal of up to 256 queries it retired, whether after a
+failure or once settled, so submission reconciliation still resolves their
+inputs. That includes a steer Claude withdrew on Stop whose cancellation main
+acknowledged but had not yet reconciled. A later retirement of the same
+session merges into its earlier journal. A resident query answers first for
+the inputs it admitted, and an input absent from every journal reads as not
+sent only when no resident query could still admit it and the journal covers
+the whole session, which a resumed query's never does. A query detached for 30
 minutes with nothing outstanding (no admitted or running input, no Claude
 activity or background work, no unacknowledged event, and no unanswered
 permission) is retired and resumes on demand. A query that still holds such
@@ -1069,7 +1075,7 @@ Stop also withdraws every input Sedes sent that Claude has not started:
   ordinary send as `claude_submission_withdrawn`, and refuses a replay of that
   identity, which Claude would skip as a duplicate. The persistent owner stops
   holding it as pending or active work and reports submission disposition
-  `cancelled`, also after the query ends.
+  `cancelled`, also after the query ends or retires.
 - Reconciliation reports it `not_accepted` without retry permission and with a
   not-sent diagnostic, unless tip-correct history holds a row with its
   identity or a consumption stamp names it. Only then is its durable steer

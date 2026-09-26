@@ -44,6 +44,8 @@ type Session = {
 export const DETACHED_SESSION_TTL_MS = 30 * 60_000;
 const RESIDENCY_SWEEP_INTERVAL_MS = 60_000;
 const MAXIMUM_ENDED_JOURNALS = 256;
+/** Operations one query admits; a retired session's journal keeps at most as many. */
+const MAXIMUM_JOURNALED_OPERATIONS = 16384;
 
 /** Shutdown baseline budget across every resident session's captured history. */
 const STOPPED_HISTORY_BYTES = 64 * 1024 * 1024;
@@ -54,7 +56,7 @@ export class ClaudePersistentRuntimeHost {
   readonly #sessions = new Map<string, Session>();
   /** Running one-shot fork launches by child session; they share the session cap. */
   readonly #forkLaunches = new Map<string, Promise<ClaudeRuntimeForkResult>>();
-  /** Admission journals of failed queries retired by eviction, most recent last. */
+  /** Admission journals of retired queries, by session, most recent last. */
   readonly #endedJournals = new Map<string, { readonly cwd: string; readonly sends: ReadonlySet<string>; readonly withdrawn: ReadonlySet<string>; readonly admissionJournalComplete: boolean }>();
   #residencyTimer: ReturnType<typeof setInterval> | undefined;
   readonly #stoppedHistoryPager = new ClaudeHistoryPager();
@@ -306,26 +308,30 @@ export class ClaudePersistentRuntimeHost {
     }
     switch (command.action) {
       case "submission_disposition": {
-        const session = this.#sessions.get(command.request.sessionId);
-        const retired = this.#endedJournals.get(command.request.sessionId);
-        // A failed query retired by eviction keeps its admission journal, so
-        // its inputs still resolve instead of becoming permanently unknown.
-        if (retired && retired.cwd === command.request.cwd) {
-          if (retired.withdrawn.has(command.request.operationId)) return { disposition: "cancelled" };
-          if (retired.sends.has(command.request.operationId)) return { disposition: "session_ended" };
-          if (!session) return { disposition: retired.admissionJournalComplete ? "not_sent" : "session_ended" };
-        }
-        if (!session || session.cwd !== command.request.cwd) return { disposition: "unknown" };
-        const ended = Boolean(session.failureCode || session.runtime.closed);
-        // Claude's exact withdrawal before start survives the session's end.
-        if (session.withdrawnInputs.has(command.request.operationId)) return { disposition: "cancelled" };
-        if (session.sends.has(command.request.operationId)) {
-          return { disposition: ended ? "session_ended" : "submitted" };
-        }
-        // Failed/closed sessions reject even delayed sends. An absent ID then
-        // proves non-admission only if this owner has the whole session journal;
-        // a resumed query may have lost an earlier incarnation's entries.
-        return { disposition: ended ? session.admissionJournalComplete ? "not_sent" : "session_ended" : "unknown" };
+        const { sessionId, operationId, cwd } = command.request;
+        const resident = this.#sessions.get(sessionId);
+        const session = resident?.cwd === cwd ? resident : undefined;
+        const ended = session && Boolean(session.failureCode || session.runtime.closed);
+        // The resident query is this session's newest incarnation, and an
+        // input it admitted can still run. Claude's exact withdrawal before
+        // start survives the query's end.
+        if (session?.withdrawnInputs.has(operationId)) return { disposition: "cancelled" };
+        if (session?.sends.has(operationId)) return { disposition: ended ? "session_ended" : "submitted" };
+        // Every retired query keeps its admission journal, so its inputs,
+        // including a withdrawal main has not reconciled yet, still resolve
+        // instead of becoming permanently unknown.
+        const journal = this.#endedJournals.get(sessionId);
+        const retired = journal?.cwd === cwd ? journal : undefined;
+        if (retired?.withdrawn.has(operationId)) return { disposition: "cancelled" };
+        if (retired?.sends.has(operationId)) return { disposition: "session_ended" };
+        // An absent ID proves non-admission only once no query can still
+        // admit it (the session ended or retired) and only if this owner has
+        // the whole session journal; a resumed query may have lost an earlier
+        // incarnation's entries. Failed or closed sessions reject even delayed
+        // sends.
+        if (resident) return { disposition: session && ended ? session.admissionJournalComplete ? "not_sent" : "session_ended" : "unknown" };
+        if (retired) return { disposition: retired.admissionJournalComplete ? "not_sent" : "session_ended" };
+        return { disposition: "unknown" };
       }
       case "probe": return await this.input.client.probe({ executablePath: config.executablePath, timeoutMs: config.initializationTimeoutMs, environment: {}, cwd: command.request.cwd });
       case "list": return { sessions: await this.input.client.listSessions(command.request, {}) };
@@ -447,7 +453,7 @@ export class ClaudePersistentRuntimeHost {
           if (session.active.size && command.request.priority !== "next") return { accepted: false, code: "claude_persistent_query_busy" };
           const inputBytes = Buffer.byteLength(JSON.stringify(command.request.content), "utf8");
           if (retainedBytes(session) + session.pendingInputBytes + inputBytes > (this.input.maximumEventBytes ?? 64 * 1024 * 1024)) return { accepted: false, code: "claude_persistent_input_capacity_exceeded" };
-          if (session.sends.size >= 16384) return { accepted: false, code: "claude_persistent_operation_capacity_exceeded" };
+          if (session.sends.size >= MAXIMUM_JOURNALED_OPERATIONS) return { accepted: false, code: "claude_persistent_operation_capacity_exceeded" };
           session.sends.set(operationId, fingerprint); session.active.add(operationId); session.pendingInputs.set(operationId, command.request as Parameters<ClaudeRuntimeSession["send"]>[0]); session.pendingInputBytes += inputBytes; this.#revision++;
           try { await session.runtime.send(command.request as Parameters<ClaudeRuntimeSession["send"]>[0]); }
           catch (error) { session.active.delete(operationId); this.#fail(session, "claude_persistent_send_failed"); throw error; }
@@ -625,10 +631,24 @@ export class ClaudePersistentRuntimeHost {
     this.#residencyTimer = undefined;
   }
 
+  /**
+   * Keeps a retired query's admission journal, whether it failed or retired
+   * healthy, so submission reconciliation still resolves its inputs. An
+   * earlier incarnation's journal for the same session merges in, so a
+   * withdrawal main has not reconciled yet survives a later retirement.
+   */
   #rememberEndedJournal(session: Session): void {
+    const journal = this.#endedJournals.get(session.id);
+    const earlier = journal?.cwd === session.cwd ? journal : undefined;
     this.#endedJournals.delete(session.id);
-    this.#endedJournals.set(session.id, { cwd: session.cwd, sends: new Set(session.sends.keys()),
-      withdrawn: new Set(session.withdrawnInputs), admissionJournalComplete: session.admissionJournalComplete });
+    const sends = [...new Set([...earlier?.sends ?? [], ...session.sends.keys()])];
+    const withdrawn = [...new Set([...earlier?.withdrawn ?? [], ...session.withdrawnInputs])];
+    this.#endedJournals.set(session.id, { cwd: session.cwd,
+      sends: new Set(sends.slice(-MAXIMUM_JOURNALED_OPERATIONS)),
+      withdrawn: new Set(withdrawn.slice(-MAXIMUM_JOURNALED_OPERATIONS)),
+      // A dropped send would make its absence read as never sent.
+      admissionJournalComplete: session.admissionJournalComplete && (earlier?.admissionJournalComplete ?? true) &&
+        sends.length <= MAXIMUM_JOURNALED_OPERATIONS });
     while (this.#endedJournals.size > MAXIMUM_ENDED_JOURNALS) this.#endedJournals.delete(this.#endedJournals.keys().next().value!);
   }
 
@@ -656,7 +676,9 @@ export class ClaudePersistentRuntimeHost {
     session.retiring = session.runtime.close().then(() => {
       if (session.events.size || session.replay.size || session.permissions.size) this.#fail(session, "claude_persistent_query_retired");
       else if (this.#sessions.get(session.id) === session) {
-        if (session.failureCode) this.#rememberEndedJournal(session);
+        // Idle retirement, the residency limit, `retire` and eviction all
+        // keep the journal, healthy or failed.
+        this.#rememberEndedJournal(session);
         this.#sessions.delete(session.id);
       }
       session.retiring = undefined;
