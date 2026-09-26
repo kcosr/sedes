@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { CanUseTool, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeRuntimeSessionOptions } from "../../src/server/backends/claude/claude-runtime-client.js";
-import { ClaudePersistentRuntimeClient } from "../../src/server/backends/claude/runtime/claude-remote-runtime-client.js";
+import { CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS, ClaudePersistentRuntimeClient } from "../../src/server/backends/claude/runtime/claude-remote-runtime-client.js";
 import { ClaudePersistentRuntimeRegistry } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-registry.js";
 import { claudePersistentAttachmentSchema, type ClaudePersistentEvent } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, registerClaudePersistentRuntimeHost } from "../../src/server/backends/claude/runtime/claude-sidecar-runtime.js";
@@ -101,6 +101,13 @@ function sessionOptions(sessionId: string, overrides: Partial<ClaudeRuntimeSessi
 function delta(sessionId: string, text: string): SDKMessage {
   return { type: "stream_event", uuid: randomUUID(), session_id: sessionId, parent_tool_use_id: null,
     event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } } };
+}
+/** Claude stamps the first stream event of the turn that consumed an input. */
+function firstDelta(sessionId: string, text: string, operationId: string): SDKMessage {
+  return { ...delta(sessionId, text), user_message_uuid: operationId, user_message_uuids: [operationId] } as SDKMessage;
+}
+function lifecycle(sessionId: string, operationId: string, state: "queued" | "started" | "completed"): SDKMessage {
+  return { type: "command_lifecycle", command_uuid: operationId, state, uuid: randomUUID(), session_id: sessionId } as unknown as SDKMessage;
 }
 function acceptedInput(sessionId: string, operation: { operationId: string; content: string }) {
   return { type: "user", uuid: operation.operationId, session_id: sessionId,
@@ -255,7 +262,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const operation = { operationId: randomUUID(), content: "Keep working remotely." };
     original.send(operation);
     await vi.waitFor(() => expect(native.send).toHaveBeenCalledTimes(1));
-    const beforeDisconnect = delta(sessionId, "Started before the connection was lost.");
+    const beforeDisconnect = firstDelta(sessionId, "Started before the connection was lost.", operation.operationId);
     await native.emit(beforeDisconnect);
     await vi.waitFor(() => expect(originalMessages.mock.calls.map(([message]) => message)).toEqual([acceptedInput(sessionId, operation), beforeDisconnect]));
     await vi.waitFor(() => expect(f.services.status().resources[0]!.blockers).toEqual(["active_work"]));
@@ -313,7 +320,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     session.send(operation);
     const native = f.sessions[0]!;
     await vi.waitFor(() => expect(native.send).toHaveBeenCalledTimes(1));
-    const beforeDisconnect = delta(sessionId, "Already delivered.");
+    const beforeDisconnect = firstDelta(sessionId, "Already delivered.", operation.operationId);
     await native.emit(beforeDisconnect);
     await vi.waitFor(() => expect(received.mock.calls.map(([message]) => message)).toEqual([acceptedInput(sessionId, operation), beforeDisconnect]));
     await vi.waitFor(() => expect(f.services.status().resources[0]!.blockers).toEqual(["active_work"]));
@@ -490,7 +497,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     await vi.waitFor(() => expect(native.send).toHaveBeenCalledTimes(1));
     await originalClient.close();
     await first.close();
-    const buffered = delta(sessionId, "This output must survive until main adopts it.");
+    const buffered = firstDelta(sessionId, "This output must survive until main adopts it.", operation.operationId);
     await native.emit(buffered);
 
     const host = f.hosts.get(f.services.status().resources[0]!.resourceId);
@@ -593,7 +600,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
         },
         listener,
       );
-      await native.emit(delta(sessionId, "Working"));
+      await native.emit(firstDelta(sessionId, "Working", operation.operationId));
       const accepted = delivered.find(
         (event) =>
           event.payload.kind === "message" &&
@@ -794,7 +801,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     // Direct host acknowledgments keep the bound test deterministic and fast;
     // the final response still traverses the production framed wire and codec.
     for (let index = 0; index < 8_200; index++) {
-      await native.emit(delta(sessionId, "x"));
+      await native.emit(index === 0 ? firstDelta(sessionId, "x", operation.operationId) : delta(sessionId, "x"));
       for (const event of delivered.splice(0)) {
         await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, listener);
       }
@@ -935,7 +942,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const host = f.hosts.get(runtimeId);
     const seen: ClaudePersistentEvent[] = [];
     await host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, event => seen.push(event));
-    await f.sessions[0]!.emit({ type: "result", session_id: sessionId, uuid: randomUUID() } as SDKMessage);
+    await f.sessions[0]!.emit({ type: "result", session_id: sessionId, uuid: randomUUID(), user_message_uuid: operation.operationId } as SDKMessage);
     for (const event of seen) await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, () => {});
     await attached.connection.execute({ ...authority, action: "evict", request: { sessionId } });
     expect(f.sessions[0]!.closed).toBe(true);
@@ -1142,7 +1149,7 @@ describe("native next over persistent replacement carriers", () => {
     await session.start();
     await session.send({ operationId: firstId, content: "First" });
     const native = f.sessions[0]!;
-    await native.options.onMessage(delta(sessionId, "First output"));
+    await native.options.onMessage(firstDelta(sessionId, "First output", firstId));
     await vi.waitFor(() => expect(seen.some(message => message.type === "user" && message.uuid === firstId)).toBe(true));
     await session.send({ operationId: steerId, content: "Correction", priority: "next" });
     await native.options.onMessage(acceptedInput(sessionId, { operationId: steerId, content: "Correction" }) as SDKMessage);
@@ -1172,5 +1179,95 @@ describe("native next over persistent replacement carriers", () => {
     await vi.waitFor(() => expect(consumedRoots).toEqual([steerId]));
     await restored.flushMessages?.();
     expect(restoredSeen.filter(message => message.type === "result" && message.user_message_uuid === steerId)).toHaveLength(1);
+  });
+});
+
+describe("persistent owner run-state evidence", () => {
+  it("materializes an ordinary input only at Claude's exact dequeue, never from unstamped output", async () => {
+    const f = await fixture(); await f.attach();
+    const sessionId = randomUUID(); const operationId = randomUUID();
+    const seen: SDKMessage[] = [];
+    const session = f.client().createSession(sessionOptions(sessionId, { onMessage: message => { seen.push(message); } }));
+    await session.start();
+    await session.send({ operationId, content: "Queued behind Claude's own turn" });
+    const native = f.sessions[0]!;
+    const host = f.hosts.get(f.services.status().resources[0]!.resourceId);
+    // Claude finishes a turn it started itself before dequeuing the input.
+    const providerOutput = delta(sessionId, "Notification turn output");
+    await native.emit(lifecycle(sessionId, operationId, "queued"));
+    await native.emit(providerOutput);
+    await native.emit({ type: "result", subtype: "success", uuid: randomUUID(), session_id: sessionId,
+      origin: { kind: "task-notification" }, num_turns: 1, result: "Notified", is_error: false } as unknown as SDKMessage);
+    await session.flushMessages?.();
+    expect(seen.some(message => message.type === "user")).toBe(false);
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ pendingInputIds: [operationId], activeOperationIds: [operationId] });
+    const started = lifecycle(sessionId, operationId, "started");
+    await native.emit(started);
+    await session.flushMessages?.();
+    await vi.waitFor(() => expect(seen.map(message => message.type)).toEqual([
+      "command_lifecycle", "stream_event", "result", "user", "command_lifecycle",
+    ]));
+    expect(seen[3]).toEqual(acceptedInput(sessionId, { operationId, content: "Queued behind Claude's own turn" }));
+    expect(host.abandonmentEvidence().sessions[0]?.pendingInputIds).toEqual([]);
+  });
+
+  it("counts Claude's own running state as active work for upgrade and idle retirement", async () => {
+    const f = await fixture(); const carrier = await f.attach();
+    const sessionId = randomUUID();
+    const session = f.client().createSession(sessionOptions(sessionId));
+    await session.start();
+    const native = f.sessions[0]!;
+    const state = (value: "idle" | "running") => ({ type: "system", subtype: "session_state_changed", state: value,
+      uuid: randomUUID(), session_id: sessionId }) as SDKMessage;
+    await native.emit(state("running"));
+    await session.flushMessages?.();
+    await vi.waitFor(() => expect(f.services.status().resources[0]!.blockers).toEqual(["active_work"]));
+    const runtimeId = f.services.status().resources[0]!.resourceId;
+    await carrier.connection.execute({ runtimeId, controllerEpoch: carrier.lease.controllerEpoch,
+      action: "evict", request: { sessionId } });
+    // A turn Claude started itself must not be killed by idle retirement.
+    expect(native.closed).toBe(false);
+    await session.close();
+    const restored = f.client().createSession(sessionOptions(sessionId, { launch: "resume" }));
+    await restored.start();
+    await native.emit(state("idle"));
+    await restored.flushMessages?.();
+    await vi.waitFor(() => expect(f.services.status().resources[0]!.blockers).toEqual([]));
+    await restored.close({ reason: "evicted" });
+    await vi.waitFor(() => expect(native.closed).toBe(true));
+  });
+});
+
+describe("persistent event acknowledgement pipelining", () => {
+  it("applies events in order without waiting one acknowledgement round trip each, within a bounded window", async () => {
+    const f = await fixture(); await f.attach();
+    const sessionId = randomUUID();
+    const seen: string[] = [];
+    const session = f.client().createSession(sessionOptions(sessionId, { onMessage: message => {
+      if (message.type === "stream_event" && message.event.type === "content_block_delta" && message.event.delta.type === "text_delta") {
+        seen.push(message.event.delta.text);
+      }
+    } }));
+    await session.start();
+    const host = f.hosts.get(f.services.status().resources[0]!.resourceId);
+    let releaseAcknowledgements!: () => void;
+    const acknowledgementsHeld = new Promise<void>(resolve => { releaseAcknowledgements = resolve; });
+    const execute = host.execute.bind(host);
+    vi.spyOn(host, "execute").mockImplementation(async (command, listener) => {
+      if (command.action === "acknowledge") await acknowledgementsHeld;
+      return await execute(command, listener);
+    });
+    const texts = Array.from({ length: CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS + 4 }, (_, index) => `chunk-${index}`);
+    for (const text of texts) await f.sessions[0]!.emit(delta(sessionId, text));
+    // Every in-window event is applied while all acknowledgements are held;
+    // the next event is applied and then waits for an acknowledgement slot.
+    await vi.waitFor(() => expect(seen).toEqual(texts.slice(0, CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS + 1)));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(seen).toHaveLength(CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS + 1);
+    expect(host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(texts.length);
+    releaseAcknowledgements();
+    await session.flushMessages?.();
+    expect(seen).toEqual(texts);
+    expect(host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(0);
   });
 });
