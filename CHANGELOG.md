@@ -4,8 +4,9 @@
 
 ### Breaking Changes
 
-- Codex viewed images use a new `viewed_image` transcript item. Requires
-  matching browser and packaged clients using protocol 123. (#11)
+- Codex viewed images use a new `viewed_image` transcript item, introduced
+  in client protocol 123. This build requires client protocol 124; see the
+  client protocol entry below. (#11)
 
 - Claude backends require Claude Code 2.1.281 or newer and are tested through
   2.1.283. Earlier releases added a hidden "Continue" prompt when resuming
