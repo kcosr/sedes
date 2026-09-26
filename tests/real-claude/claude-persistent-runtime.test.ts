@@ -18,6 +18,8 @@ import { LocalEnvironmentChannelProvider } from "../../src/server/execution/loca
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import type { SidecarRuntimeLease, SidecarRuntimeProvider } from "../../src/server/sidecar/runtime-channel.js";
 import { createClaudeFramedCarrier } from "../helpers/persistent-claude-fixture.js";
+import { claudeTranscriptContentFingerprint, verifyClaudeForkChild } from "../../src/server/backends/claude/claude-fork-lineage.js";
+import { claudeResumableHistoryStart } from "../../src/server/backends/claude/claude-history-projector.js";
 
 const MODEL = "claude-sonnet-5";
 const TIMEOUT = 240_000;
@@ -233,7 +235,57 @@ describe.sequential("real Claude persistent runtime with local SSH carrier stand
       expect(queries).toHaveLength(2);
       expect(queries[1]!.pid).not.toBe(originalPid);
       expect(reopened.reattached).toBe(false);
+
+      // A fork is one locked-down launch inside the host: it copies the
+      // source prefix into the reserved child without a model turn and leaves
+      // no session behind. The child then attaches and answers on its own.
+      const sourceHistory = await secondClient.getSessionMessages(sessionId, { dir: workspace }, {});
+      const leafIndex = sourceHistory.findLastIndex(message => message.type === "assistant");
+      const sourcePrefix = sourceHistory.slice(claudeResumableHistoryStart(sourceHistory), leafIndex + 1);
+      const childSessionId = randomUUID();
+      await expect(secondClient.forkSession({
+        executablePath: configuration.executablePath, initializationTimeoutMs: configuration.initializationTimeoutMs,
+        sessionId: childSessionId, sourceSessionId: sessionId, resumeSessionAt: sourceHistory[leafIndex]!.uuid,
+        cwd: workspace, model: MODEL, effort: "low", environment: {},
+      })).resolves.toEqual({ cliRelease: probe.cliRelease });
+      const forkQueries = (await readAudit(auditPath)).filter(entry => entry.fork);
+      expect(forkQueries).toEqual([expect.objectContaining({ persistent: true, permissionMode: "default", lockedDown: true })]);
+      const forkHost = hosts.get(services.status().resources[0]!.resourceId);
+      expect(forkHost.abandonmentEvidence().sessions.map(session => session.sessionId)).toEqual([sessionId]);
+      expect(forkHost.snapshot().blockers).not.toContain("active_work");
+      const childHistory = await secondClient.getSessionMessages(childSessionId, { dir: workspace }, {});
+      expect(verifyClaudeForkChild({ childMessages: childHistory, sourcePrefix,
+        retainedContentDigest: claudeTranscriptContentFingerprint(sourcePrefix) }))
+        .toEqual({ omittedTasks: [], omittedTaskNotificationUuids: [] });
+      const childMessages: SDKMessage[] = [];
+      const child = secondClient.createSession({ ...options, sessionId: childSessionId, launch: "resume",
+        onMessage: message => { childMessages.push(message); } });
+      await child.start();
+      const childOperationId = randomUUID();
+      await child.send({ operationId: childOperationId, content: "Reply with exactly SEDES_PERSISTENT_FORK_OK. Do not use tools." });
+      await waitFor(() => childMessages.some(message => message.type === "result" && claudeResultUserMessageIds(message).includes(childOperationId)));
+      expect(childMessages.filter((message): message is Extract<SDKMessage, { type: "result" }> =>
+        message.type === "result" && claudeResultUserMessageIds(message).includes(childOperationId))
+        .every(message => !message.is_error)).toBe(true);
+      let childAfter = await secondClient.getSessionMessages(childSessionId, { dir: workspace }, {});
+      await waitFor(async () => {
+        childAfter = await secondClient.getSessionMessages(childSessionId, { dir: workspace }, {});
+        return childAfter.some(message => message.type === "user" && message.uuid === childOperationId);
+      });
+      expect(claudeTranscriptContentFingerprint(childAfter.slice(0, sourcePrefix.length)))
+        .toBe(claudeTranscriptContentFingerprint(sourcePrefix));
+      expect((await secondClient.getSessionMessages(sessionId, { dir: workspace }, {}))
+        .some(message => message.uuid === childOperationId)).toBe(false);
+      await child.close({ reason: "evicted" });
       await reopened.close({ reason: "evicted" });
+      // With both queries evicted and the fork launch settled, the shared
+      // worker exits, which proves no Claude process remained.
+      const reopenedPid = queries[1]!.pid!;
+      await waitFor(() => {
+        try { process.kill(reopenedPid, 0); return false; }
+        catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+      });
+      expect(forkHost.abandonmentEvidence().sessionCount).toBe(0);
       expect(failures).toEqual([]);
     } finally {
       try {
@@ -250,7 +302,7 @@ describe.sequential("real Claude persistent runtime with local SSH carrier stand
   });
 });
 
-type AuditEntry = { authVerified?: boolean; persistent?: boolean; pid?: number; model?: string; effort?: string; permissionMode?: string; toolsDisabled?: boolean };
+type AuditEntry = { authVerified?: boolean; persistent?: boolean; pid?: number; model?: string; effort?: string; permissionMode?: string; toolsDisabled?: boolean; fork?: boolean; lockedDown?: boolean };
 async function readAudit(filename: string): Promise<AuditEntry[]> {
   return (await readFile(filename, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as AuditEntry);
 }
@@ -290,10 +342,15 @@ const liveAudit = entry => appendLiveAudit(${JSON.stringify(auditPath)}, JSON.st
 const originalLiveQuery = OfficialClaudeSdkFacade.prototype.createQuery;
 OfficialClaudeSdkFacade.prototype.createQuery = function (input) {
   const options = { ...input.options, tools: [], strictMcpConfig: true, mcpServers: {} };
-  if (options.persistSession !== false && (options.model !== ${JSON.stringify(MODEL)} || options.effort !== "low" || options.permissionMode !== "dontAsk")) {
-    throw new Error("REAL_CLAUDE_BLOCKER: Sonnet 5 low dontAsk required");
+  const fork = options.forkSession === true;
+  // A fork launch runs locked down in default mode with a deny-all callback.
+  const lockedDown = fork && Array.isArray(options.settingSources) && options.settingSources.length === 0 &&
+    options.settings?.disableAllHooks === true && typeof options.canUseTool === "function" && !options.allowDangerouslySkipPermissions;
+  if (options.persistSession !== false && (options.model !== ${JSON.stringify(MODEL)} || options.effort !== "low" ||
+      options.permissionMode !== (fork ? "default" : "dontAsk") || (fork && !lockedDown))) {
+    throw new Error("REAL_CLAUDE_BLOCKER: Sonnet 5 low dontAsk (or a locked-down default fork launch) required");
   }
-  liveAudit({ persistent: options.persistSession !== false, pid: process.pid, model: options.model, effort: options.effort, permissionMode: options.permissionMode, toolsDisabled: true });
+  liveAudit({ persistent: options.persistSession !== false, pid: process.pid, model: options.model, effort: options.effort, permissionMode: options.permissionMode, toolsDisabled: true, ...(fork ? { fork, lockedDown } : {}) });
   return originalLiveQuery.call(this, { ...input, options });
 };`,
       }));

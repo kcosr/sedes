@@ -320,6 +320,9 @@ describe.sequential("real Claude subscription driver", () => {
     let reopenedHandle:
       | Awaited<ReturnType<ClaudeConversationBackendDriver["attach"]>>
       | undefined;
+    let childHandle:
+      | Awaited<ReturnType<ClaudeConversationBackendDriver["attach"]>>
+      | undefined;
 
     try {
       const catalog = await driver.catalog({ scope, workspace });
@@ -571,7 +574,140 @@ describe.sequential("real Claude subscription driver", () => {
       );
       expect((await reopenedHandle.usage()).counters?.assistantMessages).toBeGreaterThan(0);
       expect(Object.values(reopened.snapshot.turnsById).find(turn => turn.completionCorrelations?.includes(steerId))?.status).toBe("completed");
+
+      // Fork the idle source at its newest completed turn. The fork is one
+      // locked-down launch that must not start a model turn; the child then
+      // attaches with the inherited turns and answers a prompt of its own.
+      await expect(reopenedHandle.backendCapabilities()).resolves.toMatchObject({
+        branching: { availability: "available" },
+      });
+      const checkpoint = await driver.resolveBranchCheckpoint({
+        scope,
+        workspace,
+        binding,
+        opaqueBindingDetail: created.opaqueBindingDetail,
+        selection: { kind: "latest_completed" },
+      });
+      const childThreadId = randomUUID();
+      const childSessionId = randomUUID();
+      const forkOperationId = randomUUID();
+      settings.initialize(
+        scope,
+        childThreadId,
+        {
+          backendInstanceId: instance.id,
+          connectionProfileId: connection.id,
+          executionEnvironmentId: connection.executionEnvironmentId,
+        },
+        { model: REQUIRED_MODEL, effort: REQUIRED_EFFORT, permissionMode: "dontAsk" },
+        Date.now(),
+      );
+      const queriesBeforeFork = sdk.persistentQueryOptions.length;
+      const framesBeforeFork = sdk.observedMessages.length;
+      const forked = await driver.branchConversation({
+        scope,
+        workspace,
+        childApplicationThreadId: childThreadId,
+        applicationOperationId: forkOperationId,
+        sourceBinding: binding,
+        sourceOpaqueBindingDetail: created.opaqueBindingDetail,
+        sourceCheckpoint: checkpoint,
+        requestedBackendConversationId: childSessionId,
+        inheritedSettings: {
+          model: { provider: connection.id, id: REQUIRED_MODEL },
+          thinkingLevel: REQUIRED_EFFORT,
+        },
+        source: { kind: "user" },
+      });
+      expect(forked.backendConversationId).toBe(childSessionId);
+      const forkLaunches = sdk.persistentQueryOptions.slice(queriesBeforeFork);
+      expect(forkLaunches).toEqual([
+        expect.objectContaining({
+          forkSession: true,
+          resume: backendConversationId,
+          sessionId: childSessionId,
+          settingSources: [],
+          settings: { disableAllHooks: true },
+          strictMcpConfig: true,
+          tools: [],
+          permissionMode: "default",
+          canUseTool: expect.any(Function),
+        }),
+      ]);
+      expect(forkLaunches[0]).not.toHaveProperty("allowDangerouslySkipPermissions");
+      // Claude settles the startup message with a zero-turn result and no
+      // API time; any model output or turn would fail the launch.
+      const forkFrames = sdk.observedMessages.slice(framesBeforeFork);
+      expect(forkFrames.filter(message => message.type === "assistant" || message.type === "stream_event")).toEqual([]);
+      expect(forkFrames.flatMap(message => message.type === "result"
+        ? [{ turns: message.num_turns, apiMs: message.duration_api_ms }] : [])).toEqual(
+        forkFrames.some(message => message.type === "result") ? [{ turns: 0, apiMs: 0 }] : [],
+      );
+      const forkChild = settings.findForkChild(scope, childThreadId);
+      expect(forkChild).toMatchObject({ nativeSessionId: childSessionId, forkOperationId });
+      expect(forkChild?.inheritedTurns.map(turn => turn.sourceBackendTurnId))
+        .toEqual(afterSteer.snapshot.orderedBackendTurnIds);
+      expect(forkChild?.omittedTaskNotificationUuids.size).toBe(0);
+
+      const childBinding: ConversationBinding = {
+        ...binding,
+        applicationThreadId: childThreadId,
+        backendConversationId: childSessionId,
+      };
+      childHandle = await driver.attach({
+        scope,
+        workspace,
+        binding: childBinding,
+        opaqueBindingDetail: forked.opaqueBindingDetail,
+      });
+      const childInitial = await childHandle.establishProjection({
+        signal: new AbortController().signal,
+      });
+      expect(childInitial.snapshot.runState).toBe("idle");
+      expect(childInitial.snapshot.orderedBackendTurnIds).toEqual(
+        forkChild?.inheritedTurns.map(turn => turn.backendTurnId),
+      );
+      expect(finalAssistantText(childInitial.snapshot.itemsById)).toBe(
+        finalAssistantText(afterSteer.snapshot.itemsById),
+      );
+      const childOperationId = randomUUID();
+      await childHandle.submit({
+        applicationOperationId: childOperationId,
+        mutationId: randomUUID(),
+        source: { kind: "user" },
+        reconciliationToken: randomUUID(),
+        text: "Reply with exactly SEDES_CLAUDE_FORK_OK. Do not use tools.",
+        contextExcerpts: [],
+        attachments: [],
+        taskContexts: [],
+      });
+      await waitFor(
+        () => sdk.resultMessages.some(message => claudeResultUserMessageIds(message).includes(childOperationId)),
+        () => {
+          const failed = sdk.resultMessages.find(message =>
+            claudeResultUserMessageIds(message).includes(childOperationId) && message.is_error);
+          return failed ? `REAL_CLAUDE_FAILURE: fork child result was ${failed.terminal_reason ?? failed.subtype}.` : undefined;
+        },
+      );
+      const childSettled = await childHandle.establishProjection({
+        signal: new AbortController().signal,
+      });
+      expect(childSettled.snapshot.orderedBackendTurnIds).toHaveLength(
+        afterSteer.snapshot.orderedBackendTurnIds.length + 1,
+      );
+      expect(Object.values(childSettled.snapshot.turnsById)
+        .find(turn => turn.completionCorrelations?.includes(childOperationId))?.status).toBe("completed");
+      expect(finalAssistantText(childSettled.snapshot.itemsById)).toContain("SEDES_CLAUDE_FORK_OK");
+      // The source keeps its own branch.
+      const sourceAfterFork = await reopenedHandle.establishProjection({
+        signal: new AbortController().signal,
+      });
+      expect(sourceAfterFork.snapshot.orderedBackendTurnIds).toEqual(
+        afterSteer.snapshot.orderedBackendTurnIds,
+      );
+      expect(JSON.stringify(sourceAfterFork.snapshot.itemsById)).not.toContain("SEDES_CLAUDE_FORK_OK");
     } finally {
+      await childHandle?.close();
       await firstHandle?.close();
       await reopenedHandle?.close();
       await driver.close();
