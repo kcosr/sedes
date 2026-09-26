@@ -43,9 +43,9 @@ native session twice is denied independently. After a query closes or fails,
 the worker keeps its native session reserved until every Claude process the
 query launched is proven gone. Closing returns only then, and a reopen waits, so
 two Claude processes never write one transcript. Unproven cleanup keeps the
-session reserved and fences the worker generation. The worker's fixed maximum of 32
-simultaneous queries is a last-resort execution-environment safety guard, not a
-backend configuration surface.
+session reserved and fences the worker generation. The worker's fixed maximum
+of 32 simultaneous queries is a last-resort execution-environment safety guard,
+not a backend configuration surface.
 
 The persistent service owns remote queries and their bounded retained events;
 SSH stdio or an outbound connection carries the current main-side attachment. Detach does not interrupt
