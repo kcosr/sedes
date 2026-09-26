@@ -8,6 +8,7 @@ import type {
   SDKSessionInfo,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { getSessionMessages } from "@anthropic-ai/claude-agent-sdk";
 import { createHash } from "node:crypto";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -493,7 +494,9 @@ describe("ClaudeConversationBackendDriver", () => {
       await submitted;
       expect(handle.retirementBlocked).toBe(true);
       const reconcile = { ...attachment, applicationOperationId: operationId, retryAnchor: retryAnchor([]) };
-      await expect(driver.reconcileSubmission(reconcile)).resolves.toMatchObject({ status: authority === "not_sent" ? "not_accepted" : "unresolved" });
+      await expect(driver.reconcileSubmission(reconcile)).resolves.toMatchObject({
+        status: authority === "not_sent" ? "not_accepted" : authority === "session_ended" ? "failed_unknown" : "unresolved",
+      });
       expect(handle.retirementBlocked).toBe(authority === "local");
       if (authority === "not_sent") {
         // A legitimate explicit retry must reach the session, rather than
@@ -545,16 +548,21 @@ describe("ClaudeConversationBackendDriver", () => {
     } finally { await driver.close(); }
   });
 
-  it("ends delivery tracking without retry permission when the exact admitted owner session ended", async () => {
+  it.each([
+    ["steer", "steering message could be confirmed. Claude may have received it."],
+    ["ordinary", "history shows no acceptance. Claude may still have received it."],
+  ] as const)("ends %s delivery tracking without retry permission when the exact admitted owner session ended", async (kind, diagnostic) => {
     const sdk = fakeSdk(); sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
     sdk.getSessionMessages.mockResolvedValue([]);
-    const steerOperations = new Map<string, string | null>([[operationId, null]]);
+    const steerOperations = new Map<string, string | null>(kind === "steer" ? [[operationId, null]] : []);
     const forgetUnconsumedSteerOperation = vi.fn();
     const driver = createDriver(sdk, { steerOperations, forgetUnconsumedSteerOperation,
       submissionDisposition: async () => "session_ended" });
+    // Even a matching idle-submit anchor cannot prove the ended owner never delivered it.
     await expect(driver.reconcileSubmission({ scope, workspace, binding: binding(),
-      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), applicationOperationId: operationId }))
-      .resolves.toMatchObject({ status: "failed_unknown", diagnostic: { text: expect.stringContaining("may have received") } });
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), applicationOperationId: operationId,
+      retryAnchor: retryAnchor([]) }))
+      .resolves.toMatchObject({ status: "failed_unknown", diagnostic: { text: expect.stringContaining(diagnostic) } });
     expect(forgetUnconsumedSteerOperation).not.toHaveBeenCalled();
     expect(sdk.createQuery).not.toHaveBeenCalled();
   });
@@ -1652,6 +1660,45 @@ describe("ClaudeConversationBackendDriver native history", () => {
     await fixture.write(configDirectory, workspace.canonicalPath);
     await expect(driver.reconcileSubmission(input)).resolves.toMatchObject({ status: "accepted" });
   });
+
+  it("never authorizes a resend of a prompt persisted before a later startup message", async () => {
+    // Earlier turns with parallel tool calls leave dead-end tool results.
+    const fixture = transcript();
+    fixture.startupMessage();
+    fixture.prompt("Survey the synthetic repository.");
+    fixture.parallelToolCalls("survey");
+    fixture.text("Two modules found.");
+    fixture.startupMessage();
+    fixture.prompt("Compare them.");
+    fixture.parallelToolCalls("compare");
+    fixture.text("They differ in one function.");
+    fixture.startupMessage();
+    await fixture.write(configDirectory, workspace.canonicalPath);
+    const { driver } = nativeStoreDriver();
+    const view = await readViaDriver(driver);
+    // The SDK's leaf heuristic reads this transcript only to its last dead end.
+    const sdkView = await getSessionMessages(sessionId, { dir: workspace.canonicalPath });
+    expect(sdkView.length).toBeLessThan(view.length);
+
+    // Sedes submits; Claude Code persists the prompt, then the process dies
+    // before replying. The next attach appends another startup message.
+    fixture.prompt("Rename the differing function.", { uuid: operationId });
+    fixture.startupMessage();
+    await fixture.write(configDirectory, workspace.canonicalPath);
+    // The SDK's truncated view still matches an anchor captured from itself.
+    expect(uuids(await getSessionMessages(sessionId, { dir: workspace.canonicalPath }))).toEqual(uuids(sdkView));
+
+    for (const anchor of [retryAnchor(view), retryAnchor(sdkView)]) {
+      await expect(driver.reconcileSubmission({ ...attachment(), applicationOperationId: operationId, retryAnchor: anchor }))
+        .resolves.toMatchObject({ status: "accepted", backendTurn: { completionCorrelations: [operationId] } });
+    }
+  });
+
+  async function readViaDriver(driver: ClaudeConversationBackendDriver): Promise<SessionMessage[]> {
+    const native = new OfficialClaudeSdkFacade();
+    await driver.read(attachment());
+    return await native.getSessionMessages(sessionId, { dir: workspace.canonicalPath }, process.env);
+  }
 });
 
 function uuids(messages: readonly SessionMessage[]): string[] {

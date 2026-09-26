@@ -1002,11 +1002,12 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
               return unresolved("Claude consumed this input while its delivery owner was being checked.");
             }
           }
-          if (!steerOperations.has(input.applicationOperationId)) {
-            return unresolved("Claude's delivery owner ended before this input could be confirmed. Claude may have received it.");
-          }
-          return { status: "failed_unknown", diagnostic: boundDisplayText(
-            "Claude's delivery owner ended before this steering message could be confirmed. Claude may have received it. Review the conversation before explicitly restoring or sending it again.",
+          // The owner can report nothing more, and the tip-verified history
+          // read above shows no acceptance. Tracking is terminal; whether
+          // Claude consumed the input stays unknown and is never retried.
+          return { status: "failed_unknown", diagnostic: boundDisplayText(steerOperations.has(input.applicationOperationId)
+            ? "Claude's delivery owner ended before this steering message could be confirmed. Claude may have received it. Review the conversation before explicitly restoring or sending it again."
+            : "Claude's delivery owner ended before this message could be confirmed, and Claude's history shows no acceptance. Claude may still have received it. Review the conversation before explicitly sending it again.",
           ) };
         }
         if (disposition === "not_sent") {
