@@ -66,6 +66,7 @@ import {
   RawUdsWebSocketServer,
   type RawWebSocketConnection,
 } from "../support/raw-uds-websocket-server.js";
+import { terminateProcessesReferencing } from "../support/process-cleanup.js";
 
 const SSH = "/usr/bin/ssh";
 const SSHD = "/usr/sbin/sshd";
@@ -104,7 +105,7 @@ afterEach(async () => {
   await Promise.allSettled(
     fixtures.splice(0).map((fixture) => fixture.close()),
   );
-});
+}, 60_000);
 
 describe.skipIf(!openSshAvailable)(
   "production SSH UDS composition over disposable OpenSSH",
@@ -1069,10 +1070,20 @@ class ProductionSshFixture {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
-    await this.stopService();
-    await this.peer.close();
-    await terminateChild(this.#sshd);
-    await rm(this.directory, { recursive: true, force: true });
+    const failures: unknown[] = [];
+    const attempt = async (step: () => Promise<unknown>) => {
+      try { await step(); } catch (error) { failures.push(error); }
+    };
+    await attempt(() => this.stopService());
+    await attempt(() => this.peer.close());
+    // A failed or unconfirmed stop must not leave the detached daemon or its
+    // SSH carriers running; every one of them runs from this directory.
+    await attempt(() => terminateProcessesReferencing(this.directory));
+    await attempt(() => terminateChild(this.#sshd));
+    const paths = persistentSidecarPaths(this.remoteAccountHome, process.getuid!(), this.serviceScope);
+    await attempt(() => rm(paths.socketDirectory, { recursive: true, force: true }));
+    await attempt(() => rm(this.directory, { recursive: true, force: true }));
+    if (failures.length > 0) throw failures[0];
   }
 }
 

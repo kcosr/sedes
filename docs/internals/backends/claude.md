@@ -39,9 +39,13 @@ principal/backend runtime owns the SDK queries admitted by the shared Sedes
 conversation-runtime budget for that execution environment. A live Sedes thread
 has at most one warm query.
 Closing a handle does not delete its Claude session, and attaching the same
-native session twice is denied independently. The worker's fixed maximum of 32
-simultaneous queries is a last-resort execution-environment safety guard, not a
-backend configuration surface.
+native session twice is denied independently. After a query closes or fails,
+the worker keeps its native session reserved until every Claude process the
+query launched is proven gone. Closing returns only then, and a reopen waits, so
+two Claude processes never write one transcript. Unproven cleanup keeps the
+session reserved and fences the worker generation. The worker's fixed maximum
+of 32 simultaneous queries is a last-resort execution-environment safety guard,
+not a backend configuration surface.
 
 The persistent service owns remote queries and their bounded retained events;
 SSH stdio or an outbound connection carries the current main-side attachment. Detach does not interrupt
@@ -99,6 +103,20 @@ requests. Shared transport owns framing, correlation, bounds, generation fencing
 Claude methods, identifiers, history meaning, or policy. An exact worker
 protocol/build mismatch fails before SDK authority opens, with no compatibility
 decoder or local fallback.
+
+The worker starts each Claude CLI process as the leader of its own detached
+process group and owns every descendant it can attribute. Claude Code runs each
+Bash tool shell in its own session (pgid = sid = pid), outside the leader group,
+so the worker records descendants from the process table (`/proc` on Linux,
+`ps` on macOS) about once a second and immediately before every signal it sends,
+while their ancestry is still visible. Stop signals go to the leader group,
+every owned descendant group, and every recorded descendant; descendants stay
+owned after their parent exits. Cleanup is proven only when all of them are gone,
+and an unproven cleanup fences the worker generation. A descendant that starts
+and is orphaned between two observations cannot be attributed. The SDK itself
+escalates a query close from SIGTERM to SIGKILL only after 5 s, so a closing
+leader can outlive its query for that long. If the inner worker dies, the outer
+supervisor applies the same rules to every registered leader.
 
 Worker permission delivery uses an application-level round trip: after the
 worker receives a `can_use_tool` result, it acknowledges the exact query,

@@ -24,6 +24,8 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/agent-tools/schema/canonical-json-schema.ts",
   "src/server/canonical-json.ts",
   "src/server/conversations/payload-policy.ts",
+  "src/server/runtime/process-table.ts",
+  "src/server/runtime/owned-process-tree.ts",
 ]);
 
 const FORBIDDEN_INPUT_FRAGMENTS = Object.freeze([

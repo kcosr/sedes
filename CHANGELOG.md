@@ -131,6 +131,25 @@
   when newer work starts; Pi retries do not leave a stale failure. Requires
   matching browser and packaged clients using client protocol 117. (#6)
 
+- Stop Claude Bash tool processes with their Claude process. The Claude worker
+  now tracks descendants that run in their own sessions and reports cleanup as
+  proven only after they are gone; previously they could outlive a stopped or
+  crashed Claude process.
+
+- Reopen a Claude session only after its previous Claude process has exited.
+  Closing or failing a query no longer releases the session while the old
+  process can still write its transcript.
+
+- Recover a stale state or native-store lock whose PID was reused by an
+  unrelated process. New lock records include the owner's process start time
+  and boot identity on Linux and macOS; existing PID-only records keep the
+  previous PID check.
+
+- Remove superseded sidecar and Claude worker builds that no live process
+  uses after a sidecar starts or installs a new worker, keeping recent builds
+  for rollback. Persistent sidecar delivery diagnostics keep captures from
+  only the four most recent earlier daemon PIDs. Diagnostics remain opt-in.
+
 ### Removed
 
 ## [0.1.1] - 2026-09-21

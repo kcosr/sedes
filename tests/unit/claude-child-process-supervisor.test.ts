@@ -23,13 +23,53 @@ import type {
   ClaudeSdkFacade,
 } from "../../src/server/backends/claude/claude-sdk-facade.js";
 import { TrackedClaudeSdkFacade } from "../../src/server/backends/claude/worker/tracked-claude-sdk-facade.js";
+import { readProcessEntrySync } from "../../src/server/runtime/process-table.js";
 
 const roots: string[] = [];
+const sessionDescendants: number[] = [];
 afterEach(async () => {
+  // Never leak a test grandchild, even when an assertion failed first.
+  for (const pid of sessionDescendants.splice(0)) {
+    try { process.kill(pid, "SIGKILL"); } catch { /* Already gone. */ }
+  }
   await Promise.all(
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
 });
+
+/**
+ * A leader that starts a grandchild in a new session, as Claude Code does for
+ * each Bash tool shell (pgid = sid = pid), so the leader's group signal cannot
+ * reach it. Both ignore SIGTERM; the leader exits on "exit" or stdin EOF.
+ */
+const SESSION_DESCENDANT_LEADER = [
+  "const{spawn}=require('child_process')",
+  "process.on('SIGTERM',()=>{})",
+  "const g=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{detached:true,stdio:'ignore'})",
+  "process.stdout.write(String(g.pid)+'\\n')",
+  "process.stdin.on('data',d=>{if(String(d).includes('exit'))process.exit(0)})",
+  // Like Claude, exit on stdin EOF; this also ends a leader orphaned by a failed test.
+  "process.stdin.on('end',()=>process.exit(0))",
+  "setInterval(()=>{},1000)",
+].join(";");
+
+const describeWithProcessTable =
+  process.platform === "linux" || process.platform === "darwin" ? describe : describe.skip;
+
+function processAlive(pid: number): boolean {
+  const entry = readProcessEntrySync(pid);
+  return entry !== undefined && !entry.exited;
+}
+
+async function sessionDescendantPid(stdout: NodeJS.ReadableStream): Promise<number> {
+  const pid = Number(await firstLine(stdout));
+  expect(pid).toBeGreaterThan(1);
+  sessionDescendants.push(pid);
+  const entry = readProcessEntrySync(pid);
+  // The grandchild leads its own session and group, outside the leader group.
+  expect(entry).toMatchObject({ pid, processGroupId: pid });
+  return pid;
+}
 
 describe("Claude child process supervisor", () => {
   it("keeps exact argv stopped while writes buffer until the outer ACK", async () => {
@@ -298,6 +338,137 @@ describe("Claude child process supervisor", () => {
     unbind();
     await waitUntil(() => supervisor.trackedProcessCount === 0, 2_000);
     expect(supervisor.trackedProcessCount).toBe(0);
+  });
+});
+
+describeWithProcessTable("Claude child process supervisor descendant sessions", () => {
+  it("terminates and proves a new-session grandchild when closing a live leader", async () => {
+    const supervisor = shortSupervisor();
+    const child = supervisor.spawn({
+      command: process.execPath,
+      args: ["-e", SESSION_DESCENDANT_LEADER],
+      env: {},
+      signal: new AbortController().signal,
+    });
+    const grandchild = await sessionDescendantPid(child.stdout);
+    await supervisor.close();
+    expect(processAlive(grandchild)).toBe(false);
+  });
+
+  it("keeps an orphaned new-session grandchild owned until its cleanup is proven", async () => {
+    const unregistered: number[] = [];
+    let registeredGroup = 0;
+    const supervisor = new ClaudeChildProcessSupervisor({
+      gracefulCloseMilliseconds: 100,
+      terminateMilliseconds: 100,
+      killMilliseconds: 500,
+      descendantObservationMilliseconds: 25,
+      processGroupRegistrar: {
+        register: async (processGroupId) => {
+          registeredGroup = processGroupId;
+        },
+        unregister: (processGroupId) => unregistered.push(processGroupId),
+        close: () => undefined,
+      },
+    });
+    const child = supervisor.spawn({
+      command: process.execPath,
+      args: ["-e", SESSION_DESCENDANT_LEADER],
+      env: {},
+      signal: new AbortController().signal,
+    });
+    const grandchild = await sessionDescendantPid(child.stdout);
+    await waitUntil(() => supervisor.observedDescendantCount >= 1, 2_000);
+    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    child.stdin.write("exit\n");
+    await exited;
+    // The leader is gone and the grandchild was reparented; ownership remains.
+    await waitUntil(() => unregistered.includes(registeredGroup), 3_000);
+    expect(processAlive(grandchild)).toBe(false);
+    expect(supervisor.trackedProcessCount).toBe(0);
+    await expect(supervisor.close()).resolves.toBeUndefined();
+  });
+
+  it("records descendants before an SDK kill without waiting for an observation tick", async () => {
+    const supervisor = new ClaudeChildProcessSupervisor({
+      gracefulCloseMilliseconds: 100,
+      terminateMilliseconds: 100,
+      killMilliseconds: 500,
+      descendantObservationMilliseconds: 60_000,
+      processGroupRegistrar: {
+        register: async () => undefined,
+        unregister: () => undefined,
+        close: () => undefined,
+      },
+    });
+    const child = supervisor.spawn({
+      command: process.execPath,
+      args: ["-e", SESSION_DESCENDANT_LEADER],
+      env: {},
+      signal: new AbortController().signal,
+    });
+    const grandchild = await sessionDescendantPid(child.stdout);
+    expect(supervisor.observedDescendantCount).toBe(0);
+    expect(child.kill("SIGKILL")).toBe(true);
+    await waitUntil(() => !processAlive(grandchild), 2_000);
+    await waitUntil(() => supervisor.trackedProcessCount === 0, 3_000);
+    await expect(supervisor.close()).resolves.toBeUndefined();
+  });
+});
+
+describeWithProcessTable("Claude outer process supervisor descendant sessions", () => {
+  it("terminates a registered leader's new-session grandchild after the inner worker crashes", async () => {
+    const leader = spawn(process.execPath, ["-e", SESSION_DESCENDANT_LEADER], {
+      detached: true,
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    const grandchild = await sessionDescendantPid(leader.stdout!);
+    const supervisor = new ClaudeOuterProcessSupervisor({
+      gracefulMilliseconds: 25,
+      terminateMilliseconds: 50,
+      killMilliseconds: 500,
+    });
+    supervisor.accept({
+      type: "process_group_registered",
+      token: "t".repeat(43),
+      processGroupId: leader.pid!,
+    });
+    await supervisor.close();
+    expect(processAlive(grandchild)).toBe(false);
+    expect(() => process.kill(-leader.pid!, 0)).toThrow(
+      expect.objectContaining({ code: "ESRCH" }),
+    );
+  });
+
+  it("refuses a live non-leader and accepts a gate that exited before registration", async () => {
+    const member = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
+    try {
+      await waitUntil(() => processAlive(member.pid!), 2_000);
+      const supervisor = new ClaudeOuterProcessSupervisor({
+        gracefulMilliseconds: 25,
+        terminateMilliseconds: 25,
+        killMilliseconds: 100,
+      });
+      expect(() => supervisor.accept({
+        type: "process_group_registered",
+        token: "t".repeat(43),
+        processGroupId: member.pid!,
+      })).toThrow("claude_runtime_worker_process_group_registration_invalid");
+      supervisor.accept({
+        type: "process_group_registered",
+        token: "t".repeat(43),
+        processGroupId: 2_147_483_646,
+      });
+      supervisor.accept({
+        type: "process_group_unregistered",
+        token: "t".repeat(43),
+        processGroupId: 2_147_483_646,
+      });
+      await expect(supervisor.close()).resolves.toBeUndefined();
+      expect(processAlive(member.pid!)).toBe(true);
+    } finally {
+      member.kill("SIGKILL");
+    }
   });
 });
 

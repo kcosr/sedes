@@ -68,6 +68,7 @@ import { registerClaudePersistentRuntimeHost } from "../backends/claude/runtime/
 import { installEmbeddedClaudeWorker } from "../backends/claude/worker/claude-sidecar-worker-artifact.js";
 import { supportsClaudeRuntimeHost } from "../backends/claude/worker/claude-runtime-host-support.js";
 import { PersistentTerminalHost } from "./persistent-terminal-host.js";
+import { pruneSupersededSidecarArtifacts } from "./sidecar-artifact-retention.js";
 
 declare const __SEDES_SIDECAR_BUILD_ID__: string;
 
@@ -147,6 +148,8 @@ async function main(): Promise<void> {
   const serviceRegistry = new PersistentSidecarServiceRegistry({ scope: input.scope, configuration: input.configuration,
     buildId: input.expectedBuild, artifactSha256, runtimeWireVersion: SIDECAR_WIRE_VERSION, recordAbandonment });
   await recordPersistentSidecar(input.scope, serviceRegistry.serviceIncarnation, "running");
+  // Retention is hygiene: an unreadable process table keeps every build.
+  void pruneSupersededSidecarArtifacts({ stateRoot: paths.stateRoot, executablePath, artifactSha256 }).catch(() => undefined);
   const server = new PersistentSidecarServiceServer({ registry: serviceRegistry, endpointPath: paths.endpointPath,
     receipts: new PersistentSidecarManagementReceipts(path.join(paths.serviceDirectory, "management-receipts")),
     onStopped: async () => {

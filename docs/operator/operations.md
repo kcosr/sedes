@@ -563,7 +563,11 @@ context, Task, attachment and history provenance, and principal Tool client
 verifiers. Losing or replacing it breaks continuity of that evidence and
 invalidates outstanding source references and Tool client credentials.
 Treat the entire directory as one backup unit. `.state.lock` is separate transient
-process-ownership metadata and is removed after a clean shutdown.
+process-ownership metadata and is removed after a clean shutdown. State and
+native-store locks record the owner's PID, and on Linux and macOS its process
+start time and boot identity. The next start recovers a lock whose owner exited,
+including one whose PID now belongs to an unrelated process; a PID-only record
+from an older build or from Windows is recovered only once that PID is gone.
 
 The overlay stores Sedes-owned state: projects, inventory, drafts, stashes,
 principal execution configuration, runtime preferences and receipts, the
@@ -811,6 +815,17 @@ still requires proof that owned processes stopped. Artifact staging and
 verification finish before conversation interruption; staging failure leaves
 the existing service and connections in place. A failed replacement remains
 visibly failed rather than claiming healthy rollback.
+
+Builds are content-addressed under the remote account's
+`~/.local/state/sedes/sidecar/artifacts/sha256/` store, which every service on
+that account shares. After a daemon started from that store records itself
+running, it removes superseded builds on a best-effort basis. It keeps its own
+build, the three most recently installed others, any build installed within the
+last hour, and any build named in a live process command line. The service's
+embedded Claude worker builds under `services/<service-key>/claude-workers/`
+follow the same rules with two retained earlier builds, applied after a
+verified worker install. Where process command lines cannot be read (Windows),
+nothing is removed.
 
 Recovery can read and acknowledge an older artifact's retained results when its
 runtime wire version and required capability versions remain compatible. An
