@@ -26,7 +26,7 @@ The shared backend rules remain normative. Read this page together with
 
 ## Runtime and session ownership
 
-The exact-pinned `@anthropic-ai/claude-agent-sdk` 0.3.274 package runs in one
+The exact-pinned `@anthropic-ai/claude-agent-sdk` 0.3.283 package runs in one
 digest-verified local provider worker or a backend-private persistent runtime
 hosted by the SSH or outbound sidecar. The Claude worker requires Node.js
 24.18+ and POSIX process-group supervision; native Windows Claude is
@@ -234,12 +234,16 @@ Every launch sends Sedes' empty `shouldQuery: false` startup message, which
 Claude Code persists as a meta user row at the transcript tip. From 2.1.280 the
 row is `queueTranscriptOnly` and never reaches the model; earlier releases
 merged its "NON-USER SOURCE" label into the next prompt, one reason the
-runtime minimum is 2.1.281. The pinned SDK's
-`getSessionMessages` picks the file-latest childless row that is not meta.
+runtime minimum is 2.1.281. SDK 0.3.274's
+`getSessionMessages` picked the file-latest childless row that is not meta.
 Parallel tool calls leave childless sibling tool results, so a transcript
 ending in a startup message read back only to its last parallel tool call:
 forks failed verification, and reconciliation compared against a truncated
-chain. Sedes therefore reads native history with its own reader. Claude Code
+chain. SDK 0.3.283 fixes that case, but it walks up from the file-latest
+childless main-conversation row of any type. Claude Code can attach a later
+system notice to an old row, for example a Remote Control warning written at
+the end of a session, and the SDK's read then still stops at that old row.
+Sedes therefore reads native history with its own reader. Claude Code
 appends each row of the active conversation as a child of the row it last
 wrote. Rewind and edit start a new branch from an earlier row and leave the
 abandoned branch in the file. The active tip is therefore the last
@@ -249,12 +253,18 @@ The reader walks `parentUuid` from that tip. Claude Code's `last-prompt` leaf
 pointer is not used; it can omit a trailing meta row or name a system notice
 attached to an old row.
 
-Apart from the tip and compaction, the reader reproduces the SDK's projection
-exactly. That covers preserved-segment relinking at compact boundaries,
-re-insertion of off-chain assistant fragments and their parallel tool results,
-and conversion of answered human queued commands. It also covers meta,
-sidechain, and team filtering, `includeSystemMessages`, task-notification
-origin reduction, the `is_meta` flag, and offset/limit slicing. Unparseable
+Apart from the tip and compaction, the reader reproduces the pinned SDK's
+projection exactly. That covers preserved-segment relinking at compact
+boundaries and re-insertion of off-chain assistant fragments with their
+parallel tool results, whether a result names its call by parent,
+`sourceToolAssistantUUID`, or `tool_use_id`. It converts every answered
+queued-command attachment (a queued prompt, a steer, or a task notification
+Claude read during a turn) to the user row it carried, marked
+`isQueuedCommand`, and marks a completed local command's rows
+`isCompletedLocalCommand` without counting them as prompts. It also covers
+meta, sidechain, and team filtering, `includeSystemMessages`,
+task-notification origin reduction to kind, subkind, and fire reason, the
+`is_meta` flag, and offset/limit slicing. Unparseable
 lines, including a final line still being written, are skipped as the SDK skips
 them. Unlike the SDK, an existing transcript that cannot be read fails the read
 instead of reading as empty.
@@ -279,8 +289,10 @@ row, the read continues through the rows relinked after it, as the SDK's leaf
 does. Earlier turns keep their identities, so a compaction never re-identifies
 them. A native link missing from the transcript still ends the read, as it does
 in the SDK. Boundary rows appear only with `includeSystemMessages`. The summary
-row keeps the SDK's `isCompactSummary` marker, which the worker protocol
-carries under sidecar wire 14.
+row keeps the SDK's `isCompactSummary` marker, and a converted queued command
+its `isQueuedCommand` marker; the worker protocol carries both under sidecar
+wire 14. The SDK's derived `is_meta`, `interruptedByShutdown`, and
+`isCompletedLocalCommand` do not cross it.
 
 The earlier segments can be several times the size of the newest one, so only
 reads that need them include them: display and paging, submission
@@ -421,8 +433,8 @@ included, without a Sedes input; the user decides whether to resend. The
 receipt is write-once, so a later closure row or result cannot change the
 outcome.
 
-SDK 0.3.274 can emit intermediate results while draining background task
-notifications. Only successful empty zero-turn results carrying native
+Since Claude Code 2.1.274, Claude can emit intermediate results while draining
+background task notifications. Only successful empty zero-turn results carrying native
 `task-notification` provenance are classified as those drain receipts, regardless
 of optional terminal metadata. Explicit singular or plural user-message
 receipt identities must correlate with the pending/current foreground input.
@@ -534,6 +546,13 @@ marker, so partial text streams under the same turn that reload shows. Otherwise
 its output extends the settled previous turn, as reload does for a peer. The
 result's exact `origin` confirms the choice or corrects it with one resnapshot.
 Markers never enter provider history or submission retry anchors.
+
+A notification that arrives while a turn runs is read by Claude between tool
+calls and folds into that turn. Claude Code records it as a queued-command
+attachment, which history reads from SDK 0.3.283 on return as a
+task-notification user row marked `isQueuedCommand`. Reload keeps such a row
+hidden inside its turn, as the live stream shows it; only an unmarked
+notification row starts a turn Claude started.
 
 Two turn identities changed, and existing threads re-identify those turns
 once on first read. A task-notification turn was named by its notification
@@ -654,8 +673,8 @@ empty draft with no Claude session or history.
 
 ## Permissions and blocking interactions
 
-SDK 0.3.274 permission callbacks preserve `defaultToNo`,
-`suppressAlwaysAllowRule`, and bounded `mcpServer` provenance through the private
+Pinned SDK permission callbacks carry `defaultToNo`, `suppressAlwaysAllowRule`,
+and bounded `mcpServer` provenance, and Sedes preserves them through the private
 worker transport and persistent permission replay. Provenance is descriptive,
 not permission authority; invalid provenance labels are omitted at the SDK worker
 boundary without dropping permission-safety hints or disconnecting the worker.
@@ -1039,9 +1058,12 @@ normalized integration surface:
   bound;
 - `tests/unit/claude-native-transcript.test.ts` compares the transcript reader
   with the pinned SDK over synthetic native fixtures. The fixtures cover
-  startup-message tips, parallel dead ends, rewinds, sidechains, queued
-  commands, compaction, and partial lines. Revalidate this parity whenever the
-  SDK release changes. For compacted transcripts the SDK's read must be the
+  startup-message tips, parallel dead ends and tool results linked only by
+  provenance, rewinds, sidechains, queued commands of every mode, completed
+  local commands, compaction, and partial lines, plus the one tip the SDK
+  still misreads: a system notice attached to an old row. Revalidate this
+  parity whenever the SDK release changes, together with a read-only
+  comparison over real transcripts (see the SDK evidence below). For compacted transcripts the SDK's read must be the
   exact suffix of Sedes' read. The automatic-compaction fixtures follow Claude
   Code 2.1.28x rows: a mid-turn compaction with relinked kept rows, one with a
   segment but no listed rows, several compactions, a resume after compaction,
@@ -1090,4 +1112,4 @@ changes. The authorization and safety guidance for the real suite remains in
 the [operator guide](../../operator/backends/claude.md#opt-in-live-verification).
 
 Release-specific native qualification and the distinction between native and
-synthetic evidence are recorded in the [SDK 0.3.274 evidence](../../../protocol/claude-agent-sdk/0.3.274/README.md).
+synthetic evidence are recorded in the [SDK 0.3.283 evidence](../../../protocol/claude-agent-sdk/0.3.283/README.md).

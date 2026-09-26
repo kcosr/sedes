@@ -1,7 +1,7 @@
 # Claude backend
 
 Sedes integrates Claude through the exact-pinned
-`@anthropic-ai/claude-agent-sdk` 0.3.274 package in a managed local
+`@anthropic-ai/claude-agent-sdk` 0.3.283 package in a managed local
 worker or persistent SSH/outbound sidecar and an operator-selected Claude Code
 executable. Claude Code owns authentication and native conversation history; Sedes provides its normalized thread workflow, durable controls, and
 recovery records.
@@ -113,7 +113,7 @@ explicitly enable them; their IDs and native session bindings are retained.
 
 ## Version compatibility
 
-Sedes pins one SDK profile: `@anthropic-ai/claude-agent-sdk` 0.3.274. It admits
+Sedes pins one SDK profile: `@anthropic-ai/claude-agent-sdk` 0.3.283. It admits
 stable Claude Code releases at or above 2.1.281, except for explicitly excluded
 known-bad releases.
 
@@ -138,8 +138,8 @@ SDK profile and behavioral checks. This warning is not an authentication
 failure. Prereleases and releases older than 2.1.281 fail closed. The minimum
 runtime does not move merely because a future SDK package bundles a newer CLI,
 and protocol or behavioral incompatibility still fails closed. The pinned SDK
-package bundles Claude Code 2.1.274, below the minimum; Sedes never runs it and
-always uses the operator-installed executable.
+package bundles Claude Code 2.1.283; Sedes never runs it, removes it at
+install, and always uses the operator-installed executable.
 
 For the most predictable deployment, pin the reviewed baseline. Before adopting
 a newer admitted runtime, deliberately run the opt-in live gate described

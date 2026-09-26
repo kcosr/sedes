@@ -116,6 +116,14 @@
   Files other than its records are never removed. Sidecars apply this once
   upgraded to this version.
 
+- Claude backends use Agent SDK 0.3.283 (was 0.3.274). Claude history now
+  reads task notifications Claude received while running a tool, and other
+  queued input, where Claude read them, as SDK 0.3.283 does; they stay inside
+  their turn, so existing threads show the same turns. The Claude Code
+  runtime policy is unchanged (2.1.281 or newer, tested through 2.1.283).
+  Upgrade sidecars together with the server: the sidecar build changes and
+  sidecar runtime protocol 14 now also carries the queued-input marker.
+
 ### Fixed
 
 - Create Claude forks with one locked-down Claude Code launch. It loads no
