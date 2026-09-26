@@ -475,7 +475,12 @@ turn.
 
 Claude starts turns itself for background-task notifications and peer
 hand-backs. Sedes models such a turn as running from one of two events. The
-first is Claude's `running` edge, when no Sedes input awaits its start. The
+first is Claude's `running` edge, when no Sedes input awaits its start and
+this launch's startup message has settled. Claude reports `running` while it
+handles that message and ends it with the message's `completed` lifecycle
+frame and a result naming only it, so a fresh persistent launch, whose frames
+the owner holds until history is installed, does not start a phantom turn. A
+reattached query's startup message belongs to an earlier attachment. The
 second is the turn's first unstamped main-thread response. The turn ends at its
 result, or at Claude's `idle` if no result came. Stop targets it. Its result
 writes no terminal receipt, and an uncorrelated result never receipts or settles

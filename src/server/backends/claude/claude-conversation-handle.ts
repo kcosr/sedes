@@ -285,6 +285,13 @@ export class ClaudeConversationHandle implements ConversationHandle {
   #announcedForkBlocker: string | undefined;
   /** A reattached query's state is unknown until Claude reports it. */
   #providerStateReported = false;
+  /**
+   * Claude reports running while it handles this launch's startup message,
+   * answers it with a result naming only that message, then reports idle.
+   * Until then a running edge is not a turn Claude started. A reattached
+   * query's startup message belongs to an earlier attachment.
+   */
+  #startupSettled = false;
   /** A fresh launch's trailing unfinished turn, until Claude shows it is not running it. */
   #processLostTurnId: string | undefined;
   /** Bounds a Stop that Claude acknowledged but has not settled with a result. */
@@ -482,6 +489,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       },
     });
     this.#ready = this.#session.start().then(async (initialization) => {
+      if (this.#session.reattached === true) this.#startupSettled = true;
       this.#usageAccounting?.admitQuery(this.#session.startupProbeUuid, this.#session.reattached === true);
       if (this.#session.backgroundActivity) {
         if (this.#session.pendingBackgroundTaskIds === undefined) throw new Error("claude_background_attachment_state_incomplete");
@@ -1832,6 +1840,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
   }
 
   #consumeResult(message: SDKResultMessage): void {
+    const startupProbeUuid = this.#session.startupProbeUuid;
+    if (startupProbeUuid !== undefined && claudeResultUserMessageIds(message).includes(startupProbeUuid)) {
+      this.#startupSettled = true;
+    }
     this.#usageAccounting?.admitQuery(this.#session.startupProbeUuid, this.#session.reattached === true);
     // Only an applied or reattach-confirmed effort attributes usage, and only to
     // the confirmed model's row; unknown stays null.
@@ -1982,6 +1994,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   /** `started` is emitted when Claude dequeues an input into a turn. */
   #consumeCommandLifecycle(lifecycle: NonNullable<ReturnType<typeof claudeCommandLifecycle>>): void {
+    if (lifecycle.commandUuid === this.#session.startupProbeUuid &&
+        (lifecycle.state === "completed" || lifecycle.state === "cancelled" || lifecycle.state === "discarded")) {
+      this.#startupSettled = true;
+    }
     if (lifecycle.state !== "started") return;
     const submission = this.#submissions.get(lifecycle.commandUuid);
     // The startup probe and inputs this attachment did not send are ignored.
@@ -2106,8 +2122,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
     if (this.#initialHistoryLoaded) {
       if (state !== "idle") {
         // Claude began work while no Sedes input is awaiting its turn: a task
-        // notification or peer hand-back started this turn.
-        if (previous === "idle" && this.#runState !== "running" && this.#runState !== "stopping" &&
+        // notification or peer hand-back started this turn. Handling this
+        // launch's startup message is not a turn; output still starts one.
+        if (previous === "idle" && this.#startupSettled && this.#runState !== "running" && this.#runState !== "stopping" &&
             !this.#hasSubmissionAwaitingStart(true)) this.#beginProviderTurn();
       } else if (this.#providerTurn) {
         // Claude finished work that produced no result, for example a drain

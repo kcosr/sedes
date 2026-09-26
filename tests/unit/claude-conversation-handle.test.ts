@@ -289,6 +289,13 @@ function fixture(options: {
     })),
     createQuery(input: ClaudeQueryInput): Query {
       queryInput = input;
+      // Claude Code completes Sedes' startup message without a model turn.
+      const prompt = input.prompt as unknown as { push(value: SDKUserMessage): void };
+      const push = prompt.push.bind(prompt);
+      prompt.push = (value) => {
+        if (value.isSynthetic && value.message.content === "") messages.push(nativeFrames.lifecycle(value.uuid!, "completed"));
+        push(value);
+      };
       const stream = (async function* () {
         yield {
           type: "system",
@@ -542,6 +549,12 @@ function retainedRuntime(
   provider: ReturnType<typeof fixture>,
   replay: SDKMessage[],
   confirmedEffort?: EffortLevel | null,
+  launch: {
+    /** False models a fresh persistent open, whose output the host holds until history is installed. */
+    readonly reattached?: boolean;
+    /** Output the owner retained after this launch's startup message, which it names. */
+    readonly afterStart?: (startupProbeUuid: string) => SDKMessage[];
+  } = {},
 ) {
   let activeOptions: ClaudeRuntimeSessionOptions | undefined;
   let delivery = Promise.resolve();
@@ -564,12 +577,12 @@ function retainedRuntime(
         get safeSkills() {
           return session.safeSkills;
         },
-        reattached: true,
+        reattached: launch.reattached ?? true,
         lifetime: "persistent_service" as const,
         ...(confirmedEffort !== undefined ? { confirmedEffort } : {}),
         async start() {
           const initialization = await session.start();
-          for (const message of replay) {
+          for (const message of [...replay, ...launch.afterStart?.(session.startupProbeUuid!) ?? []]) {
             delivery = delivery.then(async () => {
               await options.onMessage(message);
             });
@@ -5151,6 +5164,39 @@ describe("Claude compaction, lost processes, and bounded Stop", () => {
       .toMatchObject({ providerTerminalReason: "process_lost" });
     await handle.close();
   });
+
+  it.each(["idle", "failed"] as const)(
+    "does not treat a fresh persistent launch handling its startup message as a turn Claude started (%s)", async (settled) => {
+      // Claude reports running for Sedes' startup message, answers it with a
+      // result naming only that message, and reports idle; the owner holds
+      // those frames until history is installed.
+      const settings = repository();
+      const provider = fixture();
+      if (settled === "failed") {
+        settings.writeTerminalReceipt({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId }, BINDING.applicationThreadId, {
+          backendTurnId: projectClaudeHistory(settledTurn).snapshot.orderedBackendTurnIds.at(-1)!, status: "failed",
+          failureMessage: "Synthetic failure", providerTerminalReason: "error_during_execution",
+          providerResultUuid: "a1000000-0000-4000-8000-000000000031", terminalAt: 1, now: 1 });
+      }
+      const retained = retainedRuntime(provider, [], undefined, { reattached: false, afterStart: (startup) => [
+        nativeFrames.state("running"), nativeFrames.lifecycle(startup, "started"),
+        nativeFrames.result([startup]), nativeFrames.lifecycle(startup, "completed"), nativeFrames.state("idle")] });
+      const { handle } = createHandle(provider, vi.fn(), { settings, runtimeClient: retained.runtime,
+        initialMessages: settledTurn, resumeSession: true });
+      const events: BackendConversationEvent[] = [];
+      handle.subscribe(event => events.push(event));
+      const snapshot = await projectionSnapshot(handle);
+      expect(snapshot.runState).toBe(settled);
+      expect(snapshot.activeBackendTurnId).toBeUndefined();
+      expect(runStates(events)).toEqual([]);
+      // A turn Claude then starts on its own is still modelled.
+      provider.messages.push(nativeFrames.state("running"));
+      await vi.waitFor(() => expect(runStates(events)).toEqual(["running"]));
+      provider.messages.push(nativeFrames.state("idle"));
+      await vi.waitFor(() => expect(runStates(events)).toEqual(["running", "idle"]));
+      await handle.close();
+    },
+  );
 
   it("never marks the running turn of a reattached query", async () => {
     const provider = fixture();
