@@ -67,9 +67,11 @@ Existing attachment response arrays remain immutable while later sweeps remove
 entries from the host's replay map. A replacement main loads native history,
 then applies retained residual and live output without resending accepted input.
 
-Discovery, metadata, history, resume, and model catalogs use the official SDK.
-Sedes does not parse Claude's on-disk transcript format, take a global
-Claude-home writer lock, mirror native history into its database, or maintain a
+Discovery, metadata, resume, and model catalogs use the official SDK. Native
+history is read by Sedes' own transcript reader, described under
+[Authoritative history and paging](#authoritative-history-and-paging), in the
+worker that holds the transcript. Sedes does not take a global Claude-home
+writer lock, mirror native history into its database, or maintain a
 persistent or reusable provider-history cache. Bounded transient snapshots
 exist only while transferring one history acquisition. Provider-native IDs,
 messages, and binding shapes stay inside this backend.
@@ -91,9 +93,9 @@ policy are defined in the
 Local worker semantics remain independent of remote sidecar lifecycle.
 
 The worker protocol is provider-private. It carries SDK query control,
-messages, session discovery/history/rename/fork, version and authentication
-evidence, cancellation, and reverse permission requests. Shared transport owns
-framing, correlation, bounds, generation fencing, and cleanup; it does not own
+messages, session discovery, history, transcript presence, rename, and fork,
+version and authentication evidence, cancellation, and reverse permission
+requests. Shared transport owns framing, correlation, bounds, generation fencing, and cleanup; it does not own
 Claude methods, identifiers, history meaning, or policy. An exact worker
 protocol/build mismatch fails before SDK authority opens, with no compatibility
 decoder or local fallback.
@@ -129,9 +131,42 @@ the separate service-owned lifetime and reattachment contract described above.
 On attach, Claude first arms the resumed SDK stream, then acquires a complete
 provider-history baseline. It merges any live messages or
 retractions observed during that acquisition. The handle retains the resulting
-provider-private value for its lifetime.
+provider-private value for its lifetime. Reading after start keeps a reattached
+remote query's held replay behind the baseline; the read resolves through the
+startup message that the launch has just persisted.
 
-Native history transfer uses byte-bounded pages from one captured SDK read.
+Every launch sends Sedes' empty `shouldQuery: false` startup message, which
+Claude Code persists as a meta user row at the transcript tip. The pinned SDK's
+`getSessionMessages` picks the file-latest childless row that is not meta.
+Parallel tool calls leave childless sibling tool results, so a transcript
+ending in a startup message read back only to its last parallel tool call:
+forks failed verification, and reconciliation compared against a truncated
+chain. Sedes therefore reads native history with its own reader. Claude Code
+appends each row of the active conversation as a child of the row it last
+wrote. Rewind and edit start a new branch from an earlier row and leave the
+abandoned branch in the file. The active tip is therefore the last
+main-conversation user or assistant row in file order: not a sidechain or
+team row, but possibly the startup message or a `<synthetic>` assistant row.
+The reader walks `parentUuid` from that tip. Claude Code's `last-prompt` leaf
+pointer is not used; it can omit a trailing meta row or name a system notice
+attached to an old row.
+
+Apart from the tip, the reader reproduces the SDK's projection exactly. That
+covers preserved-segment relinking at compact boundaries, re-insertion of
+off-chain assistant fragments and their parallel tool results, and conversion
+of answered human queued commands. It also covers meta, sidechain, and team
+filtering, `includeSystemMessages`, task-notification origin reduction, the
+`is_meta` flag, and offset/limit slicing. Unparseable lines, including a final
+line still being written, are skipped as the SDK skips them. A compact
+boundary still ends the chain, because its `parentUuid` is null. Unlike the
+SDK, an existing transcript that cannot be read fails the read instead of
+reading as empty. The reader searches only the workspace's own native project
+directory: the sanitized canonical path, length-hashed like Claude Code's, or
+`CLAUDE_CODE_PROJECT_DIR_NAME` under an explicit `CLAUDE_CONFIG_DIR`. It skips
+the SDK's sibling-worktree and legacy hash-prefix fallbacks, because Sedes
+rejects a session recorded for another workspace.
+
+Native history transfer uses byte-bounded pages from one captured native read.
 A private random acquisition ID binds continuation offsets to that snapshot,
 session, and read options. Provider appends, compaction, replacement, and
 truncation after capture cannot splice different histories into one acquisition;
@@ -142,8 +177,8 @@ Each worker retains at most 32 transient acquisitions sharing a 256 MiB budget
 of serialized-equivalent rows. A single acquisition is also limited to 262,144
 messages. Each owns detached projected rows plus byte sizes; it does not retain
 a second encoded copy or reread and reproject the full SDK history for every
-page. The SDK still materializes native history before these limits apply, so
-neither the wire bound nor the retained-row bound caps SDK file-read memory,
+page. The reader still materializes the whole transcript before these limits
+apply, so neither the wire bound nor the retained-row bound caps transcript read memory,
 concurrent incoming materialization, or JavaScript heap size. The stopped host
 applies the same transfer lifetime to its captured shutdown baseline.
 
@@ -162,7 +197,7 @@ sustained capacity pressure can still fail an acquisition explicitly.
 
 Native reads proceed independently, with at most 32 in flight. A caller stops
 waiting after 30 seconds or owner disposal, and late completion cannot install
-a snapshot. The SDK history API has no cancellation: a timed-out read continues
+a snapshot. Native history reads have no cancellation: a timed-out read continues
 to occupy its native-read reservation until it actually settles. Exhausting all
 32 reservations returns a retryable busy error; a single slow reader does not
 block unrelated acquisition or foreground reads. Maintenance iterates validated
@@ -185,8 +220,8 @@ Requesting the same complete oversized turn as a history page fails only that
 page request. More generally, normalized page overflow does not fence an
 attached query.
 
-The SDK owns native transcript loading and folding. Sedes does not infer or
-invent a compaction boundary from folded public history. Provider history is
+The reader keeps the SDK's compaction semantics. Sedes does not infer or
+invent a compaction boundary from folded history. Provider history is
 the durable transcript authority and is reprojected as bounded whole turns
 after restart or generation replacement.
 
@@ -298,6 +333,15 @@ usage and cumulative query-pipeline totals remain separate; native round counts
 do not establish request cardinality.
 Creation reserves an application UUID before crossing the SDK boundary so a
 retry or recovery attempt cannot create an untracked replacement.
+
+A session exists natively once its transcript does. The SDK reports metadata
+only after a prompt or title, so a thread that was opened but never sent to
+holds a transcript with only startup messages and no metadata. Attach resumes
+such a session, because Claude Code rejects a fresh launch that reuses the ID.
+Reads, fork identity checks, and creation reconciliation treat it as an
+existing, empty history. Existence then comes from the runtime's
+`session.transcript` presence check. After a deliberate stop, the persistent
+host answers that check from its shutdown baseline.
 
 The live model and effort catalog is intersected with installation policy.
 Aliases that resolve to the same exact native model produce one option. An
@@ -496,6 +540,19 @@ provider-private bindings, authoritative terminal result, and exact message
 correlation prevent recovery from inventing replacement sessions or duplicate
 turns.
 
+Anchor-based non-acceptance comes only from a tip-correct read. The handle's
+retry anchor covers history that starts from a baseline read through the true
+tip, and reconciliation reads the same way. A prompt persisted before a later startup
+message is therefore found and accepted instead of hidden behind a parallel
+dead end and resent.
+
+On a remote runtime, an ordinary submission can reconcile as `failed_unknown`.
+This happens when the persistent owner reports that its session ended and the
+tip-correct history shows no acceptance: tracking is terminal, and
+consumption is unknown. The shared queue keeps that head uncertain, because
+only Steer adopts the terminal failed-item recovery. It therefore still blocks
+later queued input, and force reset is the remaining way to clear it.
+
 Persistent send admission returns a typed positive acceptance or a bounded
 pre-native refusal (busy, closed, or retention capacity). Main awaits that
 response within the submission acknowledgment deadline. A known busy refusal
@@ -563,6 +620,11 @@ normalized integration surface:
 - `tests/unit/claude-conversation-handle.test.ts` and
   `tests/unit/claude-conversation-driver.test.ts` cover session lifecycle,
   exact terminal receipts, capabilities, interactions, history, and recovery;
+- `tests/unit/claude-native-transcript.test.ts` compares the transcript reader
+  with the pinned SDK over synthetic native fixtures. The fixtures cover
+  startup-message tips, parallel dead ends, rewinds, sidechains, queued
+  commands, compaction, and partial lines. Revalidate this parity whenever the
+  SDK release changes;
 - `tests/unit/claude-native-images.test.ts`, skill/command tests, and
   agent-tool environment tests cover input projection and optional surfaces;
 - persistent-runtime tests cover exact-session attachment, event replay,

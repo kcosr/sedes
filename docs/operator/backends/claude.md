@@ -135,8 +135,9 @@ child process. For SSH or an approved outbound host, the persistent sidecar
 hosts the Claude runtime on the execution host. SSH stdio or the outbound
 connection carries the same runtime protocol. The sidecar owns its SDK queries
 and Claude processes independently of that attachment. Both paths load the
-pinned SDK and perform discovery, history, rename, fork, version, and
-authentication operations in the selected filesystem and account namespace.
+pinned SDK for discovery, rename, fork, version, and authentication, and read
+native history with Sedes' transcript reader. Both run in the selected
+filesystem and account namespace.
 Claude's login and ambient permission rules remain external operator authority.
 
 Outbound Linux and macOS hosts use the same provider runtime. Native Windows
@@ -186,6 +187,8 @@ Upgrading only main cannot change an already-running sidecar's retention code,
 and the old protocol is rejected. Upgrade the sidecar through its supported
 lifecycle controls; active-work protection still applies. After that upgrade,
 compatible main restarts can reattach to the surviving query as usual.
+Reading history through the transcript's true tip requires sidecar runtime
+protocol 14, which upgrades an older sidecar the same way.
 
 **Disconnect** detaches main Sedes and preserves remote work. **Stop**,
 **Restart**, and **Upgrade and restart** act on the owning runtime/service and
@@ -352,6 +355,8 @@ workspace, and do not use sensitive files merely to validate connectivity.
 | A permission mode is missing                                 | Compare it with the backend `allowedModes`. `bypassPermissions` must be explicitly allowed and can never be the target default.                                                                                                                                                                                         |
 | Plan-mode tools appear or a reset command is selected        | Use a reviewed CLI/profile and keep those commands disabled. Sedes rejects `EnterPlanMode`, `ExitPlanMode`, and other reset-producing forms.                                                                                                                                                                                       |
 | An ordinary file is visible but its contents were not used   | Sedes sends the authenticated staged path, not the file body. Ask Claude to read it explicitly; native images use a separate SDK image-block path.                                                                                                                                                                                 |
+| History ends at an older tool call, or a fork cannot be verified | Earlier versions read history with the SDK's leaf heuristic. It stops at a parallel tool call once Sedes' startup message is the newest transcript row. Upgrade main and any SSH or outbound sidecar to runtime protocol 14, then reload the thread. |
+| Reopening a thread that was never sent to fails with "Session ID … is already in use" | Earlier versions launched a new session because the SDK reports no metadata for a transcript holding only the startup message. The current version resumes any existing transcript. |
 | Fork is missing                                              | The source must be idle and the boundary must be an exact successfully completed ordinary turn. Attachment-ended structured-output boundaries and active sources are unforkable.                                                                                                                                                   |
 
 Use [Debug diagnostics](../../developer/diagnostics.md) for safe inspection.

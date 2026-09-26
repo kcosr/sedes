@@ -4,6 +4,10 @@
 
 ### Breaking Changes
 
+- Sidecars must use runtime protocol 14, which reads Claude history through the
+  transcript's true tip and reports transcript presence. Upgrade existing
+  sidecars explicitly before reconnecting with this server version.
+
 - Sidecars must use runtime protocol 13, which serves `sedes mcp` and accepts
   Claude's Native agent-tool entry. Upgrade existing sidecars explicitly
   before reconnecting with this server version. (#10)
@@ -74,6 +78,15 @@
   template choices remain available. (#6)
 
 ### Fixed
+
+- Read Claude history through the transcript's newest row. After a resume,
+  history no longer stops at an earlier parallel tool call, forks from such
+  threads verify, and reconciliation no longer compares against a truncated
+  history that could resend a prompt Claude had already received.
+
+- Reopen a Claude thread that was opened but never sent to. Sedes now resumes
+  the existing session instead of failing with "Session ID … is already in
+  use", and first-send recovery can resolve it.
 
 - Preserve underlying Claude read errors in gated thread-load diagnostics and
   identify failed persistent-runtime commands without logging conversation content.
