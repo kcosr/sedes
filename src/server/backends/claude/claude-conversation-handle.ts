@@ -869,41 +869,55 @@ export class ClaudeConversationHandle implements ConversationHandle {
         );
       }
       if (!steering) {
-        try {
-          await this.#session.setModel(desired.model);
-          this.#effectiveModel = desired.model;
-          if (this.#effectiveModel && !this.#closed) {
-            this.#recordModelEvidence(this.#effectiveModel, "setter");
+        // Each setter is a sidecar and CLI control round trip. Skip an axis
+        // this query already applied and confirmed; a new query generation or
+        // any contrary evidence (fallback, status, failure) re-applies it.
+        const applied = this.#desiredSettings();
+        const generation = this.#sessionGeneration;
+        if (!(this.#effectiveModel === desired.model && applied.effectiveModelState === "confirmed" &&
+            applied.effectiveModel === desired.model && applied.effectiveModelGeneration === generation)) {
+          try {
+            await this.#session.setModel(desired.model);
+            this.#effectiveModel = desired.model;
+            if (this.#effectiveModel && !this.#closed) {
+              this.#recordModelEvidence(this.#effectiveModel, "setter");
+            }
+            this.#emit({
+              type: "capabilities_changed",
+              capabilities: this.#capabilities(),
+            });
+          } catch (error) {
+            this.#markEffectiveAxisUnknown("model");
+            throw mapClaudePreSubmissionError(error, "settings");
           }
-          this.#emit({
-            type: "capabilities_changed",
-            capabilities: this.#capabilities(),
-          });
-        } catch (error) {
-          this.#markEffectiveAxisUnknown("model");
-          throw mapClaudePreSubmissionError(error, "settings");
         }
-        try {
-          const generation = this.#sessionGeneration;
-          await this.#session.setPermissionMode(permissionMode);
-          if (generation === this.#sessionGeneration && !this.#closed) {
-            this.#recordPermissionModeEvidence(permissionMode, "setter");
+        if (!(this.#effectivePermissionMode === permissionMode && applied.effectivePermissionState === "confirmed" &&
+            applied.effectivePermissionClassification === "recognized" &&
+            applied.effectivePermissionMode === permissionMode && applied.effectivePermissionGeneration === generation)) {
+          try {
+            await this.#session.setPermissionMode(permissionMode);
+            if (generation === this.#sessionGeneration && !this.#closed) {
+              this.#recordPermissionModeEvidence(permissionMode, "setter");
+            }
+          } catch (error) {
+            this.#markEffectiveAxisUnknown("permission");
+            throw mapClaudePreSubmissionError(error, "settings");
           }
-        } catch (error) {
-          this.#markEffectiveAxisUnknown("permission");
-          throw mapClaudePreSubmissionError(error, "settings");
         }
-        try {
-          await this.#session.setEffort(effort);
-          this.#effectiveEffort = effort ?? null;
-          if (!this.#closed) this.#recordEffortEvidence(effort);
-          this.#emit({
-            type: "capabilities_changed",
-            capabilities: this.#capabilities(),
-          });
-        } catch (error) {
-          this.#markEffectiveAxisUnknown("effort");
-          throw mapClaudePreSubmissionError(error, "settings");
+        if (!(this.#effectiveEffort === (effort ?? null) && applied.effectiveEffortState === "confirmed" &&
+            applied.effectiveEffort === (effort ?? null) && applied.effectiveEffortGeneration === generation)) {
+          try {
+            await this.#session.setEffort(effort);
+            this.#effectiveEffort = effort ?? null;
+            if (!this.#closed) this.#recordEffortEvidence(effort);
+            this.#emit({
+              type: "capabilities_changed",
+              capabilities: this.#capabilities(),
+            });
+          } catch (error) {
+            this.#markEffectiveAxisUnknown("effort");
+            throw mapClaudePreSubmissionError(error, "settings");
+          }
         }
       }
       const liveSettings = this.#desiredSettings();

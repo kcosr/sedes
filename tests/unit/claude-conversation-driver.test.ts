@@ -22,6 +22,7 @@ import type {
   ClaudeSdkFacade,
 } from "../../src/server/backends/claude/claude-sdk-facade.js";
 import { ClaudeSdkRuntimeAdapter, type ClaudeRuntimeClient } from "../../src/server/backends/claude/claude-runtime-client.js";
+import type { ClaudeInputQueue } from "../../src/server/backends/claude/claude-input-queue.js";
 import type { ClaudeThreadRepository } from "../../src/server/backends/claude/claude-thread-repository.js";
 import type { ClaudePermissionMode } from "../../src/server/backends/claude/claude-permission-policy.js";
 import { projectClaudeHistory } from "../../src/server/backends/claude/claude-history-projector.js";
@@ -498,10 +499,10 @@ describe("ClaudeConversationBackendDriver", () => {
         await vi.advanceTimersByTimeAsync(30_001);
         await retried;
         await expect(handle.submit(input)).resolves.toMatchObject({ accepted: true });
-        expect(sdk.createQuery.mock.results.at(-1)!.value.setModel).toHaveBeenCalledTimes(2);
+        expect(nativeInputCount(sdk)).toBe(2);
       } else {
         await expect(handle.submit(input)).rejects.toMatchObject({ category: "submission_unknown" });
-        expect(sdk.createQuery.mock.results.at(-1)!.value.setModel).toHaveBeenCalledTimes(1);
+        expect(nativeInputCount(sdk)).toBe(1);
         if (authority === "local") {
           // The runtime may end before its callback closes the handle. Release
           // its retirement hold, but keep the outcome unknown and forbid retry.
@@ -509,7 +510,7 @@ describe("ClaudeConversationBackendDriver", () => {
           await expect(driver.reconcileSubmission(reconcile)).resolves.toMatchObject({ status: "unresolved" });
           expect(handle.retirementBlocked).toBe(false);
           await expect(handle.submit(input)).rejects.toMatchObject({ backendCode: "claude_submission_tracking_ended" });
-          expect(sdk.createQuery.mock.results.at(-1)!.value.setModel).toHaveBeenCalledTimes(1);
+          expect(nativeInputCount(sdk)).toBe(1);
         }
       }
     } finally { vi.useRealTimers(); await driver.close(); }
@@ -1824,6 +1825,11 @@ function fakeSdk(
     ),
   } satisfies ClaudeSdkFacade;
   return sdk;
+}
+
+/** Inputs written to the unread fake query, excluding the startup probe. */
+function nativeInputCount(sdk: ReturnType<typeof fakeSdk>): number {
+  return (sdk.createQuery.mock.calls.at(-1)![0].prompt as ClaudeInputQueue<unknown>).size - 1;
 }
 
 function exposeSessionMessages(

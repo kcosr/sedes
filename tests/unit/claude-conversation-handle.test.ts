@@ -241,7 +241,12 @@ class MessageQueue implements AsyncIterable<SDKMessage> {
   }
 }
 
-function fixture(options: { readonly safeSkill?: boolean } = {}) {
+function fixture(options: {
+  readonly safeSkill?: boolean;
+  /** Claude's reported initial model/mode; differing values force a setter. */
+  readonly initModel?: string;
+  readonly initPermissionMode?: PermissionMode;
+} = {}) {
   const messages = new MessageQueue();
   let queryInput: ClaudeQueryInput | undefined;
   const controls = {
@@ -290,8 +295,8 @@ function fixture(options: { readonly safeSkill?: boolean } = {}) {
           cwd: input.options.cwd!,
           tools: [],
           mcp_servers: [],
-          model: "claude-sonnet-5",
-          permissionMode: "default",
+          model: options.initModel ?? "claude-sonnet-5",
+          permissionMode: options.initPermissionMode ?? "default",
           slash_commands: options.safeSkill ? ["review"] : [],
           output_style: "default",
           skills: options.safeSkill ? ["review"] : [],
@@ -844,11 +849,14 @@ describe("ClaudeConversationHandle", () => {
     ).rejects.toMatchObject({
       backendCode: "claude_submission_replay_mismatch",
     });
-    expect(provider.controls.setModel).toHaveBeenCalledWith("claude-sonnet-5");
+    // Initialization confirmed the model and mode, and attach applied the
+    // effort. A send with unchanged settings makes no control round trips.
+    expect(provider.controls.setModel).not.toHaveBeenCalled();
+    expect(provider.controls.applyFlagSettings).toHaveBeenCalledOnce();
     expect(provider.controls.applyFlagSettings).toHaveBeenCalledWith({
       effortLevel: "low",
     });
-    expect(provider.controls.setPermissionMode).toHaveBeenCalledWith("default");
+    expect(provider.controls.setPermissionMode).not.toHaveBeenCalled();
     expect(modelEvidence).toHaveBeenCalledTimes(1);
     expect(modelEvidence).toHaveBeenCalledWith({
       generation: 1,
@@ -1911,7 +1919,7 @@ describe("ClaudeConversationHandle", () => {
   });
 
   it("marks the failed effective axis unknown after an uncertain settings apply", async () => {
-    const provider = fixture();
+    const provider = fixture({ initPermissionMode: "acceptEdits" });
     const axisUnknown = vi.fn();
     provider.controls.setPermissionMode.mockRejectedValueOnce(
       new Error("control response lost"),
@@ -2398,7 +2406,7 @@ describe("ClaudeConversationHandle", () => {
   });
 
   it("reserves submission admission before awaiting provider settings controls", async () => {
-    const provider = fixture();
+    const provider = fixture({ initModel: "claude-opus-5" });
     let resolveModel!: () => void;
     provider.controls.setModel.mockImplementationOnce(async () => {
       await new Promise<void>((resolve) => {
@@ -4123,7 +4131,7 @@ describe("Claude asynchronous send admission", () => {
       expect(snapshot.runState).toBe("running");
       expect(Object.values(snapshot.itemsById).filter(item => item.semanticKind === "user_message")).toHaveLength(1);
       await expect(handle.submit(input)).resolves.toMatchObject({ accepted: true });
-      expect(provider.controls.setModel).toHaveBeenCalledTimes(1);
+      expect(provider.controls.setModel).not.toHaveBeenCalled();
       expect(provider.sdk.getSessionMessages).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); await handle.close(); }
   });
@@ -4152,7 +4160,7 @@ describe("Claude asynchronous send admission", () => {
       expect(snapshot.runState).toBe("idle");
       expect(Object.values(snapshot.itemsById).filter(item => item.semanticKind === "user_message")).toHaveLength(1);
       expect(handle.retirementBlocked).toBe(false);
-      expect(provider.controls.setModel).toHaveBeenCalledTimes(1);
+      expect(provider.controls.setModel).not.toHaveBeenCalled();
     } finally { vi.useRealTimers(); await handle.close(); }
   });
 
@@ -4169,7 +4177,7 @@ describe("Claude asynchronous send admission", () => {
       await submitted;
       expect(handle.retirementBlocked).toBe(true);
       await expect(handle.submit(input)).rejects.toMatchObject({ category: "submission_unknown" });
-      expect(provider.controls.setModel).toHaveBeenCalledTimes(1);
+      expect(provider.controls.setModel).not.toHaveBeenCalled();
       expect(handle.forgetProvenUnsentSubmission(OPERATION_ID)).toBe(true);
       expect(handle.retirementBlocked).toBe(false);
       const retried = handle.submit(input);
@@ -4180,7 +4188,7 @@ describe("Claude asynchronous send admission", () => {
       await expect(retried).resolves.toMatchObject({ accepted: true });
       await expect(handle.submit(input)).resolves.toMatchObject({ accepted: true });
       expect(handle.forgetProvenUnsentSubmission(OPERATION_ID)).toBe(false);
-      expect(provider.controls.setModel).toHaveBeenCalledTimes(2);
+      expect(provider.controls.setModel).not.toHaveBeenCalled();
       await handle.close();
       expect(await nativeInputs.next()).toMatchObject({ done: true });
     } finally { vi.useRealTimers(); await handle.close(); }
@@ -4621,6 +4629,36 @@ describe("Claude native run state without prompt echoes", () => {
     expect(writeTerminal).toHaveBeenCalledOnce();
     expect(writeTerminal).toHaveBeenCalledWith(expect.anything(), BINDING.applicationThreadId,
       expect.objectContaining({ backendTurnId: steered.backendTurnId, status: "completed" }));
+    await handle.close();
+  });
+
+  it("re-applies only a settings axis the live query has not confirmed", async () => {
+    const provider = fixture({ initModel: "claude-opus-5" });
+    const { handle } = createHandle(provider);
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const inputs = provider.prompt()[Symbol.asyncIterator]();
+    const turn = async (operationId: string) => {
+      const submitted = handle.submit(submitInput(operationId, `Turn ${operationId}`));
+      await inputs.next();
+      provider.messages.push(nativeFrames.lifecycle(operationId, "started"));
+      await submitted;
+      provider.messages.push(nativeFrames.result([operationId]));
+      await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    };
+    await turn("a1111111-1111-4111-8111-111111111111");
+    expect(provider.controls.setModel).toHaveBeenCalledExactlyOnceWith("claude-sonnet-5");
+    expect(provider.controls.setPermissionMode).not.toHaveBeenCalled();
+    expect(provider.controls.applyFlagSettings).toHaveBeenCalledOnce();
+    await turn("a2222222-2222-4222-8222-222222222222");
+    expect(provider.controls.setModel).toHaveBeenCalledOnce();
+    // Claude reports a mode change; the next send restores the desired mode.
+    provider.messages.push({ type: "system", subtype: "status", status: null, permissionMode: "acceptEdits",
+      uuid: crypto.randomUUID(), session_id: SESSION_ID } as SDKMessage);
+    await vi.waitFor(async () => expect((await handle.backendCapabilities()).revision).toContain("acceptEdits"));
+    await turn("a3333333-3333-4333-8333-333333333333");
+    expect(provider.controls.setPermissionMode).toHaveBeenCalledExactlyOnceWith("default");
+    expect(provider.controls.setModel).toHaveBeenCalledOnce();
+    expect(provider.controls.applyFlagSettings).toHaveBeenCalledOnce();
     await handle.close();
   });
 
