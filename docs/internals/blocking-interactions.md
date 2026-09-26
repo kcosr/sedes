@@ -94,8 +94,9 @@ interactions retain broker order and are shown one at a time.
 ## Interaction lifetime and questionnaire resolution
 
 An approval or questionnaire remains pending without a Sedes deadline until
-the user responds, the active turn is interrupted or cancelled, or the
-provider resolves or withdraws the request. A provider's blocking hint may
+the user responds, the active turn is interrupted or cancelled, a
+[force reset](#force-reset-cancellation) abandons it, or the provider resolves
+or withdraws the request. A provider's blocking hint may
 describe its native turn behavior, but it does not authorize Sedes to expire
 the request or submit unanswered questions after elapsed time. Sedes does not
 publish countdowns, schedule interaction timers, or synthesize a questionnaire
@@ -107,6 +108,25 @@ while that generation is alive. Sedes does not persist provider-native
 callbacks across a server or provider restart; the provider must present an
 outstanding request again in the new generation, at which point the broker
 publishes it as a new pending interaction.
+
+### Force reset cancellation
+
+Force reset is the only path on which Sedes answers a provider interaction the
+user did not answer. After the durable reset commits, the broker removes each
+exact pending interaction the reset listed and sends every provider-owned one
+the backend-neutral `cancel` response through the runtime that owns it. Sedes
+waits at most 10 seconds in total for these cancellations and then replaces
+the runtime, so a replaced or reattached runtime does not leave the provider
+waiting on a prompt nobody can answer.
+
+The cancellation is not a user response. It records no receipt, is never
+reported as provider success, and never blocks or undoes the committed reset.
+Sedes ignores a cancellation that the backend rejects, that fails, or that is
+still unconfirmed at the bound. The request stays abandoned, a replay of it in
+the same generation is dropped, and replacing the runtime releases whatever the
+backend could not cancel. Application-owned decisions are rejected locally and
+reach no provider. Each backend's disposition is listed in the
+[compiled backend audit](#compiled-backend-audit).
 
 ### Application-owned environment decisions
 
@@ -185,6 +205,15 @@ turn stop is never required to make the panel appear.
 - **Invocation context:** implemented for MCP tool approvals with explicit
   `codex_approval_kind: mcp_tool_call` metadata and `tool_params`. The adapter
   normalizes those parameters without matching transcript items or prompt text.
+- **Force-reset cancellation:** implemented where the native request can be
+  cancelled or declined. Command and file-change approvals that offer Codex's
+  `cancel` decision receive it, which also cancels the turn. Legacy approvals
+  receive `abort`, permission requests an empty turn grant, and MCP
+  elicitations `cancel`. A delivered cancellation completes on Codex's
+  `serverRequest/resolved` confirmation. Questionnaires, and command
+  approvals whose native choices omit `cancel`, have no native cancellation:
+  the adapter rejects it, and the request fails when the replaced runtime
+  releases it.
 - **Private boundary:** strict app-server codecs, native request IDs, decision
   unions, positional option mapping, Other and `user_note: ` encoding, native
   `isBlocking`, server-request confirmation, and generation ownership remain
@@ -198,6 +227,11 @@ turn stop is never required to make the panel appear.
 - **Forms:** intentionally unsupported; Pi retains its existing primitive UI.
 - **Invocation context:** intentionally omitted; existing approval details and
   primitive UI contracts remain unchanged.
+- **Force-reset cancellation:** implemented. The request settles with the value
+  Pi gives a dismissed prompt: the managed approval is not granted, so the tool
+  is blocked; a confirmation returns false; and a selection or text input
+  returns no value. Pi's durable response markers record it like any other
+  response.
 - **Private boundary:** the managed approval extension uses a dedicated bridge
   for approve-once or deny. Generic Pi UI methods retain primitive interaction
   kinds. Pi advertises no questionnaire capability and has no JSON or
@@ -211,6 +245,10 @@ turn stop is never required to make the panel appear.
 - **Forms:** intentionally unsupported; Claude does not advertise this kind.
 - **Invocation context:** intentionally omitted; bounded tool input remains in
   the existing decision details.
+- **Force-reset cancellation:** implemented. A permission request is denied
+  ("User denied permission.") and an `AskUserQuestion` request is denied as
+  cancelled, without interrupting the turn. Delivery completes when the direct
+  SDK callback, the runtime worker, or the persistent host accepts the answer.
 - **Private boundary:** SDK request/tool identities, permission updates,
   positional mappings, response encoding, and callback lifetime remain under
   `src/server/backends/claude`. Unsupported or oversized native shapes fail
@@ -221,6 +259,9 @@ turn stop is never required to make the panel appear.
 - **Decisions and questionnaires:** intentionally unsupported.
 - **Forms:** intentionally unsupported.
 - **Invocation context:** intentionally unsupported with provider interactions.
+- **Force-reset cancellation:** intentionally unsupported. Grok opens no
+  provider interactions, so force reset has nothing to cancel, and its
+  `respond` rejects every response.
 - **Private boundary:** Grok advertises an empty `interactionKinds` set. Sedes
   does not infer ACP permission or elicitation shapes, emulate them with
   messages, or expose a response route.
@@ -228,8 +269,9 @@ turn stop is never required to make the panel appear.
 ### In-memory conformance backend
 
 - **Decisions and questionnaires:** intentionally unsupported by the backend.
-- **Test boundary:** it advertises no kinds. Fixture-only interaction journeys
-  enter through the normalized test seam and create no provider contract.
+- **Test boundary:** it advertises no kinds, so force reset has nothing to
+  cancel. Fixture-only interaction journeys enter through the normalized test
+  seam and create no provider contract.
 
 Every compiled backend with an implemented interaction kind uses the normalized
 broker, operation gateway, snapshots/events, interaction panel, and fail-closed
@@ -253,6 +295,8 @@ A backend or contract change in this area must cover:
 - response receipts, reconciliation, duplicate submission, stale generation,
   arbitrary elapsed-time durability, explicit cancellation, and
   user/provider-resolution races;
+- force-reset cancellation of exactly the abandoned provider interactions, its
+  bound, and tolerance of rejected or unconfirmed cancellations;
 - each compiled backend's implemented and intentionally unsupported paths,
   including exact native decision/answer encoding and provider resolution
   confirmation;

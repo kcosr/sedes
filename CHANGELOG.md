@@ -100,6 +100,14 @@
   to Claude Code. A turn interrupted by a lost process is marked interrupted
   instead of re-running its tools unattended; resend it to continue.
 
+- **Force reset** now cancels the approvals and questions it abandons at the
+  provider, for every backend, instead of only removing them from Sedes, so a
+  provider is not left waiting on a prompt nobody can answer. Claude and Pi
+  receive a denial or dismissal. A Codex approval that offers **Cancel turn**
+  receives it, which also cancels that turn; a Codex question, which has no
+  cancel, fails when the runtime is replaced. The reset waits up to 10 seconds
+  for these answers before it replaces the runtime.
+
 ### Fixed
 
 - Create Claude forks with one locked-down Claude Code launch. It loads no
@@ -132,8 +140,7 @@
   Resetting a fork no longer resets its source and sibling forks or stops the
   source's running turn. The preview names each affected thread with its run
   state and background work and totals the background agents and commands it
-  may stop; a change in that work makes the preview stale. Abandoned approvals
-  and questions are answered as denied at the provider.
+  may stop; a change in that work makes the preview stale.
 
 - Release remote Claude queries that are no longer useful. A failed query is
   retired once its output is delivered, so reopening the thread no longer

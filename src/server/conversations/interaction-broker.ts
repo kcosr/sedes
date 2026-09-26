@@ -592,15 +592,15 @@ export class InteractionBroker {
   }
 
   /**
-   * Locally abandons exact browser interactions after a durable force reset.
-   * This deliberately publishes no response or cancellation to the backend.
-   */
-  /**
-   * Force reset: abandon exact pending interactions in Sedes, and deny any
-   * provider request still waiting on one, so a runtime that is replaced or
-   * reattached later does not keep the provider waiting on a prompt that
-   * nobody can answer. Validation is synchronous; the returned promise
-   * settles when the denials are delivered or have failed.
+   * Force reset: abandon exact pending interactions in Sedes after the durable
+   * reset commits, and send each provider-owned one the backend-neutral
+   * `cancel` response through its owning runtime, so a runtime that is
+   * replaced or reattached later does not keep the provider waiting on a
+   * prompt nobody can answer. The cancellation is not a user response: it
+   * records no receipt, and a failed or rejected delivery is swallowed.
+   * Validation is synchronous; the returned promise never rejects and settles
+   * once every cancellation is delivered or has failed. The caller bounds the
+   * wait. Application-owned decisions are rejected locally instead.
    */
   abandonPending(
     scope: RequestScope,
@@ -632,16 +632,23 @@ export class InteractionBroker {
             current.backendInteractionId,
           ),
         );
+        let cancellation: Promise<void>;
+        try {
+          cancellation = current.conversation.respond({
+            applicationOperationId: `force-reset:${current.interaction.id}`,
+            interactionId: current.backendInteractionId,
+            kind: "cancel",
+          });
+        } catch (error) {
+          // A synchronous refusal must not leave later interactions pending.
+          cancellation = Promise.reject(error);
+        }
         denials.push(
-          current.conversation
-            .respond({
-              applicationOperationId: `force-reset:${current.interaction.id}`,
-              interactionId: current.backendInteractionId,
-              kind: "cancel",
-            })
-            .catch(() => {
-              // The abandoned marker still drops any replay of this request.
-            }),
+          cancellation.catch(() => {
+            // The abandoned marker still drops any replay of this request, and
+            // replacing the runtime releases a request the backend could not
+            // cancel.
+          }),
         );
       }
       this.#remove(current);

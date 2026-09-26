@@ -926,6 +926,17 @@ synthesize idle. Receipt replay is observational and must never retire a newer
 generation. This contract is backend-neutral and shared code must not branch on
 provider identity.
 
+Force reset also releases the exact provider interactions it abandons. After
+the durable commit and before replacing a runtime, send each abandoned
+provider-owned interaction the normalized `cancel` response through its owning
+runtime, and wait at most 10 seconds in total. This cancellation is not a user
+response: record no receipt, never report it as provider success, ignore its
+failures, and never let it block or undo the commit. Every backend that
+advertises interaction kinds must map `cancel` for each kind to its native
+cancel, decline, or dismissal, or reject it without side effects so that
+replacing the runtime releases the request. Record each backend's disposition in
+[Blocking interactions](blocking-interactions.md#compiled-backend-audit).
+
 The scoped thread event registry must retain the same hub while a runtime
 owns it, including establishment and periods without browser subscribers.
 Quiet application reads and cache eviction cannot remove that owned hub:
@@ -3067,7 +3078,7 @@ surfaces that apply:
 | Provider output artifacts          | Are exact native completion and byte authority, immutable scoped storage, duplicate live/history observation, normalized metadata, content retrieval, bounds, unavailable projection, topology, path-capture authority and host attribution, and input/tool-result separation explicit?                                                                              |
 | Settings and provider features     | Are policy, desired/effective evidence, generation, turn-boundary application, persistence, native mapping, revisions, receipts, Saved Agents, and unsupported paths covered?                                                                                                                                                                                        |
 | Model policy                       | Is it backend-owned and fingerprinted? Are native provider/model/effort matcher dispositions, catalog intersection, defaults, every new provider-effect boundary, stale stored selections, empty intersections, denylist future admission, and receipt/reconciliation ordering covered?                                                                              |
-| Interactions                       | Are kinds, answers, interruption, reconnect, and sensitive data covered?                                                                                                                                                                                                                                                                                             |
+| Interactions                       | Are kinds, answers, interruption, force-reset cancellation, reconnect, and sensitive data covered?                                                                                                                                                                                                                                                                   |
 | Forks                              | Are ancestry, exact selected turns, latest-provider-snapshot capability, lineage boundary/source-turn nullability, acceptance races, active-leaf interruption, immutable context, provider-history fidelity, backend fallback, and unresolved outcomes covered?                                                                                                      |
 | Environments and Files             | Are local/remote authority, exact sidecar providers, no-fallback behavior, paths, idempotency, and cleanup covered?                                                                                                                                                                                                                                                  |
 | Application terminal resources     | Are all environment providers explicitly implemented or unsupported? Are process/panel/End separation, initial-CWD authority, bounded checkpoint and `CSI 3 J` floor semantics, output ordering, preemptive epoch-fenced control, input reconciliation, zero-viewer lifetime, retained interruption truth, Sidecar revision, and no-local-fallback behavior covered? |

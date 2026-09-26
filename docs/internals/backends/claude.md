@@ -902,7 +902,9 @@ forced stop would.
 Force reset answers every pending Claude permission or question it abandons
 with a provider-side cancel, which Claude receives as a denial, and waits up to
 10 seconds for those answers before it replaces the runtime. A remote query
-therefore does not stay blocked on a prompt no client can answer.
+therefore does not stay blocked on a prompt no client can answer. The
+backend-neutral rule is in
+[Blocking interactions](../blocking-interactions.md#force-reset-cancellation).
 
 A fork failure is definite when it proves no child exists (a refused launch) or
 that the child is unusable (a history mismatch, a settings or effort mismatch,

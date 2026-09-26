@@ -280,17 +280,37 @@ test.describe.serial("blocking interaction panel", () => {
       await expect(reset).toContainText("1 conversation runtime");
       await capture(page, testInfo, "blocking-force-reset-approval-desktop.png");
 
-      const committed = page.waitForResponse(
-        (response) =>
-          response.request().method() === "POST" &&
-          response.url().endsWith(`/api/threads/${threadId}/force-reset`) &&
-          response.ok(),
-      );
+      let resetResponded = false;
+      const committed = page
+        .waitForResponse(
+          (response) =>
+            response.request().method() === "POST" &&
+            response.url().endsWith(`/api/threads/${threadId}/force-reset`) &&
+            response.ok(),
+        )
+        .finally(() => {
+          resetResponded = true;
+        });
       await reset.getByRole("button", { name: "Force reset" }).click();
+      // After the durable commit, Sedes cancels the abandoned approval at the
+      // provider with Codex's native cancel decision, never as an approval.
+      await expect
+        .poll(async () => (await fixtureRecord(page, stuckRequestId)).state)
+        .toBe("response_received");
+      expect((await fixtureRecord(page, stuckRequestId)).safeResponse).toEqual({
+        kind: "decision",
+        decision: "cancel",
+      });
+      await expect(approval).toHaveCount(0);
+      // The reset waits, within its bound, for the provider to confirm the
+      // cancellation before it replaces the runtime.
+      expect(resetResponded).toBe(false);
+      await releaseInteraction(page, stuckRequestId);
       await committed;
       await expect(reset).toHaveCount(0);
-      await expect(approval).toHaveCount(0);
-      expect((await fixtureRecord(page, stuckRequestId)).state).toBe("failed");
+      expect((await fixtureRecord(page, stuckRequestId)).state).toBe(
+        "confirmed",
+      );
 
       const [nextRequestId] = await openScenario(
         page,
