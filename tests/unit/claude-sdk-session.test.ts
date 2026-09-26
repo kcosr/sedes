@@ -336,6 +336,32 @@ describe("ClaudeSdkSession", () => {
     await session.close();
   });
 
+  it("withholds an inherited request to re-run interrupted turns", async () => {
+    const fixture = fakeQuery();
+    let observedOptions: Options | undefined;
+    const environment = { HOME: "/home/test", CLAUDE_CODE_RESUME_INTERRUPTED_TURN: "1" };
+    const session = new ClaudeSdkSession({
+      sdk: fixture.sdk,
+      executablePath: "/home/test/.local/bin/claude",
+      initializationTimeoutMs: 1_000,
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      cwd: "/workspace",
+      launch: "resume",
+      environment,
+      onMessage: () => undefined,
+    });
+    const originalCreate = fixture.sdk.createQuery.bind(fixture.sdk);
+    fixture.sdk.createQuery = (input) => {
+      observedOptions = input.options;
+      return originalCreate(input);
+    };
+    await session.start();
+    expect(observedOptions?.env).not.toHaveProperty("CLAUDE_CODE_RESUME_INTERRUPTED_TURN");
+    expect(observedOptions?.env?.HOME).toBe("/home/test");
+    expect(environment.CLAUDE_CODE_RESUME_INTERRUPTED_TURN).toBe("1");
+    await session.close();
+  });
+
   it("uses the external CLI and subscription login without configuring auth", async () => {
     const fixture = fakeQuery();
     let observedOptions: Options | undefined;

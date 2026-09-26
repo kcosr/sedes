@@ -1698,8 +1698,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
    */
   #watchProcessLostTurn(): void {
     const { snapshot } = this.#projection;
-    // Claude Code itself re-runs an interrupted turn when this is set.
-    if (snapshot.runState !== "running" || environmentFlag(this.#childEnvironment.CLAUDE_CODE_RESUME_INTERRUPTED_TURN)) return;
+    if (snapshot.runState !== "running") return;
     this.#processLostTurnId = snapshot.activeBackendTurnId;
     this.#closeProcessLostTurn(false);
   }
@@ -2830,10 +2829,6 @@ function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
 }
 
 /** Claude Code's reading of a boolean environment variable. */
-function environmentFlag(value: string | undefined): boolean {
-  return value !== undefined && ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
-}
-
 function liveSessionMessage(
   message: SDKMessage,
   compactSummary = false,

@@ -4972,25 +4972,22 @@ describe("Claude compaction, lost processes, and bounded Stop", () => {
     await reopened.close();
   });
 
-  it("leaves the turn alone when Claude Code already closed it or re-runs it itself", async () => {
+  it("leaves the turn alone when Claude Code already closed it", async () => {
     const closure = { type: "assistant", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
       parent_agent_id: null, timestamp: "2026-09-26T10:00:00.000Z", message: { id: crypto.randomUUID(), role: "assistant",
         model: "<synthetic>", content: [{ type: "text", text: "No response requested." }], stop_reason: "stop_sequence", usage: {} } } as SessionMessage;
-    for (const variant of ["closed", "rerun"] as const) {
-      const settings = repository();
-      const writes = vi.spyOn(settings, "writeTerminalReceipt");
-      const provider = fixture();
-      const { handle } = createHandle(provider, vi.fn(), { settings, resumeSession: true,
-        initialMessages: [...settledTurn, unanswered, ...(variant === "closed" ? [closure] : [])],
-        ...(variant === "rerun" ? { childEnvironment: { CLAUDE_CODE_RESUME_INTERRUPTED_TURN: "1" } } : {}) });
-      const snapshot = await projectionSnapshot(handle);
-      expect(snapshot.runState).toBe(variant === "closed" ? "idle" : "running");
-      provider.messages.push(nativeFrames.state("idle"));
-      provider.messages.push(nativeFrames.state("running"));
-      await vi.waitFor(() => expect(handle.retirementBlocked).toBe(true));
-      expect(writes).not.toHaveBeenCalled();
-      await handle.close();
-    }
+    const settings = repository();
+    const writes = vi.spyOn(settings, "writeTerminalReceipt");
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { settings, resumeSession: true,
+      initialMessages: [...settledTurn, unanswered, closure] });
+    const snapshot = await projectionSnapshot(handle);
+    expect(snapshot.runState).toBe("idle");
+    provider.messages.push(nativeFrames.state("idle"));
+    provider.messages.push(nativeFrames.state("running"));
+    await vi.waitFor(() => expect(handle.retirementBlocked).toBe(true));
+    expect(writes).not.toHaveBeenCalled();
+    await handle.close();
   });
 
   it("waits while Claude handles the startup message, then closes the turn when it reports idle", async () => {

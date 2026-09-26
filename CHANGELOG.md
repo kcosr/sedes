@@ -90,6 +90,10 @@
   backend. Claude skips settings calls the live session already confirmed and
   applies sidecar events without one acknowledgement round trip each.
 
+- Sedes no longer passes an inherited `CLAUDE_CODE_RESUME_INTERRUPTED_TURN`
+  to Claude Code. A turn interrupted by a lost process is marked interrupted
+  instead of re-running its tools unattended; resend it to continue.
+
 ### Fixed
 
 - Read Claude history through the transcript's newest row. After a resume,

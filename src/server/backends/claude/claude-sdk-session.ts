@@ -37,6 +37,14 @@ const CLAUDE_SETTING_SOURCES = ["user", "project", "local"] as const;
 export const CLAUDE_SESSION_STATE_EVENTS_VARIABLE =
   "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS";
 
+/**
+ * When set, Claude Code re-runs a turn that a process restart interrupted,
+ * tools included, with no Sedes input. Sedes withholds it from every launch:
+ * such a turn is marked interrupted and the user decides whether to resend.
+ */
+export const CLAUDE_RESUME_INTERRUPTED_TURN_VARIABLE =
+  "CLAUDE_CODE_RESUME_INTERRUPTED_TURN";
+
 const SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE =
   "SEDES_AGENT_TOOL_SOURCE_CAPABILITY";
 
@@ -264,7 +272,10 @@ export class ClaudeSdkSession {
           ? { mcpServers: sedesMcpServers(this.#options.agentToolMcp) }
           : {}),
         env: {
-          ...this.#options.environment,
+          ...withoutVariable(
+            this.#options.environment,
+            CLAUDE_RESUME_INTERRUPTED_TURN_VARIABLE,
+          ),
           ...(this.#options.agentToolMcp
             ? {
                 [SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE]:
@@ -588,4 +599,13 @@ async function withTimeout<T>(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+function withoutVariable(
+  environment: Readonly<Record<string, string | undefined>>,
+  name: string,
+): Record<string, string | undefined> {
+  const copy = { ...environment };
+  delete copy[name];
+  return copy;
 }

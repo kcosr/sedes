@@ -366,10 +366,12 @@ has no terminal receipt gets an `interrupted` receipt. The receipt has the
 Sedes-owned reason `process_lost` and no result UUID. The projector adds a
 warning notice: "Claude Code stopped before this turn finished. Sedes marked it
 interrupted when the conversation reopened." A reattached persistent query is
-never watched, because its turn may still be running. A turn is also left
-alone when the child environment sets `CLAUDE_CODE_RESUME_INTERRUPTED_TURN`,
-because Claude Code then re-runs it. The receipt is write-once, so a later
-closure row or result cannot change the outcome.
+never watched, because its turn may still be running. Sedes withholds
+`CLAUDE_CODE_RESUME_INTERRUPTED_TURN` from every launch, even when the inherited
+environment sets it, so Claude Code never re-runs an interrupted turn, tools
+included, without a Sedes input; the user decides whether to resend. The
+receipt is write-once, so a later closure row or result cannot change the
+outcome.
 
 SDK 0.3.274 can emit intermediate results while draining background task
 notifications. Only successful empty zero-turn results carrying native
