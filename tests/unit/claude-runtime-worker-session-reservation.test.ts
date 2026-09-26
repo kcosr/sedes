@@ -24,7 +24,7 @@ const context = () => ({ requestId: randomUUID(), signal: new AbortController().
 /**
  * Answers the release and auth probes like Claude Code. As a session process
  * it reports its PID and, like a CLI flushing its transcript, exits only
- * 400 ms after SIGTERM or stdin EOF.
+ * 1 s after SIGTERM or stdin EOF.
  */
 const FAKE_CLAUDE = `#!${process.execPath}
 const args = process.argv.slice(2);
@@ -34,7 +34,7 @@ if (args[0] === "auth") {
   process.exit(0);
 }
 let exiting = false;
-const exitSoon = () => { if (!exiting) { exiting = true; setTimeout(() => process.exit(0), 400); } };
+const exitSoon = () => { if (!exiting) { exiting = true; setTimeout(() => process.exit(0), 1_000); } };
 process.on("SIGTERM", exitSoon);
 process.stdin.on("end", exitSoon);
 process.stdin.resume();
