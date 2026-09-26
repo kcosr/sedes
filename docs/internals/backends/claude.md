@@ -664,7 +664,11 @@ normalized integration surface:
   with the pinned SDK over synthetic native fixtures. The fixtures cover
   startup-message tips, parallel dead ends, rewinds, sidechains, queued
   commands, compaction, and partial lines. Revalidate this parity whenever the
-  SDK release changes;
+  SDK release changes. Its resume-shape fixtures also project the Claude Code
+  behaviours Sedes depends on: startup messages with and without
+  `queueTranscriptOnly`, one closure per later resume, closures after a
+  dangling startup message, prompt, tool result, or interruption, and resume
+  task-notification wording variants;
 - `tests/unit/claude-native-images.test.ts`, skill/command tests, and
   agent-tool environment tests cover input projection and optional surfaces;
 - persistent-runtime tests cover exact-session attachment, event replay,
@@ -678,7 +682,8 @@ normalized integration surface:
 - `tests/real-claude/` is an opt-in, capacity-consuming gate for its narrow
   reviewed streaming/persistence/usage/reopen profile. Its native-history
   case reproduces a startup-message tip over parallel tool calls with exact
-  pre-approved `sleep`/`echo` Bash invocations. Its persistent-runtime
+  pre-approved `sleep`/`echo` Bash invocations, and reopens a thread before
+  and after its first reply without a phantom turn. Its persistent-runtime
   case uses real worker stdio over local framed sockets; it does not verify a
   remote SSH or outbound host or provide blanket evidence for images, tools, permissions,
   skills, or subagents.
