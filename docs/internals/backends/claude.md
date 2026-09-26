@@ -173,7 +173,12 @@ environment. Claude then emits `session_state_changed` (`running`,
 uuid-stamped input, Claude Code also emits a stream-json `command_lifecycle`
 frame: `queued` on admission, `started` when a turn dequeues the input or folds
 it into the running turn (before any model request), then `completed`,
-`cancelled`, or `discarded`. `refused` instead means the session's receive-side
+`cancelled`, or `discarded`. `cancelled` before any `started` means Claude
+withdrew the input, as Stop does (see
+[Recovery and unsupported mutations](#recovery-and-unsupported-mutations)), so
+it never ran. After `started`, an interrupted turn ends the inputs it started
+`cancelled`; they belong to that turn and its result still stamps them.
+`refused` instead means the session's receive-side
 policy declined the input before queueing it; it never runs in that session,
 so Sedes fails the send as not sent and the persistent owner stops holding it
 as outstanding work. The pinned SDK forwards this frame verbatim
@@ -486,7 +491,10 @@ blocks, including after reload.
 Stop is bounded, because Claude has then acknowledged the interrupt. If
 Claude's reported state is `idle` when the interrupt is acknowledged, or
 becomes `idle` afterwards, the turn settles after a one-second grace, which
-lets a result Claude already emitted land. Otherwise it settles after 30
+lets a result Claude already emitted land. The grace waits for no input still
+awaiting its start: a steer Claude withdraws on Stop no longer counts, so an
+`idle` that arrived before the withdrawal still settles within the grace.
+Otherwise it settles after 30
 seconds. A Sedes turn then gets an `interrupted` receipt with the reason
 `interrupt_unconfirmed`. A turn Claude started ends without one, as its result
 would. When a stopped turn Claude started opens its own live turn, the Stop
@@ -988,8 +996,47 @@ reattachment can still drain final receipts without classifying the stopped
 query as an unexpected failure or requiring another forced stop.
 
 Claude advertises conversation-targeted Steer using native `priority: "next"`.
-Stop interrupts the current turn only. Claude reports a queued steer as
-`still_queued` and runs it as the next turn; Sedes does not withdraw it.
+Stop also withdraws every input Sedes sent that Claude has not started, as
+Pi's Stop clears its steering queue:
+
+- Before the interrupt, the handle sends Claude Code's `cancel_async_message`
+  for each input of its own that still awaits its start. The pinned SDK
+  0.3.274 implements it as `Query.cancelAsyncMessage`, although its
+  declaration omits the method. It crosses the worker protocol as
+  `query.cancel_input` and the persistent runtime as `cancel_input`. Then the
+  handle sends the plain interrupt. A failed request proves nothing and does
+  not block Stop.
+- Claude removes a queued input, or marks one already dequeued for the next
+  turn so that turn drops it, and closes it with a `cancelled` lifecycle
+  frame. It leaves an input it is folding into the running turn, or has
+  started, alone. Only that frame, arriving before any `started` for the same
+  input, proves a withdrawal. Claude's boolean answer and the interrupt's
+  `still_queued` receipt are never used as evidence, and nothing is inferred
+  from an input's absence.
+- Claude's own queued work, such as a finished background task's
+  notification, is not withdrawn and can still start a turn after Stop, which
+  Sedes shows as a turn Claude started. The interrupt's `cancel_queued` option
+  would also drop those notifications before the model sees them, so Sedes
+  does not use it.
+- The handle forgets the withdrawn input as awaiting its start, fails an
+  ordinary send as `claude_submission_withdrawn`, and refuses a replay of that
+  identity, which Claude would skip as a duplicate. The persistent owner stops
+  holding it as pending or active work and reports submission disposition
+  `cancelled`, also after the query ends.
+- Reconciliation reports it `not_accepted` without retry permission and with a
+  not-sent diagnostic, unless tip-correct history holds a row with its
+  identity or a consumption stamp names it. Only then is its durable steer
+  record dropped. The queue fails the entry as not sent for the user to
+  restore or dismiss and never resends it. A restart before reconciliation
+  loses a local handle's evidence; the steer then ends as `failed_unknown`,
+  like any lost local tracking.
+- A steer Claude already started (folded into the turn, or dequeued as its own)
+  belongs to the stopped turn: the interrupted result stamps it, although
+  Claude ends it `cancelled`.
+
+`tests/real-claude/claude-steer-native.test.ts` pins both cases on 2.1.281 and
+2.1.283.
+
 Steer needs 2.1.274 or newer, below the 2.1.281 runtime minimum. Testing
 2.1.241 showed that it can consume guidance but omits the second input’s
 consumption UUID, which cannot establish safe delivery tracking. Older

@@ -2091,6 +2091,27 @@ including whether it survives, is cancelled, or is fenced from a later turn. If
 any of target admission, receipt, history grouping, or interrupt-race evidence
 is absent, advertise only provider-neutral next-turn Queue and omit Steer.
 
+Stop never removes Sedes's durable Queue, including a Steer intent not yet sent
+to the provider. For input the provider accepted but has not materialized,
+each backend states what Stop does. Such input must neither start a turn after
+Stop without Sedes tracking it nor disappear while Sedes records it delivered.
+A backend that withdraws it on Stop confirms each withdrawal with exact
+per-input provider evidence, never with a receipt list, an empty provider
+queue, or a missing history row. It then reconciles that input as
+`not_accepted` with `retryable: false` and a bounded `diagnostic`. The queue
+fails the entry as not sent and returns it to the user to restore or dismiss;
+it never resends it, and later entries wait for that decision.
+`not_accepted` with `retryable: true` instead restores a proven-unsent Steer
+as Sedes's own work, which the stale-target rule dispatches after Stop. Input
+the provider already started belongs to the stopped turn.
+
+| Backend | Accepted Steer not yet materialized when Stop lands |
+| --- | --- |
+| Claude | Withdrawn by `cancel_async_message` for each Sedes input awaiting its start, before the interrupt. The exact evidence is that input's `command_lifecycle` `cancelled` before any `started`; it reconciles `not_accepted` without retry permission. |
+| Pi | Cleared from Pi's generation-volatile steering queue. It reconciles `not_accepted` and retryable, so it runs after Stop as Queue work. |
+| Codex | Known gap: Sedes records it accepted at the `turn/steer` response, and Codex's interrupt clears pending input without evidence, so it can disappear while recorded as delivered. It never starts a later turn. |
+| Grok | No Steer. |
+
 Text, context excerpts, attachments, and structured Task references are
 normalized application input, not provider-native IDs or browser-selected
 paths. Before provider delivery, the application materializes one immutable,

@@ -282,6 +282,18 @@ work already persisted by the provider, and it does not imply that every
 external side effect was rolled back. If the outcome cannot be confirmed, use
 the displayed recovery action rather than repeating Stop.
 
+Stop never removes Sedes's own Queue: queued entries keep their order and run
+after the stopped turn. A Steer card Sedes has not yet sent to the provider is
+also still Sedes's own work. What Stop does to a Steer the provider has
+received but not used yet depends on the backend:
+
+| Backend | A Steer the provider received but has not used when you press Stop |
+| --- | --- |
+| Claude | Stop withdraws it, so it never runs. Its card shows it failed and was not sent. Restore it to the composer or dismiss it; later queued entries wait for that choice. Sedes never resends it. A Steer Claude already started stays with the stopped turn. Claude's own queued work, such as a finished background task's notification, can still start a turn afterwards. |
+| Pi | Stop clears Pi's own steering queue. Sedes proves the Steer was not accepted and keeps it as queued work, which runs after the stopped turn. |
+| Codex | Codex drops it without reporting that. Sedes counted it as delivered when Codex accepted it, so it is neither in history nor returned to you; send it again if you still need it. |
+| Grok | Grok has no Steer; active-turn input waits in Queue. |
+
 ### Mobile composer focus
 
 On mobile, Sedes normally returns focus to the composer after Send, Steer, or

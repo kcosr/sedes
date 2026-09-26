@@ -424,6 +424,21 @@ acceptance, the adapter classifies that rejection so Sedes can preserve it as
 ordinary next-turn queue work. Every other rejection and uncertain outcome
 fails closed.
 
+A `turn/steer` response only admits the input to the active turn's pending
+input; Codex writes it to history and emits its `userMessage` item when the
+turn loop next picks it up, before its next model request. Sedes nevertheless
+records the Steer as accepted on the response. On `turn/interrupt`, Codex
+0.153.0 (`abort_all_tasks`) aborts the task, emits `TurnAborted`, then clears
+the turn's pending input, unless the aborting task consumed it first. It starts
+a new turn afterwards only for
+inter-agent mailbox work, never for a user Steer. So Stop never runs an
+accepted but unconsumed Steer later, but it drops it without evidence: the
+pinned protocol has no event for dropped pending input, and `turn/interrupt`
+returns `{}`. Sedes has already closed that Steer as accepted, so it is
+neither reconciled nor returned to the user. This is a known gap, not a
+reviewed withdrawal; closing it needs a Codex Steer that stays pending until
+its `userMessage` materializes and a reviewed interrupt disposition for it.
+
 Server requests route only to the active owner of the matching native thread
 and client generation. Command, file-change, and permission approvals become
 normalized decisions. `item/tool/requestUserInput` becomes a normalized

@@ -298,9 +298,8 @@ files. Native image input does not imply provider-output image artifacts.
 Steer sends input at Claude’s next native opportunity, including during active
 work, using conversation-scoped delivery. It may join the current turn
 or start the next if the current turn has finished. Pending input remains
-visible until Claude confirms incorporation. Steer does not interrupt work,
-and Stop does not withdraw a steer Claude has already queued: it starts the
-next turn. Steer relies on the consumption acknowledgments Claude Code has
+visible until Claude confirms incorporation. Steer does not interrupt work.
+Steer relies on the consumption acknowledgments Claude Code has
 sent since 2.1.274, which let Sedes track delivery reliably.
 If a server restart interrupts confirmation, Sedes exposes the delivery as
 unconfirmed for recovery and retains its original identity. Missing transcript
@@ -310,6 +309,17 @@ If the original delivery can no longer be tracked, the input becomes a failed
 queue item explicitly marked with an unknown outcome. Claude may already have
 received it. You can acknowledge the failure or restore the text to review
 before deciding whether to send again; Sedes never resends it automatically.
+
+**Stop** also withdraws every steer Claude has received but not started, as
+Pi's Stop clears its steering queue, so it no longer runs as the next turn.
+Sedes relies on Claude's own confirmation for each withdrawn steer. Its card
+then shows it failed and was not sent; restore it to the composer or dismiss
+it. Later queued messages wait for that choice, and Sedes never resends it. A
+steer Claude had already started stays with the stopped turn. Stop does not
+withdraw Claude's own queued work: a background task that finished during the
+stopped turn can still start a turn of its own afterwards. Remote hosts need a
+sidecar built from this version, which carries the withdrawal (runtime
+protocol 14).
 
 Queue is Sedes-owned next-turn work. It is not SDK stream injection and is not
 relabeled as Steer. An unconfirmed delivery pauses subsequent dispatch and shows

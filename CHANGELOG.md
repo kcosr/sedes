@@ -109,6 +109,17 @@
   cancel, fails when the runtime is replaced. The reset waits up to 10 seconds
   for these answers before it replaces the runtime.
 
+- **Stop** on a Claude thread also withdraws steering messages Claude has
+  received but not yet started, as Pi's Stop clears its steering queue. They
+  no longer run as the next turn. Each withdrawn message returns as a failed
+  queue entry marked not sent, which you can restore to the composer or
+  dismiss; later queued messages wait for that choice, and nothing is resent
+  automatically. A message Claude already started stays with the stopped
+  turn, and Claude's own queued work, such as a finished background task's
+  notification, is not withdrawn. Sedes' own Queue is still untouched by
+  Stop. Remote Claude needs a sidecar built from this version (runtime
+  protocol 14).
+
 ### Fixed
 
 - Create Claude forks with one locked-down Claude Code launch. It loads no
