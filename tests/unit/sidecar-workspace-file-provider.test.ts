@@ -68,30 +68,38 @@ const root: WorkspaceFileRootTarget = {
 };
 
 describe("SidecarWorkspaceFileProvider", () => {
-  it("recovers a candidate root admitted by an interrupted open and never waits for its close", async () => {
+  it("closes candidate roots admitted by interrupted opens without a later read or waiting for close", async () => {
+    // Mirrors the host: an admission completes even when the caller stops
+    // waiting, and reopening the same admission joins or returns it.
     const openRoots = new Set<string>();
     const handlesByAdmission = new Map<string, string>();
-    let stallOpen = true;
+    let admitHost!: () => void;
+    const hostAdmitted = new Promise<void>(resolve => { admitHost = resolve; });
     let closes = 0;
+    let resolves = 0;
     const session = {
       call: vi.fn((definition: unknown, input: { admissionId?: string; rootHandle?: string },
         options?: { signal?: AbortSignal }) => {
         if (definition === workspaceFilesRootOpenOperation) {
-          // The host admits the root even when the caller stops waiting.
           const rootHandle = handlesByAdmission.get(input.admissionId!) ??
             `de8e220b-0000-4000-8000-${String(handlesByAdmission.size + 1).padStart(12, "0")}`;
           handlesByAdmission.set(input.admissionId!, rootHandle);
           openRoots.add(rootHandle);
-          if (!stallOpen) return Promise.resolve({ rootHandle });
-          return new Promise((_resolve, reject) => options?.signal?.addEventListener("abort",
-            () => reject(new SidecarProtocolDeliveryError("cancelled", "sent_outcome_unknown")), { once: true }));
+          return new Promise((resolve, reject) => {
+            void hostAdmitted.then(() => resolve({ rootHandle }));
+            options?.signal?.addEventListener("abort",
+              () => reject(new SidecarProtocolDeliveryError("cancelled", "sent_outcome_unknown")), { once: true });
+          });
         }
         if (definition === workspaceFilesRootCloseOperation) {
           closes += 1;
           openRoots.delete(input.rootHandle!);
           return new Promise(() => undefined);
         }
-        if (definition === workspaceFilesResolveLinkOperation) return Promise.resolve({ status: "resolved", path: "image.png" });
+        if (definition === workspaceFilesResolveLinkOperation) {
+          resolves += 1;
+          return Promise.resolve({ status: "resolved", path: "image.png" });
+        }
         return Promise.reject(new Error("unexpected_operation"));
       }),
     } as unknown as SidecarClientSession;
@@ -99,19 +107,37 @@ describe("SidecarWorkspaceFileProvider", () => {
       acquireOperation: vi.fn(async () => ({ session, carrierGeneration: 1, serviceStatus, release: vi.fn() })),
     } as unknown as SidecarRuntimeOwner<SidecarClientSession>;
     const provider = providerFor(runtime);
-    const candidate = { ...root, rootId: WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID, canonicalPath: "/srv/captures/slow" };
-    const reference = { kind: "absolute" as const, path: "/srv/captures/slow/image.png" };
     const aborted = new AbortController();
-    const interrupted = provider.resolveFileLink(scope, candidate, reference, aborted.signal);
-    await vi.waitFor(() => expect(openRoots.size).toBe(1));
+    const reads = ["one", "two", "three"].map((name) => provider.resolveFileLink(scope,
+      { ...root, rootId: WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID, canonicalPath: `/srv/captures/${name}` },
+      { kind: "absolute" as const, path: `/srv/captures/${name}/image.png` }, aborted.signal));
+    await vi.waitFor(() => expect(openRoots.size).toBe(3));
     aborted.abort(new Error("capture_deadline"));
-    await expect(interrupted).rejects.toThrow("capture_deadline");
-    expect(openRoots.size).toBe(1);
-    stallOpen = false;
-    // The same admission recovers the orphaned root; its close never answers.
-    await expect(provider.resolveFileLink(scope, candidate, reference)).resolves.toBe("image.png");
-    expect(closes).toBe(1);
-    expect(openRoots.size).toBe(0);
+    for (const read of reads) await expect(read).rejects.toThrow("capture_deadline");
+    expect(openRoots.size).toBe(3);
+    admitHost();
+    await vi.waitFor(() => expect(openRoots.size).toBe(0));
+    expect(closes).toBe(3);
+    expect(resolves).toBe(0);
+    await provider.close();
+  });
+
+  it("does not reopen a candidate root whose open the sidecar definitely rejected", async () => {
+    const session = {
+      call: vi.fn(async (definition: unknown) => {
+        if (definition === workspaceFilesRootOpenOperation) throw new SidecarOperationError("sidecar_root_capacity", true);
+        throw new Error("unexpected_operation");
+      }),
+    } as unknown as SidecarClientSession;
+    const runtime = {
+      acquireOperation: vi.fn(async () => ({ session, carrierGeneration: 1, serviceStatus, release: vi.fn() })),
+    } as unknown as SidecarRuntimeOwner<SidecarClientSession>;
+    const provider = providerFor(runtime);
+    await expect(provider.resolveFileLink(scope,
+      { ...root, rootId: WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID, canonicalPath: "/srv/captures/full" },
+      { kind: "absolute", path: "/srv/captures/full/image.png" })).rejects.toThrow();
+    await new Promise(resolve => setImmediate(resolve));
+    expect(session.call).toHaveBeenCalledTimes(1);
     await provider.close();
   });
 
