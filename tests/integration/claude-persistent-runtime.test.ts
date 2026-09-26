@@ -1602,6 +1602,43 @@ describe("persistent host shutdown evidence", () => {
       (event.payload.message as { type?: string }).type === "result")).toBe(false);
   });
 
+  it("keeps an unforced stop within its baseline budget by leaving out idle sessions' full histories", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const delivered: ClaudePersistentEvent[] = [];
+    const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
+    const [idle, working] = [randomUUID(), randomUUID()];
+    for (const sessionId of [idle, working]) {
+      await host.execute({ ...authority, action: "open", replay: "full", request: {
+        queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
+    }
+    const operationId = randomUUID();
+    await host.execute({ ...authority, action: "send", request: { queryId: working, operationId, content: "Work." } }, listener);
+    const native = f.sessions.find(session => session.options.sessionId === working)!;
+    await native.emit(lifecycle(working, operationId, "started"));
+    for (const event of delivered.splice(0)) {
+      await host.execute({ ...authority, action: "acknowledge", request: { sessionId: event.sessionId, sequence: event.sequence } }, listener);
+    }
+    // Earlier compaction segments make each full history large.
+    f.runtime.hasSessionTranscript.mockResolvedValue(true);
+    f.runtime.getSessionMessages.mockImplementation(async (sessionId) => Array.from({ length: 10 }, () => ({ type: "user",
+      uuid: randomUUID(), session_id: sessionId, parent_tool_use_id: null, parent_agent_id: null,
+      message: { role: "user", content: "x".repeat(4 * 1024 * 1024) } })) as never);
+    // The working session's result lands while the worker closes: a main must drain it.
+    const close = f.runtime.close.getMockImplementation()!;
+    f.runtime.close.mockImplementationOnce(async () => { await native.emit(result(working, operationId)); await close(); });
+    await expect(host.stop()).rejects.toThrow("sidecar_resource_handoff_pending");
+    const read = (sessionId: string) => host.execute({ ...authority, action: "messages",
+      request: { sessionId, dir: "/workspace" } }, listener) as Promise<{ messages: unknown[] }>;
+    await expect(read(working)).resolves.toMatchObject({ messages: expect.arrayContaining([expect.objectContaining({ session_id: working })]) });
+    // The idle session has nothing to drain; its history is read once the replacement runtime runs.
+    await expect(read(idle)).rejects.toThrow("claude_persistent_recovery_history_unavailable");
+    await expect(host.execute({ ...authority, action: "transcript", request: { sessionId: idle, dir: "/workspace" } }, listener))
+      .resolves.toEqual({ present: true });
+  });
+
   it("ends every session on a forced stop but marks a settled session's unacknowledged result as its outcome", async () => {
     const f = await fixture();
     const attached = await f.attach();

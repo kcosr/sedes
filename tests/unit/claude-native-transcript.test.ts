@@ -35,7 +35,7 @@ afterEach(async () => {
 
 const environment = () => ({ CLAUDE_CONFIG_DIR: configDirectory });
 
-async function ours(fixture: ClaudeTranscriptFixture, options: { includeSystemMessages?: boolean; offset?: number; limit?: number } = {}) {
+async function ours(fixture: ClaudeTranscriptFixture, options: { includeSystemMessages?: boolean; offset?: number; limit?: number; resumableOnly?: boolean } = {}) {
   await fixture.write(configDirectory, workspace);
   return await readClaudeSessionMessages(fixture.sessionId, { dir: workspace, ...options }, environment());
 }
@@ -529,6 +529,11 @@ describe("Claude automatic compaction", () => {
     // The newest segment is exactly the SDK's read: the model's context.
     const context = await sdk(fixture);
     expect(messages.slice(messages.length - context.length)).toEqual(context);
+    // Lifecycle maintenance reads only that segment.
+    for (const includeSystemMessages of [false, true]) {
+      expect(await ours(fixture, { includeSystemMessages, resumableOnly: true }))
+        .toEqual(await sdk(fixture, { includeSystemMessages }));
+    }
     return { messages, projection: projectClaudeHistory(messages) };
   }
 

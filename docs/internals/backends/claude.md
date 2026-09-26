@@ -282,6 +282,18 @@ in the SDK. Boundary rows appear only with `includeSystemMessages`. The summary
 row keeps the SDK's `isCompactSummary` marker, which the worker protocol
 carries under sidecar wire 14.
 
+The earlier segments can be several times the size of the newest one, so only
+reads that need them include them: display and paging, submission
+reconciliation (an input accepted before a later compaction lies in an earlier
+segment), and fork checkpoints and verification. Persistent replay reclaim
+reads only the newest segment with the Sedes-private `resumableOnly` read
+option, which is never passed to the SDK: replay holds only the live query's
+output, and rows a later compaction summarized stay retained until their
+turn's result prunes them. On a synthetic 79 MB transcript with 16 segments,
+this cut the reclaim acquisition from 59 MB to 3.7 MB; the whole file is still
+parsed. Earlier segments share the acquisition bounds below, and a history
+beyond them fails the read explicitly instead of dropping earlier turns.
+
 Native history transfer uses byte-bounded pages from one captured native read.
 A private random acquisition ID binds continuation offsets to that snapshot,
 session, and read options. Provider appends, compaction, replacement, and
@@ -296,7 +308,13 @@ a second encoded copy or reread and reproject the full SDK history for every
 page. The reader still materializes the whole transcript before these limits
 apply, so neither the wire bound nor the retained-row bound caps transcript read memory,
 concurrent incoming materialization, or JavaScript heap size. The stopped host
-applies the same transfer lifetime to its captured shutdown baseline.
+applies the same transfer lifetime to its captured shutdown baseline. That
+baseline holds each resident session's full history within one 64 MiB budget.
+Sessions with live work or unacknowledged events are captured first, because
+a main hydrates them from the baseline to drain that work; if one does not
+fit, the unforced stop fails before the worker closes. An idle session that
+does not fit keeps only its metadata and transcript presence, and a read of
+its history fails retryably until the replacement runtime serves it.
 
 Pages target 4 MiB and at most 8,192 messages; an individual message may occupy
 a page up to the existing 32 MiB encoded response ceiling. Oversized records

@@ -52,7 +52,14 @@ export type ClaudeTranscriptEntry = Readonly<Record<string, unknown>> & {
   readonly uuid: string;
 };
 
-export type ClaudeTranscriptReadOptions = Pick<GetSessionMessagesOptions, "includeSystemMessages" | "offset" | "limit">;
+export type ClaudeTranscriptReadOptions = Pick<GetSessionMessagesOptions, "includeSystemMessages" | "offset" | "limit"> & {
+  /**
+   * Sedes-private: read only the conversation Claude Code resumes, the newest
+   * segment, exactly as the SDK reads it. Lifecycle maintenance that needs
+   * only current provider evidence uses it; display reads never do.
+   */
+  readonly resumableOnly?: boolean;
+};
 
 export interface ClaudeTranscriptLocation {
   readonly filePath: string;
@@ -153,7 +160,7 @@ export async function resolveClaudeSessionMessages(
   entries: readonly ClaudeTranscriptEntry[],
   options: ClaudeTranscriptReadOptions = {},
 ): Promise<SessionMessage[]> {
-  const chain = await resolveActiveChain(entries);
+  const chain = await resolveActiveChain(entries, options.resumableOnly === true);
   const replies = replyFollows(chain);
   const chainUuids = new Set(chain.map(({ uuid }) => uuid));
   const includeSystemMessages = options.includeSystemMessages ?? false;
@@ -164,7 +171,7 @@ export async function resolveClaudeSessionMessages(
   return page(messages, options);
 }
 
-async function resolveActiveChain(entries: readonly ClaudeTranscriptEntry[]): Promise<ClaudeTranscriptEntry[]> {
+async function resolveActiveChain(entries: readonly ClaudeTranscriptEntry[], resumableOnly: boolean): Promise<ClaudeTranscriptEntry[]> {
   const byUuid = new Map<string, ClaudeTranscriptEntry>();
   const lastIndex = new Map<string, number>();
   entries.forEach((entry, index) => {
@@ -187,7 +194,7 @@ async function resolveActiveChain(entries: readonly ClaudeTranscriptEntry[]): Pr
     newest.push(entry);
   }
   const segments = [newest.reverse()];
-  for (let boundary = newest[0]; boundary && isCompactBoundary(boundary);) {
+  for (let boundary = resumableOnly ? undefined : newest[0]; boundary && isCompactBoundary(boundary);) {
     const previousTip = continued(activeTip(entries, lastIndex, lastIndex.get(boundary.uuid)!));
     if (!previousTip) break;
     await yieldToEventLoop();

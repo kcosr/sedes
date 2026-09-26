@@ -284,6 +284,8 @@ describe("Claude acknowledged replay retention", () => {
     expect(f.runtime.getSessionMessagesPage).toHaveBeenCalledTimes(2);
     expect(f.runtime.getSessionMessagesPage.mock.calls[0]![1].includeSystemMessages).toBe(false);
     expect(f.runtime.getSessionMessagesPage.mock.calls[0]![1].maintenance).toBe(true);
+    // Replay covers only what the live query produced: the resumable segment.
+    expect(f.runtime.getSessionMessagesPage.mock.calls[0]![1].resumableOnly).toBe(true);
     expect(f.session.close).not.toHaveBeenCalled();
   });
   it("runs only one history sweep at a time across sessions and advances queued work", async () => {

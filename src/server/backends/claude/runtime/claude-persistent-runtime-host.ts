@@ -41,6 +41,9 @@ export const DETACHED_SESSION_TTL_MS = 30 * 60_000;
 const RESIDENCY_SWEEP_INTERVAL_MS = 60_000;
 const MAXIMUM_ENDED_JOURNALS = 256;
 
+/** Shutdown baseline budget across every resident session's captured history. */
+const STOPPED_HISTORY_BYTES = 64 * 1024 * 1024;
+
 /** Service-owned sessions never depend on an upstream SSH attachment lifetime. */
 export class ClaudePersistentRuntimeHost {
   readonly runtimeId = randomUUID();
@@ -65,7 +68,8 @@ export class ClaudePersistentRuntimeHost {
   /** An unforced stop ended work that started after its confirmation. */
   #handedOver = false;
   #inflight = 0;
-  readonly #stoppedHistory = new Map<string, { info: Awaited<ReturnType<ClaudeRuntimeClient["getSessionInfo"]>>; present: boolean; messages: Awaited<ReturnType<ClaudeRuntimeClient["getSessionMessages"]>> }>();
+  /** Shutdown baseline; `messages` is absent for an idle session that did not fit its budget. */
+  readonly #stoppedHistory = new Map<string, { info: Awaited<ReturnType<ClaudeRuntimeClient["getSessionInfo"]>>; present: boolean; messages?: Awaited<ReturnType<ClaudeRuntimeClient["getSessionMessages"]>> }>();
   freezeAdmission(): void { this.#frozen = true; }
   restoreAdmission(): void {
     if (this.#abandoning) return;
@@ -171,15 +175,27 @@ export class ClaudePersistentRuntimeHost {
       // Late terminal frames are retained separately and replay over this exact
       // snapshot during handoff; this is never advertised as a fresh disk read.
       let historyBytes = 0;
+      // A main hydrates a session from this baseline to drain its retained
+      // work, so those sessions come first and their full history must fit.
+      // Full histories include every compaction segment; an idle session
+      // that does not fit keeps only its metadata, and a read of its history
+      // fails retryably until the replacement runtime serves it.
+      const retainsWork = (session: Session) => this.#hasLiveWork(session) || session.events.size > 0;
+      const sessions = [...this.#sessions.values()].sort((left, right) => Number(retainsWork(right)) - Number(retainsWork(left)));
       // Explicit interruption preserves the retained journal above; fresh
       // provider history is not a prerequisite for terminating an unavailable worker.
-      for (const session of force ? [] : this.#sessions.values()) {
+      for (const session of force ? [] : sessions) {
         const info = await this.input.client.getSessionInfo(session.id, { dir: session.cwd }, {});
         // Metadata implies a transcript; a startup-only transcript has none.
         const present = info !== undefined || await this.input.client.hasSessionTranscript(session.id, { dir: session.cwd }, {});
         const messages = present ? await this.input.client.getSessionMessages(session.id, { dir: session.cwd, includeSystemMessages: true }, {}) : [];
-        historyBytes += Buffer.byteLength(JSON.stringify({ info, messages }), "utf8");
-        if (historyBytes > 64 * 1024 * 1024) throw new Error("claude_persistent_recovery_history_capacity_exceeded");
+        const bytes = Buffer.byteLength(JSON.stringify({ info, messages }), "utf8");
+        if (historyBytes + bytes > STOPPED_HISTORY_BYTES) {
+          if (retainsWork(session)) throw new Error("claude_persistent_recovery_history_capacity_exceeded");
+          this.#stoppedHistory.set(session.id, { info, present });
+          continue;
+        }
+        historyBytes += bytes;
         this.#stoppedHistory.set(session.id, { info, present, messages });
       }
       // Claude can start work itself after an unforced stop was confirmed
@@ -270,6 +286,8 @@ export class ClaudePersistentRuntimeHost {
         if (!baseline) throw new Error("claude_persistent_recovery_history_unavailable");
         if (command.action === "info") return { session: baseline.info ?? null };
         if (command.action === "transcript") return { present: baseline.present };
+        // The baseline is the complete history; it has no resumable-only form.
+        if (!baseline.messages || command.request.resumableOnly) throw new Error("claude_persistent_recovery_history_unavailable");
         const messages = command.request.includeSystemMessages ? baseline.messages : baseline.messages.filter(message => message.type !== "system");
         return this.#stoppedHistoryPager.getPage(session.id, command.request, async () => messages);
       }
@@ -867,7 +885,10 @@ export class ClaudePersistentRuntimeHost {
       let authorityValid = true;
       for await (const page of iterateClaudeSessionHistory(
         options => this.input.client.getSessionMessagesPage(session.id, options, {}),
-        { dir: session.cwd, includeSystemMessages: false, maintenance: true },
+        // Replay holds only this query's output, which is in the conversation
+        // Claude resumes; rows a later compaction summarized stay retained
+        // until their turn's result prunes them.
+        { dir: session.cwd, includeSystemMessages: false, maintenance: true, resumableOnly: true },
       )) {
         authorityValid &&= isCurrent();
         if (authorityValid) {

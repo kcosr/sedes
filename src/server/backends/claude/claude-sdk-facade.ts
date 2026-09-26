@@ -19,6 +19,7 @@ import {
 import {
   locateClaudeSessionTranscript,
   readClaudeSessionMessages,
+  type ClaudeTranscriptReadOptions,
 } from "./claude-native-transcript.js";
 
 export interface ClaudeCliAuthStatus {
@@ -146,11 +147,12 @@ export interface ClaudeSdkFacade {
   ): Promise<SDKSessionInfo | undefined>;
   /**
    * Sedes-owned native history read through the transcript's true tip, never
-   * the SDK's leaf heuristic. `dir` is required.
+   * the SDK's leaf heuristic. `dir` is required. `resumableOnly` is
+   * Sedes-private and never reaches the SDK.
    */
   getSessionMessages(
     sessionId: string,
-    options: GetSessionMessagesOptions,
+    options: GetSessionMessagesOptions & Pick<ClaudeTranscriptReadOptions, "resumableOnly">,
     environment: ClaudeChildEnvironment,
   ): Promise<SessionMessage[]>;
   /** Whether Claude Code has a non-empty transcript for this workspace session. */
@@ -243,7 +245,7 @@ export class OfficialClaudeSdkFacade implements ClaudeSdkFacade {
 
   async getSessionMessages(
     sessionId: string,
-    options: GetSessionMessagesOptions,
+    options: GetSessionMessagesOptions & Pick<ClaudeTranscriptReadOptions, "resumableOnly">,
     environment: ClaudeChildEnvironment,
   ): Promise<SessionMessage[]> {
     assertClaudeSdkHelperEnvironment(environment);

@@ -265,6 +265,7 @@ export const claudeRuntimeSessionMessagesRequestSchema = z.strictObject({
   includeSystemMessages: z.boolean().optional(),
   cursor: claudeHistoryCursorSchema.optional(),
   maintenance: z.boolean().optional(),
+  resumableOnly: z.boolean().optional(),
 });
 export const claudeRuntimeSessionMessagesResponseSchema = z.strictObject({
   messages: z.array(claudeRuntimeSessionMessageSchema).max(CLAUDE_HISTORY_PAGE_MESSAGES),

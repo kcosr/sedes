@@ -163,7 +163,9 @@
   compacted mid-way keeps its prompt, settles with its result, and can be
   stopped, instead of staying running. Threads already compacted re-identify
   the former summary turn once. Only turns after the latest compaction can be
-  forked, because Claude resumes from its summary.
+  forked, because Claude resumes from its summary. Sidecar replay cleanup
+  reads only the conversation Claude resumes, and a sidecar stop or upgrade
+  no longer fails because idle threads have long compacted histories.
 
 - End a Claude turn left running after its Claude process was lost, for
   example when the server, worker, or sidecar stopped mid-turn. The next launch
