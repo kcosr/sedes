@@ -18,6 +18,7 @@ import type {
   ClaudeRuntimeSessionOptions,
 } from "../../src/server/backends/claude/claude-runtime-client.js";
 import type { ClaudeSdkSessionInitialization } from "../../src/server/backends/claude/claude-sdk-session.js";
+import { runClaudeForkLaunch } from "../../src/server/backends/claude/claude-fork-launch.js";
 
 /** Both sides exchange production length-prefixed protocol bytes over a fresh
  * local socket standing in for the SSH stdio carrier. Provider-independent. */
@@ -107,12 +108,16 @@ export function createFakePersistentClaudeRuntime() {
   const sessions: FakePersistentClaudeSession[] = [];
   const history = new ClaudeHistoryPager();
   const getSessionMessages = vi.fn<ClaudeRuntimeClient["getSessionMessages"]>(async () => []);
+  const createSession = vi.fn((options: ClaudeRuntimeSessionOptions) => {
+    const session = new FakePersistentClaudeSession(options);
+    sessions.push(session);
+    return session;
+  });
   const runtime = {
-    createSession: vi.fn((options: ClaudeRuntimeSessionOptions) => {
-      const session = new FakePersistentClaudeSession(options);
-      sessions.push(session);
-      return session;
-    }),
+    createSession,
+    // The production one-shot launch over the fake sessions above.
+    forkSession: vi.fn<ClaudeRuntimeClient["forkSession"]>(async (options) =>
+      await runClaudeForkLaunch(createSession, options)),
     probe: vi.fn<ClaudeRuntimeClient["probe"]>(async () => ({
       cliRelease: "2.1.274", account: {}, models: [], commands: [], skillNames: [], terminalCommandNames: [],
     })),

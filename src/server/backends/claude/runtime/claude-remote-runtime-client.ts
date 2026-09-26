@@ -7,12 +7,14 @@ import { z } from "zod";
 import type { CanUseTool, SDKMessage, SDKSessionInfo } from "@anthropic-ai/claude-agent-sdk";
 import type { EnvironmentChannelScope } from "../../../execution/environment-channel.js";
 import { isSidecarRevisionChanged, type SidecarRuntimeLease, type SidecarRuntimeProvider } from "../../../sidecar/runtime-channel.js";
-import type { ClaudeRuntimeClient, ClaudeRuntimeProbeInput, ClaudeRuntimeProbeResult, ClaudeRuntimeSession, ClaudeRuntimeSessionOptions } from "../claude-runtime-client.js";
+import type { ClaudeRuntimeClient, ClaudeRuntimeForkOptions, ClaudeRuntimeForkResult, ClaudeRuntimeProbeInput, ClaudeRuntimeProbeResult, ClaudeRuntimeSession, ClaudeRuntimeSessionOptions } from "../claude-runtime-client.js";
+import { claudeForkLaunchFailure } from "../claude-fork-launch.js";
+import { SidecarOperationError } from "../../../../internal/sidecar-protocol/operation-registry.js";
 import type { ClaudeSdkSessionInitialization } from "../claude-sdk-session.js";
 import { verifyClaudeRuntimeVersion } from "../claude-release-guard.js";
 import { resolveClaudeSafeSkills, type ClaudeSafeSkill } from "../claude-skills.js";
 import * as worker from "../worker/claude-runtime-v1.js";
-import { claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
+import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudePersistentOpenRequestSchema, claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, claudePersistentRuntimeOperations } from "./claude-sidecar-runtime.js";
 
 type Command = ClaudePersistentCommand extends infer C ? C extends ClaudePersistentCommand ? Omit<C, "runtimeId" | "controllerEpoch"> : never : never;
@@ -61,10 +63,34 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
     this.#assertOpen();
     this.#assertIdentity(options);
     worker.claudeRuntimeQueryEnvironmentSchema.parse(Object.fromEntries(Object.entries(options.environment).filter(([, value]) => value !== undefined)));
+    // Fork launches are one-shot host operations; a session never adopts one.
+    if (options.launch === "fork") throw new Error("claude_persistent_fork_launch_requires_fork_session");
     if (this.#sessions.has(options.sessionId)) throw new Error("claude_persistent_session_already_attached");
     const session = new PersistentSession(this, options);
     this.#sessions.set(options.sessionId, session);
     return session;
+  }
+  /**
+   * The persistent host runs the whole fork launch and proves its exit before
+   * answering. Failing to reach the host proves nothing was launched.
+   */
+  async forkSession(options: ClaudeRuntimeForkOptions): Promise<ClaudeRuntimeForkResult> {
+    this.#assertIdentity(options);
+    assertEmptyEnvironment(options.environment);
+    const request = worker.claudeRuntimeForkRequestSchema.parse({
+      sessionId: options.sessionId, sourceSessionId: options.sourceSessionId, resumeSessionAt: options.resumeSessionAt,
+      cwd: options.cwd, ...(options.title ? { title: options.title } : {}), model: options.model,
+      ...(options.effort ? { effort: options.effort } : {}),
+      ...(options.executionEnvironment ? { executionEnvironment: options.executionEnvironment } : {}),
+    });
+    let attachment: Attachment;
+    try { attachment = await this.attachment(); }
+    catch (error) { options.onVersionAssessmentFailed?.(); throw claudeForkLaunchFailure("claude_fork_launch_refused", error); }
+    let result: ClaudeRuntimeForkResult;
+    try { result = worker.claudeRuntimeForkResponseSchema.parse(await this.execute({ action: "fork", request }, attachment)); }
+    catch (error) { options.onVersionAssessmentFailed?.(); throw error; }
+    verifyClaudeRuntimeVersion(result.cliRelease, options);
+    return result;
   }
   async listSessions(options: Parameters<ClaudeRuntimeClient["listSessions"]>[0], environment: Readonly<Record<string, string | undefined>>) {
     assertEmptyEnvironment(environment);
@@ -286,9 +312,8 @@ class PersistentSession implements ClaudeRuntimeSession {
     const model = this.#initialization ? this.#modelSelection : options.model;
     const effort = this.#reopenEffort !== undefined ? this.#reopenEffort : options.effort;
     const permissionMode = this.#initialization ? this.#permissionSelection : options.permissionMode;
-    const request = worker.claudeRuntimeQueryOpenRequestSchema.parse({
+    const request = claudePersistentOpenRequestSchema.parse({
       queryId: options.sessionId, sessionId: options.sessionId, cwd: options.cwd, launch,
-      ...(launch === "fork" ? { sourceSessionId: options.sourceSessionId, resumeSessionAt: options.resumeSessionAt } : {}),
       ...(!this.#initialization && options.title ? { title: options.title } : {}), ...(model ? { model } : {}),
       ...(effort ? { effort } : {}), ...(permissionMode ? { permissionMode } : {}),
       ...(options.allowDangerouslySkipPermissions ? { allowDangerouslySkipPermissions: true } : {}),
@@ -297,7 +322,16 @@ class PersistentSession implements ClaudeRuntimeSession {
       ...(options.agentToolMcp ? { agentToolMcp: options.agentToolMcp } : {}),
           ...(options.executionEnvironment ? { executionEnvironment: options.executionEnvironment } : {}),
     });
-    const response = claudePersistentAttachmentSchema.parse(await this.client.execute({ action: "open", request, replay: this.#initialization ? "unacknowledged" : "full" }, attachment));
+    let opened: unknown;
+    try { opened = await this.client.execute({ action: "open", request, replay: this.#initialization ? "unacknowledged" : "full" }, attachment); }
+    catch (error) {
+      if (!(error instanceof SidecarOperationError) || error.code !== "claude_persistent_session_capacity_exceeded") throw error;
+      throw new BackendError({
+        category: "overloaded", retryable: true, crossedSubmissionBoundary: false, backendCode: error.code,
+        safeMessage: `The remote Claude runtime already holds its maximum of ${CLAUDE_PERSISTENT_MAXIMUM_SESSIONS} sessions. Archive or close idle Claude threads in this environment, then try again.`,
+      }, { cause: error });
+    }
+    const response = claudePersistentAttachmentSchema.parse(opened);
     if (this.#closed) {
       await this.client.execute({ action: this.#evicted ? "evict" : "detach", request: { sessionId: options.sessionId } }, attachment).catch(() => undefined);
       throw new Error("claude_persistent_session_closed");

@@ -426,6 +426,46 @@ describe("ClaudeRuntimeWorkerHost", () => {
     }
   });
 
+  it("reports a start that failed before launching Claude Code, and only then", async () => {
+    const previousConfig = process.env.CLAUDE_CONFIG_DIR;
+    const configDirectory = await mkdtemp("/tmp/sedes-claude-worker-test-");
+    await chmod(configDirectory, 0o775);
+    const sdk = helperFacade();
+    const host = new ClaudeRuntimeWorkerHost({ sdk, peer: inertPeer() });
+    const open = (queryId: string) => host.handlers.openQuery({
+      queryId, sessionId: randomUUID(), cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {},
+    }, context());
+    try {
+      await host.handlers.initialize({ executablePath: process.execPath, configDirectory, initializationTimeoutMs: 1_000 }, context());
+      // The login check fails before any query exists: nothing was launched.
+      await expect(open(randomUUID())).rejects.toMatchObject({
+        name: "SidecarOperationError", code: "claude_runtime_query_not_launched_login",
+      });
+      expect(sdk.createQuery).not.toHaveBeenCalled();
+      vi.mocked(sdk.readCliAuthStatus).mockResolvedValue({
+        loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max",
+      });
+      // Once the SDK is asked to launch, a failure no longer proves that.
+      await expect(open(randomUUID())).rejects.toThrow("unused");
+      expect(sdk.createQuery).toHaveBeenCalledOnce();
+    } finally {
+      await host.close();
+      await rm(configDirectory, { recursive: true });
+      if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previousConfig;
+    }
+  });
+
+  it("rejects fork launches that would carry permissions, tools, or a query environment", () => {
+    const fork = { queryId: QUERY_ID, sessionId: SESSION_ID, cwd: "/workspace", launch: "fork" as const,
+      sourceSessionId: randomUUID(), resumeSessionAt: randomUUID(), enableCanUseTool: false, environment: {} };
+    expect(claudeRuntimeQueryOpenRequestSchema.safeParse(fork).success).toBe(true);
+    for (const widened of [{ permissionMode: "bypassPermissions" }, { allowDangerouslySkipPermissions: true },
+      { enableCanUseTool: true }, { environment: { SEDES_AGENT_TOOL_ENDPOINT: "http://127.0.0.1:4784", SEDES_AGENT_TOOL_SOURCE_CAPABILITY: "x".repeat(40), SEDES_AGENT_TOOL_CLI_MODE: "progressive", PATH: "/bin" } }]) {
+      expect(claudeRuntimeQueryOpenRequestSchema.safeParse({ ...fork, ...widened }).success).toBe(false);
+    }
+  });
+
   it.each(["environment", "home", "symlink"] as const)(
     "resolves the omitted native config directory inside the worker from %s",
     async (source) => {

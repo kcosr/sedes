@@ -53,6 +53,18 @@ import type {
   ClaudeRuntimeSession,
 } from "./claude-runtime-client.js";
 import type { ClaudeThreadRepository } from "./claude-thread-repository.js";
+import {
+  claudeForkLaunchFailureCode,
+  claudeForkLaunchRefused,
+  type ClaudeForkLaunchFailureCode,
+} from "./claude-fork-launch.js";
+import {
+  claudeForkCarriedTaskReceipts,
+  ClaudeForkHistoryMismatchError,
+  claudeTranscriptContentFingerprint,
+  verifyClaudeForkChild,
+  type ClaudeForkChildVerification,
+} from "./claude-fork-lineage.js";
 import type { AgentToolCliAvailability } from "../module.js";
 import type { AgentToolSourceCapabilityIssuer } from "../../agent-tools/application/database-agent-tool-source-authority.js";
 import type { BackendAgentToolFacade } from "../../agent-tools/adapters/backend-facade.js";
@@ -717,7 +729,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
           retainedLeafUuid,
           retainedPrefixCount: prefix.length,
           retainedPrefixDigest: transcriptFingerprint(prefix),
-          retainedContentDigest: transcriptContentFingerprint(prefix),
+          retainedContentDigest: claudeTranscriptContentFingerprint(prefix),
         }),
       };
     } catch (error) {
@@ -777,10 +789,23 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         "claude_fork_settings_mismatch",
       );
     }
-    const sourceMessages = await this.#readMessages(
-      input.sourceBinding.backendConversationId,
-      input.workspace,
-    );
+    const childSessionId = input.requestedBackendConversationId!;
+    // An earlier attempt may have created the reserved child. Until its
+    // existence is known, a failure cannot prove that no child exists.
+    let existingChild: boolean;
+    let sourceMessages: SessionMessage[];
+    try {
+      existingChild = await this.#sessionExists(childSessionId, input.workspace);
+      sourceMessages = await this.#readMessages(
+        input.sourceBinding.backendConversationId,
+        input.workspace,
+      );
+    } catch (error) {
+      throw claudeForkOutcomeUnknown(
+        "Claude history could not be read, so this fork's outcome is not yet known.",
+        error,
+      );
+    }
     const retainedLeafIndex = sourceMessages.findIndex(
       ({ uuid }) => uuid === checkpoint.retainedLeafUuid,
     );
@@ -789,7 +814,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
       retainedLeafIndex < 0 ||
       prefix.length !== checkpoint.retainedPrefixCount ||
       transcriptFingerprint(prefix) !== checkpoint.retainedPrefixDigest ||
-      transcriptContentFingerprint(prefix) !== checkpoint.retainedContentDigest
+      claudeTranscriptContentFingerprint(prefix) !== checkpoint.retainedContentDigest
     ) {
       throw claudeError(
         "invalid_state",
@@ -806,137 +831,127 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         input.sourceBinding.backendConversationId,
       ),
     );
-    const copyTaskContextEvidence = (): void =>
+    const adoptChild = (childMessages: readonly SessionMessage[]): CreateConversationResult => {
+      let verification: ClaudeForkChildVerification;
+      try {
+        verification = verifyClaudeForkChild({
+          childMessages,
+          sourcePrefix: prefix,
+          retainedContentDigest: checkpoint.retainedContentDigest,
+        });
+      } catch (error) {
+        if (!(error instanceof ClaudeForkHistoryMismatchError)) throw error;
+        throw claudeForkFailed(
+          existingChild
+            ? "An earlier attempt of this fork already created its Claude session, but that history does not match the selected turn."
+            : "Claude created the fork, but its history does not match the selected turn.",
+          "claude_fork_history_mismatch",
+          { retryable: false, futile: !existingChild, cause: error },
+        );
+      }
+      const retained = childMessages.slice(0, prefix.length);
       this.#settings.copyOperationSnapshotsForFork(input.scope, {
         sourceApplicationThreadId: input.sourceBinding.applicationThreadId,
         childApplicationThreadId: input.childApplicationThreadId,
         applicationOperationIds:
           retainedProjection.authenticatedTaskContextOperationIds,
       });
-    const copyInputEvidence = (childMessages: readonly SessionMessage[]): void => {
+      const nativeUserMessageMappings = prefix.flatMap((sourceMessage, index) => {
+        const childMessage = retained[index];
+        return sourceMessage.type === "user" && childMessage?.type === "user"
+          ? [{ sourceUuid: sourceMessage.uuid, childUuid: childMessage.uuid }]
+          : [];
+      });
       const evidence = {
         sourceApplicationThreadId: input.sourceBinding.applicationThreadId,
         childApplicationThreadId: input.childApplicationThreadId,
-        nativeUserMessageMappings: prefix.flatMap((sourceMessage, index) => {
-          const childMessage = childMessages[index];
-          return sourceMessage.type === "user" && childMessage?.type === "user"
-            ? [{ sourceUuid: sourceMessage.uuid, childUuid: childMessage.uuid }]
-            : [];
-        }),
+        nativeUserMessageMappings,
       };
       this.#settings.copySkillInvocationsForFork(input.scope, evidence);
       this.#settings.copySteerOperationsForFork(input.scope, evidence);
-    };
-    const childSessionId = input.requestedBackendConversationId!;
-    const copyTaskLifecycleEvidence = (): void =>
       this.#settings.copyTaskLifecycleReceiptsForFork(input.scope, {
         sourceApplicationThreadId: input.sourceBinding.applicationThreadId,
-        sourceNativeSessionId: input.sourceBinding.backendConversationId,
         childApplicationThreadId: input.childApplicationThreadId,
         childNativeSessionId: childSessionId,
-        nativeToolUseIds: retainedProjection.nativeToolUseIds,
+        receipts: claudeForkCarriedTaskReceipts({
+          sourcePrefix: prefix,
+          receipts: this.#settings.listTaskLifecycleReceipts(
+            input.scope,
+            input.sourceBinding.applicationThreadId,
+            input.sourceBinding.backendConversationId,
+          ).filter(({ nativeToolUseId }) => retainedProjection.nativeToolUseIds.has(nativeToolUseId)),
+          omittedTasks: verification.omittedTasks,
+        }),
       });
-    const resultForChild = (): CreateConversationResult => ({
-      backendConversationId: childSessionId,
-      reconciliationToken: digest(
-        `claude-fork\0${input.applicationOperationId}\0${childSessionId}`,
-      ),
-      opaqueBindingDetail: serializeClaudeBindingDetail({
-        version: 1,
-        sessionId: childSessionId,
-      }),
-    });
-    const existingChild = await this.#sessionExists(
-      childSessionId,
-      input.workspace,
-    );
-    if (existingChild) {
-      const existingMessages = await this.#readMessages(
-        childSessionId,
-        input.workspace,
-      );
-      if (
-        existingMessages.length !== checkpoint.retainedPrefixCount ||
-        transcriptContentFingerprint(existingMessages) !==
-          checkpoint.retainedContentDigest
-      ) {
-        throw claudeError(
-          "invalid_state",
-          "The reserved Claude fork identity already belongs to another session.",
-          "claude_fork_identity_conflict",
+      return {
+        backendConversationId: childSessionId,
+        reconciliationToken: digest(
+          `claude-fork\0${input.applicationOperationId}\0${childSessionId}`,
+        ),
+        opaqueBindingDetail: serializeClaudeBindingDetail({
+          version: 1,
+          sessionId: childSessionId,
+        }),
+      };
+    };
+    const readChild = async (): Promise<SessionMessage[]> => {
+      try {
+        return await this.#readMessages(childSessionId, input.workspace);
+      } catch (error) {
+        throw claudeForkOutcomeUnknown(
+          "Claude may have created the fork, but its history could not be read.",
+          error,
         );
       }
-      copyTaskContextEvidence();
-      copyInputEvidence(existingMessages);
-      copyTaskLifecycleEvidence();
-      return resultForChild();
-    }
+    };
+    if (existingChild) return adoptChild(await readChild());
     this.#assertModelPolicyAllowed(childSettings.model, childSettings.effort);
     const versionObservation = this.#newVersionObservation(
       "conversation_session",
     );
-    const session = this.#runtimeClient.createSession({
-      executionEnvironment: await this.#resolveThreadEnvironment(input.childApplicationThreadId),
-      executablePath: this.#executablePath,
-      initializationTimeoutMs: this.#initializationTimeoutMs,
-      sessionId: childSessionId,
-      sourceSessionId: input.sourceBinding.backendConversationId,
-      resumeSessionAt: checkpoint.retainedLeafUuid,
-      cwd: input.workspace.canonicalPath,
-      launch: "fork",
-      ...(input.title ? { title: input.title } : {}),
-      model: childSettings.model,
-      ...(childSettings.effort
-        ? { effort: effortSchema.parse(childSettings.effort) as EffortLevel }
-        : {}),
-      permissionMode: childSettings.permissionMode,
-      ...(claudePermissionPolicyAllowsBypass(this.#permissionPolicy)
-        ? { allowDangerouslySkipPermissions: true }
-        : {}),
-      environment: this.#childEnvironment,
-      onVersionAssessment: versionObservation.observeVersionAssessment,
-      onVersionAssessmentFailed: versionObservation.failed,
-      onMessage: () => undefined,
-    });
     const releaseAdmission = this.#acquireSession(childSessionId);
     try {
-      const initialization = await session.start();
-      await this.#confirmTransientSessionSettings(
-        session,
-        initialization,
-        childSettings,
-        "fork",
-      );
-      await session.close();
-      const childMessages = await this.#readMessages(
-        childSessionId,
-        input.workspace,
-      );
-      if (
-        childMessages.length !== checkpoint.retainedPrefixCount ||
-        transcriptContentFingerprint(childMessages) !==
-          checkpoint.retainedContentDigest
-      ) {
-        throw new Error("claude_fork_response_history_invalid");
+      try {
+        await this.#runtimeClient.forkSession({
+          executionEnvironment: await this.#resolveThreadEnvironment(input.childApplicationThreadId),
+          executablePath: this.#executablePath,
+          initializationTimeoutMs: this.#initializationTimeoutMs,
+          sessionId: childSessionId,
+          sourceSessionId: input.sourceBinding.backendConversationId,
+          resumeSessionAt: checkpoint.retainedLeafUuid,
+          cwd: input.workspace.canonicalPath,
+          ...(input.title ? { title: input.title } : {}),
+          model: childSettings.model,
+          ...(childSettings.effort
+            ? { effort: effortSchema.parse(childSettings.effort) as EffortLevel }
+            : {}),
+          environment: this.#childEnvironment,
+          onVersionAssessment: versionObservation.observeVersionAssessment,
+          onVersionAssessmentFailed: versionObservation.failed,
+        });
+      } catch (error) {
+        const code = claudeForkLaunchFailureCode(error);
+        if (code === undefined || code === "claude_fork_launch_cleanup_unproven") {
+          throw claudeForkOutcomeUnknown(
+            "Claude fork creation crossed the provider boundary without a verified outcome.",
+            error,
+          );
+        }
+        if (claudeForkLaunchRefused(code)) throw claudeForkLaunchRefusal(code, error);
+        // The launch started and its exit is proven: its child is final.
+        let created: boolean;
+        try {
+          created = await this.#sessionExists(childSessionId, input.workspace);
+        } catch (readError) {
+          throw claudeForkOutcomeUnknown(
+            "Claude fork creation failed, and whether it created the child could not be read.",
+            new AggregateError([error, readError], "claude_fork_launch_outcome_unread"),
+          );
+        }
+        if (code === "claude_fork_launch_failed" && created) return adoptChild(await readChild());
+        throw claudeForkLaunchFailed(code, created, error);
       }
-      copyTaskContextEvidence();
-      copyInputEvidence(childMessages);
-      copyTaskLifecycleEvidence();
-      return resultForChild();
-    } catch (error) {
-      await session.close();
-      if (
-        error instanceof BackendError &&
-        (error.backendCode === "claude_fork_effective_settings_mismatch" ||
-          error.backendCode === "claude_fork_effort_unconfirmed")
-      ) {
-        throw error;
-      }
-      throw claudeMutationUnknown(
-        "Claude fork creation crossed the provider boundary without a fully verified response.",
-        "claude_fork_outcome_unknown",
-        error,
-      );
+      return adoptChild(await readChild());
     } finally {
       releaseAdmission();
     }
@@ -1128,46 +1143,6 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
       queryGeneration: evidence.generation,
       now: Date.parse(this.#now()),
     });
-  }
-
-  async #confirmTransientSessionSettings(
-    session: ClaudeRuntimeSession,
-    initialization: Awaited<ReturnType<ClaudeRuntimeSession["start"]>>,
-    settings: {
-      readonly model: string;
-      readonly effort: string | null;
-      readonly permissionMode: ClaudePermissionMode;
-    },
-    operation: "fork",
-  ): Promise<void> {
-    if (
-      initialization.actualModel !== settings.model ||
-      initialization.actualPermissionMode !== settings.permissionMode
-    ) {
-      throw claudeError(
-        "invalid_state",
-        "Claude did not initialize with the frozen execution settings.",
-        `claude_${operation}_effective_settings_mismatch`,
-      );
-    }
-    try {
-      await session.setEffort(
-        settings.effort
-          ? (effortSchema.parse(settings.effort) as EffortLevel)
-          : undefined,
-      );
-    } catch (error) {
-      throw new BackendError(
-        {
-          category: "unavailable",
-          retryable: true,
-          crossedSubmissionBoundary: false,
-          safeMessage: "Claude did not acknowledge the frozen effort setting.",
-          backendCode: `claude_${operation}_effort_unconfirmed`,
-        },
-        { cause: error },
-      );
-    }
   }
 
   #recordModelEvidence(
@@ -1550,22 +1525,6 @@ function transcriptFingerprint(messages: readonly SessionMessage[]): string {
   return hash.digest("base64url");
 }
 
-function transcriptContentFingerprint(
-  messages: readonly SessionMessage[],
-): string {
-  return digest(
-    JSON.stringify(
-      messages.map((message) => ({
-        type: message.type,
-        parentToolUseId: message.parent_tool_use_id,
-        parentAgentId: message.parent_agent_id,
-        origin: "origin" in message ? message.origin : undefined,
-        message: message.message,
-      })),
-    ),
-  );
-}
-
 function serializeBranchCheckpoint(
   input: z.infer<typeof branchCheckpointSchema>,
 ): string {
@@ -1682,21 +1641,63 @@ function claudeError(
   }, cause === undefined ? undefined : { cause });
 }
 
-function claudeMutationUnknown(
-  safeMessage: string,
-  backendCode: string,
-  cause?: unknown,
-): BackendError {
+function claudeForkOutcomeUnknown(safeMessage: string, cause: unknown): BackendError {
   return new BackendError(
     {
       category: "submission_unknown",
       retryable: false,
       crossedSubmissionBoundary: true,
       safeMessage,
-      backendCode,
+      backendCode: "claude_fork_outcome_unknown",
     },
-    cause === undefined ? undefined : { cause },
+    { cause },
   );
+}
+
+/** A definite fork failure: the reserved child is not, and will not be, adopted. */
+function claudeForkFailed(
+  safeMessage: string,
+  backendCode: string,
+  options: { readonly retryable: boolean; readonly futile: boolean; readonly cause?: unknown },
+): BackendError {
+  return new BackendError(
+    {
+      category: options.retryable ? "unavailable" : "invalid_state",
+      retryable: options.retryable,
+      crossedSubmissionBoundary: false,
+      safeMessage,
+      backendCode,
+      ...(options.futile ? { forkRestart: "futile" as const } : {}),
+    },
+    options.cause === undefined ? undefined : { cause: options.cause },
+  );
+}
+
+function claudeForkLaunchRefusal(code: ClaudeForkLaunchFailureCode, cause: unknown): BackendError {
+  switch (code) {
+    case "claude_fork_launch_refused_version":
+      return claudeForkFailed("Claude did not start the fork: this Claude Code version is not supported.", code, { retryable: false, futile: true, cause });
+    case "claude_fork_launch_refused_login":
+      return claudeForkFailed("Claude did not start the fork: the Claude subscription login is unavailable.", code, { retryable: false, futile: true, cause });
+    case "claude_fork_launch_refused_capacity":
+      return claudeForkFailed("Claude did not start the fork: the remote Claude runtime already holds its maximum of 32 sessions. Close or archive idle Claude threads there and try again.", code, { retryable: true, futile: false, cause });
+    default:
+      return claudeForkFailed("Claude did not start the fork. Nothing was created.", code, { retryable: true, futile: false, cause });
+  }
+}
+
+function claudeForkLaunchFailed(code: ClaudeForkLaunchFailureCode, created: boolean, cause: unknown): BackendError {
+  const outcome = created ? "Its unverified child was discarded." : "No child was created.";
+  switch (code) {
+    case "claude_fork_effective_settings_mismatch":
+      return claudeForkFailed(`Claude did not start the fork with the child's model. ${outcome}`, code, { retryable: false, futile: true, cause });
+    case "claude_fork_effort_unconfirmed":
+      return claudeForkFailed(`Claude did not accept the child's effort setting. ${outcome}`, code, { retryable: false, futile: true, cause });
+    case "claude_fork_launch_started_turn":
+      return claudeForkFailed(`Claude began a model turn while creating the fork, so it was stopped. ${outcome}`, code, { retryable: false, futile: true, cause });
+    default:
+      return claudeForkFailed(`Claude could not create the fork. ${outcome}`, code, { retryable: true, futile: false, cause });
+  }
 }
 
 function mapClaudeForkReadError(error: unknown): BackendError {

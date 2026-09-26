@@ -308,7 +308,39 @@ export const claudeRuntimeQueryOpenRequestSchema = z
       request.agentToolMcp === undefined ||
       Object.keys(request.environment).length === 0,
     "A query presents Sedes tools through the CLI or MCP, never both.",
+  )
+  .refine(
+    (request) =>
+      request.launch !== "fork" ||
+      (request.permissionMode === undefined &&
+        request.allowDangerouslySkipPermissions === undefined &&
+        !request.enableCanUseTool &&
+        request.agentToolMcp === undefined &&
+        Object.keys(request.environment).length === 0),
+    "A fork launch owns its locked-down permissions and presents no tools.",
   );
+/**
+ * One locked-down fork launch: copy the retained source prefix into the
+ * application-reserved child session, confirm the launch, and exit.
+ */
+export const claudeRuntimeForkRequestSchema = z
+  .strictObject({
+    sessionId: uuidSchema,
+    sourceSessionId: uuidSchema,
+    resumeSessionAt: uuidSchema,
+    cwd: absolutePathSchema,
+    title: z.string().min(1).max(16_384).optional(),
+    model: boundedStringSchema.min(1),
+    effort: effortSchema.optional(),
+    executionEnvironment: resolvedEnvironmentVariablesSchema.optional(),
+  })
+  .refine(
+    (request) => request.sessionId !== request.sourceSessionId,
+    "A fork child needs its own session identity.",
+  );
+export const claudeRuntimeForkResponseSchema = z.strictObject({
+  cliRelease: boundedStringSchema,
+});
 export const claudeRuntimeQueryOpenResponseSchema = z.strictObject({
   queryId: uuidSchema,
   startupProbeUuid: uuidSchema,

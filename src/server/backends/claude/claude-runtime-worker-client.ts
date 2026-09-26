@@ -21,11 +21,14 @@ import {
 } from "./claude-skills.js";
 import type {
   ClaudeRuntimeClient,
+  ClaudeRuntimeForkOptions,
+  ClaudeRuntimeForkResult,
   ClaudeRuntimeProbeInput,
   ClaudeRuntimeProbeResult,
   ClaudeRuntimeSession,
   ClaudeRuntimeSessionOptions,
 } from "./claude-runtime-client.js";
+import { runClaudeForkLaunch } from "./claude-fork-launch.js";
 import {
   CLAUDE_RUNTIME_CAPABILITY_ID,
   CLAUDE_RUNTIME_MAJOR_VERSION,
@@ -161,6 +164,10 @@ export class ClaudeRuntimeWorkerClient implements ClaudeRuntimeClient {
     const session = new WorkerSession(this, queryId, options);
     this.#sessions.set(queryId, session);
     return session;
+  }
+
+  forkSession(options: ClaudeRuntimeForkOptions): Promise<ClaudeRuntimeForkResult> {
+    return runClaudeForkLaunch((session) => this.createSession(session), options);
   }
 
   async listSessions(

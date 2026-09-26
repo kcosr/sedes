@@ -922,30 +922,32 @@ export class ClaudeThreadRepository {
     return result.changes === 1;
   }
 
+  /**
+   * Copy exactly the source task receipts the fork may truthfully inherit,
+   * under the child's native session. The caller selects them from evidence
+   * inside the retained prefix; nothing else about the source is carried.
+   */
   copyTaskLifecycleReceiptsForFork(scope: RequestScope, input: {
     readonly sourceApplicationThreadId: string;
-    readonly sourceNativeSessionId: string;
     readonly childApplicationThreadId: string;
     readonly childNativeSessionId: string;
-    readonly nativeToolUseIds: Iterable<string>;
+    readonly receipts: readonly ClaudeTaskLifecycleReceipt[];
   }): void {
     this.get(scope, input.sourceApplicationThreadId);
     this.get(scope, input.childApplicationThreadId);
-    requireBoundedText(input.sourceNativeSessionId, 512, "source_native_session_id");
     requireBoundedText(input.childNativeSessionId, 512, "child_native_session_id");
     const copy = this.database.prepare(`INSERT INTO claude_task_lifecycle_receipts
       (tenant_id, owner_principal_id, application_thread_id, native_session_id, native_task_id,
        native_tool_use_id, description, started_at, terminal_status, terminal_at)
-      SELECT tenant_id, owner_principal_id, ?, ?, native_task_id,
-        native_tool_use_id, description, started_at, terminal_status, terminal_at
-      FROM claude_task_lifecycle_receipts WHERE tenant_id = ? AND owner_principal_id = ?
-        AND application_thread_id = ? AND native_session_id = ? AND native_tool_use_id = ?
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT DO NOTHING`);
     this.database.transaction(() => {
-      for (const toolUseId of input.nativeToolUseIds) {
-        requireBoundedText(toolUseId, 512, "native_tool_use_id");
-        copy.run(input.childApplicationThreadId, input.childNativeSessionId,
-          scope.tenantId, scope.principalId, input.sourceApplicationThreadId, input.sourceNativeSessionId, toolUseId);
+      for (const receipt of input.receipts) {
+        requireBoundedText(receipt.nativeTaskId, 512, "native_task_id");
+        requireBoundedText(receipt.nativeToolUseId, 512, "native_tool_use_id");
+        copy.run(scope.tenantId, scope.principalId, input.childApplicationThreadId, input.childNativeSessionId,
+          receipt.nativeTaskId, receipt.nativeToolUseId, receipt.description, receipt.startedAt,
+          receipt.terminalStatus, receipt.terminalAt);
       }
     })();
   }

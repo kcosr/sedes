@@ -373,12 +373,11 @@ it.each(["permission_failed", "permission_delivered"] as const)("settles an unan
   await client.close();
 });
 
-it.each(["new", "fork"] as const)("resumes an established %s identity when the detached idle worker has retired", async (launch) => {
+it("resumes an established identity when the detached idle worker has retired", async () => {
+  const launch = "new";
   vi.useFakeTimers();
   const { client, carriers, options } = setup();
-  const session = client.createSession({ ...options, launch, title: "Original title", model: "original-model", effort: "low", permissionMode: "default",
-    ...(launch === "fork" ? { sourceSessionId: "33333333-3333-4333-8333-333333333333", resumeSessionAt: PROBE_ID } : {}),
-  });
+  const session = client.createSession({ ...options, launch, title: "Original title", model: "original-model", effort: "low", permissionMode: "default" });
   await session.start();
   const first = connectionState.instances[0]!;
   expect(first.execute).toHaveBeenCalledWith(expect.objectContaining({ action: "open", request: expect.objectContaining({ launch }) }));
@@ -428,6 +427,43 @@ it.each(["new", "fork"] as const)("resumes an established %s identity when the d
   await client.close();
 });
 
+const forkOptions = {
+  executablePath: "/bin/claude", initializationTimeoutMs: 1000, sessionId: SESSION_ID,
+  sourceSessionId: "33333333-3333-4333-8333-333333333333", resumeSessionAt: PROBE_ID,
+  cwd: "/work", title: "Source title", model: "claude-sonnet-5", effort: "low" as const, environment: {},
+};
+
+it("never opens a fork launch as a persistent session", async () => {
+  const { client, options } = setup();
+  expect(() => client.createSession({ ...options, launch: "fork", sourceSessionId: forkOptions.sourceSessionId, resumeSessionAt: PROBE_ID }))
+    .toThrow("claude_persistent_fork_launch_requires_fork_session");
+  await client.close();
+});
+
+it("runs a fork as one host command and verifies the reported CLI release", async () => {
+  const { client } = setup();
+  await client.attachment();
+  const connection = connectionState.instances[0]!;
+  connection.execute.mockImplementation(async (command: ClaudePersistentCommand) => command.action === "fork" ? { cliRelease: "2.1.274" } : {});
+  const onVersionAssessment = vi.fn();
+  await expect(client.forkSession({ ...forkOptions, onVersionAssessment })).resolves.toEqual({ cliRelease: "2.1.274" });
+  expect(connection.execute).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action: "fork", request: {
+    sessionId: SESSION_ID, sourceSessionId: forkOptions.sourceSessionId, resumeSessionAt: PROBE_ID,
+    cwd: "/work", title: "Source title", model: "claude-sonnet-5", effort: "low",
+  } }));
+  expect(onVersionAssessment).toHaveBeenCalledWith(expect.objectContaining({ version: "2.1.274" }));
+  await expect(client.forkSession({ ...forkOptions, environment: { PATH: "/usr/bin" } })).rejects.toThrow("claude_persistent_runtime_environment_invalid");
+  await client.close();
+});
+
+it("reports an unreachable persistent host as a fork launch that never started", async () => {
+  const { client, acquire } = setup();
+  acquire.mockRejectedValueOnce(new Error("sidecar_unavailable"));
+  const onVersionAssessmentFailed = vi.fn();
+  await expect(client.forkSession({ ...forkOptions, onVersionAssessmentFailed })).rejects.toMatchObject({ code: "claude_fork_launch_refused" });
+  expect(onVersionAssessmentFailed).toHaveBeenCalledOnce();
+  await client.close();
+});
 
 it("does not report requested effort as confirmed when an existing host has no effort evidence", async () => {
   vi.useFakeTimers();

@@ -30,6 +30,43 @@ import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v1.js";
 const CLAUDE_SETTING_SOURCES = ["user", "project", "local"] as const;
 
 /**
+ * A fork launch only copies a provider prefix into the reserved child and
+ * exits; the child's own runtime later applies its real permission mode. The
+ * launch loads no setting sources (so no user hooks, permission rules, or MCP
+ * servers), disables hooks and every tool, and denies any permission request.
+ * It never runs with bypass permissions.
+ */
+export const CLAUDE_FORK_LAUNCH_PERMISSION_MODE = "default" as const satisfies PermissionMode;
+
+/**
+ * Worker error code for a start that failed before the Claude Code query was
+ * created, suffixed with its {@link ClaudeLaunchRefusal}.
+ */
+export const CLAUDE_QUERY_NOT_LAUNCHED_CODE_PREFIX =
+  "claude_runtime_query_not_launched";
+
+/** Why a start stopped before launching: CLI version, login, or anything else. */
+export type ClaudeLaunchRefusal = "version" | "login" | "unavailable";
+
+export function claudeLaunchRefusal(error: unknown): ClaudeLaunchRefusal {
+  if (isClaudeRuntimeReleaseFailure(error)) return "version";
+  if (
+    error instanceof Error &&
+    error.message === "claude_subscription_auth_unavailable"
+  ) {
+    return "login";
+  }
+  return "unavailable";
+}
+
+const denyForkLaunchTool: CanUseTool = async (_toolName, _input, options) => ({
+  behavior: "deny",
+  message: "A Sedes fork launch cannot use tools.",
+  interrupt: true,
+  toolUseID: options.toolUseID,
+});
+
+/**
  * Claude Code emits `session_state_changed` only when this variable is set.
  * Sedes owns it for every launch: turns Claude starts itself (task
  * notifications, peer hand-backs) are otherwise invisible to run state.
@@ -139,6 +176,7 @@ export class ClaudeSdkSession {
   readonly #input = new ClaudeInputQueue<SDKUserMessage>(16);
   readonly #abortController = new AbortController();
   #query: Query | undefined;
+  #launched = false;
   #consumer: Promise<void> | undefined;
   #closed = false;
   #closing = false;
@@ -152,7 +190,13 @@ export class ClaudeSdkSession {
   constructor(options: ClaudeSdkSessionOptions) {
     if (
       (options.launch === "fork" &&
-        (!options.sourceSessionId || !options.resumeSessionAt)) ||
+        (!options.sourceSessionId ||
+          !options.resumeSessionAt ||
+          // The lockdown owns the fork launch's permissions and tools.
+          options.permissionMode !== undefined ||
+          options.allowDangerouslySkipPermissions !== undefined ||
+          options.canUseTool !== undefined ||
+          options.agentToolMcp !== undefined)) ||
       (options.launch !== "fork" &&
         (options.sourceSessionId !== undefined ||
           options.resumeSessionAt !== undefined))
@@ -176,6 +220,15 @@ export class ClaudeSdkSession {
 
   get safeSkills(): readonly ClaudeSafeSkill[] {
     return this.#safeSkills;
+  }
+
+  /**
+   * False until Sedes asks the SDK to launch Claude Code. A start that failed
+   * while this is false (CLI version, login, or subscription checks) launched
+   * no provider process and wrote no transcript.
+   */
+  get launched(): boolean {
+    return this.#launched;
   }
 
   async start(): Promise<ClaudeSdkSessionInitialization> {
@@ -226,6 +279,8 @@ export class ClaudeSdkSession {
     if (this.closed) throw new Error("claude_sdk_session_closed");
     assertClaudeSubscriptionAuthStatus(authStatus);
     if (this.closed) throw new Error("claude_sdk_session_closed");
+    const forkLaunch = this.#options.launch === "fork";
+    this.#launched = true;
     const query = this.#options.sdk.createQuery({
       prompt: this.#input,
       options: {
@@ -233,7 +288,16 @@ export class ClaudeSdkSession {
         cwd: this.#options.cwd,
         pathToClaudeCodeExecutable: this.#options.executablePath,
         systemPrompt: { type: "preset", preset: "claude_code" },
-        settingSources: [...CLAUDE_SETTING_SOURCES],
+        ...(forkLaunch
+          ? {
+              settingSources: [],
+              settings: { disableAllHooks: true },
+              strictMcpConfig: true,
+              tools: [],
+              permissionMode: CLAUDE_FORK_LAUNCH_PERMISSION_MODE,
+              canUseTool: denyForkLaunchTool,
+            }
+          : { settingSources: [...CLAUDE_SETTING_SOURCES] }),
         disallowedTools: [...CLAUDE_RESET_PRODUCING_TOOLS],
         persistSession: true,
         includePartialMessages: true,

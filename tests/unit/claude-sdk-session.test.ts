@@ -526,6 +526,47 @@ describe("ClaudeSdkSession", () => {
       expect.any(AbortSignal),
     );
     expect(onCreate).not.toHaveBeenCalled();
+    expect(session.launched).toBe(false);
+  });
+
+  it("locks a fork launch down and rejects caller permissions or tools", async () => {
+    const onCreate = vi.fn();
+    const fixture = fakeQuery({ onCreate });
+    const fork = {
+      sdk: fixture.sdk,
+      executablePath: "/usr/local/bin/claude",
+      initializationTimeoutMs: 1_000,
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      sourceSessionId: "33333333-3333-4333-8333-333333333333",
+      resumeSessionAt: "44444444-4444-4444-8444-444444444444",
+      cwd: "/workspace",
+      launch: "fork" as const,
+      environment: {},
+      onMessage: () => undefined,
+    };
+    for (const widened of [
+      { permissionMode: "bypassPermissions" as const },
+      { allowDangerouslySkipPermissions: true as const },
+      { canUseTool: async () => ({ behavior: "allow" as const }) },
+      { agentToolMcp: { command: "/usr/bin/sedes", mode: "individual" as const, endpoint: "http://127.0.0.1:4784", sourceCapability: "x".repeat(40) } },
+    ]) {
+      expect(() => new ClaudeSdkSession({ ...fork, ...widened })).toThrow("claude_sdk_fork_options_invalid");
+    }
+    const session = new ClaudeSdkSession(fork);
+    expect(session.launched).toBe(false);
+    await session.start();
+    expect(session.launched).toBe(true);
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+      settingSources: [], settings: { disableAllHooks: true }, strictMcpConfig: true, tools: [],
+      permissionMode: "default", resume: fork.sourceSessionId, forkSession: true, sessionId: fork.sessionId,
+      resumeSessionAt: fork.resumeSessionAt,
+    }));
+    const options = onCreate.mock.calls[0]![0] as Options;
+    expect(options).not.toHaveProperty("allowDangerouslySkipPermissions");
+    expect(options).not.toHaveProperty("mcpServers");
+    await expect(options.canUseTool!("Write", {}, { signal: new AbortController().signal, toolUseID: "tool", requestId: "request" } as never))
+      .resolves.toMatchObject({ behavior: "deny", interrupt: true });
+    await session.close();
   });
 
   it("accepts a newer compatible stream release and reports it", async () => {

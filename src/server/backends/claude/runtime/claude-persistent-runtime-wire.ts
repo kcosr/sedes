@@ -2,6 +2,8 @@ import { backgroundActivitySchema } from "../../../../shared/protocol/background
 import { z } from "zod";
 import * as worker from "../worker/claude-runtime-v1.js";
 
+/** Resident sessions plus running fork launches, per persistent runtime. */
+export const CLAUDE_PERSISTENT_MAXIMUM_SESSIONS = 32;
 const id = z.string().min(1).max(512);
 export const claudePersistentConfigurationSchema = worker.claudeRuntimeInitializeRequestSchema.omit({ startupEnvironment: true }).extend({
   tenantId: id, principalId: id, backendInstanceId: id, executionEnvironmentId: id,
@@ -12,6 +14,9 @@ const authority = { runtimeId: id, controllerEpoch: z.number().int().positive() 
 function command<const Action extends string, Schema extends z.ZodType>(action: Action, request: Schema) {
   return z.strictObject({ ...authority, action: z.literal(action), request });
 }
+/** A fork launch is only ever the one-shot `fork` command, never a session. */
+export const claudePersistentOpenRequestSchema = worker.claudeRuntimeQueryOpenRequestSchema.refine(
+  request => request.launch !== "fork", "A persistent session never adopts a fork launch.");
 export const claudePersistentCommandSchema = z.discriminatedUnion("action", [
   command("probe", worker.claudeRuntimeProbeRequestSchema),
   command("list", worker.claudeRuntimeSessionListRequestSchema),
@@ -19,7 +24,8 @@ export const claudePersistentCommandSchema = z.discriminatedUnion("action", [
   command("messages", worker.claudeRuntimeSessionMessagesRequestSchema),
   command("transcript", worker.claudeRuntimeSessionTranscriptRequestSchema),
   command("rename", worker.claudeRuntimeSessionRenameRequestSchema),
-  command("open", worker.claudeRuntimeQueryOpenRequestSchema).extend({ replay: z.enum(["full", "unacknowledged"]) }),
+  command("open", claudePersistentOpenRequestSchema).extend({ replay: z.enum(["full", "unacknowledged"]) }),
+  command("fork", worker.claudeRuntimeForkRequestSchema),
   command("send", worker.claudeRuntimeQuerySendRequestSchema),
   command("interrupt", z.strictObject({ queryId: z.string().uuid() })),
   command("set_model", worker.claudeRuntimeQuerySetModelRequestSchema),

@@ -11,7 +11,7 @@ import { ClaudeSidecarRuntimeConnection, registerClaudePersistentRuntimeHost } f
 import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execution/environment-channel.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import type { SidecarRuntimeLease, SidecarRuntimeProvider } from "../../src/server/sidecar/runtime-channel.js";
-import { createClaudeFramedCarrier, createFakePersistentClaudeRuntime } from "../helpers/persistent-claude-fixture.js";
+import { createClaudeFramedCarrier, createFakePersistentClaudeRuntime, FakePersistentClaudeSession } from "../helpers/persistent-claude-fixture.js";
 
 const scope = { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "ssh-environment", backendInstanceId: "claude-remote" };
 const configuration = { ...scope, executablePath: "/provider/claude", configDirectory: "/provider/.claude", initializationTimeoutMs: 5_000 };
@@ -230,6 +230,89 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(f.runtime.createSession).toHaveBeenCalledTimes(2);
     expect(f.sessions[1]!.closed).toBe(false);
     await restored.close({ reason: "evicted" });
+  });
+
+  function forkOptions(sessionId: string, overrides: Partial<Parameters<ClaudePersistentRuntimeClient["forkSession"]>[0]> = {}) {
+    return { executablePath: configuration.executablePath, initializationTimeoutMs: 5_000, sessionId,
+      sourceSessionId: randomUUID(), resumeSessionAt: randomUUID(), cwd: "/workspace", title: "Source",
+      model: "claude-sonnet-4-6", effort: "low" as const, environment: {}, ...overrides };
+  }
+
+  it("runs a fork launch to its proven exit on the host, then attaches the child as its own runtime", async () => {
+    const f = await fixture();
+    await f.attach();
+    const client = f.client();
+    const childId = randomUUID();
+    await expect(client.forkSession(forkOptions(childId))).resolves.toEqual({ cliRelease: "2.1.274" });
+    const launch = f.sessions[0]!;
+    // Locked down, confirmed, and closed before the host answered.
+    expect(launch.options).toMatchObject({ launch: "fork", sessionId: childId, model: "claude-sonnet-4-6", effort: "low", environment: {} });
+    for (const key of ["canUseTool", "permissionMode", "allowDangerouslySkipPermissions", "agentToolMcp"]) expect(launch.options).not.toHaveProperty(key);
+    expect(launch.setEffort).toHaveBeenCalledWith("low");
+    expect(launch.closed).toBe(true);
+    const runtimeId = f.services.status().resources[0]!.resourceId;
+    const host = f.hosts.get(runtimeId);
+    expect(host.abandonmentEvidence()).toMatchObject({ sessionCount: 0, state: "idle" });
+
+    const bridge = vi.fn<CanUseTool>(async () => ({ behavior: "deny", message: "no" }));
+    const child = client.createSession(sessionOptions(childId, { launch: "resume", canUseTool: bridge, permissionMode: "acceptEdits" }));
+    await expect(child.start()).resolves.toMatchObject({ cliRelease: "2.1.274" });
+    expect(f.runtime.createSession).toHaveBeenCalledTimes(2);
+    expect(f.sessions[1]!.options).toMatchObject({ launch: "resume", sessionId: childId, permissionMode: "acceptEdits" });
+    expect(f.sessions[1]!.options.canUseTool).toBeTypeOf("function");
+    await child.close({ reason: "evicted" });
+    expect(host.abandonmentEvidence()).toMatchObject({ sessionCount: 0 });
+  });
+
+  it("reports a failed fork launch by code after closing it, and holds child reads until its exit", async () => {
+    const f = await fixture();
+    await f.attach();
+    const client = f.client();
+    const mismatch = randomUUID();
+    await expect(client.forkSession(forkOptions(mismatch, { model: "claude-opus-5" }))).rejects.toMatchObject({
+      name: "SidecarOperationError", code: "claude_fork_effective_settings_mismatch",
+    });
+    expect(f.sessions[0]!.closed).toBe(true);
+
+    const childId = randomUUID();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    f.runtime.createSession.mockImplementationOnce((options) => {
+      const session = new FakePersistentClaudeSession(options);
+      session.start.mockImplementation(async () => { await gate; return session.initialization; });
+      f.sessions.push(session);
+      return session;
+    });
+    const forking = client.forkSession(forkOptions(childId));
+    await vi.waitFor(() => expect(f.sessions).toHaveLength(2));
+    const read = client.hasSessionTranscript(childId, { dir: "/workspace" }, {});
+    const settled = vi.fn();
+    void read.then(settled);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(settled).not.toHaveBeenCalled();
+    expect(f.runtime.hasSessionTranscript).not.toHaveBeenCalled();
+    // Nothing else can open the identity while its launch runs.
+    const early = client.createSession(sessionOptions(childId, { launch: "resume" }));
+    await expect(early.start()).rejects.toThrow();
+    await early.close().catch(() => undefined);
+    release();
+    await forking;
+    await expect(read).resolves.toBe(false);
+    expect(f.sessions[1]!.closed).toBe(true);
+  });
+
+  it("counts fork launches against the host's session cap and refuses beyond it", async () => {
+    const f = await fixture();
+    await f.attach();
+    const client = f.client();
+    const sessions = Array.from({ length: 32 }, () => client.createSession(sessionOptions(randomUUID())));
+    await Promise.all(sessions.map(session => session.start()));
+    await expect(client.forkSession(forkOptions(randomUUID()))).rejects.toMatchObject({ code: "claude_fork_launch_refused_capacity" });
+    const refused = client.createSession(sessionOptions(randomUUID()));
+    await expect(refused.start()).rejects.toMatchObject({ backendCode: "claude_persistent_session_capacity_exceeded", retryable: true });
+    await refused.close().catch(() => undefined);
+    expect(f.runtime.createSession).toHaveBeenCalledTimes(32);
+    await Promise.all(sessions.map(session => session.close({ reason: "evicted" })));
   });
 
   it("preserves idle queries across detach and closes only the deliberately evicted query", async () => {

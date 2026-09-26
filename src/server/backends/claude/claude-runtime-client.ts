@@ -29,6 +29,13 @@ import type {
 } from "./claude-release-guard.js";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v1.js";
+import {
+  runClaudeForkLaunch,
+  type ClaudeRuntimeForkOptions,
+  type ClaudeRuntimeForkResult,
+} from "./claude-fork-launch.js";
+
+export type { ClaudeRuntimeForkOptions, ClaudeRuntimeForkResult };
 
 export interface ClaudeRuntimeProbeInput {
   readonly executablePath: string;
@@ -86,6 +93,11 @@ export interface ClaudeRuntimeSessionOptions {
 /** Provider-private live query contract implemented identically over local and SSH workers. */
 export interface ClaudeRuntimeSession {
   readonly closed: boolean;
+  /**
+   * In-process sessions only: false while no Claude Code query exists, so a
+   * failed start that leaves it false launched no provider process.
+   */
+  readonly launched?: boolean;
   /** A service-owned query and CLI ingress survive individual SSH carriers. */
   readonly lifetime?: "persistent_service";
   /** True when start attached to a service-owned query already running. */
@@ -130,6 +142,12 @@ export interface ClaudeRuntimeClient {
   }): Promise<"submitted" | "session_ended" | "not_sent" | "unknown">;
   probe(input: ClaudeRuntimeProbeInput): Promise<ClaudeRuntimeProbeResult>;
   createSession(options: ClaudeRuntimeSessionOptions): ClaudeRuntimeSession;
+  /**
+   * One locked-down fork launch that copies the retained source prefix into
+   * the reserved child and exits before returning. It is never adopted as a
+   * conversation runtime; failures carry `claude-fork-launch.ts` codes.
+   */
+  forkSession(options: ClaudeRuntimeForkOptions): Promise<ClaudeRuntimeForkResult>;
   listSessions(
     options: ListSessionsOptions,
     environment: Readonly<Record<string, string | undefined>>,
@@ -187,6 +205,10 @@ export class ClaudeSdkRuntimeAdapter implements ClaudeRuntimeClient {
 
   createSession(options: ClaudeRuntimeSessionOptions): ClaudeRuntimeSession {
     return new ClaudeSdkSession({ sdk: this.#sdk, ...options });
+  }
+
+  forkSession(options: ClaudeRuntimeForkOptions): Promise<ClaudeRuntimeForkResult> {
+    return runClaudeForkLaunch((session) => this.createSession(session), options);
   }
 
   listSessions(

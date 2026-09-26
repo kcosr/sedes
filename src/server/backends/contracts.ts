@@ -710,6 +710,12 @@ export interface BackendErrorShape {
    * may preserve the same durable input as ordinary next-turn queue work.
    */
   readonly steerRejectionReason?: "target_no_longer_active";
+  /**
+   * A definite fork failure that a new fork of the same boundary would repeat
+   * (for example an unsupported runtime or a deterministic history mismatch).
+   * The application then does not offer to start another fork.
+   */
+  readonly forkRestart?: "futile";
 }
 
 export class BackendError extends Error implements BackendErrorShape {
@@ -718,6 +724,7 @@ export class BackendError extends Error implements BackendErrorShape {
   readonly crossedSubmissionBoundary: boolean;
   readonly backendCode?: string;
   readonly steerRejectionReason?: BackendErrorShape["steerRejectionReason"];
+  readonly forkRestart?: BackendErrorShape["forkRestart"];
   /**
    * Bounded, server-only evidence that an external mutation whose immediate
    * result was uncertain may later become authoritative. The owning mutation
@@ -739,6 +746,7 @@ export class BackendError extends Error implements BackendErrorShape {
     this.crossedSubmissionBoundary = input.crossedSubmissionBoundary;
     this.backendCode = input.backendCode;
     this.steerRejectionReason = input.steerRejectionReason;
+    this.forkRestart = input.forkRestart;
     this.lateMutationReconciliation = options?.lateMutationReconciliation;
   }
 

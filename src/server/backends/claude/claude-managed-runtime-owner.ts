@@ -29,7 +29,10 @@ import type {
   ClaudeRuntimeProbeResult,
   ClaudeRuntimeSession,
   ClaudeRuntimeSessionOptions,
+  ClaudeRuntimeForkOptions,
+  ClaudeRuntimeForkResult,
 } from "./claude-runtime-client.js";
+import { runClaudeForkLaunch } from "./claude-fork-launch.js";
 import { ClaudeRuntimeWorkerClient } from "./claude-runtime-worker-client.js";
 import type { ClaudeSafeSkill } from "./claude-skills.js";
 import type { ClaudeSdkSessionInitialization } from "./claude-sdk-session.js";
@@ -151,6 +154,10 @@ export class ClaudeManagedRuntimeOwner implements ClaudeRuntimeClient {
       (error) => this.#reportUnavailable(error),
       () => lease.release(true),
     );
+  }
+
+  forkSession(options: ClaudeRuntimeForkOptions): Promise<ClaudeRuntimeForkResult> {
+    return runClaudeForkLaunch((session) => this.createSession(session), options);
   }
 
   async listSessions(

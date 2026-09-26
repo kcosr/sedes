@@ -149,7 +149,7 @@ describe("Claude thread repository", () => {
     }]);
   });
 
-  it("copies only retained tool receipts into the exact scoped fork session", () => {
+  it("copies exactly the selected source receipts into the scoped fork session", () => {
     const settings = repository();
     const otherScope = { ...scope, principalId: "other" };
     for (const owner of [scope, otherScope]) for (const thread of ["source", "child"]) {
@@ -161,8 +161,10 @@ describe("Claude thread repository", () => {
     settings.writeTaskStarted(scope, "source", "source-session", { ...start, nativeTaskId: "later", nativeToolUseId: "excluded" });
     settings.writeTaskStarted(scope, "source", "other-session", { ...start, nativeTaskId: "wrong-session" });
     settings.writeTaskStarted(otherScope, "source", "source-session", { ...start, nativeTaskId: "wrong-owner" });
-    const input = { sourceApplicationThreadId: "source", sourceNativeSessionId: "source-session",
-      childApplicationThreadId: "child", childNativeSessionId: "child-session", nativeToolUseIds: ["kept"] };
+    const kept = settings.listTaskLifecycleReceipts(scope, "source", "source-session")
+      .filter(({ nativeToolUseId }) => nativeToolUseId === "kept");
+    const input = { sourceApplicationThreadId: "source",
+      childApplicationThreadId: "child", childNativeSessionId: "child-session", receipts: kept };
     settings.copyTaskLifecycleReceiptsForFork(scope, input);
     settings.copyTaskLifecycleReceiptsForFork(scope, input);
     expect(settings.listTaskLifecycleReceipts(scope, "child", "child-session")).toEqual([{

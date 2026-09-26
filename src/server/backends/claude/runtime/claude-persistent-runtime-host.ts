@@ -4,12 +4,14 @@ import { ClaudeBackgroundActivity } from "../claude-background-activity.js";
 import { claudeCommandLifecycle, claudeResultIsUnrelated, claudeResultUserMessageIds } from "../claude-result-lifecycle.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { CanUseTool, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { ClaudeRuntimeClient, ClaudeRuntimeSession } from "../claude-runtime-client.js";
+import type { ClaudeRuntimeClient, ClaudeRuntimeForkResult, ClaudeRuntimeSession } from "../claude-runtime-client.js";
+import { claudeForkLaunchFailure } from "../claude-fork-launch.js";
+import { SidecarOperationError } from "../../../../internal/sidecar-protocol/operation-registry.js";
 import type { ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v1.js";
 import type { PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import { SidecarResourceHandoffPendingError } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import type { SidecarUpgradeBlocker } from "../../../../internal/sidecar-protocol/service-management-v1.js";
-import { claudePersistentEventSchema, type ClaudePersistentConfiguration, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
+import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudePersistentEventSchema, type ClaudePersistentConfiguration, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import { ClaudeHistoryPager, iterateClaudeSessionHistory } from "../claude-session-history.js";
 import { compactedStreamSequences, historyCandidates, historyCovers, isTransientReplay, replayMessage, replayStateKey } from "./claude-replay-retention.js";
 
@@ -17,7 +19,7 @@ type Permission = { event: ClaudePersistentEvent; resolve(value: PermissionResul
 type Session = {
   backgroundActivity: ClaudeBackgroundActivity; backgroundSequence?: number;
   terminalResultSequences: Set<number>; pendingTerminalSequence?: number; model?: string | null; commandsInvalidated: boolean; permissionMode?: import("@anthropic-ai/claude-agent-sdk").PermissionMode; confirmedEffort?: import("@anthropic-ai/claude-agent-sdk").EffortLevel | null;
-  id: string; cwd: string; authorityFingerprint: string; forkIdentity?: string; runtime: ClaudeRuntimeSession; starting: Promise<unknown>;
+  id: string; cwd: string; authorityFingerprint: string; runtime: ClaudeRuntimeSession; starting: Promise<unknown>;
   admissionJournalComplete: boolean;
   events: Map<number, ClaudePersistentEvent>; replay: Map<number, ClaudePersistentEvent>; bytes: number; replayBytes: number; sequence: number;
   sends: Map<string, string>; pendingInputs: Map<string, Parameters<ClaudeRuntimeSession["send"]>[0]>; pendingInputBytes: number; permissionResponses: Map<string,string>; retiring?: Promise<void>; active: Set<string>; permissions: Map<string, Permission>;
@@ -32,6 +34,8 @@ type Session = {
 export class ClaudePersistentRuntimeHost {
   readonly runtimeId = randomUUID();
   readonly #sessions = new Map<string, Session>();
+  /** Running one-shot fork launches by child session; they share the session cap. */
+  readonly #forkLaunches = new Map<string, Promise<ClaudeRuntimeForkResult>>();
   readonly #stoppedHistoryPager = new ClaudeHistoryPager();
   readonly #historySweepQueue = new Set<Session>();
   #historySweepSession?: Session;
@@ -162,6 +166,7 @@ export class ClaudePersistentRuntimeHost {
   }
 
   async execute(command: ClaudePersistentCommand, listener: (event: ClaudePersistentEvent) => void): Promise<unknown> {
+    if (command.action === "fork") return await this.#forkLaunch(command);
     if (command.runtimeId !== this.runtimeId) throw new Error("claude_persistent_runtime_unknown");
     this.input.services.assertController(command.controllerEpoch);
     if (this.#closed || this.#cleanupUnproven) throw new Error("claude_persistent_runtime_unavailable");
@@ -233,12 +238,17 @@ export class ClaudePersistentRuntimeHost {
       }
       case "probe": return await this.input.client.probe({ executablePath: config.executablePath, timeoutMs: config.initializationTimeoutMs, environment: {}, cwd: command.request.cwd });
       case "list": return { sessions: await this.input.client.listSessions(command.request, {}) };
-      case "info": return { session: await this.input.client.getSessionInfo(command.request.sessionId, command.request.dir ? { dir: command.request.dir } : {}, {}) ?? null };
+      case "info":
+        await this.#settledForkLaunch(command.request.sessionId);
+        return { session: await this.input.client.getSessionInfo(command.request.sessionId, command.request.dir ? { dir: command.request.dir } : {}, {}) ?? null };
       case "messages": {
         const { sessionId, ...options } = command.request;
+        await this.#settledForkLaunch(sessionId);
         return await this.input.client.getSessionMessagesPage(sessionId, options, {});
       }
-      case "transcript": return { present: await this.input.client.hasSessionTranscript(command.request.sessionId, { dir: command.request.dir }, {}) };
+      case "transcript":
+        await this.#settledForkLaunch(command.request.sessionId);
+        return { present: await this.input.client.hasSessionTranscript(command.request.sessionId, { dir: command.request.dir }, {}) };
       case "rename": await this.input.client.renameSession(command.request.sessionId, command.request.title, { dir: command.request.dir }, {}); return { renamed: true };
       case "open": return await this.#open(command, listener);
       case "attach": return await this.#attach(this.#session(command.request.sessionId), command.controllerEpoch, listener, true, command.replay);
@@ -339,17 +349,72 @@ export class ClaudePersistentRuntimeHost {
     }
   }
 
+  /**
+   * One-shot fork launch. It runs to its proven exit even if main disconnects,
+   * is never a retained session, and cannot be adopted by a later open. Every
+   * refusal before the launch starts is reported as such, so main can treat
+   * it as proof that no child was created.
+   */
+  async #forkLaunch(command: Extract<ClaudePersistentCommand, { action: "fork" }>): Promise<ClaudeRuntimeForkResult> {
+    const request = command.request;
+    const started = performance.now();
+    try {
+      try {
+        if (command.runtimeId !== this.runtimeId) throw new Error("claude_persistent_runtime_unknown");
+        this.input.services.assertController(command.controllerEpoch);
+        if (this.#closed || this.#cleanupUnproven || this.#runtimeStopped || this.#frozen) throw new Error("claude_persistent_admission_frozen");
+        this.input.services.assertAdmission(command.controllerEpoch);
+        if (this.#sessions.has(request.sessionId) || this.#forkLaunches.has(request.sessionId)) throw new Error("claude_persistent_session_configuration_conflict");
+      } catch (error) {
+        throw claudeForkLaunchFailure("claude_fork_launch_refused", error);
+      }
+      if (this.#sessions.size + this.#forkLaunches.size >= CLAUDE_PERSISTENT_MAXIMUM_SESSIONS) {
+        throw claudeForkLaunchFailure("claude_fork_launch_refused_capacity");
+      }
+      const config = this.input.configuration;
+      const launch = this.input.client.forkSession({
+        executablePath: config.executablePath, initializationTimeoutMs: config.initializationTimeoutMs,
+        sessionId: request.sessionId, sourceSessionId: request.sourceSessionId, resumeSessionAt: request.resumeSessionAt,
+        cwd: request.cwd, ...(request.title ? { title: request.title } : {}), model: request.model,
+        ...(request.effort ? { effort: request.effort } : {}),
+        ...(request.executionEnvironment ? { executionEnvironment: request.executionEnvironment } : {}),
+        environment: {},
+      });
+      this.#forkLaunches.set(request.sessionId, launch); this.#inflight++; this.#revision++;
+      try { return await launch; }
+      finally { this.#forkLaunches.delete(request.sessionId); this.#inflight--; this.#revision++; }
+    } catch (error) {
+      attachmentDiagnostic("claude_sidecar_command_failed", {
+        role: "sidecar",
+        backendInstanceId: this.input.configuration.backendInstanceId,
+        executionEnvironmentId: this.input.configuration.executionEnvironmentId,
+        method: "fork",
+        durationMs: performance.now() - started,
+      }, error);
+      throw error;
+    }
+  }
+
+  /** A read of a child whose fork launch is running waits for its proven exit. */
+  async #settledForkLaunch(sessionId: string): Promise<void> {
+    await this.#forkLaunches.get(sessionId)?.catch(() => undefined);
+  }
+
   async #open(command: Extract<ClaudePersistentCommand, { action: "open" }>, listener: (event: ClaudePersistentEvent) => void) {
     const request = command.request;
     let session = this.#sessions.get(request.sessionId);
     if (session?.retiring) { await session.retiring; this.input.services.assertController(command.controllerEpoch); session = this.#sessions.get(request.sessionId); }
     if (session) {
-      if (session.cwd !== request.cwd || session.authorityFingerprint !== queryAuthorityFingerprint(request) || (request.launch === "fork" && session.forkIdentity !== JSON.stringify([request.sourceSessionId, request.resumeSessionAt]))) throw new Error("claude_persistent_session_configuration_conflict");
+      if (session.cwd !== request.cwd || session.authorityFingerprint !== queryAuthorityFingerprint(request)) throw new Error("claude_persistent_session_configuration_conflict");
       return await this.#attach(session, command.controllerEpoch, listener, true, command.replay);
     }
     if (this.#frozen || this.#runtimeStopped) throw new Error("claude_persistent_admission_frozen");
     this.input.services.assertAdmission(command.controllerEpoch);
-    if (this.#sessions.size >= 32) throw new Error("claude_persistent_session_capacity_exceeded");
+    // A running fork launch owns this identity until its process has exited.
+    if (this.#forkLaunches.has(request.sessionId)) throw new Error("claude_persistent_session_configuration_conflict");
+    if (this.#sessions.size + this.#forkLaunches.size >= CLAUDE_PERSISTENT_MAXIMUM_SESSIONS) {
+      throw new SidecarOperationError("claude_persistent_session_capacity_exceeded", true);
+    }
     this.input.validateQueryEnvironment?.(request.environment);
     if (request.agentToolMcp) {
       if (!this.input.validateAgentToolMcp) throw new Error("claude_persistent_agent_tool_mcp_denied");
@@ -366,7 +431,7 @@ export class ClaudePersistentRuntimeHost {
       onMessage: message => this.#message(created, message),
       onFailure: () => this.#fail(created, "claude_persistent_query_failed"),
     });
-    created = { backgroundActivity: new ClaudeBackgroundActivity(), id: request.sessionId, cwd: request.cwd, authorityFingerprint: queryAuthorityFingerprint(request), ...(request.launch === "fork" ? { forkIdentity: JSON.stringify([request.sourceSessionId, request.resumeSessionAt]) } : {}), runtime, starting: Promise.resolve(), events: new Map(), replay: new Map(), bytes: 0, replayBytes: 0, sequence: 0,
+    created = { backgroundActivity: new ClaudeBackgroundActivity(), id: request.sessionId, cwd: request.cwd, authorityFingerprint: queryAuthorityFingerprint(request), runtime, starting: Promise.resolve(), events: new Map(), replay: new Map(), bytes: 0, replayBytes: 0, sequence: 0,
       nextHistoryRead: 0, historyBackoff: 0, historyPressure: false, historyCandidatesDirty: true, hasHistoryCandidates: false, rewriteGeneration: 0, streamStopSequence: 0, replayStateSequences: new Map(),
       admissionJournalComplete: request.launch === "new",
       terminalResultSequences: new Set(), sends: new Map(), pendingInputs: new Map(), pendingInputBytes: 0, commandsInvalidated: false, permissionResponses: new Map(), active: new Set(), permissions: new Map(),
