@@ -23,7 +23,7 @@
   allowed roots and keeps the snapshot with the thread, so later file changes
   do not alter it. Viewed paths are assumed to be on the thread's configured
   execution host; Codex-native additional executor environments are
-  unsupported.
+  unsupported. (#11)
 
 - Let Codex and Claude threads use Native Sedes agent tools. Choose
   **Native tools** in **Agent tools…**; Sedes adds a per-thread `sedes` MCP
