@@ -18,6 +18,7 @@ import { terminalPrepareOperation, terminalCreateOperation, terminalAttachOperat
 import { SidecarRuntimeOwner } from "../../src/server/sidecar/sidecar-runtime.js";
 import { SshSidecarArtifactInstaller } from "../../src/server/sidecar/ssh-sidecar-artifact-installer.js";
 import { PersistentSidecarManagementReceipts } from "../../src/server/sidecar/persistent-sidecar-management-receipts.js";
+import { terminateProcessesReferencing } from "../support/process-cleanup.js";
 
 type UnscopedRequest = SidecarManagementRequest extends infer Request ? Request extends { scope: unknown } ? Omit<Request, "scope"> : never : never;
 const configuration = { environmentRevision: 1, operationsRevision: 1 };
@@ -29,8 +30,20 @@ beforeAll(async () => {
   await command(process.execPath, ["scripts/build-sidecar.mjs", "--output-directory", buildDirectory]);
   artifact = await loadSidecarArtifactRegistration(path.join(buildDirectory, "manifest.json"));
 }, 60_000);
-afterAll(async () => { if (buildDirectory) await rm(buildDirectory, { recursive: true, force: true }); });
-afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+afterAll(async () => {
+  if (!buildDirectory) return;
+  await terminateProcessesReferencing(buildDirectory);
+  await rm(buildDirectory, { recursive: true, force: true });
+}, 30_000);
+// Run every cleanup even after an earlier one fails, then report the first
+// failure; a skipped cleanup would leave a detached service daemon running.
+afterEach(async () => {
+  const failures: unknown[] = [];
+  for (const cleanup of cleanups.splice(0).reverse()) {
+    try { await cleanup(); } catch (error) { failures.push(error); }
+  }
+  if (failures.length > 0) throw failures[0];
+}, 60_000);
 
 async function fixture(nativeAssets = false, selectedArtifact = artifact) {
   const home = await mkdtemp(path.join(tmpdir(), "sedes-service-"));
@@ -71,9 +84,16 @@ async function fixture(nativeAssets = false, selectedArtifact = artifact) {
     return mutationId;
   };
   cleanups.push(async () => {
-    try { await stop(); } catch (error) { if (!(error && typeof error === "object" && "code" in error && ["ENOENT", "ECONNREFUSED"].includes(String(error.code)))) throw error; }
-    await rm(home, { recursive: true, force: true });
-    await rm(paths.socketDirectory, { recursive: true, force: true });
+    let failure: unknown;
+    try { await stop(); } catch (error) { if (!(error && typeof error === "object" && "code" in error && ["ENOENT", "ECONNREFUSED"].includes(String(error.code)))) failure = error; }
+    // A refused or failed stop, or a test that failed first, can leave the
+    // detached daemon or a carrier running. All of them run from this home.
+    try { await terminateProcessesReferencing(home); }
+    finally {
+      await rm(home, { recursive: true, force: true });
+      await rm(paths.socketDirectory, { recursive: true, force: true });
+    }
+    if (failure !== undefined) throw failure;
   });
   const launch = async () => {
     const child = spawn(process.execPath, [executable, "service", "connect", "--expected-digest", selectedArtifact.artifactSha256,
