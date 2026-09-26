@@ -287,7 +287,7 @@ describe("durable scoped usage service", () => {
     const message = {type: "assistant", uuid: "frame", session_id: "native-session", parent_tool_use_id: null, parent_agent_id: null,
       message: {id: "msg-1", model: "model-a", stop_reason: "end_turn", content: [], usage: {input_tokens: 10, output_tokens: 2,
         cache_read_input_tokens: 0, cache_creation_input_tokens: 0}}} as unknown as SessionMessage;
-    const attach = () => new ClaudeUsageAccounting({sink: service, binding, nativeNamespace: "native-store"});
+    const attach = () => new ClaudeUsageAccounting({sink: service, binding, nativeNamespace: "native-store", launch: "new"});
     const before = attach();
     before.registerTurns([{backendTurnId: "old-turn", status: "completed", orderedBackendItemIds: []}]);
     before.messages([{message, backendTurnId: "old-turn"}], "history");
@@ -309,6 +309,110 @@ describe("durable scoped usage service", () => {
     expect(turn("old-turn").metrics.input.value).toBe("10");
     expect(turn("new-turn").metrics.input.value ?? null).toBeNull();
     expect(turn("new-turn").reasons).toContain("conflicting_evidence");
+  });
+
+  describe("reported series baselines", () => {
+    const model = (input: string, overrides: Partial<UsageFact> = {}) => fact("model:a", input, {kind: "cumulative", sessionContribution: "checkpoint", coverageDomain: "pipeline", ...overrides});
+    const cost = (amount: string) => fact("query_cost", "0", {kind: "cumulative", sessionContribution: "checkpoint", coverageDomain: "pipeline", tokens: {}, models: [],
+      costs: [{amount, currency: "USD", kind: "estimated", provenance: "sdk"}]});
+    const snapshot = (id: string, input: string, amount: string) => observation(id, [model(input), cost(amount)], true);
+    const resumed = (start: UsageObservation, initialBaseline: "proven_zero" | "unknown" = "proven_zero") => ({...source, epoch: "resumed", initialBaseline, reportedBaseline: start});
+    const totals = (service: UsageService, thread = "thread") => {
+      const {metrics, costs, reasons} = service.read(scope, thread).summary;
+      return {input: metrics.input.value, quality: metrics.input.quality, cost: costs[0]?.amount ?? null, reasons};
+    };
+
+    it("counts only a series' increase over the baseline it was created with", () => {
+      const service = new UsageService(database(), {enabled: true});
+      service.open(source).capture([snapshot("a1", "60", "0.06"), snapshot("a2", "100", "0.1")]);
+      // The resumed query's counter continues from the 100 its predecessor saved.
+      const start = snapshot("b0:baseline", "100", "0.1");
+      service.open(resumed(start)).capture([snapshot("b0", "100", "0.1"), snapshot("b1", "130", "0.13")]);
+      expect(totals(service)).toMatchObject({input: "130", quality: "complete", cost: "0.13"});
+      expect(service.read(scope, "thread").summary.metrics.input.basis).toEqual(["sdk_normalized", "derived"]);
+      // A reopened source keeps its own baseline rather than the one offered now.
+      service.open(resumed(snapshot("b2:baseline", "150", "0.15"), "unknown")).capture([snapshot("b2", "150", "0.15")]);
+      expect(totals(service)).toMatchObject({input: "150", quality: "complete", cost: "0.15"});
+      expect(totals(service).reasons).not.toContain("unknown_baseline");
+    });
+
+    it("never counts below a baseline or past a member it no longer reports", () => {
+      const service = new UsageService(database(), {enabled: true});
+      const capture = service.open(resumed(snapshot("start", "100", "0.1")));
+      capture.capture([snapshot("first", "120", "0.12")]);
+      capture.capture([snapshot("fell", "90", "0.13")]);
+      capture.capture([snapshot("later", "140", "0.14")]);
+      expect(totals(service)).toMatchObject({input: "20", quality: "conflict", cost: "0.02"});
+      expect(totals(service).reasons).toContain("counter_regression");
+      const second = new UsageService(database(), {enabled: true});
+      second.open(resumed(observation("start", [model("10"), model("5", {id: "model:b"})], true))).capture([observation("dropped", [model("40")], true)]);
+      expect(totals(second)).toMatchObject({input: null});
+      expect(totals(second).reasons).toContain("counter_regression");
+    });
+
+    it("counts from an unobserved start only above the first value seen", () => {
+      const service = new UsageService(database(), {enabled: true});
+      service.open(resumed(snapshot("first:baseline", "500", "0.5"), "unknown")).capture([snapshot("first", "500", "0.5"), snapshot("next", "520", "0.52")]);
+      expect(totals(service)).toMatchObject({input: "20", quality: "partial", cost: "0.02"});
+      expect(totals(service).reasons).toContain("unknown_baseline");
+    });
+
+    it("withholds what a baseline member did not report and counts a new member from zero", () => {
+      const service = new UsageService(database(), {enabled: true});
+      const start = observation("start", [model("100")], true);
+      service.open(resumed(start)).capture([observation("next", [model("130", {tokens: {input: "130", reasoning: "7"},
+        costs: [{amount: "0.3", currency: "USD", kind: "estimated", provenance: "sdk"}]}), model("4", {id: "model:b"})], true)]);
+      const summary = service.read(scope, "thread").summary;
+      expect(summary.metrics.input).toMatchObject({value: "34", quality: "partial"});
+      expect(summary.metrics.reasoning.value).toBeNull();
+      expect(summary.costs).toEqual([]);
+      expect(summary.reasons).toContain("unknown_baseline");
+    });
+
+    it("rejects baseline evidence that is not a whole checkpoint instead of counting from zero", () => {
+      const db = database(), service = new UsageService(db, {enabled: true});
+      const capture = service.open(resumed(observation("start", [fact("additive", "100")], true)));
+      expect(capture.capture([snapshot("next", "130", "0.13")])).toBe(false);
+      expect(db.prepare("SELECT COUNT(*) AS count FROM usage_sources").get()).toEqual({count: 0});
+    });
+
+    it("counts resumed, reattached, and forked Claude queries once", () => {
+      const db = database(), service = new UsageService(db, {enabled: true});
+      db.exec(`INSERT INTO application_threads VALUES('tenant','principal','child','backend','environment','workspace');
+INSERT INTO conversation_bindings(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,execution_environment_id,backend_conversation_id,connection_profile_id) VALUES('tenant','principal','child','backend','environment','child-session','connection');`);
+      const child = {...binding, applicationThreadId: "child", backendConversationId: "child-session"};
+      const attach = (launch: "new" | "resume", target = binding) => new ClaudeUsageAccounting({sink: service, binding: target, nativeNamespace: "native-store", launch});
+      // Each fixture request costs 1 input token and $0.000012.
+      const result = (uuid: string, requests: number, startup?: string) => ({type: "result", subtype: "success", is_error: false, uuid, session_id: "native",
+        num_turns: startup ? 0 : 1, ...(startup ? {user_message_uuid: startup} : {}),
+        usage: {input_tokens: startup ? 0 : 1, output_tokens: startup ? 0 : 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0},
+        modelUsage: requests ? {"claude-sonnet-5": {inputTokens: requests, outputTokens: requests, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: requests * 0.000012}} : {},
+        total_cost_usd: requests * 0.000012} as unknown as SDKResultMessage);
+      const first = attach("new");
+      first.admitQuery("startup-a", false);
+      for (const message of [result("a0", 0, "startup-a"), result("a1", 1), result("a2", 2)]) first.pipeline(message);
+      first.close();
+      expect(totals(service)).toMatchObject({input: "2", cost: "0.000024"});
+      // The resumed query's startup result already carries both earlier turns.
+      const second = attach("resume");
+      second.admitQuery("startup-b", false);
+      for (const message of [result("b0", 2, "startup-b"), result("b1", 3)]) second.pipeline(message);
+      second.close();
+      expect(totals(service)).toMatchObject({input: "3", quality: "complete", cost: "0.000036"});
+      // A main restart reattaches to that same live query, which keeps its baseline.
+      const third = attach("resume");
+      third.admitQuery("startup-b", true);
+      third.pipeline(result("b2", 4));
+      third.close();
+      expect(totals(service)).toMatchObject({input: "4", quality: "complete", cost: "0.000048"});
+      // A fork child's transcript copies the source's saved totals.
+      const fork = attach("resume", child);
+      fork.admitQuery("startup-c", false);
+      for (const message of [result("c0", 4, "startup-c"), result("c1", 5)]) fork.pipeline(message);
+      fork.close();
+      expect(totals(service, "child")).toMatchObject({input: "1", quality: "complete", cost: "0.000012"});
+      expect(totals(service)).toMatchObject({input: "4", cost: "0.000048"});
+    });
   });
 
   it("retains a delayed direct turn result behind a later cumulative source frontier", () => {

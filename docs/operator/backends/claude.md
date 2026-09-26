@@ -485,6 +485,12 @@ conflicting with previously saved evidence; it does not indicate detected loss.
 
 Reattaching the same retained query preserves accounting identity. A new query
 lifetime is a separate epoch, and a recorded conversation reset ends its segment.
+Claude Code continues a resumed or forked query's cumulative totals from those
+its transcript saved; Sedes counts each query only from where it started, so
+earlier turns are not counted again. When that starting point was not observed,
+the query's work before its first observed result is left out and marked
+partial. Totals recorded by earlier Sedes versions for resumed or forked
+threads can include earlier turns twice and are not corrected.
 A decrease without proven reset stays a conflict. Existing retained replay and
 ordinary history can reconcile available evidence; unrecoverable gaps remain
 labelled. Legacy Claude ledger totals have unknown coverage and appear separately

@@ -260,6 +260,28 @@ describe("usage timeline projection", () => {
     expect(rows(db)).toMatchObject([{placement: "unplaced", input: 170}]);
   });
 
+  it("places a series counted from a reported baseline as observed work and rebuilds it the same way", () => {
+    const db = database("claude_agent_sdk"), service = new UsageService(db, {enabled: true});
+    at("2026-09-02T10:00:00Z");
+    const capture = service.open({...source("thread", "proven_zero"), reportedBaseline: counter("start", {input: "900", output: "100"})});
+    at("2026-09-02T10:01:00Z"); capture.capture([counter("a", {input: "900", output: "100"})]);
+    at("2026-09-02T10:02:00Z"); capture.capture([counter("b", {input: "950", output: "110"})]);
+    expect(rows(db)).toMatchObject([{placement: "observed", occurred_at: "2026-09-02T10:02:00.000Z", input: 50, output: 10}]);
+    const live = service.analytics(scope, request());
+    expect(live.totals).toMatchObject({input: "50", output: "10", tokens: "60"});
+    expect(live.placement).toMatchObject({observed: "60", unplaced: "0"});
+    expect(service.read(scope, "thread").summary.metrics.input.value).toBe("50");
+    db.exec("DELETE FROM usage_increments; UPDATE usage_sources SET timeline_state='backfill'");
+    new UsageService(db, {enabled: true}).analytics(scope, request());
+    expect(rows(db)).toMatchObject([{placement: "interval", interval_start: "2026-09-02T10:01:00.000Z", input: 50, output: 10}]);
+    // A baseline alone still starts the next interval after a rebuild.
+    const fresh = database("claude_agent_sdk"), empty = new UsageService(fresh, {enabled: true});
+    at("2026-09-03T10:00:00Z"); empty.open({...source("thread", "unknown"), reportedBaseline: counter("start", {input: "900", output: "100"})});
+    fresh.exec("UPDATE usage_sources SET timeline_state='backfill'");
+    at("2026-09-03T10:05:00Z"); empty.open(source("thread", "unknown")).capture([counter("next", {input: "910", output: "100"})]);
+    expect(rows(fresh)).toMatchObject([{placement: "interval", interval_start: "2026-09-03T10:00:00.000Z", input: 10}]);
+  });
+
   it("backfills before live capture continues a pending source", () => {
     const db = database(), service = new UsageService(db, {enabled: true});
     at("2026-09-02T10:00:00Z"); service.open(source()).capture([counter("a", {input: "100", output: "0"})]);

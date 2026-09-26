@@ -144,6 +144,14 @@
   and copy background task results only when the copied history shows them
   finished. Migration 117 records this child evidence.
 
+- Count a resumed or forked Claude query's usage once. Claude Code 2.1.277 and
+  newer continue such a query's totals from those its transcript saved, and
+  Sedes counted the earlier turns again in session tokens, cost, and the Usage
+  page. Each query is now counted from the totals its startup message reported,
+  and a reattached query keeps that starting point. If the start was not
+  observed, earlier work is left out and the usage is marked partial. Totals
+  already recorded are not corrected.
+
 - Log every fork failure with its backend code and cause. A retry that fails
   transiently keeps the fork recoverable instead of discarding a child an
   earlier attempt may have created. Startup fork recovery runs after the

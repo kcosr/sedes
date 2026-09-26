@@ -154,10 +154,19 @@ and `modelUsage` continue from the totals its transcript saved instead of
 starting at zero. That is Claude Code behaviour from 2.1.277, so it applies to
 every admitted runtime whatever the SDK release. A loopback probe on 2.1.281
 and 2.1.283 confirmed it: after two turns, a resumed query's first result
-reported three requests. Sedes' usage accounting still opens each fresh
-query from a proven zero, so the pipeline totals of a resumed or forked thread
-count its earlier turns again. That is an open defect of the runtime policy,
-not of this SDK update, and is not changed here.
+reported three requests. Claude Code restores the last `cost-state` row its
+transcript holds for the session, which it writes when a process exits or
+clears; a fork child's transcript carries the source's.
+
+Sedes' accounting counts each resumed, forked, or reattached query only from
+where it started. Sedes' `shouldQuery: false` startup message gets its own
+zero-turn result, which reports the restored totals before any request; that
+result is the series' reported baseline. Before this, every fresh query was
+counted from zero, so a resumed or forked thread's pipeline totals counted its
+earlier turns again; those recorded totals are not corrected.
+`claude-usage-continuation-native.test.ts` qualifies this on 2.1.281 and
+2.1.283, through Sedes' session and fork launch. See the
+[Claude usage notes](../../../docs/internals/backends/claude.md#creation-binding-and-model-state).
 
 ### Background activity and task notifications
 

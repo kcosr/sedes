@@ -629,6 +629,28 @@ do not establish request cardinality.
 Creation reserves an application UUID before crossing the SDK boundary so a
 retry or recovery attempt cannot create an untracked replacement.
 
+Query-pipeline totals (`modelUsage` and `total_cost_usd`) are cumulative for
+one query. From Claude Code 2.1.277, a resumed or forked query starts from the
+totals its transcript saved: the last `cost-state` row for the session, which
+Claude Code writes when a process exits or clears. Its first result therefore
+already carries earlier turns. A fork child's transcript carries the source's
+saved totals, so the child's first query starts from them too. Accounting
+counts each query only from where it started
+([reported baselines](../usage-accounting.md#reported-baselines)):
+
+- A new launch starts from zero.
+- A resumed launch, and a reattached query, opens its series at the first
+  result it observes. The startup message is sent with `shouldQuery: false`,
+  so its own result makes no model request: one that names only that message,
+  succeeded, ran no turns, and reports zero turn usage is an exact start.
+- Any other first result is used as an `unknown` start. The query's earlier
+  work is left out and marked `unknown_baseline`, not counted twice.
+- A reattached query reopens the same series, which keeps the start recorded
+  at launch.
+
+Per-turn result `usage` and per-message usage do not continue across queries
+and are unaffected.
+
 A session exists natively once its transcript does. The SDK reports metadata
 only after a prompt or title, so a thread that was opened but never sent to
 holds a transcript with only startup messages and no metadata. Attach resumes
@@ -1092,6 +1114,11 @@ normalized integration surface:
   a tool runs, then resumes as Sedes does. It qualifies the unfinished turn in
   history and the `running`, startup-result, and `idle` frames that the
   lost-process rule relies on;
+- `claude-usage-continuation-native.test.ts` drives Sedes' session, fork
+  launch, and usage accounting against the actual executable and a loopback
+  Messages fixture. It qualifies that a resumed query's and a fork child's
+  startup results carry the saved totals, and that session totals count each
+  request once;
 - `claude-background-activity-native.test.ts` runs the pinned SDK and actual
   Claude executable against an isolated loopback Messages fixture. Its finite
   gated Bash and Agent jobs prove the foreground result precedes background

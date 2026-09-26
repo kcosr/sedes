@@ -11,7 +11,7 @@ import type { UsageCapture, UsageFact, UsageObservation, UsageSink } from "./con
 import { NO_USAGE_CAPTURE } from "./contracts.js";
 import type { UsageAnalyticsRequest, UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
 import { UsageAnalyticsService } from "./usage-analytics-service.js";
-import { costSplit, rebuildUsageTimeline, snapshotFact, snapshotReshaped, timelineInstant, writeUsageIncrement, type TimelineSource, type TimelineTime } from "./usage-timeline.js";
+import { costSplit, increaseOverBaseline, rebuildUsageTimeline, snapshotFact, snapshotReshaped, timelineInstant, writeUsageIncrement, type TimelineSource, type TimelineTime } from "./usage-timeline.js";
 
 const identifier = z.string().min(1).max(2048);
 const factSchema = z.strictObject({
@@ -53,8 +53,11 @@ export function emptyUsageSummary(): UsageSummary {
 type StoredFact = {sourceId:string; turnId:string|null; recordedAt:string; fact:UsageFact};
 type State = {revision:bigint; report_json:string|null; legacy_json:string|null};
 type Source = TimelineSource & {capture_state:UsageReport["captureState"]; frontier:string|null; timeline_state:"current"|"backfill"; timeline_receipt:string|null};
-/** One capture transaction: whether the next checkpoint continues an observed series. */
-type CaptureContext = {continuous:boolean; acceptedCheckpoint:boolean; backendKind:string};
+/**
+ * One capture transaction: whether the next checkpoint continues an observed
+ * series, and the reported baseline its checkpoints are counted from.
+ */
+type CaptureContext = {continuous:boolean; acceptedCheckpoint:boolean; backendKind:string; baseline:readonly UsageFact[]|null};
 
 /** Database-only scoped reads and nonthrowing provider capture. No transcript or provider IO. */
 export class UsageService implements UsageSink {
@@ -306,12 +309,15 @@ export class UsageService implements UsageSink {
     let sealed=false;
     // Only a newly created empty series is continuous before its first checkpoint.
     let continuous=input.initialBaseline==="proven_zero";
+    // Immutable once recorded, so one read serves the whole incarnation.
+    let baseline:readonly UsageFact[]|null|undefined;
     const incarnation=Symbol();
     const run = (action:(context:CaptureContext)=>void):boolean => {
       if(sealed || (admitted && this.#incarnations.get(sourceId)!==incarnation))return false;
       try {
         let changes:{threadId:string;revision:string}[]=[];
         let context:CaptureContext|undefined;
+        let recorded=baseline;
         this.database.transaction(() => {
           const target=this.#admitBinding(binding);
           if (input.subagent ? target.kind !== "codex_app_server" : input.nativeSession !== binding.backendConversationId) throw new Error("usage_binding_not_admitted");
@@ -319,17 +325,21 @@ export class UsageService implements UsageSink {
           if(input.subagent)this.#admitSubagent(input);
           else if(this.database.prepare(`SELECT 1 FROM usage_subagents WHERE tenant_id=? AND backend_id=? AND environment_id=? AND native_namespace=? AND native_session=?`)
             .get(scope.tenantId,binding.backendInstanceId,binding.executionEnvironmentId,input.nativeNamespace,input.nativeSession))throw new Error("usage_source_owned_elsewhere");
-          this.database.prepare(`INSERT OR IGNORE INTO usage_sources(id,tenant_id,principal_id,thread_id,backend_id,environment_id,workspace_id,native_namespace,native_session,epoch,normalization_version,baseline,capture_state,agent_role) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active',?)`).run(sourceId,scope.tenantId,scope.principalId,threadId,binding.backendInstanceId,target.environment_id,target.workspace_id,identifier.parse(input.nativeNamespace),identifier.parse(input.nativeSession),identifier.parse(input.epoch),identifier.parse(input.normalizationVersion),input.initialBaseline,input.subagent?"subagent":"main");
+          const created=this.database.prepare(`INSERT OR IGNORE INTO usage_sources(id,tenant_id,principal_id,thread_id,backend_id,environment_id,workspace_id,native_namespace,native_session,epoch,normalization_version,baseline,capture_state,agent_role) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active',?)`).run(sourceId,scope.tenantId,scope.principalId,threadId,binding.backendInstanceId,target.environment_id,target.workspace_id,identifier.parse(input.nativeNamespace),identifier.parse(input.nativeSession),identifier.parse(input.epoch),identifier.parse(input.normalizationVersion),input.initialBaseline,input.subagent?"subagent":"main").changes===1;
           const source=this.database.prepare("SELECT * FROM usage_sources WHERE id=?").get(sourceId) as Source;
           if (source.thread_id !== threadId || source.tenant_id !== scope.tenantId || source.principal_id !== scope.principalId) throw new Error("usage_source_owned_elsewhere");
+          // The series is observed from its reported start; a reopened source keeps its own.
+          if (created && input.reportedBaseline) {recorded=this.#recordBaseline(sourceId,input);continuous=true;}
+          else if (recorded===undefined) recorded=this.#baseline(sourceId);
           if (input.subagent ? this.#failedSubagents.get(failedKey)?.has(sourceId) : this.#failed.has(failedKey)) {this.#gap(sourceId,"capture_failed");continuous=false;}
           // A proven-zero open continues only a series that has no accepted checkpoint yet.
           if (!admitted && source.timeline_receipt!==null) continuous=false;
           if (source.timeline_state==="backfill") rebuildUsageTimeline(this.database,source,target.kind);
-          context={continuous,acceptedCheckpoint:false,backendKind:target.kind};
+          context={continuous,acceptedCheckpoint:false,backendKind:target.kind,baseline:recorded ?? null};
           action(context);
           changes=this.#materialize(scope,threadId);
         })();
+        baseline=recorded;
         admitted=true; this.#incarnations.set(sourceId,incarnation);
         if(context)continuous=context.continuous;
         if(input.subagent){const failed=this.#failedSubagents.get(failedKey);failed?.delete(sourceId);if(failed?.size===0)this.#failedSubagents.delete(failedKey);}
@@ -370,6 +380,25 @@ export class UsageService implements UsageSink {
     }
 
   }
+  /** Only a whole checkpoint snapshot can be a series' start. Invalid evidence fails the capture rather than counting from zero. */
+  #recordBaseline(sourceId:string,input:Parameters<UsageSink["open"]>[0]):readonly UsageFact[] {
+    const {attribution:_attribution, ...evidence}=input.reportedBaseline!;
+    const parsed=observationSchema.safeParse(evidence);
+    if(!parsed.success || !parsed.data.replaceCheckpoint || parsed.data.facts.some(fact=>fact.sessionContribution!=="checkpoint" || fact.turn!==null || fact.inheritedFrom!==undefined) ||
+      Buffer.byteLength(JSON.stringify(parsed.data),"utf8")>65_536)throw new Error("usage_baseline_invalid");
+    const semantic={order:parsed.data.order,replaceCheckpoint:true,facts:parsed.data.facts,baseline:true};
+    const receivedAt=new Date().toISOString();
+    this.database.prepare("INSERT INTO usage_observations(source_id,observation_id,revision,fingerprint,evidence_json,normalization_version,occurred_at,received_at) VALUES(?,?,?,?,?,?,?,?)")
+      .run(sourceId,parsed.data.id,parsed.data.revision,hash(semantic),canonical(semantic),input.normalizationVersion,parsed.data.occurredAt,receivedAt);
+    // It confirms the series at this receipt, and older checkpoints predate it.
+    this.database.prepare("UPDATE usage_sources SET timeline_receipt=?,frontier=COALESCE(?,frontier) WHERE id=?").run(receivedAt,parsed.data.order,sourceId);
+    if(input.initialBaseline==="unknown")this.#gap(sourceId,"unknown_baseline");
+    return parsed.data.facts;
+  }
+  #baseline(sourceId:string):readonly UsageFact[]|null {
+    const row=this.database.prepare("SELECT evidence_json FROM usage_observations WHERE source_id=? AND json_extract(evidence_json,'$.baseline')=1").get(sourceId) as {evidence_json:string}|undefined;
+    return row ? (JSON.parse(row.evidence_json) as {facts:UsageFact[]}).facts : null;
+  }
   #gap(sourceId:string,reason:UsageReason,subject="",affectsSession=true):void {this.database.prepare("INSERT INTO usage_gaps(source_id,reason,subject,affects_session,recorded_at) VALUES(?,?,?,?,?) ON CONFLICT(source_id,reason,subject) DO UPDATE SET affects_session=MAX(usage_gaps.affects_session,excluded.affects_session)").run(sourceId,reason,subject,affectsSession?1:0,new Date().toISOString());}
   #capture(scope:RequestScope,threadId:string,backendId:string,sourceId:string,observation:UsageObservation,normalizationVersion:string,context:CaptureContext):void {
     // Attribution describes settings in effect, not accounting evidence; replay stays a no-op.
@@ -389,6 +418,12 @@ export class UsageService implements UsageSink {
     this.database.prepare("INSERT INTO usage_observations(source_id,observation_id,revision,fingerprint,evidence_json,normalization_version,occurred_at,received_at) VALUES(?,?,?,?,?,?,?,?)").run(sourceId,observation.id,observation.revision,fingerprint,canonical(semantic),normalizationVersion,observation.occurredAt,receivedAt);
     const source=this.database.prepare("SELECT * FROM usage_sources WHERE id=?").get(sourceId) as Source;
     if(observation.replaceCheckpoint && observation.order!==null && source.frontier!==null && BigInt(observation.order)<BigInt(source.frontier)) return;
+    // A series counted from a reported baseline charges only its increase over it.
+    if(context.baseline){
+      const increase=increaseOverBaseline(observation.facts,context.baseline);
+      if(!increase){this.#gap(sourceId,"counter_regression");return;}
+      observation={...observation,facts:increase};
+    }
     const previous=this.database.prepare("SELECT r.fact_json, json_extract(o.evidence_json, '$.order') AS source_order FROM usage_records r JOIN usage_observations o ON o.source_id=r.source_id AND o.observation_id=r.observation_id AND o.revision=r.observation_revision WHERE r.source_id=?").all(sourceId) as {fact_json:string;source_order:string|null}[];
     const oldFacts=previous.map(row=>JSON.parse(row.fact_json) as UsageFact);
     // The latest accepted or confirmed checkpoint receipt bounds an unobserved interval.

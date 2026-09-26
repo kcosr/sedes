@@ -149,6 +149,71 @@ export function writeUsageIncrement(database: Database.Database, input: {
   return result.changes === 1;
 }
 
+function moneyIncrease(now: string, was: string): string | null {
+  const scale = Math.max(now.split(".")[1]?.length ?? 0, was.split(".")[1]?.length ?? 0);
+  const units = (amount: string) => { const [whole, fraction = ""] = amount.split("."); return BigInt(whole! + fraction.padEnd(scale, "0")); };
+  const increase = units(now) - units(was);
+  if (increase < 0n) return null;
+  if (!scale) return String(increase);
+  const digits = String(increase).padStart(scale + 1, "0");
+  return `${digits.slice(0, -scale)}.${digits.slice(-scale)}`.replace(/\.?0+$/, "");
+}
+const sameMoney = (left: UsageFact["costs"][number], right: UsageFact["costs"][number]) =>
+  left.currency === right.currency && left.kind === right.kind && left.provenance === right.provenance;
+
+/**
+ * Each checkpoint member's increase over the reported baseline member with the
+ * same id; a member absent from the baseline started from zero. Returns null
+ * when a baseline member, metric, or cost is no longer reported, or a value
+ * fell below its baseline: the increase is then unknown, never negative. A
+ * value the baseline did not report cannot be differenced, so it is withheld
+ * and the member becomes partial with `unknown_baseline`.
+ */
+export function increaseOverBaseline(facts: readonly UsageFact[], baseline: readonly UsageFact[]): UsageFact[] | null {
+  const checkpoint = (fact: UsageFact) => fact.sessionContribution === "checkpoint" && !fact.inheritedFrom;
+  const starts = new Map(baseline.map((fact) => [fact.id, fact]));
+  const members = new Set(facts.filter(checkpoint).map((fact) => fact.id));
+  if (!members.size) return [...facts];
+  if (baseline.some((fact) => !members.has(fact.id))) return null;
+  const derived: UsageFact[] = [];
+  for (const fact of facts) {
+    const start = checkpoint(fact) ? starts.get(fact.id) : undefined;
+    if (!start) { derived.push(fact); continue; }
+    let unknown = false;
+    const tokens: Partial<Record<UsageTokenKind, string | null>> = {};
+    for (const key of Object.keys(start.tokens) as UsageTokenKind[]) {
+      if (start.tokens[key] != null && fact.tokens[key] == null) return null;
+    }
+    for (const key of Object.keys(fact.tokens) as UsageTokenKind[]) {
+      const now = fact.tokens[key], was = start.tokens[key];
+      if (now == null) { tokens[key] = now; continue; }
+      if (was == null) { unknown = true; tokens[key] = null; continue; }
+      const increase = BigInt(now) - BigInt(was);
+      if (increase < 0n) return null;
+      tokens[key] = String(increase);
+    }
+    const costs: UsageFact["costs"][number][] = [];
+    for (const was of start.costs) if (!fact.costs.some((now) => sameMoney(now, was))) return null;
+    for (const now of fact.costs) {
+      const was = start.costs.find((cost) => sameMoney(cost, now));
+      if (!was) { unknown = true; continue; }
+      const amount = moneyIncrease(now.amount, was.amount);
+      if (amount === null) return null;
+      costs.push({...now, amount});
+    }
+    // Pricing is evidence, not a charge: a component without a comparable start is dropped.
+    const pricing = fact.pricing && {...fact.pricing, components: fact.pricing.components.flatMap((now) => {
+      const was = start.pricing?.components.find((part) => part.kind === now.kind && part.currency === now.currency);
+      const amount = was ? moneyIncrease(now.amount, was.amount) : null;
+      return amount === null ? [] : [{...now, amount}];
+    })};
+    derived.push({...fact, tokens, costs, ...(pricing ? {pricing} : {}),
+      basis: [...new Set([...fact.basis, "derived" as const])],
+      ...(unknown ? {quality: "partial" as const, reasons: [...new Set([...fact.reasons, "unknown_baseline" as const])]} : {})});
+  }
+  return derived;
+}
+
 /**
  * Per-member deltas are exact only while every member of a replaced snapshot
  * persists and none shrinks. Otherwise one snapshot-level delta keeps the
@@ -228,7 +293,12 @@ export function backfillUsageTimeline(database: Database.Database, source: Timel
   const records = readRecords(database, source.id);
   writeAdditiveRows(database, source, backendKind, records);
   const expected = records.filter((row) => (JSON.parse(row.fact_json) as UsageFact).sessionContribution === "checkpoint");
-  if (!expected.length) { markCurrent(database, source.id, null); return; }
+  if (!expected.length) {
+    // A reported baseline alone still starts the series' first interval.
+    const start = database.prepare("SELECT received_at FROM usage_observations WHERE source_id=? AND json_extract(evidence_json,'$.baseline')=1").get(source.id) as {received_at: string} | undefined;
+    markCurrent(database, source.id, start ? timelineInstant(start.received_at) : null);
+    return;
+  }
   // Writes cannot run while a statement iterates, so page by insertion order.
   const page = database.prepare("SELECT rowid,observation_id,revision,evidence_json,received_at FROM usage_observations WHERE source_id=? AND rowid>? ORDER BY rowid LIMIT 500");
   function* observations(): Generator<{observation_id:string;revision:string;evidence_json:string;received_at:string}> {
@@ -244,12 +314,21 @@ export function backfillUsageTimeline(database: Database.Database, source: Timel
   let frontier: bigint | null = null;
   let previousReceipt: string | null = null;
   let replayed = true;
+  let baseline: UsageFact[] | null = null;
   for (const row of observations()) {
-    const evidence = JSON.parse(row.evidence_json) as {order: string | null; replaceCheckpoint: boolean; facts: UsageFact[]};
-    const checkpoints = evidence.facts.filter((fact) => fact.sessionContribution === "checkpoint" && !fact.inheritedFrom);
-    if (!checkpoints.length) continue;
+    const evidence = JSON.parse(row.evidence_json) as {order: string | null; replaceCheckpoint: boolean; facts: UsageFact[]; baseline?: true};
+    if (evidence.baseline) {
+      // The series is counted from its reported start, which charges nothing.
+      baseline = evidence.facts; previousReceipt = timelineInstant(row.received_at);
+      if (evidence.order !== null) frontier = BigInt(evidence.order);
+      continue;
+    }
+    if (!evidence.facts.some((fact) => fact.sessionContribution === "checkpoint" && !fact.inheritedFrom)) continue;
     if (!evidence.replaceCheckpoint) { replayed = false; break; }
     if (evidence.order !== null && frontier !== null && BigInt(evidence.order) < frontier) continue;
+    const increase = baseline ? increaseOverBaseline(evidence.facts, baseline) : evidence.facts;
+    if (!increase) break;
+    const checkpoints = increase.filter((fact) => fact.sessionContribution === "checkpoint" && !fact.inheritedFrom);
     const before = [...state.values()];
     const regressed = TOKEN_COLUMNS.some(([key]) => {
       const old = before.filter((fact) => fact.tokens[key] != null);

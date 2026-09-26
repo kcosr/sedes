@@ -4,6 +4,7 @@ import type { SDKResultMessage, SessionMessage } from "@anthropic-ai/claude-agen
 import type { BackendTurn } from "../../../shared/protocol/backend.js";
 import type { UsageModel } from "../../../shared/protocol/usage-accounting.js";
 import type { ConversationBinding } from "../contracts.js";
+import { claudeResultUserMessageIds } from "./claude-result-lifecycle.js";
 import { usageTokens, type UsageCapture, type UsageFact, type UsageObservation, type UsageSink } from "../../usage/contracts.js";
 
 function sum(...values: (number | null | undefined)[]): number | null {
@@ -18,13 +19,17 @@ function count(value: unknown): number | null {
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
+const NORMALIZATION = "claude-agent-sdk-0.3.274/usage-v1";
 const baseFact = {
   coverageDomain: "claude_main_loop", costs: [], models: [], basis: ["sdk_normalized"], providerPresence: "unknown",
   quality: "partial", reasons: ["main_loop_only"], activity: "model",
 } as const;
 
 /**
- * Pipeline totals replace a complete map for one query incarnation. The
+ * Pipeline totals replace a complete map for one query incarnation. A resumed
+ * or forked query's totals continue from those its transcript saved, so its
+ * series counts only the increase over its first result (see
+ * `ClaudeUsageAccounting.admitQuery`). The
  * `claude-agent-sdk-0.3.274/usage-v1` normalization and its provenance label
  * are persisted evidence identifiers; SDK 0.3.283 did not change them.
  * `reasoningEffort` is the handle-confirmed effort when the result arrived, for
@@ -48,6 +53,17 @@ export function claudePipelineObservation(message: SDKResultMessage, reasoningEf
     costs: [{amount: nativeUsageMoney(message.total_cost_usd), currency: "USD", kind: "estimated", provenance: "Claude Agent SDK 0.3.274 cumulative query estimate"}]});
   return {id: `${message.uuid}:pipeline`, revision: "1", order: message.result_index === undefined ? null : String(message.result_index),
     provenance: "live", occurredAt: null, replaceCheckpoint: true, facts, attribution: {model: model ? {provider: null, model} : null, reasoningEffort}};
+}
+/**
+ * The result of Sedes' startup message. It is sent with `shouldQuery: false`,
+ * so a result that consumed only it and ran no model turn reports exactly the
+ * totals the query started from: zero for a new session, and the transcript's
+ * saved totals for a resumed or forked one.
+ */
+export function claudeStartupResult(message: SDKResultMessage, startupMessageUuid: string): boolean {
+  const ids = claudeResultUserMessageIds(message), usage = message.usage;
+  return ids.length === 1 && ids[0] === startupMessageUuid && message.subtype === "success" && !message.is_error && message.num_turns === 0 &&
+    [usage.input_tokens, usage.output_tokens, usage.cache_read_input_tokens, usage.cache_creation_input_tokens].every((value) => !value);
 }
 export function claudeTurnObservation(message: SDKResultMessage, backendTurnId: string, models: readonly UsageModel[] = []): UsageObservation | undefined {
   if ("startup_failure_reason" in message && message.startup_failure_reason) return;
@@ -84,23 +100,37 @@ export class ClaudeUsageAccounting {
   readonly #history: UsageCapture;
   readonly #models = new Map<string, Map<string, UsageModel>>();
   readonly #committedMessages = new Map<string, string>();
+  readonly #launch: "new" | "resume";
   #query: UsageCapture | undefined;
   #epoch: string | undefined;
   #deliveryCommitted = true;
   beginDelivery(): void { this.#deliveryCommitted = true; }
   get deliveryCommitted(): boolean { return this.#deliveryCommitted; }
-  constructor(input: {sink: UsageSink; binding: ConversationBinding; nativeNamespace: string}) {
-    this.#sink = input.sink; this.#binding = input.binding; this.#namespace = input.nativeNamespace;
+  /** `launch` is how this handle starts its query when none is retained to reattach to. */
+  constructor(input: {sink: UsageSink; binding: ConversationBinding; nativeNamespace: string; launch: "new" | "resume"}) {
+    this.#sink = input.sink; this.#binding = input.binding; this.#namespace = input.nativeNamespace; this.#launch = input.launch;
     this.#history = input.sink.open({binding: input.binding, nativeNamespace: input.nativeNamespace,
-      nativeSession: input.binding.backendConversationId, normalizationVersion: "claude-agent-sdk-0.3.274/usage-v1", epoch: "history", initialBaseline: "unknown"});
+      nativeSession: input.binding.backendConversationId, normalizationVersion: NORMALIZATION, epoch: "history", initialBaseline: "unknown"});
   }
   registerTurns(turns: readonly BackendTurn[], inherited?: Parameters<UsageCapture["registerTurns"]>[1]): void { this.#history.registerTurns(turns, inherited); this.#query?.registerTurns(turns, inherited); }
-  admitQuery(epoch: string | undefined, retained: boolean): void {
+  /**
+   * `epoch` is the query's startup message identity. A new launch counts from
+   * zero. A resumed or forked query continues the totals its transcript saved,
+   * and a reattached one started wherever its launch did, so their series
+   * opens at the first result with that result as its reported baseline. The
+   * startup message's own result is exact; any other first result leaves
+   * earlier work in the query unattributable (`unknown_baseline`) rather than
+   * counting it again. A reopened series keeps the baseline it began with.
+   */
+  admitQuery(epoch: string | undefined, reattached: boolean): void {
     if (!epoch) { this.#history.gap("unknown_baseline"); return; }
     if (this.#epoch === epoch) return;
     this.#epoch = epoch;
-    this.#query = this.#sink.open({binding: this.#binding, nativeNamespace: this.#namespace,
-      nativeSession: this.#binding.backendConversationId, normalizationVersion: "claude-agent-sdk-0.3.274/usage-v1", epoch, initialBaseline: retained ? "unknown" : "proven_zero"});
+    this.#query = !reattached && this.#launch === "new" ? this.#open(epoch, "proven_zero") : undefined;
+  }
+  #open(epoch: string, initialBaseline: "proven_zero" | "unknown", reportedBaseline?: UsageObservation): UsageCapture {
+    return this.#sink.open({binding: this.#binding, nativeNamespace: this.#namespace, nativeSession: this.#binding.backendConversationId,
+      normalizationVersion: NORMALIZATION, epoch, initialBaseline, ...(reportedBaseline ? {reportedBaseline} : {})});
   }
   message(message: SessionMessage, backendTurnId: string, provenance: "live" | "history"): void {
     this.messages([{message, backendTurnId}], provenance);
@@ -132,7 +162,11 @@ export class ClaudeUsageAccounting {
     try {
       const observation = claudePipelineObservation(message, reasoningEffort, model);
       if (!observation) { this.#query?.gap("capture_gap"); return; }
-      if (!this.#query) { this.#history.gap("unknown_baseline"); return; }
+      if (!this.#epoch) { this.#history.gap("unknown_baseline"); return; }
+      if (!this.#query) {
+        const {attribution: _attribution, ...start} = observation;
+        this.#query = this.#open(this.#epoch, claudeStartupResult(message, this.#epoch) ? "proven_zero" : "unknown", {...start, id: `${message.uuid}:baseline`});
+      }
       if (!this.#query.capture([observation])) this.#deliveryCommitted = false;
     } catch { (this.#query ?? this.#history).gap("invalid_evidence"); }
   }
