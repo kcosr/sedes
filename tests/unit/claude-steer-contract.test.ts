@@ -177,6 +177,7 @@ function provider(
     releaseStream = resolve;
   });
   const interrupt = vi.fn(async () => interruptReceipt);
+  const cancelAsyncMessage = vi.fn(async (_messageUuid: string) => true);
   const initialization = {
     commands: [],
     agents: [],
@@ -223,6 +224,7 @@ function provider(
       return Object.assign(stream, {
         initializationResult: async () => initialization,
         interrupt,
+        cancelAsyncMessage,
         setModel: vi.fn(async () => undefined),
         setPermissionMode: vi.fn(async () => undefined),
         applyFlagSettings: vi.fn(async () => undefined),
@@ -239,6 +241,7 @@ function provider(
     sdk,
     runtimeClient: new ClaudeSdkRuntimeAdapter(sdk),
     interrupt,
+    cancelAsyncMessage,
     queryInput: () => {
       if (!input) throw new Error("claude_query_not_started");
       return input;
@@ -350,6 +353,12 @@ describe("Claude conversation-target Steer contract", () => {
     await expect(session.interrupt()).resolves.toEqual(receipt);
     expect(fake.interrupt).toHaveBeenCalledWith();
     expect(fake.queryInput().options).not.toHaveProperty("expectedTurnId");
+    // Stop withdraws one input through the SDK's undeclared `cancelAsyncMessage`.
+    await expect(session.cancelQueuedInput(STEER_OPERATION_ID)).resolves.toBe(true);
+    fake.cancelAsyncMessage.mockResolvedValueOnce(false);
+    await expect(session.cancelQueuedInput(STEER_OPERATION_ID)).resolves.toBe(false);
+    expect(fake.cancelAsyncMessage.mock.calls).toEqual([[STEER_OPERATION_ID], [STEER_OPERATION_ID]]);
+    expect(fake.interrupt).toHaveBeenCalledOnce();
 
     await session.close();
   });

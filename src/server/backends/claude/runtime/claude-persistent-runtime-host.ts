@@ -27,6 +27,10 @@ type Session = {
   /** No main has been offered a sequence above this, live or in an attachment. */
   offeredThrough: number;
   sends: Map<string, string>; pendingInputs: Map<string, Parameters<ClaudeRuntimeSession["send"]>[0]>; pendingInputBytes: number; permissionResponses: Map<string,string>; retiring?: Promise<void>; active: Set<string>; permissions: Map<string, Permission>;
+  /** Pending steers Claude has started, awaiting the stamp naming their turn. */
+  startedInputs: Set<string>;
+  /** Sends Claude withdrew with a `cancelled` lifecycle before starting them; they never ran. */
+  withdrawnInputs: Set<string>;
   evicted?: boolean;
   /** Claude Code's own run state; work it starts itself keeps it non-idle. */
   providerState: "idle" | "running" | "requires_action";
@@ -51,7 +55,7 @@ export class ClaudePersistentRuntimeHost {
   /** Running one-shot fork launches by child session; they share the session cap. */
   readonly #forkLaunches = new Map<string, Promise<ClaudeRuntimeForkResult>>();
   /** Admission journals of failed queries retired by eviction, most recent last. */
-  readonly #endedJournals = new Map<string, { readonly cwd: string; readonly sends: ReadonlySet<string>; readonly admissionJournalComplete: boolean }>();
+  readonly #endedJournals = new Map<string, { readonly cwd: string; readonly sends: ReadonlySet<string>; readonly withdrawn: ReadonlySet<string>; readonly admissionJournalComplete: boolean }>();
   #residencyTimer: ReturnType<typeof setInterval> | undefined;
   readonly #stoppedHistoryPager = new ClaudeHistoryPager();
   readonly #historySweepQueue = new Set<Session>();
@@ -259,7 +263,7 @@ export class ClaudePersistentRuntimeHost {
     // Reads and attachment observation do not invalidate an operator's stop
     // confirmation. Only asynchronous provider mutations need an in-flight
     // blocker; synchronous admission and journal changes update their own state.
-    const mutation = ["rename", "interrupt", "set_model", "set_effort", "set_permission_mode"].includes(command.action);
+    const mutation = ["rename", "interrupt", "cancel_input", "set_model", "set_effort", "set_permission_mode"].includes(command.action);
     if (mutation) { this.#inflight++; this.#revision++; }
     const started = performance.now();
     try { return await this.#execute(command, listener); }
@@ -307,11 +311,14 @@ export class ClaudePersistentRuntimeHost {
         // A failed query retired by eviction keeps its admission journal, so
         // its inputs still resolve instead of becoming permanently unknown.
         if (retired && retired.cwd === command.request.cwd) {
+          if (retired.withdrawn.has(command.request.operationId)) return { disposition: "cancelled" };
           if (retired.sends.has(command.request.operationId)) return { disposition: "session_ended" };
           if (!session) return { disposition: retired.admissionJournalComplete ? "not_sent" : "session_ended" };
         }
         if (!session || session.cwd !== command.request.cwd) return { disposition: "unknown" };
         const ended = Boolean(session.failureCode || session.runtime.closed);
+        // Claude's exact withdrawal before start survives the session's end.
+        if (session.withdrawnInputs.has(command.request.operationId)) return { disposition: "cancelled" };
         if (session.sends.has(command.request.operationId)) {
           return { disposition: ended ? "session_ended" : "submitted" };
         }
@@ -448,6 +455,9 @@ export class ClaudePersistentRuntimeHost {
         return { accepted: true };
       }
       case "interrupt": return { receipt: await this.#session(command.request.queryId).runtime.interrupt() ?? null };
+      // Only the input's own `cancelled` lifecycle frame, observed in
+      // #message, records a withdrawal; this answer is Claude's own.
+      case "cancel_input": return { cancelled: await this.#session(command.request.queryId).runtime.cancelQueuedInput(command.request.operationId) };
       case "set_model": { const session = this.#session(command.request.queryId); await session.runtime.setModel(command.request.model ?? undefined); session.model = command.request.model; return { updated: true }; }
       case "set_effort": { const session = this.#session(command.request.queryId); await session.runtime.setEffort(command.request.effort ?? undefined); session.confirmedEffort = command.request.effort; return { updated: true }; }
       case "set_permission_mode": { const session = this.#session(command.request.queryId); await session.runtime.setPermissionMode(command.request.permissionMode); session.permissionMode = command.request.permissionMode; return { updated: true }; }
@@ -541,7 +551,7 @@ export class ClaudePersistentRuntimeHost {
       nextHistoryRead: 0, historyBackoff: 0, historyPressure: false, historyCandidatesDirty: true, hasHistoryCandidates: false, rewriteGeneration: 0, streamStopSequence: 0, replayStateSequences: new Map(),
       admissionJournalComplete: request.launch === "new",
       terminalResultSequences: new Set(), sends: new Map(), pendingInputs: new Map(), pendingInputBytes: 0, commandsInvalidated: false, permissionResponses: new Map(), active: new Set(), permissions: new Map(),
-      providerState: "idle" };
+      startedInputs: new Set(), withdrawnInputs: new Set(), providerState: "idle" };
     session = created;
     session.backgroundActivity.reset();
     this.#sessions.set(session.id, session); this.#inflight++; this.#revision++;
@@ -616,7 +626,7 @@ export class ClaudePersistentRuntimeHost {
   #rememberEndedJournal(session: Session): void {
     this.#endedJournals.delete(session.id);
     this.#endedJournals.set(session.id, { cwd: session.cwd, sends: new Set(session.sends.keys()),
-      admissionJournalComplete: session.admissionJournalComplete });
+      withdrawn: new Set(session.withdrawnInputs), admissionJournalComplete: session.admissionJournalComplete });
     while (this.#endedJournals.size > MAXIMUM_ENDED_JOURNALS) this.#endedJournals.delete(this.#endedJournals.keys().next().value!);
   }
 
@@ -679,6 +689,17 @@ export class ClaudePersistentRuntimeHost {
       this.#forgetPendingInput(session, lifecycle.commandUuid);
       session.active.delete(lifecycle.commandUuid);
     }
+    // A pending steer Claude started belongs to that turn; its stamp names it.
+    if (started !== undefined && session.pendingInputs.has(started)) session.startedInputs.add(started);
+    // Claude withdrew an input it never started (Stop cancels queued input):
+    // it never runs, so it is neither pending nor outstanding work. After a
+    // start, `cancelled` instead ends an interrupted turn the input belongs to.
+    if (lifecycle?.state === "cancelled" && session.pendingInputs.has(lifecycle.commandUuid) &&
+        !session.startedInputs.has(lifecycle.commandUuid)) {
+      this.#forgetPendingInput(session, lifecycle.commandUuid);
+      session.active.delete(lifecycle.commandUuid);
+      session.withdrawnInputs.add(lifecycle.commandUuid);
+    }
     // Only exact native evidence materializes an admitted input: Claude's
     // dequeue of an ordinary input, or a consumption stamp. Unstamped output
     // can belong to a turn Claude started itself, and a steer's receiving turn
@@ -720,6 +741,7 @@ export class ClaudePersistentRuntimeHost {
     if (!pending) return;
     session.pendingInputBytes -= Buffer.byteLength(JSON.stringify(pending.content), "utf8");
     session.pendingInputs.delete(operationId);
+    session.startedInputs.delete(operationId);
   }
   #fail(session: Session, code: string): void {
     // WorkerClient.close reports a generic failure for each resident query.
@@ -732,6 +754,7 @@ export class ClaudePersistentRuntimeHost {
     if (session.failureCode) return;
     this.#cancelHistoryTimer(session);
     session.failureCode = code; session.backgroundActivity.invalidate(); session.active.clear(); session.pendingInputs.clear(); session.pendingInputBytes = 0;
+    session.startedInputs.clear();
     session.providerState = "idle";
     this.#event(session, { kind: "failed", code }, true);
   }

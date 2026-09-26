@@ -448,6 +448,53 @@ describe("ClaudeConversationBackendDriver", () => {
     expect(sdk.createQuery).not.toHaveBeenCalled();
   });
 
+  it("returns input the remote owner saw Claude withdraw before starting as not sent, without retry permission", async () => {
+    const sdk = fakeSdk(); sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
+    sdk.getSessionMessages.mockResolvedValue([]);
+    const forgetUnconsumedSteerOperation = vi.fn();
+    const driver = createDriver(sdk, { submissionDisposition: async () => "cancelled", forgetUnconsumedSteerOperation,
+      steerOperations: new Map([[operationId, null]]) });
+    const input = { scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), applicationOperationId: operationId };
+    await expect(driver.reconcileSubmission(input)).resolves.toEqual({ status: "not_accepted", retryable: false,
+      diagnostic: { text: expect.stringContaining("withdrew this message before starting it") } });
+    expect(forgetUnconsumedSteerOperation).toHaveBeenCalledWith(scope, binding().applicationThreadId, operationId);
+    // A native row with its identity contradicts the withdrawal.
+    sdk.getSessionMessages.mockResolvedValue([user(operationId, "queued steer")]);
+    await expect(driver.reconcileSubmission(input)).resolves.toMatchObject({ status: "unresolved" });
+    expect(sdk.createQuery).not.toHaveBeenCalled();
+  });
+
+  it("returns a local steer Claude withdrew before starting it as not sent, unless native evidence contradicts it", async () => {
+    const sdk = fakeSdk(); sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId, cwd: workspace.canonicalPath });
+    sdk.getSessionMessages.mockResolvedValue([]);
+    const steerOperations = new Map<string, string | null>([[operationId, null]]);
+    const forgetUnconsumedSteerOperation = vi.fn();
+    const driver = createDriver(sdk, { steerOperations, forgetUnconsumedSteerOperation, confirmSettings: true });
+    const input = { scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) };
+    const handle = await driver.attach(input);
+    try {
+      await handle.establishProjection({ signal: new AbortController().signal });
+      await handle.steer({ applicationOperationId: operationId, mutationId: "withdrawn-steer", reconciliationToken: "withdrawn-receipt",
+        target: { kind: "conversation" }, text: "Correction", contextExcerpts: [], attachments: [], taskContexts: [] });
+      const reconcile = { ...input, applicationOperationId: operationId };
+      await expect(driver.reconcileSubmission(reconcile)).resolves.toMatchObject({ status: "unresolved" });
+      const withdrew = vi.spyOn(handle as ClaudeConversationHandle, "withdrewSubmission").mockReturnValue(true);
+      steerOperations.set(operationId, "a0000000-0000-4000-8000-00000000c0de");
+      await expect(driver.reconcileSubmission(reconcile)).resolves.toMatchObject({ status: "unresolved" });
+      steerOperations.set(operationId, null);
+      sdk.getSessionMessages.mockResolvedValue([user(operationId, "Correction")]);
+      await expect(driver.reconcileSubmission(reconcile)).resolves.toMatchObject({ status: "unresolved" });
+      expect(forgetUnconsumedSteerOperation).not.toHaveBeenCalled();
+      sdk.getSessionMessages.mockResolvedValue([]);
+      await expect(driver.reconcileSubmission(reconcile)).resolves.toEqual({ status: "not_accepted", retryable: false,
+        diagnostic: { text: expect.stringContaining("so it was not sent. Nothing was resent.") } });
+      expect(withdrew).toHaveBeenCalledWith(operationId);
+      expect(forgetUnconsumedSteerOperation).toHaveBeenCalledWith(scope, binding().applicationThreadId, operationId);
+      expect(nativeInputCount(sdk)).toBe(1);
+    } finally { await driver.close(); }
+  });
+
   it.each(["submitted", "unknown"] as const)("does not infer nonacceptance without an anchor when the owner reports %s", async disposition => {
     const sdk = fakeSdk(); sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
     sdk.getSessionMessages.mockResolvedValue([]);

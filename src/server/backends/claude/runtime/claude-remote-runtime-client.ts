@@ -7,14 +7,14 @@ import { z } from "zod";
 import type { CanUseTool, SDKMessage, SDKSessionInfo } from "@anthropic-ai/claude-agent-sdk";
 import type { EnvironmentChannelScope } from "../../../execution/environment-channel.js";
 import { isSidecarRevisionChanged, type SidecarRuntimeLease, type SidecarRuntimeProvider } from "../../../sidecar/runtime-channel.js";
-import type { ClaudeRuntimeClient, ClaudeRuntimeForkOptions, ClaudeRuntimeForkResult, ClaudeRuntimeProbeInput, ClaudeRuntimeProbeResult, ClaudeRuntimeSession, ClaudeRuntimeSessionOptions } from "../claude-runtime-client.js";
+import type { ClaudeRuntimeClient, ClaudeRuntimeForkOptions, ClaudeRuntimeForkResult, ClaudeRuntimeProbeInput, ClaudeRuntimeProbeResult, ClaudeRuntimeSession, ClaudeRuntimeSessionOptions, ClaudeSubmissionDisposition } from "../claude-runtime-client.js";
 import { claudeForkLaunchFailure } from "../claude-fork-launch.js";
 import { SidecarOperationError } from "../../../../internal/sidecar-protocol/operation-registry.js";
 import type { ClaudeSdkSessionInitialization } from "../claude-sdk-session.js";
 import { verifyClaudeRuntimeVersion } from "../claude-release-guard.js";
 import { resolveClaudeSafeSkills, type ClaudeSafeSkill } from "../claude-skills.js";
 import * as worker from "../worker/claude-runtime-v1.js";
-import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudePersistentOpenRequestSchema, claudePersistentRetireResponseSchema, claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
+import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudePersistentOpenRequestSchema, claudePersistentRetireResponseSchema, claudePersistentSubmissionDispositionResponseSchema, claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, claudePersistentRuntimeOperations } from "./claude-sidecar-runtime.js";
 
 type Command = ClaudePersistentCommand extends infer C ? C extends ClaudePersistentCommand ? Omit<C, "runtimeId" | "controllerEpoch"> : never : never;
@@ -56,8 +56,8 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
     verifyClaudeRuntimeVersion(result.cliRelease, input);
     return result as ClaudeRuntimeProbeResult;
   }
-  async submissionDisposition(input: { sessionId: string; operationId: string; cwd: string }): Promise<"submitted" | "session_ended" | "not_sent" | "unknown"> {
-    return z.strictObject({ disposition: z.enum(["submitted", "session_ended", "not_sent", "unknown"]) }).parse(await this.execute({ action: "submission_disposition", request: input })).disposition;
+  async submissionDisposition(input: { sessionId: string; operationId: string; cwd: string }): Promise<ClaudeSubmissionDisposition> {
+    return claudePersistentSubmissionDispositionResponseSchema.parse(await this.execute({ action: "submission_disposition", request: input })).disposition;
   }
   createSession(options: ClaudeRuntimeSessionOptions): ClaudeRuntimeSession {
     this.#assertOpen();
@@ -414,6 +414,10 @@ class PersistentSession implements ClaudeRuntimeSession {
   async interrupt() {
     this.#assertReady();
     return worker.claudeRuntimeQueryInterruptOperation.responseSchema.parse(await this.#execute({ action: "interrupt", request: { queryId: this.options.sessionId } })).receipt ?? undefined;
+  }
+  async cancelQueuedInput(operationId: string) {
+    this.#assertReady();
+    return worker.claudeRuntimeQueryCancelInputOperation.responseSchema.parse(await this.#execute({ action: "cancel_input", request: { queryId: this.options.sessionId, operationId } })).cancelled;
   }
   async setModel(model?: string) {
     this.#assertReady();

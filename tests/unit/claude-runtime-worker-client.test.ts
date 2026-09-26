@@ -136,6 +136,40 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
     await expect(acknowledged).resolves.toEqual({ acknowledged: true });
   });
 
+  it("asks the worker to withdraw one exact input and returns Claude's answer", async () => {
+    const cancels: unknown[] = [];
+    let queryId = "";
+    const peer = fakePeer(async (operation, _signal, request) => {
+      if (operation === "runtime.initialize") {
+        return { initialized: true, configDirectory: "/config" };
+      }
+      if (operation === "query.open") {
+        queryId = (request as { queryId: string }).queryId;
+        return openedResponse("2.1.283", queryId);
+      }
+      if (operation === "query.cancel_input") {
+        cancels.push(request);
+        return { cancelled: cancels.length === 1 };
+      }
+      if (operation === "query.close") return { closed: true };
+      throw new Error(`unexpected:${operation}`);
+    });
+    const client = new ClaudeRuntimeWorkerClient({
+      peer,
+      hostRegistry: new SidecarOperationRegistry(),
+      executablePath: "/bin/claude",
+      configDirectory: "/config",
+      initializationTimeoutMs: 1_000,
+    });
+    const session = client.createSession(sessionOptions());
+    await session.start();
+    const operationId = "44444444-4444-4444-8444-444444444444";
+    await expect(session.cancelQueuedInput(operationId)).resolves.toBe(true);
+    await expect(session.cancelQueuedInput(operationId)).resolves.toBe(false);
+    expect(cancels).toEqual([{ queryId, operationId }, { queryId, operationId }]);
+    await session.close();
+  });
+
   it("rejects a prompt mutation promptly when Claude reports it was not adopted", async () => {
     const registry = new SidecarOperationRegistry();
     const failedGate = deferred<void>();

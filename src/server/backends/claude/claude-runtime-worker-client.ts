@@ -36,6 +36,7 @@ import {
   claudeRuntimeCanUseToolOperation,
   claudeRuntimeQueryFailedEventSchema,
   claudeRuntimeQueryInterruptOperation,
+  claudeRuntimeQueryCancelInputOperation,
   claudeRuntimeQueryMessageEventSchema,
   claudeRuntimeQueryOpenOperation,
   claudeRuntimeQuerySendOperation,
@@ -517,6 +518,16 @@ class WorkerSession implements ClaudeRuntimeSession {
         })
       ).receipt ?? undefined
     );
+  }
+
+  async cancelQueuedInput(operationId: string): Promise<boolean> {
+    this.#assertReady();
+    return (
+      await this.#client.call(claudeRuntimeQueryCancelInputOperation, {
+        queryId: this.#queryId,
+        operationId,
+      })
+    ).cancelled;
   }
 
   async setModel(model?: string): Promise<void> {

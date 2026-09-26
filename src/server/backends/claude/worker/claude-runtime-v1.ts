@@ -360,6 +360,15 @@ export const claudeRuntimeQuerySendResponseSchema = z.strictObject({
   accepted: z.literal(true),
 });
 const queryIdRequestSchema = z.strictObject({ queryId: uuidSchema });
+/** Withdraws one input Claude admitted but has not started (Stop). */
+export const claudeRuntimeQueryCancelInputRequestSchema = z.strictObject({
+  queryId: uuidSchema,
+  operationId: uuidSchema,
+});
+/** Claude's own answer; the `cancelled` lifecycle frame is the evidence. */
+export const claudeRuntimeQueryCancelInputResponseSchema = z.strictObject({
+  cancelled: z.boolean(),
+});
 export const claudeRuntimeQueryInterruptResponseSchema = z.strictObject({
   receipt: z
     .strictObject({
@@ -553,6 +562,13 @@ export const claudeRuntimeQueryInterruptOperation = operation({
   maximumDeadlineMilliseconds: 30_000,
   lane: "control",
 });
+export const claudeRuntimeQueryCancelInputOperation = operation({
+  operation: "query.cancel_input",
+  requestSchema: claudeRuntimeQueryCancelInputRequestSchema,
+  responseSchema: claudeRuntimeQueryCancelInputResponseSchema,
+  maximumDeadlineMilliseconds: 30_000,
+  lane: "control",
+});
 export const claudeRuntimeQuerySetModelOperation = operation({
   operation: "query.set_model",
   requestSchema: claudeRuntimeQuerySetModelRequestSchema,
@@ -607,6 +623,7 @@ export const claudeRuntimeWorkerOperations = Object.freeze([
   claudeRuntimeQueryOpenOperation,
   claudeRuntimeQuerySendOperation,
   claudeRuntimeQueryInterruptOperation,
+  claudeRuntimeQueryCancelInputOperation,
   claudeRuntimeQuerySetModelOperation,
   claudeRuntimeQuerySetEffortOperation,
   claudeRuntimeQuerySetPermissionModeOperation,
@@ -642,6 +659,9 @@ export interface ClaudeRuntimeV1WorkerHandlers {
   readonly sendQuery: HandlerFor<typeof claudeRuntimeQuerySendOperation>;
   readonly interruptQuery: HandlerFor<
     typeof claudeRuntimeQueryInterruptOperation
+  >;
+  readonly cancelQueryInput: HandlerFor<
+    typeof claudeRuntimeQueryCancelInputOperation
   >;
   readonly setQueryModel: HandlerFor<
     typeof claudeRuntimeQuerySetModelOperation
@@ -680,6 +700,10 @@ export function registerClaudeRuntimeV1WorkerOperations(
   registry.register(
     claudeRuntimeQueryInterruptOperation,
     handlers.interruptQuery,
+  );
+  registry.register(
+    claudeRuntimeQueryCancelInputOperation,
+    handlers.cancelQueryInput,
   );
   registry.register(
     claudeRuntimeQuerySetModelOperation,

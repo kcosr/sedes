@@ -84,6 +84,26 @@ function sedesMcpServers(mcp: ClaudeRuntimeAgentToolMcp) {
   };
 }
 
+/**
+ * Sends Claude Code's `cancel_async_message` control request for one
+ * uuid-stamped input. The pinned SDK 0.3.274 implements it as
+ * `Query.cancelAsyncMessage`, although its declaration omits the method.
+ * Claude removes a queued input, or marks one already dequeued for the next
+ * turn to be dropped there, and closes it with a `cancelled` lifecycle frame.
+ * It leaves an input it is folding into the running turn, or has started,
+ * alone. The returned boolean only says whether it was still queued.
+ */
+export async function cancelClaudeQueuedInput(
+  query: Query,
+  operationId: string,
+): Promise<boolean> {
+  const cancel = (query as Query & {
+    readonly cancelAsyncMessage?: (messageUuid: string) => Promise<unknown>;
+  }).cancelAsyncMessage;
+  if (typeof cancel !== "function") throw new Error("claude_sdk_cancel_input_unavailable");
+  return (await cancel.call(query, operationId)) === true;
+}
+
 const CLAUDE_RESET_PRODUCING_TOOLS = ["EnterPlanMode", "ExitPlanMode"] as const;
 const CLAUDE_RESET_PRODUCING_TOOL_SET = new Set<string>(
   CLAUDE_RESET_PRODUCING_TOOLS,
@@ -444,6 +464,13 @@ export class ClaudeSdkSession {
       throw new Error("claude_sdk_session_not_ready");
     }
     return this.#query.interrupt();
+  }
+
+  async cancelQueuedInput(operationId: string): Promise<boolean> {
+    if (!this.#query || !this.#initialization || this.closed) {
+      throw new Error("claude_sdk_session_not_ready");
+    }
+    return cancelClaudeQueuedInput(this.#query, operationId);
   }
 
   async setModel(model?: string): Promise<void> {

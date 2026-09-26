@@ -87,6 +87,7 @@ export class FakePersistentClaudeSession implements ClaudeRuntimeSession {
   readonly start = vi.fn(async () => this.initialization);
   readonly send = vi.fn<ClaudeRuntimeSession["send"]>();
   readonly interrupt = vi.fn(async () => undefined);
+  readonly cancelQueuedInput = vi.fn<ClaudeRuntimeSession["cancelQueuedInput"]>(async () => false);
   readonly setModel = vi.fn(async () => undefined);
   readonly setEffort = vi.fn(async () => undefined);
   readonly setPermissionMode = vi.fn(async () => undefined);

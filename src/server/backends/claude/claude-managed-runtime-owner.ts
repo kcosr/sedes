@@ -537,6 +537,7 @@ class DeferredManagedClaudeSession implements ClaudeRuntimeSession {
   }
   send(input: Parameters<ClaudeRuntimeSession["send"]>[0]): void | Promise<void> { return this.#ready().send(input); }
   interrupt(): Promise<SDKControlInterruptResponse | undefined> { return this.#ready().interrupt(); }
+  cancelQueuedInput(operationId: string): Promise<boolean> { return this.#ready().cancelQueuedInput(operationId); }
   setModel(model?: string): Promise<void> { return this.#ready().setModel(model); }
   setEffort(effort?: EffortLevel): Promise<void> { return this.#ready().setEffort(effort); }
   setPermissionMode(mode: PermissionMode): Promise<void> { return this.#ready().setPermissionMode(mode); }

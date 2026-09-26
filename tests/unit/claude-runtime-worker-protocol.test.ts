@@ -21,6 +21,7 @@ import {
   claudeRuntimeInitializeOperation,
   claudeRuntimeProbeOperation,
   claudeRuntimeQueryOpenOperation,
+  claudeRuntimeQueryCancelInputRequestSchema,
   claudeRuntimeQueryOpenRequestSchema,
   claudeRuntimeQuerySendRequestSchema,
   claudeRuntimeSessionMessagesResponseSchema,
@@ -43,6 +44,14 @@ const context = () => ({
 });
 
 describe("claude_runtime@1 protocol", () => {
+  it("names exactly one query and one input identity when withdrawing input", () => {
+    const queryId = randomUUID(), operationId = randomUUID();
+    expect(claudeRuntimeQueryCancelInputRequestSchema.parse({ queryId, operationId })).toEqual({ queryId, operationId });
+    expect(claudeRuntimeQueryCancelInputRequestSchema.safeParse({ queryId }).success).toBe(false);
+    expect(claudeRuntimeQueryCancelInputRequestSchema.safeParse({ queryId, operationId: "not-a-uuid" }).success).toBe(false);
+    expect(claudeRuntimeQueryCancelInputRequestSchema.safeParse({ queryId, operationId, all: true }).success).toBe(false);
+  });
+
   it("admits bounded permission metadata with explicit false hints", () => {
     expect(claudeRuntimeCanUseToolOperation.requestSchema.safeParse({
       queryId: QUERY_ID, toolName: "Read", input: {},
@@ -83,6 +92,7 @@ describe("claude_runtime@1 protocol", () => {
       openQuery: noHandler,
       sendQuery: noHandler,
       interruptQuery: noHandler,
+      cancelQueryInput: noHandler,
       setQueryModel: noHandler,
       setQueryEffort: noHandler,
       setQueryPermissionMode: noHandler,
@@ -93,6 +103,7 @@ describe("claude_runtime@1 protocol", () => {
         capabilityId: "claude_runtime",
         majorVersion: 1,
         operations: [
+          "query.cancel_input",
           "query.close",
           "query.interrupt",
           "query.open",
@@ -110,7 +121,7 @@ describe("claude_runtime@1 protocol", () => {
         ],
       },
     ]);
-    expect(claudeRuntimeWorkerOperations).toHaveLength(14);
+    expect(claudeRuntimeWorkerOperations).toHaveLength(15);
 
     const hostRegistry = new SidecarOperationRegistry();
     registerClaudeRuntimeV1HostOperations(hostRegistry, {
@@ -796,6 +807,13 @@ describe("ClaudeRuntimeWorkerHost", () => {
       expect(peer.close).toHaveBeenCalledWith(
         "claude_runtime_permission_acknowledgement_failed",
       );
+      // Stop withdraws one input through the SDK's `cancel_async_message`.
+      await expect(host.handlers.cancelQueryInput({ queryId: QUERY_ID, operationId: OPERATION_ID }, context()))
+        .resolves.toEqual({ cancelled: true });
+      queryFixture.cancelAsyncMessage.mockResolvedValueOnce(false);
+      await expect(host.handlers.cancelQueryInput({ queryId: QUERY_ID, operationId: OPERATION_ID }, context()))
+        .resolves.toEqual({ cancelled: false });
+      expect(queryFixture.cancelAsyncMessage.mock.calls).toEqual([[OPERATION_ID], [OPERATION_ID]]);
       await host.handlers.closeQuery({ queryId: QUERY_ID }, context());
       expect(host.activeQueryCount).toBe(0);
       expect(queryFixture.close).toHaveBeenCalledOnce();
@@ -1214,10 +1232,12 @@ function queryFacade(
 ): {
   readonly sdk: ClaudeSdkFacade;
   readonly close: ReturnType<typeof vi.fn>;
+  readonly cancelAsyncMessage: ReturnType<typeof vi.fn>;
   readonly options: () => Options;
 } {
   let options: Options | undefined;
   const close = vi.fn();
+  const cancelAsyncMessage = vi.fn(async (_messageUuid: string) => true);
   const sdk: ClaudeSdkFacade = {
     readCliRelease: vi.fn(async () => "2.1.283"),
     readCliAuthStatus: vi.fn(async () => ({
@@ -1260,6 +1280,7 @@ function queryFacade(
       return Object.assign(stream, {
         initializationResult: async () => await initializationResult,
         interrupt: async () => ({ still_queued: [] }),
+        cancelAsyncMessage,
         setModel: async () => undefined,
         setPermissionMode: async () => undefined,
         applyFlagSettings: async () => undefined,
@@ -1278,6 +1299,7 @@ function queryFacade(
   return {
     sdk,
     close,
+    cancelAsyncMessage,
     options: () => {
       if (!options) throw new Error("query_not_created");
       return options;

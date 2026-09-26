@@ -90,6 +90,14 @@ export interface ClaudeRuntimeSessionOptions {
   readonly onFailure?: (error: unknown) => void;
 }
 
+/**
+ * What a service-owned delivery owner knows about one input. `cancelled`:
+ * Claude admitted it, then withdrew it with a `cancelled` lifecycle frame
+ * before it started, so it never ran. `not_sent`: it never reached Claude.
+ */
+export type ClaudeSubmissionDisposition =
+  | "submitted" | "session_ended" | "not_sent" | "cancelled" | "unknown";
+
 /** Provider-private live query contract implemented identically over local and SSH workers. */
 export interface ClaudeRuntimeSession {
   readonly closed: boolean;
@@ -122,6 +130,14 @@ export interface ClaudeRuntimeSession {
     readonly priority?: "next";
   }): void | Promise<void>;
   interrupt(): Promise<SDKControlInterruptResponse | undefined>;
+  /**
+   * Asks Claude to withdraw one input it admitted but has not started. Claude
+   * closes a withdrawn input with a `command_lifecycle` `cancelled` frame
+   * before any `started`; only that frame is evidence. The boolean is Claude's
+   * own answer and proves nothing: `false` also covers an input it will still
+   * withdraw at dequeue, one it is folding into the turn, or one it started.
+   */
+  cancelQueuedInput(operationId: string): Promise<boolean>;
   setModel(model?: string): Promise<void>;
   setEffort(effort?: EffortLevel): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
@@ -139,7 +155,7 @@ export interface ClaudeRuntimeClient {
     readonly sessionId: string;
     readonly operationId: string;
     readonly cwd: string;
-  }): Promise<"submitted" | "session_ended" | "not_sent" | "unknown">;
+  }): Promise<ClaudeSubmissionDisposition>;
   probe(input: ClaudeRuntimeProbeInput): Promise<ClaudeRuntimeProbeResult>;
   /**
    * Service-owned runtimes only: retire a query no attachment attends, unless

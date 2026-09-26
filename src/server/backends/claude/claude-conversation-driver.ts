@@ -1110,7 +1110,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
             : "Claude's delivery owner ended before this message could be confirmed, and Claude's history shows no acceptance. Claude may still have received it. Review the conversation before explicitly sending it again.",
           ) };
         }
-        if (disposition === "not_sent") {
+        if (disposition === "not_sent" || disposition === "cancelled") {
           if (messages.some(message => message.type === "user" && message.uuid === input.applicationOperationId) ||
               typeof this.#settings.listSteerOperations(input.scope, input.binding.applicationThreadId).get(input.applicationOperationId) === "string") {
             return unresolved("Claude's non-admission evidence conflicts with retained native input evidence.");
@@ -1124,7 +1124,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
             }
           }
           this.#settings.forgetUnconsumedSteerOperation(input.scope, input.binding.applicationThreadId, input.applicationOperationId);
-          return { status: "not_accepted", retryable: true };
+          return disposition === "cancelled" ? claudeWithdrawnReconciliation() : { status: "not_accepted", retryable: true };
         }
         return unresolved(
           disposition === "submitted"
@@ -1132,17 +1132,27 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
             : "The remote Claude runtime cannot prove this submission was not sent.",
         );
       }
+      const bindingHandles = [...this.#handles].filter(handle =>
+        handle.binding.applicationThreadId === input.binding!.applicationThreadId &&
+        handle.binding.backendConversationId === input.binding!.backendConversationId);
+      if (bindingHandles.some(handle => handle.withdrewSubmission(input.applicationOperationId))) {
+        // Claude's exact `cancelled` before `started`. History above holds no
+        // turn with it; a native row or consumption stamp would contradict it.
+        if (messages.some(message => message.type === "user" && message.uuid === input.applicationOperationId) ||
+            typeof steerOperations.get(input.applicationOperationId) === "string") {
+          return unresolved("Claude's withdrawal of this input conflicts with retained native input evidence.");
+        }
+        this.#settings.forgetUnconsumedSteerOperation(input.scope, input.binding.applicationThreadId, input.applicationOperationId);
+        return claudeWithdrawnReconciliation();
+      }
       if (steerOperations.has(input.applicationOperationId)) {
         if (typeof steerOperations.get(input.applicationOperationId) === "string") {
           return unresolved("Claude retained exact steering consumption evidence, but its history has not materialized yet.");
         }
-        const localObservers = [...this.#handles].filter(handle =>
-          handle.binding.applicationThreadId === input.binding!.applicationThreadId &&
-          handle.binding.backendConversationId === input.binding!.backendConversationId);
-        if (localObservers.some(handle => handle.hasPendingSubmissionObservation(input.applicationOperationId))) {
+        if (bindingHandles.some(handle => handle.hasPendingSubmissionObservation(input.applicationOperationId))) {
           return unresolved("Claude is still tracking this queued steering message; consumption has not been confirmed.");
         }
-        if (localObservers.some(handle => !handle.endSubmissionObservation(input.applicationOperationId))) {
+        if (bindingHandles.some(handle => !handle.endSubmissionObservation(input.applicationOperationId))) {
           return unresolved("Claude consumed this input while its delivery owner was being checked.");
         }
         // Local SDK observers cannot reattach after their owning handle/process
@@ -1153,9 +1163,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
           "Local Claude delivery tracking ended before this steering message could be confirmed. Claude may have received it. Review the conversation before explicitly restoring or sending it again.",
         ) };
       }
-      const unconfirmedObservers = [...this.#handles].filter(handle =>
-        handle.binding.applicationThreadId === input.binding!.applicationThreadId &&
-        handle.binding.backendConversationId === input.binding!.backendConversationId &&
+      const unconfirmedObservers = bindingHandles.filter(handle =>
         handle.hasUnconfirmedSubmission(input.applicationOperationId));
       if (unconfirmedObservers.length > 0) {
         for (const handle of unconfirmedObservers) {
@@ -1569,6 +1577,16 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
       );
     }
   }
+}
+
+/**
+ * Claude withdrew the input before starting it (Stop cancels queued input),
+ * so it never ran. It is returned to the user and never resent automatically.
+ */
+function claudeWithdrawnReconciliation(): SubmissionReconciliation {
+  return { status: "not_accepted", retryable: false, diagnostic: boundDisplayText(
+    "Claude withdrew this message before starting it, as it does on Stop, so it was not sent. Nothing was resent. Restore it to send it again, or dismiss it.",
+  ) };
 }
 
 function reconcileProjectedSubmission(

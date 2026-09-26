@@ -109,7 +109,7 @@ function delta(sessionId: string, text: string): SDKMessage {
 function firstDelta(sessionId: string, text: string, operationId: string): SDKMessage {
   return { ...delta(sessionId, text), user_message_uuid: operationId, user_message_uuids: [operationId] } as SDKMessage;
 }
-function lifecycle(sessionId: string, operationId: string, state: "queued" | "started" | "completed" | "refused"): SDKMessage {
+function lifecycle(sessionId: string, operationId: string, state: "queued" | "started" | "completed" | "cancelled" | "refused"): SDKMessage {
   return { type: "command_lifecycle", command_uuid: operationId, state, uuid: randomUUID(), session_id: sessionId } as unknown as SDKMessage;
 }
 function acceptedInput(sessionId: string, operation: { operationId: string; content: string }) {
@@ -339,6 +339,52 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     await client.attachment();
     await b.close({ reason: "evicted" });
     expect(f.sessions[1]!.closed).toBe(true);
+  });
+
+  it("carries Stop's input withdrawal to the owned query and records only inputs Claude withdrew before starting", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const client = f.client();
+    const sessionId = randomUUID();
+    const remote = client.createSession(sessionOptions(sessionId));
+    await remote.start();
+    const native = f.sessions[0]!;
+    const turn = { operationId: randomUUID(), content: "Run the long task." };
+    const folded = { operationId: randomUUID(), content: "Use tabs.", priority: "next" as const };
+    const withdrawn = { operationId: randomUUID(), content: "Also check the lexer.", priority: "next" as const };
+    await remote.send(turn);
+    await native.emit(lifecycle(sessionId, turn.operationId, "started"));
+    await remote.send(folded);
+    await remote.send(withdrawn);
+    await native.emit(lifecycle(sessionId, folded.operationId, "queued"));
+    await native.emit(lifecycle(sessionId, withdrawn.operationId, "queued"));
+    // Claude folded one steer into the running turn before the Stop landed.
+    await native.emit(lifecycle(sessionId, folded.operationId, "started"));
+    native.cancelQueuedInput.mockImplementation(async operationId => {
+      if (operationId !== withdrawn.operationId) return false;
+      await native.emit(lifecycle(sessionId, withdrawn.operationId, "cancelled"));
+      return true;
+    });
+    // Claude's answer alone records nothing; only the lifecycle frame does.
+    await expect(remote.cancelQueuedInput(folded.operationId)).resolves.toBe(false);
+    await expect(client.submissionDisposition({ sessionId, cwd: "/workspace", operationId: folded.operationId })).resolves.toBe("submitted");
+    await expect(remote.cancelQueuedInput(withdrawn.operationId)).resolves.toBe(true);
+    expect(native.cancelQueuedInput.mock.calls).toEqual([[folded.operationId], [withdrawn.operationId]]);
+    await remote.interrupt();
+    expect(native.interrupt).toHaveBeenCalledOnce();
+    // The interrupted turn closes the inputs it started with `cancelled` too.
+    await native.emit(lifecycle(sessionId, folded.operationId, "cancelled"));
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ pendingInputIds: [folded.operationId] });
+    expect(host.abandonmentEvidence().sessions[0]!.activeOperationIds).not.toContain(withdrawn.operationId);
+    const query = { sessionId, cwd: "/workspace" };
+    await expect(client.submissionDisposition({ ...query, operationId: withdrawn.operationId })).resolves.toBe("cancelled");
+    await expect(client.submissionDisposition({ ...query, operationId: folded.operationId })).resolves.toBe("submitted");
+    await expect(client.submissionDisposition({ ...query, operationId: turn.operationId })).resolves.toBe("submitted");
+    // The withdrawal outlives the query: it is proof, not tracking state.
+    native.options.onFailure?.(new Error("claude_test_query_lost"));
+    await expect(client.submissionDisposition({ ...query, operationId: withdrawn.operationId })).resolves.toBe("cancelled");
+    await expect(client.submissionDisposition({ ...query, operationId: folded.operationId })).resolves.toBe("session_ended");
   });
 
   it("reattaches the same active native query after main client replacement and replays disconnected output once", async () => {

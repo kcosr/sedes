@@ -146,6 +146,10 @@ export class ClaudeRuntimeWorkerHost {
       sendQuery: (request) => this.#sendQuery(request),
       interruptQuery: async ({ queryId }) =>
         await this.#interruptQuery(queryId),
+      cancelQueryInput: async ({ queryId, operationId }) => {
+        this.#assertOpen();
+        return { cancelled: await this.#query(queryId).session.cancelQueuedInput(operationId) };
+      },
       setQueryModel: async ({ queryId, model }) => {
         await this.#query(queryId).session.setModel(model ?? undefined);
         return { updated: true as const };

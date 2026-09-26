@@ -28,6 +28,7 @@ export const claudePersistentCommandSchema = z.discriminatedUnion("action", [
   command("fork", worker.claudeRuntimeForkRequestSchema),
   command("send", worker.claudeRuntimeQuerySendRequestSchema),
   command("interrupt", z.strictObject({ queryId: z.string().uuid() })),
+  command("cancel_input", worker.claudeRuntimeQueryCancelInputRequestSchema),
   command("set_model", worker.claudeRuntimeQuerySetModelRequestSchema),
   command("set_effort", worker.claudeRuntimeQuerySetEffortRequestSchema),
   command("set_permission_mode", worker.claudeRuntimeQuerySetPermissionModeRequestSchema),
@@ -66,6 +67,13 @@ export const claudePersistentAttachmentSchema = z.strictObject({
   pendingBackgroundTaskIds: z.array(z.string().min(1).max(512)).max(8192),
   confirmedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable().optional(),
   events: z.array(claudePersistentEventSchema).max(8192),
+});
+/**
+ * `cancelled`: Claude admitted the input, then withdrew it with a `cancelled`
+ * lifecycle frame before it started, so it never ran.
+ */
+export const claudePersistentSubmissionDispositionResponseSchema = z.strictObject({
+  disposition: z.enum(["submitted", "session_ended", "not_sent", "cancelled", "unknown"]),
 });
 /** A retired or absent query holds nothing; a busy one still has work outstanding. */
 /** `undelivered`: only output no main has applied and acknowledged holds the query. */

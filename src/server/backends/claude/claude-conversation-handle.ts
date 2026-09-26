@@ -144,6 +144,8 @@ type PendingSubmission = {
   readonly accept: () => void;
   readonly reject: (error: unknown) => void;
   accepted: boolean;
+  /** Claude dequeued it into a turn; a later `cancelled` ends that turn. */
+  started?: true;
   admissionError?: BackendError;
   observationEnded?: boolean;
 };
@@ -263,6 +265,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
   readonly #messages: SessionMessage[];
   readonly #projectionMessages: SessionMessage[];
   readonly #submissions = new Map<string, PendingSubmission>();
+  /** Inputs Claude withdrew with `cancelled` before starting them; they never ran. */
+  readonly #withdrawnSubmissions = new Map<string, true>();
   readonly #interrupts = new Map<string, string>();
   readonly #renames = new Map<string, string>();
   readonly #partialItems = new Map<
@@ -840,6 +844,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
     return pending !== undefined && !pending.accepted;
   }
 
+  /**
+   * Claude withdrew this input with a `cancelled` lifecycle frame before
+   * starting it, as Stop does for queued input: exact proof it never ran.
+   */
+  withdrewSubmission(operationId: string): boolean {
+    return this.#withdrawnSubmissions.has(operationId);
+  }
+
   /** Stop waiting after the owning runtime ended; consumption remains unknown. */
   endSubmissionObservation(operationId: string): boolean {
     const pending = this.#submissions.get(operationId);
@@ -905,6 +917,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
       if (!steering) await prior.promise;
       return prior.result;
     }
+    // Claude already received and withdrew this identity; it would skip a
+    // resend as a duplicate. A new send needs a new operation.
+    if (this.#withdrawnSubmissions.has(input.applicationOperationId)) throw claudeWithdrawnError();
     if (
       this.#submissionReserved ||
       (!steering && (
@@ -1226,6 +1241,15 @@ export class ClaudeConversationHandle implements ConversationHandle {
         "The active Claude turn changed before interrupt.",
         "claude_interrupt_target_changed",
       );
+    }
+    // Stop first withdraws each input Sedes sent that Claude has not started,
+    // as Pi's Stop clears its steering queue, so none runs as the next turn.
+    // Claude's own queued work is left alone. A withdrawal is proven only by
+    // the input's own `cancelled` lifecycle frame, never by Claude's answer
+    // here or by the interrupt receipt; a failed request proves nothing.
+    for (const operationId of this.#submissionsAwaitingStart()) {
+      try { await this.#session.cancelQueuedInput(operationId); }
+      catch { /* The input stays tracked; its outcome comes from evidence. */ }
     }
     await this.#session.interrupt();
     rememberBounded(
@@ -2012,18 +2036,52 @@ export class ClaudeConversationHandle implements ConversationHandle {
       refused.reject(claudeError("rejected", "Claude declined this input before queueing it. It was not sent.", "claude_submission_refused"));
       return;
     }
+    if (lifecycle.state === "cancelled") {
+      this.#withdrawUnstartedSubmission(lifecycle.commandUuid);
+      return;
+    }
     if (lifecycle.state !== "started") return;
     const submission = this.#submissions.get(lifecycle.commandUuid);
+    if (submission) submission.started = true;
     // The startup probe and inputs this attachment did not send are ignored.
     // A steer's receiving turn is identified only by its consumption stamp.
     if (!submission || submission.steering || submission.accepted || submission.observationEnded) return;
     this.#materializePendingUser(lifecycle.commandUuid);
   }
 
+  /**
+   * `cancelled` before `started` means Claude withdrew the input, as Stop
+   * does for queued input, so it never ran. After `started` it instead ends
+   * an interrupted turn the input belongs to, which its stamp names.
+   */
+  #withdrawUnstartedSubmission(operationId: string): void {
+    const submission = this.#submissions.get(operationId);
+    if (!submission || submission.accepted || submission.started || submission.observationEnded) return;
+    this.#submissions.delete(operationId);
+    rememberBounded(this.#withdrawnSubmissions, operationId, true);
+    // The durable steer record stays until reconciliation reports the input
+    // not sent, so a lost handle leaves it unknown rather than untracked.
+    submission.reject(claudeWithdrawnError());
+    // A Stop that was waiting on this input can settle with Claude's idle.
+    if (this.#stopConfirmation && this.#providerState === "idle" &&
+        (this.#providerStateReported || this.#session.reattached !== true) &&
+        !this.#hasSubmissionAwaitingStart(true) &&
+        this.#stopConfirmation.deadline > Date.now() + STOP_IDLE_GRACE_MS) {
+      this.#awaitStopConfirmation(this.#stopConfirmation.backendTurnId, STOP_IDLE_GRACE_MS);
+    }
+  }
+
   #hasSubmissionAwaitingStart(includeSteering: boolean): boolean {
     return [...this.#submissions.values()].some(submission =>
       (includeSteering || !submission.steering) && !submission.accepted &&
       !submission.admissionError && !submission.observationEnded);
+  }
+
+  /** Inputs this attachment sent that Claude has neither started nor settled. */
+  #submissionsAwaitingStart(): string[] {
+    return [...this.#submissions].flatMap(([operationId, submission]) =>
+      !submission.accepted && !submission.started && !submission.admissionError &&
+        !submission.observationEnded ? [operationId] : []);
   }
 
   #beginSedesTurn(): void {
@@ -3205,6 +3263,12 @@ function cancelled(reason: unknown): BackendError {
     },
     { cause: reason },
   );
+}
+
+/** Claude withdrew the input before starting it; it was not sent. */
+function claudeWithdrawnError(): BackendError {
+  return claudeError("rejected", "Claude withdrew this input before it started, so it was not sent.",
+    "claude_submission_withdrawn");
 }
 
 function claudeError(
