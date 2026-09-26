@@ -61,6 +61,20 @@ export const CLAUDE_SESSION_STATE_EVENTS_VARIABLE =
 export const CLAUDE_RESUME_INTERRUPTED_TURN_VARIABLE =
   "CLAUDE_CODE_RESUME_INTERRUPTED_TURN";
 
+/**
+ * The text of the `shouldQuery: false` startup message Sedes sends on every
+ * launch. Nothing reads it: Sedes matches that message by UUID, and history
+ * readers drop the meta row Claude Code persists for it. The model does
+ * receive it, though. Claude Code merges the row into the next prompt, after
+ * its own `[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]` label, and renders
+ * empty text as `(no content)`. Models then took the prompt to be that
+ * non-user message and refused it. So the text only says what it is: it
+ * gives no instruction and says nothing about the surrounding text, since
+ * either would read as an injection from a non-user source.
+ */
+export const CLAUDE_STARTUP_MARKER_TEXT =
+  "Sedes session start marker. It contains no request.";
+
 const SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE =
   "SEDES_AGENT_TOOL_SOURCE_CAPABILITY";
 
@@ -361,14 +375,14 @@ export class ClaudeSdkSession {
       onNewerVersion,
     );
     // Claude Code does not emit its stream init until it receives stream
-    // input. A synthetic empty append starts the transport without querying a
-    // model; the matching replay is provider-private and filtered below.
+    // input. A synthetic marker append starts the transport without querying
+    // a model; the matching replay is provider-private and filtered below.
     this.#input.push({
       type: "user",
       session_id: this.#options.sessionId,
       parent_tool_use_id: null,
       uuid: this.#startupProbeUuid,
-      message: { role: "user", content: "" },
+      message: { role: "user", content: CLAUDE_STARTUP_MARKER_TEXT },
       isSynthetic: true,
       shouldQuery: false,
     });

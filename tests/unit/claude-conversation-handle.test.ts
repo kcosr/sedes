@@ -297,7 +297,7 @@ function fixture(options: {
       const prompt = input.prompt as unknown as { push(value: SDKUserMessage): void };
       const push = prompt.push.bind(prompt);
       prompt.push = (value) => {
-        if (value.isSynthetic && value.message.content === "") messages.push(nativeFrames.lifecycle(value.uuid!, "completed"));
+        if (value.isSynthetic && value.shouldQuery === false) messages.push(nativeFrames.lifecycle(value.uuid!, "completed"));
         push(value);
       };
       const stream = (async function* () {

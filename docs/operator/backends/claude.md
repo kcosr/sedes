@@ -126,9 +126,21 @@ Sedes opens or resumes a thread:
   content.
 
 Sedes' startup message still reaches the model with the first prompt after
-each start, labelled as input from a non-user source, on every admitted
-release including 2.1.283. Claude sometimes treats that prompt with caution
-or refuses it; resend it if that happens.
+each start, on every admitted release including 2.1.283. Claude Code labels
+it `[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]`, followed by Sedes'
+marker "Sedes session start marker. It contains no request." Earlier builds
+sent no text, which Claude Code shows as "(no content)". Claude sometimes takes
+the first prompt to be that non-user message and refuses it or treats it with
+caution. The marker makes this less frequent but does not prevent it. Sedes'
+live tests on 2.1.283 used `claude-sonnet-5` at low effort:
+
+- A first prompt asking Claude to run two shell commands was refused in 6 of
+  16 runs with the marker, against 10 of 11 with no text.
+- A first prompt asking only for a fixed reply was refused in 0 of 16 runs,
+  against 2 of 11.
+
+Only the first prompt after a start carries the label. If Claude refuses it,
+send the prompt again.
 
 Update Claude Code on every execution host, local and remote, before
 upgrading Sedes. An older release now fails backend startup with a runtime

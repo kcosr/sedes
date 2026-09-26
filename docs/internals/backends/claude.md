@@ -243,11 +243,26 @@ provider-private value for its lifetime. Reading after start keeps a reattached
 remote query's held replay behind the baseline; the read resolves through the
 startup message that the launch has just persisted.
 
-Every launch sends Sedes' empty `shouldQuery: false` startup message, which
+Every launch sends Sedes' `shouldQuery: false` startup message, which
 Claude Code persists as a meta user row at the transcript tip. From 2.1.280 the
 row is marked `queueTranscriptOnly`, but on every admitted release (checked on
-2.1.283) the next prompt is still saved as its child and the model still
-receives the row's "NON-USER SOURCE" label with that prompt. SDK 0.3.274's
+2.1.283) the next prompt is still saved as its child, and Claude Code merges the
+row into that prompt's user message. The model receives a first text block,
+Claude Code's `[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]` label followed
+by the startup message text, and then the prompt. The label is Claude Code's
+rule for a meta message without an `origin`. Sedes cannot remove it, because
+every `origin` kind carries other semantics.
+
+The text is `CLAUDE_STARTUP_MARKER_TEXT`, "Sedes session start marker. It
+contains no request." Earlier builds sent empty text, which Claude Code shows
+as `(no content)`, and models took the prompt to be the non-user message.
+The marker only says what it is. It gives no instruction and makes no claim
+about the surrounding text, since either would read as an injection from a
+non-user source. It lowers refusals of the first prompt without ending them;
+the [operator guide](../../operator/backends/claude.md#version-compatibility) gives
+the measured effect. Nothing depends on the text. Live
+handling matches the message by UUID, readers drop meta rows, and usage
+baselines use its result. Transcripts with either text read the same. SDK 0.3.274's
 `getSessionMessages` picked the file-latest childless row that is not meta.
 Parallel tool calls leave childless sibling tool results, so a transcript
 ending in a startup message read back only to its last parallel tool call:

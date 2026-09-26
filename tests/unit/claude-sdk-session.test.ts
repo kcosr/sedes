@@ -6,7 +6,10 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it, vi } from "vitest";
-import { ClaudeSdkSession } from "../../src/server/backends/claude/claude-sdk-session.js";
+import {
+  CLAUDE_STARTUP_MARKER_TEXT,
+  ClaudeSdkSession,
+} from "../../src/server/backends/claude/claude-sdk-session.js";
 import { ClaudeRuntimeInstallationAdvisories } from "../../src/server/backends/claude/claude-runtime-installation-advisories.js";
 import type {
   ClaudeQueryInput,
@@ -429,11 +432,12 @@ describe("ClaudeSdkSession", () => {
     );
 
     const promptIterator = fixture.prompt()[Symbol.asyncIterator]();
+    // The startup message carries only the session-start marker.
     expect(await promptIterator.next()).toMatchObject({
       done: false,
       value: {
         type: "user",
-        message: { role: "user", content: "" },
+        message: { role: "user", content: CLAUDE_STARTUP_MARKER_TEXT },
         isSynthetic: true,
         shouldQuery: false,
       },

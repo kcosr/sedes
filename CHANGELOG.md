@@ -165,6 +165,14 @@
   reconnects; it takes effect once the sidecar runs this build, and the sidecar
   runtime protocol is unchanged.
 
+- Claude now refuses the first prompt after a session start less often.
+  Claude Code merges Sedes' startup message into that prompt under its "NON-USER
+  SOURCE" label. That message now carries a short session-start marker instead
+  of no text, which Claude Code showed as "(no content)". Claude can still
+  refuse that prompt, so resend it if it does. A remote Claude thread gets the
+  marker once its sidecar runs this build. The sidecar runtime protocol is
+  unchanged.
+
 - Create Claude forks with one locked-down Claude Code launch. It loads no
   settings, hooks, MCP servers, or tools and denies any permission request.
   It no longer uses the thread's permission mode, so it cannot act for the

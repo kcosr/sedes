@@ -17,6 +17,7 @@ import { ClaudeConversationBackendDriver } from "../../src/server/backends/claud
 import { verifyClaudeRuntimeVersion } from "../../src/server/backends/claude/claude-release-guard.js";
 import { ClaudeSdkRuntimeAdapter } from "../../src/server/backends/claude/claude-runtime-client.js";
 import { OfficialClaudeSdkFacade, type ClaudeQueryInput } from "../../src/server/backends/claude/claude-sdk-facade.js";
+import { CLAUDE_STARTUP_MARKER_TEXT } from "../../src/server/backends/claude/claude-sdk-session.js";
 import { probeClaudeSdkDirect } from "../../src/server/backends/claude/claude-sdk-probe.js";
 import { ClaudeThreadRepository } from "../../src/server/backends/claude/claude-thread-repository.js";
 import type { AgentBackendInstance, AgentConnectionProfile, ConversationBinding } from "../../src/server/backends/contracts.js";
@@ -102,7 +103,9 @@ describe.sequential("real Claude native history", () => {
 
       const rows = await transcriptRows(thread.sessionId, live.workspace.canonicalPath);
       const tip = rows.filter((row) => (row.type === "user" || row.type === "assistant") && !row.isSidechain).at(-1);
-      expect(tip).toMatchObject({ type: "user", isMeta: true });
+      // Claude Code saves the startup message's marker after its non-user label.
+      expect(tip).toMatchObject({ type: "user", isMeta: true,
+        message: { content: `[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n${CLAUDE_STARTUP_MARKER_TEXT}` } });
       const parents = new Set(rows.map((row) => row.parentUuid));
       const deadEnds = rows.filter((row) => row.type === "user" && !parents.has(row.uuid) && JSON.stringify(row.message).includes("tool_result"));
       if (deadEnds.length === 0) throw new Error("REAL_CLAUDE_BLOCKER: Claude did not issue parallel tool calls, so no dead-end tool result exists.");

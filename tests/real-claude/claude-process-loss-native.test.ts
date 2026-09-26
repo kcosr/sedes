@@ -8,7 +8,7 @@ import { query, type Options, type SDKMessage, type SDKUserMessage, type Spawned
 import { expect, it } from "vitest";
 import { ClaudeInputQueue } from "../../src/server/backends/claude/claude-input-queue.js";
 import { claudeCommandLifecycle, claudeResultUserMessageIds } from "../../src/server/backends/claude/claude-result-lifecycle.js";
-import { CLAUDE_SESSION_STATE_EVENTS_VARIABLE } from "../../src/server/backends/claude/claude-sdk-session.js";
+import { CLAUDE_SESSION_STATE_EVENTS_VARIABLE, CLAUDE_STARTUP_MARKER_TEXT } from "../../src/server/backends/claude/claude-sdk-session.js";
 import { readClaudeSessionMessages } from "../../src/server/backends/claude/claude-native-transcript.js";
 import { projectClaudeHistory } from "../../src/server/backends/claude/claude-history-projector.js";
 
@@ -16,7 +16,7 @@ import { projectClaudeHistory } from "../../src/server/backends/claude/claude-hi
  * Actual pinned SDK + native CLI against an isolated localhost Messages API.
  * The CLI running a turn is killed with SIGKILL while its only tool, a finite
  * fixture command, waits; a fresh query then resumes the session the way
- * Sedes does, with its empty `shouldQuery: false` startup message. Qualifies
+ * Sedes does, with its `shouldQuery: false` startup message. Qualifies
  * what the handle decides from: the unfinished turn in history, and the
  * frames Claude reports while it handles the startup message.
  */
@@ -98,7 +98,7 @@ it("leaves a killed turn unfinished and reports idle once the resumed CLI has ha
     const consumed = (async () => { for await (const message of resumed!) frames.push(message); })();
     void consumed.catch(error => errors.push(error));
     second.push({ type: "user", uuid: startup as ReturnType<typeof randomUUID>, session_id: sessionId, parent_tool_use_id: null,
-      message: { role: "user", content: "" }, isSynthetic: true, shouldQuery: false });
+      message: { role: "user", content: CLAUDE_STARTUP_MARKER_TEXT }, isSynthetic: true, shouldQuery: false });
     const states = () => frames.flatMap((message, index) =>
       message.type === "system" && message.subtype === "session_state_changed" ? [{ index, state: message.state }] : []);
     await waitFor(() => states().some(({ state }) => state === "idle"));

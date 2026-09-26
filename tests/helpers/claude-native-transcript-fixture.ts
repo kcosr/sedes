@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { CLAUDE_STARTUP_MARKER_TEXT } from "../../src/server/backends/claude/claude-sdk-session.js";
 
 type Row = Record<string, unknown>;
 
@@ -41,17 +42,24 @@ export class ClaudeTranscriptFixture {
   }
 
   /**
-   * Claude Code's persisted form of Sedes' empty `shouldQuery: false` startup
+   * Claude Code's persisted form of Sedes' `shouldQuery: false` startup
    * message, attached to the last user or assistant row on every launch.
-   * Releases before 2.1.280 omit `queueTranscriptOnly`, so the model also
-   * received the label with the next prompt.
+   * Claude Code prefixes its non-user label to the text Sedes sent: the
+   * session-start marker, or `(no content)` for the empty text Sedes sent
+   * before the marker (`legacyEmptyContent`). Releases before 2.1.280 omit
+   * `queueTranscriptOnly`.
    */
-  startupMessage(options: { readonly uuid?: string; readonly queueTranscriptOnly?: boolean } = {}): string {
-    this.#bookkeeping({ type: "queue-operation", operation: "enqueue", content: "" });
+  startupMessage(options: {
+    readonly uuid?: string;
+    readonly queueTranscriptOnly?: boolean;
+    readonly legacyEmptyContent?: boolean;
+  } = {}): string {
+    const sent = options.legacyEmptyContent === true ? "" : CLAUDE_STARTUP_MARKER_TEXT;
+    this.#bookkeeping({ type: "queue-operation", operation: "enqueue", content: sent });
     this.#bookkeeping({ type: "queue-operation", operation: "dequeue" });
     const startup = this.from(this.#lastMessage).#append({ uuid: options.uuid ?? randomUUID(), type: "user", isMeta: true,
       origin: { kind: "unclassified" },
-      message: { role: "user", content: "[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n(no content)" },
+      message: { role: "user", content: `[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n${sent || "(no content)"}` },
       promptId: randomUUID(), queueSkipAttachments: true,
       ...(options.queueTranscriptOnly === false ? {} : { queueTranscriptOnly: true }) });
     this.#bookkeeping({ type: "last-prompt", leafUuid: startup });
@@ -76,7 +84,10 @@ export class ClaudeTranscriptFixture {
    * One Sedes attach resuming the session: Claude Code 2.1.28x closes a
    * trailing user or attachment row, then persists the new startup message.
    */
-  resume(options: { readonly queueTranscriptOnly?: boolean } = {}): { readonly closure?: string; readonly startup: string } {
+  resume(options: { readonly queueTranscriptOnly?: boolean; readonly legacyEmptyContent?: boolean } = {}): {
+    readonly closure?: string;
+    readonly startup: string;
+  } {
     const last = this.rows.findLast((row) => row.uuid === this.#lastConversational);
     // A transcript-only task notification is left open, like Claude Code does.
     const transcriptOnlyNotification = last?.queueTranscriptOnly === true &&

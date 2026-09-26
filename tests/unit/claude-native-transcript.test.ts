@@ -13,6 +13,7 @@ import {
 import { claudeResumableHistoryStart, projectClaudeHistory } from "../../src/server/backends/claude/claude-history-projector.js";
 import { ClaudeSdkRuntimeAdapter } from "../../src/server/backends/claude/claude-runtime-client.js";
 import { OfficialClaudeSdkFacade } from "../../src/server/backends/claude/claude-sdk-facade.js";
+import { CLAUDE_STARTUP_MARKER_TEXT } from "../../src/server/backends/claude/claude-sdk-session.js";
 import { ClaudeTranscriptFixture } from "../helpers/claude-native-transcript-fixture.js";
 
 let root: string;
@@ -49,16 +50,20 @@ function uuids(messages: readonly SessionMessage[]): string[] {
   return messages.map(({ uuid }) => uuid);
 }
 
-/** A resumed "Refactor"-shaped conversation: parallel calls, then a later turn. */
-function refactorShaped(): { fixture: ClaudeTranscriptFixture; lastReply: string; deadEnds: string[] } {
+/**
+ * A resumed "Refactor"-shaped conversation: parallel calls, then a later turn.
+ * `legacyEmptyContent` writes the startup messages Sedes sent before the
+ * session-start marker.
+ */
+function refactorShaped(legacyEmptyContent = false): { fixture: ClaudeTranscriptFixture; lastReply: string; deadEnds: string[] } {
   const fixture = new ClaudeTranscriptFixture(workspace);
-  fixture.startupMessage();
+  fixture.startupMessage({ legacyEmptyContent });
   fixture.prompt("Refactor the synthetic parser.");
   const first = fixture.parallelToolCalls("alpha");
   fixture.text("The parser splits lines twice.");
   fixture.system("turn_duration", { durationMs: 1234 });
   fixture.bookkeeping({ type: "custom-title", customTitle: "Synthetic refactor" });
-  fixture.startupMessage();
+  fixture.startupMessage({ legacyEmptyContent });
   fixture.prompt("Now simplify the tokenizer.");
   const second = fixture.parallelToolCalls("beta");
   const [, lastReply] = fixture.reply([
@@ -70,15 +75,16 @@ function refactorShaped(): { fixture: ClaudeTranscriptFixture; lastReply: string
 }
 
 describe("Claude native transcript reader", () => {
-  it("reads a startup-message tip through its true chain, as the pinned SDK now does", async () => {
-    const { fixture, lastReply, deadEnds } = refactorShaped();
-    fixture.startupMessage();
+  it.each([false, true])("reads a startup-message tip through its true chain, as the pinned SDK now does (legacy empty content: %s)", async (legacyEmptyContent) => {
+    const { fixture, lastReply, deadEnds } = refactorShaped(legacyEmptyContent);
+    fixture.startupMessage({ legacyEmptyContent });
 
     const messages = await ours(fixture);
     expect(messages.at(-1)?.uuid).toBe(lastReply);
     expect(uuids(messages)).toEqual(expect.arrayContaining(deadEnds));
     expect(messages.some((message) => message.type === "user" && typeof message.message === "object" &&
       JSON.stringify(message.message).includes("NON-USER SOURCE"))).toBe(false);
+    expect(JSON.stringify(messages)).not.toContain(CLAUDE_STARTUP_MARKER_TEXT);
     // SDK 0.3.274 skipped the meta tip and stopped at the file-latest dead end;
     // 0.3.283 walks from the meta tip too.
     expect(messages).toEqual(await sdk(fixture));
@@ -109,9 +115,9 @@ describe("Claude native transcript reader", () => {
     expect(await ours(fixture, { includeSystemMessages: true })).toEqual(await sdk(fixture, { includeSystemMessages: true }));
   });
 
-  it("matches the SDK once the next prompt follows a startup message", async () => {
-    const { fixture } = refactorShaped();
-    fixture.startupMessage();
+  it.each([false, true])("matches the SDK once the next prompt follows a startup message (legacy empty content: %s)", async (legacyEmptyContent) => {
+    const { fixture } = refactorShaped(legacyEmptyContent);
+    fixture.startupMessage({ legacyEmptyContent });
     fixture.prompt("One more change.");
     fixture.text("Done.");
     const messages = await ours(fixture);
@@ -416,13 +422,19 @@ describe("Claude Code resume shapes", () => {
     return fixture.rows.filter((row) => row.type === "assistant" && (row.message as { model?: string }).model === "<synthetic>");
   }
 
-  it.each([true, false])("hides the startup message and parents the next prompt on it (queueTranscriptOnly: %s)", async (queueTranscriptOnly) => {
+  it.each([
+    { queueTranscriptOnly: true, legacyEmptyContent: false, text: CLAUDE_STARTUP_MARKER_TEXT },
+    { queueTranscriptOnly: true, legacyEmptyContent: true, text: "(no content)" },
+    { queueTranscriptOnly: false, legacyEmptyContent: true, text: "(no content)" },
+  ])("hides the startup message and parents the next prompt on it (%o)", async ({ queueTranscriptOnly, legacyEmptyContent, text }) => {
     const fixture = new ClaudeTranscriptFixture(workspace);
-    const startup = fixture.startupMessage({ queueTranscriptOnly });
+    const startup = fixture.startupMessage({ queueTranscriptOnly, legacyEmptyContent });
     const prompt = fixture.prompt("Describe the synthetic module.");
     const answer = fixture.answer("It parses synthetic input.");
-    // Before 2.1.280 the row lacked `queueTranscriptOnly`, so the model also
-    // received its "NON-USER SOURCE" label merged into this prompt.
+    // From 2.1.280 the row carries `queueTranscriptOnly`; on every release the
+    // model still receives it, label and text, merged into this prompt.
+    expect(fixture.rows.find(({ uuid }) => uuid === startup)).toMatchObject({ isMeta: true,
+      message: { role: "user", content: `[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n${text}` } });
     expect(fixture.rows.find(({ uuid }) => uuid === startup)?.queueTranscriptOnly).toBe(queueTranscriptOnly || undefined);
     expect(fixture.rows.find(({ uuid }) => uuid === prompt)).toMatchObject({ parentUuid: startup });
 
