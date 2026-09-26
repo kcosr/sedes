@@ -816,6 +816,17 @@ verification finish before conversation interruption; staging failure leaves
 the existing service and connections in place. A failed replacement remains
 visibly failed rather than claiming healthy rollback.
 
+Builds are content-addressed under the remote account's
+`~/.local/state/sedes/sidecar/artifacts/sha256/` store, which every service on
+that account shares. After a daemon started from that store records itself
+running, it removes superseded builds on a best-effort basis. It keeps its own
+build, the three most recently installed others, any build installed within the
+last hour, and any build named in a live process command line. The service's
+embedded Claude worker builds under `services/<service-key>/claude-workers/`
+follow the same rules with two retained earlier builds, applied after a
+verified worker install. Where process command lines cannot be read (Windows),
+nothing is removed.
+
 Recovery can read and acknowledge an older artifact's retained results when its
 runtime wire version and required capability versions remain compatible. An
 incompatible runtime protocol prevents normal attachment and automatic recovery,

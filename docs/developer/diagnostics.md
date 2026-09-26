@@ -161,9 +161,13 @@ Existing insecure files, symlinks, hard links, and non-private parent directorie
 are refused. The asynchronous pending-write buffer is capped at 64 KiB and each
 record at 8 KiB; overload drops diagnostic records instead of delaying provider
 work. Graceful shutdown allows up to 500 ms to flush optional logging. Each PID
-has its own bounded files; remove old PID files after collecting the incident
-because the sink does not delete other processes' captures. File-output failure
-does not affect application startup or recovery.
+has its own bounded files. A persistent sidecar daemon starting with the opt-in
+keeps its own capture and those of the four most recent earlier daemon PIDs, and
+deletes older captures of PIDs that are no longer running; collect an incident's
+files before several restarts. Main's operator-selected
+`SEDES_DEBUG_DELIVERY_FILE` captures are never deleted; remove old PID files
+there after collecting the incident. File-output failure does not affect
+application startup or recovery.
 
 ### Bounded main CPU capture
 

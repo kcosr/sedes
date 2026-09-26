@@ -132,6 +132,11 @@
   and boot identity on Linux and macOS; existing PID-only records keep the
   previous PID check.
 
+- Remove superseded sidecar and Claude worker builds that no live process
+  uses after a sidecar starts or installs a new worker, keeping recent builds
+  for rollback. Persistent sidecar delivery diagnostics keep captures from
+  only the four most recent earlier daemon PIDs. Diagnostics remain opt-in.
+
 ### Removed
 
 ## [0.1.1] - 2026-09-21

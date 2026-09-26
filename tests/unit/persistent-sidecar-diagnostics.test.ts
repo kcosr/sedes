@@ -1,4 +1,4 @@
-import { chmod, link, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -74,6 +74,37 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
     const alias = path.join(parent, "service");
     await symlink(directory, alias);
     expect(await persistentSidecarDiagnosticOptions(alias)).toBeUndefined();
+  });
+
+  it("bounds earlier daemons' captures while keeping this and live PIDs", async () => {
+    const directory = await fixture('{"delivery":true}');
+    const captures = path.join(directory, "diagnostics");
+    await mkdir(captures, { mode: 0o700 });
+    const write = async (name: string, ageSeconds: number) => {
+      const file = path.join(captures, name);
+      await writeFile(file, "{}\n", { mode: 0o600 });
+      const time = new Date(Date.now() - ageSeconds * 1_000);
+      await utimes(file, time, time);
+    };
+    // Six exited daemons, newest first; PIDs above the kernel maximum never run.
+    const exited = [2_147_000_001, 2_147_000_002, 2_147_000_003, 2_147_000_004, 2_147_000_005, 2_147_000_006];
+    for (const [index, pid] of exited.entries()) {
+      await write(`delivery-${pid}.jsonl`, 100 + index * 10);
+      await write(`delivery-${pid}.jsonl.1`, 105 + index * 10);
+    }
+    await write(`delivery-${process.pid}.jsonl`, 10_000);
+    await write(`delivery-${process.ppid}.jsonl`, 20_000);
+    await write("notes.txt", 30_000);
+    await symlink(path.join(directory, "diagnostics.json"), path.join(captures, "delivery-2147000007.jsonl"));
+
+    expect(await persistentSidecarDiagnosticOptions(directory)).toMatchObject({ enabled: true });
+    expect((await readdir(captures)).sort()).toEqual([
+      ...exited.slice(0, 4).flatMap((pid) => [`delivery-${pid}.jsonl`, `delivery-${pid}.jsonl.1`]),
+      `delivery-${process.pid}.jsonl`,
+      "delivery-2147000007.jsonl",
+      `delivery-${process.ppid}.jsonl`,
+      "notes.txt",
+    ].sort());
   });
 
   it("rejects a non-private service or output directory", async () => {
