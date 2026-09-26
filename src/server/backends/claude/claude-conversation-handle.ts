@@ -56,6 +56,8 @@ import { claudeContextExcerptEnvelope } from "./claude-context-excerpts.js";
 import {
   assertClaudeHistorySession,
   assertClaudeMessageItemPayload,
+  CLAUDE_INTERRUPT_UNCONFIRMED_REASON,
+  CLAUDE_PROCESS_LOST_REASON,
   ClaudeHistoryProjectionError,
   projectClaudeHistoryPageAtIndex,
   locateClaudeHistoryTurn,
@@ -96,6 +98,10 @@ const MAXIMUM_EVENT_JOURNAL = 256;
 const MAXIMUM_ACKNOWLEDGEMENT_WAIT_MS = 30_000;
 const MAXIMUM_SUBMISSION_HISTORY_READ_MS = 5_000;
 const MAXIMUM_REPLAY_RECORDS = 1_024;
+/** A Stop Claude acknowledged but never settled with a result ends after this. */
+const STOP_CONFIRMATION_TIMEOUT_MS = 30_000;
+/** Once Claude reports idle, a result it already emitted has this long to land. */
+const STOP_IDLE_GRACE_MS = 1_000;
 const CLAUDE_HANDLE_HISTORY_CURSOR_PREFIX = "claude-handle-history:v1:";
 const EFFORTS = new Set<EffortLevel>(["low", "medium", "high", "xhigh", "max"]);
 
@@ -274,6 +280,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
   readonly #startupSupersededMessageUuids = new Set<string>();
   /** Claude Code's reported session state, including work it started itself. */
   #providerState: "idle" | "running" | "requires_action" = "idle";
+  /** A reattached query's state is unknown until Claude reports it. */
+  #providerStateReported = false;
+  /** Bounds a Stop that Claude acknowledged but has not settled with a result. */
+  #stopConfirmation: { readonly backendTurnId: string; readonly timer: ReturnType<typeof setTimeout> } | undefined;
   /** A live compact boundary; its summary is the next main-thread synthetic user row. */
   #liveCompaction: LiveCompaction | undefined;
   /** A live turn Claude started itself; it carries no Sedes input identity. */
@@ -476,6 +486,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
       }
       this.#resolveInitialHistory();
       await this.#session.flushMessages?.();
+      // Held output is applied, so Claude's own state report is current.
+      if (this.#session.reattached !== true) this.#closeProcessLostTurn();
       if (
         this.#session.reattached &&
         this.#session.confirmedEffort !== undefined
@@ -1195,7 +1207,61 @@ export class ClaudeConversationHandle implements ConversationHandle {
     if (this.#runState === "running" &&
         this.#activeBackendTurnId() === input.expectedBackendTurnId) {
       this.#setRunState("stopping");
+      // Claude reports every turn it runs; idle now means nothing was left
+      // to stop, so no result will follow. Otherwise bound the wait.
+      const idle = this.#providerState === "idle" && (this.#providerStateReported || this.#session.reattached !== true) &&
+        !this.#hasSubmissionAwaitingStart(true);
+      this.#awaitStopConfirmation(input.expectedBackendTurnId, idle ? STOP_IDLE_GRACE_MS : STOP_CONFIRMATION_TIMEOUT_MS);
     }
+  }
+
+  /** A Stop ends at its result; this bounds one that never gets one. */
+  #awaitStopConfirmation(backendTurnId: string, delayMs: number): void {
+    this.#clearStopConfirmation();
+    const timer = setTimeout(() => {
+      if (this.#stopConfirmation?.timer !== timer) return;
+      this.#stopConfirmation = undefined;
+      this.#endUnconfirmedStop(backendTurnId);
+    }, delayMs);
+    timer.unref?.();
+    this.#stopConfirmation = { backendTurnId, timer };
+  }
+
+  #clearStopConfirmation(): void {
+    if (!this.#stopConfirmation) return;
+    clearTimeout(this.#stopConfirmation.timer);
+    this.#stopConfirmation = undefined;
+  }
+
+  /**
+   * Ends a stopping turn that got no result. A turn Claude started itself
+   * ends without a receipt, as its result would; a Sedes turn records that
+   * Claude never confirmed the Stop.
+   */
+  #endUnconfirmedStop(backendTurnId: string): void {
+    if (this.#closed || this.#projectionInvalidated || this.#runState !== "stopping" ||
+        this.#activeBackendTurnId() !== backendTurnId) return;
+    this.#terminalResultRevision++;
+    if (this.#providerTurn) {
+      this.#endProviderTurn();
+      return;
+    }
+    const existing = this.#settings.findTerminalReceipt(this.#scope, {
+      applicationThreadId: this.binding.applicationThreadId, backendTurnId,
+    });
+    if (existing) {
+      this.#setRunState(existing.status === "failed" ? "failed" : "idle");
+      return;
+    }
+    const previous = this.#projection;
+    const terminalAt = this.#now();
+    this.#settings.writeTerminalReceipt(this.#scope, this.binding.applicationThreadId, {
+      backendTurnId, status: "interrupted", providerTerminalReason: CLAUDE_INTERRUPT_UNCONFIRMED_REASON,
+      terminalAt, now: terminalAt,
+    });
+    this.#refreshProjection();
+    this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot, backendTurnId);
+    this.#setRunState("idle");
   }
 
   async reconcileInterrupt(
@@ -1308,6 +1374,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   async close(options?: { readonly reason: "evicted" }): Promise<void> {
     if (this.#closed) return this.#closePromise;
     this.#closed = true;
+    this.#clearStopConfirmation();
     this.#usageAccounting?.close();
     // Detaching first fences remote permission callbacks before the local
     // interaction bridge settles its waiters during main-server shutdown.
@@ -1590,6 +1657,32 @@ export class ClaudeConversationHandle implements ConversationHandle {
     }
     const head = this.#messages.findIndex(({ uuid }) => uuid === compaction.preservedHeadUuid);
     return head >= 0 ? head : end;
+  }
+
+  /**
+   * A fresh launch proves that the process which ran a trailing unfinished
+   * turn is gone: no result will settle it. Claude Code may close it with a
+   * synthetic row when it resumes, but not necessarily before this read. A
+   * reattached query may still be running its turn and is never marked, nor
+   * is a turn the new process reports running.
+   */
+  #closeProcessLostTurn(): void {
+    if (this.#closed || this.#projectionInvalidated) return;
+    const { snapshot } = this.#projection;
+    const backendTurnId = snapshot.activeBackendTurnId;
+    if (snapshot.runState !== "running" || backendTurnId === undefined || this.#providerState !== "idle") return;
+    // Claude Code itself re-runs an interrupted turn when this is set.
+    if (environmentFlag(this.#childEnvironment.CLAUDE_CODE_RESUME_INTERRUPTED_TURN)) return;
+    const receipt = { applicationThreadId: this.binding.applicationThreadId, backendTurnId };
+    if (this.#settings.findTerminalReceipt(this.#scope, receipt)) return;
+    const terminalAt = this.#now();
+    this.#settings.writeTerminalReceipt(this.#scope, this.binding.applicationThreadId, {
+      backendTurnId, status: "interrupted", providerTerminalReason: CLAUDE_PROCESS_LOST_REASON,
+      terminalAt, now: terminalAt,
+    });
+    this.#refreshProjection(true);
+    this.#providerTurn = undefined;
+    this.#setRunState(this.#projection.snapshot.runState);
   }
 
   #installInitialMessages(messages: readonly SessionMessage[]): void {
@@ -1951,6 +2044,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   #consumeProviderState(state: "idle" | "running" | "requires_action"): void {
     const previous = this.#providerState;
     this.#providerState = state;
+    this.#providerStateReported = true;
     if (this.#initialHistoryLoaded) {
       if (state !== "idle") {
         // Claude began work while no Sedes input is awaiting its turn: a task
@@ -1961,6 +2055,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
         // Claude finished work that produced no result, for example a drain
         // that did not query the model.
         this.#endProviderTurn();
+      } else if (this.#stopConfirmation && !this.#hasSubmissionAwaitingStart(true)) {
+        // Claude went idle after Stop; its result, if any, preceded this.
+        this.#awaitStopConfirmation(this.#stopConfirmation.backendTurnId, STOP_IDLE_GRACE_MS);
       }
     }
     if ((previous === "idle") !== (state === "idle")) {
@@ -2182,6 +2279,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   }
 
   #setRunState(state: BackendConversationSnapshot["runState"], republish = false): void {
+    if (state !== "stopping") this.#clearStopConfirmation();
     if (this.#runState === state && !republish) return;
     this.#runState = state;
     this.#emit({
@@ -2687,6 +2785,11 @@ function liveCompaction(metadata: unknown): LiveCompaction {
 
 function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+/** Claude Code's reading of a boolean environment variable. */
+function environmentFlag(value: string | undefined): boolean {
+  return value !== undefined && ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
 function liveSessionMessage(

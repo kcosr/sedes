@@ -60,6 +60,15 @@ const CLAUDE_SYNTHETIC_MODEL = "<synthetic>";
 const CLAUDE_NO_RESPONSE_REQUESTED = "No response requested.";
 const UNANSWERED_TURN_NOTICE =
   "Claude Code exited before this turn finished and closed it without a response when the conversation resumed.";
+/**
+ * Terminal reasons Sedes writes itself, with no provider result. A fresh
+ * launch proves that the process running a trailing unfinished turn is gone.
+ * A Stop ends without a result once Claude reports idle or stays silent.
+ */
+export const CLAUDE_PROCESS_LOST_REASON = "process_lost";
+export const CLAUDE_INTERRUPT_UNCONFIRMED_REASON = "interrupt_unconfirmed";
+const PROCESS_LOST_NOTICE =
+  "Claude Code stopped before this turn finished. Sedes marked it interrupted when the conversation reopened.";
 const OPERATION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const CLAUDE_MESSAGE_TIMESTAMP_SCHEMA = z.iso.datetime();
@@ -1128,7 +1137,34 @@ function applyTerminalReceipts(
         itemsById[itemId] = terminalItem(item, candidate.status, completedAt);
       }
     }
+    if (candidate.status === "interrupted" && candidate.providerResultUuid === null &&
+        candidate.providerTerminalReason === CLAUDE_PROCESS_LOST_REASON) {
+      appendProcessLostNotice(turnsById, itemsById, candidate.backendTurnId);
+    }
   }
+}
+
+/** The process that ran this turn is gone; no native row records why it ended. */
+function appendProcessLostNotice(
+  turnsById: Record<string, BackendTurn>,
+  itemsById: Record<string, BackendItem>,
+  backendTurnId: string,
+): void {
+  const turn = turnsById[backendTurnId]!;
+  if (turn.orderedBackendItemIds.length >= MAXIMUM_BACKEND_ITEMS_PER_TURN) {
+    throw new ClaudeHistoryProjectionError("history_too_large");
+  }
+  // The next native slot: the process that could have used it is gone.
+  const sourceOrder = turn.orderedBackendItemIds.reduce((last, itemId) => {
+    const order = itemsById[itemId]!.sourceOrder;
+    return order % 2 === 0 ? Math.max(last, order) : last;
+  }, -2) + 2;
+  const backendItemId = stableId("claude-item-process-lost", backendTurnId);
+  itemsById[backendItemId] = {
+    backendItemId, backendTurnId, sourceOrder, semanticKind: "notice", status: "completed",
+    tone: "warning", text: boundText(PROCESS_LOST_NOTICE),
+  };
+  turnsById[backendTurnId] = { ...turn, orderedBackendItemIds: [...turn.orderedBackendItemIds, backendItemId] };
 }
 
 function terminalItem(
