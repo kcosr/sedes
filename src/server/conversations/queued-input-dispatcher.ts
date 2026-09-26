@@ -1550,7 +1550,22 @@ export class QueuedInputDispatcher {
       return;
     }
     if (options?.acceptanceOnly && reconciliation.status !== "accepted") return;
-    if (reconciliation.status === "unresolved" || reconciliation.status === "failed_unknown") return;
+    if (reconciliation.status === "unresolved") return;
+    if (reconciliation.status === "failed_unknown") {
+      // Tracking is terminal, so the head must not stay uncertain forever.
+      // As with a terminal Steer, the user drops it or restores it for an
+      // explicit resend; later entries wait for that decision.
+      this.#repository.database.transaction(() => {
+        this.#repository.failSubmitUnknown(scope, item.applicationThreadId, item.id, {
+          diagnostic: safeDiagnostic(
+            `Delivery outcome is unknown; the backend may already have received this input. Nothing was resent. Review the conversation, then dismiss it or restore it to send again. ${reconciliation.diagnostic.text}`,
+          ),
+          now: this.#clock.now(),
+        });
+      }).immediate();
+      await this.#emitQueueChanged(scope, item.applicationThreadId);
+      return;
+    }
     if (reconciliation.status === "accepted") {
       const completionIdentity = reconciliation.completionIdentity;
       this.#repository.database.transaction(() => {

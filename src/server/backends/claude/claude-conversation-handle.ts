@@ -295,6 +295,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
   #providerTurn: ProviderTurn | undefined;
   /** A non-ambient task finished; its notification can start the next turn. */
   #taskNotificationPending = false;
+  /** Tasks this query itself started; bounded, oldest first. */
+  readonly #tasksStartedThisQuery = new Set<string>();
   /** Live boundary marker UUID to the provider turn's first message ID. */
   readonly #providerTurnBoundaries = new Map<string, string>();
   #projection: ClaudeHistoryProjection;
@@ -1432,6 +1434,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
         this.#emitBackgroundActivity();
         return;
       }
+      if (message.subtype === "task_started") {
+        this.#tasksStartedThisQuery.add(message.task_id);
+        if (this.#tasksStartedThisQuery.size > 4096) this.#tasksStartedThisQuery.delete(this.#tasksStartedThisQuery.values().next().value!);
+      }
       if (message.subtype === "task_started" && this.#backgroundActivity.observeTaskStarted(message)) {
         this.#emitBackgroundActivity();
       }
@@ -1454,8 +1460,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
       }
       if (message.subtype === "task_notification") {
         if (!message.ambient && !message.skip_transcript) {
+          // A fresh query (a resume, not a reattachment) cannot end a task it
+          // never started: Claude is reporting work the previous process left
+          // unfinished. An in-process worker restart says so explicitly.
+          const orphaned = message.reason === "worker_restart" ||
+            (message.status !== "completed" && this.#session.reattached !== true && !this.#tasksStartedThisQuery.has(message.task_id));
           this.#consumeTaskTerminal({ nativeTaskId: message.task_id, nativeToolUseId: message.tool_use_id, status: message.status });
           this.#taskNotificationPending = true;
+          if (orphaned) this.#noticeOrphanedTask(message.task_id, message.uuid);
         }
         if (this.#backgroundActivity.settleTask(message.task_id)) {
           // Reevaluate idle retirement only after the durable receipt above.
@@ -1601,6 +1613,20 @@ export class ClaudeConversationHandle implements ConversationHandle {
     }
   }
 
+  /** On resume Claude stops or fails background work the previous process
+   * left unfinished and may relaunch it. Name each task, since its bookend
+   * alone reads like an ordinary stop and its result never arrives. */
+  #noticeOrphanedTask(nativeTaskId: string, uuid: string): void {
+    const description = this.#settings.listTaskLifecycleReceipts(this.#scope, this.binding.applicationThreadId, this.binding.backendConversationId)
+      .find(receipt => receipt.nativeTaskId === nativeTaskId)?.description;
+    this.#emit({ type: "notice", notice: {
+      id: `claude-task-orphaned:${uuid}`.slice(0, 160),
+      tone: "warning",
+      message: boundDisplayText(`Background task ${description ? `"${description}"` : nativeTaskId} did not finish before the previous Claude session ended, and its result was not reported. Claude may restart it; check its output before relying on it.`),
+      createdAt: new Date(this.#now()).toISOString(),
+    } });
+  }
+
   #consumeTaskTerminal(input: {
     nativeTaskId: string; nativeToolUseId?: string; status: "completed" | "failed" | "stopped";
   }): void {
@@ -1687,8 +1713,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
    */
   #watchProcessLostTurn(): void {
     const { snapshot } = this.#projection;
-    // Claude Code itself re-runs an interrupted turn when this is set.
-    if (snapshot.runState !== "running" || environmentFlag(this.#childEnvironment.CLAUDE_CODE_RESUME_INTERRUPTED_TURN)) return;
+    if (snapshot.runState !== "running") return;
     this.#processLostTurnId = snapshot.activeBackendTurnId;
     this.#closeProcessLostTurn(false);
   }
@@ -2858,10 +2883,6 @@ function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
 }
 
 /** Claude Code's reading of a boolean environment variable. */
-function environmentFlag(value: string | undefined): boolean {
-  return value !== undefined && ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
-}
-
 function liveSessionMessage(
   message: SDKMessage,
   compactSummary = false,

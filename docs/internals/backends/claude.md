@@ -62,7 +62,9 @@ keeps the admission journal of up to 256 queries it retired after a failure, so
 submission reconciliation still resolves their inputs. A query detached for 30
 minutes with nothing outstanding (no admitted or running input, no Claude
 activity or background work, no unacknowledged event, and no unanswered
-permission) is retired and resumes on demand. Archiving a thread whose runtime
+permission) is retired and resumes on demand. A query that still holds such
+retained work is never retired by eviction, this limit, or `retire`; it waits
+for an attachment to apply and acknowledge that work. Archiving a thread whose runtime
 is not loaded retires its query by session through the `retire` command, and
 the archive is refused while that query still has outstanding work. The host
 holds at most 32 sessions and fork launches together; an open beyond that is a
@@ -76,6 +78,29 @@ complete messages whose native identity and content match provider history.
 Unfinished or ambiguous streams, uncovered messages, and unsettled control or
 terminal evidence remain retained. Acknowledged transient progress notices are
 discarded; replaceable state retains its current value.
+
+Each retained event counts once toward a query's bound of 8,190 events and
+64 MiB, although an unacknowledged message is both a journal and a replay
+entry. While no main is attached, a plain streamed delta (text, thinking,
+tool-input JSON, or signature) folds into the immediately preceding delta of
+the same block if no main was ever offered that frame, live or in an
+attachment. Offered frames keep their exact sequences, because a main may have
+applied one without acknowledging it yet. Frames that carry a consumption
+stamp, time to first token, or any other field never fold. A long turn that
+runs while main is away therefore retains a few merged deltas rather than one
+frame per token.
+
+The runtime inspection lists the retained sessions that still hold work, live
+work first: a running turn (including one Claude started), a pending input or
+permission, background activity, or unacknowledged events. A running fork
+launch is not a session and never appears in it. Main maps each to
+its bound thread and opens it within the runtime budget whenever it inspects
+the runtime: within one 30-second maintenance pass of startup, after the
+service's controller changes, and for each lifecycle preview. Retained output
+is therefore applied and acknowledged without anyone opening the thread. The
+same inspection counts running turns, background agents and commands, pending
+permissions, and sessions with unacknowledged output for Stop, Restart, and
+Upgrade previews.
 
 Cleanup is independent of optional usage accounting. A failed accounting
 capture still withholds its event ACK. Disconnect stops connected reclamation;
@@ -358,10 +383,12 @@ has no terminal receipt gets an `interrupted` receipt. The receipt has the
 Sedes-owned reason `process_lost` and no result UUID. The projector adds a
 warning notice: "Claude Code stopped before this turn finished. Sedes marked it
 interrupted when the conversation reopened." A reattached persistent query is
-never watched, because its turn may still be running. A turn is also left
-alone when the child environment sets `CLAUDE_CODE_RESUME_INTERRUPTED_TURN`,
-because Claude Code then re-runs it. The receipt is write-once, so a later
-closure row or result cannot change the outcome.
+never watched, because its turn may still be running. Sedes withholds
+`CLAUDE_CODE_RESUME_INTERRUPTED_TURN` from every launch, even when the inherited
+environment sets it, so Claude Code never re-runs an interrupted turn, tools
+included, without a Sedes input; the user decides whether to resend. The
+receipt is write-once, so a later closure row or result cannot change the
+outcome.
 
 SDK 0.3.274 can emit intermediate results while draining background task
 notifications. Only successful empty zero-turn results carrying native
@@ -485,6 +512,18 @@ these system notifications, so receipts preserve observed terminal bookends
 across reload; they contain no child messages, command output, or live-state
 claim. Projection requires the exact parent tool call to remain in native
 history. Replaying a receipt cannot complete the main turn again.
+
+When Claude resumes a session whose previous process left background work
+unfinished, it ends each such task with a `stopped` or `failed`
+`task_notification`, before its initialization frame, and it may relaunch the
+task. An in-process worker restart adds `reason: "worker_restart"`; a new
+process resuming the session does not. Sedes therefore treats a non-completed
+notification in a fresh (not reattached) query for a task that query never
+started, or any `worker_restart` notification, as orphaned work. It records the
+bookend and shows a warning notice naming the task by its recorded
+description, or by its native ID, because the task's result never arrived.
+The provider's summary text is not shown.
+`claude-resume-orphan-native.test.ts` qualifies this on Claude Code 2.1.283.
 
 `background_tasks_changed` is the authoritative level inventory for live
 subagents, Bash commands, and other nonambient work. It maps to the shared
@@ -701,10 +740,12 @@ turn. Sedes reserves the child first, resumes the selected provider prefix, and
 records native lineage without sending a synthetic follow-up prompt.
 
 The generic thread **Fork** action resolves the newest completed turn while the
-source is idle and records `completed_turn_inclusive`. It skips completed turns
-that carry a `forkUnavailableReason`, so it never picks a turn Claude cannot
-fork at. Transcript and agent-tool forks continue to select an exact completed
-turn. Claude does not advertise `latest_provider_snapshot`.
+source is idle and records `completed_turn_inclusive`. Interrupted and failed
+turns are not completed, so they are never selected. If the newest completed
+turn carries a `forkUnavailableReason`, the fork fails with that reason; it
+never falls back to an older turn. Transcript and agent-tool forks continue to
+select an exact completed turn. Claude does not advertise
+`latest_provider_snapshot`.
 
 The projector marks a completed turn unforkable, with a user-facing reason, when
 it has no fork checkpoint: it ended without a final answer (for example on a
@@ -822,9 +863,11 @@ dead end and resent.
 On a remote runtime, an ordinary submission can reconcile as `failed_unknown`.
 This happens when the persistent owner reports that its session ended and the
 tip-correct history shows no acceptance: tracking is terminal, and
-consumption is unknown. The shared queue keeps that head uncertain, because
-only Steer adopts the terminal failed-item recovery. It therefore still blocks
-later queued input, and force reset is the remaining way to clear it.
+consumption is unknown. When the user reconciles the queue, or on recovery at
+startup, the shared queue fails that head with a "Claude may have received
+this; review the conversation" diagnostic. The user then dismisses it, deletes
+it, or restores it to the draft for an explicit resend; later queued input
+waits for that choice. Nothing is resent automatically.
 
 Persistent send admission returns a typed positive acceptance or a bounded
 pre-native refusal (busy, closed, or retention capacity). Main awaits that
@@ -834,13 +877,27 @@ queue's bounded invalid-state handling. Missing, malformed, or post-admission
 failure responses remain uncertain; they never prove the prompt was not sent.
 
 A persistent query's failure code survives event acknowledgment and is included
-in every attachment. Main drains retained output, then fails hydration with
-explicit backend-restart guidance. It must not infer query liveness from an
-unfinished transcript or recreate a native query merely because its failure
-event was acknowledged. Thread reset detaches the presentation; it does not
+in every attachment. Main drains retained output, then fails hydration and
+closes its handle with eviction, so the host retires the failed query once its
+output is acknowledged; reopening the thread then starts a fresh query. Main
+must not infer query liveness from an unfinished transcript or recreate a
+native query while the failed one is still resident. Thread reset detaches the presentation; it does not
 replace the remote owner. Use the confirmed backend Stop/Restart flow to review
 and abandon unresolved outcomes when necessary. Ordinary reattachment never
 replays an uncertain input or discards unknown background work.
+
+An operator's forced stop ends every session with a failure event, which is
+how an attached main learns its query is gone. A session with live work (a
+running turn, including one Claude started, a pending input or permission, or
+background activity) ends with `claude_persistent_operator_stopped`. A session
+whose work had settled ends with `claude_persistent_operator_stopped_settled`
+after its retained output, so an unacknowledged result remains its outcome
+rather than reading as interrupted. The abandonment evidence records each
+session's `liveWork`, background counts, and failure codes. An unforced stop proceeds only after the
+owner reports no work, but Claude can start work itself while the stop reads
+history. If any session has live work when the worker closes, the stop records
+before- and after-shutdown evidence marked `startedAfterConfirmation`, as a
+forced stop would.
 
 Force reset answers every pending Claude permission or question it abandons
 with a provider-side cancel, which Claude receives as a denial, and waits up to
@@ -933,6 +990,9 @@ normalized integration surface:
 - `claude-run-state-native.test.ts` qualifies the lifecycle and session-state
   frames described under runtime ownership against the actual executable and a
   loopback Messages fixture, including turns Claude starts itself;
+- `claude-resume-orphan-native.test.ts` kills a query while its background
+  command runs, resumes the session against a loopback Messages fixture, and
+  checks the notification that ends the orphaned task;
 - `claude-compaction-native.test.ts` makes the actual executable compact
   automatically against the loopback fixture, at a turn's start (keeping the
   new prompt) and mid-turn. It qualifies the live boundary, the synthetic

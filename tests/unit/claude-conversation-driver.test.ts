@@ -1254,6 +1254,42 @@ describe("ClaudeConversationBackendDriver", () => {
       retainedLeafUuid: answer.uuid, retainedPrefixCount: 2 });
   });
 
+  it("fails a latest-completed fork with the newest completed turn's reason instead of forking an older turn", async () => {
+    const sdk = fakeSdk();
+    const messages: SessionMessage[] = [user(operationId, "ordinary prompt"),
+      assistant("44444444-4444-4444-8444-444444444444", "ordinary answer"),
+      user("55555555-5555-4555-8555-555555555555", "structured output"),
+      { ...assistant("66666666-6666-4666-8666-666666666666", ""),
+        message: { role: "assistant", content: [{ type: "tool_use", id: "result-tool", name: "StructuredOutput", input: {} }] } },
+      { ...user("77777777-7777-4777-8777-777777777777", ""),
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "result-tool", content: "ok" }] } } as SessionMessage];
+    const [ordinary, structured] = projectClaudeHistory(messages).snapshot.orderedBackendTurnIds;
+    const terminalReceipts = [{ backendTurnId: structured!, status: "completed" as const,
+      providerTerminalReason: "success", providerResultUuid: "88888888-8888-4888-8888-888888888888", terminalAt: 2_000 }];
+    expect(projectClaudeHistory(messages, terminalReceipts).snapshot.turnsById[structured!])
+      .toMatchObject({ status: "completed", forkUnavailableReason: { text: expect.stringContaining("without a final answer") } });
+    sdk.getSessionInfo.mockImplementation(async (id) => ({ sessionId: id, summary: "Session", lastModified: 1, cwd: workspace.canonicalPath }));
+    sdk.getSessionMessages.mockImplementation(async () => messages);
+    const driver = createDriver(sdk, {
+      terminalReceipts: terminalReceipts as unknown as ReturnType<ClaudeThreadRepository["listTerminalReceipts"]>,
+    });
+    const resolve = (selection: Parameters<typeof driver.resolveBranchCheckpoint>[0]["selection"]) =>
+      driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
+        opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection });
+    for (const selection of [{ kind: "latest_completed" as const },
+      { kind: "selected_completed_turn" as const, backendTurnId: structured!, boundary: "completed_turn_inclusive" as const }]) {
+      await expect(resolve(selection)).rejects.toMatchObject({
+        category: "invalid_state",
+        backendCode: "claude_fork_checkpoint_unavailable",
+        safeMessage: expect.stringContaining("Claude cannot fork exactly after this turn"),
+      });
+    }
+    // The older ordinary turn is still forkable when selected explicitly.
+    const checkpoint = await resolve({ kind: "selected_completed_turn", backendTurnId: ordinary!, boundary: "completed_turn_inclusive" });
+    expect(JSON.parse(Buffer.from(checkpoint.opaqueReference, "base64url").toString()))
+      .toMatchObject({ backendTurnId: ordinary, retainedPrefixCount: 2 });
+  });
+
   it("forks a compacted conversation only after its latest summary and verifies the child from there", async () => {
     const sdk = fakeSdk();
     const copyTaskLifecycleReceiptsForFork = vi.fn(() => undefined);
@@ -1984,6 +2020,7 @@ function createDriver(
     readonly permissionPolicy?: ConstructorParameters<typeof ClaudeConversationBackendDriver>[0]["permissionPolicy"];
     readonly submissionDisposition?: ClaudeRuntimeClient["submissionDisposition"];
     readonly retireSession?: ClaudeRuntimeClient["retireSession"];
+    readonly terminalReceipts?: ReturnType<ClaudeThreadRepository["listTerminalReceipts"]>;
     readonly steerOperations?: ReadonlyMap<string, string | null>;
     readonly forgetUnconsumedSteerOperation?: ClaudeThreadRepository["forgetUnconsumedSteerOperation"];
     readonly childEnvironment?: Readonly<Record<string, string | undefined>>;
@@ -2092,7 +2129,7 @@ function createDriver(
       forgetUnconsumedSteerOperation: options.forgetUnconsumedSteerOperation ?? vi.fn(),
       copySteerOperationsForFork: vi.fn(),
       associateSteerOperation: vi.fn(),
-      listTerminalReceipts: vi.fn(() => []),
+      listTerminalReceipts: vi.fn(() => options.terminalReceipts ?? []),
       findTerminalReceipt: vi.fn(() => undefined),
       findUsageLedger: vi.fn(() => undefined),
       writeUsageLedger: vi.fn((_scope, applicationThreadId, usage) => ({

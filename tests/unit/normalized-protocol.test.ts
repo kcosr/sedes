@@ -889,6 +889,13 @@ describe("thread force-reset protocol", () => {
       warnings: [],
     };
     expect(threadForceResetImpactSchema.safeParse(impact).success).toBe(false);
+    expect(threadForceResetImpactSchema.safeParse({ ...impact, blockers }).success).toBe(true);
+    // Per-thread runtime background inventory is the only background contract.
+    expect(threadForceResetImpactSchema.safeParse({ ...impact, blockers,
+      backgroundActivity: { agents: 0, commands: 0, other: 0, unknownThreads: 0 } }).success).toBe(false);
+    expect(threadForceResetImpactSchema.safeParse({ ...impact, blockers,
+      affectedThreads: [{ threadId, title: "Thread", runtime: { runState: "idle",
+        backgroundActivity: { state: "known", agents: -1, commands: 0, other: 0 } } }] }).success).toBe(false);
     expect(
       threadForceResetImpactSchema.safeParse({
         ...impact,

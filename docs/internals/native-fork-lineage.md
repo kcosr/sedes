@@ -84,8 +84,10 @@ a nullable application `sourceTurnId`; Sedes does not mislabel it as one exact
 completed normalized turn. Pi and Claude do not advertise snapshot semantics,
 so their generic fork action resolves the newest completed turn. A backend may
 mark individual completed turns unforkable with a user-facing
-`forkUnavailableReason`; the fork button, the turn's fork capability, and
-latest-completed resolution all skip such turns. The agent
+`forkUnavailableReason`. The turn's fork button and fork capability show the
+reason, and a fork that selects such a turn, including a latest-completed fork
+whose newest completed turn is marked, fails with it rather than falling back
+to an older turn. The agent
 `thread.fork` tool remains an exact completed-turn operation. Grok does not
 advertise fork capability, so both browser and agent-tool fork requests fail
 closed before any native operation.
@@ -94,7 +96,7 @@ closed before any native operation.
 | --- | --- |
 | Pi | Exact selected completed turn; idle-only latest-completed selection. |
 | Codex | Exact selected completed turn and atomic latest-provider snapshot. |
-| Claude | Exact selected completed turn while idle with no background work; idle-only latest-completed selection that skips unforkable turns. |
+| Claude | Exact selected completed turn while idle with no background work; idle-only latest-completed selection that fails on an unforkable newest turn. |
 | Grok | Intentionally unsupported. |
 
 Cross-backend review requirements are defined in

@@ -830,6 +830,24 @@ its applied launch environment and report the pending definitions until an
 explicit provider restart. Initial observation must recover the retained
 fingerprint without launching a provider.
 
+Provider work can outlive main in a service-owned runtime that journals
+per-thread events until main acknowledges them. The runtime's administrative
+inspection then reports `retainedThreadIds`: the application threads whose
+retained work (a running turn, a pending interaction or input, or
+unacknowledged output) needs a main attachment. Whenever main inspects the
+runtime, which it does soon after startup, after the service's controller
+changes, and for every lifecycle preview, it opens those threads one at a time
+within the shared conversation-runtime budget. Their output is then applied and
+acknowledged instead of overflowing the owner's retention bound. A pass cut
+short at the budget retries at the next inspection. Inspection uses the
+existing recovery attachment and never launches a provider. The inspection
+may also report bounded `activity` counts (running turns, background work,
+pending interactions, and conversations with unacknowledged output) that
+interruption previews show; absent counts are not zero. Claude's persistent
+host reports both. Codex's runtime-wide attachment already records and
+acknowledges retained outcomes without a thread handle, and Pi, Grok, and
+local Claude workers end with main, so they report neither.
+
 **Execution** definitions are principal-owned Environment → Backend → Saved
 Agent → Thread layers. Capture definitions and provenance transactionally before
 native creation, fence the preview's configuration and agent revisions, and
@@ -2018,8 +2036,22 @@ and restoration to the draft provide user recovery; restoration itself does
 not send. Late exact consumption evidence may still accept an untouched,
 unacknowledged failed item; it must not revive one already restored or
 acknowledged by the user. A live or merely unreachable tracker remains unresolved. Codex/Pi
-exact-turn reconciliation and ordinary Submit retain their existing conservative
-uncertainty handling; they do not adopt this terminal Steer recovery path.
+exact-turn reconciliation retains its existing conservative uncertainty
+handling and does not adopt this terminal Steer recovery path.
+
+An ordinary queued Submit whose explicit or recovery reconciliation returns
+`failed_unknown` follows the same user recovery. Its uncertain head becomes a
+failed, unacknowledged item with a diagnostic that preserves the unknown
+outcome and asks the user to review the conversation first. It still blocks
+later queued input until the user dismisses, deletes, or restores it;
+restoration returns the text to the draft and sends nothing. The automatic
+dispatch check still closes uncertainty only on acceptance. Tracking is
+terminal, so there is no late-acceptance path for a failed Submit. `unresolved`
+keeps the head uncertain. Only Claude returns `failed_unknown` for Submit,
+when its remote delivery owner ended and tip-correct history shows no
+acceptance; Codex, Pi, and Grok return only accepted, not accepted, or
+unresolved, and a new backend must return `failed_unknown` only for terminally
+lost tracking.
 
 The same disposition applies explicitly to completion-callback delivery. Pi
 and Codex use their already-audited application delivery correlation and
@@ -2220,10 +2252,10 @@ A backend that cannot copy history exactly through a completed turn marks that
 turn with a bounded user-facing `forkUnavailableReason`. Currently only Claude
 does so, for turns without a final answer and turns before its latest
 compaction. The turn's fork action shows the reason instead of forking. The
-normalized actor and the backend then resolve `latest_completed` to the
-newest completed turn without such a reason. That turn is recorded as the
-lineage boundary, and the newer turn stays visibly marked, so this is not a
-silent fallback.
+normalized actor and the backend both resolve `latest_completed` to the newest
+completed turn; interrupted and failed turns are not completed. If that turn
+carries a reason, the fork fails with it before any provider call rather than
+falling back to an older turn.
 
 A definite fork failure that another fork of the same boundary would repeat,
 such as a deterministic history mismatch or an unsupported runtime, sets

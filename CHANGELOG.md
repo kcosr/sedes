@@ -19,7 +19,8 @@
 
 - Browser and packaged clients must use client protocol 123, which carries
   per-turn fork availability, restartable fork aborts, the **Discard this
-  fork** action, and the affected threads in the force reset preview.
+  fork** action, the affected threads in the force reset preview, and
+  background work in Stop, Restart, and Upgrade previews.
 
 - Sidecars must use runtime protocol 13, which serves `sedes mcp` and accepts
   Claude's Native agent-tool entry. Upgrade existing sidecars explicitly
@@ -95,6 +96,10 @@
   backend. Claude skips settings calls the live session already confirmed and
   applies sidecar events without one acknowledgement round trip each.
 
+- Sedes no longer passes an inherited `CLAUDE_CODE_RESUME_INTERRUPTED_TURN`
+  to Claude Code. A turn interrupted by a lost process is marked interrupted
+  instead of re-running its tools unattended; resend it to continue.
+
 ### Fixed
 
 - Create Claude forks with one locked-down Claude Code launch. It loads no
@@ -108,8 +113,8 @@
   source, with a reason on the fork action. A fork of an earlier turn whose
   background work had not finished is allowed; its child shows that the work
   was not carried over, instead of failing verification. Each turn Claude
-  cannot fork at shows why, and generic **Fork** picks the newest turn Claude
-  can fork at.
+  cannot fork at shows why, and generic **Fork** fails with that reason when
+  it is the newest completed turn instead of forking an older one.
 
 - Claude fork children inherit the source turns' usage and terminal results,
   and copy background task results only when the copied history shows them
@@ -126,8 +131,9 @@
 - Scope **Force reset** to the thread it starts from and its unfinished forks.
   Resetting a fork no longer resets its source and sibling forks or stops the
   source's running turn. The preview names each affected thread with its run
-  state and background work, and abandoned approvals and questions are
-  answered as denied at the provider.
+  state and background work and totals the background agents and commands it
+  may stop; a change in that work makes the preview stale. Abandoned approvals
+  and questions are answered as denied at the provider.
 
 - Release remote Claude queries that are no longer useful. A failed query is
   retired once its output is delivered, so reopening the thread no longer
@@ -176,6 +182,32 @@
 
 - Keep a conflicting Claude result from failing the thread; the first recorded
   outcome is kept.
+
+- Distinguish, in sidecar abandonment records, a remote Claude session whose
+  work had finished (its unacknowledged result is its outcome) from work the
+  stop interrupted. An automatic sidecar replacement that ends Claude work
+  started after its idle check now leaves an abandonment record.
+
+- Warn, naming each task, when a resumed Claude session reports background
+  work the previous session left unfinished; its result never arrived and
+  Claude may run it again.
+
+- Show background work before it is interrupted. Backend and environment
+  Stop, Restart, and Upgrade previews list running turns, background work,
+  pending approvals, and undelivered output that remote Claude reports,
+  including for threads nobody has open.
+
+- Stop a Claude message whose remote session ended unconfirmed from pausing
+  the queue indefinitely. **Reconcile delivery** now marks it failed with an
+  unknown outcome, so you can review the conversation and dismiss it or
+  restore it to send again; later queued messages wait for that choice.
+
+- Let a remote Claude turn run twice as long while main is away before its
+  retained output overflows. The sidecar counts each retained event once and
+  folds streamed text that no main has seen yet into fewer events. After a
+  restart or reconnection, Sedes now opens threads whose remote Claude work is
+  still running or undelivered, within the conversation-runtime budget, so
+  their output is applied without waiting for someone to open them.
 
 - Show a Claude task-notification turn as its own turn while it streams, as
   reload does. Existing threads re-identify those turns once on first load.

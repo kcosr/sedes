@@ -416,7 +416,8 @@ Provider capabilities determine when forking is available:
 - Claude forks require the source to be idle, with no background agents or
   commands still running in it. Some Claude turns cannot be forked at, such as
   a turn that ended without a final answer or one before Claude compacted the
-  conversation; the turn's fork action shows why.
+  conversation; the turn's fork action shows why. If the newest completed turn
+  is one of these, **Fork** explains why instead of forking an older turn.
 - Generic **Fork** may use a provider-supported latest snapshot; otherwise it
   uses the newest eligible completed turn.
 

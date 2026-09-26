@@ -637,13 +637,12 @@ export class ConversationActor {
         ? selection
         : (() => {
             const timeline = this.#projector.timeline();
-            // The newest turn that can be a fork boundary for this backend.
+            // The newest completed turn. If the backend marks it unforkable,
+            // the fork fails with that reason instead of using an older turn.
             const turnId = timeline.orderedTurnIds.findLast((candidate) => {
               const turn = timeline.turnsById[candidate];
               return (
-                turn?.status === "completed" &&
-                turn.endedBy === "agent_settled" &&
-                turn.forkUnavailableReason === undefined
+                turn?.status === "completed" && turn.endedBy === "agent_settled"
               );
             });
             const turn = turnId ? timeline.turnsById[turnId] : undefined;
@@ -779,6 +778,7 @@ export class ConversationActor {
       readonly status: string;
       readonly endedBy?: string;
       readonly revision: number;
+      readonly forkUnavailableReason?: { readonly text: string };
     },
     expectedRevision: number,
   ): void {
@@ -796,6 +796,14 @@ export class ConversationActor {
         retryable: false,
         crossedSubmissionBoundary: false,
         safeMessage: "Only a successfully completed turn can be forked.",
+      });
+    }
+    if (turn.forkUnavailableReason !== undefined) {
+      throw new BackendError({
+        category: "invalid_state",
+        retryable: false,
+        crossedSubmissionBoundary: false,
+        safeMessage: turn.forkUnavailableReason.text,
       });
     }
   }

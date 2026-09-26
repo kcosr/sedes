@@ -22,6 +22,10 @@ type Session = {
   id: string; cwd: string; authorityFingerprint: string; runtime: ClaudeRuntimeSession; starting: Promise<unknown>;
   admissionJournalComplete: boolean;
   events: Map<number, ClaudePersistentEvent>; replay: Map<number, ClaudePersistentEvent>; bytes: number; replayBytes: number; sequence: number;
+  /** Unacknowledged message events sit in both maps; retention counts them once. */
+  journalMessageBytes: number; journalMessageCount: number;
+  /** No main has been offered a sequence above this, live or in an attachment. */
+  offeredThrough: number;
   sends: Map<string, string>; pendingInputs: Map<string, Parameters<ClaudeRuntimeSession["send"]>[0]>; pendingInputBytes: number; permissionResponses: Map<string,string>; retiring?: Promise<void>; active: Set<string>; permissions: Map<string, Permission>;
   evicted?: boolean;
   /** Claude Code's own run state; work it starts itself keeps it non-idle. */
@@ -58,6 +62,8 @@ export class ClaudePersistentRuntimeHost {
   #cleanupUnproven = false;
   #frozen = false;
   #abandoning = false;
+  /** An unforced stop ended work that started after its confirmation. */
+  #handedOver = false;
   #inflight = 0;
   readonly #stoppedHistory = new Map<string, { info: Awaited<ReturnType<ClaudeRuntimeClient["getSessionInfo"]>>; present: boolean; messages: Awaited<ReturnType<ClaudeRuntimeClient["getSessionMessages"]>> }>();
   freezeAdmission(): void { this.#frozen = true; }
@@ -100,14 +106,42 @@ export class ClaudePersistentRuntimeHost {
       revision: String(this.#revision), blockers };
   }
 
+  /** Sessions whose work needs a main attachment, live work first, so a
+   * replacement main applies and acknowledges their output instead of letting
+   * it accumulate; and bounded activity counts for interruption previews. */
+  retainedWork() {
+    const sessions = [...this.#sessions.values()];
+    const live = sessions.filter(session => this.#hasLiveWork(session));
+    const unacknowledged = sessions.filter(session => !this.#hasLiveWork(session) && session.events.size > 0);
+    const background = { agents: 0, commands: 0, other: 0, unknownSessions: 0 };
+    for (const session of sessions) {
+      const snapshot = session.backgroundActivity.snapshot();
+      if (snapshot.state === "unknown") background.unknownSessions++;
+      background.agents += snapshot.agents; background.commands += snapshot.commands; background.other += snapshot.other;
+    }
+    return {
+      retainedSessionIds: [...live, ...unacknowledged].map(session => session.id),
+      activity: {
+        runningTurns: sessions.filter(session => session.active.size > 0 || session.providerState !== "idle").length,
+        pendingInteractions: sessions.reduce((count, session) => count + session.permissions.size, 0),
+        unacknowledgedSessions: sessions.filter(session => session.events.size > 0).length,
+        background,
+      },
+    };
+  }
+
   abandonmentEvidence() {
     return { ...this.snapshot(), sessionCount: this.#sessions.size,
       sessions: [...this.#sessions.values()].slice(0, 256).map(session => ({ sessionId: session.id,
         providerState: session.providerState,
+        // Settled sessions hold only unacknowledged output, possibly a result.
+        liveWork: this.#hasLiveWork(session),
+        background: (({ state, agents, commands, other }) => ({ state, agents, commands, other }))(session.backgroundActivity.snapshot()),
         activeOperationIds: [...session.active], pendingInputIds: [...session.pendingInputs.keys()],
         retainedEventCount: session.events.size,
         events: [...session.events.values()].slice(0, 256).map(event => ({ sequence: event.sequence, kind: event.payload.kind,
           ...(event.payload.kind === "message" ? { messageType: event.payload.message.type } : {}),
+          ...(event.payload.kind === "failed" ? { code: event.payload.code } : {}),
           ...(event.payload.kind === "permission" ? { requestId: event.payload.request.options.requestId, toolUseID: event.payload.request.options.toolUseID } : {}) })),
       })) };
   }
@@ -119,12 +153,17 @@ export class ClaudePersistentRuntimeHost {
       await this.input.services.recordAbandonment({ resourceId: this.runtimeId, kind: "claude_agent_sdk", reason,
         evidence: { phase: "before_shutdown", ...this.abandonmentEvidence() } });
       this.#abandoning = true;
+      const interrupted = new Set([...this.#sessions.values()].filter(session => this.#hasLiveWork(session)));
       for (const session of this.#sessions.values()) {
         for (const permission of session.permissions.values()) {
           const payload = permission.event.payload;
           if (payload.kind === "permission") permission.resolve({ behavior: "deny", message: "The operator stopped this runtime.", toolUseID: payload.request.options.toolUseID });
         }
-        this.#fail(session, "claude_persistent_operator_stopped");
+        // Every session ends: its failure event is how an attached main learns
+        // the query is gone. A settled session's retained output, including an
+        // unacknowledged result, remains its outcome; its code says it was
+        // stopped after settling rather than interrupted.
+        this.#fail(session, interrupted.has(session) ? "claude_persistent_operator_stopped" : "claude_persistent_operator_stopped_settled");
       }
     }
     if (!this.#runtimeStopped) {
@@ -143,6 +182,13 @@ export class ClaudePersistentRuntimeHost {
         if (historyBytes > 64 * 1024 * 1024) throw new Error("claude_persistent_recovery_history_capacity_exceeded");
         this.#stoppedHistory.set(session.id, { info, present, messages });
       }
+      // Claude can start work itself after an unforced stop was confirmed
+      // idle (a notification, a scheduled wake-up). Ending it is still a hard
+      // handover, so it leaves the same evidence as an operator's forced stop.
+      const handover = !force && [...this.#sessions.values()].some(session => this.#hasLiveWork(session));
+      this.#handedOver = handover;
+      if (handover) await this.input.services.recordAbandonment({ resourceId: this.runtimeId, kind: "claude_agent_sdk", reason,
+        evidence: { phase: "before_shutdown", startedAfterConfirmation: true, ...this.abandonmentEvidence() } });
       this.#closing = true;
       try { await this.input.close(); }
       catch (error) {
@@ -169,8 +215,8 @@ export class ClaudePersistentRuntimeHost {
     // Native cleanup can emit terminal or permission receipts while awaited.
     // Proven termination and application adoption are separate obligations.
     if (!force && [...this.#sessions.values()].some(session => this.#hasUnsettledOutcomes(session))) throw new SidecarResourceHandoffPendingError();
-    if (force) await this.input.services.recordAbandonment({ resourceId: this.runtimeId, kind: "claude_agent_sdk", reason,
-      evidence: { phase: "after_shutdown", ...this.abandonmentEvidence() } });
+    if (force || this.#handedOver) await this.input.services.recordAbandonment({ resourceId: this.runtimeId, kind: "claude_agent_sdk", reason,
+      evidence: { phase: "after_shutdown", ...(force ? {} : { startedAfterConfirmation: true }), ...this.abandonmentEvidence() } });
     this.#closed = true;
     this.#stopResidencySweep();
     this.#stoppedHistoryPager.close();
@@ -301,6 +347,7 @@ export class ClaudePersistentRuntimeHost {
         if (event) {
           session.events.delete(event.sequence);
           session.bytes -= eventSize(event);
+          if (event.payload.kind === "message") { session.journalMessageBytes -= eventSize(event); session.journalMessageCount--; }
           const currentReplay = session.replay.get(event.sequence);
           if (currentReplay) {
             const previous = [...session.replay.values()].filter(retained => retained.sequence < event.sequence).at(-1);
@@ -364,7 +411,7 @@ export class ClaudePersistentRuntimeHost {
           if (session.runtime.closed || session.failureCode) return { accepted: false, code: "claude_persistent_query_closed" };
           if (session.active.size && command.request.priority !== "next") return { accepted: false, code: "claude_persistent_query_busy" };
           const inputBytes = Buffer.byteLength(JSON.stringify(command.request.content), "utf8");
-          if (session.bytes + session.replayBytes + session.pendingInputBytes + inputBytes > (this.input.maximumEventBytes ?? 64 * 1024 * 1024)) return { accepted: false, code: "claude_persistent_input_capacity_exceeded" };
+          if (retainedBytes(session) + session.pendingInputBytes + inputBytes > (this.input.maximumEventBytes ?? 64 * 1024 * 1024)) return { accepted: false, code: "claude_persistent_input_capacity_exceeded" };
           if (session.sends.size >= 16384) return { accepted: false, code: "claude_persistent_operation_capacity_exceeded" };
           session.sends.set(operationId, fingerprint); session.active.add(operationId); session.pendingInputs.set(operationId, command.request as Parameters<ClaudeRuntimeSession["send"]>[0]); session.pendingInputBytes += inputBytes; this.#revision++;
           try { await session.runtime.send(command.request as Parameters<ClaudeRuntimeSession["send"]>[0]); }
@@ -462,6 +509,7 @@ export class ClaudePersistentRuntimeHost {
       onFailure: () => this.#fail(created, "claude_persistent_query_failed"),
     });
     created = { backgroundActivity: new ClaudeBackgroundActivity(), id: request.sessionId, cwd: request.cwd, authorityFingerprint: queryAuthorityFingerprint(request), runtime, starting: Promise.resolve(), events: new Map(), replay: new Map(), bytes: 0, replayBytes: 0, sequence: 0,
+      journalMessageBytes: 0, journalMessageCount: 0, offeredThrough: 0,
       nextHistoryRead: 0, historyBackoff: 0, historyPressure: false, historyCandidatesDirty: true, hasHistoryCandidates: false, rewriteGeneration: 0, streamStopSequence: 0, replayStateSequences: new Map(),
       admissionJournalComplete: request.launch === "new",
       terminalResultSequences: new Set(), sends: new Map(), pendingInputs: new Map(), pendingInputBytes: 0, commandsInvalidated: false, permissionResponses: new Map(), active: new Set(), permissions: new Map(),
@@ -492,6 +540,8 @@ export class ClaudePersistentRuntimeHost {
     if (!this.#closing && !this.#runtimeStopped && session.runtime.closed && !session.failureCode) this.#fail(session, "claude_persistent_query_closed");
     session.evicted = false;
     session.listener = listener; session.epoch = epoch; session.detachedAt = undefined;
+    // The response below offers every retained event to this main.
+    session.offeredThrough = session.sequence;
     this.#scheduleHistorySweep(session);
     const { actualModel: initialModel, ...initialization } = session.runtime.initialization!;
     const actualModel = session.model === undefined ? initialModel : session.model;
@@ -550,7 +600,9 @@ export class ClaudePersistentRuntimeHost {
   async #retireIdle(session: Session): Promise<void> {
     if (session.retiring) return await session.retiring;
     if (this.#runtimeStopped || this.#closed) return;
-    if (!session.evicted || session.listener || session.active.size || session.providerState !== "idle" || session.backgroundActivity.active || session.backgroundActivity.retirementBlocked || session.events.size || session.permissions.size || session.pendingInputs.size) return;
+    // Retained work (live work or unacknowledged output) keeps the query for
+    // an attachment; eviction, the residency limit, and retire all wait for it.
+    if (!session.evicted || session.listener || this.#hasLiveWork(session) || session.events.size) return;
     // The application explicitly evicted an idle, fully acknowledged query.
     // Its transcript lives in provider history; replay exists only for a
     // retained attachment and must not keep an evicted subprocess resident.
@@ -651,15 +703,36 @@ export class ClaudePersistentRuntimeHost {
     this.#event(session, { kind: "failed", code }, true);
   }
   #event(session: Session, payload: ClaudePersistentEvent["payload"], reserve = false, beforePublish?: (event: ClaudePersistentEvent) => void): ClaudePersistentEvent {
-    const event = claudePersistentEventSchema.parse({ sessionId: session.id, sequence: ++session.sequence, payload });
-    const size = eventSize(event);
-    if (!reserve && (session.bytes + session.replayBytes + session.pendingInputBytes + size * 2 > (this.input.maximumEventBytes ?? 64 * 1024 * 1024) || session.events.size + session.replay.size >= 8190)) {
+    let event = claudePersistentEventSchema.parse({ sessionId: session.id, sequence: ++session.sequence, payload });
+    // While no main is attached, a streamed delta folds into the immediately
+    // preceding delta if no main was ever offered that frame. Offered frames
+    // keep their exact sequences: a main may have applied one without
+    // acknowledging it yet, and a merged replay would repeat its text.
+    const previous = session.listener ? undefined : session.events.get(event.sequence - 1);
+    const merged = previous && previous.sequence > session.offeredThrough && session.replay.get(previous.sequence) === previous
+      ? coalesceUnofferedDelta(previous, event) : undefined;
+    const released = merged && previous ? eventSize(previous) : 0;
+    const size = eventSize(merged ?? event);
+    // Each retained event counts once, although an unacknowledged message is
+    // both a journal entry and a replay entry.
+    if (!reserve && (retainedBytes(session) - released + session.pendingInputBytes + size > (this.input.maximumEventBytes ?? 64 * 1024 * 1024) ||
+        retainedCount(session) - (merged ? 1 : 0) >= CLAUDE_PERSISTENT_RETAINED_EVENT_LIMIT)) {
       this.#fail(session, "claude_persistent_event_capacity_exceeded");
       void session.runtime.close().catch(() => { this.#cleanupUnproven = true; this.#revision++; });
       throw new Error("claude_persistent_event_capacity_exceeded");
     }
+    if (merged && previous) {
+      session.events.delete(previous.sequence); session.replay.delete(previous.sequence);
+      session.bytes -= released; session.replayBytes -= released;
+      session.journalMessageBytes -= released; session.journalMessageCount--;
+      event = merged;
+    }
     session.events.set(event.sequence, event); session.bytes += size; this.#revision++;
-    if (payload.kind === "message") { session.replay.set(event.sequence, event); session.replayBytes += size; }
+    if (payload.kind === "message") {
+      session.replay.set(event.sequence, event); session.replayBytes += size;
+      session.journalMessageBytes += size; session.journalMessageCount++;
+    }
+    if (session.listener) session.offeredThrough = event.sequence;
     beforePublish?.(event);
     try { session.listener?.(event); } catch { this.#unlisten(session); }
     return event;
@@ -838,6 +911,11 @@ export class ClaudePersistentRuntimeHost {
       finally { signal.removeEventListener("abort", abort); }
     };
   }
+  /** Work the provider is still doing or waiting on, as opposed to settled output. */
+  #hasLiveWork(session: Session): boolean {
+    return session.active.size > 0 || session.pendingInputs.size > 0 || session.providerState !== "idle" || session.permissions.size > 0 ||
+      session.backgroundActivity.active || session.backgroundActivity.retirementBlocked;
+  }
   #hasUnsettledOutcomes(session: Session): boolean {
     return [...session.events.values()].some(event => event.payload.kind !== "permission");
   }
@@ -869,6 +947,25 @@ function isBackgroundInventory(event: ClaudePersistentEvent): boolean {
 }
 function permissionKey(identity: { requestId: string; toolUseID: string }): string { return JSON.stringify([identity.requestId, identity.toolUseID]); }
 function eventSize(event: ClaudePersistentEvent): number { return Buffer.byteLength(JSON.stringify(event), "utf8"); }
+/** Distinct retained events. An attachment offers at most this many, within
+ * its 8,192-event wire bound (a reserved failure event may follow). */
+export const CLAUDE_PERSISTENT_RETAINED_EVENT_LIMIT = 8190;
+function retainedBytes(session: Session): number { return session.bytes + session.replayBytes - session.journalMessageBytes; }
+function retainedCount(session: Session): number { return session.events.size + session.replay.size - session.journalMessageCount; }
+
+/** Only plain delta frames fold before any main sees them. A consumption stamp,
+ * time-to-first-token, or any unreviewed field keeps the frame exact. */
+const plainStreamEventKeys = ["event", "parent_tool_use_id", "session_id", "type", "uuid"].join();
+function coalesceUnofferedDelta(previous: ClaudePersistentEvent, current: ClaudePersistentEvent): ClaudePersistentEvent | undefined {
+  if (previous.payload.kind !== "message" || current.payload.kind !== "message" || previous.payload.consumedTurnRootUuid || current.payload.consumedTurnRootUuid) return undefined;
+  const keys = (value: unknown) => { const fields = object(value); return fields ? Object.keys(fields).sort().join() : undefined; };
+  const plain = (value: unknown) => {
+    const message = object(value); const frame = object(message?.event); const delta = object(frame?.delta);
+    return keys(message) === plainStreamEventKeys && keys(frame) === "delta,index,type" && delta !== undefined && Object.keys(delta).length === 2;
+  };
+  if (!plain(previous.payload.message) || !plain(current.payload.message)) return undefined;
+  return coalesceDelta(previous, current);
+}
 
 /** Merge only adjacent native delta fragments; lifecycle/index/type boundaries
  * remain ordered. Only acknowledged fragments merge. The journal retains original frames for a surviving

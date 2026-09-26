@@ -1656,6 +1656,26 @@ export class QueuedInputRepository {
     })();
   }
 
+  /** Terminal tracking without proof either way. The failed head stays
+   * unacknowledged, so the user drops, deletes, or restores it; nothing resends. */
+  failSubmitUnknown(
+    scope: RequestScope,
+    applicationThreadId: string,
+    id: string,
+    input: { readonly diagnostic: string; readonly now: number },
+  ): QueuedInputRecord {
+    return this.database.transaction(() => {
+      const item = this.get(scope, applicationThreadId, id);
+      if (item.state !== "uncertain" || item.deliveryMode !== "submit") {
+        throw new DomainError(
+          "invalid_transition",
+          "The queued input changed before its unknown outcome was recorded.",
+        );
+      }
+      return this.#markFailed(scope, applicationThreadId, item, "uncertain", input.diagnostic, input.now);
+    })();
+  }
+
   failSteerUnknown(
     scope: RequestScope,
     applicationThreadId: string,

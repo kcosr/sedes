@@ -708,7 +708,11 @@ still runs on main Sedes and does not survive its shutdown.
 
 **Disconnect** drops the main connection and persists that preference without
 stopping remote work. **Stop**, **Restart**, and **Upgrade and restart** operate
-on the service and require a current impact check. Intentional Disconnect/Stop
+on the service and require a current impact check. For a provider runtime
+that reports its work, such as remote Claude, the check lists running turns,
+background agents and commands, pending approvals, and conversations with
+undelivered output, including conversations nobody has open, as well as
+loaded threads that still have background work. Intentional Disconnect/Stop
 survives main restart and is never overridden by background discovery or an
 automatic upgrade. An unreachable stop reports uncertainty, not confirmed cleanup.
 
@@ -726,7 +730,9 @@ when provider state is unknown; retained outcomes do not veto it. Provider-nativ
 history remains in its existing store. Bounded operation identity and disposition
 metadata is saved under the scoped service directory’s `abandoned-work/` directory
 on a best-effort basis; this is diagnostic evidence, not a replayable transcript
-or proof that an uncertain mutation succeeded. Archive failures are logged and
+or proof that an uncertain mutation succeeded. An automatic replacement that
+ends Claude work started after its idle check, for example a turn Claude began
+itself, records the same evidence marked `startedAfterConfirmation`. Archive failures are logged and
 do not block Stop. The archive retains at most 128 files and caps each evidence
 payload at 1 MiB. Once full it logs `sidecar_abandonment_capacity_exceeded` and
 stops recording new evidence. Back up records you need, then remove reviewed

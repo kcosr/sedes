@@ -704,16 +704,29 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         ),
       );
       // The newest successfully completed turn, chosen exactly as the actor
-      // chose the application turn it records; it must itself be forkable.
-      const backendTurnId =
-        input.selection.kind === "selected_completed_turn"
-          ? input.selection.backendTurnId
+      // chose the application turn it records. An unforkable turn fails with
+      // its reason; the fork never falls back to an older turn.
+      const selection = input.selection;
+      const selectedTurn =
+        selection.kind === "selected_completed_turn"
+          ? projection.usageTurns.find(
+              (turn) => turn.backendTurnId === selection.backendTurnId,
+            )
           : projection.usageTurns.findLast(
               (turn) =>
-                turn.status === "completed" &&
-                turn.endedBy === "agent_settled" &&
-                turn.forkUnavailableReason === undefined,
-            )?.backendTurnId;
+                turn.status === "completed" && turn.endedBy === "agent_settled",
+            );
+      if (selectedTurn?.forkUnavailableReason !== undefined) {
+        throw claudeError(
+          "invalid_state",
+          selectedTurn.forkUnavailableReason.text,
+          "claude_fork_checkpoint_unavailable",
+        );
+      }
+      const backendTurnId =
+        selection.kind === "selected_completed_turn"
+          ? selection.backendTurnId
+          : selectedTurn?.backendTurnId;
       const retainedLeafUuid = backendTurnId
         ? projection.terminalCheckpointUuidByBackendTurnId.get(backendTurnId)
         : undefined;

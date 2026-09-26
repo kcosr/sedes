@@ -51,6 +51,42 @@ function runtimeDescription(
     : "Loaded runtime will be replaced.";
 }
 
+function countLabel(count: number, singular: string, plural: string): string | undefined {
+  return count === 0 ? undefined : `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
+}
+
+/** Totals of the background work the affected loaded runtimes report. */
+function backgroundSummary(
+  threads: ThreadForceResetImpact["affectedThreads"],
+): React.JSX.Element | null {
+  const total = { agents: 0, commands: 0, other: 0, unknownThreads: 0 };
+  for (const { runtime } of threads) {
+    const activity = runtime?.backgroundActivity;
+    if (!activity) continue;
+    total.agents += activity.agents;
+    total.commands += activity.commands;
+    total.other += activity.other;
+    if (activity.state === "unknown") total.unknownThreads++;
+  }
+  const counts = [
+    countLabel(total.agents, "background agent", "background agents"),
+    countLabel(total.commands, "background command", "background commands"),
+    countLabel(total.other, "other background task", "other background tasks"),
+  ].filter((label): label is string => label !== undefined);
+  if (counts.length === 0 && total.unknownThreads === 0) return null;
+  return (
+    <p data-testid="force-reset-background">
+      {counts.length > 0
+        ? `Running in the affected conversations: ${counts.join(", ")}. Replacing their runtimes may stop this work.`
+        : null}
+      {counts.length > 0 && total.unknownThreads > 0 ? " " : null}
+      {total.unknownThreads > 0
+        ? `Background work is unknown in ${total.unknownThreads === 1 ? "one conversation" : `${total.unknownThreads.toLocaleString()} conversations`}.`
+        : null}
+    </p>
+  );
+}
+
 export function ForceResetDialog({
   open,
   onOpenChange,
@@ -230,6 +266,7 @@ export function ForceResetDialog({
                       </li>
                     ))}
                   </ul>
+                  {backgroundSummary(impact.affectedThreads)}
                 </>
               ) : (
                 <p role="status">No unresolved Sedes work was found.</p>

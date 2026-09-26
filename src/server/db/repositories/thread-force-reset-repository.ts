@@ -763,7 +763,9 @@ export class ThreadForceResetRepository {
           !threadRunStateSchema.safeParse(runtime.runState).success ||
           (runtime.activeTurnId !== undefined &&
             (runtime.activeTurnId.length === 0 ||
-              runtime.activeTurnId.length > 240))
+              runtime.activeTurnId.length > 240)) ||
+          (runtime.backgroundActivity !== undefined &&
+            !backgroundActivitySchema.safeParse(runtime.backgroundActivity).success)
         ) {
           throw new DomainError(
             "conflict",
@@ -771,15 +773,6 @@ export class ThreadForceResetRepository {
           );
         }
         runtimeThreads.add(runtime.threadId);
-        if (
-          runtime.backgroundActivity !== undefined &&
-          !backgroundActivitySchema.safeParse(runtime.backgroundActivity).success
-        ) {
-          throw new DomainError(
-            "conflict",
-            "The conversation-runtime force-reset evidence is invalid or stale.",
-          );
-        }
         const normalized = {
           kind: "conversation_runtime" as const,
           threadId: runtime.threadId,
@@ -797,6 +790,7 @@ export class ThreadForceResetRepository {
           kind: normalized.kind,
           id: normalized.generation,
           threadId: normalized.threadId,
+          // A changed background inventory makes an earlier preview stale.
           state: JSON.stringify([
             normalized.runState,
             normalized.activeTurnId ?? null,

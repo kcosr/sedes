@@ -83,6 +83,9 @@ import { RuntimeBackedQueuedInputConversationGateway } from "./conversations/que
 import { QueuedInputDispatcher } from "./conversations/queued-input-dispatcher.js";
 import { ThreadCompletionCallbackDispatcher } from "./conversations/thread-completion-callback-dispatcher.js";
 import { reportBackgroundError } from "./report-background-error.js";
+import { attachRetainedThreads } from "./runtime/retained-provider-work.js";
+import { describeBackgroundActivity, describeRuntimeActivity } from "./configuration-admin/runtime-activity-description.js";
+import { hasOutstandingBackgroundActivity } from "../shared/protocol/background-activity.js";
 import {
   ActorBackedThreadApplicationConversationReader,
   ThreadApplicationService,
@@ -1932,6 +1935,27 @@ export async function startProductionApplication(
       if (!administration) observedBackends.delete(id);
       return administration;
     };
+    // Provider work that outlived main (or a lost connection) in a
+    // service-owned runtime is attached when an observation reports it, so
+    // its output is applied and acknowledged instead of accumulating. A pass
+    // cut short at the runtime budget retries at the next observation.
+    const retainedAttachments = new Set<string>();
+    const attachRetainedWork = (backendId: string): void => {
+      const threadIds = observedBackends.get(backendId)?.retainedThreadIds ?? [];
+      if (threadIds.length === 0 || retainedAttachments.has(backendId) || !runtimes) return;
+      const coordinator = runtimes;
+      retainedAttachments.add(backendId);
+      const admitted = discoveryOperations.admit(async signal => {
+        const result = await attachRetainedThreads({ threadIds, signal,
+          acquire: threadId => coordinator.acquire(scope, threadId),
+          report: (context, error) => reportBackgroundError(`Backend ${backendId}: ${context}`)(error) });
+        const owned = moduleRuntimes.get(backendId);
+        if (!result.complete && owned) remoteBackendObservations.delete(owned);
+      });
+      if (!admitted) { retainedAttachments.delete(backendId); return; }
+      void admitted.catch(reportBackgroundError(`Backend ${backendId} retained work attachment`))
+        .finally(() => retainedAttachments.delete(backendId));
+    };
     const captureAdministrativeResource = async (record: ConfigurationRuntimeState, refresh: boolean, refreshProvider = true) => {
       const current = configurationRepository.get(scope);
       const id = record.resourceId;
@@ -1949,7 +1973,7 @@ export async function startProductionApplication(
           // impact token. The independent management status still works when a
           // provider runtime cannot be recovered or speaks an older dialect.
           for (const backend of (refreshProvider ? current.configuration.backends : []).filter(backend => current.configuration.targets.some(target => target.backendInstanceId === backend.id && target.executionEnvironmentId === id))) {
-            try { const control = backendHasRemoteProvider(backend.id) ? await recoverBackendAdministration(backend.id) : moduleRuntimes.get(backend.id)?.administration; if (control) observedBackends.set(backend.id, await control.inspect()); }
+            try { const control = backendHasRemoteProvider(backend.id) ? await recoverBackendAdministration(backend.id) : moduleRuntimes.get(backend.id)?.administration; if (control) { observedBackends.set(backend.id, await control.inspect()); attachRetainedWork(backend.id); } }
             catch { /* Stable management inventory remains authoritative below. */ }
           }
           try { observedServices.set(id, await owner.inspectService(managementSignal()) ?? null); observationFailures.delete(key); }
@@ -1959,6 +1983,11 @@ export async function startProductionApplication(
         const terminalImpact = terminalService.impact(scope, id);
         const blockers = service?.resources.filter(item => item.state !== "idle" || item.blockers.length > 0) ?? [];
         interruptions.push(...blockers.map(item => `${item.kind} ${item.resourceId} (${item.state}): ${item.blockers.join(", ") || "no additional blockers"}`));
+        // Provider-reported work, including conversations nobody has open.
+        for (const backend of current.configuration.backends.filter(backend => current.configuration.targets.some(target => target.backendInstanceId === backend.id && target.executionEnvironmentId === id))) {
+          const activity = describeRuntimeActivity(observedBackends.get(backend.id)?.activity);
+          if (activity) interruptions.push(`${backend.label}: ${activity}.`);
+        }
         if (terminalImpact.liveCount) interruptions.push(`${terminalImpact.liveCount} live terminal(s) will be interrupted.`);
         if (terminalImpact.unknownCount) interruptions.push(`${terminalImpact.unknownCount} terminal(s) have unconfirmed process state.`);
         const remote = definition !== undefined && definition.kind !== "local";
@@ -2005,7 +2034,7 @@ export async function startProductionApplication(
           observation.pending = (async () => {
             try {
               administration = remote ? await recoverBackendAdministration(id) : owned?.administration;
-              if (administration) observedBackends.set(id, await administration.inspect());
+              if (administration) { observedBackends.set(id, await administration.inspect()); attachRetainedWork(id); }
               observationFailures.delete(key);
             } catch (error) {
               observationFailures.set(key, observationFailure(error));
@@ -2023,9 +2052,15 @@ export async function startProductionApplication(
           appliedStartupEnvironmentFingerprints.set(id, backendObservation.startupEnvironmentFingerprint);
         }
         const loaded = await backendThreads(id);
-        const active = loaded.filter(item => item.runState !== "idle");
-        interruptions.push(...active.map(item => `Thread ${item.threadId}: ${item.runState}`));
+        // Background work outlives a settled turn and still ends with its runtime.
+        const active = loaded.filter(item => item.runState !== "idle" || hasOutstandingBackgroundActivity(item.backgroundActivity));
+        interruptions.push(...active.map(item => {
+          const background = describeBackgroundActivity(item.backgroundActivity);
+          return `Thread ${item.threadId}: ${item.runState}${background ? `; ${background}` : ""}`;
+        }));
         interruptions.push(...(backendObservation?.blockers ?? []).map(blocker => `Provider resource: ${blocker}`));
+        const providerActivity = describeRuntimeActivity(backendObservation?.activity);
+        if (providerActivity) interruptions.push(`Provider activity: ${providerActivity}.`);
         const intentionallyAbsent = !definition?.enabled || record.preference !== "automatic";
         const recoveryRequired = ownershipRecovery(key, backendPreparationFailures.get(id));
         const applied = intentionallyAbsent ? !owned && (record.preference !== "stopped" || !remote || backendPresence.get(id) === false) : appliedBackendRevisions.get(id) === record.desiredRevision && Boolean(owned) && !startupEnvironmentPending(id) &&

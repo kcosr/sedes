@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, expect, it, vi } from "vitest";
 import type { BackendRuntimeRecoveryContext } from "../../src/server/backends/module.js";
 import { BackendRuntimeControlRejectedError } from "../../src/server/backends/runtime-control.js";
@@ -28,7 +29,8 @@ async function fixture() {
   await carrier.start();
   const release = vi.fn();
   const context: BackendRuntimeRecoveryContext = {
-    database: {} as BackendRuntimeRecoveryContext["database"], scope,
+    // No application thread is bound to these fixture sessions.
+    database: { prepare: () => ({ get: () => undefined }) } as unknown as BackendRuntimeRecoveryContext["database"], scope,
     instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "claude_agent_sdk", label: "Claude", enabled: false, configurationRevision: 0, protocolRelease: "0.3.274" },
     connections: [{ id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template", kind: "claude_agent_sdk", backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId, label: "Claude", enabled: false, configurationRevision: 0 }],
     sidecarRuntime: { acquireRecovery: vi.fn(async () => ({ channel: carrier.mainChannel, controllerEpoch, serviceIncarnation: services.serviceIncarnation, closed: new Promise(() => {}), release })) },
@@ -52,6 +54,44 @@ it("recovers only existing providers and releases every administrative attachmen
   await expect(recoverClaudeRuntimeAdministration({ context: f.context, configuration })).resolves.toBeUndefined();
   expect(f.createRuntime).toHaveBeenCalledOnce();
   expect(f.release).toHaveBeenCalledTimes(6);
+});
+
+it("reports retained work for a replacement main, live work first, mapped to this backend's bound threads", async () => {
+  const f = await fixture();
+  const runtimeId = await f.connection.ensure(configuration);
+  const host = f.hosts.get(runtimeId);
+  const authority = { runtimeId, controllerEpoch: f.controllerEpoch };
+  const [unacknowledged, running, settled, unbound] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+  const listener = vi.fn();
+  for (const sessionId of [unacknowledged, running, settled, unbound]) {
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
+    await host.execute({ ...authority, action: "detach", request: { sessionId } }, listener);
+  }
+  const native = (sessionId: string) => f.sessions.find(session => session.options.sessionId === sessionId)!;
+  await host.execute({ ...authority, action: "send", request: { queryId: running, operationId: randomUUID(), content: "Keep working." } }, listener);
+  const output = (sessionId: string) => ({ type: "stream_event", uuid: randomUUID(), session_id: sessionId, parent_tool_use_id: null,
+    event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Finished while main was away." } } }) as SDKMessage;
+  await native(unacknowledged).emit(output(unacknowledged));
+  await native(unbound).emit({ type: "system", subtype: "background_tasks_changed", tasks: [
+    { task_id: "agent-1", task_type: "local_agent", description: "Explore" }, { task_id: "shell-1", task_type: "local_bash", description: "Build" },
+  ], uuid: randomUUID(), session_id: unbound } as unknown as SDKMessage);
+  const threads = new Map<string, string>([[unacknowledged, "thread-unacknowledged"], [running, "thread-running"], [settled, "thread-settled"]]);
+  const lookups: unknown[][] = [];
+  const database = { prepare: () => ({ get: (...parameters: unknown[]) => {
+    lookups.push(parameters);
+    const threadId = threads.get(String(parameters[3]));
+    return threadId ? { applicationThreadId: threadId } : undefined;
+  } }) } as unknown as BackendRuntimeRecoveryContext["database"];
+  const admin = (await recoverClaudeRuntimeAdministration({ context: { ...f.context, database }, configuration }))!;
+  const inspection = await admin.inspect();
+  // The session with only background work has no bound thread to attach.
+  expect(inspection.retainedThreadIds).toEqual(["thread-running", "thread-unacknowledged"]);
+  expect(lookups.map(parameters => parameters[3])).toEqual([running, unbound, unacknowledged]);
+  expect(lookups.every(([tenant, principal, backend]) => tenant === scope.tenantId && principal === scope.principalId && backend === scope.backendInstanceId)).toBe(true);
+  expect(inspection.activity).toEqual({ runningTurns: 1, pendingInteractions: 0, unacknowledgedConversations: 2,
+    background: expect.objectContaining({ unknownConversations: 0 }) });
+  expect(inspection.activity!.background.agents + inspection.activity!.background.commands + inspection.activity!.background.other).toBe(2);
 });
 
 it("rejects wrong scope, configuration drift, stale controller and changed incarnation", async () => {

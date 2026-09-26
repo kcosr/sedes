@@ -4008,6 +4008,43 @@ describe("Claude outstanding background activity and subagent bookends", () => {
     await reopened.close();
   });
 
+  it("names each background task a resumed query reports its previous process left unfinished, and only those", async () => {
+    const provider = fixture();
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    // The previous query started this agent; its launch receipt persists.
+    provider.messages.push(started());
+    await vi.waitFor(() => expect(settings.listTaskLifecycleReceipts({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId },
+      BINDING.applicationThreadId, SESSION_ID)).toHaveLength(1));
+    await handle.close();
+    const provider2 = fixture();
+    const resumed = createHandle(provider2, vi.fn(), { settings, resumeSession: true, initialMessages });
+    const reopened = await resumed.handle.establishProjection({ signal: new AbortController().signal });
+    events.length = 0;
+    reopened.subscribeFromNext(({ event }) => events.push(event));
+    const notification = (body: Record<string, unknown>) => system({ subtype: "task_notification", output_file: "/private", summary: "Private summary text", ...body });
+    // A resumed Claude stops or fails the work the previous process left.
+    provider2.messages.push(notification({ task_id: "child", status: "stopped" }));
+    provider2.messages.push(notification({ task_id: "unrecorded-shell", status: "failed" }));
+    // Work this query started and stopped, and ordinary completion, are not orphans.
+    provider2.messages.push(system({ subtype: "task_started", task_id: "own", task_type: "local_bash", description: "Own work" }));
+    provider2.messages.push(notification({ task_id: "own", status: "stopped" }));
+    provider2.messages.push(notification({ task_id: "finished-late", status: "completed" }));
+    // An in-process worker restart says so explicitly, even on a reattachment.
+    provider2.messages.push(notification({ task_id: "restarted", status: "stopped", reason: "worker_restart" }));
+    await vi.waitFor(() => expect(events.filter(event => event.type === "notice")).toHaveLength(3));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const notices = events.flatMap(event => event.type === "notice" ? [event.notice] : []);
+    const text = (task: string) => `Background task ${task} did not finish before the previous Claude session ended, and its result was not reported. Claude may restart it; check its output before relying on it.`;
+    expect(notices.map(notice => [notice.tone, notice.message.text])).toEqual([
+      ["warning", text('"Sleep 20 seconds test"')], ["warning", text("unrecorded-shell")], ["warning", text("restarted")],
+    ]);
+    expect(JSON.stringify(notices)).not.toContain("Private summary text");
+    await resumed.handle.close();
+  });
+
   it.each(["completed", "failed", "stopped"] as const)("keeps Send independent and persists exactly one %s bookend across reopen", async status => {
     const provider = fixture();
     const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages, claudeRunning: true });
@@ -4994,25 +5031,22 @@ describe("Claude compaction, lost processes, and bounded Stop", () => {
     await reopened.close();
   });
 
-  it("leaves the turn alone when Claude Code already closed it or re-runs it itself", async () => {
+  it("leaves the turn alone when Claude Code already closed it", async () => {
     const closure = { type: "assistant", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
       parent_agent_id: null, timestamp: "2026-09-26T10:00:00.000Z", message: { id: crypto.randomUUID(), role: "assistant",
         model: "<synthetic>", content: [{ type: "text", text: "No response requested." }], stop_reason: "stop_sequence", usage: {} } } as SessionMessage;
-    for (const variant of ["closed", "rerun"] as const) {
-      const settings = repository();
-      const writes = vi.spyOn(settings, "writeTerminalReceipt");
-      const provider = fixture();
-      const { handle } = createHandle(provider, vi.fn(), { settings, resumeSession: true,
-        initialMessages: [...settledTurn, unanswered, ...(variant === "closed" ? [closure] : [])],
-        ...(variant === "rerun" ? { childEnvironment: { CLAUDE_CODE_RESUME_INTERRUPTED_TURN: "1" } } : {}) });
-      const snapshot = await projectionSnapshot(handle);
-      expect(snapshot.runState).toBe(variant === "closed" ? "idle" : "running");
-      provider.messages.push(nativeFrames.state("idle"));
-      provider.messages.push(nativeFrames.state("running"));
-      await vi.waitFor(() => expect(handle.retirementBlocked).toBe(true));
-      expect(writes).not.toHaveBeenCalled();
-      await handle.close();
-    }
+    const settings = repository();
+    const writes = vi.spyOn(settings, "writeTerminalReceipt");
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { settings, resumeSession: true,
+      initialMessages: [...settledTurn, unanswered, closure] });
+    const snapshot = await projectionSnapshot(handle);
+    expect(snapshot.runState).toBe("idle");
+    provider.messages.push(nativeFrames.state("idle"));
+    provider.messages.push(nativeFrames.state("running"));
+    await vi.waitFor(() => expect(handle.retirementBlocked).toBe(true));
+    expect(writes).not.toHaveBeenCalled();
+    await handle.close();
   });
 
   it("waits while Claude handles the startup message, then closes the turn when it reports idle", async () => {

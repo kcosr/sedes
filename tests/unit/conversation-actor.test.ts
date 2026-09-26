@@ -2502,7 +2502,7 @@ describe("ConversationActorManager", () => {
     await manager.close();
   });
 
-  it("records the newest turn that can be a fork boundary as the latest completed turn", async () => {
+  it("fails a latest-completed fork with the newest completed turn's reason instead of an older turn", async () => {
     const { driver, handle, manager } = fixture();
     const base = snapshot();
     handle.establishmentSnapshots[0] = {
@@ -2514,12 +2514,18 @@ describe("ConversationActorManager", () => {
           forkUnavailableReason: { text: "No exact fork point." }, orderedBackendItemIds: [] },
       },
     };
-    handle.backendCapabilities.mockResolvedValueOnce(
+    handle.backendCapabilities.mockResolvedValue(
       selectedBranchingCapabilities(["latest_completed", "selected_completed_turn"]),
     );
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
-    const [forkable] = acquired.actor.timeline.orderedTurnIds;
-    await expect(acquired.actor.resolveBranchCheckpoint({ kind: "latest_completed" }))
+    const [forkable, unforkable] = acquired.actor.timeline.orderedTurnIds;
+    const rejection = { category: "invalid_state", retryable: false, safeMessage: "No exact fork point." };
+    await expect(acquired.actor.resolveBranchCheckpoint({ kind: "latest_completed" })).rejects.toMatchObject(rejection);
+    await expect(acquired.actor.resolveBranchCheckpoint({ kind: "selected_completed_turn", turnId: unforkable!,
+      expectedTurnRevision: acquired.actor.timeline.turnsById[unforkable!]!.revision })).rejects.toMatchObject(rejection);
+    expect(driver.resolveBranchCheckpoint).not.toHaveBeenCalled();
+    await expect(acquired.actor.resolveBranchCheckpoint({ kind: "selected_completed_turn", turnId: forkable!,
+      expectedTurnRevision: acquired.actor.timeline.turnsById[forkable!]!.revision }))
       .resolves.toMatchObject({ sourceTurnId: forkable, backendTurnId: "turn-1" });
     acquired.release();
     await manager.close();
