@@ -146,7 +146,9 @@ class FakeStripStore {
     );
   });
   readonly recoverUncertain = vi.fn(async (): Promise<void> => undefined);
-  readonly dismissQueueFailure = vi.fn(async () => undefined);
+  readonly dismissQueueFailure = vi.fn(
+    async (_id: string): Promise<void> => undefined,
+  );
   readonly #listeners = new Set<() => void>();
 
   constructor(value: NormalizedThreadSnapshot) {
@@ -213,6 +215,14 @@ class FakeStripStore {
 
   setTransfers(transfers: readonly PendingComposerTransfer[]): void {
     this.state = { ...this.state, pendingComposerTransfers: transfers };
+    for (const listener of this.#listeners) listener();
+  }
+
+  replaceSnapshot(patch: Partial<NormalizedThreadSnapshot>): void {
+    this.state = {
+      ...this.state,
+      snapshot: { ...this.state.snapshot!, ...patch },
+    };
     for (const listener of this.#listeners) listener();
   }
 }
@@ -846,9 +856,13 @@ describe("PendingInputStrip", () => {
         name: "Steer queued input into active turn: Prompt later",
       }),
     ).not.toBeInTheDocument();
+    // Delete cancels unsent queued work only; the failed row offers Restore
+    // and Dismiss instead.
     expect(
-      screen.getAllByRole("button", { name: /Delete queued input/ }),
-    ).toHaveLength(3);
+      screen
+        .getAllByRole("button", { name: /Delete queued input/ })
+        .map((button) => button.closest("li")?.dataset.queuedInputId),
+    ).toEqual(["head", "later"]);
     expect(
       screen.getAllByRole("button", {
         name: /Restore queued input to composer:/,
@@ -971,6 +985,219 @@ describe("PendingInputStrip", () => {
     expect(
       screen.getByRole("button", { name: "Delete queued input: Prompt later" }),
     ).toHaveFocus();
+  });
+
+  it("shows several Steering cards in delivery order and clears each by its exact evidence", () => {
+    const steerRow = (
+      id: string,
+      sequence: number,
+      overrides: Partial<QueuedInputSummary> = {},
+    ) =>
+      queued(id, sequence, "dispatching", {
+        resolvedDeliveryMode: "steer",
+        requestedDeliveryMode: "steer",
+        deliveryMode: "steer",
+        ...overrides,
+      });
+    const store = new FakeStripStore(
+      snapshot([
+        steerRow("steer-a", 1),
+        steerRow("steer-b", 2),
+        steerRow("steer-c", 3),
+      ]),
+    );
+    // A fourth Steer has been sent but its queue row has not arrived yet.
+    store.setTransfers([
+      transfer("steer-d", "steer", {
+        captured: {
+          text: "Fourth steer",
+          contextExcerpts: [],
+          attachments: [],
+          taskReferences: [],
+          revision: 1,
+        },
+        presentationSequence: 4,
+      }),
+    ]);
+    renderStrip(store);
+
+    const order = () =>
+      screen
+        .getAllByRole("listitem")
+        .map(
+          (row) =>
+            row.dataset.queuedInputId ?? row.dataset.pendingSteerOperationId,
+        );
+    expect(order()).toEqual(["steer-a", "steer-b", "steer-c", "steer-d"]);
+    expect(screen.getAllByText("Steering")).toHaveLength(3);
+    expect(screen.getByText("Sending steer")).toBeInTheDocument();
+
+    // The middle Steer's exact user item arrives first.
+    act(() =>
+      store.replaceSnapshot({
+        itemsById: {
+          "user-b": {
+            id: "user-b",
+            kind: "user_message",
+            deliveryOperationId: "operation-steer-b",
+          },
+        },
+      } as unknown as Partial<NormalizedThreadSnapshot>),
+    );
+    expect(order()).toEqual(["steer-a", "steer-c", "steer-d"]);
+    expect(screen.getAllByText("Steering")).toHaveLength(2);
+
+    // The fourth Steer's exact row arrives behind the others and replaces
+    // its card without moving it.
+    act(() =>
+      store.replaceQueue([
+        steerRow("steer-a", 1),
+        steerRow("steer-c", 3),
+        steerRow("steer-d-row", 4, {
+          deliveryOperationId: "steer-d",
+          state: "pending",
+          deliveryMode: undefined,
+        }),
+      ]),
+    );
+    expect(order()).toEqual(["steer-a", "steer-c", "steer-d-row"]);
+    expect(
+      document.querySelector('[data-pending-steer-operation-id="steer-d"]'),
+    ).toBeNull();
+    expect(
+      document.querySelector('[data-queued-input-id="steer-d-row"]'),
+    ).toHaveTextContent("Pending steer");
+    // An unsent Steer row can still be cancelled; a sent one cannot.
+    expect(
+      screen.getByRole("button", {
+        name: "Delete queued input: Prompt steer-d-row",
+      }),
+    ).toBeEnabled();
+    expect(
+      screen.queryByRole("button", {
+        name: "Delete queued input: Prompt steer-a",
+      }),
+    ).toBeNull();
+  });
+
+  it("offers Restore and Dismiss on each not-sent Steer and keeps its label neutral", async () => {
+    const notSent = (id: string, sequence: number) =>
+      queued(id, sequence, "failed", {
+        resolvedDeliveryMode: "steer",
+        requestedDeliveryMode: "steer",
+        failureReason: "not_sent",
+        diagnostic: { text: "Stop withdrew this Steer, so it was not sent." },
+      });
+    const store = new FakeStripStore(
+      snapshot(
+        [
+          notSent("first", 1),
+          notSent("second", 2),
+          queued("waiting", 3, "pending", { isHead: false }),
+        ],
+        { failureId: "first" },
+      ),
+    );
+    store.dismissQueueFailure.mockImplementation(async (id: string) => {
+      store.replaceQueue(
+        store.state.snapshot!.queue.filter((item) => item.id !== id),
+      );
+    });
+    const { onRestore } = renderStrip(store);
+
+    for (const id of ["first", "second"]) {
+      const row = document.querySelector(
+        `[data-queued-input-id="${id}"]`,
+      ) as HTMLElement;
+      const label = within(row).getByText("Not sent");
+      expect(label).toHaveAttribute("data-state", "failed");
+      expect(label).toHaveAttribute("data-failure-reason", "not_sent");
+      expect(within(row).queryByText("Steer failed")).toBeNull();
+      expect(row).toHaveTextContent("so it was not sent");
+      expect(
+        within(row)
+          .getAllByRole("button")
+          .map((button) => button.getAttribute("aria-label")),
+      ).toEqual([
+        `Restore queued input to composer: Prompt ${id}`,
+        `Dismiss not-sent input: Prompt ${id}`,
+      ]);
+    }
+    const waiting = document.querySelector(
+      '[data-queued-input-id="waiting"]',
+    ) as HTMLElement;
+    expect(
+      within(waiting).getByRole("button", {
+        name: "Delete queued input: Prompt waiting",
+      }),
+    ).toBeEnabled();
+
+    // Each not-sent row is dismissed on its own, not only the attention row.
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Dismiss not-sent input: Prompt second",
+        }),
+      ),
+    );
+    expect(store.dismissQueueFailure).toHaveBeenLastCalledWith("second");
+    expect(document.querySelector('[data-queued-input-id="second"]')).toBeNull();
+    expect(
+      screen.getByRole("button", {
+        name: "Dismiss not-sent input: Prompt first",
+      }),
+    ).toBeEnabled();
+    expect(
+      screen.getByText("Dismissed not-sent input 2: Prompt second"),
+    ).toHaveClass("sr-only");
+
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Restore queued input to composer: Prompt first",
+        }),
+      ),
+    );
+    expect(onRestore).toHaveBeenCalledWith("first");
+    expect(store.dismissQueueFailure).toHaveBeenCalledTimes(1);
+    expect(store.cancelQueuedInput).not.toHaveBeenCalled();
+  });
+
+  it("keeps the failure label on a failed row without a not-sent reason", () => {
+    const store = new FakeStripStore(
+      snapshot([
+        queued("steer-failed", 1, "failed", {
+          resolvedDeliveryMode: "steer",
+          diagnostic: { text: "The provider rejected this Steer." },
+        }),
+        queued("queue-failed", 2, "failed"),
+      ]),
+    );
+    renderStrip(store);
+
+    const steerFailed = document.querySelector(
+      '[data-queued-input-id="steer-failed"]',
+    ) as HTMLElement;
+    const steerLabel = within(steerFailed).getByText("Steer failed");
+    expect(steerLabel).toHaveAttribute("data-state", "failed");
+    expect(steerLabel).not.toHaveAttribute("data-failure-reason");
+    const queueFailed = document.querySelector(
+      '[data-queued-input-id="queue-failed"]',
+    ) as HTMLElement;
+    expect(within(queueFailed).getByText("Failed")).toBeInTheDocument();
+    for (const [row, id] of [
+      [steerFailed, "steer-failed"],
+      [queueFailed, "queue-failed"],
+    ] as const) {
+      expect(
+        within(row)
+          .getAllByRole("button")
+          .map((button) => button.getAttribute("aria-label")),
+      ).toEqual([
+        `Restore queued input to composer: Prompt ${id}`,
+        `Dismiss queued input failure: Prompt ${id}`,
+      ]);
+    }
   });
 
   it("does not force composer focus after the last row is removed on a coarse pointer", async () => {

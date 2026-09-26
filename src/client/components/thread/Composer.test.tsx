@@ -1185,6 +1185,126 @@ describe("Composer delivery guards", () => {
     expect(localStorage.getItem("sedes-composer-delivery-mode")).toBeNull();
   });
 
+  const unconfirmedSteerRow = (index: number) => ({
+    id: `steer-row-${index}`,
+    deliveryOperationId: `steer-${index}`,
+    resolvedDeliveryMode: "steer" as const,
+    requestedDeliveryMode: "steer" as const,
+    sequence: index,
+    origin: "user" as const,
+    isHead: index === 1,
+    state: "dispatching" as const,
+    deliveryMode: "steer" as const,
+    attachmentCount: 0,
+    taskCount: 0,
+    preview: { text: `Earlier steer ${index}` },
+    createdAt: "2026-07-30T15:00:00.000Z",
+  });
+  const unconfirmedSteerTransfer = (index: number): PendingComposerTransfer => ({
+    operationId: `steer-${index}`,
+    mode: "steer",
+    captured: {
+      text: `Earlier steer ${index}`,
+      contextExcerpts: [],
+      attachments: [],
+      taskReferences: [],
+      revision: index,
+    },
+    capturedPresentation: {},
+    startedAt: index,
+    presentationSequence: index,
+    baselineThreadRevision: 1,
+    baselineOrderedTurnIds: [],
+    baselineTailTurnItemIds: [],
+    acceptanceEvidence: "durably_queued",
+    presentation: "pending_steer",
+    requestState: "receipt_received",
+    authorityState: "queue_owned",
+    queuedInputId: `steer-row-${index}`,
+    steerPhase: "steering",
+    rollbackRequired: false,
+    rollbackApplied: false,
+    lateMaterializationRequiresComposerReconciliation: false,
+    retainTombstoneAfterRollback: false,
+  });
+
+  it("keeps Steer and Queue available while two earlier Steers await materialization", async () => {
+    const active = snapshot("running");
+    active.capabilities.deliveryModes = [
+      { id: "steer", steerTarget: "turn" as const, label: { text: "Steer" }, available: true },
+      { id: "queue", steerTarget: null, label: { text: "Queue" }, available: true },
+    ];
+    active.queue = [unconfirmedSteerRow(1), unconfirmedSteerRow(2)];
+    const store = new FakeComposerStore(active, "Third steer");
+    store.replace({
+      pendingComposerTransfers: [
+        unconfirmedSteerTransfer(1),
+        unconfirmedSteerTransfer(2),
+      ],
+    });
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+
+    expect(screen.getAllByText("Steering")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Steer" })).toBeEnabled();
+    fireEvent.keyDown(screen.getByRole("button", { name: "Delivery mode" }), {
+      key: "ArrowDown",
+    });
+    expect(
+      await screen.findByRole("menuitem", { name: "Queue" }),
+    ).not.toHaveAttribute("aria-disabled", "true");
+    fireEvent.keyDown(screen.getByRole("menuitem", { name: "Queue" }), {
+      key: "Escape",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    await waitFor(() =>
+      expect(store.deliver).toHaveBeenCalledWith(
+        "steer",
+        expect.objectContaining({ text: "Third steer" }),
+        expect.any(String),
+      ),
+    );
+  });
+
+  it("sends at idle behind unconfirmed Steers when the server offers Send", async () => {
+    const idle = snapshot("idle");
+    idle.queue = [unconfirmedSteerRow(1), unconfirmedSteerRow(2)];
+    const store = new FakeComposerStore(idle, "Next turn");
+    store.replace({
+      pendingComposerTransfers: [
+        unconfirmedSteerTransfer(1),
+        unconfirmedSteerTransfer(2),
+      ],
+    });
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+
+    const send = screen.getByRole("button", { name: "Send message" });
+    expect(send).toBeEnabled();
+    fireEvent.click(send);
+    await waitFor(() =>
+      expect(store.deliver).toHaveBeenCalledWith(
+        "submit",
+        expect.objectContaining({ text: "Next turn" }),
+        expect.any(String),
+      ),
+    );
+  });
+
+  it("keeps Send disabled at idle behind unconfirmed Steers when the server withholds it", () => {
+    const idle = snapshot("idle", false);
+    idle.queue = [unconfirmedSteerRow(1), unconfirmedSteerRow(2)];
+    const store = new FakeComposerStore(idle, "Next turn");
+    store.replace({
+      pendingComposerTransfers: [
+        unconfirmedSteerTransfer(1),
+        unconfirmedSteerTransfer(2),
+      ],
+    });
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+  });
+
   it("uses Queue when Steer is unsupported without replacing the saved preference", async () => {
     localStorage.setItem("sedes-composer-delivery-mode", "steer");
     const active = snapshot("running");
