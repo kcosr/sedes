@@ -249,6 +249,20 @@ it.each(["tool-boundary", "two-folded", "three-queued", "turn-finished", "stop-p
       const history = await nativeHistory();
       for (const id of [secondId, thirdId, fourthId]) expect(history.some(message => message.uuid === id)).toBe(false);
       for (const text of ["STEER_CORRECTION", "STEER_FOLLOW_UP", "STEER_THIRD"]) expect(JSON.stringify(history)).not.toContain(text);
+      // The call Stop aborted projects as interrupted, not failed: Claude
+      // wrote its error result and then the tool-use interruption marker.
+      const nativeSessionId = events.find(event => event.type === "system" && event.subtype === "init")!.session_id;
+      const transcript = await readClaudeSessionMessages(nativeSessionId, { dir: cwd }, env);
+      const stopped = projectClaudeHistory(transcript, [], {
+        steerOperations: new Map(),
+        attachmentProvenanceKey: new Uint8Array(32),
+        forkBoundaryAuthentication: { installationKey: new Uint8Array(32).fill(1), tenantId: "fixture", principalId: "fixture", backendInstanceId: "fixture" },
+      }).snapshot;
+      expect(transcript.some(message => message.type === "user" &&
+        JSON.stringify(message.message).includes('"is_error":true'))).toBe(true);
+      const commands = Object.values(stopped.itemsById).filter(item => item.semanticKind === "command");
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toMatchObject({ status: "interrupted" });
       expect(errors).toEqual([]);
       return;
     }
