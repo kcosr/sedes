@@ -1249,11 +1249,10 @@ export class ConversationLifecycleService {
     const binding =
       attempt.provisionalBackendConversationId === null
         ? undefined
-        : bindingFromAttempt(
+        : this.#bindingForAttempt(
             scope,
             attempt,
             attempt.provisionalBackendConversationId,
-            attempt.preparedAt,
           );
     let result;
     try {
@@ -1462,18 +1461,17 @@ export class ConversationLifecycleService {
     }
     const resolved = await this.#resolveAttemptTarget(scope, attempt);
     const driver = this.#registry.driver(resolved.connection);
-    const ephemeralBinding = bindingFromAttempt(
+    const binding = this.#bindingForAttempt(
       scope,
       attempt,
       attempt.provisionalBackendConversationId,
-      attempt.preparedAt,
     );
     let acquired;
     try {
       acquired = await this.#actors.acquire(
         {
           scope,
-          binding: ephemeralBinding,
+          binding,
           workspace: resolved.workspace,
           opaqueBindingDetail: detail,
           driver,
@@ -1983,18 +1981,17 @@ export class ConversationLifecycleService {
     }
     const resolved = await this.#resolveAttemptTarget(scope, attempt);
     const driver = this.#registry.driver(resolved.connection);
-    const ephemeralBinding = bindingFromAttempt(
+    const binding = this.#bindingForAttempt(
       scope,
       attempt,
       attempt.provisionalBackendConversationId,
-      attempt.preparedAt,
     );
     let acquired;
     try {
       acquired = await this.#actors.acquire(
         {
           scope,
-          binding: ephemeralBinding,
+          binding,
           workspace: resolved.workspace,
           opaqueBindingDetail: detail,
           driver,
@@ -2447,6 +2444,47 @@ export class ConversationLifecycleService {
     return resolved;
   }
 
+  #bindingForAttempt(
+    scope: RequestScope,
+    attempt: ConversationCreationAttemptRecord,
+    backendConversationId: string,
+  ): ConversationBinding {
+    const persisted = this.#bindings.getBinding(
+      scope,
+      attempt.applicationThreadId,
+    );
+    if (persisted) {
+      if (
+        persisted.backendInstanceId !== attempt.backendInstanceId ||
+        persisted.connectionProfileId !== attempt.connectionProfileId ||
+        persisted.executionEnvironmentId !== attempt.executionEnvironmentId ||
+        persisted.backendConversationId !== backendConversationId
+      ) {
+        throw new DomainError(
+          "conflict",
+          "The creation attempt no longer matches its durable conversation binding.",
+        );
+      }
+      // Provider-assigned conversations can be bound before the first prompt.
+      // Handles and reconciliation must share that durable binding incarnation.
+      return {
+        ...persisted,
+        createdAt: new Date(persisted.createdAt).toISOString(),
+      };
+    }
+    // Application-assigned creation remains provisional until acceptance.
+    return {
+      tenantId: scope.tenantId,
+      ownerPrincipalId: scope.principalId,
+      applicationThreadId: attempt.applicationThreadId,
+      backendInstanceId: attempt.backendInstanceId,
+      connectionProfileId: attempt.connectionProfileId,
+      executionEnvironmentId: attempt.executionEnvironmentId,
+      backendConversationId,
+      createdAt: new Date(attempt.preparedAt).toISOString(),
+    };
+  }
+
   #persistenceForThread(
     scope: RequestScope,
     applicationThreadId: string,
@@ -2478,24 +2516,6 @@ function submissionSource(
         automationId: attempt.sourceAutomationId!,
         automationRunId: attempt.sourceAutomationRunId!,
       };
-}
-
-function bindingFromAttempt(
-  scope: RequestScope,
-  attempt: ConversationCreationAttemptRecord,
-  backendConversationId: string,
-  createdAt: number,
-): ConversationBinding {
-  return {
-    tenantId: scope.tenantId,
-    ownerPrincipalId: scope.principalId,
-    applicationThreadId: attempt.applicationThreadId,
-    backendInstanceId: attempt.backendInstanceId,
-    connectionProfileId: attempt.connectionProfileId,
-    executionEnvironmentId: attempt.executionEnvironmentId,
-    backendConversationId,
-    createdAt: new Date(createdAt).toISOString(),
-  };
 }
 
 function operationKey(

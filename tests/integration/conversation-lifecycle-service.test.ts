@@ -3176,6 +3176,57 @@ describe("ConversationLifecycleService", () => {
     }
   });
 
+  it.each([
+    { contract: "provider-assigned", creationIdentity: PROVIDER_ASSIGNED_CREATION_IDENTITY },
+    { contract: "application-assigned", creationIdentity: APPLICATION_ASSIGNED_CREATION_IDENTITY },
+  ])("keeps $contract binding authority consistent through first submit, reconciliation, and retry", async ({ creationIdentity }) => {
+    const current = fixture({ creationIdentity });
+    try {
+      const created = await createDraft(current, "58585858-5858-4858-8858-585858585858");
+      const acquire = vi.spyOn(current.actors, "acquire");
+      current.driver.create.mockImplementation(async input => ({
+        backendConversationId: input.requestedBackendConversationId ?? "provider-authority",
+        reconciliationToken: "create-authority",
+        opaqueBindingDetail: "authority-detail",
+      }));
+      current.driver.submit.mockRejectedValueOnce(new BackendError({
+        category: "submission_unknown", retryable: true, crossedSubmissionBoundary: true,
+        safeMessage: "Submission receipt was lost.",
+      }));
+      await expect(current.service.startFirstSend(current.scope, created.applicationThreadId, {
+        attemptId: "authority-attempt", mutationId: "authority-submit",
+        expectedThreadRevision: 0, expectedDraftRevision: 0,
+      })).resolves.toMatchObject({ status: "recovery_required" });
+      const attempt = current.creation.get(current.scope, created.applicationThreadId, "authority-attempt");
+      const durable = current.bindings.getBinding(current.scope, created.applicationThreadId);
+      if (creationIdentity === PROVIDER_ASSIGNED_CREATION_IDENTITY) {
+        expect(durable).toBeDefined();
+        expect(durable!.createdAt).toBeGreaterThan(attempt.preparedAt);
+      } else {
+        expect(durable).toBeUndefined();
+      }
+      const expectedBinding = durable
+        ? { ...durable, createdAt: new Date(durable.createdAt).toISOString() }
+        : { ...current.driver.attach.mock.calls[0]![0].binding,
+            createdAt: new Date(attempt.preparedAt).toISOString() };
+      expect(current.driver.attach.mock.calls[0]![0].binding).toEqual(expectedBinding);
+      expect(acquire.mock.calls[0]![0].binding).toEqual(expectedBinding);
+
+      current.driver.reconcile.mockResolvedValueOnce({ status: "not_accepted", retryable: true });
+      await expect(current.service.recoverFirstSend(current.scope, created.applicationThreadId, "authority-attempt"))
+        .resolves.toMatchObject({ status: "recovery_required", retryable: true });
+      expect(current.driver.reconcile.mock.calls[0]![0].binding).toEqual(expectedBinding);
+      await expect(current.service.retryFirstSend(current.scope, created.applicationThreadId,
+        "authority-attempt", "authority-retry")).resolves.toMatchObject({ status: "bound" });
+      expect(acquire.mock.calls.at(-1)![0].binding).toEqual(expectedBinding);
+      expect(current.driver.create).toHaveBeenCalledTimes(1);
+      expect(current.driver.submit).toHaveBeenCalledTimes(2);
+    } finally {
+      await current.actors.close();
+      current.database.close();
+    }
+  });
+
   it("joins recovery to an in-flight provider create without discarding its response", async () => {
     const current = fixture({
       creationIdentity: PROVIDER_ASSIGNED_CREATION_IDENTITY,
