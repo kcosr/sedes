@@ -23,7 +23,9 @@ const COMMAND_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  * Claude Code's stream-json lifecycle frame for a uuid-stamped input. The SDK
  * forwards it verbatim but does not type it. `queued` proves native admission;
  * `started` is emitted when a turn dequeues the input or folds it into the
- * running turn, before any model request. `refused` means the session's
+ * running turn, before any model request. Its stream position places it: before
+ * the running turn's result it joins that turn, after it the input starts the
+ * next turn. `refused` means the session's
  * receive-side policy declined the input before queueing it: it is not
  * preceded by `queued` and never runs in this session. Any other shape is not
  * evidence.
@@ -40,22 +42,26 @@ export function claudeCommandLifecycle(message: unknown): {
   return { commandUuid: frame.command_uuid, state: frame.state as ClaudeCommandLifecycleState };
 }
 
+/**
+ * 2.1.274 batches task notifications: intermediate entries get empty,
+ * zero-round-trip success receipts. The same result shape also occurs for
+ * legitimate foreground commands, so require native background provenance.
+ * Such a receipt ends no turn.
+ */
+export function claudeResultIsNotificationDrain(message: SDKResultMessage): boolean {
+  return message.origin?.kind === "task-notification" &&
+    message.subtype === "success" &&
+    !message.is_error &&
+    message.num_turns === 0 &&
+    message.result === "";
+}
+
 /** A background queue receipt cannot settle an unrelated application turn. */
 export function claudeResultIsUnrelated(
   message: SDKResultMessage,
   expectedUserMessageIds: readonly string[],
 ): boolean {
-  // 2.1.274 batches task notifications: intermediate entries get empty,
-  // zero-round-trip success receipts. The same result shape also occurs for
-  // legitimate foreground commands, so require native background provenance.
-  if (
-    message.origin?.kind === "task-notification" &&
-    message.subtype === "success" &&
-    !message.is_error &&
-    message.num_turns === 0 &&
-    message.result === ""
-  )
-    return true;
+  if (claudeResultIsNotificationDrain(message)) return true;
   const identities = claudeResultUserMessageIds(message);
   return (
     identities.length > 0 &&

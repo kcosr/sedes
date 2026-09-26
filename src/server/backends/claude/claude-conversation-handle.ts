@@ -4,7 +4,12 @@ import { turnFailure } from "../turn-failure.js";
 import type { ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { claudeMessageIsChildOwned } from "./claude-message-scope.js";
 import { ClaudeBackgroundActivity } from "./claude-background-activity.js";
-import { claudeCommandLifecycle, claudeResultIsUnrelated, claudeResultUserMessageIds } from "./claude-result-lifecycle.js";
+import {
+  claudeCommandLifecycle,
+  claudeResultIsNotificationDrain,
+  claudeResultIsUnrelated,
+  claudeResultUserMessageIds,
+} from "./claude-result-lifecycle.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type {
   EffortLevel,
@@ -267,6 +272,15 @@ export class ClaudeConversationHandle implements ConversationHandle {
   readonly #submissions = new Map<string, PendingSubmission>();
   /** Inputs Claude withdrew with `cancelled` before starting them; they never ran. */
   readonly #withdrawnSubmissions = new Map<string, true>();
+  /**
+   * The native root of the turn Claude is running, in stream order: set when
+   * an input starts a turn, cleared by the result that ends it. A steer Claude
+   * starts meanwhile joins this turn; otherwise it starts one, or takes over a
+   * turn Claude started itself. The persistent owner keeps its own.
+   */
+  #nativeTurnRoot: string | undefined;
+  /** Steers Claude started since the last result, by the native turn root each joined. */
+  readonly #steerStartsAwaitingResult = new Map<string, string>();
   readonly #interrupts = new Map<string, string>();
   readonly #renames = new Map<string, string>();
   readonly #partialItems = new Map<
@@ -475,7 +489,13 @@ export class ClaudeConversationHandle implements ConversationHandle {
         // delivery pending so the runtime only acknowledges applied output.
         if (this.#session.flushMessages) await this.#initialHistory;
         if (evidence && message.type === "user" && message.uuid) {
+          // The persistent owner places a steer where Claude started it.
           const associated = this.#settings.associateSteerOperation(this.#scope, this.binding.applicationThreadId, message.uuid, evidence.consumedTurnRootUuid);
+          const recorded = this.#settings.listSteerOperations(this.#scope, this.binding.applicationThreadId).get(message.uuid);
+          if (typeof recorded === "string" && recorded !== evidence.consumedTurnRootUuid) {
+            steerPlacementConflict({ misplaced: [message.uuid] });
+          }
+          rememberBounded(this.#steerStartsAwaitingResult, message.uuid, evidence.consumedTurnRootUuid);
           if (associated && this.#messages.some(({ uuid }) => uuid === message.uuid)) {
             const previous = this.#projection.snapshot;
             this.#refreshProjection(true);
@@ -1554,10 +1574,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
     ) {
       this.#recordPermissionModeEvidence(message.permissionMode, "status");
     }
-    // Only an exact native input UUID proves which turn consumed a Sedes
-    // input. Unstamped output belongs to whatever turn Claude is running.
+    // Only exact native input evidence proves which turn consumed a Sedes
+    // input: its `started` frame, or a consumption stamp. Unstamped output
+    // belongs to whatever turn Claude is running.
     if (message.type === "stream_event" || message.type === "assistant" || message.type === "result") {
       const consumed = claudeResultUserMessageIds(message);
+      const endsTurn = message.type === "result" && !claudeResultIsNotificationDrain(message);
+      if (endsTurn) this.#checkSteerPlacement(consumed);
+      // A stamp still places a steer whose start this attachment never saw.
       for (const operationId of consumed) {
         // Persist native evidence even if transport admission timed out and the
         // in-memory waiter has gone away; reconciliation can then use history.
@@ -1571,6 +1595,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       }
       const outputMessageId = modelOutputMessageId(message);
       if (consumed.length === 0 && outputMessageId !== undefined) this.#observeProviderOutput(outputMessageId);
+      if (!endsTurn && consumed.length > 0) this.#nativeTurnRoot ??= consumed[0];
     }
     if (
       message.type === "system" &&
@@ -1581,6 +1606,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
     }
     if (message.type === "result") {
       this.#consumeResult(message);
+      // Claude's running turn ended here, whatever turn Sedes settled.
+      if (!claudeResultIsNotificationDrain(message)) this.#nativeTurnRoot = undefined;
       return;
     }
     if (message.type === "stream_event") {
@@ -1613,7 +1640,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     if (message.type === "user" && message.uuid &&
         this.#settings.listSteerOperations(this.#scope, this.binding.applicationThreadId).get(message.uuid) === null) {
       // A replay/echo of queued input does not establish which turn consumes it.
-      // Wait for exact consumption stamps or the owner's retained evidence.
+      // Wait for Claude's exact start or stamp, or the owner's retained evidence.
       return;
     }
     if (!this.#messages.some(({ uuid }) => uuid === sessionMessage.uuid)) {
@@ -1638,7 +1665,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
         this.#emit({ type: "resnapshot_required", reason: "history_changed" });
       }
       if (message.type === "user" && [...this.#projection.nativeUserMessageUuidByBackendTurnId.values()].includes(message.uuid!)) {
-        this.#beginSedesTurn();
+        this.#beginSedesTurn(message.uuid!);
       }
       this.#emit({ type: "usage_changed", usage: this.#usage });
     }
@@ -1993,7 +2020,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
   }
 
   #materializePendingUser(operationId: string, nativeTurnRootUuid?: string): void {
-    // The persistent owner emits the exact admitted user UUID before output.
+    // The persistent owner emits the exact admitted user row where Claude
+    // started or stamped it.
     if (this.#session.lifetime === "persistent_service") return;
     const submission = this.#submissions.get(operationId);
     if (!submission) return;
@@ -2015,7 +2043,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       this.#refreshProjection();
       this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot);
       if ([...this.#projection.nativeUserMessageUuidByBackendTurnId.values()].includes(operationId)) {
-        this.#beginSedesTurn();
+        this.#beginSedesTurn(operationId);
       }
     }
     submission.accepted = true;
@@ -2052,9 +2080,42 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const submission = this.#submissions.get(lifecycle.commandUuid);
     if (submission) submission.started = true;
     // The startup probe and inputs this attachment did not send are ignored.
-    // A steer's receiving turn is identified only by its consumption stamp.
-    if (!submission || submission.steering || submission.accepted || submission.observationEnded) return;
-    this.#materializePendingUser(lifecycle.commandUuid);
+    if (!submission) return;
+    if (!submission.steering) {
+      this.#nativeTurnRoot = lifecycle.commandUuid;
+      if (!submission.accepted && !submission.observationEnded) this.#materializePendingUser(lifecycle.commandUuid);
+      return;
+    }
+    if (submission.accepted) return;
+    // Claude starts a steer exactly where it takes it, before its next model
+    // request. Before the running turn's result it joins that turn here;
+    // otherwise it starts the next turn, or takes over a turn Claude started
+    // itself. Like a stamp, this exact evidence also accepts a steer whose
+    // observation ended. The persistent owner places its own steers.
+    const root = this.#nativeTurnRoot ?? lifecycle.commandUuid;
+    this.#nativeTurnRoot = root;
+    if (this.#session.lifetime === "persistent_service") return;
+    rememberBounded(this.#steerStartsAwaitingResult, lifecycle.commandUuid, root);
+    this.#materializePendingUser(lifecycle.commandUuid, root);
+  }
+
+  /**
+   * Stream order placed each steer at its `started` frame; the result that
+   * ends the turn names every input the turn consumed. Agreement needs
+   * nothing more. A contradiction (a steer named with none of its recorded
+   * turn's inputs, or a started steer the result omits) is logged. It never
+   * rewrites the recorded placement or resends anything: history and
+   * reconciliation keep deciding.
+   */
+  #checkSteerPlacement(consumed: readonly string[]): void {
+    const steers = this.#settings.listSteerOperations(this.#scope, this.binding.applicationThreadId);
+    const misplaced = consumed.filter(id => {
+      const root = steers.get(id);
+      return typeof root === "string" && !consumed.includes(root);
+    });
+    const unnamed = [...this.#steerStartsAwaitingResult.keys()].filter(id => !consumed.includes(id));
+    this.#steerStartsAwaitingResult.clear();
+    if (misplaced.length > 0 || unnamed.length > 0) steerPlacementConflict({ misplaced, unnamed });
   }
 
   /**
@@ -2092,7 +2153,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
         !submission.observationEnded ? [operationId] : []);
   }
 
-  #beginSedesTurn(): void {
+  #beginSedesTurn(rootUuid: string): void {
+    // Until its result, a steer Claude starts joins this turn.
+    this.#nativeTurnRoot = rootUuid;
     // Claude runs this input, not the turn a lost process left unfinished.
     this.#closeProcessLostTurn(true);
     // A Sedes input can take over a turn Claude started, for example a steer
@@ -3200,6 +3263,11 @@ function rememberBounded<K, V>(map: Map<K, V>, key: K, value: V): void {
     if (oldest !== undefined) map.delete(oldest);
   }
   map.set(key, value);
+}
+
+/** Claude's own evidence disagrees about where a steer went; nothing is changed. */
+function steerPlacementConflict(detail: { readonly misplaced?: readonly string[]; readonly unnamed?: readonly string[] }): void {
+  console.warn("claude_steer_placement_conflict", detail);
 }
 
 function same(

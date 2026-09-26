@@ -16,7 +16,7 @@ import type {
   SDKUserMessage,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BackendError,
   type ConversationBinding,
@@ -46,6 +46,8 @@ import { compileBackendModelPolicy } from "../../src/server/backends/model-polic
 import type { BackendModelPolicy } from "../../src/server/backends/model-policy.js";
 import { renderTaskContextsForModel } from "../../src/server/conversations/delivery-input-projection.js";
 import { claudeSkillId } from "../../src/server/backends/claude/claude-skills.js";
+import { parseClaudeTranscript, resolveClaudeSessionMessages } from "../../src/server/backends/claude/claude-native-transcript.js";
+import { ClaudeTranscriptFixture } from "../helpers/claude-native-transcript-fixture.js";
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const OPERATION_ID = "22222222-2222-4222-8222-222222222222";
@@ -4398,6 +4400,34 @@ describe("Claude conversation-scoped native next delivery", () => {
   const result = (ids: string[]) => ({ type: "result", subtype: "success", uuid: crypto.randomUUID(), session_id: SESSION_ID,
     user_message_uuid: ids.at(-1), user_message_uuids: ids, terminal_reason: "completed", num_turns: 1,
     result: "Done", is_error: false, usage: {}, modelUsage: {}, permission_denials: [] }) as unknown as SDKMessage;
+  const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+  /** The identity-bearing shape the application compares across live and reload. */
+  const identities = (value: Awaited<ReturnType<typeof snapshot>>) => value.orderedBackendTurnIds.map(id => ({
+    id, status: value.turnsById[id]!.status, completionCorrelations: value.turnsById[id]!.completionCorrelations,
+    items: value.turnsById[id]!.orderedBackendItemIds.map(itemId => {
+      const { backendItemId, backendTurnId, sourceOrder, semanticKind } = value.itemsById[itemId]!;
+      return { backendItemId, backendTurnId, sourceOrder, semanticKind };
+    }),
+  }));
+
+  /** A local turn this attachment submitted, which Claude has started. */
+  async function startedTurn(text = "Original request") {
+    const provider = fixture();
+    const created = createHandle(provider);
+    const established = await created.handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const input = provider.prompt()[Symbol.asyncIterator]();
+    const submitted = created.handle.submit({ applicationOperationId: OPERATION_ID, mutationId: "original-turn",
+      reconciliationToken: "original-receipt", source: { kind: "user" }, text, contextExcerpts: [], taskContexts: [], attachments: [] });
+    expect((await input.next()).value).toMatchObject({ uuid: OPERATION_ID });
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "queued"));
+    provider.messages.push(nativeFrames.lifecycle(OPERATION_ID, "started"));
+    await submitted;
+    const turnId = (await snapshot(created.handle)).activeBackendTurnId!;
+    return { ...created, provider, events, input, turnId };
+  }
 
   it("ignores explicitly child-owned output without requesting a parent resnapshot or accepting a queued steer", async () => {
     const provider = fixture();
@@ -4714,18 +4744,17 @@ describe("Claude conversation-scoped native next delivery", () => {
   });
 
   it("keeps a steer Claude started before Stop with its turn, although the stopped batch ends cancelled", async () => {
-    const provider = fixture();
-    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: [initialUser], claudeRunning: true });
-    const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
-    const original = await snapshot(handle);
+    const { handle, settings, provider, input, turnId } = await startedTurn();
     await handle.steer(steerInput);
-    await provider.prompt()[Symbol.asyncIterator]().next();
+    await input.next();
     provider.messages.push(nativeFrames.lifecycle(steerId, "queued"));
-    // Claude folded it into the running turn before the Stop landed.
+    // Claude folded it into the running turn before the Stop landed; that
+    // start accepts it into the turn.
     provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
-    await vi.waitFor(() => expect(handle.hasPendingSubmissionObservation(steerId)).toBe(true));
-    await new Promise(resolve => setTimeout(resolve, 10));
-    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: original.orderedBackendTurnIds[0]! });
+    await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(steerId)).toBe(false));
+    expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(OPERATION_ID);
+    expect((await snapshot(handle)).turnsById[turnId]!.completionCorrelations).toEqual([OPERATION_ID, steerId]);
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: turnId });
     // Stop leaves an input Claude started alone.
     expect(provider.controls.cancelAsyncMessage).not.toHaveBeenCalled();
     // An interrupted turn closes the inputs it started with `cancelled`.
@@ -4736,8 +4765,262 @@ describe("Claude conversation-scoped native next delivery", () => {
     expect(handle.withdrewSubmission(steerId)).toBe(false);
     expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(OPERATION_ID);
     const settled = await snapshot(handle);
-    expect(settled.turnsById[original.orderedBackendTurnIds[0]!]!.completionCorrelations).toEqual([OPERATION_ID, steerId]);
+    expect(settled.turnsById[turnId]!.completionCorrelations).toEqual([OPERATION_ID, steerId]);
     await handle.close();
+  });
+
+  describe("placement where Claude starts a steer", () => {
+    const secondId = "99999999-9999-4999-8999-999999999999";
+    const second = { ...steerInput, applicationOperationId: secondId, mutationId: "steer-second",
+      reconciliationToken: "second-receipt", text: "Keep the tests green too" };
+    const toolCall = (id: string) => ({ type: "assistant", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+      message: { id: `msg-${id}`, type: "message", role: "assistant", model: "claude-sonnet-5",
+        content: [{ type: "tool_use", id, name: "Bash", input: { command: "true" } }], stop_reason: "tool_use", usage: {} } }) as unknown as SDKMessage;
+    const toolResult = (id: string) => ({ type: "user", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "done" }] } }) as unknown as SDKMessage;
+    /** Each item of a turn, with a user message named by its Sedes input. */
+    const items = (value: Awaited<ReturnType<typeof snapshot>>, turnId: string) => value.turnsById[turnId]!.orderedBackendItemIds.map(id => {
+      const item = value.itemsById[id]!;
+      return item.semanticKind === "user_message" ? `user:${item.deliveryOperationId}` : item.semanticKind;
+    });
+    let warn: { readonly mock: { readonly calls: unknown[][] }; mockRestore(): void };
+    beforeEach(() => { warn = vi.spyOn(console, "warn").mockImplementation(() => undefined); });
+    afterEach(() => warn.mockRestore());
+    const conflicts = () => warn.mock.calls.filter(([code]) => code === "claude_steer_placement_conflict");
+
+    it("accepts a steer mid-turn when Claude folds it in, then takes another steer into the same turn", async () => {
+      const { handle, settings, provider, input, events, turnId } = await startedTurn();
+      provider.messages.push(toolCall("toolu-first"));
+      await expect(handle.steer(steerInput)).resolves.toMatchObject({ status: "pending_materialization" });
+      await input.next();
+      provider.messages.push(nativeFrames.lifecycle(steerId, "queued"));
+      provider.messages.push(toolResult("toolu-first"));
+      await new Promise(resolve => setTimeout(resolve, 10));
+      // Queued is not taken: nothing is shown until Claude starts it.
+      expect(JSON.stringify(await snapshot(handle))).not.toContain(steerInput.text);
+      expect(handle.hasPendingSubmissionObservation(steerId)).toBe(true);
+      provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+      await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(steerId)).toBe(false));
+      const folded = await snapshot(handle);
+      expect(folded).toMatchObject({ runState: "running", activeBackendTurnId: turnId, orderedBackendTurnIds: [turnId] });
+      // In place, at the fold, not after the turn's final answer.
+      expect(items(folded, turnId)).toEqual([`user:${OPERATION_ID}`, "command", `user:${steerId}`]);
+      expect(folded.turnsById[turnId]!.completionCorrelations).toEqual([OPERATION_ID, steerId]);
+      // Published at once: the application accepts the steer and frees the composer.
+      expect(events).toContainEqual({ type: "turn_updated", turn: expect.objectContaining({
+        backendTurnId: turnId, status: "in_progress", completionCorrelations: [OPERATION_ID, steerId] }) });
+      expect(await handle.steer(steerInput)).toMatchObject({ status: "accepted", backendTurnId: turnId });
+      expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(OPERATION_ID);
+      // The next steer in the same turn.
+      await expect(handle.steer(second)).resolves.toMatchObject({ status: "pending_materialization" });
+      await input.next();
+      provider.messages.push(nativeFrames.lifecycle(secondId, "queued"));
+      provider.messages.push(toolCall("toolu-second"));
+      provider.messages.push(toolResult("toolu-second"));
+      provider.messages.push(nativeFrames.lifecycle(secondId, "started"));
+      await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(secondId)).toBe(false));
+      expect(items(await snapshot(handle), turnId)).toEqual([`user:${OPERATION_ID}`, "command", `user:${steerId}`, "command", `user:${secondId}`]);
+      provider.messages.push(nativeFrames.start("msg-final"));
+      provider.messages.push(nativeFrames.text("msg-final", "Done with both corrections."));
+      provider.messages.push(nativeFrames.lifecycle(steerId, "completed"));
+      provider.messages.push(nativeFrames.lifecycle(secondId, "completed"));
+      provider.messages.push(result([OPERATION_ID, steerId, secondId]));
+      provider.messages.push(nativeFrames.state("idle"));
+      await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+      const settled = await snapshot(handle);
+      expect(settled.orderedBackendTurnIds).toEqual([turnId]);
+      expect(settled.turnsById[turnId]).toMatchObject({ status: "completed", completionCorrelations: [OPERATION_ID, steerId, secondId] });
+      expect(items(settled, turnId)).toEqual([`user:${OPERATION_ID}`, "command", `user:${steerId}`, "command", `user:${secondId}`, "assistant_message"]);
+      expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(secondId)).toBe(OPERATION_ID);
+      expect(events.some(event => event.type === "resnapshot_required")).toBe(false);
+      expect(conflicts()).toEqual([]);
+      await handle.close();
+    });
+
+    it("places several steers Claude starts together in order", async () => {
+      const { handle, settings, provider, input, turnId } = await startedTurn();
+      provider.messages.push(toolCall("toolu-first"));
+      await handle.steer(steerInput);
+      await handle.steer(second);
+      await input.next(); await input.next();
+      provider.messages.push(toolResult("toolu-first"));
+      provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+      provider.messages.push(nativeFrames.lifecycle(secondId, "started"));
+      await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(secondId)).toBe(false));
+      expect(items(await snapshot(handle), turnId)).toEqual([`user:${OPERATION_ID}`, "command", `user:${steerId}`, `user:${secondId}`]);
+      expect([...settings.listSteerOperations(scope, BINDING.applicationThreadId)]).toEqual([[steerId, OPERATION_ID], [secondId, OPERATION_ID]]);
+      provider.messages.push(result([OPERATION_ID, steerId, secondId]));
+      await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+      expect(conflicts()).toEqual([]);
+      await handle.close();
+    });
+
+    it("folds a steer into a turn this attachment saw start only through its consumption stamp", async () => {
+      const provider = fixture();
+      const { handle, settings } = createHandle(provider);
+      await snapshot(handle);
+      const input = provider.prompt()[Symbol.asyncIterator]();
+      const submitted = handle.submit({ applicationOperationId: OPERATION_ID, mutationId: "original-turn",
+        reconciliationToken: "original-receipt", source: { kind: "user" }, text: "Original request", contextExcerpts: [], taskContexts: [], attachments: [] });
+      await input.next();
+      provider.messages.push(nativeFrames.start("msg-first", [OPERATION_ID]));
+      await submitted;
+      const turnId = (await snapshot(handle)).activeBackendTurnId!;
+      await handle.steer(steerInput);
+      await input.next();
+      provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+      await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(steerId)).toBe(false));
+      expect(items(await snapshot(handle), turnId)).toEqual([`user:${OPERATION_ID}`, `user:${steerId}`]);
+      expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(OPERATION_ID);
+      await handle.close();
+    });
+
+    it("starts the next turn with a steer Claude starts after the running turn's result", async () => {
+      const { handle, settings, provider, input, events, turnId } = await startedTurn();
+      await handle.steer(steerInput);
+      await input.next();
+      provider.messages.push(nativeFrames.lifecycle(steerId, "queued"));
+      provider.messages.push(nativeFrames.text("msg-first", "First answer."));
+      provider.messages.push(result([OPERATION_ID]));
+      await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+      expect(JSON.stringify(await snapshot(handle))).not.toContain(steerInput.text);
+      provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+      await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("running"));
+      const next = await snapshot(handle);
+      expect(next.orderedBackendTurnIds).toHaveLength(2);
+      expect(next.orderedBackendTurnIds[0]).toBe(turnId);
+      const steerTurn = next.orderedBackendTurnIds[1]!;
+      expect(next).toMatchObject({ activeBackendTurnId: steerTurn });
+      expect(next.turnsById[steerTurn]).toMatchObject({ status: "in_progress", completionCorrelations: [steerId] });
+      expect(items(next, steerTurn)).toEqual([`user:${steerId}`]);
+      expect(events.filter(event => event.type === "run_state_changed").at(-1)).toMatchObject({ state: "running", activeBackendTurnId: steerTurn });
+      expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(steerId);
+      provider.messages.push(nativeFrames.start("msg-steer", [steerId]));
+      provider.messages.push(nativeFrames.text("msg-steer", "Following the correction.", [steerId]));
+      provider.messages.push(result([steerId]));
+      await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+      expect((await snapshot(handle)).turnsById[steerTurn]).toMatchObject({ status: "completed" });
+      expect(conflicts()).toEqual([]);
+      await handle.close();
+    });
+
+    it("logs, without moving or resending anything, a result that contradicts where Claude started a steer", async () => {
+      const { handle, settings, provider, input, turnId } = await startedTurn();
+      await handle.steer(steerInput);
+      await handle.steer(second);
+      await input.next(); await input.next();
+      provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+      provider.messages.push(nativeFrames.lifecycle(secondId, "started"));
+      await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(secondId)).toBe(false));
+      // The result omits one steer Claude started, and names the other
+      // without the turn it joined.
+      provider.messages.push(result([steerId]));
+      await vi.waitFor(() => expect(conflicts()).toHaveLength(1));
+      expect(conflicts()[0]![1]).toEqual({ misplaced: [steerId], unnamed: [secondId] });
+      expect([...settings.listSteerOperations(scope, BINDING.applicationThreadId)]).toEqual([[steerId, OPERATION_ID], [secondId, OPERATION_ID]]);
+      const kept = await snapshot(handle);
+      expect(kept.orderedBackendTurnIds).toEqual([turnId]);
+      expect(kept.turnsById[turnId]!.completionCorrelations).toEqual([OPERATION_ID, steerId, secondId]);
+      expect(provider.controls.interrupt).not.toHaveBeenCalled();
+      await handle.close();
+    });
+
+    it("projects a steer folded mid-turn live exactly as reload places it, with the same item identities", async () => {
+      // The native transcript Claude Code 2.1.281-2.1.283 writes for this fold:
+      // the steer is a queued-command attachment after the tool result.
+      const transcript = new ClaudeTranscriptFixture();
+      transcript.prompt("Original request", { uuid: OPERATION_ID });
+      const [call] = transcript.reply([{ type: "tool_use", id: "toolu-fold", name: "Bash", input: { command: "true" } }],
+        { stopReason: "tool_use" });
+      const resultRow = transcript.toolResult("toolu-fold", call!, "done");
+      transcript.attachment({ type: "prompt_snapshot" });
+      transcript.attachment({ type: "queued_command", prompt: steerInput.text, source_uuid: steerId, commandMode: "prompt" });
+      transcript.attachment({ type: "total_tokens_reminder", used: 1, total: 2 });
+      const answer = transcript.answer("Done with the correction.");
+      const history = (await resolveClaudeSessionMessages(await parseClaudeTranscript(
+        Buffer.from(transcript.jsonl().replaceAll(transcript.sessionId, SESSION_ID))))).map(message => ({ ...message, parent_agent_id: null }));
+      expect(history.find(message => message.uuid === steerId)).toMatchObject({ isQueuedCommand: true });
+      const row = (uuid: string) => transcript.rows.find(candidate => candidate.uuid === uuid)!;
+      const live = (uuid: string) => ({ type: row(uuid).type, uuid, session_id: SESSION_ID, parent_tool_use_id: null,
+        message: row(uuid).message }) as unknown as SDKMessage;
+
+      const { handle, settings, provider, input, events, turnId } = await startedTurn("Original request");
+      provider.messages.push(live(call!));
+      await handle.steer(steerInput);
+      await input.next();
+      provider.messages.push(nativeFrames.lifecycle(steerId, "queued"));
+      provider.messages.push(live(resultRow));
+      provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+      provider.messages.push(nativeFrames.start(String((row(answer).message as { id: string }).id)));
+      provider.messages.push(live(answer));
+      provider.messages.push(result([OPERATION_ID, steerId]));
+      await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+      const liveSnapshot = await snapshot(handle);
+      expect(events.some(event => event.type === "resnapshot_required")).toBe(false);
+      await handle.close();
+
+      const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: history, resumeSession: true }).handle;
+      const reloadedSnapshot = await snapshot(reloaded);
+      expect(identities(reloadedSnapshot)).toEqual(identities(liveSnapshot));
+      expect(items(reloadedSnapshot, turnId)).toEqual([`user:${OPERATION_ID}`, "command", `user:${steerId}`, "assistant_message"]);
+      expect(reloadedSnapshot.turnsById[turnId]!.completionCorrelations).toEqual([OPERATION_ID, steerId]);
+      expect(conflicts()).toEqual([]);
+      await reloaded.close();
+    });
+
+    it("projects a steer that takes over a notification turn live exactly as reload does", async () => {
+      // Claude Code 2.1.281-2.1.283: a steer folded into a turn Claude started
+      // for a task notification is written as a queued command there, and the
+      // turn's later reply frames and its result name only the steer.
+      const transcript = new ClaudeTranscriptFixture();
+      transcript.prompt("Start background work", { uuid: OPERATION_ID });
+      transcript.answer("Started.");
+      transcript.taskNotification({ status: "completed", summary: "Background command completed", taskIds: ["task-1"] });
+      const [call] = transcript.reply([{ type: "tool_use", id: "toolu-notified", name: "Bash", input: { command: "true" } }],
+        { stopReason: "tool_use" });
+      const resultRow = transcript.toolResult("toolu-notified", call!, "done");
+      transcript.attachment({ type: "queued_command", prompt: steerInput.text, source_uuid: steerId, commandMode: "prompt" });
+      const answer = transcript.answer("Following the correction.");
+      const history = (await resolveClaudeSessionMessages(await parseClaudeTranscript(
+        Buffer.from(transcript.jsonl().replaceAll(transcript.sessionId, SESSION_ID))))).map(message => ({ ...message, parent_agent_id: null }));
+      const row = (uuid: string) => transcript.rows.find(candidate => candidate.uuid === uuid)!;
+      const messageId = (uuid: string) => String((row(uuid).message as { id: string }).id);
+      const live = (uuid: string) => ({ type: row(uuid).type, uuid, session_id: SESSION_ID, parent_tool_use_id: null,
+        message: row(uuid).message }) as unknown as SDKMessage;
+
+      const provider = fixture();
+      const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages: history.slice(0, 2), resumeSession: true });
+      const established = await handle.establishProjection({ signal: new AbortController().signal });
+      const events: BackendConversationEvent[] = [];
+      established.subscribeFromNext(({ event }) => events.push(event));
+      provider.messages.push(nativeFrames.taskNotification("task-1"));
+      provider.messages.push(nativeFrames.state("running"));
+      provider.messages.push(nativeFrames.start(messageId(call!)));
+      provider.messages.push(live(call!));
+      provider.messages.push(live(resultRow));
+      await vi.waitFor(async () => expect((await snapshot(handle)).orderedBackendTurnIds).toHaveLength(2));
+      await handle.steer(steerInput);
+      await provider.prompt()[Symbol.asyncIterator]().next();
+      provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+      await vi.waitFor(async () => expect((await snapshot(handle)).orderedBackendTurnIds).toHaveLength(3));
+      const taken = await snapshot(handle);
+      expect(taken).toMatchObject({ runState: "running", activeBackendTurnId: taken.orderedBackendTurnIds[2] });
+      provider.messages.push(nativeFrames.start(messageId(answer), [steerId]));
+      provider.messages.push(live(answer));
+      provider.messages.push(nativeFrames.result([steerId], { origin: { kind: "task-notification" } }));
+      await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+      const liveSnapshot = await snapshot(handle);
+      expect(events.some(event => event.type === "resnapshot_required")).toBe(false);
+      expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(steerId);
+      await handle.close();
+
+      const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: history, resumeSession: true }).handle;
+      const reloadedSnapshot = await snapshot(reloaded);
+      expect(identities(reloadedSnapshot)).toEqual(identities(liveSnapshot));
+      expect(items(reloadedSnapshot, reloadedSnapshot.orderedBackendTurnIds[2]!)).toEqual([`user:${steerId}`, "assistant_message"]);
+      expect(conflicts()).toEqual([]);
+      await reloaded.close();
+    });
   });
 
   it("leaves a service-owned query's withdrawals to its owner, and still records Claude's exact evidence", async () => {
@@ -5037,8 +5320,16 @@ describe("Claude native run state without prompt echoes", () => {
     await expect(handle.steer({ ...submitInput(steerId, "Use this instead"), target: { kind: "conversation" } }))
       .resolves.toMatchObject({ status: "pending_materialization" });
     await provider.prompt()[Symbol.asyncIterator]().next();
-    // A message folded into a meta turn takes over its reply stamps.
+    // A message folded into a meta turn takes it over from its start, and
+    // later takes over its reply stamps.
     provider.messages.push(nativeFrames.lifecycle(steerId, "started"));
+    await vi.waitFor(async () => {
+      const taken = await projectionSnapshot(handle);
+      expect(taken.runState).toBe("running");
+      expect(taken.turnsById[taken.activeBackendTurnId!]!.completionCorrelations).toEqual([steerId]);
+    });
+    expect(settings.listSteerOperations({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId },
+      BINDING.applicationThreadId).get(steerId)).toBe(steerId);
     provider.messages.push(nativeFrames.start("msg-steered", [steerId]));
     provider.messages.push(nativeFrames.text("msg-steered", "Following the steer.", [steerId]));
     provider.messages.push(nativeFrames.result([steerId]));

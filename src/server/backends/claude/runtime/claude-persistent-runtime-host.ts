@@ -1,7 +1,7 @@
 import { claudeMessageIsChildOwned } from "../claude-message-scope.js";
 import { attachmentDiagnostic } from "../../../diagnostics/attachment-diagnostics.js";
 import { ClaudeBackgroundActivity } from "../claude-background-activity.js";
-import { claudeCommandLifecycle, claudeResultIsUnrelated, claudeResultUserMessageIds } from "../claude-result-lifecycle.js";
+import { claudeCommandLifecycle, claudeResultIsNotificationDrain, claudeResultIsUnrelated, claudeResultUserMessageIds } from "../claude-result-lifecycle.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { CanUseTool, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeOwnedRuntimeClient, ClaudeOwnedRuntimeSession, ClaudeRuntimeClient, ClaudeRuntimeForkResult, ClaudeRuntimeSession } from "../claude-runtime-client.js";
@@ -27,8 +27,12 @@ type Session = {
   /** No main has been offered a sequence above this, live or in an attachment. */
   offeredThrough: number;
   sends: Map<string, string>; pendingInputs: Map<string, Parameters<ClaudeRuntimeSession["send"]>[0]>; pendingInputBytes: number; permissionResponses: Map<string,string>; retiring?: Promise<void>; active: Set<string>; permissions: Map<string, Permission>;
-  /** Pending steers Claude has started, awaiting the stamp naming their turn. */
-  startedInputs: Set<string>;
+  /**
+   * The native root of the turn Claude is running, in stream order: set when
+   * an input starts a turn, cleared by the result that ends it. A steer Claude
+   * starts meanwhile joins this turn; otherwise it starts one.
+   */
+  turnRoot?: string;
   /** Sends Claude withdrew with a `cancelled` lifecycle before starting them; they never ran. */
   withdrawnInputs: Set<string>;
   evicted?: boolean;
@@ -559,7 +563,7 @@ export class ClaudePersistentRuntimeHost {
       nextHistoryRead: 0, historyBackoff: 0, historyPressure: false, historyCandidatesDirty: true, hasHistoryCandidates: false, rewriteGeneration: 0, streamStopSequence: 0, replayStateSequences: new Map(),
       admissionJournalComplete: request.launch === "new",
       terminalResultSequences: new Set(), sends: new Map(), pendingInputs: new Map(), pendingInputBytes: 0, commandsInvalidated: false, permissionResponses: new Map(), active: new Set(), permissions: new Map(),
-      startedInputs: new Set(), withdrawnInputs: new Set(), providerState: "idle" };
+      withdrawnInputs: new Set(), providerState: "idle" };
     session = created;
     session.backgroundActivity.reset();
     this.#sessions.set(session.id, session); this.#inflight++; this.#revision++;
@@ -700,7 +704,11 @@ export class ClaudePersistentRuntimeHost {
     }
     if (message.type === "system" && "subtype" in message && message.subtype === "commands_changed") session.commandsInvalidated = true;
     if (message.type === "user" && "uuid" in message && typeof message.uuid === "string" &&
-        session.pendingInputs.get(message.uuid)?.priority !== "next") this.#forgetPendingInput(session, message.uuid);
+        session.pendingInputs.has(message.uuid) && session.pendingInputs.get(message.uuid)?.priority !== "next") {
+      // An echoed ordinary input has started its turn.
+      this.#forgetPendingInput(session, message.uuid);
+      session.turnRoot = message.uuid;
+    }
     if (message.type === "system" && message.subtype === "session_state_changed") session.providerState = message.state;
     const terminalResult = message.type === "result" && !claudeResultIsUnrelated(message,
       session.active.size ? [...session.active] : [...session.sends.keys()].slice(-1));
@@ -713,30 +721,38 @@ export class ClaudePersistentRuntimeHost {
       this.#forgetPendingInput(session, lifecycle.commandUuid);
       session.active.delete(lifecycle.commandUuid);
     }
-    // A pending steer Claude started belongs to that turn; its stamp names it.
-    if (started !== undefined && session.pendingInputs.has(started)) session.startedInputs.add(started);
     // Claude withdrew an input it never started (Stop cancels queued input):
-    // it never runs, so it is neither pending nor outstanding work. After a
-    // start, `cancelled` instead ends an interrupted turn the input belongs to.
-    if (lifecycle?.state === "cancelled" && session.pendingInputs.has(lifecycle.commandUuid) &&
-        !session.startedInputs.has(lifecycle.commandUuid)) {
+    // it never runs, so it is neither pending nor outstanding work. A started
+    // input is no longer pending: `cancelled` then ends an interrupted turn
+    // the input belongs to.
+    if (lifecycle?.state === "cancelled" && session.pendingInputs.has(lifecycle.commandUuid)) {
       this.#forgetPendingInput(session, lifecycle.commandUuid);
       session.active.delete(lifecycle.commandUuid);
       session.withdrawnInputs.add(lifecycle.commandUuid);
     }
     // Only exact native evidence materializes an admitted input: Claude's
-    // dequeue of an ordinary input, or a consumption stamp. Unstamped output
-    // can belong to a turn Claude started itself, and a steer's receiving turn
-    // is known only from its stamp.
+    // start of it, or a consumption stamp. Unstamped output can belong to a
+    // turn Claude started itself. A steer's start places it by stream order:
+    // it joins the turn Claude is running, or else starts the next turn or
+    // takes over a turn Claude started itself. A stamp still places an input
+    // whose start this owner never saw, in the turn of the stamp's first input.
     for (const [operationId, input] of session.pendingInputs) {
-      if (!consumedIds.includes(operationId) && (started !== operationId || input.priority === "next")) continue;
+      const start = started === operationId;
+      if (!start && !consumedIds.includes(operationId)) continue;
+      const steer = input.priority === "next";
+      const root = !start ? consumedIds[0]! : steer ? session.turnRoot ?? operationId : operationId;
+      if (start) session.turnRoot = root;
       this.#forgetPendingInput(session, operationId);
       this.#event(session, { kind: "message", message: {
         type: "user", uuid: operationId, session_id: session.id,
         parent_tool_use_id: null, message: { role: "user", content: input.content },
         ...(input.priority ? { priority: input.priority } : {}),
-      }, ...(input.priority ? { consumedTurnRootUuid: consumedIds[0]! } : {}) } as ClaudePersistentEvent["payload"]);
+      }, ...(steer ? { consumedTurnRootUuid: root } : {}) } as ClaudePersistentEvent["payload"]);
     }
+    // A result ends the running turn, unless it only drains notifications.
+    if (message.type === "result") {
+      if (!claudeResultIsNotificationDrain(message)) session.turnRoot = undefined;
+    } else if (consumedIds.length > 0) session.turnRoot ??= consumedIds[0];
     if (terminalResult) {
       for (const id of session.active) {
         // A later result may truncate its UUID list. Inputs already proven
@@ -772,7 +788,7 @@ export class ClaudePersistentRuntimeHost {
   async #withdrawUnstartedInputs(session: Session): Promise<void> {
     for (const operationId of [...session.pendingInputs.keys()]) {
       // Claude may start or settle an input while an earlier request runs.
-      if (!session.pendingInputs.has(operationId) || session.startedInputs.has(operationId)) continue;
+      if (!session.pendingInputs.has(operationId)) continue;
       try { await session.runtime.cancelQueuedInput(operationId); }
       catch { /* The input stays pending; its outcome comes from evidence. */ }
     }
@@ -782,7 +798,6 @@ export class ClaudePersistentRuntimeHost {
     if (!pending) return;
     session.pendingInputBytes -= Buffer.byteLength(JSON.stringify(pending.content), "utf8");
     session.pendingInputs.delete(operationId);
-    session.startedInputs.delete(operationId);
   }
   #fail(session: Session, code: string): void {
     // WorkerClient.close reports a generic failure for each resident query.
@@ -795,7 +810,7 @@ export class ClaudePersistentRuntimeHost {
     if (session.failureCode) return;
     this.#cancelHistoryTimer(session);
     session.failureCode = code; session.backgroundActivity.invalidate(); session.active.clear(); session.pendingInputs.clear(); session.pendingInputBytes = 0;
-    session.startedInputs.clear();
+    session.turnRoot = undefined;
     session.providerState = "idle";
     this.#event(session, { kind: "failed", code }, true);
   }

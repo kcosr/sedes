@@ -351,7 +351,10 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
     const client = f.client();
     const sessionId = randomUUID();
-    const remote = client.createSession(sessionOptions(sessionId));
+    const roots = new Map<string, string>();
+    const remote = client.createSession(sessionOptions(sessionId, { onMessage: (message, evidence) => {
+      if (evidence && message.type === "user") roots.set(String(message.uuid), evidence.consumedTurnRootUuid);
+    } }));
     await remote.start();
     // The owner withdraws; main sends no request of its own.
     expect(remote.cancelQueuedInput).toBeUndefined();
@@ -367,8 +370,11 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
       await remote.send(steer);
       await native.emit(lifecycle(sessionId, steer.operationId, "queued"));
     }
-    // Claude folded one steer into the running turn before the Stop landed.
+    // Claude folded one steer into the running turn before the Stop landed;
+    // the owner places it in that turn at once and no longer holds it.
     await native.emit(lifecycle(sessionId, folded.operationId, "started"));
+    await remote.flushMessages?.();
+    await vi.waitFor(() => expect(roots.get(folded.operationId)).toBe(turn.operationId));
     native.cancelQueuedInput.mockImplementation(async operationId => {
       if (operationId === failing.operationId) throw new Error("claude_control_request_failed");
       // Claude's answer alone records nothing; only the lifecycle frame does.
@@ -383,7 +389,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     // The interrupted turn closes the inputs it started with `cancelled` too.
     await native.emit(lifecycle(sessionId, folded.operationId, "cancelled"));
     expect(host.abandonmentEvidence().sessions[0]).toMatchObject({
-      pendingInputIds: [folded.operationId, unconfirmed.operationId, failing.operationId] });
+      pendingInputIds: [unconfirmed.operationId, failing.operationId] });
     expect(host.abandonmentEvidence().sessions[0]!.activeOperationIds).not.toContain(withdrawn.operationId);
     const query = { sessionId, cwd: "/workspace" };
     await expect(client.submissionDisposition({ ...query, operationId: withdrawn.operationId })).resolves.toBe("cancelled");
@@ -1466,6 +1472,68 @@ describe("native next over persistent replacement carriers", () => {
     await vi.waitFor(() => expect(f.services.status().resources[0]!.blockers).toEqual([]));
     await session.send({ operationId: randomUUID(), content: "Another turn" });
     expect(native.send).toHaveBeenCalledTimes(67);
+  });
+
+  it("places each steer where Claude starts it, and a replacement main replays the same placement", async () => {
+    const f = await fixture(); const carrier = await f.attach();
+    const sessionId = randomUUID();
+    const first = randomUUID(), s1 = randomUUID(), s2 = randomUUID(), s3 = randomUUID(), s4 = randomUUID(), s5 = randomUUID();
+    const collect = (into: { uuid: string; root?: string }[]) => (message: SDKMessage, evidence?: { consumedTurnRootUuid: string }) => {
+      if (message.type === "user") into.push({ uuid: String(message.uuid), ...(evidence ? { root: evidence.consumedTurnRootUuid } : {}) });
+    };
+    const seen: { uuid: string; root?: string }[] = [];
+    const session = f.client().createSession(sessionOptions(sessionId, { onMessage: collect(seen) }));
+    await session.start();
+    const native = f.sessions[0]!;
+    const host = f.hosts.get(f.services.status().resources[0]!.resourceId);
+    await session.send({ operationId: first, content: "Run the long task." });
+    await native.emit(lifecycle(sessionId, first, "started"));
+    await native.emit(firstDelta(sessionId, "Working", first));
+    for (const operationId of [s1, s2]) {
+      await session.send({ operationId, content: `Correction ${operationId}`, priority: "next" });
+      await native.emit(lifecycle(sessionId, operationId, "queued"));
+    }
+    await native.emit(delta(sessionId, "Still working"));
+    await session.flushMessages?.();
+    // Queued is not taken: the owner still holds both.
+    expect(seen.map(({ uuid }) => uuid)).toEqual([first]);
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ pendingInputIds: [s1, s2] });
+    // Claude folds both into the running turn at a tool boundary.
+    await native.emit(lifecycle(sessionId, s1, "started"));
+    await native.emit(lifecycle(sessionId, s2, "started"));
+    await session.flushMessages?.();
+    await vi.waitFor(() => expect(seen).toEqual([{ uuid: first }, { uuid: s1, root: first }, { uuid: s2, root: first }]));
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ pendingInputIds: [], activeOperationIds: [first, s1, s2] });
+
+    // A replacement main replays the steers where Claude started them.
+    await carrier.close(); await f.attach();
+    const replayed: { uuid: string; root?: string }[] = [];
+    const restored = f.client().createSession(sessionOptions(sessionId, { launch: "resume", onMessage: collect(replayed) }));
+    await restored.start();
+    await restored.flushMessages?.();
+    await vi.waitFor(() => expect(replayed).toEqual([{ uuid: first }, { uuid: s1, root: first }, { uuid: s2, root: first }]));
+    const terminal = (ids: string[]) => ({ type: "result", subtype: "success", uuid: randomUUID(), session_id: sessionId,
+      user_message_uuid: ids.at(-1), user_message_uuids: ids, num_turns: 1, terminal_reason: "completed",
+      result: "Done", is_error: false, usage: {}, modelUsage: {}, permission_denials: [] }) as unknown as SDKMessage;
+    await native.emit(terminal([first, s1, s2]));
+    // After the turn's result, a steer Claude starts begins the next turn,
+    // and a later steer joins that one.
+    await restored.send({ operationId: s3, content: "Next", priority: "next" });
+    await native.emit(lifecycle(sessionId, s3, "started"));
+    await native.emit(firstDelta(sessionId, "Next turn", s3));
+    await restored.send({ operationId: s4, content: "Also", priority: "next" });
+    await native.emit(lifecycle(sessionId, s4, "started"));
+    await native.emit(terminal([s3, s4]));
+    // A steer Claude starts during a turn it started itself takes that turn over.
+    await native.emit({ type: "system", subtype: "session_state_changed", state: "running", uuid: randomUUID(), session_id: sessionId } as SDKMessage);
+    await native.emit(delta(sessionId, "Notification work"));
+    await restored.send({ operationId: s5, content: "Steer the notification turn", priority: "next" });
+    await native.emit(lifecycle(sessionId, s5, "started"));
+    await restored.flushMessages?.();
+    await vi.waitFor(() => expect(replayed.slice(3)).toEqual([{ uuid: s3, root: s3 }, { uuid: s4, root: s3 }, { uuid: s5, root: s5 }]));
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ pendingInputIds: [] });
+    // Consumption is still a submission the owner admitted.
+    await expect(f.client().submissionDisposition({ sessionId, cwd: "/workspace", operationId: s1 })).resolves.toBe("submitted");
   });
 
   it("admits steer while busy, waits for its exact stamp, retains it across the older result and reconnect", async () => {
