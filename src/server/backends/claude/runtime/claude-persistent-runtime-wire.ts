@@ -32,6 +32,8 @@ export const claudePersistentCommandSchema = z.discriminatedUnion("action", [
   command("set_effort", worker.claudeRuntimeQuerySetEffortRequestSchema),
   command("set_permission_mode", worker.claudeRuntimeQuerySetPermissionModeRequestSchema),
   command("attach", session).extend({ replay: z.enum(["full", "unacknowledged"]) }), command("detach", session), command("evict", session),
+  // Retire an unattended query for a thread main has no runtime for (archive).
+  command("retire", session.extend({ cwd: worker.claudeRuntimeProbeRequestSchema.shape.cwd })),
   command("submission_disposition", session.extend({ operationId: z.string().uuid(), cwd: worker.claudeRuntimeProbeRequestSchema.shape.cwd })),
   command("acknowledge", session.extend({ sequence: z.number().int().nonnegative() })),
   command("respond_permission", session.extend({ requestId: id, toolUseID: id, response: worker.claudeRuntimeCanUseToolResponseSchema })),
@@ -65,3 +67,5 @@ export const claudePersistentAttachmentSchema = z.strictObject({
   confirmedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable().optional(),
   events: z.array(claudePersistentEventSchema).max(8192),
 });
+/** A retired or absent query holds nothing; a busy one still has work outstanding. */
+export const claudePersistentRetireResponseSchema = z.strictObject({ outcome: z.enum(["retired", "absent", "busy"]) });

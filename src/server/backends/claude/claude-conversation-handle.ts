@@ -1621,8 +1621,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
     for (const submission of this.#submissions.values()) {
       if (!submission.accepted) submission.reject(error);
     }
+    // No replacement attachment adopts this query: a remote owner retires it
+    // once quiescent instead of keeping it resident after the failure.
     this.#closePromise = this.#session
-      .close()
+      .close({ reason: "evicted" })
       .catch(this.#onError)
       .finally(() => this.#releaseAdmission());
     this.#interactions.close();
@@ -2539,8 +2541,11 @@ export class ClaudeConversationHandle implements ConversationHandle {
     }
     this.#submissions.clear();
     this.#closed = true;
+    // A failed attachment evicts: a remote owner retires the query once its
+    // events are acknowledged and nothing is outstanding, so reopening starts
+    // a fresh query instead of requiring a backend restart.
     this.#closePromise = this.#session
-      .close()
+      .close({ reason: "evicted" })
       .catch(this.#onError)
       .finally(() => this.#releaseAdmission());
     this.#interactions.close();

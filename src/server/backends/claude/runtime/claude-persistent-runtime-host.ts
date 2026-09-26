@@ -27,8 +27,15 @@ type Session = {
   /** Claude Code's own run state; work it starts itself keeps it non-idle. */
   providerState: "idle" | "running" | "requires_action";
   listener?: (event: ClaudePersistentEvent) => void; epoch?: number; failureCode?: string;
+  /** When main last stopped listening; drives retirement of an unattended, quiescent query. */
+  detachedAt?: number;
   historySweep?: Promise<void>; historyTimer?: ReturnType<typeof setTimeout>; nextHistoryRead: number; historyBackoff: number; historyPressure: boolean; historyCandidatesDirty: boolean; hasHistoryCandidates: boolean; rewriteGeneration: number; streamStopSequence: number; replayStateSequences: Map<string, number>;
 };
+
+/** A detached query with nothing outstanding is retired after this long. */
+export const DETACHED_SESSION_TTL_MS = 30 * 60_000;
+const RESIDENCY_SWEEP_INTERVAL_MS = 60_000;
+const MAXIMUM_ENDED_JOURNALS = 256;
 
 /** Service-owned sessions never depend on an upstream SSH attachment lifetime. */
 export class ClaudePersistentRuntimeHost {
@@ -36,6 +43,9 @@ export class ClaudePersistentRuntimeHost {
   readonly #sessions = new Map<string, Session>();
   /** Running one-shot fork launches by child session; they share the session cap. */
   readonly #forkLaunches = new Map<string, Promise<ClaudeRuntimeForkResult>>();
+  /** Admission journals of failed queries retired by eviction, most recent last. */
+  readonly #endedJournals = new Map<string, { readonly cwd: string; readonly sends: ReadonlySet<string>; readonly admissionJournalComplete: boolean }>();
+  #residencyTimer: ReturnType<typeof setInterval> | undefined;
   readonly #stoppedHistoryPager = new ClaudeHistoryPager();
   readonly #historySweepQueue = new Set<Session>();
   #historySweepSession?: Session;
@@ -66,12 +76,14 @@ export class ClaudePersistentRuntimeHost {
     replayRetention?: { highWaterEntries?: number; highWaterBytes?: number; minimumHistoryIntervalMs?: number };
     validateQueryEnvironment?: (environment: Readonly<Record<string, string | undefined>>) => void;
     validateAgentToolMcp?: (agentToolMcp: ClaudeRuntimeAgentToolMcp) => void;
+    /** How long a detached, quiescent query stays resident before retirement. */
+    detachedSessionTtlMs?: number;
   }) {}
 
   detach(epoch?: number): void {
     for (const session of this.#sessions.values()) {
       if (epoch !== undefined && session.epoch !== epoch) continue;
-      session.listener = undefined; session.epoch = undefined;
+      this.#unlisten(session);
       this.#cancelHistoryTimer(session);
       void this.#retireIdle(session).catch(() => undefined);
     }
@@ -160,6 +172,7 @@ export class ClaudePersistentRuntimeHost {
     if (force) await this.input.services.recordAbandonment({ resourceId: this.runtimeId, kind: "claude_agent_sdk", reason,
       evidence: { phase: "after_shutdown", ...this.abandonmentEvidence() } });
     this.#closed = true;
+    this.#stopResidencySweep();
     this.#stoppedHistoryPager.close();
     this.detach();
     this.#sessions.clear(); this.#revision++;
@@ -176,8 +189,8 @@ export class ClaudePersistentRuntimeHost {
       (this.#sessions.get(command.request.sessionId)?.permissionResponses.has(permissionKey(command.request)) ||
         ((!this.#runtimeStopped && !this.#frozen || command.request.response.behavior === "deny") &&
           this.#sessions.get(command.request.sessionId)?.permissions.has(permissionKey(command.request))));
-    if (this.#runtimeStopped && !existingOpen && !permissionSettlement && !["attach", "detach", "evict", "acknowledge", "submission_disposition", "info", "messages", "transcript", "list", "probe"].includes(command.action)) throw new Error("claude_persistent_runtime_stopped");
-    if (!existingOpen && !retainedProbe && !permissionSettlement && !["attach", "detach", "evict", "acknowledge", "list", "info", "messages", "transcript", "submission_disposition"].includes(command.action)) {
+    if (this.#runtimeStopped && !existingOpen && !permissionSettlement && !["attach", "detach", "evict", "retire", "acknowledge", "submission_disposition", "info", "messages", "transcript", "list", "probe"].includes(command.action)) throw new Error("claude_persistent_runtime_stopped");
+    if (!existingOpen && !retainedProbe && !permissionSettlement && !["attach", "detach", "evict", "retire", "acknowledge", "list", "info", "messages", "transcript", "submission_disposition"].includes(command.action)) {
       if (this.#frozen) throw new Error("claude_persistent_admission_frozen");
       this.input.services.assertAdmission(command.controllerEpoch);
     }
@@ -226,6 +239,13 @@ export class ClaudePersistentRuntimeHost {
     switch (command.action) {
       case "submission_disposition": {
         const session = this.#sessions.get(command.request.sessionId);
+        const retired = this.#endedJournals.get(command.request.sessionId);
+        // A failed query retired by eviction keeps its admission journal, so
+        // its inputs still resolve instead of becoming permanently unknown.
+        if (retired && retired.cwd === command.request.cwd) {
+          if (retired.sends.has(command.request.operationId)) return { disposition: "session_ended" };
+          if (!session) return { disposition: retired.admissionJournalComplete ? "not_sent" : "session_ended" };
+        }
         if (!session || session.cwd !== command.request.cwd) return { disposition: "unknown" };
         const ended = Boolean(session.failureCode || session.runtime.closed);
         if (session.sends.has(command.request.operationId)) {
@@ -259,11 +279,21 @@ export class ClaudePersistentRuntimeHost {
         if (!session) throw new Error("claude_persistent_session_not_found");
         if (command.action === "evict" || session.epoch === command.controllerEpoch) {
           session.evicted = command.action === "evict";
-          session.listener = undefined; session.epoch = undefined;
+          this.#unlisten(session);
           this.#cancelHistoryTimer(session);
         }
         await this.#retireIdle(session);
         return { detached: true };
+      }
+      case "retire": {
+        const session = this.#sessions.get(command.request.sessionId);
+        if (!session) return { outcome: "absent" };
+        if (session.cwd !== command.request.cwd) throw new Error("claude_persistent_session_configuration_conflict");
+        // A query main still attends belongs to that attachment.
+        if (session.listener) return { outcome: "busy" };
+        session.evicted = true;
+        await this.#retireIdle(session);
+        return { outcome: this.#sessions.get(session.id) === session ? "busy" : "retired" };
       }
       case "acknowledge": {
         const session = this.#session(command.request.sessionId);
@@ -461,12 +491,55 @@ export class ClaudePersistentRuntimeHost {
     // to drain. Observing that stopped worker must not manufacture a failure.
     if (!this.#closing && !this.#runtimeStopped && session.runtime.closed && !session.failureCode) this.#fail(session, "claude_persistent_query_closed");
     session.evicted = false;
-    session.listener = listener; session.epoch = epoch;
+    session.listener = listener; session.epoch = epoch; session.detachedAt = undefined;
     this.#scheduleHistorySweep(session);
     const { actualModel: initialModel, ...initialization } = session.runtime.initialization!;
     const actualModel = session.model === undefined ? initialModel : session.model;
     return { queryId: session.id, initialization: { ...initialization, ...(actualModel ? { actualModel } : {}), ...(session.commandsInvalidated ? { skillNames: [] } : {}), ...(session.permissionMode ? { actualPermissionMode: session.permissionMode } : {}) }, ...(session.confirmedEffort !== undefined ? { confirmedEffort: session.confirmedEffort } : {}), startupProbeUuid: session.runtime.startupProbeUuid,
       reattached, failureCode: session.failureCode ?? null, backgroundActivity: session.backgroundActivity.snapshot(), pendingBackgroundTaskIds: session.backgroundActivity.pendingTaskIds(), events: [...new Map([...[...session.events].filter(([, event]) => replay !== "full" || event.payload.kind !== "message"), ...(replay === "full" ? session.replay : []), ...[...session.permissions.values()].filter(permission => !permission.response && !permission.cancelled).map(permission => [permission.event.sequence, permission.event] as const)]).values()].sort((a, b) => a.sequence - b.sequence) };
+  }
+
+  #unlisten(session: Session): void {
+    session.listener = undefined; session.epoch = undefined;
+    session.detachedAt ??= Date.now();
+    this.#scheduleResidencySweep();
+  }
+
+  /**
+   * A query main no longer attends is retired once it has been detached for
+   * the residency limit and has nothing outstanding: no admitted or running
+   * input, no Claude activity of its own, no background work, and no
+   * unacknowledged event or unanswered permission. It resumes on demand.
+   */
+  #scheduleResidencySweep(): void {
+    if (this.#residencyTimer || this.#closed || this.#runtimeStopped) return;
+    const ttl = this.input.detachedSessionTtlMs ?? DETACHED_SESSION_TTL_MS;
+    this.#residencyTimer = setInterval(() => {
+      if (this.#closed || this.#runtimeStopped) { this.#stopResidencySweep(); return; }
+      const now = Date.now();
+      let detached = 0;
+      for (const session of this.#sessions.values()) {
+        if (session.listener || session.detachedAt === undefined) continue;
+        detached++;
+        if (session.retiring || this.#frozen || now - session.detachedAt < ttl) continue;
+        session.evicted = true;
+        void this.#retireIdle(session).catch(() => undefined);
+      }
+      if (!detached) this.#stopResidencySweep();
+    }, Math.min(ttl, RESIDENCY_SWEEP_INTERVAL_MS));
+    this.#residencyTimer.unref();
+  }
+
+  #stopResidencySweep(): void {
+    if (this.#residencyTimer) clearInterval(this.#residencyTimer);
+    this.#residencyTimer = undefined;
+  }
+
+  #rememberEndedJournal(session: Session): void {
+    this.#endedJournals.delete(session.id);
+    this.#endedJournals.set(session.id, { cwd: session.cwd, sends: new Set(session.sends.keys()),
+      admissionJournalComplete: session.admissionJournalComplete });
+    while (this.#endedJournals.size > MAXIMUM_ENDED_JOURNALS) this.#endedJournals.delete(this.#endedJournals.keys().next().value!);
   }
 
   #session(id: string): Session {
@@ -490,7 +563,10 @@ export class ClaudePersistentRuntimeHost {
     this.#inflight++;
     session.retiring = session.runtime.close().then(() => {
       if (session.events.size || session.replay.size || session.permissions.size) this.#fail(session, "claude_persistent_query_retired");
-      else if (this.#sessions.get(session.id) === session) this.#sessions.delete(session.id);
+      else if (this.#sessions.get(session.id) === session) {
+        if (session.failureCode) this.#rememberEndedJournal(session);
+        this.#sessions.delete(session.id);
+      }
       session.retiring = undefined;
     }).catch(error => { this.#cleanupUnproven = true; this.#revision++; throw error; }).finally(() => { this.#inflight--; });
     await session.retiring;
@@ -585,7 +661,7 @@ export class ClaudePersistentRuntimeHost {
     session.events.set(event.sequence, event); session.bytes += size; this.#revision++;
     if (payload.kind === "message") { session.replay.set(event.sequence, event); session.replayBytes += size; }
     beforePublish?.(event);
-    try { session.listener?.(event); } catch { session.listener = undefined; session.epoch = undefined; }
+    try { session.listener?.(event); } catch { this.#unlisten(session); }
     return event;
   }
   #removeReplay(session: Session, sequence: number): void {

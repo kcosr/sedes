@@ -21,6 +21,7 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) awai
 
 async function fixture(options: {
   readonly validateAgentToolMcp?: (agentToolMcp: NonNullable<ClaudeRuntimeSessionOptions["agentToolMcp"]>) => void;
+  readonly detachedSessionTtlMs?: number;
 } = {}) {
   const native = createFakePersistentClaudeRuntime();
   const archive = vi.fn(async (_record: unknown) => {});
@@ -35,6 +36,7 @@ async function fixture(options: {
     artifact: async () => { throw new Error("test_provider_must_not_launch_artifact"); },
     createRuntime,
     ...(options.validateAgentToolMcp ? { validateAgentToolMcp: options.validateAgentToolMcp } : {}),
+    ...(options.detachedSessionTtlMs !== undefined ? { detachedSessionTtlMs: options.detachedSessionTtlMs } : {}),
   });
   let current: SidecarRuntimeLease | undefined;
   const sidecarRuntime: SidecarRuntimeProvider = {
@@ -1154,11 +1156,87 @@ describe("Claude rejected sends and retained query failure", () => {
     await restored.start();
     await expect(restored.flushMessages!()).rejects.toMatchObject({
       category: "unavailable", backendCode: "claude_persistent_query_failed",
-      safeMessage: expect.stringContaining("Restart the Claude backend"),
+      safeMessage: expect.stringContaining("Reopen the thread to start a new Claude session"),
     });
     expect(replacementFailure).toHaveBeenCalled();
     expect(f.sessions).toHaveLength(1);
     expect(native.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("remote query residency", () => {
+  it("retires a failed query main evicts once its events are acknowledged, keeping its admission journal", async () => {
+    const f = await fixture(); await f.attach();
+    const client = f.client(); const sessionId = randomUUID(); const onFailure = vi.fn();
+    const session = client.createSession(sessionOptions(sessionId, { onFailure }));
+    await session.start();
+    const native = f.sessions[0]!;
+    const admittedId = randomUUID();
+    await session.send({ operationId: admittedId, content: "Sent before the failure" });
+    native.closed = true;
+    native.options.onFailure?.(new Error("simulated_native_exit"));
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledOnce());
+    await session.close({ reason: "evicted" });
+    const runtimeId = f.services.status().resources[0]!.resourceId;
+    const host = f.hosts.get(runtimeId);
+    await vi.waitFor(() => expect(host.abandonmentEvidence().sessionCount).toBe(0));
+    // Inputs of the retired query still resolve from its journal.
+    await expect(client.submissionDisposition({ sessionId, operationId: admittedId, cwd: "/workspace" })).resolves.toBe("session_ended");
+    await expect(client.submissionDisposition({ sessionId, operationId: randomUUID(), cwd: "/workspace" })).resolves.toBe("not_sent");
+    // Reopening starts a fresh query; no backend restart is needed.
+    const reopened = client.createSession(sessionOptions(sessionId, { launch: "resume" }));
+    await expect(reopened.start()).resolves.toBeDefined();
+    await expect(reopened.flushMessages!()).resolves.toBeUndefined();
+    expect(f.sessions).toHaveLength(2);
+    expect(f.sessions[1]!.options.launch).toBe("resume");
+    await expect(client.submissionDisposition({ sessionId, operationId: admittedId, cwd: "/workspace" })).resolves.toBe("session_ended");
+    await reopened.close({ reason: "evicted" });
+  });
+
+  it("retires an unattended query on request only when nothing is outstanding", async () => {
+    const f = await fixture();
+    const carrier = await f.attach();
+    const client = f.client();
+    const idleId = randomUUID(); const busyId = randomUUID();
+    const idle = client.createSession(sessionOptions(idleId));
+    const busy = client.createSession(sessionOptions(busyId));
+    await Promise.all([idle.start(), busy.start()]);
+    await busy.send({ operationId: randomUUID(), content: "Still running" });
+    // A thread main still attends is not retired from under it.
+    await expect(client.retireSession({ sessionId: idleId, cwd: "/workspace" })).resolves.toBe("busy");
+    await carrier.close();
+    await f.attach();
+    const other = f.client();
+    await expect(other.retireSession({ sessionId: idleId, cwd: "/other" })).rejects.toThrow();
+    await expect(other.retireSession({ sessionId: idleId, cwd: "/workspace" })).resolves.toBe("retired");
+    expect(f.sessions[0]!.closed).toBe(true);
+    await expect(other.retireSession({ sessionId: busyId, cwd: "/workspace" })).resolves.toBe("busy");
+    expect(f.sessions[1]!.closed).toBe(false);
+    await expect(other.retireSession({ sessionId: randomUUID(), cwd: "/workspace" })).resolves.toBe("absent");
+  });
+
+  it("retires a detached query after the residency limit only once nothing is outstanding", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      const f = await fixture({ detachedSessionTtlMs: 1_000 });
+      const carrier = await f.attach();
+      const client = f.client();
+      const idle = client.createSession(sessionOptions(randomUUID()));
+      const busy = client.createSession(sessionOptions(randomUUID()));
+      const working = client.createSession(sessionOptions(randomUUID()));
+      await Promise.all([idle.start(), busy.start(), working.start()]);
+      await busy.send({ operationId: randomUUID(), content: "Still running" });
+      await f.sessions[2]!.emit({ type: "system", subtype: "session_state_changed", state: "running",
+        uuid: randomUUID(), session_id: f.sessions[2]!.options.sessionId } as SDKMessage);
+      await working.flushMessages!();
+      await carrier.close();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(f.sessions.map(({ closed }) => closed)).toEqual([false, false, false]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.waitFor(() => expect(f.sessions[0]!.closed).toBe(true));
+      expect(f.sessions[1]!.closed).toBe(false);
+      expect(f.sessions[2]!.closed).toBe(false);
+    } finally { vi.useRealTimers(); }
   });
 });
 

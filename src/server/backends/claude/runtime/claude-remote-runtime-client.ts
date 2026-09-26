@@ -14,7 +14,7 @@ import type { ClaudeSdkSessionInitialization } from "../claude-sdk-session.js";
 import { verifyClaudeRuntimeVersion } from "../claude-release-guard.js";
 import { resolveClaudeSafeSkills, type ClaudeSafeSkill } from "../claude-skills.js";
 import * as worker from "../worker/claude-runtime-v1.js";
-import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudePersistentOpenRequestSchema, claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
+import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudePersistentOpenRequestSchema, claudePersistentRetireResponseSchema, claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, claudePersistentRuntimeOperations } from "./claude-sidecar-runtime.js";
 
 type Command = ClaudePersistentCommand extends infer C ? C extends ClaudePersistentCommand ? Omit<C, "runtimeId" | "controllerEpoch"> : never : never;
@@ -91,6 +91,15 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
     catch (error) { options.onVersionAssessmentFailed?.(); throw error; }
     verifyClaudeRuntimeVersion(result.cliRelease, options);
     return result;
+  }
+  /**
+   * Retire the service-owned query of a thread main has no runtime for. The
+   * host retires it only when nothing is outstanding, so running provider
+   * work is never stopped here.
+   */
+  async retireSession(input: { readonly sessionId: string; readonly cwd: string }): Promise<"retired" | "absent" | "busy"> {
+    if (this.#sessions.has(input.sessionId)) return "busy";
+    return claudePersistentRetireResponseSchema.parse(await this.execute({ action: "retire", request: input })).outcome;
   }
   async listSessions(options: Parameters<ClaudeRuntimeClient["listSessions"]>[0], environment: Readonly<Record<string, string | undefined>>) {
     assertEmptyEnvironment(environment);
@@ -397,7 +406,7 @@ class PersistentSession implements ClaudeRuntimeSession {
         crossedSubmissionBoundary: false, backendCode: response.code,
         safeMessage: busy ? "Claude is still working. The input was not sent."
           : response.code === "claude_persistent_query_closed"
-            ? "The retained Claude session has ended. Restart the Claude backend in Settings to recover. The input was not sent."
+            ? "The retained Claude session has ended. Reopen the thread to start a new Claude session. The input was not sent."
             : "The Claude runtime cannot retain another input. The input was not sent.",
       });
     }
@@ -592,6 +601,6 @@ function retainedQueryFailure(code: string): BackendError {
   return new BackendError({
     category: "unavailable", retryable: false, crossedSubmissionBoundary: true,
     backendCode: code,
-    safeMessage: "The retained Claude session has ended. Restart the Claude backend in Settings to recover; review any unresolved inputs before sending again.",
+    safeMessage: "The retained Claude session has ended. Reopen the thread to start a new Claude session; review any unresolved inputs before sending again.",
   });
 }
