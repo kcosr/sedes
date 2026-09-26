@@ -106,6 +106,11 @@
 - Keep a conflicting Claude result from failing the thread; the first recorded
   outcome is kept.
 
+- Keep a remote Claude outcome that finished while main was away from being
+  recorded as failed when the service stops: only sessions with running work
+  fail. An automatic sidecar replacement that ends Claude work started after
+  its idle check now leaves an abandonment record.
+
 - Show background work before it is interrupted. **Force reset…** counts the
   background agents and commands in the affected conversations, and backend
   and environment Stop, Restart, and Upgrade previews list running turns,

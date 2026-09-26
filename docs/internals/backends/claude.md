@@ -675,6 +675,17 @@ replace the remote owner. Use the confirmed backend Stop/Restart flow to review
 and abandon unresolved outcomes when necessary. Ordinary reattachment never
 replays an uncertain input or discards unknown background work.
 
+An operator's forced stop fails only sessions with live work: a running turn
+(including one Claude started), a pending input or permission, or background
+activity. A session whose work had settled keeps its retained output,
+including an unacknowledged result, as its last event; the stop abandons it
+without appending a failure, and the abandonment evidence marks each session's
+`liveWork` and background counts. An unforced stop proceeds only after the
+owner reports no work, but Claude can start work itself while the stop reads
+history. If any session has live work when the worker closes, the stop records
+before- and after-shutdown evidence marked `startedAfterConfirmation`, as a
+forced stop would.
+
 Sidecar wire v10 fences older attachment/send response shapes and workers that
 cannot carry native steering priority before connecting to a retained runtime. Busy incompatible services require the existing explicit
 upgrade flow; they are not silently replaced. During a deliberate shutdown,

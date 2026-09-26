@@ -1333,3 +1333,80 @@ describe("persistent retained-event accounting", () => {
     await f.stop(true);
   });
 });
+
+describe("persistent host shutdown evidence", () => {
+  const result = (sessionId: string, operationId: string): SDKMessage => ({ type: "result", subtype: "success", duration_ms: 0, duration_api_ms: 0,
+    is_error: false, num_turns: 1, result: "Done.", stop_reason: "end_turn", total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [],
+    uuid: randomUUID(), session_id: sessionId, user_message_uuid: operationId, user_message_uuids: [operationId] }) as unknown as SDKMessage;
+  const running = (sessionId: string) => ({ type: "system", subtype: "session_state_changed", state: "running",
+    uuid: randomUUID(), session_id: sessionId }) as SDKMessage;
+  type Evidence = { phase: string; startedAfterConfirmation?: boolean;
+    sessions: { sessionId: string; liveWork: boolean; events: { kind: string; messageType?: string }[] }[] };
+  const evidence = (archive: ReturnType<typeof vi.fn>) => archive.mock.calls.map(([record]) => (record as { evidence: Evidence }).evidence);
+
+  it("fails only interrupted work on a forced stop and keeps a settled session's unacknowledged result", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const delivered: ClaudePersistentEvent[] = [];
+    const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
+    const [settled, interrupted] = [randomUUID(), randomUUID()];
+    const operations = new Map<string, string>();
+    for (const sessionId of [settled, interrupted]) {
+      await host.execute({ ...authority, action: "open", replay: "full", request: {
+        queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
+      const operationId = randomUUID();
+      operations.set(sessionId, operationId);
+      await host.execute({ ...authority, action: "send", request: { queryId: sessionId, operationId, content: "Work." } }, listener);
+      await f.sessions.find(session => session.options.sessionId === sessionId)!.emit(lifecycle(sessionId, operationId, "started"));
+    }
+    // Main never acknowledges this result, as when it restarted meanwhile.
+    await f.sessions.find(session => session.options.sessionId === settled)!.emit(result(settled, operations.get(settled)!));
+    await f.stop(true);
+    const [before, after] = evidence(f.archive);
+    expect(before!.phase).toBe("before_shutdown");
+    expect(before!.sessions.map(({ sessionId, liveWork }) => [sessionId, liveWork])).toEqual([[settled, false], [interrupted, true]]);
+    const kinds = (sessionId: string) => after!.sessions.find(session => session.sessionId === sessionId)!.events.map(event => event.messageType ?? event.kind);
+    expect(after!.phase).toBe("after_shutdown");
+    expect(kinds(settled)).toEqual(["user", "command_lifecycle", "result"]);
+    expect(kinds(interrupted)).toEqual(["user", "command_lifecycle", "failed"]);
+    expect(delivered.filter(event => event.payload.kind === "failed").map(event => event.sessionId)).toEqual([interrupted]);
+  });
+
+  it("records a hard handover when Claude starts work after an unforced stop was confirmed", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const sessionId = randomUUID();
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, () => {});
+    await host.execute({ ...authority, action: "detach", request: { sessionId } }, () => {});
+    expect(host.snapshot().blockers).toEqual([]);
+    const native = f.sessions[0]!;
+    // A task notification wakes Claude while the idle stop reads its history.
+    f.runtime.getSessionInfo.mockImplementationOnce(async () => { await native.emit(running(sessionId)); return undefined; });
+    await expect(host.stop(false, "sidecar_service_replacement")).rejects.toThrow("sidecar_resource_handoff_pending");
+    expect(native.closed).toBe(true);
+    expect(evidence(f.archive)).toEqual([expect.objectContaining({ phase: "before_shutdown", startedAfterConfirmation: true,
+      sessions: [expect.objectContaining({ sessionId, liveWork: true })] })]);
+    // Its retained frame is recovery evidence; once applied, the stop completes.
+    const retained = claudePersistentAttachmentSchema.parse(await host.execute({ ...authority, action: "attach", replay: "unacknowledged", request: { sessionId } }, () => {}));
+    for (const event of retained.events) await host.execute({ ...authority, action: "acknowledge", request: { sessionId, sequence: event.sequence } }, () => {});
+    await host.stop(false, "sidecar_service_replacement");
+    expect(evidence(f.archive).at(-1)).toMatchObject({ phase: "after_shutdown", startedAfterConfirmation: true });
+  });
+
+  it("writes no abandonment record for an unforced stop that ended nothing", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const sessionId = randomUUID();
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, () => {});
+    await host.stop(false, "sidecar_service_replacement");
+    expect(f.archive).not.toHaveBeenCalled();
+  });
+});

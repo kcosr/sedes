@@ -48,6 +48,8 @@ export class ClaudePersistentRuntimeHost {
   #cleanupUnproven = false;
   #frozen = false;
   #abandoning = false;
+  /** An unforced stop ended work that started after its confirmation. */
+  #handedOver = false;
   #inflight = 0;
   readonly #stoppedHistory = new Map<string, { info: Awaited<ReturnType<ClaudeRuntimeClient["getSessionInfo"]>>; present: boolean; messages: Awaited<ReturnType<ClaudeRuntimeClient["getSessionMessages"]>> }>();
   freezeAdmission(): void { this.#frozen = true; }
@@ -116,6 +118,9 @@ export class ClaudePersistentRuntimeHost {
     return { ...this.snapshot(), sessionCount: this.#sessions.size,
       sessions: [...this.#sessions.values()].slice(0, 256).map(session => ({ sessionId: session.id,
         providerState: session.providerState,
+        // Settled sessions hold only unacknowledged output, possibly a result.
+        liveWork: this.#hasLiveWork(session),
+        background: (({ state, agents, commands, other }) => ({ state, agents, commands, other }))(session.backgroundActivity.snapshot()),
         activeOperationIds: [...session.active], pendingInputIds: [...session.pendingInputs.keys()],
         retainedEventCount: session.events.size,
         events: [...session.events.values()].slice(0, 256).map(event => ({ sequence: event.sequence, kind: event.payload.kind,
@@ -131,12 +136,15 @@ export class ClaudePersistentRuntimeHost {
       await this.input.services.recordAbandonment({ resourceId: this.runtimeId, kind: "claude_agent_sdk", reason,
         evidence: { phase: "before_shutdown", ...this.abandonmentEvidence() } });
       this.#abandoning = true;
+      const interrupted = new Set([...this.#sessions.values()].filter(session => this.#hasLiveWork(session)));
       for (const session of this.#sessions.values()) {
         for (const permission of session.permissions.values()) {
           const payload = permission.event.payload;
           if (payload.kind === "permission") permission.resolve({ behavior: "deny", message: "The operator stopped this runtime.", toolUseID: payload.request.options.toolUseID });
         }
-        this.#fail(session, "claude_persistent_operator_stopped");
+        // Only interrupted work fails. A settled session keeps its retained
+        // outcome, including an unacknowledged result, as its last word.
+        if (interrupted.has(session)) this.#fail(session, "claude_persistent_operator_stopped");
       }
     }
     if (!this.#runtimeStopped) {
@@ -155,6 +163,13 @@ export class ClaudePersistentRuntimeHost {
         if (historyBytes > 64 * 1024 * 1024) throw new Error("claude_persistent_recovery_history_capacity_exceeded");
         this.#stoppedHistory.set(session.id, { info, present, messages });
       }
+      // Claude can start work itself after an unforced stop was confirmed
+      // idle (a notification, a scheduled wake-up). Ending it is still a hard
+      // handover, so it leaves the same evidence as an operator's forced stop.
+      const handover = !force && [...this.#sessions.values()].some(session => this.#hasLiveWork(session));
+      this.#handedOver = handover;
+      if (handover) await this.input.services.recordAbandonment({ resourceId: this.runtimeId, kind: "claude_agent_sdk", reason,
+        evidence: { phase: "before_shutdown", startedAfterConfirmation: true, ...this.abandonmentEvidence() } });
       this.#closing = true;
       try { await this.input.close(); }
       catch (error) {
@@ -181,8 +196,8 @@ export class ClaudePersistentRuntimeHost {
     // Native cleanup can emit terminal or permission receipts while awaited.
     // Proven termination and application adoption are separate obligations.
     if (!force && [...this.#sessions.values()].some(session => this.#hasUnsettledOutcomes(session))) throw new SidecarResourceHandoffPendingError();
-    if (force) await this.input.services.recordAbandonment({ resourceId: this.runtimeId, kind: "claude_agent_sdk", reason,
-      evidence: { phase: "after_shutdown", ...this.abandonmentEvidence() } });
+    if (force || this.#handedOver) await this.input.services.recordAbandonment({ resourceId: this.runtimeId, kind: "claude_agent_sdk", reason,
+      evidence: { phase: "after_shutdown", ...(force ? {} : { startedAfterConfirmation: true }), ...this.abandonmentEvidence() } });
     this.#closed = true;
     this.#stoppedHistoryPager.close();
     this.detach();

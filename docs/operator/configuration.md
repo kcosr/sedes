@@ -730,7 +730,9 @@ when provider state is unknown; retained outcomes do not veto it. Provider-nativ
 history remains in its existing store. Bounded operation identity and disposition
 metadata is saved under the scoped service directory’s `abandoned-work/` directory
 on a best-effort basis; this is diagnostic evidence, not a replayable transcript
-or proof that an uncertain mutation succeeded. Archive failures are logged and
+or proof that an uncertain mutation succeeded. An automatic replacement that
+ends Claude work started after its idle check, for example a turn Claude began
+itself, records the same evidence marked `startedAfterConfirmation`. Archive failures are logged and
 do not block Stop. The archive retains at most 128 files and caps each evidence
 payload at 1 MiB. Once full it logs `sidecar_abandonment_capacity_exceeded` and
 stops recording new evidence. Back up records you need, then remove reviewed
