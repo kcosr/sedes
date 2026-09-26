@@ -1,7 +1,7 @@
 import { claudeMessageIsChildOwned } from "../claude-message-scope.js";
 import { attachmentDiagnostic } from "../../../diagnostics/attachment-diagnostics.js";
 import { ClaudeBackgroundActivity } from "../claude-background-activity.js";
-import { claudeResultIsUnrelated, claudeResultUserMessageIds } from "../claude-result-lifecycle.js";
+import { claudeCommandLifecycle, claudeResultIsUnrelated, claudeResultUserMessageIds } from "../claude-result-lifecycle.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { CanUseTool, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeRuntimeClient, ClaudeRuntimeSession } from "../claude-runtime-client.js";
@@ -22,6 +22,8 @@ type Session = {
   events: Map<number, ClaudePersistentEvent>; replay: Map<number, ClaudePersistentEvent>; bytes: number; replayBytes: number; sequence: number;
   sends: Map<string, string>; pendingInputs: Map<string, Parameters<ClaudeRuntimeSession["send"]>[0]>; pendingInputBytes: number; permissionResponses: Map<string,string>; retiring?: Promise<void>; active: Set<string>; permissions: Map<string, Permission>;
   evicted?: boolean;
+  /** Claude Code's own run state; work it starts itself keeps it non-idle. */
+  providerState: "idle" | "running" | "requires_action";
   listener?: (event: ClaudePersistentEvent) => void; epoch?: number; failureCode?: string;
   historySweep?: Promise<void>; historyTimer?: ReturnType<typeof setTimeout>; nextHistoryRead: number; historyBackoff: number; historyPressure: boolean; historyCandidatesDirty: boolean; hasHistoryCandidates: boolean; rewriteGeneration: number; streamStopSequence: number; replayStateSequences: Map<string, number>;
 };
@@ -75,7 +77,7 @@ export class ClaudePersistentRuntimeHost {
     const sessions = [...this.#sessions.values()];
     const blockers: SidecarUpgradeBlocker[] = [];
     if (this.#cleanupUnproven) blockers.push("cleanup_unproven");
-    if (this.#inflight || sessions.some(session => session.active.size || session.backgroundActivity.active || session.backgroundActivity.retirementBlocked)) blockers.push("active_work");
+    if (this.#inflight || sessions.some(session => session.active.size || session.providerState !== "idle" || session.backgroundActivity.active || session.backgroundActivity.retirementBlocked)) blockers.push("active_work");
     if (sessions.some(session => session.permissions.size)) blockers.push("pending_interaction");
     if (sessions.some(session => this.#hasUnsettledOutcomes(session))) blockers.push("unsettled_outcome");
     return { state: this.#cleanupUnproven ? "unknown" as const : blockers.length ? "active" as const : "idle" as const,
@@ -85,6 +87,7 @@ export class ClaudePersistentRuntimeHost {
   abandonmentEvidence() {
     return { ...this.snapshot(), sessionCount: this.#sessions.size,
       sessions: [...this.#sessions.values()].slice(0, 256).map(session => ({ sessionId: session.id,
+        providerState: session.providerState,
         activeOperationIds: [...session.active], pendingInputIds: [...session.pendingInputs.keys()],
         retainedEventCount: session.events.size,
         events: [...session.events.values()].slice(0, 256).map(event => ({ sequence: event.sequence, kind: event.payload.kind,
@@ -139,6 +142,7 @@ export class ClaudePersistentRuntimeHost {
       this.#shutdownFailures.clear(); this.#shutdownCancellations.length = 0;
       for (const session of this.#sessions.values()) {
         session.active.clear();
+        session.providerState = "idle";
         for (const permission of [...session.permissions.values()]) {
           if (permission.event.payload.kind === "permission") this.#permissionDelivered(session, permission.event.payload.request.options, false);
         }
@@ -361,7 +365,8 @@ export class ClaudePersistentRuntimeHost {
     created = { backgroundActivity: new ClaudeBackgroundActivity(), id: request.sessionId, cwd: request.cwd, authorityFingerprint: queryAuthorityFingerprint(request), ...(request.launch === "fork" ? { forkIdentity: JSON.stringify([request.sourceSessionId, request.resumeSessionAt]) } : {}), runtime, starting: Promise.resolve(), events: new Map(), replay: new Map(), bytes: 0, replayBytes: 0, sequence: 0,
       nextHistoryRead: 0, historyBackoff: 0, historyPressure: false, historyCandidatesDirty: true, hasHistoryCandidates: false, rewriteGeneration: 0, streamStopSequence: 0, replayStateSequences: new Map(),
       admissionJournalComplete: request.launch === "new",
-      terminalResultSequences: new Set(), sends: new Map(), pendingInputs: new Map(), pendingInputBytes: 0, commandsInvalidated: false, permissionResponses: new Map(), active: new Set(), permissions: new Map() };
+      terminalResultSequences: new Set(), sends: new Map(), pendingInputs: new Map(), pendingInputBytes: 0, commandsInvalidated: false, permissionResponses: new Map(), active: new Set(), permissions: new Map(),
+      providerState: "idle" };
     session = created;
     session.backgroundActivity.reset();
     this.#sessions.set(session.id, session); this.#inflight++; this.#revision++;
@@ -403,7 +408,7 @@ export class ClaudePersistentRuntimeHost {
   async #retireIdle(session: Session): Promise<void> {
     if (session.retiring) return await session.retiring;
     if (this.#runtimeStopped || this.#closed) return;
-    if (!session.evicted || session.listener || session.active.size || session.backgroundActivity.active || session.backgroundActivity.retirementBlocked || session.events.size || session.permissions.size || session.pendingInputs.size) return;
+    if (!session.evicted || session.listener || session.active.size || session.providerState !== "idle" || session.backgroundActivity.active || session.backgroundActivity.retirementBlocked || session.events.size || session.permissions.size || session.pendingInputs.size) return;
     // The application explicitly evicted an idle, fully acknowledged query.
     // Its transcript lives in provider history; replay exists only for a
     // retained attachment and must not keep an evicted subprocess resident.
@@ -437,26 +442,25 @@ export class ClaudePersistentRuntimeHost {
     if (message.type === "system" && "subtype" in message && message.subtype === "commands_changed") session.commandsInvalidated = true;
     if (message.type === "user" && "uuid" in message && typeof message.uuid === "string" &&
         session.pendingInputs.get(message.uuid)?.priority !== "next") this.#forgetPendingInput(session, message.uuid);
+    if (message.type === "system" && message.subtype === "session_state_changed") session.providerState = message.state;
     const terminalResult = message.type === "result" && !claudeResultIsUnrelated(message,
       session.active.size ? [...session.active] : [...session.sends.keys()].slice(-1));
-    const provesAcceptance = message.type === "assistant" || message.type === "stream_event" || terminalResult ||
-      (message.type === "system" && "subtype" in message && message.subtype === "session_state_changed" && "state" in message && message.state === "running");
     const consumedIds = message.type === "assistant" || message.type === "stream_event" || message.type === "result"
       ? claudeResultUserMessageIds(message) : [];
-    if (provesAcceptance) {
-      // Existing foreground output says nothing about an enqueued next message.
-      // Only an exact native consumption stamp can materialize a steer.
-      for (const [operationId, input] of session.pendingInputs) {
-        if (input.priority === "next" ? !consumedIds.includes(operationId) :
-            consumedIds.length > 0 && !consumedIds.includes(operationId)) continue;
-        this.#forgetPendingInput(session, operationId);
-        this.#event(session, { kind: "message", message: {
-          type: "user", uuid: operationId, session_id: session.id,
-          parent_tool_use_id: null, message: { role: "user", content: input.content },
-          ...(input.priority ? { priority: input.priority } : {}),
-        }, ...(input.priority ? { consumedTurnRootUuid: consumedIds[0]! } : {}) } as ClaudePersistentEvent["payload"]);
-        if (consumedIds.length === 0) break;
-      }
+    const lifecycle = claudeCommandLifecycle(message);
+    const started = lifecycle?.state === "started" ? lifecycle.commandUuid : undefined;
+    // Only exact native evidence materializes an admitted input: Claude's
+    // dequeue of an ordinary input, or a consumption stamp. Unstamped output
+    // can belong to a turn Claude started itself, and a steer's receiving turn
+    // is known only from its stamp.
+    for (const [operationId, input] of session.pendingInputs) {
+      if (!consumedIds.includes(operationId) && (started !== operationId || input.priority === "next")) continue;
+      this.#forgetPendingInput(session, operationId);
+      this.#event(session, { kind: "message", message: {
+        type: "user", uuid: operationId, session_id: session.id,
+        parent_tool_use_id: null, message: { role: "user", content: input.content },
+        ...(input.priority ? { priority: input.priority } : {}),
+      }, ...(input.priority ? { consumedTurnRootUuid: consumedIds[0]! } : {}) } as ClaudePersistentEvent["payload"]);
     }
     if (terminalResult) {
       for (const id of session.active) {
@@ -498,6 +502,7 @@ export class ClaudePersistentRuntimeHost {
     if (session.failureCode) return;
     this.#cancelHistoryTimer(session);
     session.failureCode = code; session.backgroundActivity.invalidate(); session.active.clear(); session.pendingInputs.clear(); session.pendingInputBytes = 0;
+    session.providerState = "idle";
     this.#event(session, { kind: "failed", code }, true);
   }
   #event(session: Session, payload: ClaudePersistentEvent["payload"], reserve = false, beforePublish?: (event: ClaudePersistentEvent) => void): ClaudePersistentEvent {
