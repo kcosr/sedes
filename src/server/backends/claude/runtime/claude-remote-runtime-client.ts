@@ -415,10 +415,6 @@ class PersistentSession implements ClaudeRuntimeSession {
     this.#assertReady();
     return worker.claudeRuntimeQueryInterruptOperation.responseSchema.parse(await this.#execute({ action: "interrupt", request: { queryId: this.options.sessionId } })).receipt ?? undefined;
   }
-  async cancelQueuedInput(operationId: string) {
-    this.#assertReady();
-    return worker.claudeRuntimeQueryCancelInputOperation.responseSchema.parse(await this.#execute({ action: "cancel_input", request: { queryId: this.options.sessionId, operationId } })).cancelled;
-  }
   async setModel(model?: string) {
     this.#assertReady();
     worker.claudeRuntimeQuerySetModelOperation.responseSchema.parse(await this.#execute({ action: "set_model", request: { queryId: this.options.sessionId, model: model ?? null } }));

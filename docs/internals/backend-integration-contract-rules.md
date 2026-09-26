@@ -2149,7 +2149,7 @@ targeted turn ended without the input. It never authorizes a resend.
 
 | Backend | Accepted Steer not yet started when Stop lands |
 | --- | --- |
-| Claude | Withdrawn by `cancel_async_message` for each Sedes input awaiting its start, before the interrupt. The exact evidence is that input's `command_lifecycle` `cancelled` before any `started`. |
+| Claude | Withdrawn by `cancel_async_message` for each Sedes input awaiting its start, before the interrupt, by the owner holding the query's inputs: the handle for a local query, the persistent owner for a remote one, including a steer an earlier main attachment sent. The exact evidence is that input's `command_lifecycle` `cancelled` before any `started`. |
 | Pi | Withdrawn by clearing Pi's generation-volatile steering queue before the abort (Stop and retirement). The exact evidence is that input's authenticated `lost` submission marker, written when its run settles, or restart reconciliation finds its generation gone, without its user entry. |
 | Codex | Dropped by Codex's interrupt, which clears the turn's pending input without an event; it can never start or join a later turn. The Steer stays pending until its exact `userMessage` appears. The evidence is its absence from final history once the target turn is terminal (complete legacy read) or the thread is settled (stable paginated cuts). Residual: a forced abort after Codex's 100 ms interrupt grace can leave a just-drained Steer in model history without its item. |
 | Grok | No Steer; active-turn input waits in Queue. |

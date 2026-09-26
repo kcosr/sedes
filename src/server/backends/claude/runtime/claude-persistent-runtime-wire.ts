@@ -28,7 +28,6 @@ export const claudePersistentCommandSchema = z.discriminatedUnion("action", [
   command("fork", worker.claudeRuntimeForkRequestSchema),
   command("send", worker.claudeRuntimeQuerySendRequestSchema),
   command("interrupt", z.strictObject({ queryId: z.string().uuid() })),
-  command("cancel_input", worker.claudeRuntimeQueryCancelInputRequestSchema),
   command("set_model", worker.claudeRuntimeQuerySetModelRequestSchema),
   command("set_effort", worker.claudeRuntimeQuerySetEffortRequestSchema),
   command("set_permission_mode", worker.claudeRuntimeQuerySetPermissionModeRequestSchema),

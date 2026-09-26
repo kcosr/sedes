@@ -24,6 +24,8 @@ import type {
   ManagedWorkerArtifactRegistration,
 } from "../../managed-workers/artifact.js";
 import type {
+  ClaudeOwnedRuntimeClient,
+  ClaudeOwnedRuntimeSession,
   ClaudeRuntimeClient,
   ClaudeRuntimeProbeInput,
   ClaudeRuntimeProbeResult,
@@ -64,7 +66,7 @@ export interface ClaudeManagedRuntimeOwnerOptions {
  * Owns one lazy Claude worker generation at a time. Ordinary proven carrier
  * loss permits a replacement; cleanup-proof loss permanently fences the owner.
  */
-export class ClaudeManagedRuntimeOwner implements ClaudeRuntimeClient {
+export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
   readonly #scope: EnvironmentChannelScope;
   readonly #artifact: Promise<ManagedWorkerArtifactRegistration>;
   readonly #channels: ExecutionEnvironmentChannelProvider;
@@ -144,7 +146,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeRuntimeClient {
     return await this.#observe(async () => await (await this.#client()).probe(input));
   }
 
-  createSession(options: ClaudeRuntimeSessionOptions): ClaudeRuntimeSession {
+  createSession(options: ClaudeRuntimeSessionOptions): ClaudeOwnedRuntimeSession {
     this.#assertRuntimeIdentity(options);
     assertQueryEnvironment(options.environment);
     const lease = this.#residency.retain();
@@ -495,17 +497,17 @@ function assertExactHello(
   }
 }
 
-class DeferredManagedClaudeSession implements ClaudeRuntimeSession {
-  readonly #create: () => Promise<ClaudeRuntimeSession>;
+class DeferredManagedClaudeSession implements ClaudeOwnedRuntimeSession {
+  readonly #create: () => Promise<ClaudeOwnedRuntimeSession>;
   readonly #onReady: () => void | Promise<void>;
   readonly #onFailure: (error: unknown) => void;
-  #delegate: ClaudeRuntimeSession | undefined;
-  #starting: Promise<ClaudeRuntimeSession> | undefined;
+  #delegate: ClaudeOwnedRuntimeSession | undefined;
+  #starting: Promise<ClaudeOwnedRuntimeSession> | undefined;
   #closed = false;
   #closePromise: Promise<void> | undefined;
   readonly #release: () => Promise<void>;
   constructor(
-    create: () => Promise<ClaudeRuntimeSession>,
+    create: () => Promise<ClaudeOwnedRuntimeSession>,
     onReady: () => void | Promise<void>,
     onFailure: (error: unknown) => void,
     release: () => Promise<void>,
@@ -551,7 +553,7 @@ class DeferredManagedClaudeSession implements ClaudeRuntimeSession {
     await this.#delegate?.close();
     await this.#release();
   }
-  #ready(): ClaudeRuntimeSession {
+  #ready(): ClaudeOwnedRuntimeSession {
     if (this.#closed || !this.#delegate?.initialization) {
       throw new Error("claude_runtime_session_not_ready");
     }

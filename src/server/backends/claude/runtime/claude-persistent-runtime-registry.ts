@@ -3,7 +3,7 @@ import type { RequestScope } from "../../../identity/identity-provider.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../../execution/environment-channel.js";
 import type { ManagedWorkerArtifactRegistration } from "../../../managed-workers/artifact.js";
 import { SidecarResourceHandoffPendingError, type PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
-import type { ClaudeRuntimeClient } from "../claude-runtime-client.js";
+import type { ClaudeOwnedRuntimeClient } from "../claude-runtime-client.js";
 import type { ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v1.js";
 import { ClaudeManagedRuntimeOwner } from "../claude-managed-runtime-owner.js";
 import { ClaudePersistentRuntimeHost } from "./claude-persistent-runtime-host.js";
@@ -19,7 +19,7 @@ export class ClaudePersistentRuntimeRegistry {
     artifact: () => Promise<ManagedWorkerArtifactRegistration>;
     validateQueryEnvironment?: (environment: Readonly<Record<string, string | undefined>>) => void;
     validateAgentToolMcp?: (agentToolMcp: ClaudeRuntimeAgentToolMcp) => void;
-    createRuntime?: (configuration: ClaudePersistentConfiguration) => ClaudeRuntimeClient & { close(): Promise<void> };
+    createRuntime?: (configuration: ClaudePersistentConfiguration) => ClaudeOwnedRuntimeClient & { close(): Promise<void> };
     /** Residency limit for detached, quiescent queries; tests shorten it. */
     detachedSessionTtlMs?: number;
   }) {}

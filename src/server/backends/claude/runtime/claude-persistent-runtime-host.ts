@@ -4,7 +4,7 @@ import { ClaudeBackgroundActivity } from "../claude-background-activity.js";
 import { claudeCommandLifecycle, claudeResultIsUnrelated, claudeResultUserMessageIds } from "../claude-result-lifecycle.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { CanUseTool, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { ClaudeRuntimeClient, ClaudeRuntimeForkResult, ClaudeRuntimeSession } from "../claude-runtime-client.js";
+import type { ClaudeOwnedRuntimeClient, ClaudeOwnedRuntimeSession, ClaudeRuntimeClient, ClaudeRuntimeForkResult, ClaudeRuntimeSession } from "../claude-runtime-client.js";
 import { claudeForkLaunchFailure } from "../claude-fork-launch.js";
 import { SidecarOperationError } from "../../../../internal/sidecar-protocol/operation-registry.js";
 import type { ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v1.js";
@@ -19,7 +19,7 @@ type Permission = { event: ClaudePersistentEvent; resolve(value: PermissionResul
 type Session = {
   backgroundActivity: ClaudeBackgroundActivity; backgroundSequence?: number;
   terminalResultSequences: Set<number>; pendingTerminalSequence?: number; model?: string | null; commandsInvalidated: boolean; permissionMode?: import("@anthropic-ai/claude-agent-sdk").PermissionMode; confirmedEffort?: import("@anthropic-ai/claude-agent-sdk").EffortLevel | null;
-  id: string; cwd: string; authorityFingerprint: string; runtime: ClaudeRuntimeSession; starting: Promise<unknown>;
+  id: string; cwd: string; authorityFingerprint: string; runtime: ClaudeOwnedRuntimeSession; starting: Promise<unknown>;
   admissionJournalComplete: boolean;
   events: Map<number, ClaudePersistentEvent>; replay: Map<number, ClaudePersistentEvent>; bytes: number; replayBytes: number; sequence: number;
   /** Unacknowledged message events sit in both maps; retention counts them once. */
@@ -83,7 +83,7 @@ export class ClaudePersistentRuntimeHost {
   }
   constructor(readonly input: {
     configuration: ClaudePersistentConfiguration;
-    client: ClaudeRuntimeClient;
+    client: ClaudeOwnedRuntimeClient;
     close(): Promise<void>;
     services: PersistentSidecarServiceRegistry;
     maximumEventBytes?: number;
@@ -263,7 +263,7 @@ export class ClaudePersistentRuntimeHost {
     // Reads and attachment observation do not invalidate an operator's stop
     // confirmation. Only asynchronous provider mutations need an in-flight
     // blocker; synchronous admission and journal changes update their own state.
-    const mutation = ["rename", "interrupt", "cancel_input", "set_model", "set_effort", "set_permission_mode"].includes(command.action);
+    const mutation = ["rename", "interrupt", "set_model", "set_effort", "set_permission_mode"].includes(command.action);
     if (mutation) { this.#inflight++; this.#revision++; }
     const started = performance.now();
     try { return await this.#execute(command, listener); }
@@ -454,10 +454,12 @@ export class ClaudePersistentRuntimeHost {
         }
         return { accepted: true };
       }
-      case "interrupt": return { receipt: await this.#session(command.request.queryId).runtime.interrupt() ?? null };
-      // Only the input's own `cancelled` lifecycle frame, observed in
-      // #message, records a withdrawal; this answer is Claude's own.
-      case "cancel_input": return { cancelled: await this.#session(command.request.queryId).runtime.cancelQueuedInput(command.request.operationId) };
+      case "interrupt": {
+        // Main sends `interrupt` only for Stop.
+        const session = this.#session(command.request.queryId);
+        await this.#withdrawUnstartedInputs(session);
+        return { receipt: await session.runtime.interrupt() ?? null };
+      }
       case "set_model": { const session = this.#session(command.request.queryId); await session.runtime.setModel(command.request.model ?? undefined); session.model = command.request.model; return { updated: true }; }
       case "set_effort": { const session = this.#session(command.request.queryId); await session.runtime.setEffort(command.request.effort ?? undefined); session.confirmedEffort = command.request.effort; return { updated: true }; }
       case "set_permission_mode": { const session = this.#session(command.request.queryId); await session.runtime.setPermissionMode(command.request.permissionMode); session.permissionMode = command.request.permissionMode; return { updated: true }; }
@@ -735,6 +737,23 @@ export class ClaudePersistentRuntimeHost {
           session.backgroundSequence = event.sequence;
         }
       });
+  }
+  /**
+   * Stop withdraws every Sedes input this owner holds that Claude has not
+   * started, before the interrupt, so none runs as the next turn. The owner
+   * outlives main's attachments, so this includes inputs an earlier attachment
+   * sent, which a replacement main never saw. Claude's own queued work is left
+   * alone. Only an input's own `cancelled` lifecycle frame, observed in
+   * #message, records its withdrawal; Claude's answer here proves nothing, and
+   * a failed request neither proves anything nor blocks the interrupt.
+   */
+  async #withdrawUnstartedInputs(session: Session): Promise<void> {
+    for (const operationId of [...session.pendingInputs.keys()]) {
+      // Claude may start or settle an input while an earlier request runs.
+      if (!session.pendingInputs.has(operationId) || session.startedInputs.has(operationId)) continue;
+      try { await session.runtime.cancelQueuedInput(operationId); }
+      catch { /* The input stays pending; its outcome comes from evidence. */ }
+    }
   }
   #forgetPendingInput(session: Session, operationId: string): void {
     const pending = session.pendingInputs.get(operationId);

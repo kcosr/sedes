@@ -13,6 +13,8 @@ import {
 import { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.js";
 import { sidecarSocketByteStream } from "../../src/server/sidecar/sidecar-socket-byte-stream.js";
 import type {
+  ClaudeOwnedRuntimeClient,
+  ClaudeOwnedRuntimeSession,
   ClaudeRuntimeClient,
   ClaudeRuntimeSession,
   ClaudeRuntimeSessionOptions,
@@ -76,7 +78,7 @@ export async function createClaudeFramedCarrier() {
   };
 }
 
-export class FakePersistentClaudeSession implements ClaudeRuntimeSession {
+export class FakePersistentClaudeSession implements ClaudeOwnedRuntimeSession {
   closed = false;
   readonly initialization: ClaudeSdkSessionInitialization = {
     models: [], commands: [], skillNames: [], terminalCommandNames: [], account: {},
@@ -87,7 +89,7 @@ export class FakePersistentClaudeSession implements ClaudeRuntimeSession {
   readonly start = vi.fn(async () => this.initialization);
   readonly send = vi.fn<ClaudeRuntimeSession["send"]>();
   readonly interrupt = vi.fn(async () => undefined);
-  readonly cancelQueuedInput = vi.fn<ClaudeRuntimeSession["cancelQueuedInput"]>(async () => false);
+  readonly cancelQueuedInput = vi.fn<ClaudeOwnedRuntimeSession["cancelQueuedInput"]>(async () => false);
   readonly setModel = vi.fn(async () => undefined);
   readonly setEffort = vi.fn(async () => undefined);
   readonly setPermissionMode = vi.fn(async () => undefined);
@@ -132,6 +134,6 @@ export function createFakePersistentClaudeRuntime() {
     hasSessionTranscript: vi.fn<ClaudeRuntimeClient["hasSessionTranscript"]>(async () => false),
     renameSession: vi.fn<ClaudeRuntimeClient["renameSession"]>(async () => undefined),
     close: vi.fn(async () => { history.close(); await Promise.all(sessions.map(session => session.close())); }),
-  } satisfies ClaudeRuntimeClient & { close(): Promise<void> };
+  } satisfies ClaudeOwnedRuntimeClient & { close(): Promise<void> };
   return { runtime, sessions };
 }

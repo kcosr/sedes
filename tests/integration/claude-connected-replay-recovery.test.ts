@@ -300,3 +300,69 @@ describe("connected Claude replay reclamation recovery", () => {
     expect(native.closed).toBe(false);
   }, 30_000);
 });
+
+function lifecycle(sessionId: string, operationId: string, state: "queued" | "started" | "cancelled"): SDKMessage {
+  return { type: "command_lifecycle", command_uuid: operationId, state, uuid: randomUUID(), session_id: sessionId } as unknown as SDKMessage;
+}
+
+describe("Stop after main replacement", () => {
+  it("withdraws a steer only the replaced main sent, before interrupting, so it never runs after the Stop", async () => {
+    const f = await fixture();
+    const firstCarrier = await f.attach();
+    const firstClient = f.client();
+    const sessionId = randomUUID();
+    // The same query authority a Claude handle opens with.
+    const first = firstClient.createSession(sessionOptions(sessionId, {
+      canUseTool: async () => ({ behavior: "deny", message: "No tool request expected in this fixture." }),
+    }));
+    await first.start();
+    const native = f.sessions[0]!;
+    const turn = { operationId: randomUUID(), content: "Run the long task." };
+    const steer = { operationId: randomUUID(), content: "Also check the lexer.", priority: "next" as const };
+    await first.send(turn);
+    await native.emit({ type: "system", subtype: "session_state_changed", state: "running", uuid: randomUUID(), session_id: sessionId } as SDKMessage);
+    await native.emit(lifecycle(sessionId, turn.operationId, "started"));
+    await first.send(steer);
+    await native.emit(lifecycle(sessionId, steer.operationId, "queued"));
+    f.runtime.getSessionMessages.mockResolvedValue([{ ...acceptedInput(sessionId, turn), parent_agent_id: null } as SessionMessage]);
+    // Main restarts while Claude still holds the steer.
+    await firstClient.close();
+    await firstCarrier.close();
+
+    await f.attach();
+    const database = new Database(":memory:");
+    initializeEmptyBackendNormalizedDatabase(database);
+    // Only provider settings are under test; application inventory is not used.
+    database.pragma("foreign_keys = OFF");
+    cleanups.push(async () => { database.close(); });
+    const settings = new ClaudeThreadRepository(database);
+    const binding = { ...scope, ownerPrincipalId: scope.principalId, applicationThreadId: "thread", connectionProfileId: "profile",
+      backendConversationId: sessionId, createdAt: "2026-09-26T00:00:00.000Z" };
+    settings.initialize(scope, binding.applicationThreadId, binding,
+      { model: "claude-sonnet-4-6", effort: "low", permissionMode: "default" }, 1);
+    const client = f.client();
+    const handle = new ClaudeConversationHandle({
+      usage: NO_USAGE_SINK, nativeNamespace: "test", binding, canonicalWorkspacePath: "/workspace", workspaceId: "workspace",
+      opaqueBindingDetail: '{"version":1}', runtimeClient: client, executablePath: configuration.executablePath, initializationTimeoutMs: 5000,
+      permissionPolicy: { allowedModes: ["default"] }, modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"),
+      queryGeneration: 2, attachmentProvenanceKey: new Uint8Array(32).fill(1), settings,
+      forkBoundaryAuthentication: { installationKey: new Uint8Array(32).fill(2), ...scope }, childEnvironment: {},
+      loadInitialMessages: () => client.getSessionMessages(sessionId, { dir: "/workspace" }, {}), resumeSession: true, releaseSession: () => {},
+    });
+    cleanups.push(async () => { await handle.close(); });
+    const restored = await handle.establishProjection({ signal: new AbortController().signal });
+    expect(restored.snapshot.runState).toBe("running");
+    native.cancelQueuedInput.mockImplementation(async operationId => {
+      await native.emit(lifecycle(sessionId, operationId, "cancelled"));
+      return true;
+    });
+    await handle.interrupt({ applicationOperationId: randomUUID(), expectedBackendTurnId: restored.snapshot.activeBackendTurnId! });
+    // Claude's owner withdrew it exactly once; this handle never knew it.
+    expect(native.cancelQueuedInput.mock.calls).toEqual([[steer.operationId]]);
+    expect(native.interrupt).toHaveBeenCalledOnce();
+    expect(native.cancelQueuedInput.mock.invocationCallOrder[0]).toBeLessThan(native.interrupt.mock.invocationCallOrder[0]!);
+    expect(handle.withdrewSubmission(steer.operationId)).toBe(false);
+    await expect(client.submissionDisposition({ sessionId, cwd: "/workspace", operationId: steer.operationId })).resolves.toBe("cancelled");
+    expect(f.runtime.createSession).toHaveBeenCalledOnce();
+  }, 30_000);
+});

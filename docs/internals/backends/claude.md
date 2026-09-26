@@ -1041,13 +1041,18 @@ Following the backend-neutral
 [Stop rule](../backend-integration-contract-rules.md#interactions-input-and-interruption),
 Stop also withdraws every input Sedes sent that Claude has not started:
 
-- Before the interrupt, the handle sends Claude Code's `cancel_async_message`
-  for each input of its own that still awaits its start. The pinned SDK
-  0.3.283 implements it as `Query.cancelAsyncMessage`, although its
-  declaration omits the method. It crosses the worker protocol as
-  `query.cancel_input` and the persistent runtime as `cancel_input`. Then the
-  handle sends the plain interrupt. A failed request proves nothing and does
-  not block Stop.
+- Before the interrupt, whichever side owns the query's inputs sends Claude
+  Code's `cancel_async_message` for each Sedes input it holds that Claude has
+  not started. A local query lives exactly as long as its handle, so the
+  handle withdraws its own inputs. A remote query's persistent owner outlives
+  main's attachments, so it withdraws every such input it holds when it
+  handles the `interrupt` command, including a steer an earlier main
+  attachment sent that the replacement never saw; main sends no withdrawal of
+  its own. The pinned SDK 0.3.283 implements the request as
+  `Query.cancelAsyncMessage`, although its declaration omits the method. It
+  crosses the worker protocol as `query.cancel_input`. Then the owner sends
+  the plain interrupt. A failed request proves nothing and does not block
+  Stop.
 - Claude removes a queued input, or marks one already dequeued for the next
   turn so that turn drops it, and closes it with a `cancelled` lifecycle
   frame. It leaves an input it is folding into the running turn, or has

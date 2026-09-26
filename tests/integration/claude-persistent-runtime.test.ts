@@ -345,7 +345,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(f.sessions[1]!.closed).toBe(true);
   });
 
-  it("carries Stop's input withdrawal to the owned query and records only inputs Claude withdrew before starting", async () => {
+  it("withdraws on Stop, before interrupting, only inputs Claude has not started, and records only those Claude withdrew", async () => {
     const f = await fixture();
     const attached = await f.attach();
     const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
@@ -353,42 +353,87 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const sessionId = randomUUID();
     const remote = client.createSession(sessionOptions(sessionId));
     await remote.start();
+    // The owner withdraws; main sends no request of its own.
+    expect(remote.cancelQueuedInput).toBeUndefined();
     const native = f.sessions[0]!;
     const turn = { operationId: randomUUID(), content: "Run the long task." };
     const folded = { operationId: randomUUID(), content: "Use tabs.", priority: "next" as const };
     const withdrawn = { operationId: randomUUID(), content: "Also check the lexer.", priority: "next" as const };
+    const unconfirmed = { operationId: randomUUID(), content: "Mention the tests.", priority: "next" as const };
+    const failing = { operationId: randomUUID(), content: "Keep it short.", priority: "next" as const };
     await remote.send(turn);
     await native.emit(lifecycle(sessionId, turn.operationId, "started"));
-    await remote.send(folded);
-    await remote.send(withdrawn);
-    await native.emit(lifecycle(sessionId, folded.operationId, "queued"));
-    await native.emit(lifecycle(sessionId, withdrawn.operationId, "queued"));
+    for (const steer of [folded, withdrawn, unconfirmed, failing]) {
+      await remote.send(steer);
+      await native.emit(lifecycle(sessionId, steer.operationId, "queued"));
+    }
     // Claude folded one steer into the running turn before the Stop landed.
     await native.emit(lifecycle(sessionId, folded.operationId, "started"));
     native.cancelQueuedInput.mockImplementation(async operationId => {
-      if (operationId !== withdrawn.operationId) return false;
-      await native.emit(lifecycle(sessionId, withdrawn.operationId, "cancelled"));
+      if (operationId === failing.operationId) throw new Error("claude_control_request_failed");
+      // Claude's answer alone records nothing; only the lifecycle frame does.
+      if (operationId === withdrawn.operationId) await native.emit(lifecycle(sessionId, withdrawn.operationId, "cancelled"));
       return true;
     });
-    // Claude's answer alone records nothing; only the lifecycle frame does.
-    await expect(remote.cancelQueuedInput(folded.operationId)).resolves.toBe(false);
-    await expect(client.submissionDisposition({ sessionId, cwd: "/workspace", operationId: folded.operationId })).resolves.toBe("submitted");
-    await expect(remote.cancelQueuedInput(withdrawn.operationId)).resolves.toBe(true);
-    expect(native.cancelQueuedInput.mock.calls).toEqual([[folded.operationId], [withdrawn.operationId]]);
     await remote.interrupt();
+    // A failed request does not block the interrupt, which comes last.
+    expect(native.cancelQueuedInput.mock.calls).toEqual([[withdrawn.operationId], [unconfirmed.operationId], [failing.operationId]]);
     expect(native.interrupt).toHaveBeenCalledOnce();
+    expect(Math.max(...native.cancelQueuedInput.mock.invocationCallOrder)).toBeLessThan(native.interrupt.mock.invocationCallOrder[0]!);
     // The interrupted turn closes the inputs it started with `cancelled` too.
     await native.emit(lifecycle(sessionId, folded.operationId, "cancelled"));
-    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ pendingInputIds: [folded.operationId] });
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({
+      pendingInputIds: [folded.operationId, unconfirmed.operationId, failing.operationId] });
     expect(host.abandonmentEvidence().sessions[0]!.activeOperationIds).not.toContain(withdrawn.operationId);
     const query = { sessionId, cwd: "/workspace" };
     await expect(client.submissionDisposition({ ...query, operationId: withdrawn.operationId })).resolves.toBe("cancelled");
-    await expect(client.submissionDisposition({ ...query, operationId: folded.operationId })).resolves.toBe("submitted");
-    await expect(client.submissionDisposition({ ...query, operationId: turn.operationId })).resolves.toBe("submitted");
+    for (const input of [turn, folded, unconfirmed, failing]) {
+      await expect(client.submissionDisposition({ ...query, operationId: input.operationId })).resolves.toBe("submitted");
+    }
     // The withdrawal outlives the query: it is proof, not tracking state.
     native.options.onFailure?.(new Error("claude_test_query_lost"));
     await expect(client.submissionDisposition({ ...query, operationId: withdrawn.operationId })).resolves.toBe("cancelled");
     await expect(client.submissionDisposition({ ...query, operationId: folded.operationId })).resolves.toBe("session_ended");
+  });
+
+  it("withdraws on Stop a steer an earlier main attachment sent, which the replacement main never saw", async () => {
+    const f = await fixture();
+    const first = await f.attach();
+    const firstClient = f.client();
+    const sessionId = randomUUID();
+    const original = firstClient.createSession(sessionOptions(sessionId));
+    await original.start();
+    const native = f.sessions[0]!;
+    const turn = { operationId: randomUUID(), content: "Run the long task." };
+    const steer = { operationId: randomUUID(), content: "Also check the lexer.", priority: "next" as const };
+    await original.send(turn);
+    await native.emit(lifecycle(sessionId, turn.operationId, "started"));
+    await original.send(steer);
+    await native.emit(lifecycle(sessionId, steer.operationId, "queued"));
+    // Main restarts while Claude still holds the steer.
+    await firstClient.close();
+    await first.close();
+    expect(native.close).not.toHaveBeenCalled();
+
+    const second = await f.attach();
+    const host = f.hosts.ensure(configuration, second.lease.controllerEpoch);
+    const client = f.client();
+    const replacement = client.createSession(sessionOptions(sessionId, { launch: "resume" }));
+    await replacement.start();
+    expect(replacement.reattached).toBe(true);
+    await expect(client.submissionDisposition({ sessionId, cwd: "/workspace", operationId: steer.operationId })).resolves.toBe("submitted");
+    native.cancelQueuedInput.mockImplementation(async operationId => {
+      await native.emit(lifecycle(sessionId, operationId, "cancelled"));
+      return true;
+    });
+    await replacement.interrupt();
+    expect(native.cancelQueuedInput.mock.calls).toEqual([[steer.operationId]]);
+    expect(native.cancelQueuedInput.mock.invocationCallOrder[0]).toBeLessThan(native.interrupt.mock.invocationCallOrder[0]!);
+    // It no longer counts as work Claude can still run after the Stop.
+    expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ pendingInputIds: [] });
+    expect(host.abandonmentEvidence().sessions[0]!.activeOperationIds).not.toContain(steer.operationId);
+    await expect(client.submissionDisposition({ sessionId, cwd: "/workspace", operationId: steer.operationId })).resolves.toBe("cancelled");
+    await expect(client.submissionDisposition({ sessionId, cwd: "/workspace", operationId: turn.operationId })).resolves.toBe("submitted");
   });
 
   it("reattaches the same active native query after main client replacement and replays disconnected output once", async () => {

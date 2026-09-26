@@ -312,13 +312,15 @@ before deciding whether to send again; Sedes never resends it automatically.
 
 **Stop** also withdraws every steer Claude has received but not started, as
 Pi's Stop clears its steering queue, so it no longer runs as the next turn.
+On a remote host this includes a steer sent before Sedes restarted while the
+Claude session kept running.
 Sedes relies on Claude's own confirmation for each withdrawn steer. Its card
 then shows it failed and was not sent; restore it to the composer or dismiss
 it. Later queued messages wait for that choice, and Sedes never resends it. A
 steer Claude had already started stays with the stopped turn. Stop does not
 withdraw Claude's own queued work: a background task that finished during the
 stopped turn can still start a turn of its own afterwards. Remote hosts need a
-sidecar built from this version, which carries the withdrawal (runtime
+sidecar built from this version, which performs the withdrawal (runtime
 protocol 14).
 
 Queue is Sedes-owned next-turn work. It is not SDK stream injection and is not

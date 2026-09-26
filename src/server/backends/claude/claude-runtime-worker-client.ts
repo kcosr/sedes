@@ -20,6 +20,8 @@ import {
   type ClaudeSafeSkill,
 } from "./claude-skills.js";
 import type {
+  ClaudeOwnedRuntimeClient,
+  ClaudeOwnedRuntimeSession,
   ClaudeRuntimeClient,
   ClaudeRuntimeForkOptions,
   ClaudeRuntimeForkResult,
@@ -77,7 +79,7 @@ export interface ClaudeRuntimeWorkerClientPeer {
 const CLAUDE_PERMISSION_RESPONSE_ACK_DRAIN_MILLISECONDS = 30_000;
 
 /** One generation-fenced client for the provider-private Claude worker. */
-export class ClaudeRuntimeWorkerClient implements ClaudeRuntimeClient {
+export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
   readonly #peer: ClaudeRuntimeWorkerClientPeer;
   readonly #sessions = new Map<string, WorkerSession>();
   readonly #unsubscribe: readonly (() => void)[];
@@ -159,7 +161,7 @@ export class ClaudeRuntimeWorkerClient implements ClaudeRuntimeClient {
     return result as ClaudeRuntimeProbeResult;
   }
 
-  createSession(options: ClaudeRuntimeSessionOptions): ClaudeRuntimeSession {
+  createSession(options: ClaudeRuntimeSessionOptions): ClaudeOwnedRuntimeSession {
     this.#assertOpen();
     const queryId = randomUUID();
     const session = new WorkerSession(this, queryId, options);
@@ -361,7 +363,7 @@ export class ClaudeRuntimeWorkerClient implements ClaudeRuntimeClient {
   }
 }
 
-class WorkerSession implements ClaudeRuntimeSession {
+class WorkerSession implements ClaudeOwnedRuntimeSession {
   readonly #client: ClaudeRuntimeWorkerClient;
   readonly #queryId: string;
   readonly #options: ClaudeRuntimeSessionOptions;

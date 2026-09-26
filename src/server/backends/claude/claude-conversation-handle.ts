@@ -1244,13 +1244,20 @@ export class ClaudeConversationHandle implements ConversationHandle {
       );
     }
     // Stop first withdraws each input Sedes sent that Claude has not started,
-    // as Pi's Stop clears its steering queue, so none runs as the next turn.
-    // Claude's own queued work is left alone. A withdrawal is proven only by
-    // the input's own `cancelled` lifecycle frame, never by Claude's answer
-    // here or by the interrupt receipt; a failed request proves nothing.
-    for (const operationId of this.#submissionsAwaitingStart()) {
-      try { await this.#session.cancelQueuedInput(operationId); }
-      catch { /* The input stays tracked; its outcome comes from evidence. */ }
+    // so none runs as the next turn. Claude's own queued work is left alone.
+    // A withdrawal is proven only by the input's own `cancelled` lifecycle
+    // frame, never by Claude's answer here or by the interrupt receipt; a
+    // failed request proves nothing. A local query lives exactly as long as
+    // this handle, so its inputs are this handle's to withdraw. A
+    // service-owned query's owner withdraws every unstarted input it holds
+    // when it handles the interrupt, including inputs an earlier attachment
+    // sent, so this handle sends no request of its own for them.
+    const withdraw = this.#session.cancelQueuedInput?.bind(this.#session);
+    if (withdraw) {
+      for (const operationId of this.#submissionsAwaitingStart()) {
+        try { await withdraw(operationId); }
+        catch { /* The input stays tracked; its outcome comes from evidence. */ }
+      }
     }
     await this.#session.interrupt();
     rememberBounded(

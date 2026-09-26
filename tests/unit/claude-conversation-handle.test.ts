@@ -594,8 +594,9 @@ function retainedRuntime(
         },
         flushMessages: () => delivery,
         send: session.send.bind(session),
+        // A service-owned owner withdraws unstarted inputs when it handles
+        // the interrupt, so the session offers the caller no withdrawal.
         interrupt: session.interrupt.bind(session),
-        cancelQueuedInput: session.cancelQueuedInput.bind(session),
         setModel: session.setModel.bind(session),
         setEffort: session.setEffort.bind(session),
         setPermissionMode: session.setPermissionMode.bind(session),
@@ -4736,6 +4737,32 @@ describe("Claude conversation-scoped native next delivery", () => {
     expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(OPERATION_ID);
     const settled = await snapshot(handle);
     expect(settled.turnsById[original.orderedBackendTurnIds[0]!]!.completionCorrelations).toEqual([OPERATION_ID, steerId]);
+    await handle.close();
+  });
+
+  it("leaves a service-owned query's withdrawals to its owner, and still records Claude's exact evidence", async () => {
+    const provider = fixture();
+    const retained = retainedRuntime(provider, [nativeFrames.state("running")]);
+    const { handle } = createHandle(provider, vi.fn(), { runtimeClient: retained.runtime, initialMessages: [initialUser], resumeSession: true });
+    const original = await snapshot(handle);
+    expect(original.runState).toBe("running");
+    const input = provider.prompt()[Symbol.asyncIterator]();
+    await handle.steer(steerInput);
+    expect((await input.next()).value).toMatchObject({ uuid: steerId, priority: "next" });
+    provider.messages.push(nativeFrames.lifecycle(steerId, "queued"));
+    // The owner withdraws every unstarted input it holds when it handles the
+    // interrupt, including ones an earlier attachment sent.
+    provider.controls.interrupt.mockImplementationOnce(async () => {
+      provider.messages.push(nativeFrames.lifecycle(steerId, "cancelled"));
+      return { still_queued: [] };
+    });
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: original.orderedBackendTurnIds[0]! });
+    expect(provider.controls.cancelAsyncMessage).not.toHaveBeenCalled();
+    expect(provider.controls.interrupt).toHaveBeenCalledExactlyOnceWith();
+    await vi.waitFor(() => expect(handle.withdrewSubmission(steerId)).toBe(true));
+    expect(handle.hasPendingSubmissionObservation(steerId)).toBe(false);
+    await expect(handle.steer(steerInput)).rejects.toMatchObject({ category: "rejected",
+      backendCode: "claude_submission_withdrawn", crossedSubmissionBoundary: false });
     await handle.close();
   });
 });

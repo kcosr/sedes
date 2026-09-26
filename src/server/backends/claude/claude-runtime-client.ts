@@ -129,6 +129,11 @@ export interface ClaudeRuntimeSession {
     readonly shouldQuery?: boolean;
     readonly priority?: "next";
   }): void | Promise<void>;
+  /**
+   * A service-owned session's owner first withdraws every Sedes input it holds
+   * that Claude has not started, as Stop requires, including inputs an earlier
+   * main attachment sent. Otherwise this interrupts only.
+   */
   interrupt(): Promise<SDKControlInterruptResponse | undefined>;
   /**
    * Asks Claude to withdraw one input it admitted but has not started. Claude
@@ -136,12 +141,26 @@ export interface ClaudeRuntimeSession {
    * before any `started`; only that frame is evidence. The boolean is Claude's
    * own answer and proves nothing: `false` also covers an input it will still
    * withdraw at dequeue, one it is folding into the turn, or one it started.
+   *
+   * Present exactly when the caller owns the query's inputs
+   * ({@link ClaudeOwnedRuntimeSession}), so Stop withdraws them itself before
+   * the interrupt. A service-owned session omits it: its owner outlives main's
+   * attachments and withdraws on `interrupt`.
    */
-  cancelQueuedInput(operationId: string): Promise<boolean>;
+  cancelQueuedInput?(operationId: string): Promise<boolean>;
   setModel(model?: string): Promise<void>;
   setEffort(effort?: EffortLevel): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
   close(options?: { readonly reason: "evicted" }): Promise<void>;
+}
+
+/**
+ * A query whose inputs its caller owns, so the caller withdraws unstarted
+ * inputs itself on Stop: a local query lives exactly as long as the handle
+ * that opened it, and a persistent owner holds the queries it serves.
+ */
+export interface ClaudeOwnedRuntimeSession extends ClaudeRuntimeSession {
+  cancelQueuedInput(operationId: string): Promise<boolean>;
 }
 
 /**
@@ -203,6 +222,11 @@ export interface ClaudeRuntimeClient {
     options: { readonly dir: string },
     environment: Readonly<Record<string, string | undefined>>,
   ): Promise<void>;
+}
+
+/** A runtime whose queries' inputs their caller owns: local workers, including the one a persistent owner runs. */
+export interface ClaudeOwnedRuntimeClient extends ClaudeRuntimeClient {
+  createSession(options: ClaudeRuntimeSessionOptions): ClaudeOwnedRuntimeSession;
 }
 
 /**
