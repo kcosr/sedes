@@ -2074,10 +2074,21 @@ describe("ThreadRuntimeCoordinator", () => {
       await vi.advanceTimersByTimeAsync(100);
       expect(actorRelease).not.toHaveBeenCalled();
 
+      // A replacement snapshot that is already settled is also a settlement
+      // observation; a running one is not.
+      summaryListener!({
+        event: { type: "snapshot", snapshot: { runState: "running" } },
+      } as never);
+      expect(onAuthoritativeSettled).not.toHaveBeenCalled();
+      summaryListener!({
+        event: { type: "snapshot", snapshot: { runState: "idle" } },
+      } as never);
+      expect(onAuthoritativeSettled).toHaveBeenCalledOnce();
       canEvict = true;
       summaryListener!({
         event: { type: "run_state", state: "failed" },
       });
+      expect(onAuthoritativeSettled).toHaveBeenCalledTimes(2);
       expect(onAuthoritativeSettled).toHaveBeenCalledWith(scope, "thread-1");
       await vi.advanceTimersByTimeAsync(9);
       expect(actorRelease).not.toHaveBeenCalled();

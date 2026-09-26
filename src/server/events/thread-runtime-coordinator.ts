@@ -1160,9 +1160,16 @@ export class ThreadRuntimeCoordinator {
         if (event.type === "snapshot" || event.type === "run_state") {
           this.#runtimeStateChanged(scopedKey(scope, applicationThreadId), hub);
         }
+        // A replacement snapshot can carry the settled state instead of a
+        // run-state event (for example, when the backend requires a
+        // resnapshot while a stopped turn ends). Settlement hooks are
+        // idempotent, so observe both.
         if (
-          event.type === "run_state" &&
-          (event.state === "idle" || event.state === "failed")
+          (event.type === "run_state" &&
+            (event.state === "idle" || event.state === "failed")) ||
+          (event.type === "snapshot" &&
+            (event.snapshot.runState === "idle" ||
+              event.snapshot.runState === "failed"))
         ) {
           try {
             const dispatch = this.#onAuthoritativeSettled?.(
