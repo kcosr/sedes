@@ -139,19 +139,34 @@ describe.sequential("real Claude native history", () => {
       expect(live.sdk.persistentQueryOptions.at(-1)).toMatchObject({ resume: thread.sessionId });
       expect(live.sdk.persistentQueryOptions.at(-1)).not.toHaveProperty("sessionId");
       // Resuming answers the dangling startup message with a `<synthetic>`
-      // "No response requested." row; filtering it is separate projector work.
+      // "No response requested." row, which is never a turn.
       const reopened = await handle.establishProjection({ signal: new AbortController().signal });
-      const synthetic = (await transcriptRows(thread.sessionId, live.workspace.canonicalPath))
-        .filter((row) => row.type === "assistant" && (row.message as { model?: string }).model === "<synthetic>");
-      expect(reopened.snapshot.orderedBackendTurnIds).toHaveLength(synthetic.length);
-      console.info(`[real-claude] startup-only reopen resumed; provider synthetic rows: ${synthetic.length}`);
+      expect(reopened.snapshot.orderedBackendTurnIds).toEqual([]);
       await live.completeTurn(handle, "Reply with exactly SEDES_CLAUDE_REOPEN_OK. Do not use tools.");
       const settled = await handle.establishProjection({ signal: new AbortController().signal });
-      expect(settled.snapshot.orderedBackendTurnIds).toHaveLength(synthetic.length + 1);
+      expect(settled.snapshot.orderedBackendTurnIds).toHaveLength(1);
       expect(finalAssistantText(settled.snapshot.itemsById)).toContain("SEDES_CLAUDE_REOPEN_OK");
       await handle.close();
       const read = await live.driver.read(thread.attachment);
       expect(read.snapshot.orderedBackendTurnIds).toEqual(settled.snapshot.orderedBackendTurnIds);
+
+      // The first reopen finds the reply at the tip; the second closes the
+      // startup message the first one left. Neither adds a turn or an answer.
+      for (let reopen = 0; reopen < 2; reopen += 1) {
+        handle = await live.driver.attach(thread.attachment);
+        const again = await handle.establishProjection({ signal: new AbortController().signal });
+        expect(again.snapshot.orderedBackendTurnIds).toEqual(settled.snapshot.orderedBackendTurnIds);
+        expect(finalAssistantText(again.snapshot.itemsById)).toBe(finalAssistantText(settled.snapshot.itemsById));
+        await handle.close();
+      }
+      const reread = await live.driver.read(thread.attachment);
+      expect(reread.snapshot).toEqual(read.snapshot);
+      expect(JSON.stringify(reread.snapshot)).not.toContain("No response requested.");
+      const synthetic = (await transcriptRows(thread.sessionId, live.workspace.canonicalPath))
+        .filter((row) => row.type === "assistant" && (row.message as { model?: string }).model === "<synthetic>");
+      // One closure for the startup-only reopen and one for the last reopen.
+      expect(synthetic.length).toBeGreaterThanOrEqual(2);
+      console.info(`[real-claude] startup-only thread reopened three times; provider synthetic rows: ${synthetic.length}`);
     } finally {
       await handle.close();
       await live.close();

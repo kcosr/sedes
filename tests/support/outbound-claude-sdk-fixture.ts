@@ -41,7 +41,7 @@ export class FakeOutboundClaudeSdkFacade implements ClaudeSdkFacade {
   readonly #sessions = new Map<string, { info: SDKSessionInfo; messages: SessionMessage[] }>();
   #queryCount = 0;
 
-  async readCliRelease(): Promise<string> { return "2.1.274"; }
+  async readCliRelease(): Promise<string> { return "2.1.283"; }
   async readCliAuthStatus() {
     return { loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "Claude Max" };
   }
@@ -110,7 +110,7 @@ export class FakeOutboundClaudeSdkFacade implements ClaudeSdkFacade {
     };
     log("query_open");
     emit({
-      type: "system", subtype: "init", apiKeySource: "oauth", claude_code_version: "2.1.274",
+      type: "system", subtype: "init", apiKeySource: "oauth", claude_code_version: "2.1.283",
       cwd, tools: input.options.persistSession === false ? [] : ["Bash"], mcp_servers: [],
       model: "claude-sonnet-5", permissionMode: input.options.permissionMode ?? "default",
       slash_commands: [], output_style: "default", skills: [], plugins: [], uuid: randomUUID(), session_id: sessionId,

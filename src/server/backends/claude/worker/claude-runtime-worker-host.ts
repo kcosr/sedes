@@ -251,6 +251,9 @@ export class ClaudeRuntimeWorkerHost {
         ...("timestamp" in message && typeof message.timestamp === "string"
           ? { timestamp: message.timestamp }
           : {}),
+        ...("isCompactSummary" in message && message.isCompactSummary === true
+          ? { isCompactSummary: true as const }
+          : {}),
       }));
       return projected;
     });

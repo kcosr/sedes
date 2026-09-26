@@ -637,10 +637,13 @@ export class ConversationActor {
         ? selection
         : (() => {
             const timeline = this.#projector.timeline();
+            // The newest turn that can be a fork boundary for this backend.
             const turnId = timeline.orderedTurnIds.findLast((candidate) => {
               const turn = timeline.turnsById[candidate];
               return (
-                turn?.status === "completed" && turn.endedBy === "agent_settled"
+                turn?.status === "completed" &&
+                turn.endedBy === "agent_settled" &&
+                turn.forkUnavailableReason === undefined
               );
             });
             const turn = turnId ? timeline.turnsById[turnId] : undefined;

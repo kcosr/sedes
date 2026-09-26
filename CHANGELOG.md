@@ -4,9 +4,17 @@
 
 ### Breaking Changes
 
+- Claude backends require Claude Code 2.1.281 or newer and are tested through
+  2.1.283. Earlier releases sent Sedes' startup message to the model with the
+  first prompt, which Claude sometimes refused, or added a hidden "Continue"
+  prompt when resuming after an interrupted tool call. Update Claude Code on
+  every local and remote execution host before upgrading; an older release
+  fails backend startup.
+
 - Sidecars must use runtime protocol 14, which reads Claude history through the
-  transcript's true tip and reports transcript presence. Upgrade existing
-  sidecars explicitly before reconnecting with this server version.
+  transcript's true tip and across automatic compactions, and reports
+  transcript presence. Upgrade existing sidecars explicitly before
+  reconnecting with this server version.
 
 - Sidecars must use runtime protocol 13, which serves `sedes mcp` and accepts
   Claude's Native agent-tool entry. Upgrade existing sidecars explicitly
@@ -92,6 +100,26 @@
 - Reopen a Claude thread that was opened but never sent to. Sedes now resumes
   the existing session instead of failing with "Session ID … is already in
   use", and first-send recovery can resolve it.
+
+- Stop showing Claude Code's "No response requested." resume placeholder as a
+  reply. Reopening a Claude thread no longer adds a phantom turn or displaces a
+  turn's final answer, and forks and usage ignore the placeholder. A prompt
+  left unanswered because Claude Code exited now ends as interrupted with an
+  explanation instead of completed.
+
+- Keep earlier Claude turns visible after Claude automatically compacts a long
+  conversation. **Conversation compacted** marks the point and expands to
+  Claude's summary, which no longer appears as a new prompt. A turn Claude
+  compacted mid-way keeps its prompt, settles with its result, and can be
+  stopped, instead of staying running. Threads already compacted re-identify
+  the former summary turn once. Only turns after the latest compaction can be
+  forked, because Claude resumes from its summary.
+
+- End a Claude turn left running after its Claude process was lost, for
+  example when the server, worker, or sidecar stopped mid-turn. The next launch
+  marks it interrupted with a notice; a reattached remote query that is still
+  running is unaffected. **Stop** no longer stays "stopping" without a result:
+  the turn ends a second after Claude reports idle, or after 30 seconds.
 
 - Show turns Claude starts itself, such as after a background task or peer
   hand-back, as running with **Stop**, and keep idle retirement, eviction and

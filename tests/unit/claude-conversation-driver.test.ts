@@ -1226,6 +1226,43 @@ describe("ClaudeConversationBackendDriver", () => {
       retainedLeafUuid: answer.uuid, retainedPrefixCount: 2 });
   });
 
+  it("forks a compacted conversation only after its latest summary and verifies the child from there", async () => {
+    const sdk = fakeSdk();
+    const copyTaskLifecycleReceiptsForFork = vi.fn(() => undefined);
+    const childSessionId = "33333333-3333-4333-8333-333333333333";
+    const call = (id: string): SessionMessage => ({ ...assistant(crypto.randomUUID(), ""),
+      message: { role: "assistant", content: [{ type: "tool_use", id, name: "Agent", input: { description: "Audit", prompt: "Audit" } }] } });
+    const result = (id: string): SessionMessage => ({ ...user(crypto.randomUUID(), ""),
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "Done" }] } });
+    const summary = { ...user(crypto.randomUUID(), "This session is being continued. Summary: synthetic."), isCompactSummary: true } as SessionMessage;
+    // Sedes reads across the boundary; Claude Code resumes, and copies, only from the summary.
+    const sourceMessages = [user(operationId, "First"), call("summarized-call"), result("summarized-call"),
+      assistant(crypto.randomUUID(), "First answer"), user(crypto.randomUUID(), "Later"), summary,
+      call("retained-call"), result("retained-call"), assistant(crypto.randomUUID(), "Later answer")];
+    const resumable = sourceMessages.slice(5);
+    sdk.getSessionInfo.mockImplementation(async (id) => id === childSessionId && !sdk.createQuery.mock.calls.length
+      ? undefined : { sessionId: id, summary: "Session", lastModified: 1, cwd: workspace.canonicalPath });
+    sdk.getSessionMessages.mockImplementation(async (id) => id === sessionId ? sourceMessages
+      : resumable.map(message => ({ ...message, session_id: childSessionId })));
+    const receipt = (nativeTaskId: string, nativeToolUseId: string) => ({ nativeTaskId, nativeToolUseId, description: "Audit",
+      startedAt: 1, terminalStatus: "completed" as const, terminalAt: 2 });
+    const driver = createDriver(sdk, { copyTaskLifecycleReceiptsForFork,
+      listTaskLifecycleReceipts: () => [receipt("summarized", "summarized-call"), receipt("retained", "retained-call")] });
+    const [summarizedTurn, compactedTurn] = projectClaudeHistory(sourceMessages).snapshot.orderedBackendTurnIds;
+    const resolve = (backendTurnId: string) => driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
+      selection: { kind: "selected_completed_turn", backendTurnId, boundary: "completed_turn_inclusive" } });
+    await expect(resolve(summarizedTurn!)).rejects.toMatchObject({ backendCode: "claude_fork_checkpoint_unavailable" });
+    const checkpoint = await resolve(compactedTurn!);
+    expect(JSON.parse(Buffer.from(checkpoint.opaqueReference, "base64url").toString())).toMatchObject({ retainedPrefixCount: resumable.length });
+    await driver.branchConversation({ scope, workspace, childApplicationThreadId: "child-thread", applicationOperationId: operationId,
+      sourceBinding: binding(), sourceOpaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
+      sourceCheckpoint: checkpoint, requestedBackendConversationId: childSessionId,
+      inheritedSettings: { model: { provider: connection.id, id: "claude-sonnet-5" }, thinkingLevel: "low" }, source: { kind: "user" } });
+    expect(copyTaskLifecycleReceiptsForFork).toHaveBeenCalledExactlyOnceWith(scope, expect.objectContaining({
+      receipts: [receipt("retained", "retained-call")] }));
+  });
+
   it("rejects provider-snapshot checkpoints before reading Claude history", async () => {
     const sdk = fakeSdk();
     const driver = createDriver(sdk);
@@ -1874,6 +1911,21 @@ describe("ClaudeConversationBackendDriver native history", () => {
     }
   });
 
+  it("reconciles a prompt Claude Code closed unanswered on resume as interrupted, not completed", async () => {
+    const fixture = transcript();
+    fixture.startupMessage();
+    const anchor = retryAnchor([]);
+    fixture.prompt("Rename the synthetic function.", { uuid: operationId });
+    // The process died before replying; the next attach resumes the session.
+    expect(fixture.resume().closure).toBeDefined();
+    await fixture.write(configDirectory, workspace.canonicalPath);
+    const { driver } = nativeStoreDriver();
+    const reconciled = await driver.reconcileSubmission({ ...attachment(), applicationOperationId: operationId, retryAnchor: anchor });
+    expect(reconciled).toMatchObject({ status: "accepted", backendTurn: { status: "interrupted", completionCorrelations: [operationId] } });
+    expect(reconciled.status === "accepted" && reconciled.completionIdentity).toMatch(/:interrupted$/u);
+    expect(JSON.stringify(reconciled)).not.toContain("No response requested.");
+  });
+
   async function readViaDriver(driver: ClaudeConversationBackendDriver): Promise<SessionMessage[]> {
     const native = new OfficialClaudeSdkFacade();
     await driver.read(attachment());
@@ -2093,7 +2145,7 @@ function fakeSdk(
     },
   } satisfies SDKControlInitializeResponse;
   const sdk = {
-    readCliRelease: vi.fn(async () => options.cliRelease ?? "2.1.274"),
+    readCliRelease: vi.fn(async () => options.cliRelease ?? "2.1.283"),
     readCliAuthStatus: vi.fn(async () => options.authStatus ?? ({
       loggedIn: true,
       authMethod: "claude.ai",
@@ -2112,7 +2164,7 @@ function fakeSdk(
           type: "system",
           subtype: "init",
           apiKeySource: "oauth",
-          claude_code_version: "2.1.274",
+          claude_code_version: "2.1.283",
           cwd: "/workspace",
           tools: [],
           mcp_servers: [],

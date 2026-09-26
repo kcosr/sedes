@@ -10,6 +10,7 @@ import {
   readClaudeSessionMessages,
   resolveClaudeSessionMessages,
 } from "../../src/server/backends/claude/claude-native-transcript.js";
+import { claudeResumableHistoryStart, projectClaudeHistory } from "../../src/server/backends/claude/claude-history-projector.js";
 import { ClaudeSdkRuntimeAdapter } from "../../src/server/backends/claude/claude-runtime-client.js";
 import { OfficialClaudeSdkFacade } from "../../src/server/backends/claude/claude-sdk-facade.js";
 import { ClaudeTranscriptFixture } from "../helpers/claude-native-transcript-fixture.js";
@@ -198,27 +199,29 @@ describe("Claude native transcript reader", () => {
     expect((await ours(fixture)).at(-1)?.uuid).toBe(synthetic);
   });
 
-  it("stops at a compact boundary and marks the summary like the SDK", async () => {
+  it("continues across a compact boundary: the SDK's segment follows the history it summarized", async () => {
     const fixture = new ClaudeTranscriptFixture(workspace);
     const before = fixture.prompt("Before compaction.");
-    fixture.text("Old answer.");
-    const { summary } = fixture.compaction("Synthetic summary of the earlier conversation.");
+    const oldAnswer = fixture.text("Old answer.");
+    const { boundary, summary } = fixture.compaction("Synthetic summary of the earlier conversation.");
     const after = fixture.prompt("After compaction.");
-    fixture.text("New answer.");
+    const newAnswer = fixture.text("New answer.");
 
     const messages = await ours(fixture);
-    expect(uuids(messages)).not.toContain(before);
-    expect(messages[0]).toMatchObject({ uuid: summary, isCompactSummary: true, is_meta: true });
-    expect(uuids(messages)).toContain(after);
-    expect(messages).toEqual(await sdk(fixture));
-    expect(await ours(fixture, { includeSystemMessages: true })).toEqual(await sdk(fixture, { includeSystemMessages: true }));
+    expect(uuids(messages)).toEqual([before, oldAnswer, summary, after, newAnswer]);
+    expect(messages[2]).toMatchObject({ uuid: summary, isCompactSummary: true, is_meta: true });
+    // The pinned SDK, like Claude Code's own loader, stops at the boundary.
+    expect(messages.slice(2)).toEqual(await sdk(fixture));
+    const withSystem = await ours(fixture, { includeSystemMessages: true });
+    expect(uuids(withSystem)).toEqual([before, oldAnswer, boundary, summary, after, newAnswer]);
+    expect(withSystem.slice(2)).toEqual(await sdk(fixture, { includeSystemMessages: true }));
     fixture.startupMessage();
     expect(await ours(fixture)).toEqual(messages);
   });
 
-  it("relinks a preserved compaction segment like the SDK", async () => {
+  it("shows relinked preserved rows once, after the summary like the SDK", async () => {
     const fixture = new ClaudeTranscriptFixture(workspace);
-    fixture.prompt("Old prompt.");
+    const old = fixture.prompt("Old prompt.");
     const kept = fixture.prompt("Kept prompt.");
     const keptReply = fixture.text("Kept answer.");
     // Preserved rows follow the summary; later rows continue after the preserved tail.
@@ -230,8 +233,8 @@ describe("Claude native transcript reader", () => {
     const next = fixture.prompt("Continue.");
 
     const messages = await ours(fixture);
-    expect(uuids(messages)).toEqual([summary, kept, keptReply, next]);
-    expect(messages).toEqual(await sdk(fixture));
+    expect(uuids(messages)).toEqual([old, summary, kept, keptReply, next]);
+    expect(messages.slice(1)).toEqual(await sdk(fixture));
   });
 
   it("skips a half-written final line", async () => {
@@ -309,6 +312,397 @@ describe("Claude native transcript reader", () => {
     ].join("\n")));
     expect(entries).toEqual([{ type: "user", uuid: "a" }, { type: "progress", uuid: "b" }]);
     expect(await resolveClaudeSessionMessages([])).toEqual([]);
+  });
+});
+
+/**
+ * Claude Code behaviours on resume that Sedes' reader and projector depend on,
+ * as native rows: the persisted startup message, its `<synthetic>` closure on
+ * the next resume, and provider notifications about unfinished background work.
+ */
+describe("Claude Code resume shapes", () => {
+  const unansweredNotice = "Claude Code exited before this turn finished and closed it without a response when the conversation resumed.";
+
+  async function project(fixture: ClaudeTranscriptFixture) {
+    const messages = await ours(fixture);
+    // No shape here has a parallel dead end, so the pinned SDK agrees.
+    expect(messages).toEqual(await sdk(fixture));
+    return projectClaudeHistory(messages);
+  }
+
+  function statuses(projection: ReturnType<typeof projectClaudeHistory>): string[] {
+    return projection.snapshot.orderedBackendTurnIds.map((id) => projection.snapshot.turnsById[id]!.status);
+  }
+
+  /** User, assistant, and notice text per turn, in order. */
+  function transcript(projection: ReturnType<typeof projectClaudeHistory>): string[][] {
+    const { snapshot } = projection;
+    return snapshot.orderedBackendTurnIds.map((turnId) => snapshot.turnsById[turnId]!.orderedBackendItemIds.flatMap((itemId) => {
+      const item = snapshot.itemsById[itemId]!;
+      if (item.semanticKind === "user_message") return item.content.flatMap((part) => part.kind === "text" ? [`user: ${part.text.text}`] : []);
+      if (item.semanticKind === "assistant_message") return [`assistant: ${item.markdown.text}`];
+      if (item.semanticKind === "notice") return [`notice: ${item.text.text}`];
+      return [item.semanticKind];
+    }));
+  }
+
+  function closures(fixture: ClaudeTranscriptFixture) {
+    return fixture.rows.filter((row) => row.type === "assistant" && (row.message as { model?: string }).model === "<synthetic>");
+  }
+
+  it.each([true, false])("hides the startup message and parents the next prompt on it (queueTranscriptOnly: %s)", async (queueTranscriptOnly) => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    const startup = fixture.startupMessage({ queueTranscriptOnly });
+    const prompt = fixture.prompt("Describe the synthetic module.");
+    const answer = fixture.answer("It parses synthetic input.");
+    // Before 2.1.280 the row lacked `queueTranscriptOnly`, so the model also
+    // received its "NON-USER SOURCE" label merged into this prompt.
+    expect(fixture.rows.find(({ uuid }) => uuid === startup)?.queueTranscriptOnly).toBe(queueTranscriptOnly || undefined);
+    expect(fixture.rows.find(({ uuid }) => uuid === prompt)).toMatchObject({ parentUuid: startup });
+
+    const projection = await project(fixture);
+    expect(statuses(projection)).toEqual(["completed"]);
+    expect(transcript(projection)).toEqual([["user: Describe the synthetic module.", "assistant: It parses synthetic input."]]);
+    expect(projection.terminalCheckpointUuidByBackendTurnId.get(projection.snapshot.orderedBackendTurnIds[0]!)).toBe(answer);
+  });
+
+  it("accumulates a startup message per attach and a closure per later resume without changing history", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.startupMessage();
+    fixture.prompt("Summarize the synthetic notes.");
+    const answer = fixture.answer("There are three synthetic notes.");
+    const settled = await project(fixture);
+
+    // The first reopen finds the answer at the tip; every later one finds the previous startup message.
+    const resumes = Array.from({ length: 9 }, () => fixture.resume());
+    expect(resumes[0]!.closure).toBeUndefined();
+    for (const [index, resume] of resumes.entries()) {
+      if (index === 0) continue;
+      expect(fixture.rows.find(({ uuid }) => uuid === resume.closure)).toMatchObject({ parentUuid: resumes[index - 1]!.startup });
+    }
+    expect(fixture.rows.filter((row) => row.isMeta === true)).toHaveLength(10);
+    expect(closures(fixture)).toHaveLength(8);
+
+    const messages = await ours(fixture);
+    expect(messages.filter(({ type }) => type === "assistant")).toHaveLength(9);
+    const reopened = await project(fixture);
+    expect(reopened.snapshot).toEqual(settled.snapshot);
+    expect(reopened.usage).toEqual(settled.usage);
+    expect(reopened.terminalCheckpointUuidByBackendTurnId).toEqual(settled.terminalCheckpointUuidByBackendTurnId);
+    expect([...reopened.terminalCheckpointUuidByBackendTurnId.values()]).toEqual([answer]);
+  });
+
+  it("projects no turn for a thread reopened several times before its first prompt", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.startupMessage();
+    for (let attach = 0; attach < 3; attach += 1) fixture.resume();
+    expect(closures(fixture)).toHaveLength(3);
+    const reopened = await project(fixture);
+    expect(reopened.snapshot.orderedBackendTurnIds).toEqual([]);
+    expect(reopened.snapshot.runState).toBe("idle");
+
+    fixture.prompt("First synthetic prompt.");
+    fixture.answer("First synthetic answer.");
+    const sent = await project(fixture);
+    expect(statuses(sent)).toEqual(["completed"]);
+    expect(transcript(sent)).toEqual([["user: First synthetic prompt.", "assistant: First synthetic answer."]]);
+  });
+
+  it("ends a prompt left unanswered by a process that died as interrupted, stably across resumes", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.startupMessage();
+    fixture.prompt("Earlier synthetic prompt.");
+    fixture.answer("Earlier synthetic answer.");
+    fixture.resume();
+    fixture.prompt("A synthetic prompt nobody answered.");
+    const reminder = fixture.attachment({ type: "synthetic_reminder", content: "synthetic" });
+    const { closure } = fixture.resume();
+    // Claude Code closes the trailing row, here an attachment after the prompt.
+    expect(fixture.rows.find(({ uuid }) => uuid === closure)).toMatchObject({ parentUuid: reminder });
+
+    const projection = await project(fixture);
+    expect(statuses(projection)).toEqual(["completed", "interrupted"]);
+    expect(transcript(projection)[1]).toEqual(["user: A synthetic prompt nobody answered.", `notice: ${unansweredNotice}`]);
+    expect(projection.snapshot.runState).toBe("idle");
+    const ended = projection.snapshot.orderedBackendTurnIds[1]!;
+    expect(projection.snapshot.turnsById[ended]).toMatchObject({ endedBy: "interrupted",
+      completedAt: fixture.rows.find(({ uuid }) => uuid === closure)!.timestamp });
+    expect(projection.terminalCheckpointUuidByBackendTurnId.has(ended)).toBe(false);
+
+    fixture.resume();
+    fixture.resume();
+    expect((await project(fixture)).snapshot).toEqual(projection.snapshot);
+  });
+
+  it.each([false, true])("ends a turn cut off after a tool result (hidden Continue row before 2.1.281: %s)", async (hiddenContinue) => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.startupMessage();
+    fixture.prompt("Read the synthetic file.");
+    const [call] = fixture.reply([{ type: "tool_use", id: "toolu_synthetic_read", name: "Read", input: { file_path: "/synthetic/file" } }],
+      { stopReason: "tool_use" });
+    fixture.toolResult("toolu_synthetic_read", call!);
+    if (hiddenContinue) {
+      fixture.prompt("Continue from where you left off.", { isMeta: true, origin: undefined, promptId: undefined,
+        message: { role: "user", content: [{ type: "text", text: "Continue from where you left off." }] } });
+    }
+    expect(fixture.resume().closure).toBeDefined();
+
+    const projection = await project(fixture);
+    expect(statuses(projection)).toEqual(["interrupted"]);
+    expect(transcript(projection)).toEqual([["user: Read the synthetic file.", "file_read", `notice: ${unansweredNotice}`]]);
+    const tool = Object.values(projection.snapshot.itemsById).find((item) => item.semanticKind === "file_read");
+    expect(tool?.status).toBe("completed");
+  });
+
+  it("keeps a user-interrupted turn interrupted without a phantom answer", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.startupMessage();
+    fixture.prompt("Start a long synthetic task.");
+    fixture.text("Working on the synthetic task");
+    fixture.prompt("[Request interrupted by user]", { origin: undefined, promptId: undefined,
+      message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] } });
+    expect(fixture.resume().closure).toBeDefined();
+
+    const projection = await project(fixture);
+    expect(statuses(projection)).toEqual(["interrupted"]);
+    expect(transcript(projection)).toEqual([["user: Start a long synthetic task.", "assistant: Working on the synthetic task"]]);
+  });
+
+  describe("unfinished background work reported on resume", () => {
+    const variants = [
+      ["an agent with no completion record", { status: "stopped", summary: "Background agent \"synthetic survey\" didn't finish before the previous session ended",
+        note: "Synthetic note: no completion record was found in the previous session." }],
+      ["an agent lost with its process", { status: "failed", summary: "Background agent \"synthetic survey\" didn't finish before the previous session ended",
+        note: "Synthetic note: it was running when the previous process exited." }],
+      ["several agents", { status: "stopped", taskIds: ["asynthetic0000001", "asynthetic0000002"],
+        summary: "2 background agents didn't finish before the previous session ended: \"synthetic a\" (asynthetic0000001), \"synthetic b\" (asynthetic0000002)." }],
+      ["a shell command", { status: "stopped", toolUseId: "toolu_synthetic_shell",
+        summary: "Background shell command didn't finish before the previous session ended" }],
+      ["the older wording", { status: "stopped",
+        summary: "No completion record was found for background agent \"synthetic survey\" from the previous session." }],
+    ] as const;
+
+    function beforeResume() {
+      const fixture = new ClaudeTranscriptFixture(workspace);
+      fixture.startupMessage();
+      fixture.prompt("Start a synthetic background survey.");
+      fixture.answer("The synthetic survey is running in the background.");
+      return fixture;
+    }
+
+    it.each(variants)("drops an unanswered notification about %s and its later closure", async (_label, notification) => {
+      const fixture = beforeResume();
+      const settled = await project(fixture);
+      // Claude Code writes the notification on resume, before the startup message.
+      const row = fixture.taskNotification(notification);
+      fixture.startupMessage();
+      expect((await ours(fixture)).find(({ uuid }) => uuid === row)).toMatchObject({ origin: { kind: "task-notification" } });
+      expect((await project(fixture)).snapshot).toEqual(settled.snapshot);
+      expect(fixture.resume().closure).toBeDefined();
+      const reopened = await project(fixture);
+      expect(reopened.snapshot).toEqual(settled.snapshot);
+      expect(reopened.terminalCheckpointUuidByBackendTurnId).toEqual(settled.terminalCheckpointUuidByBackendTurnId);
+    });
+
+    it("shows a turn Claude starts for a resume notification", async () => {
+      const fixture = beforeResume();
+      fixture.taskNotification(variants[0][1]);
+      const answer = fixture.answer("The synthetic survey stopped; it can be resumed.");
+      fixture.startupMessage();
+      fixture.resume();
+      const projection = await project(fixture);
+      expect(statuses(projection)).toEqual(["completed", "completed"]);
+      expect(transcript(projection)[1]).toEqual(["assistant: The synthetic survey stopped; it can be resumed."]);
+      expect(projection.terminalCheckpointUuidByBackendTurnId.get(projection.snapshot.orderedBackendTurnIds[1]!)).toBe(answer);
+    });
+  });
+});
+
+/**
+ * Automatic compaction as Claude Code 2.1.28x persists it (see
+ * `autoCompaction`). Sedes shows the summarized history, a compaction marker
+ * where the summary sits, and Claude's current context after it.
+ */
+describe("Claude automatic compaction", () => {
+  async function read(fixture: ClaudeTranscriptFixture) {
+    const messages = await ours(fixture);
+    // The newest segment is exactly the SDK's read: the model's context.
+    const context = await sdk(fixture);
+    expect(messages.slice(messages.length - context.length)).toEqual(context);
+    return { messages, projection: projectClaudeHistory(messages) };
+  }
+
+  /** Item kinds and texts per turn, in order. */
+  function turns(projection: ReturnType<typeof projectClaudeHistory>): string[][] {
+    const { snapshot } = projection;
+    return snapshot.orderedBackendTurnIds.map((turnId) => snapshot.turnsById[turnId]!.orderedBackendItemIds.map((itemId) => {
+      const item = snapshot.itemsById[itemId]!;
+      if (item.semanticKind === "user_message") return `user: ${item.content.flatMap((part) => part.kind === "text" ? [part.text.text] : []).join("")}`;
+      if (item.semanticKind === "assistant_message") return `assistant: ${item.markdown.text}`;
+      if (item.semanticKind === "notice") return `notice: ${item.text.text}`;
+      return item.semanticKind;
+    }));
+  }
+
+  function statuses(projection: ReturnType<typeof projectClaudeHistory>): string[] {
+    return projection.snapshot.orderedBackendTurnIds.map((id) => projection.snapshot.turnsById[id]!.status);
+  }
+
+  /** A settled turn, then a turn Claude compacts after its first tool round. */
+  function midTurn() {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.startupMessage();
+    const first = fixture.prompt("Summarize the synthetic notes.");
+    const firstAnswer = fixture.answer("There are three synthetic notes.");
+    fixture.startupMessage();
+    const prompt = fixture.prompt("Refactor the synthetic parser.");
+    fixture.attachment({ type: "total_tokens_reminder" });
+    const [thinking, text, call] = fixture.reply([
+      { type: "thinking", thinking: "synthetic reasoning", signature: "c3ludGhldGlj" },
+      { type: "text", text: "Reading the parser first." },
+      { type: "tool_use", id: "toolu_parser", name: "Read", input: { file_path: "/synthetic/parser.ts" } },
+    ], { stopReason: "tool_use" });
+    const result = fixture.toolResult("toolu_parser", call!);
+    const reminder = fixture.attachment({ type: "total_tokens_reminder" });
+    return { fixture, first, firstAnswer, prompt, preserved: [thinking!, text!, call!, result, reminder] };
+  }
+
+  it("keeps the turns before a mid-turn compaction and marks it inside the turn it interrupted", async () => {
+    const { fixture, first, firstAnswer, prompt, preserved } = midTurn();
+    const before = await read(fixture);
+    const { summary } = fixture.autoCompaction({ preserved });
+    const answer = fixture.answer("The parser is refactored.");
+
+    const { messages, projection } = await read(fixture);
+    // The prompt the compaction summarized stays; the rows the model kept follow the summary.
+    expect(uuids(messages)).toEqual([first, firstAnswer, prompt, summary, ...preserved.slice(0, 4), answer]);
+    expect(projection.snapshot.orderedBackendTurnIds).toEqual(before.projection.snapshot.orderedBackendTurnIds);
+    expect(statuses(projection)).toEqual(["completed", "completed"]);
+    expect(turns(projection)).toEqual([
+      ["user: Summarize the synthetic notes.", "assistant: There are three synthetic notes."],
+      ["user: Refactor the synthetic parser.", "compaction", "reasoning", "assistant: Reading the parser first.", "file_read",
+        "assistant: The parser is refactored."],
+    ]);
+    const marker = Object.values(projection.snapshot.itemsById).find((item) => item.semanticKind === "compaction");
+    expect(marker).toMatchObject({ status: "completed", summary: { text: expect.stringContaining("Synthetic request") } });
+    expect(projection.usage?.counters).toMatchObject({ userMessages: 2, compactions: 1 });
+    // Claude Code resumes only from the summary; earlier turns cannot anchor a fork.
+    const [settled, compacted] = projection.snapshot.orderedBackendTurnIds;
+    expect(before.projection.terminalCheckpointUuidByBackendTurnId.get(settled!)).toBe(firstAnswer);
+    expect(projection.terminalCheckpointUuidByBackendTurnId.has(settled!)).toBe(false);
+    expect(projection.terminalCheckpointUuidByBackendTurnId.get(compacted!)).toBe(answer);
+    expect(claudeResumableHistoryStart(messages)).toBe(3);
+    expect(claudeResumableHistoryStart(before.messages)).toBe(0);
+  });
+
+  it("keeps summarized rows in place when the compaction lists none to relink", async () => {
+    const { fixture, prompt, preserved } = midTurn();
+    const [, text, call, result] = preserved;
+    // The shape with a segment but no listed rows: neither Claude Code nor the SDK relinks it.
+    const { summary } = fixture.autoCompaction({ segment: { headUuid: preserved[0]!, tailUuid: preserved.at(-1)! } });
+    const answer = fixture.answer("The parser is refactored.");
+
+    const { messages, projection } = await read(fixture);
+    expect(uuids(messages).slice(2)).toEqual([prompt, preserved[0], text, call, result, summary, answer]);
+    expect(turns(projection)[1]).toEqual(["user: Refactor the synthetic parser.", "reasoning", "assistant: Reading the parser first.",
+      "file_read", "compaction", "assistant: The parser is refactored."]);
+    expect(statuses(projection)).toEqual(["completed", "completed"]);
+  });
+
+  it("keeps every turn across several compactions and forks only after the latest", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    const first = fixture.prompt("First synthetic task.");
+    fixture.answer("First synthetic answer.");
+    const second = fixture.prompt("Second synthetic task.");
+    const { summary: early } = fixture.autoCompaction({ summary: "1. Synthetic early summary." });
+    fixture.answer("Second synthetic answer.");
+    const third = fixture.prompt("Third synthetic task.");
+    const [call] = fixture.reply([{ type: "tool_use", id: "toolu_third", name: "Read", input: { file_path: "/synthetic/third" } }],
+      { stopReason: "tool_use" });
+    const result = fixture.toolResult("toolu_third", call!);
+    const { summary: late } = fixture.autoCompaction({ preserved: [call!, result], summary: "1. Synthetic late summary." });
+    const answer = fixture.answer("Third synthetic answer.");
+
+    const { messages, projection } = await read(fixture);
+    expect(uuids(messages).filter((uuid) => [first, second, early, third, late, answer].includes(uuid)))
+      .toEqual([first, second, early, third, late, answer]);
+    expect(turns(projection)).toEqual([
+      ["user: First synthetic task.", "assistant: First synthetic answer."],
+      ["user: Second synthetic task.", "compaction", "assistant: Second synthetic answer."],
+      ["user: Third synthetic task.", "compaction", "file_read", "assistant: Third synthetic answer."],
+    ]);
+    expect(projection.usage?.counters).toMatchObject({ userMessages: 3, compactions: 2 });
+    expect([...projection.terminalCheckpointUuidByBackendTurnId.values()]).toEqual([answer]);
+  });
+
+  it("reads the same after a resume, and ends a turn whose process died right after compacting", async () => {
+    const settled = midTurn();
+    settled.fixture.autoCompaction({ preserved: settled.preserved });
+    settled.fixture.answer("The parser is refactored.");
+    const compacted = await read(settled.fixture);
+    // The SDK misreads a startup-message tip, so only Sedes' read is compared from here.
+    expect(settled.fixture.resume().closure).toBeUndefined();
+    expect(await ours(settled.fixture)).toEqual(compacted.messages);
+
+    const { fixture, preserved } = midTurn();
+    fixture.autoCompaction({ preserved });
+    const running = await read(fixture);
+    expect(uuids(running.messages).slice(3, 8)).toEqual([running.messages[3]!.uuid, ...preserved.slice(0, 4)]);
+    expect(statuses(running.projection)).toEqual(["completed", "in_progress"]);
+    expect(running.projection.snapshot.runState).toBe("running");
+    // Claude Code closes the trailing attachment when the session resumes.
+    expect(fixture.resume().closure).toBeDefined();
+    const projection = projectClaudeHistory(await ours(fixture));
+    expect(statuses(projection)).toEqual(["completed", "interrupted"]);
+    expect(turns(projection)[1]).toEqual(["user: Refactor the synthetic parser.", "compaction", "reasoning",
+      "assistant: Reading the parser first.", "file_read",
+      "notice: Claude Code exited before this turn finished and closed it without a response when the conversation resumed."]);
+    expect(projection.snapshot.runState).toBe("idle");
+  });
+
+  it("reads a fork of a compacted conversation, which starts at the summary", async () => {
+    // Claude Code copies what it resumes: the boundary, the summary, and the rows after it.
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    const { summary } = fixture.autoCompaction();
+    fixture.from(summary);
+    fixture.reply([{ type: "text", text: "Continuing the synthetic refactor." }]);
+    const answer = fixture.answer("The synthetic refactor is complete.");
+    const { messages, projection } = await read(fixture);
+    expect(messages).toEqual(await sdk(fixture));
+    // The child's first attach persists a startup message after its copy.
+    fixture.startupMessage();
+    expect(await ours(fixture)).toEqual(messages);
+    expect(turns(projection)).toEqual([["compaction", "assistant: Continuing the synthetic refactor.",
+      "assistant: The synthetic refactor is complete."]]);
+    expect(statuses(projection)).toEqual(["completed"]);
+    expect([...projection.terminalCheckpointUuidByBackendTurnId.values()]).toEqual([answer]);
+    expect(claudeResumableHistoryStart(messages)).toBe(0);
+  });
+
+  it("marks a compaction alone as a settled turn", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.autoCompaction();
+    const { projection } = await read(fixture);
+    expect(turns(projection)).toEqual([["compaction"]]);
+    expect(statuses(projection)).toEqual(["completed"]);
+    expect(projection.snapshot.runState).toBe("idle");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.size).toBe(0);
+  });
+
+  it("puts a compaction before a notification turn's first response into that turn", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.prompt("Start a synthetic background survey.");
+    fixture.answer("The synthetic survey is running.");
+    fixture.taskNotification({ status: "completed", summary: "Background agent \"synthetic survey\" completed" });
+    fixture.autoCompaction();
+    const answer = fixture.answer("The synthetic survey found two issues.");
+
+    const { projection } = await read(fixture);
+    expect(turns(projection)).toEqual([
+      ["user: Start a synthetic background survey.", "assistant: The synthetic survey is running."],
+      ["compaction", "assistant: The synthetic survey found two issues."],
+    ]);
+    expect(projection.terminalCheckpointUuidByBackendTurnId.get(projection.snapshot.orderedBackendTurnIds[1]!)).toBe(answer);
   });
 });
 

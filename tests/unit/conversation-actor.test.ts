@@ -2502,6 +2502,29 @@ describe("ConversationActorManager", () => {
     await manager.close();
   });
 
+  it("records the newest turn that can be a fork boundary as the latest completed turn", async () => {
+    const { driver, handle, manager } = fixture();
+    const base = snapshot();
+    handle.establishmentSnapshots[0] = {
+      ...base,
+      orderedBackendTurnIds: ["turn-1", "turn-2"],
+      turnsById: {
+        ...base.turnsById,
+        "turn-2": { backendTurnId: "turn-2", status: "completed", endedBy: "agent_settled",
+          forkUnavailableReason: { text: "No exact fork point." }, orderedBackendItemIds: [] },
+      },
+    };
+    handle.backendCapabilities.mockResolvedValueOnce(
+      selectedBranchingCapabilities(["latest_completed", "selected_completed_turn"]),
+    );
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const [forkable] = acquired.actor.timeline.orderedTurnIds;
+    await expect(acquired.actor.resolveBranchCheckpoint({ kind: "latest_completed" }))
+      .resolves.toMatchObject({ sourceTurnId: forkable, backendTurnId: "turn-1" });
+    acquired.release();
+    await manager.close();
+  });
+
   it("resolves the latest provider snapshot while active without changing selected-turn semantics", async () => {
     const activeSnapshot: BackendConversationSnapshot = {
       orderedBackendTurnIds: ["turn-1", "turn-2"],

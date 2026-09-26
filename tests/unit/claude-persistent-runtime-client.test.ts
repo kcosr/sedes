@@ -23,7 +23,7 @@ vi.mock("../../src/server/backends/claude/runtime/claude-sidecar-runtime.js", as
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const PROBE_ID = "22222222-2222-4222-8222-222222222222";
 function opened(events: ClaudePersistentEvent[] = [], reattached = false) {
-  return { failureCode: null, pendingBackgroundTaskIds: [], backgroundActivity: { state: "known", agents: 0, commands: 0, other: 0 }, reattached, queryId: SESSION_ID, startupProbeUuid: PROBE_ID, initialization: { cliRelease: "2.1.274", models: [], commands: [], skillNames: [], terminalCommandNames: [], account: {}, actualPermissionMode: "default" }, events };
+  return { failureCode: null, pendingBackgroundTaskIds: [], backgroundActivity: { state: "known", agents: 0, commands: 0, other: 0 }, reattached, queryId: SESSION_ID, startupProbeUuid: PROBE_ID, initialization: { cliRelease: "2.1.283", models: [], commands: [], skillNames: [], terminalCommandNames: [], account: {}, actualPermissionMode: "default" }, events };
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 function setup(input: { nativeDefault?: boolean; supportsRuntime?: boolean } = {}) {
@@ -444,14 +444,14 @@ it("runs a fork as one host command and verifies the reported CLI release", asyn
   const { client } = setup();
   await client.attachment();
   const connection = connectionState.instances[0]!;
-  connection.execute.mockImplementation(async (command: ClaudePersistentCommand) => command.action === "fork" ? { cliRelease: "2.1.274" } : {});
+  connection.execute.mockImplementation(async (command: ClaudePersistentCommand) => command.action === "fork" ? { cliRelease: "2.1.283" } : {});
   const onVersionAssessment = vi.fn();
-  await expect(client.forkSession({ ...forkOptions, onVersionAssessment })).resolves.toEqual({ cliRelease: "2.1.274" });
+  await expect(client.forkSession({ ...forkOptions, onVersionAssessment })).resolves.toEqual({ cliRelease: "2.1.283" });
   expect(connection.execute).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action: "fork", request: {
     sessionId: SESSION_ID, sourceSessionId: forkOptions.sourceSessionId, resumeSessionAt: PROBE_ID,
     cwd: "/work", title: "Source title", model: "claude-sonnet-5", effort: "low",
   } }));
-  expect(onVersionAssessment).toHaveBeenCalledWith(expect.objectContaining({ version: "2.1.274" }));
+  expect(onVersionAssessment).toHaveBeenCalledWith(expect.objectContaining({ version: "2.1.283" }));
   await expect(client.forkSession({ ...forkOptions, environment: { PATH: "/usr/bin" } })).rejects.toThrow("claude_persistent_runtime_environment_invalid");
   await client.close();
 });

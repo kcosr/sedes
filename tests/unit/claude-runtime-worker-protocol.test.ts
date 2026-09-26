@@ -23,6 +23,7 @@ import {
   claudeRuntimeQueryOpenOperation,
   claudeRuntimeQueryOpenRequestSchema,
   claudeRuntimeQuerySendRequestSchema,
+  claudeRuntimeSessionMessagesResponseSchema,
   claudeRuntimeWorkerOperations,
   registerClaudeRuntimeV1HostOperations,
   registerClaudeRuntimeV1WorkerOperations,
@@ -35,6 +36,7 @@ import {
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const QUERY_ID = "22222222-2222-4222-8222-222222222222";
 const OPERATION_ID = "33333333-3333-4333-8333-333333333333";
+const SUMMARY_ID = "44444444-4444-4444-8444-444444444444";
 const context = () => ({
   requestId: randomUUID(),
   signal: new AbortController().signal,
@@ -380,8 +382,23 @@ describe("ClaudeRuntimeWorkerHost", () => {
             timestamp: "2026-08-27T12:00:00.000Z",
             origin: { kind: "task-notification" },
           }),
+          // A compaction summary keeps its marker; the SDK's derived is_meta does not cross.
+          {
+            type: "user",
+            uuid: SUMMARY_ID,
+            session_id: SESSION_ID,
+            message: { role: "user", content: "Summary of the earlier conversation." },
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+            timestamp: "2026-08-27T12:00:01.000Z",
+            isCompactSummary: true,
+          },
         ],
       });
+      expect(() => claudeRuntimeSessionMessagesResponseSchema.parse({ nextCursor: null, messages: [
+        { type: "user", uuid: SUMMARY_ID, session_id: SESSION_ID, message: {}, parent_tool_use_id: null,
+          parent_agent_id: null, isCompactSummary: false },
+      ] })).toThrow();
       expect(sdk.getSessionMessages).toHaveBeenCalledWith(
         SESSION_ID,
         { dir: "/workspace" },
@@ -1155,7 +1172,7 @@ describe("ClaudeRuntimeWorkerHost", () => {
 
 function helperFacade(): ClaudeSdkFacade {
   return {
-    readCliRelease: vi.fn(async () => "2.1.274"),
+    readCliRelease: vi.fn(async () => "2.1.283"),
     readCliAuthStatus: vi.fn(async () => ({ loggedIn: true })),
     createQuery: vi.fn(() => {
       throw new Error("unused");
@@ -1172,6 +1189,17 @@ function helperFacade(): ClaudeSdkFacade {
         parent_agent_id: null,
         timestamp: "2026-08-27T12:00:00.000Z",
         origin: { kind: "task-notification" },
+      } as never,
+      {
+        type: "user",
+        uuid: SUMMARY_ID,
+        session_id: SESSION_ID,
+        message: { role: "user", content: "Summary of the earlier conversation." },
+        parent_tool_use_id: null,
+        parent_agent_id: null,
+        timestamp: "2026-08-27T12:00:01.000Z",
+        isCompactSummary: true,
+        is_meta: true,
       } as never,
     ]),
     hasSessionTranscript: vi.fn(async () => true),
@@ -1191,7 +1219,7 @@ function queryFacade(
   let options: Options | undefined;
   const close = vi.fn();
   const sdk: ClaudeSdkFacade = {
-    readCliRelease: vi.fn(async () => "2.1.274"),
+    readCliRelease: vi.fn(async () => "2.1.283"),
     readCliAuthStatus: vi.fn(async () => ({
       loggedIn: true,
       authMethod: "claude.ai",
@@ -1214,7 +1242,7 @@ function queryFacade(
           type: "system",
           subtype: "init",
           apiKeySource: "oauth",
-          claude_code_version: "2.1.274",
+          claude_code_version: "2.1.283",
           cwd: "/workspace",
           tools: [],
           mcp_servers: [],

@@ -87,7 +87,7 @@ an unsupported action and the backend rejects it again if called directly.
 | ------- | ------------------------------- | ------------------------------------------------------------------------ | --------------------- |
 | Pi SDK  | `0.86.0` SDK                    | Exact pinned SDK package in the Sedes process                            | `0.86.0`              |
 | Codex   | `0.153.0` app-server protocol   | Stable `>=0.153.0`, excluding reviewed incompatible releases             | `0.154.0`             |
-| Claude  | `0.3.274` Agent SDK             | Stable Claude Code `>=2.1.274`, excluding reviewed incompatible releases | Claude Code `2.1.274` |
+| Claude  | `0.3.274` Agent SDK             | Stable Claude Code `>=2.1.281`, excluding reviewed incompatible releases | Claude Code `2.1.283` |
 | Grok    | `1.x` ACP compatibility profile | Stable `>=1.0.4`, excluding reviewed incompatible releases               | `1.0.4`               |
 
 Codex, Claude, and Grok may admit a stable runtime newer than the release most
@@ -111,7 +111,7 @@ runtimes are not equivalent to exercised runtimes.
 | --- | --- | --- | --- | --- |
 | Pi SDK | July 2026 | Pinned SDK `0.86.0` runs inside the Sedes process; no external runtime to qualify | `test:real-pi`, `test:real-pi-cli` | Local runtime; SSH or outbound sidecar for workspace tools and context |
 | Codex | July 2026 | App-server `0.154.0` reviewed against the compiled `0.153.0` profile | `test:real-codex-agent-tools` | Local process, external UDS/TCP, persistent SSH or outbound sidecar |
-| Claude | August 2026 | Claude Code `2.1.274` with Agent SDK `0.3.274` | `test:real-claude` (six files) | Local worker; persistent SSH or outbound sidecar on Linux/macOS |
+| Claude | August 2026 | Claude Code `2.1.283` with Agent SDK `0.3.274` | `test:real-claude` (seven files) | Local worker; persistent SSH or outbound sidecar on Linux/macOS |
 | Grok | August 2026 | Grok Build `1.0.4` against the compiled `1.x` ACP profile | `test:real-grok` (three files) | Local Linux x64 or macOS only |
 
 Version-pinned qualification evidence for each external runtime is kept under

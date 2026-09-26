@@ -114,15 +114,32 @@ explicitly enable them; their IDs and native session bindings are retained.
 ## Version compatibility
 
 Sedes pins one SDK profile: `@anthropic-ai/claude-agent-sdk` 0.3.274. It admits
-stable Claude Code releases at or above 2.1.274, except for explicitly excluded
+stable Claude Code releases at or above 2.1.281, except for explicitly excluded
 known-bad releases.
 
-The reviewed runtime baseline is Claude Code 2.1.274. A newer admitted stable
+The minimum is 2.1.281 because earlier releases change the conversation when
+Sedes opens or resumes a thread:
+
+- Before 2.1.280, Claude Code sent Sedes' startup message to the model with
+  the next prompt, labelled as input from a non-user source. Claude sometimes
+  refused that first prompt.
+- Before 2.1.281, resuming a session that ended during a tool call added a
+  hidden "Continue from where you left off." prompt. 2.1.281 also fixed Agent
+  SDK sessions failing every turn after an assistant message with plain-string
+  content.
+
+Update Claude Code on every execution host, local and remote, before
+upgrading Sedes. An older release now fails backend startup with a runtime
+version error.
+
+The reviewed runtime baseline is Claude Code 2.1.283. A newer admitted stable
 release produces a structured advisory while continuing to use the pinned
 SDK profile and behavioral checks. This warning is not an authentication
-failure. Prereleases and releases older than 2.1.274 fail closed. The minimum
+failure. Prereleases and releases older than 2.1.281 fail closed. The minimum
 runtime does not move merely because a future SDK package bundles a newer CLI,
-and protocol or behavioral incompatibility still fails closed.
+and protocol or behavioral incompatibility still fails closed. The pinned SDK
+package bundles Claude Code 2.1.274, below the minimum; Sedes never runs it and
+always uses the operator-installed executable.
 
 For the most predictable deployment, pin the reviewed baseline. Before adopting
 a newer admitted runtime, deliberately run the opt-in live gate described
@@ -272,8 +289,8 @@ work, using conversation-scoped delivery. It may join the current turn
 or start the next if the current turn has finished. Pending input remains
 visible until Claude confirms incorporation. Steer does not interrupt work,
 and Stop does not withdraw a steer Claude has already queued: it starts the
-next turn.
-Claude Code 2.1.274 is the minimum because its consumption acknowledgments allow Sedes to track delivery reliably.
+next turn. Steer relies on the consumption acknowledgments Claude Code has
+sent since 2.1.274, which let Sedes track delivery reliably.
 If a server restart interrupts confirmation, Sedes exposes the delivery as
 unconfirmed for recovery and retains its original identity. Missing transcript
 entries or an empty native queue never authorize an automatic resend. A late
@@ -289,7 +306,7 @@ relabeled as Steer. An unconfirmed delivery pauses subsequent dispatch and shows
 Use **Reconcile delivery** to check the original submission; your draft and
 later queued messages remain intact while confirmation is pending.
 
-On the reviewed 2.1.274 runtime, native background inventories keep subagents
+On the reviewed 2.1.283 runtime, native background inventories keep subagents
 and commands visible after the main response finishes. Ordinary Send remains
 available. Live or uncertain background work blocks automatic idle eviction;
 remote runtime impact checks include known background work. Transport loss
@@ -304,6 +321,18 @@ Claude can start a turn on its own. Sedes shows that turn as running, offers
 A message sent during that turn joins it as Steer or runs as its own next turn;
 the turn's output is never attributed to that message.
 
+When Claude automatically compacts a long conversation, the thread keeps every
+earlier turn. **Conversation compacted** marks the point where it happened and
+expands to the summary Claude continues from. A turn that was running when
+Claude compacted it keeps its prompt and settles normally.
+
+If the Claude process running a turn is lost (for example, the server, worker,
+or sidecar stopped mid-turn), the next launch marks that turn interrupted with
+a notice instead of leaving it running. A reattached remote query that is still
+running is never marked. **Stop** ends with Claude's result. If Claude reports
+that it is idle without one, the turn ends a second later, and otherwise after
+30 seconds.
+
 ## Current limits
 
 Claude does not support:
@@ -313,6 +342,9 @@ Claude does not support:
   slash commands;
 - active-source forks or latest-provider-snapshot forks;
 - forks from attachment-ended structured-output turns;
+- forks from turns before Claude's latest automatic compaction. Claude Code
+  resumes only from its compaction summary, so a later fork copies that summary
+  instead of the earlier turns;
 - guaranteed file-history or attachment fidelity across a native fork;
 - provider-output image artifacts;
 - the shared Pi `set_tool_access` action; or
@@ -324,9 +356,9 @@ turn only while the source is idle and records an inclusive completed-turn
 boundary. Transcript and agent-tool forks select an exact completed turn.
 
 Claude Steer targets the conversation; it does not provide Codex’s exact-turn
-guarantee. A separate interrupt-and-send action is not exposed. Public history can
-erase the boundary needed to recover manual compaction as one normalized
-operation. Automatic provider folding remains provider-owned history behavior.
+guarantee. A separate interrupt-and-send action is not exposed. Manual
+compaction is a Claude Code local command, which Sedes does not send.
+Automatic compaction remains Claude's own decision; Sedes displays it.
 The [internal integration contract](../../internals/backends/claude.md) records
 the complete reasoning and recovery rules.
 
@@ -360,8 +392,8 @@ workspace, and do not use sensitive files merely to validate connectivity.
 | Backend is unavailable at startup                            | Confirm the target account's `PATH` resolves `claude`, or verify the optional canonical `executablePath` override; also check the selected provider home (`configDirectory`, then the execution account's `CLAUDE_CONFIG_DIR`, then `$HOME/.claude`), worker artifact admission, executable permissions, and runtime compatibility. Inspect the bounded diagnostic code for worker, version, authentication, or initialization failure. |
 | Authentication is rejected despite a working interactive CLI | Run the configured executable's `auth status` as the selected local or remote execution account. Confirm first-party `claude.ai` subscription login, remove active API-key overrides, and verify the selected provider home and the environment visible to that account.                                                                                                              |
 | SSH runtime does not reconnect                              | Check the environment connection preference, exact SSH alias and account, remote Node installation, sidecar compatibility, and ownership/recovery status. Use **Connect** after intentional Disconnect; do not substitute local provider paths. |
-| Runtime version is rejected                                  | Use a stable Claude Code release at or above 2.1.274. Prereleases and explicitly excluded releases fail closed.                                                                                                                                                                                                                    |
-| Runtime is newer than tested                                 | This is advisory for an otherwise admitted stable release. Pin 2.1.274 for the reviewed baseline or deliberately run the opt-in real-Claude gate before adopting the newer CLI.                                                                                                                                                    |
+| Runtime version is rejected                                  | Use a stable Claude Code release at or above 2.1.281. Prereleases and explicitly excluded releases fail closed.                                                                                                                                                                                                                    |
+| Runtime is newer than tested                                 | This is advisory for an otherwise admitted stable release. Pin 2.1.283 for the reviewed baseline or deliberately run the opt-in real-Claude gate before adopting the newer CLI.                                                                                                                                                    |
 | No models or efforts are selectable                          | Confirm native initialization and catalog success, then inspect `modelPolicy`. Claude matchers use model IDs and efforts; `providerIds` are invalid.                                                                                                                                                                               |
 | Initialization times out on a healthy installation           | Investigate slow CLI startup first. If appropriate, increase `initializationTimeoutMs` within its supported one-to-120-second range; do not hide authentication or version failures with a longer timeout.                                                                                                                         |
 | The worker reports query capacity exceeded                   | The fixed 32-query worker guard indicates that too many Claude queries remain resident in one execution environment. Close or archive idle threads and inspect runtime retirement if capacity does not recover. Attaching the same native session twice is denied independently.                                                   |
@@ -370,7 +402,9 @@ workspace, and do not use sensitive files merely to validate connectivity.
 | An ordinary file is visible but its contents were not used   | Sedes sends the authenticated staged path, not the file body. Ask Claude to read it explicitly; native images use a separate SDK image-block path.                                                                                                                                                                                 |
 | History ends at an older tool call, or a fork cannot be verified | Earlier versions read history with the SDK's leaf heuristic. It stops at a parallel tool call once Sedes' startup message is the newest transcript row. Upgrade main and any SSH or outbound sidecar to runtime protocol 14, then reload the thread. |
 | Reopening a thread that was never sent to fails with "Session ID … is already in use" | Earlier versions launched a new session because the SDK reports no metadata for a transcript holding only the startup message. The current version resumes any existing transcript. |
-| Fork is missing                                              | The source must be idle and the boundary must be an exact successfully completed ordinary turn. Attachment-ended structured-output boundaries and active sources are unforkable.                                                                                                                                                   |
+| Earlier turns disappeared, or a "This session is being continued…" message appeared as a prompt | Claude compacted the conversation automatically. Earlier versions stopped reading at the compaction. Upgrade main and any SSH or outbound sidecar to runtime protocol 14, then reload the thread. |
+| A turn shows "Claude Code stopped before this turn finished" | The Claude process running that turn was lost, and a fresh launch found the turn unfinished. Check the server, worker, or sidecar logs for the stop; resend the prompt if its work is still needed. |
+| Fork is missing                                              | The source must be idle and the boundary must be an exact successfully completed ordinary turn. Attachment-ended structured-output boundaries, turns before Claude's latest compaction, and active sources are unforkable.                                                                                                                                                   |
 
 Use [Debug diagnostics](../../developer/diagnostics.md) for safe inspection.
 Do not attach Claude credentials, complete provider payloads, or native
@@ -389,14 +423,16 @@ env -u NODE_ENV npm run test:real-claude
 The gate uses its reviewed model, effort, and no-tools profile to verify basic
 streaming, persistence, usage, and reopen behavior. Its native-history case
 also reads a resumed transcript that has parallel tool calls, and reopens a
-thread that was never sent to. For the parallel calls, it enables only the
+thread that was never sent to, then twice more after its first reply, checking
+that no phantom turn appears. For the parallel calls, it enables only the
 Bash tool with three exact pre-approved `sleep`/`echo` invocations, in
 `dontAsk` mode inside a disposable workspace. Its persistent-runtime case
 uses real worker stdio and local framed sockets to verify active-turn completion
 after main-client disposal and reattachment without resubmission. It does not
 verify a remote SSH or outbound host, or its login. Passing the suite also does not claim live
 verification of every tool projection, image, subagent, skill, or permission
-path.
+path. Its Native-tools case launches the built `sedes` provider CLI, so run
+`npm run build` first.
 
 For implementation ownership, history projection, terminal receipts, input
 correlation, agent-tool injection, forks, and recovery, continue with the

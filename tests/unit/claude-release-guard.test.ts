@@ -10,12 +10,12 @@ import {
 
 describe("Claude runtime release guard", () => {
   it("declares an independent floor, tested-through release, and exclusions", () => {
-    expect(CLAUDE_CODE_MINIMUM_VERSION).toBe("2.1.274");
-    expect(CLAUDE_CODE_TESTED_THROUGH_VERSION).toBe("2.1.274");
+    expect(CLAUDE_CODE_MINIMUM_VERSION).toBe("2.1.281");
+    expect(CLAUDE_CODE_TESTED_THROUGH_VERSION).toBe("2.1.283");
     expect(CLAUDE_CODE_EXCLUDED_VERSIONS).toEqual([]);
   });
 
-  it.each(["2.1.274", "2.1.274+vendor.1"])(
+  it.each(["2.1.281", "2.1.282", "2.1.283", "2.1.283+vendor.1"])(
     "accepts supported runtime %s without a warning",
     (version) => {
       const onNewerVersion = vi.fn();
@@ -37,7 +37,7 @@ describe("Claude runtime release guard", () => {
     },
   );
 
-  it.each(["2.1.275", "2.2.0", "3.0.0", "99.0.0"])(
+  it.each(["2.1.284", "2.2.0", "3.0.0", "99.0.0"])(
     "accepts newer stable runtime %s with a warning",
     (version) => {
       const onNewerVersion = vi.fn();
@@ -47,17 +47,20 @@ describe("Claude runtime release guard", () => {
       });
       expect(onNewerVersion).toHaveBeenCalledOnce();
       expect(onNewerVersion).toHaveBeenCalledWith({
-        testedThroughVersion: "2.1.274",
+        testedThroughVersion: "2.1.283",
         observedVersion: version,
       });
     },
   );
 
   it("ignores build metadata when comparing the audited floor", () => {
-    expect(verifyClaudeRuntimeVersion("2.1.274+vendor.1")).toEqual({
-      version: "2.1.274+vendor.1",
+    expect(verifyClaudeRuntimeVersion("2.1.281+vendor.1")).toEqual({
+      version: "2.1.281+vendor.1",
       newerThanTested: false,
     });
+    expect(() => verifyClaudeRuntimeVersion("2.1.280+vendor.1")).toThrow(
+      "claude_cli_release_below_minimum",
+    );
   });
 
   it("does not let build metadata bypass a known-bad release exclusion", () => {
@@ -69,7 +72,9 @@ describe("Claude runtime release guard", () => {
     ).toBe(false);
   });
 
-  it.each(["2.1.240", "2.1.241", "2.1.260", "2.1.273", "2.1.273+vendor.1", "1.99.999"])(
+  // Before 2.1.280 the startup message reaches the model with the next prompt;
+  // 2.1.280 still resumes an interrupted tool call with a hidden prompt.
+  it.each(["2.1.240", "2.1.241", "2.1.260", "2.1.273", "2.1.274", "2.1.278", "2.1.280", "1.99.999"])(
     "rejects runtime %s below the compatibility floor",
     (version) => {
       expect(() => verifyClaudeRuntimeVersion(version)).toThrow(
@@ -101,7 +106,7 @@ describe("Claude runtime release guard", () => {
       .spyOn(process, "emitWarning")
       .mockImplementation(() => undefined);
     const warning = {
-      testedThroughVersion: "2.1.274",
+      testedThroughVersion: "2.1.283",
       observedVersion: "2.99.0+test-warning",
     };
 
@@ -113,7 +118,7 @@ describe("Claude runtime release guard", () => {
       expect.stringContaining("2.99.0+test-warning"),
       {
         code: "SEDES_CLAUDE_RUNTIME_NEWER_THAN_TESTED",
-        detail: "testedThrough=2.1.274;observed=2.99.0+test-warning",
+        detail: "testedThrough=2.1.283;observed=2.99.0+test-warning",
       },
     );
     emitWarning.mockRestore();

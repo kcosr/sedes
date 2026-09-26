@@ -546,7 +546,7 @@ describe("tracked Claude SDK facade", () => {
       executablePath,
       [
         "#!/usr/bin/env node",
-        "if(process.argv[2]==='--version')process.stdout.write('2.1.274 (Claude Code)\\n')",
+        "if(process.argv[2]==='--version')process.stdout.write('2.1.283 (Claude Code)\\n')",
         "else process.stdout.write(JSON.stringify({loggedIn:true,authMethod:'oauth',apiProvider:'firstParty',subscriptionType:'max',email:'secret@example.test'}))",
       ].join("\n"),
     );
@@ -557,7 +557,7 @@ describe("tracked Claude SDK facade", () => {
       supervisor,
     });
     await expect(facade.readCliRelease(executablePath, 1_000)).resolves.toBe(
-      "2.1.274",
+      "2.1.283",
     );
     await expect(
       facade.readCliAuthStatus(executablePath, 1_000),
