@@ -579,6 +579,15 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
         queue.push(working);
         this.#interruptions.set(sessionId, () => {
           this.#interruptions.delete(sessionId);
+          // Like Claude Code, Stop writes an error result for the call it
+          // aborted, then its tool-use interruption marker.
+          const aborted = { type: "user", uuid: crypto.randomUUID(), session_id: sessionId,
+            parent_tool_use_id: null, parent_agent_id: null, timestamp: new Date().toISOString(),
+            message: { role: "user", content: [{ type: "tool_result", tool_use_id: `stop-tool-${assistantUuid}`,
+              is_error: true, content: "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed." }] },
+          } as unknown as ClaudeSessionMessage & ClaudeMessage;
+          messages.push(aborted);
+          queue.push(aborted);
           const marker = { type: "user", uuid: crypto.randomUUID(), session_id: sessionId,
             parent_tool_use_id: null, parent_agent_id: null, timestamp: new Date().toISOString(),
             message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] },

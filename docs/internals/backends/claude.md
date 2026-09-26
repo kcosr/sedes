@@ -421,6 +421,27 @@ does not distinguish an unannotated external input that exactly copies the
 native sentinel shape; that reserved shape is interpreted as native control
 history. A late interrupt acknowledgment never overwrites a settled run state.
 
+When Stop lands while tools run, Claude Code writes an error `tool_result` for
+each call it aborts and then the tool-use sentinel. A tool batch is the tool
+calls of one assistant message, whose results can arrive between its rows. When
+the sentinel follows the latest batch with no other assistant message in
+between, each call in that batch with an `is_error` result ends `interrupted`
+(item status and tool phase) at the sentinel's timestamp instead of `failed`,
+and keeps its result text. Successful results stay `completed`, and a call
+without a result is interrupted as before. Error results stay `failed` when
+Claude continued after them, as it does after a permission denial, when they
+belong to an earlier batch, or when the sentinel is the plain streaming one or
+comes from a subagent's thread. Claude Code's per-result denial kind is not
+used. Sedes' Stop reaches Claude Code as a remote cancel, which labels an
+aborted call the same way as a rejected permission prompt, and neither the SDK
+history reader nor the worker protocol carries the field. Two residual cases
+also read as interrupted, although neither ran to a result the user asked for:
+a call in the stopped batch that had already failed on its own, and a
+permission prompt Claude Code retires with the same sentinel. Live projection
+publishes the error result as `failed` before the sentinel arrives. A published
+outcome never changes in place, so the handle then requires a resnapshot
+(`history_changed`), and reload projects the same item.
+
 Claude Code closes a trailing user or attachment row when it resumes a session.
 That row can be the previous attach's startup message, an unanswered prompt, a
 tool result, or an interruption sentinel. The closure is a timestamped

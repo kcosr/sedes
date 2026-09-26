@@ -2792,6 +2792,64 @@ describe("ClaudeConversationHandle", () => {
     await reopened.close();
   });
 
+  it("replaces the snapshot when the tool-use marker makes a stopped call's error result interrupted", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider);
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    const unsubscribe = handle.subscribe((event) => events.push(event));
+    const submitted = handle.submit({
+      applicationOperationId: OPERATION_ID, mutationId: "mutation-stop-tool", source: { kind: "user" },
+      reconciliationToken: "reconcile-stop-tool", text: "Run it", contextExcerpts: [], attachments: [], taskContexts: [],
+    });
+    const prompt = await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(prompt.value as SDKMessage);
+    await submitted;
+    const call = {
+      type: "assistant", uuid: "33333333-3333-4333-8333-333333333333", session_id: SESSION_ID, parent_tool_use_id: null,
+      message: { role: "assistant", id: "msg-stop-tool", stop_reason: "tool_use", usage: { input_tokens: 1, output_tokens: 1 },
+        content: [{ type: "tool_use", id: "tool-stopped", name: "Bash", input: { command: "sleep 60" } }] },
+    } as unknown as SDKMessage;
+    const stoppedResult = {
+      type: "user", uuid: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", session_id: SESSION_ID, parent_tool_use_id: null,
+      timestamp: "2026-09-26T10:00:04.000Z",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-stopped", is_error: true,
+        content: "The user doesn't want to proceed with this tool use." }] },
+    } as unknown as SDKMessage;
+    provider.messages.push(call);
+    provider.messages.push(stoppedResult);
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+      type: "item_completed", item: expect.objectContaining({ semanticKind: "command", status: "failed" }) })));
+    const backendTurnId = (await handle.history({ limit: 10 })).orderedBackendTurnIds.at(-1)!;
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: backendTurnId });
+    const marker = {
+      type: "user" as const, uuid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" as const, session_id: SESSION_ID,
+      parent_tool_use_id: null, timestamp: "2026-09-26T10:00:05.000Z",
+      message: { role: "user" as const, content: [{ type: "text" as const, text: "[Request interrupted by user for tool use]" }] },
+    };
+    provider.messages.push(marker);
+    await vi.waitFor(() => expect(events).toContainEqual({ type: "resnapshot_required", reason: "history_changed" }));
+    expect(events).not.toContainEqual(expect.objectContaining({
+      type: "item_updated", item: expect.objectContaining({ semanticKind: "command" }) }));
+    const live = (await handle.establishProjection({ signal: new AbortController().signal })).snapshot;
+    const command = Object.values(live.itemsById).find(item => item.semanticKind === "command");
+    expect(command).toMatchObject({ status: "interrupted", phase: "interrupted", completedAt: marker.timestamp });
+    unsubscribe();
+    await handle.close();
+
+    const reopened = createHandle(fixture(), vi.fn(), {
+      initialMessages: [
+        { type: "user", uuid: OPERATION_ID, session_id: SESSION_ID, message: (prompt.value as SDKUserMessage).message,
+          parent_tool_use_id: null, parent_agent_id: null },
+        ...[call, stoppedResult, marker].map(message => ({ ...message, parent_agent_id: null }) as unknown as SessionMessage),
+      ],
+      resumeSession: true,
+    }).handle;
+    const recovered = (await reopened.establishProjection({ signal: new AbortController().signal })).snapshot;
+    expect(recovered.itemsById[command!.backendItemId]).toEqual(command);
+    await reopened.close();
+  });
+
   it("terminates an attached query when action metadata changes native session", async () => {
     const provider = fixture();
     (provider.sdk as ClaudeSdkFacade).getSessionInfo = vi.fn(async () => ({

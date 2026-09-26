@@ -155,6 +155,12 @@ events without exposing native entries to the browser. Streaming assistant
 text, reasoning, tool arguments, execution updates, results, interruption, and
 persisted history reconcile into normalized semantic items.
 
+A tool Stop aborted keeps `failed`. Pi records it as an ordinary error
+result ("Operation aborted", or the tool's own thrown message) with no abort
+flag, and a sibling that failed on its own in the same batch looks the same,
+so only text would tell them apart. A call with no result when the run ends is
+`interrupted`, as before.
+
 Compaction or a persisted branch/window change can replace the projection with
 a fresh generation. Abandoned Pi branches are never flattened into one
 transcript.

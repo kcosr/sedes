@@ -48,6 +48,7 @@ import {
 } from "./claude-fork-context-boundary.js";
 import {
   completeClaudeTool,
+  interruptClaudeToolResult,
   projectClaudeTool,
   settleInterruptedClaudeTool,
 } from "./claude-tool-projector.js";
@@ -58,6 +59,9 @@ const MAXIMUM_PROVIDER_TOOL_NAME_BYTES = 4_096;
 /** Model Claude Code stamps on assistant rows it writes without an API call. */
 const CLAUDE_SYNTHETIC_MODEL = "<synthetic>";
 const CLAUDE_NO_RESPONSE_REQUESTED = "No response requested.";
+const CLAUDE_INTERRUPTED_BY_USER = "[Request interrupted by user]";
+/** Claude Code writes this after the results of a tool batch the user stopped. */
+const CLAUDE_TOOL_USE_INTERRUPTED_BY_USER = "[Request interrupted by user for tool use]";
 const UNANSWERED_TURN_NOTICE =
   "Claude Code exited before this turn finished and closed it without a response when the conversation resumed.";
 /**
@@ -243,6 +247,12 @@ interface MutableTurn {
   readonly completionCorrelations: string[];
   readonly toolItemIdByNativeId: Map<string, string>;
   readonly unresolvedToolIds: Set<string>;
+  /**
+   * Error results of the latest assistant message's tool calls, with each
+   * call's unsettled item, until another assistant message starts.
+   */
+  readonly erroredToolBatch: ErroredToolResult[];
+  toolBatchResponseId?: string;
   readonly taskNotificationBoundary: boolean;
   nativeUserMessageUuid?: string;
   terminalAssistantUuid?: string;
@@ -253,6 +263,12 @@ interface MutableTurn {
   readonly nativeMessageStartIndex: number;
   readonly userMessageOrdinal: number;
   sourceOrder: number;
+}
+
+interface ErroredToolResult {
+  readonly backendItemId: string;
+  readonly unsettled: BackendItem;
+  readonly content: unknown;
 }
 
 interface AssistantResponseGroup {
@@ -601,6 +617,7 @@ function buildTimeline(
       completionCorrelations: [],
       toolItemIdByNativeId: new Map(),
       unresolvedToolIds: new Set(),
+      erroredToolBatch: [],
       nativeMessageStartIndex: messageIndex,
       userMessageOrdinal,
       taskNotificationBoundary,
@@ -753,6 +770,9 @@ function buildTimeline(
     }
     if (current && isInterruptionMarker(message, content, authentication?.isApplicationInputOperation)) {
       current.interruptedAt = message.timestamp!;
+      if (content[0]?.type === "text" && content[0].text === CLAUDE_TOOL_USE_INTERRUPTED_BY_USER) {
+        interruptErroredToolBatch(current, itemsById, message.timestamp!);
+      }
       current.lastRetainedMessageUuid = message.uuid;
       current.lastRetainedMessageIndex = messageIndex;
       continue;
@@ -866,6 +886,12 @@ function buildTimeline(
         responseGroupsByTurn.set(current.backendTurnId, responseGroups);
       }
       const responseGroupId = message.assistantMessageId ?? message.uuid;
+      // One assistant message is one tool batch, even when Claude Code writes
+      // a row per block and its results arrive between those rows.
+      if (current.toolBatchResponseId !== responseGroupId) {
+        current.toolBatchResponseId = responseGroupId;
+        current.erroredToolBatch.length = 0;
+      }
       let responseGroup = responseGroups.get(responseGroupId);
       if (!responseGroup) {
         responseGroup = {
@@ -1212,6 +1238,28 @@ function appendProcessLostNotice(
   turnsById[backendTurnId] = { ...turn, orderedBackendItemIds: [...turn.orderedBackendItemIds, backendItemId] };
 }
 
+/**
+ * Claude Code writes its tool-use interruption marker after the results of
+ * the batch the user's interrupt stopped: each call it aborted has an error
+ * result. Those calls end interrupted rather than failed. Results before the
+ * batch's assistant message, and successful results, are not evidence.
+ */
+function interruptErroredToolBatch(
+  turn: MutableTurn,
+  itemsById: Record<string, BackendItem>,
+  interruptedAt: string,
+): void {
+  for (const { backendItemId, unsettled, content } of turn.erroredToolBatch) {
+    if (itemsById[backendItemId]?.status !== "failed") continue;
+    try {
+      itemsById[backendItemId] = interruptClaudeToolResult(unsettled, content, interruptedAt);
+    } catch {
+      invalid();
+    }
+  }
+  turn.erroredToolBatch.length = 0;
+}
+
 function terminalItem(
   item: BackendItem,
   status: Exclude<ClaudeTerminalStatus, "completed">,
@@ -1366,8 +1414,8 @@ function isInterruptionMarker(
     message.timestamp !== undefined && isPlainRecord(message.message) &&
     Array.isArray(message.message.content) && content.length === 1 &&
     content[0]?.type === "text" &&
-    (content[0].text === "[Request interrupted by user]" ||
-      content[0].text === "[Request interrupted by user for tool use]") &&
+    (content[0].text === CLAUDE_INTERRUPTED_BY_USER ||
+      content[0].text === CLAUDE_TOOL_USE_INTERRUPTED_BY_USER) &&
     !isApplicationInputOperation?.(message.uuid);
 }
 
@@ -1630,6 +1678,9 @@ function applyToolResult(
       invalid();
     }
     turn.unresolvedToolIds.delete(block.toolUseId);
+    if (block.isError) {
+      turn.erroredToolBatch.push({ backendItemId: existingId, unsettled: existing, content: block.content });
+    }
     return;
   }
   addItem(

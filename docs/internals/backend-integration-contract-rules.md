@@ -2194,6 +2194,15 @@ targeted turn ended without the input. It never authorizes a resend.
 | Codex | Dropped by Codex's interrupt, which clears the turn's pending input without an event; it can never start or join a later turn. The Steer stays pending until its exact `userMessage` appears. The evidence is its absence from final history once the target turn is terminal (complete legacy read) or the thread is settled (stable paginated cuts). Residual: a forced abort after Codex's 100 ms interrupt grace can leave a just-drained Steer in model history without its item. |
 | Grok | No Steer; active-turn input waits in Queue. |
 
+A tool call Stop aborted normalizes as `interrupted` (item status and tool
+phase) only on exact provider evidence, kept inside the backend; otherwise the
+provider's own outcome stands. Claude uses its tool-use interruption marker
+following the stopped batch's error results. Pi, Codex, and Grok expose no
+exact per-call abort evidence (Pi records an ordinary error result, Codex's
+command and tool statuses have no interrupted value, and ACP tool statuses
+have no cancelled value), so an aborted call keeps the provider's reported
+outcome. The in-memory conformance backend keeps the statuses it scripts.
+
 Text, context excerpts, attachments, and structured Task references are
 normalized application input, not provider-native IDs or browser-selected
 paths. Before provider delivery, the application materializes one immutable,

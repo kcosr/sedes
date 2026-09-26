@@ -243,6 +243,68 @@ describe("Claude native interruption markers", () => {
   });
 });
 
+describe("Claude tool calls stopped by the user", () => {
+  const timestamp = "2026-09-26T10:00:05.000Z";
+  const stopped = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.";
+  const prompt = user(uuid(1), "Run the checks");
+  const call = (index: number, messageId: string, id: string, name = "Bash", input: unknown = { command: `sleep ${index}` }) => ({
+    ...assistant(uuid(index), [{ type: "tool_use", id, name, input }]),
+    message: { role: "assistant", id: messageId, content: [{ type: "tool_use", id, name, input }], stop_reason: "tool_use" },
+  });
+  const result = (index: number, id: string, content: string, isError = true) =>
+    user(uuid(index), [{ type: "tool_result", tool_use_id: id, content, is_error: isError }]);
+  const marker = (index: number, text = "[Request interrupted by user for tool use]") =>
+    ({ ...user(uuid(index), [{ type: "text", text }]), timestamp });
+  const tools = (messages: readonly unknown[]) => {
+    const snapshot = projectClaudeHistory(messages).snapshot;
+    expect(projectClaudeHistoryPage(messages, { limit: 10 }).itemsById).toEqual(snapshot.itemsById);
+    return Object.values(snapshot.itemsById).filter(item => item.semanticKind !== "user_message" && item.semanticKind !== "assistant_message");
+  };
+
+  it("ends a running call interrupted when the tool-use marker follows its error result", () => {
+    const [command] = tools([prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", stopped), marker(4)]);
+    expect(command).toMatchObject({ semanticKind: "command", status: "interrupted", phase: "interrupted", completedAt: timestamp,
+      output: { text: stopped } });
+  });
+
+  it("interrupts only the batch's error results, in live and reordered history order", () => {
+    const live = [prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", "done", false), call(4, "msg-1", "tool-b"),
+      result(5, "tool-b", stopped), marker(6)];
+    const reordered = [prompt, live[1], live[3], live[2], live[4], live[5]];
+    for (const messages of [live, reordered]) {
+      expect(tools(messages).map(item => [item.status, "phase" in item ? item.phase : undefined]))
+        .toEqual([["completed", "completed"], ["interrupted", "interrupted"]]);
+    }
+  });
+
+  it("keeps a denial or an earlier batch's failure failed", () => {
+    const denied = [prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", "User denied permission.")];
+    expect(tools(denied)[0]).toMatchObject({ status: "failed", phase: "failed" });
+    const continued = [...denied, {
+      ...assistant(uuid(4), [{ type: "text", text: "It was denied." }]),
+      message: { role: "assistant", id: "msg-2", content: [{ type: "text", text: "It was denied." }], stop_reason: "end_turn" },
+    }];
+    expect(tools(continued)[0]).toMatchObject({ status: "failed", phase: "failed" });
+    const laterStop = [...denied, call(4, "msg-2", "tool-b"), result(5, "tool-b", stopped), marker(6)];
+    expect(tools(laterStop).map(item => item.status)).toEqual(["failed", "interrupted"]);
+  });
+
+  it("keeps error results failed after the streaming interruption marker or a subagent's marker", () => {
+    const failed = [prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", "exit 1")];
+    expect(tools([...failed, marker(4, "[Request interrupted by user]")])[0]).toMatchObject({ status: "failed" });
+    const child = { ...marker(4), parent_tool_use_id: "tool-agent" };
+    expect(tools([...failed, child])[0]).toMatchObject({ status: "failed" });
+  });
+
+  it("interrupts a stopped subagent launch without calling it a launch failure", () => {
+    const [launch] = tools([prompt, call(2, "msg-1", "tool-agent", "Agent", { description: "Review", prompt: "Review it" }),
+      result(3, "tool-agent", stopped), marker(4)]);
+    expect(launch).toMatchObject({ semanticKind: "collaboration", status: "interrupted", completedAt: timestamp,
+      summary: { text: "Started subagent · Review" } });
+    expect(launch).not.toHaveProperty("error");
+  });
+});
+
 describe("Claude targeted history lookup", () => {
   const messages = Array.from({ length: 4 }, (_, index) => [
     user(uuid(index * 2 + 1), `prompt ${index}`),

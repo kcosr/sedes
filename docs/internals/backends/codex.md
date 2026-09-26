@@ -293,6 +293,10 @@ as interrupted. Idle and `notLoaded` metadata project every historical
 the same rule, so an abandoned shell cannot manufacture an active run or a
 Stop/Steer target.
 
+Tool items in an interrupted turn keep Codex's own status. Codex gives no
+exact per-item evidence that Stop aborted a call, and a background terminal
+can outlive its turn and complete later.
+
 Authenticated boundary-only turns are discarded as each native page is
 inspected. A request-local deadline bounds a long hidden-only seek without
 retaining intervening pages.

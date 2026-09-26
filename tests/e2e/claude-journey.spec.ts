@@ -353,6 +353,10 @@ test("compiled Claude backend streams, settles, and reloads through normalized U
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
   await expect(page.getByText("[Request interrupted by user for tool use]", { exact: true })).toHaveCount(0);
+  // The call Stop aborted reads as interrupted, not failed.
+  const stoppedActivity = messages.getByTestId("activity-group").last();
+  await expect(stoppedActivity).toHaveAttribute("data-activity-status", "interrupted");
+  await expect(stoppedActivity).toContainText("1 tool call · Interrupted");
   // Stop means stop: each unstarted steer returns as not sent, never resent.
   for (const text of unstarted) {
     const row = stopPending.getByRole("listitem").filter({ hasText: text });
@@ -369,12 +373,14 @@ test("compiled Claude backend streams, settles, and reloads through normalized U
   await stopPending.getByRole("button", { name: `Restore queued input to composer: ${unstarted[1]}` }).click();
   await expect(stopPending.getByRole("listitem")).toHaveCount(0);
   await expect(input).toHaveValue(unstarted[1]!);
-  await input.fill("");
   await page.reload();
+  // Restore returned the text to the durable draft; nothing was sent.
+  await expect(input).toHaveValue(unstarted[1]!);
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
   await expect(page.getByText("[Request interrupted by user for tool use]", { exact: true })).toHaveCount(0);
   for (const text of unstarted) await expect(messages.getByText(text, { exact: true })).toHaveCount(0);
+  await expect(messages.getByTestId("activity-group").last()).toHaveAttribute("data-activity-status", "interrupted");
   await capture(page, testInfo, "claude-stop-restored.png");
 });
 
