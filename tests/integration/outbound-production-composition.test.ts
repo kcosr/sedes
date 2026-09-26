@@ -29,10 +29,17 @@ import { normalizedApplicationSessionSchema, normalizedApplicationSnapshotSchema
 import { configurationSnapshotSchema, configurationLifecycleImpactSchema, configurationLifecycleResultSchema } from "../../src/shared/protocol/configuration-admin.js";
 import { acceptHostRegistrationResultSchema, hostPairingListSchema } from "../../src/shared/protocol/host-pairing.js";
 import { workspaceFileContentResultSchema, workspaceFileListResultSchema, workspaceFileWriteResultSchema } from "../../src/shared/protocol/workspace-files.js";
+import { terminateProcessesReferencing } from "../support/process-cleanup.js";
 
 const execFile = promisify(execFileCallback);
 const cleanups: (() => Promise<void>)[] = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+afterEach(async () => {
+  const failures: unknown[] = [];
+  for (const cleanup of cleanups.splice(0).reverse()) {
+    try { await cleanup(); } catch (error) { failures.push(error); }
+  }
+  if (failures.length > 0) throw failures[0];
+}, 60_000);
 
 // These tests start real disposable connector/daemon processes with offline providers.
 describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("outbound production composition", () => {
@@ -497,6 +504,10 @@ else process.exit(64);
     throw new Error(`outbound_fixture_timeout\n${this.logs}\nThread SSE: ${this.threadStreamDiagnostics.join("\n")}\nCodex:${JSON.stringify(this.codex?.requests)} Errors:${JSON.stringify(this.codex?.errors)}\nService:${JSON.stringify(await this.serviceStatus())}\nSnapshot:${JSON.stringify(await this.snapshot())}\n${JSON.stringify(await this.configuration())}`);
   }
   async close() {
+    const failures: unknown[] = [];
+    const attempt = async (step: () => Promise<unknown>) => {
+      try { await step(); } catch (error) { failures.push(error); }
+    };
     await this.readBinding().catch(() => undefined);
     for (const socket of this.viewers) socket.terminate();
     if (this.application) for (const id of this.terminalIds) {
@@ -505,18 +516,18 @@ else process.exit(64);
         await this.json(`/api/terminals/${id}/actions/end`, "POST", { mutationId: randomUUID(), expectedRevision: current.lifecycleRevision });
       } catch { /* Already ended terminals have no live owned process. */ }
     }
-    await this.stopConnector();
-    await this.stopMain();
-    if (this.serviceScope) {
-      const paths = persistentSidecarPaths(this.hostHome, process.getuid!(), this.serviceScope);
+    await attempt(() => this.stopConnector());
+    await attempt(() => this.stopMain());
+    const scope = this.serviceScope;
+    if (scope) await attempt(async () => {
       for (let attempt = 0; attempt < 20; attempt++) {
       const status = await this.serviceStatus();
       if (!status || status.state === "stopped") break;
       {
-        const stream = sidecarSocketByteStream(connect(paths.endpointPath));
+        const stream = sidecarSocketByteStream(connect(persistentSidecarPaths(this.hostHome, process.getuid!(), scope).endpointPath));
         try {
           const requestId = randomUUID();
-          await writeSidecarManagementRecord(stream, { managementVersion: 1, requestId, scope: this.serviceScope, operation: "stop",
+          await writeSidecarManagementRecord(stream, { managementVersion: 1, requestId, scope, operation: "stop",
             expectedServiceIncarnation: status.serviceIncarnation, controllerEpoch: status.controllerEpoch,
             expectedConfiguration: status.desiredConfiguration, expectedResourcesFingerprint: status.resourcesFingerprint, force: true });
           const response = await readSidecarManagementRecord(stream, sidecarManagementResponseSchema, AbortSignal.timeout(5_000));
@@ -526,11 +537,16 @@ else process.exit(64);
       }
       await new Promise(resolve => setTimeout(resolve, 50));
       }
-      await rm(paths.socketDirectory, { recursive: true, force: true });
-    }
-    await this.codex?.close();
-    this.authentication.close();
-    await rm(this.directory, { recursive: true, force: true });
+    });
+    // A failed, unconfirmed, or never-attempted stop (the binding may not have
+    // been written yet) must not leave the detached `sedes service daemon`
+    // running with ppid 1: every fixture process runs from this directory.
+    await attempt(() => terminateProcessesReferencing(this.directory));
+    if (scope) await attempt(() => rm(persistentSidecarPaths(this.hostHome, process.getuid!(), scope).socketDirectory, { recursive: true, force: true }));
+    await attempt(async () => this.codex?.close());
+    await attempt(async () => this.authentication.close());
+    await attempt(() => rm(this.directory, { recursive: true, force: true }));
+    if (failures.length > 0) throw failures[0];
   }
 }
 
