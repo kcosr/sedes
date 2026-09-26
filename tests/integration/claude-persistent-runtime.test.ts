@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeRuntimeSessionOptions } from "../../src/server/backends/claude/claude-runtime-client.js";
 import { CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS, ClaudePersistentRuntimeClient } from "../../src/server/backends/claude/runtime/claude-remote-runtime-client.js";
 import { ClaudePersistentRuntimeRegistry } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-registry.js";
+import { CLAUDE_PERSISTENT_RETAINED_EVENT_LIMIT } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-host.js";
 import { claudePersistentAttachmentSchema, type ClaudePersistentEvent } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, registerClaudePersistentRuntimeHost } from "../../src/server/backends/claude/runtime/claude-sidecar-runtime.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execution/environment-channel.js";
@@ -290,7 +291,9 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(f.runtime.createSession).toHaveBeenCalledTimes(1);
     const restored = restoredClient.createSession(sessionOptions(sessionId, { launch: "resume", onMessage: restoredMessages }));
     await restored.start();
-    const replay = [acceptedInput(sessionId, operation), beforeDisconnect, ...buffered];
+    // Deltas no main was offered fold into one frame; the offered one stays exact.
+    const replay = [acceptedInput(sessionId, operation), beforeDisconnect,
+      { ...buffered[1]!, event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Still running remotely." } } }];
     await vi.waitFor(() => expect(restoredMessages.mock.calls.map(([message]) => message)).toEqual(replay));
     expect(restored.startupProbeUuid).toBe(original.startupProbeUuid);
     expect(f.services.status().resources[0]!.resourceId).toBe(originalRuntimeId);
@@ -1269,5 +1272,64 @@ describe("persistent event acknowledgement pipelining", () => {
     await session.flushMessages?.();
     expect(seen).toEqual(texts);
     expect(host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(0);
+  });
+});
+
+describe("persistent retained-event accounting", () => {
+  async function openDirect() {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const sessionId = randomUUID();
+    const delivered: ClaudePersistentEvent[] = [];
+    const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {},
+    } }, listener);
+    const replay = async () => claudePersistentAttachmentSchema.parse(await host.execute({ ...authority, action: "attach", replay: "full", request: { sessionId } }, listener));
+    const detach = async () => { await host.execute({ ...authority, action: "detach", request: { sessionId } }, listener); };
+    return { f, host, authority, sessionId, delivered, listener, replay, detach, native: f.sessions[0]! };
+  }
+  const texts = (events: readonly ClaudePersistentEvent[]) => events.map(event => {
+    const message = event.payload.kind === "message" ? event.payload.message as unknown as { event?: { delta?: { text?: string } } } : undefined;
+    return message?.event?.delta?.text;
+  });
+
+  it("counts each unacknowledged message once, so a disconnected main can fall behind by the full bound", async () => {
+    const { host, sessionId, native, f } = await openDirect();
+    // Main receives these but never acknowledges them. Before, each counted in
+    // both the journal and the replay map and the query failed at 4,095.
+    for (let index = 0; index < CLAUDE_PERSISTENT_RETAINED_EVENT_LIMIT; index++) await native.emit(delta(sessionId, `${index} `));
+    expect(host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(CLAUDE_PERSISTENT_RETAINED_EVENT_LIMIT);
+    expect(native.close).not.toHaveBeenCalled();
+    await expect(native.emit(delta(sessionId, "overflow"))).rejects.toThrow("claude_persistent_event_capacity_exceeded");
+    expect(native.close).toHaveBeenCalledTimes(1);
+    await f.stop(true);
+  });
+
+  it("folds deltas no main was offered, keeping offered, stamped and non-adjacent frames exact", async () => {
+    const { host, sessionId, native, delivered, replay, detach, f } = await openDirect();
+    await native.emit(delta(sessionId, "offered "));
+    expect(delivered).toHaveLength(1);
+    await detach();
+    // The offered frame may already be applied without its acknowledgement.
+    for (const text of ["a", "b", "c"]) await native.emit(delta(sessionId, text));
+    await native.emit({ type: "tool_progress", tool_use_id: "tool-1", tool_name: "Bash", parent_tool_use_id: null,
+      elapsed_time_seconds: 1, uuid: randomUUID(), session_id: sessionId } as SDKMessage);
+    await native.emit(delta(sessionId, "d"));
+    await native.emit(firstDelta(sessionId, "e", randomUUID()));
+    await native.emit(delta(sessionId, "f"));
+    for (let index = 0; index < 20_000; index++) await native.emit(delta(sessionId, "g"));
+    expect(delivered).toHaveLength(1);
+    const attachment = await replay();
+    expect(texts(attachment.events)).toEqual(["offered ", "abc", undefined, "d", "e", `f${"g".repeat(20_000)}`]);
+    expect(attachment.events[0]!.sequence).toBe(delivered[0]!.sequence);
+    expect(host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(6);
+    // Everything retained was offered by that attachment; live frames stay exact.
+    for (const text of ["h", "i"]) await native.emit(delta(sessionId, text));
+    expect(texts(delivered.slice(1))).toEqual(["h", "i"]);
+    expect(host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(8);
+    await f.stop(true);
   });
 });

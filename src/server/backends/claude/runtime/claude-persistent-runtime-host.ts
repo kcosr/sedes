@@ -20,6 +20,10 @@ type Session = {
   id: string; cwd: string; authorityFingerprint: string; forkIdentity?: string; runtime: ClaudeRuntimeSession; starting: Promise<unknown>;
   admissionJournalComplete: boolean;
   events: Map<number, ClaudePersistentEvent>; replay: Map<number, ClaudePersistentEvent>; bytes: number; replayBytes: number; sequence: number;
+  /** Unacknowledged message events sit in both maps; retention counts them once. */
+  journalMessageBytes: number; journalMessageCount: number;
+  /** No main has been offered a sequence above this, live or in an attachment. */
+  offeredThrough: number;
   sends: Map<string, string>; pendingInputs: Map<string, Parameters<ClaudeRuntimeSession["send"]>[0]>; pendingInputBytes: number; permissionResponses: Map<string,string>; retiring?: Promise<void>; active: Set<string>; permissions: Map<string, Permission>;
   evicted?: boolean;
   /** Claude Code's own run state; work it starts itself keeps it non-idle. */
@@ -261,6 +265,7 @@ export class ClaudePersistentRuntimeHost {
         if (event) {
           session.events.delete(event.sequence);
           session.bytes -= eventSize(event);
+          if (event.payload.kind === "message") { session.journalMessageBytes -= eventSize(event); session.journalMessageCount--; }
           const currentReplay = session.replay.get(event.sequence);
           if (currentReplay) {
             const previous = [...session.replay.values()].filter(retained => retained.sequence < event.sequence).at(-1);
@@ -324,7 +329,7 @@ export class ClaudePersistentRuntimeHost {
           if (session.runtime.closed || session.failureCode) return { accepted: false, code: "claude_persistent_query_closed" };
           if (session.active.size && command.request.priority !== "next") return { accepted: false, code: "claude_persistent_query_busy" };
           const inputBytes = Buffer.byteLength(JSON.stringify(command.request.content), "utf8");
-          if (session.bytes + session.replayBytes + session.pendingInputBytes + inputBytes > (this.input.maximumEventBytes ?? 64 * 1024 * 1024)) return { accepted: false, code: "claude_persistent_input_capacity_exceeded" };
+          if (retainedBytes(session) + session.pendingInputBytes + inputBytes > (this.input.maximumEventBytes ?? 64 * 1024 * 1024)) return { accepted: false, code: "claude_persistent_input_capacity_exceeded" };
           if (session.sends.size >= 16384) return { accepted: false, code: "claude_persistent_operation_capacity_exceeded" };
           session.sends.set(operationId, fingerprint); session.active.add(operationId); session.pendingInputs.set(operationId, command.request as Parameters<ClaudeRuntimeSession["send"]>[0]); session.pendingInputBytes += inputBytes; this.#revision++;
           try { await session.runtime.send(command.request as Parameters<ClaudeRuntimeSession["send"]>[0]); }
@@ -367,6 +372,7 @@ export class ClaudePersistentRuntimeHost {
       onFailure: () => this.#fail(created, "claude_persistent_query_failed"),
     });
     created = { backgroundActivity: new ClaudeBackgroundActivity(), id: request.sessionId, cwd: request.cwd, authorityFingerprint: queryAuthorityFingerprint(request), ...(request.launch === "fork" ? { forkIdentity: JSON.stringify([request.sourceSessionId, request.resumeSessionAt]) } : {}), runtime, starting: Promise.resolve(), events: new Map(), replay: new Map(), bytes: 0, replayBytes: 0, sequence: 0,
+      journalMessageBytes: 0, journalMessageCount: 0, offeredThrough: 0,
       nextHistoryRead: 0, historyBackoff: 0, historyPressure: false, historyCandidatesDirty: true, hasHistoryCandidates: false, rewriteGeneration: 0, streamStopSequence: 0, replayStateSequences: new Map(),
       admissionJournalComplete: request.launch === "new",
       terminalResultSequences: new Set(), sends: new Map(), pendingInputs: new Map(), pendingInputBytes: 0, commandsInvalidated: false, permissionResponses: new Map(), active: new Set(), permissions: new Map(),
@@ -397,6 +403,8 @@ export class ClaudePersistentRuntimeHost {
     if (!this.#closing && !this.#runtimeStopped && session.runtime.closed && !session.failureCode) this.#fail(session, "claude_persistent_query_closed");
     session.evicted = false;
     session.listener = listener; session.epoch = epoch;
+    // The response below offers every retained event to this main.
+    session.offeredThrough = session.sequence;
     this.#scheduleHistorySweep(session);
     const { actualModel: initialModel, ...initialization } = session.runtime.initialization!;
     const actualModel = session.model === undefined ? initialModel : session.model;
@@ -510,15 +518,36 @@ export class ClaudePersistentRuntimeHost {
     this.#event(session, { kind: "failed", code }, true);
   }
   #event(session: Session, payload: ClaudePersistentEvent["payload"], reserve = false, beforePublish?: (event: ClaudePersistentEvent) => void): ClaudePersistentEvent {
-    const event = claudePersistentEventSchema.parse({ sessionId: session.id, sequence: ++session.sequence, payload });
-    const size = eventSize(event);
-    if (!reserve && (session.bytes + session.replayBytes + session.pendingInputBytes + size * 2 > (this.input.maximumEventBytes ?? 64 * 1024 * 1024) || session.events.size + session.replay.size >= 8190)) {
+    let event = claudePersistentEventSchema.parse({ sessionId: session.id, sequence: ++session.sequence, payload });
+    // While no main is attached, a streamed delta folds into the immediately
+    // preceding delta if no main was ever offered that frame. Offered frames
+    // keep their exact sequences: a main may have applied one without
+    // acknowledging it yet, and a merged replay would repeat its text.
+    const previous = session.listener ? undefined : session.events.get(event.sequence - 1);
+    const merged = previous && previous.sequence > session.offeredThrough && session.replay.get(previous.sequence) === previous
+      ? coalesceUnofferedDelta(previous, event) : undefined;
+    const released = merged && previous ? eventSize(previous) : 0;
+    const size = eventSize(merged ?? event);
+    // Each retained event counts once, although an unacknowledged message is
+    // both a journal entry and a replay entry.
+    if (!reserve && (retainedBytes(session) - released + session.pendingInputBytes + size > (this.input.maximumEventBytes ?? 64 * 1024 * 1024) ||
+        retainedCount(session) - (merged ? 1 : 0) >= CLAUDE_PERSISTENT_RETAINED_EVENT_LIMIT)) {
       this.#fail(session, "claude_persistent_event_capacity_exceeded");
       void session.runtime.close().catch(() => { this.#cleanupUnproven = true; this.#revision++; });
       throw new Error("claude_persistent_event_capacity_exceeded");
     }
+    if (merged && previous) {
+      session.events.delete(previous.sequence); session.replay.delete(previous.sequence);
+      session.bytes -= released; session.replayBytes -= released;
+      session.journalMessageBytes -= released; session.journalMessageCount--;
+      event = merged;
+    }
     session.events.set(event.sequence, event); session.bytes += size; this.#revision++;
-    if (payload.kind === "message") { session.replay.set(event.sequence, event); session.replayBytes += size; }
+    if (payload.kind === "message") {
+      session.replay.set(event.sequence, event); session.replayBytes += size;
+      session.journalMessageBytes += size; session.journalMessageCount++;
+    }
+    if (session.listener) session.offeredThrough = event.sequence;
     beforePublish?.(event);
     try { session.listener?.(event); } catch { session.listener = undefined; session.epoch = undefined; }
     return event;
@@ -728,6 +757,25 @@ function isBackgroundInventory(event: ClaudePersistentEvent): boolean {
 }
 function permissionKey(identity: { requestId: string; toolUseID: string }): string { return JSON.stringify([identity.requestId, identity.toolUseID]); }
 function eventSize(event: ClaudePersistentEvent): number { return Buffer.byteLength(JSON.stringify(event), "utf8"); }
+/** Distinct retained events. An attachment offers at most this many, within
+ * its 8,192-event wire bound (a reserved failure event may follow). */
+export const CLAUDE_PERSISTENT_RETAINED_EVENT_LIMIT = 8190;
+function retainedBytes(session: Session): number { return session.bytes + session.replayBytes - session.journalMessageBytes; }
+function retainedCount(session: Session): number { return session.events.size + session.replay.size - session.journalMessageCount; }
+
+/** Only plain delta frames fold before any main sees them. A consumption stamp,
+ * time-to-first-token, or any unreviewed field keeps the frame exact. */
+const plainStreamEventKeys = ["event", "parent_tool_use_id", "session_id", "type", "uuid"].join();
+function coalesceUnofferedDelta(previous: ClaudePersistentEvent, current: ClaudePersistentEvent): ClaudePersistentEvent | undefined {
+  if (previous.payload.kind !== "message" || current.payload.kind !== "message" || previous.payload.consumedTurnRootUuid || current.payload.consumedTurnRootUuid) return undefined;
+  const keys = (value: unknown) => { const fields = object(value); return fields ? Object.keys(fields).sort().join() : undefined; };
+  const plain = (value: unknown) => {
+    const message = object(value); const frame = object(message?.event); const delta = object(frame?.delta);
+    return keys(message) === plainStreamEventKeys && keys(frame) === "delta,index,type" && delta !== undefined && Object.keys(delta).length === 2;
+  };
+  if (!plain(previous.payload.message) || !plain(current.payload.message)) return undefined;
+  return coalesceDelta(previous, current);
+}
 
 /** Merge only adjacent native delta fragments; lifecycle/index/type boundaries
  * remain ordered. Only acknowledged fragments merge. The journal retains original frames for a surviving

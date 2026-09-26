@@ -63,6 +63,17 @@ Unfinished or ambiguous streams, uncovered messages, and unsettled control or
 terminal evidence remain retained. Acknowledged transient progress notices are
 discarded; replaceable state retains its current value.
 
+Each retained event counts once toward a query's bound of 8,190 events and
+64 MiB, although an unacknowledged message is both a journal and a replay
+entry. While no main is attached, a plain streamed delta (text, thinking,
+tool-input JSON, or signature) folds into the immediately preceding delta of
+the same block if no main was ever offered that frame, live or in an
+attachment. Offered frames keep their exact sequences, because a main may have
+applied one without acknowledging it yet. Frames that carry a consumption
+stamp, time to first token, or any other field never fold. A long turn that
+runs while main is away therefore retains a few merged deltas rather than one
+frame per token.
+
 Cleanup is independent of optional usage accounting. A failed accounting
 capture still withholds its event ACK. Disconnect stops connected reclamation;
 long outages or unavailable history can still exhaust the existing retention

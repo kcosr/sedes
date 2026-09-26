@@ -106,6 +106,10 @@
 - Keep a conflicting Claude result from failing the thread; the first recorded
   outcome is kept.
 
+- Let a remote Claude turn run twice as long while main is away before its
+  retained output overflows. The sidecar counts each retained event once and
+  folds streamed text that no main has seen yet into fewer events.
+
 - Show a Claude task-notification turn as its own turn while it streams, as
   reload does. Existing threads re-identify those turns once on first load.
 
