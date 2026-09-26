@@ -98,6 +98,20 @@ Claude methods, identifiers, history meaning, or policy. An exact worker
 protocol/build mismatch fails before SDK authority opens, with no compatibility
 decoder or local fallback.
 
+The worker starts each Claude CLI process as the leader of its own detached
+process group and owns every descendant it can attribute. Claude Code runs each
+Bash tool shell in its own session (pgid = sid = pid), outside the leader group,
+so the worker records descendants from the process table (`/proc` on Linux,
+`ps` on macOS) about once a second and immediately before every signal it sends,
+while their ancestry is still visible. Stop signals go to the leader group,
+every owned descendant group, and every recorded descendant; descendants stay
+owned after their parent exits. Cleanup is proven only when all of them are gone,
+and an unproven cleanup fences the worker generation. A descendant that starts
+and is orphaned between two observations cannot be attributed. The SDK itself
+escalates a query close from SIGTERM to SIGKILL only after 5 s, so a closing
+leader can outlive its query for that long. If the inner worker dies, the outer
+supervisor applies the same rules to every registered leader.
+
 Worker permission delivery uses an application-level round trip: after the
 worker receives a `can_use_tool` result, it acknowledges the exact query,
 request, and tool-use identity before releasing that result to the Claude SDK.

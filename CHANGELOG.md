@@ -118,6 +118,11 @@
   when newer work starts; Pi retries do not leave a stale failure. Requires
   matching browser and packaged clients using client protocol 117. (#6)
 
+- Stop Claude Bash tool processes with their Claude process. The Claude worker
+  now tracks descendants that run in their own sessions and reports cleanup as
+  proven only after they are gone; previously they could outlive a stopped or
+  crashed Claude process.
+
 ### Removed
 
 ## [0.1.1] - 2026-09-21

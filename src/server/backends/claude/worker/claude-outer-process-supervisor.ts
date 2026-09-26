@@ -1,10 +1,17 @@
+import { cleanUpOwnedProcessTrees, OwnedProcessTree } from "../../../runtime/owned-process-tree.js";
+import { readProcessEntrySync, readProcessTable } from "../../../runtime/process-table.js";
 import type { ClaudeWorkerSupervisionMessage } from "./claude-worker-supervision-ipc.js";
 
 /** Outer status proving an abnormal worker generation left no Claude groups. */
 export const CLAUDE_RUNTIME_WORKER_CLEANUP_PROVEN_FAILURE_EXIT_CODE = 72;
 
+/**
+ * Fallback owner of every registered Claude process tree when the inner worker
+ * cannot prove cleanup itself. Descendants in other sessions are attributed
+ * through ancestry while their leader or a recorded descendant is still alive.
+ */
 export class ClaudeOuterProcessSupervisor {
-  readonly #processGroups = new Set<number>();
+  readonly #processGroups = new Map<number, OwnedProcessTree>();
   readonly #gracefulMilliseconds: number;
   readonly #terminateMilliseconds: number;
   readonly #killMilliseconds: number;
@@ -29,7 +36,12 @@ export class ClaudeOuterProcessSupervisor {
       if (this.#closePromise || this.#processGroups.has(message.processGroupId)) {
         throw new Error("claude_runtime_worker_process_group_registration_invalid");
       }
-      this.#processGroups.add(message.processGroupId);
+      // The inner worker registers a stopped, detached gate before it may exec.
+      const leader = readProcessEntrySync(message.processGroupId);
+      if (!leader || leader.exited || leader.processGroupId !== leader.pid) {
+        throw new Error("claude_runtime_worker_process_group_registration_invalid");
+      }
+      this.#processGroups.set(message.processGroupId, new OwnedProcessTree(leader));
     } else if (message.type === "process_group_unregistered") {
       if (!this.#processGroups.has(message.processGroupId) || groupExists(message.processGroupId)) {
         throw new Error("claude_runtime_worker_process_group_unregistration_invalid");
@@ -38,25 +50,35 @@ export class ClaudeOuterProcessSupervisor {
     }
   }
 
+  /** Records descendants of every registered tree while ancestry is visible. */
+  async observe(): Promise<void> {
+    if (this.#processGroups.size === 0) return;
+    const table = await readProcessTable();
+    for (const tree of this.#processGroups.values()) tree.observe(table);
+  }
+
   close(): Promise<void> {
     return (this.#closePromise ??= this.#closeAll());
   }
 
   async #closeAll(): Promise<void> {
-    const groups = [...this.#processGroups];
+    const trees = [...this.#processGroups.values()];
     // The inner worker already had a graceful EOF opportunity before the
     // outer close path. Preserve one short observation phase for an in-flight
     // unregister before taking authority away from it.
-    await waitForGroups(groups, this.#gracefulMilliseconds);
-    const afterGrace = groups.filter(groupExists);
-    for (const group of afterGrace) signalGroup(group, "SIGTERM");
-    await waitForGroups(afterGrace, this.#terminateMilliseconds);
-    const afterTerminate = afterGrace.filter(groupExists);
-    for (const group of afterTerminate) signalGroup(group, "SIGKILL");
-    await waitForGroups(afterTerminate, this.#killMilliseconds);
-    const unproven = afterTerminate.filter(groupExists);
-    this.#processGroups.clear();
-    if (unproven.length > 0) {
+    let proven: boolean;
+    try {
+      proven = await cleanUpOwnedProcessTrees(trees, {
+        gracefulMilliseconds: this.#gracefulMilliseconds,
+        terminateMilliseconds: this.#terminateMilliseconds,
+        killMilliseconds: this.#killMilliseconds,
+      });
+    } catch (error) {
+      throw new Error("claude_runtime_outer_child_cleanup_unproven", { cause: error });
+    } finally {
+      this.#processGroups.clear();
+    }
+    if (!proven) {
       throw new Error("claude_runtime_outer_child_cleanup_unproven");
     }
   }
@@ -70,27 +92,12 @@ function duration(value: number | undefined, fallback: number): number {
   return result;
 }
 
-function signalGroup(group: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(-group, signal);
-  } catch (error) {
-    if (!isErrno(error, "ESRCH")) throw error;
-  }
-}
-
 function groupExists(group: number): boolean {
   try {
     process.kill(-group, 0);
     return true;
   } catch (error) {
     return !isErrno(error, "ESRCH");
-  }
-}
-
-async function waitForGroups(groups: readonly number[], milliseconds: number): Promise<void> {
-  const deadline = Date.now() + milliseconds;
-  while (groups.some(groupExists) && Date.now() < deadline) {
-    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, deadline - Date.now())));
   }
 }
 

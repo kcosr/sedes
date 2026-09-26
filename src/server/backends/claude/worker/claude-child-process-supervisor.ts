@@ -10,11 +10,21 @@ import {
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import {
+  cleanUpOwnedProcessTrees,
+  OwnedProcessTree,
+} from "../../../runtime/owned-process-tree.js";
+import {
+  readProcessEntrySync,
+  readProcessTable,
+  readProcessTableSync,
+} from "../../../runtime/process-table.js";
 import type { ClaudeProcessGroupRegistrar } from "./claude-worker-supervision-ipc.js";
 
 const DEFAULT_GRACEFUL_CLOSE_MILLISECONDS = 2_250;
 const DEFAULT_TERMINATE_MILLISECONDS = 1_000;
 const DEFAULT_KILL_MILLISECONDS = 1_000;
+const DEFAULT_DESCENDANT_OBSERVATION_MILLISECONDS = 1_000;
 const MAXIMUM_PROBE_OUTPUT_BYTES = 4_096;
 const CLAUDE_GATE_STOP_TIMEOUT_MILLISECONDS = 2_000;
 const CLAUDE_GATE_SOURCE = 'kill -STOP $$; exec "$@"';
@@ -22,6 +32,7 @@ const CLAUDE_GATE_SOURCE = 'kill -STOP $$; exec "$@"';
 interface TrackedClaudeProcess {
   readonly child: ChildProcessWithoutNullStreams;
   readonly processGroupId: number;
+  readonly tree: OwnedProcessTree;
   readonly exited: Promise<void>;
   readonly removeAbortListener: () => void;
   killRequested: boolean;
@@ -34,27 +45,39 @@ export interface ClaudeChildProcessSupervisorOptions {
   readonly gracefulCloseMilliseconds?: number;
   readonly terminateMilliseconds?: number;
   readonly killMilliseconds?: number;
+  /** Interval for recording descendants while their ancestry is still visible. */
+  readonly descendantObservationMilliseconds?: number;
   readonly processGroupRegistrar: ClaudeProcessGroupRegistrar;
   /** Automatic record cleanup uncertainty is fatal to the worker generation. */
   readonly onCleanupFailure?: (error: unknown) => void;
 }
 
 /**
- * Owns every Claude CLI process group in one runtime worker generation.
+ * Owns every Claude CLI process tree in one runtime worker generation.
  *
- * The SDK gets ordinary Node streams and events, while signals always target
- * the detached process group so tool and subagent descendants cannot survive
- * query or worker teardown.
+ * The SDK gets ordinary Node streams and events. Signals target the detached
+ * leader group and every observed descendant. Claude Code runs Bash tool
+ * shells in their own sessions, outside the leader group, so descendants are
+ * recorded periodically and before every supervisor signal, while their
+ * ancestry is still visible. Cleanup is proven only when the leader group and
+ * every recorded descendant and descendant group are gone. A descendant that
+ * starts and is orphaned between two observations cannot be attributed. The
+ * SDK itself escalates to SIGKILL only 5 s after SIGTERM, so a leader can
+ * outlive its query for that long; the per-record cleanup below starts only
+ * after the leader closes.
  */
 export class ClaudeChildProcessSupervisor {
   readonly #gracefulCloseMilliseconds: number;
   readonly #terminateMilliseconds: number;
   readonly #killMilliseconds: number;
+  readonly #observationMilliseconds: number;
   readonly #tracked = new Set<TrackedClaudeProcess>();
   readonly #processGroupRegistrar: ClaudeProcessGroupRegistrar;
   readonly #onCleanupFailure: (error: unknown) => void;
   #closePromise: Promise<void> | undefined;
   #closed = false;
+  #observer: ReturnType<typeof setInterval> | undefined;
+  #observing: Promise<void> | undefined;
 
   constructor(options: ClaudeChildProcessSupervisorOptions) {
     this.#gracefulCloseMilliseconds = boundedDuration(
@@ -69,6 +92,10 @@ export class ClaudeChildProcessSupervisor {
       options.killMilliseconds,
       DEFAULT_KILL_MILLISECONDS,
     );
+    this.#observationMilliseconds = boundedDuration(
+      options.descendantObservationMilliseconds,
+      DEFAULT_DESCENDANT_OBSERVATION_MILLISECONDS,
+    );
     this.#processGroupRegistrar = options.processGroupRegistrar;
     this.#onCleanupFailure = options.onCleanupFailure ?? (() => undefined);
     if (process.platform === "win32") {
@@ -78,6 +105,13 @@ export class ClaudeChildProcessSupervisor {
 
   get trackedProcessCount(): number {
     return this.#tracked.size;
+  }
+
+  /** Descendants currently attributed to tracked leaders. */
+  get observedDescendantCount(): number {
+    let count = 0;
+    for (const record of this.#tracked) count += record.tree.observedDescendantCount;
+    return count;
   }
 
   spawnClaudeCodeProcess = (options: SpawnOptions): SpawnedProcess => {
@@ -113,10 +147,25 @@ export class ClaudeChildProcessSupervisor {
     // a verbose provider cannot deadlock; never retain its secret-bearing text.
     child.stderr.resume();
     const events = new EventEmitter();
+    let tree: OwnedProcessTree;
+    try {
+      waitForStoppedGate(child.pid);
+      // The stopped gate is the future Claude leader; exec keeps its identity.
+      const leader = readProcessEntrySync(child.pid);
+      if (!leader) throw new Error("claude_worker_process_identity_unavailable");
+      tree = new OwnedProcessTree(leader);
+    } catch (error) {
+      child.once("error", () => undefined);
+      killStoppedGate(child);
+      throw new Error("claude_worker_process_gate_stop_unproven", {
+        cause: error,
+      });
+    }
     let abort = () => undefined;
     const record: TrackedClaudeProcess = {
       child,
       processGroupId: child.pid,
+      tree,
       exited: new Promise<void>((resolve) =>
         child.once("close", () => resolve()),
       ),
@@ -128,17 +177,8 @@ export class ClaudeChildProcessSupervisor {
     };
     abort = () => {
       record.killRequested = true;
-      signalProcessGroup(record, "SIGTERM");
+      signalOwnedTree(record, "SIGTERM");
     };
-    try {
-      waitForStoppedGate(record.processGroupId);
-    } catch (error) {
-      child.once("error", () => undefined);
-      signalProcessGroup(record, "SIGKILL");
-      throw new Error("claude_worker_process_gate_stop_unproven", {
-        cause: error,
-      });
-    }
     child.on("error", (error) => events.emit("error", error));
     child.on("exit", (code, signal) => events.emit("exit", code, signal));
     child.once("close", () => {
@@ -158,13 +198,14 @@ export class ClaudeChildProcessSupervisor {
     });
     options.signal.addEventListener("abort", abort, { once: true });
     this.#tracked.add(record);
+    this.#startObserver();
     if (options.signal.aborted) abort();
     const registration = this.#processGroupRegistrar
       .register(record.processGroupId)
       .then(() => {
         record.registeredWithParent = true;
         if (this.#closed || record.killRequested) {
-          signalProcessGroup(record, "SIGKILL");
+          signalOwnedTree(record, "SIGKILL");
           return;
         }
         if (!signalProcessGroup(record, "SIGCONT")) {
@@ -173,7 +214,7 @@ export class ClaudeChildProcessSupervisor {
       })
       .catch((error) => {
         record.killRequested = true;
-        signalProcessGroup(record, "SIGKILL");
+        signalOwnedTree(record, "SIGKILL");
         queueMicrotask(() =>
           events.emit(
             "error",
@@ -202,7 +243,7 @@ export class ClaudeChildProcessSupervisor {
       },
       kill: (signal) => {
         record.killRequested = true;
-        return signalProcessGroup(record, signal);
+        return signalOwnedTree(record, signal);
       },
       on: (event, listener) => {
         events.on(event, listener);
@@ -325,12 +366,15 @@ export class ClaudeChildProcessSupervisor {
 
   async #closeAll(): Promise<void> {
     const records = [...this.#tracked];
+    // EOF lets leaders exit and orphan their descendants; record them first.
+    await this.#observeDescendants().catch(() => undefined);
     for (const record of records) record.child.stdin.end();
     const results = await Promise.allSettled(
       records.map(async (record) => await this.#cleanupRecord(record)),
     );
     this.#processGroupRegistrar.close();
     this.#tracked.clear();
+    this.#stopObserver();
     const failed = results.find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
@@ -347,24 +391,51 @@ export class ClaudeChildProcessSupervisor {
 
   async #performRecordCleanup(record: TrackedClaudeProcess): Promise<void> {
     record.removeAbortListener();
-    await waitForGroupsToExit([record], this.#gracefulCloseMilliseconds);
-    if (processGroupExists(record.processGroupId)) {
-      signalProcessGroup(record, "SIGTERM");
-      await waitForGroupsToExit([record], this.#terminateMilliseconds);
+    let proven: boolean;
+    try {
+      proven = await cleanUpOwnedProcessTrees([record.tree], {
+        gracefulMilliseconds: this.#gracefulCloseMilliseconds,
+        terminateMilliseconds: this.#terminateMilliseconds,
+        killMilliseconds: this.#killMilliseconds,
+      });
+    } catch (error) {
+      throw new Error("claude_worker_child_cleanup_unproven", { cause: error });
     }
-    if (processGroupExists(record.processGroupId)) {
-      signalProcessGroup(record, "SIGKILL");
-      await waitForGroupsToExit([record], this.#killMilliseconds);
-    }
-    if (processGroupExists(record.processGroupId)) {
-      throw new Error("claude_worker_child_cleanup_unproven");
-    }
+    if (!proven) throw new Error("claude_worker_child_cleanup_unproven");
     // Registration may still be awaiting the outer ACK when the leader exits.
     // Do not unregister or let supervisor.close() close the registrar until
     // that bounded registration handshake has settled.
     await record.registrationSettled;
     this.#unregister(record);
     this.#tracked.delete(record);
+    if (this.#tracked.size === 0) this.#stopObserver();
+  }
+
+  #startObserver(): void {
+    if (this.#observer || this.#closed) return;
+    this.#observer = setInterval(() => {
+      void this.#observeDescendants().catch(() => {
+        // A missed sample only narrows attribution; cleanup reads again and
+        // fails closed if the process table stays unavailable.
+      });
+    }, this.#observationMilliseconds);
+    this.#observer.unref?.();
+  }
+
+  #stopObserver(): void {
+    if (this.#observer) clearInterval(this.#observer);
+    this.#observer = undefined;
+  }
+
+  #observeDescendants(): Promise<void> {
+    if (this.#tracked.size === 0) return Promise.resolve();
+    return (this.#observing ??= readProcessTable()
+      .then((table) => {
+        for (const record of this.#tracked) record.tree.observe(table);
+      })
+      .finally(() => {
+        this.#observing = undefined;
+      }));
   }
 
   #unregister(record: TrackedClaudeProcess): void {
@@ -482,30 +553,31 @@ function signalProcessGroup(
   }
 }
 
-function processGroupExists(processGroupId: number): boolean {
+/** Records current descendants, then signals the leader group and all of them. */
+function signalOwnedTree(
+  record: TrackedClaudeProcess,
+  signal: NodeJS.Signals,
+): boolean {
+  let table: ReturnType<typeof readProcessTableSync>;
   try {
-    process.kill(-processGroupId, 0);
-    return true;
-  } catch (error) {
-    return !isErrno(error, "ESRCH");
+    table = readProcessTableSync();
+  } catch {
+    // The leader group remains reachable; cleanup rereads and fails closed.
+    return signalProcessGroup(record, signal);
   }
+  record.tree.observe(table);
+  return record.tree.signal(table, signal) || signalProcessGroup(record, signal);
 }
 
-async function waitForGroupsToExit(
-  records: readonly TrackedClaudeProcess[],
-  timeoutMilliseconds: number,
-): Promise<void> {
-  if (records.every((record) => !processGroupExists(record.processGroupId))) {
-    return;
-  }
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, Math.min(25, deadline - Date.now()));
-      timer.unref?.();
-    });
-    if (records.every((record) => !processGroupExists(record.processGroupId))) {
-      return;
+function killStoppedGate(child: ChildProcessWithoutNullStreams): void {
+  try {
+    globalThis.process.kill(-child.pid!, "SIGKILL");
+  } catch (error) {
+    if (isErrno(error, "ESRCH")) return;
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // The spawn failure below remains authoritative.
     }
   }
 }
