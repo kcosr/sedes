@@ -108,6 +108,8 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/backends/claude/worker/claude-runtime-v1.ts",
   "src/server/backends/claude/worker/claude-runtime-host-support.ts",
   "src/server/backends/claude/claude-runtime-worker-client.ts",
+  "src/server/backends/claude/claude-fork-launch.ts",
+  "src/server/backends/claude/claude-launch-refusal.ts",
   "src/server/backends/claude/worker/claude-outer-process-supervisor.ts",
   "src/server/runtime/process-table.ts",
   "src/server/runtime/owned-process-tree.ts",

@@ -1,4 +1,4 @@
-import type { EffortLevel, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { EffortLevel, PermissionMode, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { SidecarOperationError } from "../../../internal/sidecar-protocol/operation-registry.js";
 import type { ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import type { VerifiedClaudeRuntimeVersion } from "./claude-release-guard.js";
@@ -7,11 +7,16 @@ import type {
   ClaudeRuntimeSessionOptions,
 } from "./claude-runtime-client.js";
 import {
-  CLAUDE_FORK_LAUNCH_PERMISSION_MODE,
   CLAUDE_QUERY_NOT_LAUNCHED_CODE_PREFIX,
   claudeLaunchRefusal,
   type ClaudeLaunchRefusal,
-} from "./claude-sdk-session.js";
+} from "./claude-launch-refusal.js";
+
+/**
+ * The permission mode of every fork launch. The child's own runtime later
+ * applies its real mode; the launch denies any permission request.
+ */
+export const CLAUDE_FORK_LAUNCH_PERMISSION_MODE = "default" as const satisfies PermissionMode;
 
 export interface ClaudeRuntimeForkOptions {
   readonly executionEnvironment?: ResolvedEnvironmentVariables;

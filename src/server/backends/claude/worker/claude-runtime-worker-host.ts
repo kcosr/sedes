@@ -18,11 +18,11 @@ import { claudeConfigDirectory, type ClaudeChildEnvironment } from "../claude-ch
 import { snapshotBoundedJson } from "../../../provider-protocol/json/bounded-json-snapshot.js";
 import type { ClaudeSdkFacade } from "../claude-sdk-facade.js";
 import { probeClaudeSdkDirect } from "../claude-sdk-probe.js";
+import { ClaudeSdkSession } from "../claude-sdk-session.js";
 import {
   CLAUDE_QUERY_NOT_LAUNCHED_CODE_PREFIX,
-  ClaudeSdkSession,
   claudeLaunchRefusal,
-} from "../claude-sdk-session.js";
+} from "../claude-launch-refusal.js";
 import {
   CLAUDE_RUNTIME_CAPABILITY_ID,
   CLAUDE_RUNTIME_MAJOR_VERSION,
