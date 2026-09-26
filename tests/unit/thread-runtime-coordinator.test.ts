@@ -15,6 +15,7 @@ import {
   type ConversationActorManager,
 } from "../../src/server/conversations/conversation-actor-manager.js";
 import type { NormalizedThreadSnapshot } from "../../src/shared/protocol/conversation.js";
+import { DomainError } from "../../src/server/domain/errors.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" };
 
@@ -918,6 +919,79 @@ describe("ThreadRuntimeCoordinator", () => {
 
     busyRuntime.release();
     outerRuntime.release();
+    await coordinator.close();
+  });
+
+  it("releases provider residency of an unloaded thread and treats outstanding provider work as busy", async () => {
+    const outcomes = new Map<string, "released" | "busy" | Error>([
+      ["thread-released", "released"],
+      ["thread-busy", "busy"],
+      ["thread-unreachable", new Error("sidecar_unreachable")],
+    ]);
+    const release = vi.fn(async (input: { binding: { applicationThreadId: string } }) => {
+      const outcome = outcomes.get(input.binding.applicationThreadId)!;
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    });
+    const { coordinator } = resetCoordinator([], 60_000, (threadId) => {
+      if (threadId === "thread-unbound") {
+        throw new DomainError("not_found", "Thread has no backend conversation.");
+      }
+      const target = runtimeTarget(threadId);
+      return {
+        ...target,
+        driver: threadId === "thread-no-residency" ? {} : { releaseConversationResidency: release },
+      } as unknown as AcquireConversationActorInput;
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await expect(coordinator.releaseProviderResidency(scope, "thread-released")).resolves.toBeUndefined();
+      expect(release).toHaveBeenLastCalledWith(expect.objectContaining({
+        binding: expect.objectContaining({ backendConversationId: "backend-thread-released" }),
+        workspace: expect.objectContaining({ canonicalPath: "/workspace" }),
+        opaqueBindingDetail: "opaque",
+      }));
+      await expect(coordinator.releaseProviderResidency(scope, "thread-busy"))
+        .rejects.toBeInstanceOf(ThreadRuntimeNotIdleError);
+      await expect(coordinator.releaseProviderResidency(scope, "thread-unreachable")).resolves.toBeUndefined();
+      expect(stderr.mock.calls.map(([line]) => String(line)).join("")).toContain(
+        "Release of thread thread-unreachable provider residency failed: sidecar_unreachable",
+      );
+      await expect(coordinator.releaseProviderResidency(scope, "thread-unbound")).resolves.toBeUndefined();
+      await expect(coordinator.releaseProviderResidency(scope, "thread-no-residency")).resolves.toBeUndefined();
+      expect(release).toHaveBeenCalledTimes(3);
+    } finally {
+      stderr.mockRestore();
+      await coordinator.close();
+    }
+  });
+
+  it("refuses an archive fence whose provider work is outstanding and leaves later retirement usable", async () => {
+    const release = vi.fn(async (input: { binding: { applicationThreadId: string } }) =>
+      input.binding.applicationThreadId === "thread-remote-busy" ? "busy" as const : "released" as const);
+    const { coordinator } = resetCoordinator([], 60_000, (threadId) => ({
+      ...runtimeTarget(threadId),
+      driver: { releaseConversationResidency: release },
+    }) as unknown as AcquireConversationActorInput);
+    const operation = vi.fn(async () => undefined);
+    await expect(
+      runWithArchivedThreadRuntimesRetired({
+        scope,
+        threadIds: ["thread-remote-idle", "thread-remote-busy"],
+        runtimes: coordinator,
+        operation,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_transition" });
+    expect(operation).not.toHaveBeenCalled();
+    await expect(
+      runWithArchivedThreadRuntimesRetired({
+        scope,
+        threadIds: ["thread-remote-idle"],
+        runtimes: coordinator,
+        operation,
+      }),
+    ).resolves.toBeUndefined();
+    expect(operation).toHaveBeenCalledOnce();
     await coordinator.close();
   });
 

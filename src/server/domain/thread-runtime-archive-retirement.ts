@@ -11,6 +11,15 @@ export interface ArchivedThreadRuntimeRetirement {
     applicationThreadId: string,
     operation: () => Promise<Result>,
   ): Promise<Result>;
+  /**
+   * Within the retired fence, release provider residency that outlives the
+   * runtime, such as a remote query; throws ThreadRuntimeNotIdleError while
+   * provider work is outstanding.
+   */
+  releaseProviderResidency(
+    scope: RequestScope,
+    applicationThreadId: string,
+  ): Promise<void>;
 }
 
 /**
@@ -33,7 +42,12 @@ export async function runWithArchivedThreadRuntimesRetired<Result>(input: {
       return await input.runtimes.runWithRuntimeRetired(
         input.scope,
         threadId,
-        () => retire(index + 1),
+        async () => {
+          // An archived thread must not keep a remote query resident, or
+          // keep its background work running unseen.
+          await input.runtimes.releaseProviderResidency(input.scope, threadId);
+          return retire(index + 1);
+        },
       );
     } catch (error) {
       if (error instanceof ThreadRuntimeNotIdleError) {

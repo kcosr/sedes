@@ -145,6 +145,7 @@ function fixture() {
       operation: () => Promise<Result>,
     ): Promise<Result> => operation(),
   );
+  const releaseProviderResidency = vi.fn(async (_scope: typeof scope, _threadId: string): Promise<void> => undefined);
   const summaries = {
     listByIds: (requestedScope: typeof scope, threadIds: readonly string[]) =>
       threadIds.map((threadId) => {
@@ -201,6 +202,7 @@ function fixture() {
       },
       runWithRuntimeRetired:
         runWithRuntimeRetired as unknown as ArchivedThreadRuntimeRetirement["runWithRuntimeRetired"],
+      releaseProviderResidency,
     },
     publications: { publishCommitted },
     tasks,
@@ -247,6 +249,7 @@ function fixture() {
     publishTaskChange,
     deleteExecutionWorkspace,
     runWithRuntimeRetired,
+    releaseProviderResidency,
     tasks,
     questions,
     service,
@@ -607,6 +610,43 @@ describe("thread family archive service", () => {
           current.inventory.getInventory(current.scope, threadId),
         ).toMatchObject({ inventoryState: "active", inventoryRevision: 0 });
       }
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("releases every archived thread's provider residency inside its fence and refuses while provider work is outstanding", async () => {
+    const current = fixture();
+    try {
+      const fenced = new Set<string>();
+      current.runWithRuntimeRetired.mockImplementation(async (_scope, threadId, operation) => {
+        fenced.add(threadId);
+        try { return await operation(); } finally { fenced.delete(threadId); }
+      });
+      current.releaseProviderResidency.mockImplementation(async (_scope, threadId) => {
+        expect(fenced.has(threadId)).toBe(true);
+        // A remote query with running background work cannot be retired.
+        if (threadId === current.grandchildId) throw new ThreadRuntimeNotIdleError();
+      });
+      await expect(
+        current.service.archive(current.scope, current.rootId, {
+          includeDescendants: true,
+          expectedRevision: 0,
+          mutationId: "archive-remote-busy",
+          executionWorkspaceDisposition: { kind: "keep" },
+        }),
+      ).rejects.toMatchObject({ code: "invalid_transition" });
+      expect(current.inventory.getInventory(current.scope, current.rootId)).toMatchObject({ inventoryState: "active" });
+      current.releaseProviderResidency.mockResolvedValue(undefined);
+      await current.service.archive(current.scope, current.rootId, {
+        includeDescendants: true,
+        expectedRevision: 0,
+        mutationId: "archive-remote-released",
+        executionWorkspaceDisposition: { kind: "keep" },
+      });
+      expect(new Set(current.releaseProviderResidency.mock.calls.map(([, threadId]) => threadId)))
+        .toEqual(new Set([current.rootId, current.childId, current.grandchildId]));
+      expect(current.inventory.getInventory(current.scope, current.rootId)).toMatchObject({ inventoryState: "archived" });
     } finally {
       current.database.close();
     }

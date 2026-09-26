@@ -861,6 +861,7 @@ async function fixture(
     ): Promise<Result> {
       return operation();
     },
+    async releaseProviderResidency() {},
     async captureLoadedRuntime(_scope: RequestScope, threadId: string) {
       const hub = boundHubs.get(threadId);
       const snapshot = hub?.snapshot;

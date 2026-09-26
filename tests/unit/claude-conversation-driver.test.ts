@@ -476,6 +476,34 @@ describe("ClaudeConversationBackendDriver", () => {
     expect(sdk.createQuery).not.toHaveBeenCalled();
   });
 
+  it("releases a service-owned query only for an unloaded session and reports outstanding work as busy", async () => {
+    const sdk = fakeSdk();
+    sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId, cwd: workspace.canonicalPath });
+    sdk.getSessionMessages.mockResolvedValue([]);
+    const residency = { scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) };
+    // A local runtime owns no query beyond its handle.
+    await expect(createDriver(sdk).releaseConversationResidency(residency)).resolves.toBe("released");
+
+    const outcomes: ("retired" | "absent" | "busy")[] = ["busy", "absent", "retired"];
+    const retireSession = vi.fn(async () => outcomes.shift()!);
+    const driver = createDriver(sdk, { confirmSettings: true, retireSession });
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("busy");
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("released");
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("released");
+    expect(retireSession).toHaveBeenCalledWith({ sessionId, cwd: workspace.canonicalPath });
+
+    const handle = await driver.attach(residency);
+    retireSession.mockClear();
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("busy");
+    expect(retireSession).not.toHaveBeenCalled();
+    await handle.close({ reason: "evicted" });
+    retireSession.mockResolvedValueOnce("retired");
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("released");
+    expect(retireSession).toHaveBeenCalledOnce();
+    await expect(driver.releaseConversationResidency({ ...residency, binding: { ...binding(), backendInstanceId: "other" } }))
+      .rejects.toThrow();
+  });
+
   it.each(["local", "not_sent", "session_ended"] as const)("reconciles an ordinary retained waiter using %s authority without inferring absence from the old anchor", async authority => {
     const sdk = fakeSdk();
     sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId, cwd: workspace.canonicalPath });
@@ -1955,6 +1983,7 @@ function createDriver(
     readonly copyTerminalReceiptsForFork?: ClaudeThreadRepository["copyTerminalReceiptsForFork"];
     readonly permissionPolicy?: ConstructorParameters<typeof ClaudeConversationBackendDriver>[0]["permissionPolicy"];
     readonly submissionDisposition?: ClaudeRuntimeClient["submissionDisposition"];
+    readonly retireSession?: ClaudeRuntimeClient["retireSession"];
     readonly steerOperations?: ReadonlyMap<string, string | null>;
     readonly forgetUnconsumedSteerOperation?: ClaudeThreadRepository["forgetUnconsumedSteerOperation"];
     readonly childEnvironment?: Readonly<Record<string, string | undefined>>;
@@ -1984,6 +2013,7 @@ function createDriver(
     connection,
     runtimeClient: Object.assign(new ClaudeSdkRuntimeAdapter(sdk), {
       ...(options.submissionDisposition ? { submissionDisposition: options.submissionDisposition } : {}),
+      ...(options.retireSession ? { retireSession: options.retireSession } : {}),
     }),
     executablePath: "/usr/local/bin/claude",
     initializationTimeoutMs: 1_000,

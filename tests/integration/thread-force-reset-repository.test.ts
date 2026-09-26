@@ -402,6 +402,7 @@ function archiveService(
       },
       runWithRuntimeRetired: async (_scope, _threadId, operation) =>
         operation(),
+      releaseProviderResidency: async () => undefined,
     },
     publications: { publishCommitted: async () => undefined },
     tasks,

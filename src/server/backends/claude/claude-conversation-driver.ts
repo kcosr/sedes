@@ -28,6 +28,7 @@ import {
   type DiscoveredConversationPage,
   type ReadConversationInput,
   type ReconcileSubmissionInput,
+  type ReleaseConversationResidencyInput,
   type ResolveBranchCheckpointInput,
   type SubmissionReconciliation,
 } from "../contracts.js";
@@ -1134,6 +1135,23 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
     }
   }
 
+  async releaseConversationResidency(
+    input: ReleaseConversationResidencyInput,
+  ): Promise<"released" | "busy"> {
+    this.#assertAttach(input);
+    const retire = this.#runtimeClient.retireSession;
+    if (!retire) return "released";
+    const sessionId = input.binding.backendConversationId;
+    if ([...this.#handles].some((handle) => handle.binding.backendConversationId === sessionId)) {
+      return "busy";
+    }
+    const outcome = await retire.call(this.#runtimeClient, {
+      sessionId,
+      cwd: input.workspace.canonicalPath,
+    });
+    return outcome === "busy" ? "busy" : "released";
+  }
+
   async close(): Promise<void> {
     const handles = [...this.#handles];
     await Promise.allSettled(
@@ -1425,7 +1443,9 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
     return messages;
   }
 
-  #assertAttach(input: AttachConversationInput | ReadConversationInput): void {
+  #assertAttach(
+    input: AttachConversationInput | ReadConversationInput | ReleaseConversationResidencyInput,
+  ): void {
     this.#assertScope(input.scope);
     this.#assertWorkspace(input.workspace);
     this.#assertBinding(

@@ -687,6 +687,22 @@ export interface ConversationBackendDriver {
   reconcileSubmission(
     input: ReconcileSubmissionInput,
   ): Promise<SubmissionReconciliation>;
+  /**
+   * Release provider-owned residency (a service-owned remote query) for a
+   * conversation Sedes has no runtime for, such as one being archived.
+   * Backends whose provider state never outlives a handle omit this. It must
+   * never stop outstanding provider work: it reports `busy` instead.
+   */
+  releaseConversationResidency?(
+    input: ReleaseConversationResidencyInput,
+  ): Promise<"released" | "busy">;
+}
+
+export interface ReleaseConversationResidencyInput {
+  readonly scope: ExecutionScope;
+  readonly binding: ConversationBinding;
+  readonly workspace: ValidatedWorkspace;
+  readonly opaqueBindingDetail: string;
 }
 
 export interface BackendErrorShape {

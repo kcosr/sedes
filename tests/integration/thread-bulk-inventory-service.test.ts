@@ -175,6 +175,7 @@ function fixture() {
       },
       runWithRuntimeRetired:
         runWithRuntimeRetired as unknown as ArchivedThreadRuntimeRetirement["runWithRuntimeRetired"],
+      releaseProviderResidency: async () => undefined,
     },
     publications: { publishCommitted },
     tasks,
