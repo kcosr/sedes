@@ -121,6 +121,12 @@ fully acknowledged presentation must not invalidate the confirmation itself.
 Explicitly confirmed Stop, Restart, and Upgrade may abandon retained delivery
 records after bounded best-effort archival of scoped operation identities and
 known dispositions. Archive failure is diagnostic, not a new admission veto.
+A sidecar host's evidence carries its resource snapshot's `state` and
+`blockers` with its work lists. The archive skips only evidence that positively
+reports an idle resource, and an `after_shutdown` record follows its
+`before_shutdown` decision, so fence admission before the first record.
+Classify each new evidence field in the archive's predicate; until then it is
+recorded.
 Never turn abandonment into provider success or a claim that a sent mutation
 did not execute. Actual owned-process cleanup remains required; external Codex
 Stop closes Sedes's client only. Automatic retirement keeps its acknowledgement
