@@ -496,9 +496,20 @@ preceded the turn, the live path opens it with a private in-memory boundary
 marker, so partial text streams under the same turn that reload shows. Otherwise
 its output extends the settled previous turn, as reload does for a peer. The
 result's exact `origin` confirms the choice or corrects it with one resnapshot.
-Markers never enter provider history or submission retry anchors. Threads
-created before this rule re-identify their task-notification turns once; no
-receipts are keyed to those turns.
+Markers never enter provider history or submission retry anchors.
+
+Two turn identities changed, and existing threads re-identify those turns
+once on first read. A task-notification turn was named by its notification
+row, which the live stream never carries; it is now named by its first
+Anthropic message ID. A summary from a compaction in the middle of a turn
+opened a turn of its own; it now joins the turn Claude compacted. The old
+identities cannot be kept on reload, because a live turn could never carry
+them, so live and reloaded views would disagree. Evidence keyed to an old
+identity stays where it is. A terminal receipt for a turn that no longer
+exists is stale and ignored, as for any turn missing from history. A fork
+lineage record keeps the source turn it named. Message usage stays attributed to the old turn; the new turn
+reports it as conflicting evidence instead of counting it again, and session
+totals, which come from Claude's cumulative query checkpoints, do not change.
 
 Reviewed retry, rate-limit, and informational events produce bounded notices
 without exposing provider payloads.

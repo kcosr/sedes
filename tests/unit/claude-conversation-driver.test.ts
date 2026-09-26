@@ -1339,7 +1339,9 @@ describe("ClaudeConversationBackendDriver", () => {
       : resumable.map(message => ({ ...message, session_id: childSessionId })));
     const receipt = (nativeTaskId: string, nativeToolUseId: string) => ({ nativeTaskId, nativeToolUseId, description: "Audit",
       startedAt: 1, terminalStatus: "completed" as const, terminalAt: 2 });
-    const driver = createDriver(sdk, { copyTaskLifecycleReceiptsForFork,
+    const recordForkChild = vi.fn();
+    const copyTerminalReceiptsForFork = vi.fn();
+    const driver = createDriver(sdk, { copyTaskLifecycleReceiptsForFork, recordForkChild, copyTerminalReceiptsForFork,
       listTaskLifecycleReceipts: () => [receipt("summarized", "summarized-call"), receipt("retained", "retained-call")] });
     const [summarizedTurn, compactedTurn] = projectClaudeHistory(sourceMessages).snapshot.orderedBackendTurnIds;
     const resolve = (backendTurnId: string) => driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
@@ -1354,6 +1356,13 @@ describe("ClaudeConversationBackendDriver", () => {
       inheritedSettings: { model: { provider: connection.id, id: "claude-sonnet-5" }, thinkingLevel: "low" }, source: { kind: "user" } });
     expect(copyTaskLifecycleReceiptsForFork).toHaveBeenCalledExactlyOnceWith(scope, expect.objectContaining({
       receipts: [receipt("retained", "retained-call")] }));
+    // The child's copy starts at the summary, which opens a turn of its own
+    // there; in the source it belongs to the turn Claude compacted.
+    const [childTurn] = projectClaudeHistory(resumable.map(message => ({ ...message, session_id: childSessionId })))
+      .snapshot.orderedBackendTurnIds;
+    const inheritedTurns = [{ backendTurnId: childTurn, sourceBackendTurnId: compactedTurn }];
+    expect(recordForkChild).toHaveBeenCalledExactlyOnceWith(scope, expect.objectContaining({ inheritedTurns }));
+    expect(copyTerminalReceiptsForFork).toHaveBeenCalledExactlyOnceWith(scope, expect.objectContaining({ turns: inheritedTurns }));
   });
 
   it("recovers an existing child after the source compacted, but never launches one Claude can no longer resume", async () => {

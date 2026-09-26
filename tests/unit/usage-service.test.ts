@@ -12,6 +12,8 @@ import { usageGapSessionScopeMigration } from "../../src/server/db/migrations/11
 import { UsageService, addUsageMoney } from "../../src/server/usage/usage-service.js";
 import type { UsageFact, UsageObservation, UsageSink } from "../../src/server/usage/contracts.js";
 import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
+import { ClaudeUsageAccounting } from "../../src/server/backends/claude/claude-usage-accounting.js";
+import type { SDKResultMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 
 const scope = {tenantId: "tenant", principalId: "principal"};
 const binding = {tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, applicationThreadId: "thread", backendInstanceId: "backend", executionEnvironmentId: "environment", connectionProfileId: "connection", backendConversationId: "native-session", createdAt: "2026-09-22T00:00:00Z"};
@@ -278,6 +280,37 @@ describe("durable scoped usage service", () => {
     const turn=service.read(scope,"thread",turnId);expect(turn.summary.metrics.input.value).toBe("30");
     expect(turn.summary.reasons).toContain("main_loop_only");expect(turn.summary.reasons).not.toContain("history_partial");
   });
+  it("never counts Claude message usage twice when a reload re-identifies its turn", () => {
+    // Claude re-identified task-notification and mid-turn-compaction turns once.
+    // A reread assigns the same native message to the new turn identity.
+    const service = new UsageService(database(), {enabled: true});
+    const message = {type: "assistant", uuid: "frame", session_id: "native-session", parent_tool_use_id: null, parent_agent_id: null,
+      message: {id: "msg-1", model: "model-a", stop_reason: "end_turn", content: [], usage: {input_tokens: 10, output_tokens: 2,
+        cache_read_input_tokens: 0, cache_creation_input_tokens: 0}}} as unknown as SessionMessage;
+    const attach = () => new ClaudeUsageAccounting({sink: service, binding, nativeNamespace: "native-store"});
+    const before = attach();
+    before.registerTurns([{backendTurnId: "old-turn", status: "completed", orderedBackendItemIds: []}]);
+    before.messages([{message, backendTurnId: "old-turn"}], "history");
+    before.admitQuery("query", false);
+    before.pipeline({type: "result", subtype: "success", uuid: "result", session_id: "native-session", result_index: 1,
+      usage: {input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0},
+      modelUsage: {"model-a": {inputTokens: 10, outputTokens: 2, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.001}},
+      total_cost_usd: 0.001} as unknown as SDKResultMessage);
+    before.close();
+    const total = service.read(scope, "thread").summary.metrics.input.value;
+    const after = attach();
+    after.registerTurns([{backendTurnId: "new-turn", status: "completed", orderedBackendItemIds: []}]);
+    after.messages([{message, backendTurnId: "new-turn"}], "history");
+    after.close();
+    const turn = (backendTurnId: string) => service.read(scope, "thread",
+      applicationTurnIdForBackendTurn({backendInstanceId: "backend", sourceApplicationThreadId: "thread", backendTurnId})).summary;
+    expect(total).toBe("10");
+    expect(service.read(scope, "thread").summary.metrics.input.value).toBe(total);
+    expect(turn("old-turn").metrics.input.value).toBe("10");
+    expect(turn("new-turn").metrics.input.value ?? null).toBeNull();
+    expect(turn("new-turn").reasons).toContain("conflicting_evidence");
+  });
+
   it("retains a delayed direct turn result behind a later cumulative source frontier", () => {
     const service = new UsageService(database(), {enabled: true}), capture = service.open(source);
     capture.registerTurns([{backendTurnId:"turn",status:"completed",orderedBackendItemIds:[]}]);

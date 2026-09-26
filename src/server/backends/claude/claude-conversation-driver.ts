@@ -852,15 +852,15 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         "claude_fork_checkpoint_changed",
       );
     }
-    const retainedProjection = projectClaudeHistory(
-      prefix,
-      [],
-      this.#historyAuthentication(
-        input.scope,
-        input.sourceBinding.applicationThreadId,
-        input.sourceBinding.backendConversationId,
-      ),
+    const sourceAuthentication = this.#historyAuthentication(
+      input.scope,
+      input.sourceBinding.applicationThreadId,
+      input.sourceBinding.backendConversationId,
     );
+    const retainedProjection = projectClaudeHistory(prefix, [], sourceAuthentication);
+    const sourceProjection = resumableStart === 0
+      ? retainedProjection
+      : projectClaudeHistory(sourceMessages.slice(0, retainedLeafIndex + 1), [], sourceAuthentication);
     const adoptChild = (childMessages: readonly SessionMessage[]): CreateConversationResult => {
       let verification: ClaudeForkChildVerification;
       try {
@@ -914,12 +914,19 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         }),
       });
       // The child's copy of the prefix projects to the same turns in the same
-      // order as the source prefix; map them by position.
-      const sourceTurnIds = retainedProjection.usageTurns.map(({ backendTurnId }) => backendTurnId);
+      // order as the source prefix; map them by position. Name each by the
+      // turn the source's own history puts its first item in: a prefix that
+      // starts at a compaction summary opens a turn of its own, while in the
+      // source the summary belongs to the turn Claude compacted.
+      const sourceTurnByItemId = new Map(sourceProjection.usageTurns.flatMap(({ backendTurnId, orderedBackendItemIds }) =>
+        orderedBackendItemIds.map((itemId) => [itemId, backendTurnId] as const)));
+      const sourceTurnIds = retainedProjection.usageTurns.map(({ orderedBackendItemIds }) =>
+        sourceTurnByItemId.get(orderedBackendItemIds[0] ?? ""));
       const childTurnIds = projectClaudeHistory(retained, [], this.#historyAuthentication(
         input.scope, input.childApplicationThreadId, childSessionId,
       )).usageTurns.map(({ backendTurnId }) => backendTurnId);
-      const inheritedTurns = childTurnIds.length === sourceTurnIds.length
+      const inheritedTurns = childTurnIds.length === sourceTurnIds.length &&
+          sourceTurnIds.every((id) => id !== undefined) && new Set(sourceTurnIds).size === sourceTurnIds.length
         ? childTurnIds.map((backendTurnId, index) => ({ backendTurnId, sourceBackendTurnId: sourceTurnIds[index]! }))
         : [];
       const now = Date.parse(this.#now());
