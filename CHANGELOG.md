@@ -109,6 +109,13 @@
   cancel, fails when the runtime is replaced. The reset waits up to 10 seconds
   for these answers before it replaces the runtime.
 
+- A sidecar's `abandoned-work/` archive records only resources whose Stop,
+  Restart, or Upgrade interrupted or abandoned work; idle resources no longer
+  fill it. When full it removes its oldest records instead of ignoring new
+  ones, logging `sidecar_abandonment_archive_rotated` once per sidecar run.
+  Files other than its records are never removed. Sidecars apply this once
+  upgraded to this version.
+
 ### Fixed
 
 - Create Claude forks with one locked-down Claude Code launch. It loads no

@@ -1,6 +1,9 @@
 import type { EnvironmentVariableOverrides } from "../../src/shared/protocol/environment-variables.js";
 import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { CanUseTool, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeRuntimeSessionOptions } from "../../src/server/backends/claude/claude-runtime-client.js";
@@ -11,6 +14,7 @@ import { claudePersistentAttachmentSchema, type ClaudePersistentEvent } from "..
 import { ClaudeSidecarRuntimeConnection, registerClaudePersistentRuntimeHost } from "../../src/server/backends/claude/runtime/claude-sidecar-runtime.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execution/environment-channel.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
+import { createSidecarAbandonmentArchive, type SidecarAbandonmentRecord } from "../../src/server/sidecar/sidecar-abandonment-archive.js";
 import type { SidecarRuntimeLease, SidecarRuntimeProvider } from "../../src/server/sidecar/runtime-channel.js";
 import { createClaudeFramedCarrier, createFakePersistentClaudeRuntime, FakePersistentClaudeSession } from "../helpers/persistent-claude-fixture.js";
 
@@ -1577,5 +1581,38 @@ describe("persistent host shutdown evidence", () => {
       queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, () => {});
     await host.stop(false, "sidecar_service_replacement");
     expect(f.archive).not.toHaveBeenCalled();
+  });
+
+  it("archives a forced stop's evidence only when it interrupts work", async () => {
+    const archived = async (records: readonly unknown[]) => {
+      const root = await mkdtemp(path.join(tmpdir(), "claude-abandonment-"));
+      cleanups.push(() => rm(root, { recursive: true, force: true }));
+      const directory = path.join(root, "abandoned-work");
+      const archive = createSidecarAbandonmentArchive({ directory, scope: { tenantId: scope.tenantId, principalId: scope.principalId,
+        executionEnvironmentId: scope.executionEnvironmentId, installationId: "installation" }, serviceIncarnation: () => "service", onError: vi.fn() });
+      for (const record of records) await archive(record as SidecarAbandonmentRecord);
+      return await readdir(directory).catch(() => []);
+    };
+    const stopped = async (work: boolean) => {
+      const f = await fixture();
+      const attached = await f.attach();
+      const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+      const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+      const sessionId = randomUUID();
+      await host.execute({ ...authority, action: "open", replay: "full", request: {
+        queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, () => {});
+      if (work) {
+        const operationId = randomUUID();
+        await host.execute({ ...authority, action: "send", request: { queryId: sessionId, operationId, content: "Work." } }, () => {});
+        await f.sessions.find(session => session.options.sessionId === sessionId)!.emit(lifecycle(sessionId, operationId, "started"));
+      }
+      await f.stop(true);
+      return f.archive.mock.calls.map(([record]) => record);
+    };
+    // The idle session's own stop marker afterwards is residue, not abandoned work.
+    const idle = await stopped(false);
+    expect(idle.map(record => (record as { evidence: Evidence }).evidence.phase)).toEqual(["before_shutdown", "after_shutdown"]);
+    expect(await archived(idle)).toEqual([]);
+    expect(await archived(await stopped(true))).toHaveLength(2);
   });
 });

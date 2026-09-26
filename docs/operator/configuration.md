@@ -730,14 +730,21 @@ when provider state is unknown; retained outcomes do not veto it. Provider-nativ
 history remains in its existing store. Bounded operation identity and disposition
 metadata is saved under the scoped service directory’s `abandoned-work/` directory
 on a best-effort basis; this is diagnostic evidence, not a replayable transcript
-or proof that an uncertain mutation succeeded. An automatic replacement that
+or proof that an uncertain mutation succeeded. A resource is recorded only when
+the stop interrupts or abandons something: active or unknown state, a blocker,
+a retained operation or pending request, or a Claude session with live,
+pending, unacknowledged, or background work. An idle resource leaves no record,
+and neither does the post-shutdown half of its stop. An automatic replacement that
 ends Claude work started after its idle check, for example a turn Claude began
 itself, records the same evidence marked `startedAfterConfirmation`. Archive failures are logged and
-do not block Stop. The archive retains at most 128 files and caps each evidence
-payload at 1 MiB. Once full it logs `sidecar_abandonment_capacity_exceeded` and
-stops recording new evidence. Back up records you need, then remove reviewed
-JSON files from this environment’s `abandoned-work/` directory to free capacity;
-leave `service.json`, management receipts, and other environments untouched.
+do not block Stop. The directory holds at most 128 files and each evidence
+payload is capped at 1 MiB. When it is full, the oldest records are removed to
+make room, and the first removal in each sidecar run logs
+`sidecar_abandonment_archive_rotated`. Only UUID-named `.json` records are
+removed. If other files leave no record to remove, the archive logs
+`sidecar_abandonment_capacity_exceeded` and records nothing new. Copy records
+you need elsewhere before they rotate out; leave `service.json`, management
+receipts, and other environments untouched.
 External provider daemons are disconnected, not killed: closing a Codex UDS or
 TCP connection does not request a server shutdown or turn interruption.
 For owned stdio processes, shutdown first uses the provider's available graceful
