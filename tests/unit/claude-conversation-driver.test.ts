@@ -1356,6 +1356,33 @@ describe("ClaudeConversationBackendDriver", () => {
       receipts: [receipt("retained", "retained-call")] }));
   });
 
+  it("recovers an existing child after the source compacted, but never launches one Claude can no longer resume", async () => {
+    const sdk = fakeSdk();
+    const childSessionId = "33333333-3333-4333-8333-333333333333";
+    const sourceMessages: SessionMessage[] = [user(operationId, "prompt"), assistant("44444444-4444-4444-8444-444444444444", "answer")];
+    let childExists = true;
+    sdk.getSessionInfo.mockImplementation(async (id) => id === childSessionId && !childExists ? undefined
+      : { sessionId: id, summary: "Session", lastModified: 1, cwd: workspace.canonicalPath });
+    sdk.getSessionMessages.mockImplementation(async (id) => id === sessionId ? sourceMessages
+      : [{ ...user(crypto.randomUUID(), "prompt"), session_id: id }, { ...assistant(crypto.randomUUID(), "answer"), session_id: id }]);
+    const driver = createDriver(sdk);
+    const checkpoint = await driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: { kind: "latest_completed" } });
+    // The source runs on and Claude compacts it after the fork point.
+    sourceMessages.push(user(crypto.randomUUID(), "Later"),
+      { ...user(crypto.randomUUID(), "This session is being continued. Summary: synthetic."), isCompactSummary: true } as SessionMessage,
+      assistant(crypto.randomUUID(), "Later answer"));
+    const branchInput = { scope, workspace, childApplicationThreadId: "child-thread", applicationOperationId: operationId,
+      sourceBinding: binding(), sourceOpaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), sourceCheckpoint: checkpoint,
+      requestedBackendConversationId: childSessionId,
+      inheritedSettings: { model: { provider: connection.id, id: "claude-sonnet-5" }, thinkingLevel: "low" }, source: { kind: "user" as const } };
+    await expect(driver.branchConversation(branchInput)).resolves.toMatchObject({ backendConversationId: childSessionId });
+    childExists = false;
+    await expect(driver.branchConversation(branchInput)).rejects.toMatchObject({ backendCode: "claude_fork_checkpoint_changed",
+      message: expect.stringContaining("compacted") });
+    expect(sdk.createQuery).not.toHaveBeenCalled();
+  });
+
   it("rejects provider-snapshot checkpoints before reading Claude history", async () => {
     const sdk = fakeSdk();
     const driver = createDriver(sdk);

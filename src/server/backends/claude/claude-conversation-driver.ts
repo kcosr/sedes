@@ -833,10 +833,15 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
     const retainedLeafIndex = sourceMessages.findIndex(
       ({ uuid }) => uuid === checkpoint.retainedLeafUuid,
     );
-    const resumableStart = claudeResumableHistoryStart(sourceMessages);
+    // The recorded prefix starts at the latest compaction before its leaf. A
+    // compaction of the source after the leaf does not move it, so a child an
+    // earlier attempt created still verifies against the durable digests.
+    const resumableStart = claudeResumableHistoryStart(
+      sourceMessages.slice(0, retainedLeafIndex + 1),
+    );
     const prefix = sourceMessages.slice(resumableStart, retainedLeafIndex + 1);
     if (
-      retainedLeafIndex < resumableStart ||
+      retainedLeafIndex < 0 ||
       prefix.length !== checkpoint.retainedPrefixCount ||
       transcriptFingerprint(prefix) !== checkpoint.retainedPrefixDigest ||
       claudeTranscriptContentFingerprint(prefix) !== checkpoint.retainedContentDigest
@@ -957,6 +962,15 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
       }
     };
     if (existingChild) return adoptChild(await readChild());
+    // Claude Code resumes only from its latest compaction, so it can no
+    // longer resume at a leaf the source compacted after.
+    if (claudeResumableHistoryStart(sourceMessages) > retainedLeafIndex) {
+      throw claudeError(
+        "invalid_state",
+        "Claude compacted the source conversation after this turn, so it can no longer fork from it.",
+        "claude_fork_checkpoint_changed",
+      );
+    }
     this.#assertModelPolicyAllowed(childSettings.model, childSettings.effort);
     const versionObservation = this.#newVersionObservation(
       "conversation_session",

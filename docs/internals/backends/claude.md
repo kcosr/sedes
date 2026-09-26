@@ -850,7 +850,10 @@ verified on 2.1.283. Only turns whose checkpoint follows the latest compaction
 summary are forkable. The child holds the boundary, the summary, the preserved
 rows, and later rows up to the checkpoint, with the source's row UUIDs.
 Checkpoint prefixes are therefore counted, digested, and verified from the
-latest summary. Branching fidelity keeps `compaction: true`, because the child
+latest summary before the checkpoint. If the source compacts again after the
+checkpoint, a child an earlier attempt already created still verifies and is
+adopted, but a new launch fails with `claude_fork_checkpoint_changed`, because
+Claude Code can no longer resume at that row. Branching fidelity keeps `compaction: true`, because the child
 resumes the same compacted context, and states in a limitation that earlier
 turns are not copied or forkable.
 
