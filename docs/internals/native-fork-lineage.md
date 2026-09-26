@@ -75,7 +75,9 @@ Manual transcript forks use `selected_completed_turn`, including the selected
 turn ID and expected revision. Pi and Codex can copy that exact completed turn
 while later source work is active; Claude requires an idle source. The
 provider-level `latest_completed` selector remains idle-only because it could
-select a newer turn if the source settles during provider I/O.
+select a newer turn if the source settles during provider I/O. It names the
+turn the actor resolved, and the backend fails rather than fork a different
+newest completed turn.
 
 Codex additionally advertises `latest_provider_snapshot`. Its native
 `thread/fork` call atomically chooses the latest provider-persisted history at

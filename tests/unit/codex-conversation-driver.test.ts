@@ -369,6 +369,11 @@ function resumeResult(thread = nativeThread()) {
   };
 }
 
+/** The actor's `latest_completed` selection: the newest completed turn it resolved. */
+function latestCompleted(nativeTurnId: string) {
+  return { kind: "latest_completed" as const, backendTurnId: codexBackendTurnId("thread-1", nativeTurnId) };
+}
+
 function paginatedThread(
   overrides: Readonly<Record<string, unknown>> = {},
 ): CodexThread {
@@ -3723,11 +3728,20 @@ describe("CodexConversationBackendDriver", () => {
       await expect(
         driver(harness).resolveBranchCheckpoint({
           ...attachInput(),
-          selection: { kind: "latest_completed" },
+          selection: latestCompleted("turn-0"),
         }),
       ).resolves.toMatchObject({ kind: "conversation_leaf" });
     },
   );
+
+  it("never forks another turn than the latest completed turn the actor resolved", async () => {
+    const harness = new RpcHarness();
+    enqueueCompleteLegacyRead(harness, nativeThread({ turns: [nativeTurn(0), nativeTurn(1)] }));
+    await expect(driver(harness).resolveBranchCheckpoint({
+      ...attachInput(),
+      selection: latestCompleted("turn-0"),
+    })).rejects.toMatchObject({ category: "invalid_state", retryable: true, backendCode: "codex_fork_latest_turn_changed" });
+  });
 
   it("allows a finite multi-page completed-turn scan to exceed one RPC deadline in aggregate", async () => {
     vi.useFakeTimers();
@@ -3773,7 +3787,7 @@ describe("CodexConversationBackendDriver", () => {
       );
       const pending = driver(harness).resolveBranchCheckpoint({
         ...attachInput(),
-        selection: { kind: "latest_completed" },
+        selection: latestCompleted("turn-0"),
       });
       let settled = false;
       void pending.finally(() => {
@@ -3925,7 +3939,7 @@ describe("CodexConversationBackendDriver", () => {
       enqueueCompleteLegacyRead(harness, source);
       const checkpoint = await target.resolveBranchCheckpoint({
         ...attachInput(),
-        selection: { kind: "latest_completed" },
+        selection: latestCompleted("turn-1"),
       });
       const applicationOperationId = `invalid-copy-${index}`;
       const forkMarker = codexForkCreationMarker({
@@ -4265,7 +4279,7 @@ describe("CodexConversationBackendDriver", () => {
       enqueueCompleteLegacyRead(harness, nativeThread());
       const checkpoint = await target.resolveBranchCheckpoint({
         ...attachInput(),
-        selection: { kind: "latest_completed" },
+        selection: latestCompleted("turn-0"),
       });
       enqueueCompleteLegacyRead(harness, nativeThread());
       harness.enqueue("thread/fork", forkResponse);
@@ -4299,7 +4313,7 @@ describe("CodexConversationBackendDriver", () => {
     enqueueCompleteLegacyRead(harness, source);
     const checkpoint = await target.resolveBranchCheckpoint({
       ...attachInput(),
-      selection: { kind: "latest_completed" },
+      selection: latestCompleted("turn-0"),
     });
     enqueueCompleteLegacyRead(harness, source);
     harness.enqueue(
@@ -4352,7 +4366,7 @@ describe("CodexConversationBackendDriver", () => {
     enqueueCompleteLegacyRead(harness, source);
     const checkpoint = await target.resolveBranchCheckpoint({
       ...attachInput(),
-      selection: { kind: "latest_completed" },
+      selection: latestCompleted("turn-0"),
     });
     const forkMarker = codexForkCreationMarker({
       toolProvenanceKey,
@@ -4413,7 +4427,7 @@ describe("CodexConversationBackendDriver", () => {
     enqueueCompleteLegacyRead(harness, nativeThread());
     const checkpoint = await target.resolveBranchCheckpoint({
       ...attachInput(),
-      selection: { kind: "latest_completed" },
+      selection: latestCompleted("turn-0"),
     });
     enqueueCompleteLegacyRead(harness, nativeThread());
     harness.enqueue(
@@ -6867,7 +6881,7 @@ describe("CodexConversationHandle", () => {
     await expect(
       driver(driverHarness).resolveBranchCheckpoint({
         ...attachInput(),
-        selection: { kind: "latest_completed" },
+        selection: latestCompleted("turn-0"),
       }),
     ).resolves.toMatchObject({ kind: "conversation_leaf" });
     expect(
@@ -16177,7 +16191,7 @@ describe("CodexConversationHandle", () => {
     enqueueCompleteLegacyRead(forkHarness, source);
     const checkpoint = await forkDriver.resolveBranchCheckpoint({
       ...attachInput(),
-      selection: { kind: "latest_completed" },
+      selection: latestCompleted("turn-0"),
     });
     enqueueCompleteLegacyRead(forkHarness, source);
     forkHarness.enqueue(

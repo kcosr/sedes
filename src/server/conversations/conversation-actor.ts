@@ -670,7 +670,8 @@ export class ConversationActor {
             backendTurnId: resolved.backendTurnId,
             boundary: "completed_turn_inclusive",
           }
-        : { kind: "latest_completed" },
+        : // The backend must fork exactly the turn recorded as the source.
+          { kind: "latest_completed", backendTurnId: resolved.backendTurnId },
     );
     return {
       reference,

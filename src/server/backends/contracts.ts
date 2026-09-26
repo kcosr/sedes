@@ -351,7 +351,15 @@ export interface ResolveBranchCheckpointInput {
 }
 
 export type BranchCheckpointSelection =
-  | { readonly kind: "latest_completed" }
+  | {
+      readonly kind: "latest_completed";
+      /**
+       * The newest completed turn the actor resolved and records as the fork
+       * source. The backend resolves its own newest completed turn and fails
+       * when that differs; it never forks another turn.
+       */
+      readonly backendTurnId: string;
+    }
   | { readonly kind: "latest_provider_snapshot" }
   | {
       readonly kind: "selected_completed_turn";

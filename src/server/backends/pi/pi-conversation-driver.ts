@@ -1938,6 +1938,18 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
         "pi_checkpoint_unavailable",
       );
     }
+    // Fork exactly the turn the actor records as the source, never another.
+    if (
+      input.selection.kind === "latest_completed" &&
+      backendTurnId !== input.selection.backendTurnId
+    ) {
+      throw error(
+        "invalid_state",
+        "The latest completed Pi turn changed before it could be forked.",
+        "pi_latest_checkpoint_changed",
+        true,
+      );
+    }
     const leafId = completedAssistantEntryIdForTurn(branch, backendTurnId);
     if (!leafId) {
       throw error(

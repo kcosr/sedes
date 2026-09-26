@@ -716,6 +716,15 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
               (turn) =>
                 turn.status === "completed" && turn.endedBy === "agent_settled",
             );
+      if (selection.kind === "latest_completed" && selectedTurn !== undefined &&
+          selectedTurn.backendTurnId !== selection.backendTurnId) {
+        throw claudeError(
+          "invalid_state",
+          "The latest completed Claude turn changed before it could be forked.",
+          "claude_fork_latest_turn_changed",
+          true,
+        );
+      }
       if (selectedTurn?.forkUnavailableReason !== undefined) {
         throw claudeError(
           "invalid_state",
@@ -723,10 +732,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
           "claude_fork_checkpoint_unavailable",
         );
       }
-      const backendTurnId =
-        selection.kind === "selected_completed_turn"
-          ? selection.backendTurnId
-          : selectedTurn?.backendTurnId;
+      const backendTurnId = selectedTurn ? selection.backendTurnId : undefined;
       const retainedLeafUuid = backendTurnId
         ? projection.terminalCheckpointUuidByBackendTurnId.get(backendTurnId)
         : undefined;

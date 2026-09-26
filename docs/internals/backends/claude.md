@@ -762,7 +762,9 @@ The generic thread **Fork** action resolves the newest completed turn while the
 source is idle and records `completed_turn_inclusive`. Interrupted and failed
 turns are not completed, so they are never selected. If the newest completed
 turn carries a `forkUnavailableReason`, the fork fails with that reason; it
-never falls back to an older turn. Transcript and agent-tool forks continue to
+never falls back to an older turn. If the newest completed turn in Claude's
+history is not the one the actor resolved and records, the fork fails
+retryably with `claude_fork_latest_turn_changed`. Transcript and agent-tool forks continue to
 select an exact completed turn. Claude does not advertise
 `latest_provider_snapshot`.
 

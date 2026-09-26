@@ -586,7 +586,13 @@ describe.sequential("real Claude subscription driver", () => {
         workspace,
         binding,
         opaqueBindingDetail: created.opaqueBindingDetail,
-        selection: { kind: "latest_completed" },
+        // As the actor does: the newest completed turn it records as the source.
+        selection: {
+          kind: "latest_completed",
+          backendTurnId: reopened.snapshot.orderedBackendTurnIds.findLast((turnId) =>
+            reopened.snapshot.turnsById[turnId]?.status === "completed" &&
+            reopened.snapshot.turnsById[turnId]?.endedBy === "agent_settled")!,
+        },
       });
       const childThreadId = randomUUID();
       const childSessionId = randomUUID();

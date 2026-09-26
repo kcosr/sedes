@@ -1399,6 +1399,19 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         "codex_fork_checkpoint_unavailable",
       );
     }
+    // Fork exactly the turn the actor records as the source, never another.
+    if (
+      input.selection.kind === "latest_completed" &&
+      codexBackendTurnId(metadata.id, selected.id) !==
+        input.selection.backendTurnId
+    ) {
+      throw codexError(
+        "invalid_state",
+        "The latest completed Codex turn changed before it could be forked.",
+        "codex_fork_latest_turn_changed",
+        true,
+      );
+    }
     const settledLifecycle = this.#client.lifecycleSnapshot();
     if (
       settledLifecycle.state !== "ready" ||

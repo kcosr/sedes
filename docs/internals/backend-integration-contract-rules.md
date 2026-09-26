@@ -2257,7 +2257,12 @@ reason alone as a turn revision. The
 normalized actor and the backend both resolve `latest_completed` to the newest
 completed turn; interrupted and failed turns are not completed. If that turn
 carries a reason, the fork fails with it before any provider call rather than
-falling back to an older turn.
+falling back to an older turn. The actor passes the backend turn it resolved,
+which lineage records as the source, in the `latest_completed` selection. The
+backend fails retryably, with `invalid_state`, when its own newest completed
+turn differs, so it never forks a turn other than the recorded one. Pi, Codex,
+Claude, and the in-memory conformance backend implement this check; Grok does
+not support forks.
 
 A definite fork failure that another fork of the same boundary would repeat,
 such as a deterministic history mismatch or an unsupported runtime, sets

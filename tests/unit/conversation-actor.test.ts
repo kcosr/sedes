@@ -2494,8 +2494,9 @@ describe("ConversationActorManager", () => {
       sourceTurnId,
       backendTurnId: "turn-1",
     });
+    // The backend is told exactly which turn the actor records as the source.
     expect(driver.resolveBranchCheckpoint).toHaveBeenCalledWith(
-      expect.objectContaining({ selection: { kind: "latest_completed" } }),
+      expect.objectContaining({ selection: { kind: "latest_completed", backendTurnId: "turn-1" } }),
     );
 
     acquired.release();

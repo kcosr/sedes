@@ -1278,9 +1278,22 @@ describe("ClaudeConversationBackendDriver", () => {
     sdk.getSessionInfo.mockImplementation(async (id) => ({ sessionId: id, summary: "Session", lastModified: 1, cwd: workspace.canonicalPath }));
     sdk.getSessionMessages.mockImplementation(async () => messages);
     const checkpoint = await createDriver(sdk).resolveBranchCheckpoint({ scope, workspace, binding: binding(),
-      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: { kind: "latest_completed" } });
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: latestCompleted(messages) });
     expect(JSON.parse(Buffer.from(checkpoint.opaqueReference, "base64url").toString())).toMatchObject({
       retainedLeafUuid: answer.uuid, retainedPrefixCount: 2 });
+  });
+
+  it("never forks another turn than the latest completed turn the actor resolved", async () => {
+    const sdk = fakeSdk();
+    const messages = [user(operationId, "first"), assistant(crypto.randomUUID(), "First answer"),
+      user(crypto.randomUUID(), "second"), assistant(crypto.randomUUID(), "Second answer")];
+    sdk.getSessionInfo.mockImplementation(async (id) => ({ sessionId: id, summary: "Session", lastModified: 1, cwd: workspace.canonicalPath }));
+    sdk.getSessionMessages.mockImplementation(async () => messages);
+    const driver = createDriver(sdk);
+    // The actor recorded the first turn, but Claude's newest completed turn is the second.
+    await expect(driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: latestCompleted(messages.slice(0, 2)) }))
+      .rejects.toMatchObject({ category: "invalid_state", retryable: true, backendCode: "claude_fork_latest_turn_changed" });
   });
 
   it("fails a latest-completed fork with the newest completed turn's reason instead of forking an older turn", async () => {
@@ -1305,7 +1318,7 @@ describe("ClaudeConversationBackendDriver", () => {
     const resolve = (selection: Parameters<typeof driver.resolveBranchCheckpoint>[0]["selection"]) =>
       driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
         opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection });
-    for (const selection of [{ kind: "latest_completed" as const },
+    for (const selection of [latestCompleted(messages, terminalReceipts),
       { kind: "selected_completed_turn" as const, backendTurnId: structured!, boundary: "completed_turn_inclusive" as const }]) {
       await expect(resolve(selection)).rejects.toMatchObject({
         category: "invalid_state",
@@ -1376,7 +1389,7 @@ describe("ClaudeConversationBackendDriver", () => {
       : [{ ...user(crypto.randomUUID(), "prompt"), session_id: id }, { ...assistant(crypto.randomUUID(), "answer"), session_id: id }]);
     const driver = createDriver(sdk);
     const checkpoint = await driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
-      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: { kind: "latest_completed" } });
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: latestCompleted(sourceMessages) });
     // The source runs on and Claude compacts it after the fork point.
     sourceMessages.push(user(crypto.randomUUID(), "Later"),
       { ...user(crypto.randomUUID(), "This session is being continued. Summary: synthetic."), isCompactSummary: true } as SessionMessage,
@@ -1446,7 +1459,7 @@ describe("ClaudeConversationBackendDriver", () => {
       workspace,
       binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
-      selection: { kind: "latest_completed" },
+      selection: latestCompleted(sourceMessages),
     });
     const branchInput = {
       scope,
@@ -1539,7 +1552,7 @@ describe("ClaudeConversationBackendDriver", () => {
       workspace,
       binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
-      selection: { kind: "latest_completed" },
+      selection: latestCompleted(sourceMessages),
     });
 
     await expect(
@@ -1580,7 +1593,7 @@ describe("ClaudeConversationBackendDriver", () => {
       workspace,
       binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
-      selection: { kind: "latest_completed" },
+      selection: latestCompleted(sourceMessages),
     });
     sourceMessages[1] = assistant(
       "44444444-4444-4444-8444-444444444444",
@@ -1683,7 +1696,7 @@ describe("ClaudeConversationBackendDriver", () => {
       workspace,
       binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
-      selection: { kind: "latest_completed" },
+      selection: latestCompleted(sourceMessages),
     });
     await expect(
       driver.branchConversation({
@@ -1757,7 +1770,7 @@ describe("ClaudeConversationBackendDriver", () => {
       workspace,
       binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
-      selection: { kind: "latest_completed" },
+      selection: latestCompleted(sourceMessages),
     });
 
     await expect(
@@ -1801,7 +1814,7 @@ describe("ClaudeConversationBackendDriver", () => {
       : input.child!(source).map(message => ({ ...message, session_id: forkChildSessionId })));
     const driver = createDriver(sdk, input.driver);
     const checkpoint = await driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
-      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: { kind: "latest_completed" } });
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: latestCompleted(source) });
     return driver.branchConversation({ scope, workspace, childApplicationThreadId: "child-thread", applicationOperationId: operationId,
       sourceBinding: binding(), sourceOpaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
       sourceCheckpoint: checkpoint, requestedBackendConversationId: forkChildSessionId,
@@ -1903,7 +1916,7 @@ describe("ClaudeConversationBackendDriver", () => {
     sdk.getSessionMessages.mockImplementation(async () => source);
     const driver = createDriver(sdk);
     const checkpoint = await driver.resolveBranchCheckpoint({ scope, workspace, binding: binding(),
-      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: { kind: "latest_completed" } });
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), selection: latestCompleted(source) });
     sdk.getSessionInfo.mockRejectedValue(new Error("worker unavailable"));
     await expect(driver.branchConversation({ scope, workspace, childApplicationThreadId: "child-thread", applicationOperationId: operationId,
       sourceBinding: binding(), sourceOpaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
@@ -2413,6 +2426,16 @@ function assistant(uuid: string, text: string): SessionMessage {
     parent_tool_use_id: null,
     parent_agent_id: null,
   };
+}
+
+/** The actor's `latest_completed` selection: the newest completed turn it resolved. */
+function latestCompleted(
+  messages: readonly SessionMessage[],
+  terminalReceipts: Parameters<typeof projectClaudeHistory>[1] = [],
+): { readonly kind: "latest_completed"; readonly backendTurnId: string } {
+  const turn = projectClaudeHistory(messages, terminalReceipts).usageTurns
+    .findLast(({ status, endedBy }) => status === "completed" && endedBy === "agent_settled");
+  return { kind: "latest_completed", backendTurnId: turn?.backendTurnId ?? "no-completed-turn" };
 }
 
 function retryAnchor(messages: readonly SessionMessage[]): string {
