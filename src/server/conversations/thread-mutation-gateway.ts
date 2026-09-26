@@ -278,7 +278,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       readonly bindings: ConversationBindingRepository;
       readonly inventory: InventoryRepository;
       readonly lifecycle: ConversationLifecycleService;
-      readonly forks: Pick<ThreadForkService, "recoverActive">;
+      readonly forks: Pick<ThreadForkService, "recoverActive" | "discardActive">;
       readonly queue: QueuedInputDispatcher;
       readonly operations: ConversationOperationRepository;
       readonly completions: SubmissionCompletionRepository;
@@ -623,6 +623,12 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
   ): Promise<ThreadApplicationMutationResult> {
     if (operation.kind === "recover_uncertain") {
       return this.#recoverCurrent(scope, applicationThreadId);
+    }
+    if (operation.kind === "discard_fork") {
+      const discarded = await this.input.forks.discardActive(scope, applicationThreadId);
+      await this.input.publishThreadSnapshot(scope, applicationThreadId);
+      await this.#changed(scope, applicationThreadId);
+      return { status: "aborted", diagnostic: discarded.diagnostic };
     }
     if (operation.kind !== "interrupt" && operation.kind !== "cancel_queued_input") {
       const thread = this.input.inventory.getThread(scope, applicationThreadId).thread;

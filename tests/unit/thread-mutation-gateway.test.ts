@@ -69,6 +69,9 @@ function deliveryHub(
 }
 
 function fixture(input?: {
+  discardFork?: (scope: RequestScope, threadId: string) => Promise<{
+    status: "aborted"; childThreadId: string; diagnostic: string; restartable: boolean;
+  }>;
   interrupt?: () => Promise<void>;
   reconcileInterrupt?: () => Promise<{
     outcome: "accepted" | "not_applied" | "unknown";
@@ -387,7 +390,7 @@ function fixture(input?: {
       startAgentControlFirstSend,
       startPrincipalClientFirstSend,
     } as never,
-    forks: { recoverActive: () => undefined },
+    forks: { recoverActive: () => undefined, discardActive: input?.discardFork ?? (async () => { throw new Error("test_unexpected_discard"); }) },
     queue: {
       reconcileUncertain,
       onAuthoritativeSettled,
@@ -1347,6 +1350,17 @@ describe("ThreadMutationGateway creation recovery", () => {
     expect(subject.onThreadChanged).toHaveBeenCalledWith(scope, "thread-1");
   });
 
+  it("discards an unfinished fork and returns why", async () => {
+    const discardFork = vi.fn(async (_scope: RequestScope, threadId: string) => ({
+      status: "aborted" as const, childThreadId: threadId, diagnostic: "The fork was discarded.", restartable: true }));
+    const subject = fixture({ discardFork });
+    await expect(subject.gateway.mutate(scope, "thread-1", { kind: "discard_fork" }))
+      .resolves.toEqual({ status: "aborted", diagnostic: "The fork was discarded." });
+    expect(discardFork).toHaveBeenCalledWith(scope, "thread-1");
+    expect(subject.publishThreadSnapshot).toHaveBeenCalledWith(scope, "thread-1");
+    expect(subject.onThreadChanged).toHaveBeenCalledWith(scope, "thread-1");
+  });
+
   it("keeps a still-failing creation recovery actionable", async () => {
     const subject = fixture({
       recoverCreation: async () => ({
@@ -1390,7 +1404,7 @@ describe("ThreadMutationGateway delivery readiness", () => {
       lifecycle: {
         hasFirstInputMutation: vi.fn(() => false),
       } as never,
-      forks: { recoverActive: () => undefined },
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
       queue: {
         enqueue,
         findComposerDeliveryReplay: vi.fn(() => undefined),
@@ -1501,7 +1515,7 @@ describe("ThreadMutationGateway delivery readiness", () => {
       lifecycle: {
         hasFirstInputMutation: vi.fn(() => false),
       } as never,
-      forks: { recoverActive: () => undefined },
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
       queue: {
         enqueue,
         findComposerDeliveryReplay: vi.fn(() => undefined),
@@ -1836,7 +1850,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       lifecycle: {
         hasFirstInputMutation: vi.fn(() => false),
       } as never,
-      forks: { recoverActive: () => undefined },
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
       queue: {
         enqueue,
         findComposerDeliveryReplay: vi.fn(() => undefined),
@@ -2002,7 +2016,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       lifecycle: {
         hasFirstInputMutation: vi.fn(() => false),
       } as never,
-      forks: { recoverActive: () => undefined },
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
       queue: {
         enqueue,
         findComposerDeliveryReplay: vi.fn(() => undefined),
@@ -2125,7 +2139,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       lifecycle: {
         hasFirstInputMutation: vi.fn(() => false),
       } as never,
-      forks: { recoverActive: () => undefined },
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
       queue: {
         enqueue,
         findComposerDeliveryReplay: vi.fn(() => undefined),
@@ -2241,7 +2255,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       lifecycle: {
         hasFirstInputMutation: vi.fn(() => false),
       } as never,
-      forks: { recoverActive: () => undefined },
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
       queue: {
         enqueue,
         findComposerDeliveryReplay: vi.fn(() => undefined),
@@ -2386,7 +2400,7 @@ describe("ThreadMutationGateway incremental publication", () => {
         })),
       } as never,
       lifecycle: { hasFirstInputMutation: vi.fn(() => false) } as never,
-      forks: { recoverActive: () => undefined },
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
       queue: {
         findComposerDeliveryReplay: vi.fn(() => undefined),
         enqueue,
@@ -2764,7 +2778,7 @@ describe("ThreadMutationGateway incremental publication", () => {
         getDraft: vi.fn(() => retainedDraft),
       } as never,
       lifecycle: { hasFirstInputMutation: vi.fn(() => false) } as never,
-      forks: { recoverActive: () => undefined },
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
       queue: {
         findComposerDeliveryReplay: vi.fn(() => undefined),
         enqueue,
@@ -2879,7 +2893,7 @@ describe("ThreadMutationGateway incremental publication", () => {
         })),
       } as never,
       lifecycle: { hasFirstInputMutation: vi.fn(() => false) } as never,
-      forks: { recoverActive: () => undefined },
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
       queue: { findComposerDeliveryReplay: vi.fn(() => undefined) } as never,
       operations: {
         database,
@@ -2980,7 +2994,7 @@ describe("ThreadMutationGateway incremental publication", () => {
         getDraft: vi.fn(() => retainedDraft),
       } as never,
       lifecycle: { hasFirstInputMutation: vi.fn(() => false) } as never,
-      forks: { recoverActive: () => undefined },
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
       queue: {
         findComposerDeliveryReplay: vi.fn(() => undefined),
         enqueue,
@@ -3159,7 +3173,7 @@ function interactionResponseFixture(input?: {
       })),
     } as never,
     lifecycle: { recoverActiveFirstSend: () => undefined } as never,
-    forks: { recoverActive: () => undefined },
+    forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
     queue: {} as never,
     operations: operations as never,
     completions: { database } as never,
@@ -3608,7 +3622,7 @@ function backendActionFixture(input?: {
       })),
     } as never,
     lifecycle: {} as never,
-    forks: { recoverActive: () => undefined },
+    forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
     queue: {} as never,
     operations: operations as never,
     completions: { database } as never,
@@ -3772,7 +3786,7 @@ function unboundSettingFixture(input?: {
       })),
     } as never,
     lifecycle: {} as never,
-    forks: { recoverActive: () => undefined },
+    forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
     queue: {} as never,
     operations: {
       database,
@@ -3947,7 +3961,7 @@ function boundSettingActionFixture(input?: {
       })),
     } as never,
     lifecycle: {} as never,
-    forks: { recoverActive: () => undefined },
+    forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
     queue: {} as never,
     operations: operations as never,
     completions: { database } as never,
@@ -4510,7 +4524,7 @@ describe("ThreadMutationGateway durable submission observation", () => {
       bindings: {} as never,
       inventory: {} as never,
       lifecycle: {} as never,
-      forks: { recoverActive: () => undefined },
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
       queue: { observeAuthoritativeSubmission } as never,
       operations: {
         findAwaitingSteerSubmission,
@@ -4580,7 +4594,7 @@ describe("ThreadMutationGateway durable submission observation", () => {
       bindings: { database } as never,
       inventory: { database } as never,
       lifecycle: {} as never,
-      forks: { recoverActive: () => undefined },
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
       queue: {} as never,
       operations: {
         database,
@@ -4709,7 +4723,7 @@ function providerFeatureMutationFixture(input: {
       })),
     } as never,
     lifecycle: {} as never,
-    forks: { recoverActive: () => undefined },
+    forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
     queue: {} as never,
     operations: {
       database,
@@ -4909,7 +4923,7 @@ function agentToolPolicyMutationFixture(input: {
       })),
     } as never,
     lifecycle: {} as never,
-    forks: { recoverActive: () => undefined },
+    forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
     queue: {} as never,
     operations: {
       database,

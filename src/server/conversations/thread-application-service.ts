@@ -872,11 +872,19 @@ function composeCapabilities(input: {
   );
   const reason = (available: boolean, message: string) =>
     available ? {} : { unavailableReason: { text: message } };
+  // An identified child finishes through recovery; everything earlier can be
+  // discarded without crossing the provider boundary again.
+  const discardableFork =
+    input.recovery?.kind === "conversation_creation" &&
+    input.recovery.creationType === "fork" &&
+    input.recovery.phase !== "conversation_identified" &&
+    input.recovery.phase !== "accepted_unpersisted";
   const operation = (
     id:
       | "interrupt"
       | "retry_submission"
       | "recover_uncertain"
+      | "discard_fork"
       | "archive"
       | "settle"
       | "acknowledge_attention"
@@ -977,6 +985,13 @@ function composeCapabilities(input: {
       input.recovery && !input.recovery.recoverable
         ? "The provider-assigned create outcome cannot be replayed or reconciled automatically."
         : "There is no recoverable operation.",
+    ),
+    operation(
+      "discard_fork",
+      "Discard this fork",
+      available && discardableFork,
+      "Only an unfinished fork whose provider child was not returned can be discarded.",
+      true,
     ),
     operation(
       "archive",
@@ -1144,6 +1159,10 @@ function composeCapabilities(input: {
     }
     if (operation.id === "interrupt") {
       return backendCanSubmit || backendCanSteer;
+    }
+    if (operation.id === "discard_fork") {
+      return input.recovery?.kind === "conversation_creation" &&
+        input.recovery.creationType === "fork";
     }
     if (
       operation.id === "retry_submission" ||

@@ -6483,10 +6483,24 @@ body:has(.thread-settings-sheet[data-state="open"])
   font-size: 12px;
 }
 
-.materialization-recovery [data-slot="button"] {
+.materialization-recovery > [data-slot="button"],
+.materialization-recovery-actions {
   grid-row: 1 / span 3;
   grid-column: 3;
   align-self: center;
+}
+
+.materialization-recovery-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.materialization-recovery-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 2 / span 2;
+  gap: 6px;
+  align-items: center;
 }
 
 .thread-notice,

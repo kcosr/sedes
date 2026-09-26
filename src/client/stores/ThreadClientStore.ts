@@ -2151,6 +2151,19 @@ export class ThreadClientStore {
     });
   }
 
+  /** Remove this unfinished fork child; the server never adopts its provider child. */
+  discardFork(): Promise<void> {
+    return this.#mutate(async () => {
+      this.#requireOperation("discard_fork");
+      const result = await this.#api.operateThread(this.threadId, {
+        kind: "discard_fork",
+      });
+      if (result.status !== "aborted") {
+        throw new Error("Discarding the fork returned an invalid receipt.");
+      }
+    });
+  }
+
   recoverUncertain(): Promise<void> {
     return this.#mutate(async () => {
       const generation = this.normalized.state.generation;

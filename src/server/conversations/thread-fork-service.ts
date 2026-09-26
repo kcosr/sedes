@@ -617,6 +617,60 @@ export class ThreadForkService {
     }
   }
 
+  /**
+   * Explicitly discard an unfinished fork child the user no longer wants,
+   * without re-running its provider call. The reserved child thread is
+   * removed and its provider identity is quarantined from discovery; a child
+   * the provider may have created is never adopted.
+   */
+  async discardActive(
+    scope: RequestScope,
+    childThreadId: string,
+  ): Promise<Extract<ThreadForkResult, { readonly status: "aborted" }>> {
+    const attempt = this.input.creation.findActiveForThread(scope, childThreadId);
+    if (!attempt || attempt.creationKind !== "fork") {
+      throw new DomainError("not_found", "There is no unfinished fork to discard.");
+    }
+    if (this.#inFlight.has(forkKey(scope, attempt.mutationId))) {
+      throw new DomainError(
+        "invalid_transition",
+        "This fork is still being created. Wait for it to finish before discarding it.",
+      );
+    }
+    if (attempt.provisionalBackendConversationId !== null) {
+      throw new DomainError(
+        "invalid_transition",
+        "The provider returned this fork's child. Recover the fork to finish it instead.",
+      );
+    }
+    const origin = this.input.lineage.getOrigin(scope, childThreadId);
+    let promotedTaskIds: readonly string[] = [];
+    const abortInput = {
+      creationOperationId: attempt.mutationId,
+      diagnostic: "The fork was discarded.",
+      restartable: true,
+      now: this.#now(),
+      onThreadTasksPromoted: (taskIds: readonly string[]) => {
+        promotedTaskIds = taskIds;
+      },
+    };
+    const aborted =
+      origin.boundaryKind === "provider_snapshot_at_acceptance"
+        ? this.input.lineage.abortPreparedProviderSnapshotFork(scope, childThreadId, abortInput)
+        : this.input.lineage.abortPreparedFork(scope, childThreadId, abortInput);
+    for (const promotedTaskId of promotedTaskIds) {
+      await this.#taskPublications?.publishTaskChange(scope, promotedTaskId);
+    }
+    await this.#collectOutputArtifactGarbage();
+    await this.#publications().publishAuthoritativeReplacement(scope);
+    return {
+      status: "aborted",
+      childThreadId: aborted.reservedChildThreadId,
+      diagnostic: aborted.diagnostic,
+      restartable: aborted.restartable,
+    };
+  }
+
   async readRecovery(
     scope: RequestScope,
     childThreadId: string,

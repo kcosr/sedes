@@ -96,4 +96,57 @@ describe("ThreadRecoveryCallout", () => {
     expect(screen.getByText(/provider child may exist/)).toBeInTheDocument();
     expect(screen.queryByText(/accepted this prompt/)).not.toBeInTheDocument();
   });
+
+  it("discards a stuck fork only after an explicit confirmation", () => {
+    const onDiscard = vi.fn();
+    const onRecover = vi.fn();
+    const recovery = {
+      kind: "conversation_creation" as const,
+      creationType: "fork" as const,
+      phase: "recovery_required" as const,
+      diagnostic: { text: "Claude history could not be read, so this fork's outcome is not yet known." },
+      submissionMayHaveBeenAccepted: false,
+      forkUncertainty: null,
+      possibleProviderOrphan: null,
+      recoverable: true,
+    };
+    const discard = { ...operation, id: "discard_fork" as const, label: { text: "Discard this fork" }, destructive: true };
+    render(
+      <ThreadRecoveryCallout
+        recovery={recovery}
+        operation={{ ...operation, label: { text: "Recover fork" } }}
+        discardOperation={discard}
+        pending={false}
+        onRecover={onRecover}
+        onDiscard={onDiscard}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Discard this fork" }));
+    expect(onDiscard).not.toHaveBeenCalled();
+    expect(screen.getByText(/Discard removes this fork thread/u)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
+    expect(screen.getByRole("button", { name: "Recover fork" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Discard this fork" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard fork" }));
+    expect(onDiscard).toHaveBeenCalledOnce();
+    expect(onRecover).not.toHaveBeenCalled();
+  });
+
+  it("does not offer discard for an unavailable operation or a non-fork recovery", () => {
+    const discard = { ...operation, id: "discard_fork" as const, label: { text: "Discard this fork" }, destructive: true,
+      available: false, unavailableReason: { text: "Recover instead." } };
+    render(
+      <ThreadRecoveryCallout
+        recovery={{ kind: "conversation_creation", creationType: "fork", phase: "conversation_identified",
+          diagnostic: { text: "Binding failed." }, submissionMayHaveBeenAccepted: false, forkUncertainty: null,
+          possibleProviderOrphan: null, recoverable: true }}
+        operation={operation}
+        discardOperation={discard}
+        pending={false}
+        onRecover={vi.fn()}
+        onDiscard={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Discard this fork" })).toBeNull();
+  });
 });

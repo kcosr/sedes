@@ -195,7 +195,7 @@ function createSubject(input: {
     bindings: { database } as never,
     inventory: new InventoryRepository(database),
     lifecycle: {} as never,
-    forks: { recoverActive: () => undefined },
+    forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
     queue: { onAuthoritativeSettled: vi.fn() } as never,
     operations,
     completions: { database } as never,

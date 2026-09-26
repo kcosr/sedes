@@ -622,6 +622,7 @@ const noParameterOperationIds = [
   "interrupt",
   "retry_submission",
   "recover_uncertain",
+  "discard_fork",
   "archive",
   "settle",
   "acknowledge_attention",

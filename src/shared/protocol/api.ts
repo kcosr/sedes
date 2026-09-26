@@ -1102,6 +1102,10 @@ export const threadApplicationOperationSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("recover_uncertain"),
   }),
+  /** Remove an unfinished fork child; its provider child is never adopted. */
+  z.strictObject({
+    kind: z.literal("discard_fork"),
+  }),
   z.strictObject({
     kind: z.literal("cancel_queued_input"),
     queuedInputId: z.string().min(1).max(160),

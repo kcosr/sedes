@@ -1803,6 +1803,65 @@ describe("ThreadForkService", () => {
     }
   });
 
+  it("discards an unfinished fork on request without another provider call and quarantines its child", async () => {
+    const current = fixture();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      current.branchConversation.mockRejectedValueOnce(new BackendError({ category: "submission_unknown", retryable: false,
+        crossedSubmissionBoundary: true, safeMessage: "outcome unknown" }));
+      const request = current.manual("discard-me");
+      const stuck = await current.service.forkManual(request);
+      expect(stuck).toMatchObject({ status: "recovery_required" });
+      const reserved = current.branchConversation.mock.calls[0]![0].requestedBackendConversationId!;
+      const discarded = await current.service.discardActive(current.scope, stuck.childThreadId);
+      expect(discarded).toEqual({ status: "aborted", childThreadId: stuck.childThreadId,
+        diagnostic: "The fork was discarded.", restartable: true });
+      expect(current.branchConversation).toHaveBeenCalledOnce();
+      expect(current.bindings.findThreadDefinition(current.scope, stuck.childThreadId)).toBeUndefined();
+      expect(current.lineage.isReservedForkChild(current.scope, {
+        backendInstanceId: current.binding.backendInstanceId, backendConversationId: reserved })).toBe(true);
+      // Replaying the original fork request reports the discard.
+      await expect(current.service.forkManual(request)).resolves.toEqual(discarded);
+      await expect(current.service.discardActive(current.scope, stuck.childThreadId)).rejects.toMatchObject({ code: "not_found" });
+    } finally {
+      stderr.mockRestore();
+      current.database.close();
+    }
+  });
+
+  it("refuses to discard a fork that is still being created or whose child the provider returned", async () => {
+    const current = fixture();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      let childThreadId!: string;
+      current.branchConversation.mockImplementationOnce(async (input) => {
+        childThreadId = input.childApplicationThreadId;
+        await gate;
+        throw new BackendError({ category: "submission_unknown", retryable: false, crossedSubmissionBoundary: true, safeMessage: "unknown" });
+      });
+      const forking = current.service.forkManual(current.manual("in-flight"));
+      await vi.waitFor(() => expect(childThreadId).toBeDefined());
+      await expect(current.service.discardActive(current.scope, childThreadId)).rejects.toMatchObject({
+        code: "invalid_transition", message: "This fork is still being created. Wait for it to finish before discarding it." });
+      release();
+      await forking;
+
+      current.setBranching(branching("provider_assigned", "potentially_unknown"));
+      current.branchConversation.mockResolvedValue({ backendConversationId: "provider-returned",
+        reconciliationToken: "token", opaqueBindingDetail: "detail" });
+      current.failBoundDetailSaveOnce();
+      const returned = await current.service.forkManual(current.manual("provider-returned"));
+      await expect(current.service.discardActive(current.scope, returned.childThreadId)).rejects.toMatchObject({
+        code: "invalid_transition" });
+      expect(current.bindings.findThreadDefinition(current.scope, returned.childThreadId)).toBeDefined();
+    } finally {
+      stderr.mockRestore();
+      current.database.close();
+    }
+  });
+
   it("rejects queued source work before actor or provider acquisition", async () => {
     const current = fixture();
     try {

@@ -1744,6 +1744,12 @@ describe("ThreadApplicationService", () => {
       label: { text: "Recover fork" },
       parameters: { kind: "none" },
     });
+    expect(
+      forkSnapshot.capabilities.operations.find(({ id }) => id === "discard_fork"),
+    ).toMatchObject({ available: true, destructive: true, label: { text: "Discard this fork" } });
+    expect(
+      creationSnapshot.capabilities.operations.find(({ id }) => id === "discard_fork"),
+    ).toBeUndefined();
 
     const terminalCreation = createService({
       runState: "failed",

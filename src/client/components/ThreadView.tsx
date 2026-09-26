@@ -268,6 +268,9 @@ export function ThreadView({
   const recoverOperation = snapshot.capabilities.operations.find(
     ({ id }) => id === "recover_uncertain",
   );
+  const discardForkOperation = snapshot.capabilities.operations.find(
+    ({ id }) => id === "discard_fork",
+  );
   const composerDisabled =
     !snapshot.thread.available ||
     backendTransitioning ||
@@ -537,10 +540,12 @@ export function ThreadView({
           <ThreadRecoveryCallout
             recovery={snapshot.recovery}
             operation={recoverOperation}
+            discardOperation={discardForkOperation}
             pending={state.actionPending}
             onRecover={() =>
               void store.recoverUncertain().catch(() => undefined)
             }
+            onDiscard={() => void store.discardFork().catch(() => undefined)}
           />
         )}
         <QuestionInboxNotice />

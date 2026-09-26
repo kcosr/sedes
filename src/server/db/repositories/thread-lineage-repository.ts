@@ -757,7 +757,8 @@ export class ThreadLineageRepository {
         !origin.sourceCheckpointId ||
         !attempt ||
         attempt.creationKind !== "fork" ||
-        !new Set(["external_call_started", "recovery_required"]).has(
+        // A prepared attempt never crossed the provider boundary.
+        !new Set(["prepared", "external_call_started", "recovery_required"]).has(
           attempt.phase,
         ) ||
         attempt.provisionalId !== null ||
@@ -896,7 +897,7 @@ export class ThreadLineageRepository {
           `
         DELETE FROM application_threads
         WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
-          AND backing_state = 'creating'
+          AND backing_state IN ('creating', 'creation_unknown')
       `,
         )
         .run(scope.tenantId, scope.principalId, childThreadId);
