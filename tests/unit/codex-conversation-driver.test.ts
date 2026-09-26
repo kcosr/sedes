@@ -3364,6 +3364,57 @@ describe("CodexConversationBackendDriver", () => {
     });
   });
 
+  it("reconciles several Steers of one stopped turn individually by their own client identity", async () => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    const steerTurnId = codexBackendTurnId("thread-1", "turn-1");
+    const steers = ["drained", "unused-1", "unused-2"].map((label) => ({
+      scope,
+      binding: binding(),
+      opaqueBindingDetail: attachInput().opaqueBindingDetail,
+      workspace,
+      applicationOperationId: `steer-${label}`,
+      reconciliationToken: `steer-${label}-token`,
+      steerTarget: { kind: "turn" as const, turnId: steerTurnId },
+    }));
+    const clientId = (input: (typeof steers)[number]) =>
+      codexClientUserMessageId({
+        toolProvenanceKey,
+        tenantId: scope.tenantId,
+        principalId: scope.principalId,
+        backendInstanceId: instance.id,
+        nativeThreadId: "thread-1",
+        correlationAncestorThreadIds: [],
+        applicationOperationId: input.applicationOperationId,
+        reconciliationToken: input.reconciliationToken,
+      });
+    // Codex drained only the first before Stop cleared the turn's pending input.
+    const stoppedThread = nativeThread({
+      turns: [
+        nativeTurn(0),
+        {
+          ...nativeTurn(1),
+          status: "interrupted",
+          items: [
+            ...nativeTurn(1).items,
+            { ...nativeTurn(1).items[0], id: "drained-steer-item", clientId: clientId(steers[0]!) },
+          ],
+        },
+      ],
+    });
+    for (const _input of steers) enqueueCompleteLegacyRead(harness, stoppedThread);
+    await expect(target.reconcileSubmission(steers[0]!)).resolves.toMatchObject({
+      status: "accepted",
+      backendTurn: { backendTurnId: steerTurnId, status: "interrupted" },
+    });
+    for (const input of steers.slice(1)) {
+      await expect(target.reconcileSubmission(input)).resolves.toMatchObject({
+        status: "not_accepted",
+        retryable: false,
+      });
+    }
+  });
+
   it("returns a paginated Steer as not sent only from settled absence cuts", async () => {
     const reconcileInput = {
       scope,
@@ -12308,6 +12359,61 @@ describe("CodexConversationHandle", () => {
     expect(
       harness.calls.filter(({ method }) => method === "turn/steer"),
     ).toHaveLength(1);
+    // Several later Steers wait in the turn's pending input at once; each
+    // resolves only on its own exact item, in any order.
+    const laterSteers = ["later-1", "later-2", "later-3"].map((label) => ({
+      ...steerInput,
+      applicationOperationId: `steer-${label}`,
+      mutationId: `mutation-${label}`,
+      reconciliationToken: `steer-${label}-token`,
+      text: `clarification ${label}`,
+    }));
+    for (const input of laterSteers) {
+      harness.enqueue("turn/steer", (params: unknown) => ({
+        turnId: (params as { expectedTurnId: string }).expectedTurnId,
+      }));
+      await expect(handle.steer(input)).resolves.toMatchObject({
+        status: "pending_materialization",
+        reconciliationToken: input.reconciliationToken,
+      });
+    }
+    const materialize = (input: (typeof laterSteers)[number]) =>
+      harness.notify("item/started", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "userMessage",
+          id: `${input.applicationOperationId}-message`,
+          clientId: codexClientUserMessageId({
+            toolProvenanceKey,
+            tenantId: scope.tenantId,
+            principalId: scope.principalId,
+            backendInstanceId: instance.id,
+            nativeThreadId: "thread-1",
+            correlationAncestorThreadIds: [],
+            applicationOperationId: input.applicationOperationId,
+            reconciliationToken: input.reconciliationToken,
+          }),
+          content: [{ type: "text", text: input.text, text_elements: [] }],
+        },
+        startedAtMs: 1_700_000_002_500,
+      });
+    materialize(laterSteers[1]!);
+    await vi.waitFor(async () =>
+      expect(await handle.steer(laterSteers[1]!)).toMatchObject({ status: "accepted" }),
+    );
+    await expect(handle.steer(laterSteers[0]!)).resolves.toMatchObject({ status: "pending_materialization" });
+    await expect(handle.steer(laterSteers[2]!)).resolves.toMatchObject({ status: "pending_materialization" });
+    materialize(laterSteers[0]!);
+    materialize(laterSteers[2]!);
+    for (const input of laterSteers) {
+      await vi.waitFor(async () =>
+        expect(await handle.steer(input)).toMatchObject({ status: "accepted" }),
+      );
+    }
+    expect(
+      harness.calls.filter(({ method }) => method === "turn/steer"),
+    ).toHaveLength(4);
     harness.enqueue("turn/interrupt", {});
     await handle.interrupt({
       applicationOperationId: "interrupt-operation",
