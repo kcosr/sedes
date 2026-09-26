@@ -143,6 +143,14 @@
 
 ### Fixed
 
+- **Stop** on a Codex thread no longer silently loses a steering message Codex
+  accepted but had not used, while showing it as delivered. A Codex steer now
+  shows **Steering** until its message appears in history. If Codex's turn
+  ends without it, it returns as a failed queue entry marked not sent, to
+  restore to the composer or dismiss, and it is never resent. As on other
+  backends, Send, Steer, and Queue on that thread wait while a steer is
+  pending, so several Codex steers now go one at a time.
+
 - Create Claude forks with one locked-down Claude Code launch. It loads no
   settings, hooks, MCP servers, or tools and denies any permission request.
   It no longer uses the thread's permission mode, so it cannot act for the

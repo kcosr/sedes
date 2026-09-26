@@ -1486,6 +1486,9 @@ class CodexE2eRpcFixture {
     remaining: number;
   };
   readonly #heldSteerMaterializations: E2eHeldSteerMaterialization[] = [];
+  /** Unarmed steers the fixture turn drains on its next step. */
+  readonly #drainingSteerMaterializations: E2eHeldSteerMaterialization[] = [];
+  #drainedSteerOrdinal = 0;
   #interactionRequestOrdinal = 10_000;
   #ready = true;
 
@@ -1988,6 +1991,11 @@ class CodexE2eRpcFixture {
   releaseSteerMaterialization(): void {
     const held = this.#heldSteerMaterializations.shift();
     if (!held) throw new Error("e2e_codex_steer_materialization_not_held");
+    this.#materializeSteer(held);
+  }
+
+  /** Codex records a drained steer's userMessage in its target turn. */
+  #materializeSteer(held: E2eHeldSteerMaterialization): void {
     const thread = this.#threads.get(held.nativeThreadId);
     const turn = thread?.turns.find(({ id }) => id === held.nativeTurnId);
     if (!thread || !turn) {
@@ -2012,6 +2020,7 @@ class CodexE2eRpcFixture {
   resetSteerMaterialization(): void {
     this.#steerMaterializationTarget = undefined;
     this.#heldSteerMaterializations.length = 0;
+    this.#drainingSteerMaterializations.length = 0;
   }
 
   #openDecision(
@@ -3049,7 +3058,10 @@ class CodexE2eRpcFixture {
           );
           const steerMaterializationBlocksCompletion =
             this.#steerMaterializationTarget?.nativeThreadId === thread.id ||
-            this.#heldSteerMaterializations.some(
+            [
+              ...this.#heldSteerMaterializations,
+              ...this.#drainingSteerMaterializations,
+            ].some(
               (held) =>
                 held.nativeThreadId === thread.id &&
                 held.nativeTurnId === turnId,
@@ -3110,27 +3122,43 @@ class CodexE2eRpcFixture {
           .reverse()
           .find(({ status }) => status === "inProgress");
         if (!activeTurn) throw new Error("e2e_codex_turn_not_active");
-        if (this.#steerMaterializationTarget?.nativeThreadId === thread.id) {
-          const input = Array.isArray(encoded.input) ? encoded.input : [];
-          const clientId = encoded.clientUserMessageId;
-          if (typeof clientId !== "string") {
-            throw new Error("e2e_codex_steer_client_id_missing");
-          }
-          this.#heldSteerMaterializations.push({
-            generation,
-            nativeThreadId: thread.id,
-            nativeTurnId: activeTurn.id,
-            item: {
-              type: "userMessage",
-              id: `interactive-steer-user-${++this.#turnOrdinal}`,
-              clientId,
-              content: input,
-            },
-          });
+        const input = Array.isArray(encoded.input) ? encoded.input : [];
+        const clientId = encoded.clientUserMessageId;
+        if (typeof clientId !== "string") {
+          throw new Error("e2e_codex_steer_client_id_missing");
+        }
+        // Like Codex, the response only admits the input to the turn's
+        // pending input; its userMessage appears when the turn drains it.
+        const armed =
+          this.#steerMaterializationTarget?.nativeThreadId === thread.id;
+        const pendingSteer = {
+          generation,
+          nativeThreadId: thread.id,
+          nativeTurnId: activeTurn.id,
+          item: {
+            type: "userMessage" as const,
+            id: armed
+              ? `interactive-steer-user-${++this.#turnOrdinal}`
+              : `interactive-drained-steer-user-${++this.#drainedSteerOrdinal}`,
+            clientId,
+            content: input,
+          },
+        };
+        if (armed && this.#steerMaterializationTarget) {
+          this.#heldSteerMaterializations.push(pendingSteer);
           this.#steerMaterializationTarget.remaining -= 1;
           if (this.#steerMaterializationTarget.remaining === 0) {
             this.#steerMaterializationTarget = undefined;
           }
+        } else {
+          this.#drainingSteerMaterializations.push(pendingSteer);
+          this.#schedule(50, () => {
+            const index =
+              this.#drainingSteerMaterializations.indexOf(pendingSteer);
+            if (index < 0) return;
+            this.#drainingSteerMaterializations.splice(index, 1);
+            this.#materializeSteer(pendingSteer);
+          });
         }
         result = { turnId: activeTurn.id };
       } else if (specification.method === "turn/interrupt") {
@@ -3141,6 +3169,22 @@ class CodexE2eRpcFixture {
         this.#interruptedTurnIds.add(turnId);
         const interrupted = thread.turns.find(({ id }) => id === turnId);
         if (!interrupted) throw new Error("e2e_codex_turn_missing");
+        // The interrupted turn no longer needs a completion hold.
+        this.#heldTurnCompletionIds.delete(turnId);
+        // Codex clears the interrupted turn's pending input without an event.
+        for (const pending of [
+          this.#heldSteerMaterializations,
+          this.#drainingSteerMaterializations,
+        ]) {
+          for (let index = pending.length - 1; index >= 0; index -= 1) {
+            if (
+              pending[index]!.nativeThreadId === thread.id &&
+              pending[index]!.nativeTurnId === turnId
+            ) {
+              pending.splice(index, 1);
+            }
+          }
+        }
         const completedTurn = {
           ...interrupted,
           status: "interrupted" as const,
@@ -4154,6 +4198,7 @@ async function main(): Promise<void> {
   const actorTargets = new DatabaseActorTargetResolver(targets);
   const lifecycleTargets = new DatabaseLifecycleTargetResolver(targets);
   let questions: QuestionRequestService | undefined;
+  let mutationsForSubmissions: ThreadMutationGateway | undefined;
   let observeAuthoritativeCompletion:
     AuthoritativeCompletionObserver | undefined;
   const actors = new ConversationActorManager({
@@ -4166,6 +4211,13 @@ async function main(): Promise<void> {
       questions?.remember(eventScope, threadId, sourceItemId),
     onNonblockingQuestions: (eventScope, threadId, sourceItemId, payload) =>
       questions?.observe(eventScope, threadId, sourceItemId, payload),
+    // As in production, exact materialization accepts a pending Steer.
+    onAuthoritativeSubmission: (eventScope, applicationThreadId, input) =>
+      mutationsForSubmissions?.observeAuthoritativeSubmission(
+        eventScope,
+        applicationThreadId,
+        input.backendCorrelation,
+      ),
     onAuthoritativeCompletion: (eventScope, applicationThreadId, input) =>
       observeAuthoritativeCompletion?.(eventScope, applicationThreadId, input),
   });
@@ -4660,6 +4712,7 @@ async function main(): Promise<void> {
       publishApplicationThread!.publish(eventScope, applicationThreadId),
   });
   threads.bindMutations(mutations);
+  mutationsForSubmissions = mutations;
   const automations = new AutomationService({
     onRunLifecycle: (eventScope, input) =>
       notificationLifecycle.automation(eventScope, input),

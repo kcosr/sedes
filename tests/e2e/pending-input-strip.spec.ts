@@ -767,7 +767,9 @@ test("Queue clears before its request and ambiguous Steer remains until exact ma
     await expect(steerRow).toHaveCount(1);
     await expect(steerRow).toContainText(steerText);
     expect(await droppedSteer.upstreamCompleted).toBe(200);
-    await expect(steerRow).toContainText("Steer unconfirmed");
+    // Codex admitted it; its durable card stays pending until its exact item
+    // appears, whether or not this browser saw the response.
+    await expect(steerRow).toContainText(/Steering|Steer unconfirmed/);
     await expect(composer).toHaveValue("");
     await expect(
       page
@@ -795,7 +797,8 @@ test("Queue clears before its request and ambiguous Steer remains until exact ma
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`${originalPath}$`));
   await expect(composer).toHaveValue(postClearDraft);
-  await expect(steerRow).toContainText(/Pending steer|Steer unconfirmed/);
+  // Codex admitted it, but it stays unconfirmed until its exact item appears.
+  await expect(steerRow).toContainText(/Pending steer|Steering|Steer unconfirmed/);
   await expect(steerRow.getByRole("button")).toHaveCount(0);
 
   const materializationReleased = await page.request.post(
@@ -1164,7 +1167,7 @@ test("Pi pending-materialization Steer retains its cleared input until the exact
   await expect(composer).toHaveValue("");
 });
 
-test("Codex stacks serial Steers and preserves Queue-to-Steer presentation until exact materialization", async ({
+test("Codex sends Steers serially and preserves Queue-to-Steer presentation until exact materialization", async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -1267,58 +1270,49 @@ test("Codex stacks serial Steers and preserves Queue-to-Steer presentation until
     return request.mutationId;
   };
 
-  const firstSteerText = "First direct steer stays independently visible";
-  const secondSteerText = "Second direct steer stacks behind the first";
-  const firstSteerOperationId = await submitSteer(firstSteerText);
-  const secondSteerOperationId = await submitSteer(secondSteerText);
-  expect(firstSteerOperationId).not.toBe(secondSteerOperationId);
-
-  const pendingCards = [
-    {
-      text: queueToSteerText,
-      operationId: queueSteerRequest.mutationId,
-    },
-    { text: firstSteerText, operationId: firstSteerOperationId },
-    { text: secondSteerText, operationId: secondSteerOperationId },
-  ];
-  for (const pending of pendingCards) {
-    const row = strip.getByRole("listitem").filter({ hasText: pending.text });
-    await expect(row).toHaveCount(1);
-    await expect(row).toContainText(/Pending steer|Steering/);
-    await expect(row.getByRole("button")).toHaveCount(0);
-    await expect(
-      page.locator(
-        `[data-pending-steer-operation-id="${pending.operationId}"], [data-delivery-operation-id="${pending.operationId}"]`,
-      ),
-    ).toHaveCount(1);
-    await expect(
-      page.locator('[data-item-kind="user_message"]').filter({
-        hasText: pending.text,
-      }),
-    ).toHaveCount(0);
-  }
-  const held = await page.request.get(
-    "/__e2e/codex/steer-materialization/state",
+  // Codex admits a steer to the turn's pending input before recording it,
+  // so the Queue-to-Steer card stays pending until its exact item appears,
+  // and the composer waits for it before delivering more input.
+  const heldSteerCount = async (): Promise<unknown> =>
+    (
+      (await (
+        await page.request.get("/__e2e/codex/steer-materialization/state")
+      ).json()) as { readonly heldCount?: unknown }
+    ).heldCount;
+  await expect.poll(heldSteerCount).toBe(1);
+  expect(
+    await (
+      await page.request.get("/__e2e/codex/steer-materialization/state")
+    ).json(),
+  ).toMatchObject({ armed: true, held: true, heldCount: 1 });
+  await expect(queueSteerCard).toContainText("Steering");
+  await expect(
+    page.locator('[data-item-kind="user_message"]').filter({
+      hasText: queueToSteerText,
+    }),
+  ).toHaveCount(0);
+  await fillAndPersistDraft(
+    page,
+    "Draft waits for the pending steer",
+    "Message Codex",
   );
-  expect(await held.json()).toMatchObject({
-    armed: false,
-    held: true,
-    heldCount: 3,
-  });
-  await expect(composer).toHaveValue("");
+  await expect(
+    page.getByRole("button", { name: "Steer", exact: true }),
+  ).toBeDisabled();
   await capture(page, testInfo, "pending-steer-accepted-desktop.png");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expectNoPageOverflow(page);
   await expect(composer).toBeVisible();
-  for (const pending of pendingCards) {
-    await expect(
-      strip.getByRole("listitem").filter({ hasText: pending.text }),
-    ).toBeVisible();
-  }
+  await expect(queueSteerCard).toBeVisible();
   await capture(page, testInfo, "pending-steer-accepted-mobile.png");
+  await page.setViewportSize({ width: 1280, height: 800 });
 
-  for (const pending of pendingCards) {
+  const releaseAndExpectMaterialized = async (pending: {
+    readonly text: string;
+    readonly operationId: string;
+  }): Promise<void> => {
+    await expect.poll(heldSteerCount).toBe(1);
     const released = await page.request.post(
       "/__e2e/codex/steer-materialization/release",
     );
@@ -1331,7 +1325,137 @@ test("Codex stacks serial Steers and preserves Queue-to-Steer presentation until
         `[data-item-kind="user_message"][data-delivery-operation-id="${pending.operationId}"]`,
       ),
     ).toHaveCount(1);
+  };
+  await releaseAndExpectMaterialized({
+    text: queueToSteerText,
+    operationId: queueSteerRequest.mutationId,
+  });
+
+  // Direct Steers follow one at a time, each pending until it materializes.
+  for (const text of [
+    "First direct steer stays independently visible",
+    "Second direct steer follows the first",
+  ]) {
+    const operationId = await submitSteer(text);
+    const row = strip.locator(`[data-delivery-operation-id="${operationId}"]`);
+    await expect(row).toContainText(/Pending steer|Steering/);
+    await expect(row.getByRole("button")).toHaveCount(0);
+    await expect(
+      page.locator('[data-item-kind="user_message"]').filter({ hasText: text }),
+    ).toHaveCount(0);
+    await releaseAndExpectMaterialized({ text, operationId });
   }
   await expect(composer).toHaveValue("");
   await expectNoPageOverflow(page);
+});
+
+test("Stop returns a Codex steer Codex never used as not sent and keeps a used one", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openSedesWorkspace(page);
+  const threadId = await createCodexDraftThread(page);
+  const composer = page.getByRole("textbox", { name: "Message Codex" });
+  const strip = page.getByRole("region", { name: "Pending inputs" });
+  const steer = async (text: string): Promise<string> => {
+    await fillAndPersistDraft(page, text, "Message Codex");
+    const response = page.waitForResponse(
+      (candidate) => operationKind(candidate) === "deliver" && candidate.ok(),
+    );
+    await page.getByRole("button", { name: "Steer", exact: true }).click();
+    const mutationId = (
+      (await response).request().postDataJSON() as { readonly mutationId?: unknown }
+    ).mutationId;
+    if (typeof mutationId !== "string") {
+      throw new Error("e2e_codex_stop_steer_operation_id_missing");
+    }
+    return mutationId;
+  };
+  const stopTurn = async (): Promise<void> => {
+    const stopped = page.waitForResponse(
+      (response) => operationKind(response) === "interrupt" && response.ok(),
+    );
+    await page.getByRole("button", { name: "Stop" }).click();
+    await stopped;
+    await expect(page.getByRole("button", { name: "Stop" })).toHaveCount(0);
+  };
+
+  // A steer Codex admitted but had not drained when Stop landed.
+  expect(
+    (await page.request.post("/__e2e/codex/turn-completion/arm")).status(),
+  ).toBe(204);
+  await fillAndPersistDraft(page, "Keep this Codex turn running", "Message Codex");
+  await sendCurrentDraft(page);
+  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await selectDeliveryMode(page, "Steer");
+  expect(
+    (
+      await page.request.post(
+        `/__e2e/codex/steer-materialization/arm/${threadId}`,
+      )
+    ).status(),
+  ).toBe(204);
+  const unusedText = "Codex never drained this steer";
+  const unusedOperationId = await steer(unusedText);
+  const unusedRow = strip.locator(
+    `[data-delivery-operation-id="${unusedOperationId}"]`,
+  );
+  await expect(unusedRow).toContainText("Steering");
+  await expect
+    .poll(async () =>
+      (
+        (await (
+          await page.request.get("/__e2e/codex/steer-materialization/state")
+        ).json()) as { readonly heldCount?: unknown }
+      ).heldCount,
+    )
+    .toBe(1);
+
+  await stopTurn();
+  await expect(unusedRow).toContainText("Steer failed");
+  await expect(unusedRow).toContainText("so it was not sent");
+  await expect(
+    unusedRow.getByRole("button", {
+      name: `Restore queued input to composer: ${unusedText}`,
+    }),
+  ).toBeEnabled();
+  await expect(
+    unusedRow.getByRole("button", { name: `Delete queued input: ${unusedText}` }),
+  ).toBeEnabled();
+  await expect(
+    page.locator('[data-item-kind="user_message"]').filter({ hasText: unusedText }),
+  ).toHaveCount(0);
+  await capture(page, testInfo, "codex-stop-unused-steer-not-sent.png");
+  // Nothing is resent: a failed entry is never dispatched, and the thread
+  // stays idle until the user decides.
+  await expect(page.getByRole("button", { name: "Stop" })).toHaveCount(0);
+  await expect(unusedRow).toContainText("Steer failed");
+  await unusedRow
+    .getByRole("button", {
+      name: `Restore queued input to composer: ${unusedText}`,
+    })
+    .click();
+  await expect(unusedRow).toHaveCount(0);
+  await expect(composer).toHaveValue(unusedText);
+  await composer.fill("");
+
+  // A steer Codex drained before Stop stays with the stopped turn.
+  expect(
+    (await page.request.post("/__e2e/codex/turn-completion/arm")).status(),
+  ).toBe(204);
+  await fillAndPersistDraft(page, "Start another Codex turn", "Message Codex");
+  await sendCurrentDraft(page);
+  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  const usedText = "Codex drained this steer before Stop";
+  const usedOperationId = await steer(usedText);
+  const usedMessage = page.locator(
+    `[data-item-kind="user_message"][data-delivery-operation-id="${usedOperationId}"]`,
+  );
+  await expect(usedMessage).toHaveCount(1);
+  await expect(
+    strip.locator(`[data-delivery-operation-id="${usedOperationId}"]`),
+  ).toHaveCount(0);
+  await stopTurn();
+  await expect(usedMessage).toHaveCount(1);
+  await expect(strip.getByText("Steer failed")).toHaveCount(0);
 });

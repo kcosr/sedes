@@ -4364,6 +4364,9 @@ describe("QueuedInputDispatcher", () => {
         {
           applicationOperationId: "pending-steer-operation",
           reconciliationToken: "pending-steer-operation",
+          // The durable target lets a backend prove its turn ended without it.
+          steerTarget:
+            kind === "turn" ? { kind, turnId: "active-turn-1" } : { kind },
         },
       ]);
       expect(gateway.steered).toEqual([]);
@@ -4478,6 +4481,7 @@ describe("QueuedInputDispatcher", () => {
 
       expect(gateway.reconciled).toEqual([{
         applicationOperationId: "withdrawn-steer-operation", reconciliationToken: "withdrawn-steer-operation",
+        steerTarget: { kind: "conversation" },
       }]);
       expect(repository.get(fixture.scope, threadId, "withdrawn-steer")).toMatchObject({
         state: "failed", deliveryMode: null, failureAcknowledgedAt: null, diagnostic,

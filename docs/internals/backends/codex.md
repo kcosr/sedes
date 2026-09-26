@@ -425,19 +425,54 @@ ordinary next-turn queue work. Every other rejection and uncertain outcome
 fails closed.
 
 A `turn/steer` response only admits the input to the active turn's pending
-input; Codex writes it to history and emits its `userMessage` item when the
-turn loop next picks it up, before its next model request. Sedes nevertheless
-records the Steer as accepted on the response. On `turn/interrupt`, Codex
-0.153.0 (`abort_all_tasks`) aborts the task, emits `TurnAborted`, then clears
-the turn's pending input, unless the aborting task consumed it first. It starts
-a new turn afterwards only for
-inter-agent mailbox work, never for a user Steer. So Stop never runs an
-accepted but unconsumed Steer later, but it drops it without evidence: the
-pinned protocol has no event for dropped pending input, and `turn/interrupt`
-returns `{}`. Sedes has already closed that Steer as accepted, so it is
-neither reconciled nor returned to the user. This is a known gap, not a
-reviewed withdrawal; closing it needs a Codex Steer that stays pending until
-its `userMessage` materializes and a reviewed interrupt disposition for it.
+input. Codex 0.153.0 records it (model history, then the `userMessage` item
+with its `clientId`) when the turn loop next drains that input, before the
+next model request. The handle therefore returns `pending_materialization`
+unless the exact authenticated item is already in its projection, and the
+shared queue waits for that item's `completionCorrelations` evidence; a replay
+upgrades to accepted once the item appears. Like every pending Steer, it
+withholds further Send, Steer, and Queue on that thread until it resolves.
+
+Reviewed 0.153.0 behaviour for input that was admitted but not yet drained:
+
+- `turn/interrupt` (`abort_all_tasks`) takes the active turn, aborts its task,
+  persists and delivers `TurnAborted`, and only then clears that turn's pending
+  input, with no event; the `{}` response carries nothing. Pending input
+  belongs to its turn, so it is never carried into a later turn and never
+  starts one; only inter-agent mailbox work can start a turn afterwards. A
+  compact, review, or shell turn that replaces the active turn, a guardian
+  abort, and shutdown drop it the same way.
+- A turn that completes or fails drains it first: leftover input is recorded
+  in that turn before its terminal event, even if not sampled, so it is
+  accepted.
+- Codex persists every item of a turn before its terminal event and keeps the
+  thread active until it has handled that event. Legacy `thread/read` reads
+  the flushed rollout and reports an in-progress turn only while the thread is
+  active; paginated lists read a projection updated synchronously with each
+  write.
+
+Reconciliation receives the Steer's durable exact target (`steerTarget`).
+When the complete legacy read shows that turn terminal, or stable paginated
+absence cuts were taken while the thread was neither active nor failed, and
+no `userMessage` anywhere in the thread carries the Steer's client identity,
+the Steer reconciles `not_accepted` without retry permission and with a
+not-sent diagnostic. The queue returns it to the user and never resends it,
+as the backend-neutral
+[Stop rule](../backend-integration-contract-rules.md#interactions-input-and-interruption)
+requires.
+An in-progress or missing target turn, an unstable or unavailable read, or a
+duplicate identity stays unresolved. A matching item is accepted with its
+turn, which is how a Steer Codex drained before Stop stays with the stopped
+turn.
+
+The evidence is absence in final history, because Codex exposes no per-input
+drop event. One Codex-internal path can make it wrong: an interrupt waits
+100 ms for the task to stop and then aborts it, so a task that is at that
+moment recording a just-drained Steer can keep it in model history (and the
+rollout's model items, which later turns send) without its `userMessage`
+item. The input then reaches the model in a later turn although Sedes
+reported it not sent. Hooks that block a steered prompt drop it before
+recording, which is correctly reported as not sent.
 
 Server requests route only to the active owner of the matching native thread
 and client generation. Command, file-change, and permission approvals become

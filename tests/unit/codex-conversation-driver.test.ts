@@ -3248,6 +3248,183 @@ describe("CodexConversationBackendDriver", () => {
     });
   });
 
+  it("returns a Steer as not sent only once its target turn ended without it", async () => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    const steerTurnId = codexBackendTurnId("thread-1", "turn-1");
+    const reconcileInput = {
+      scope,
+      binding: binding(),
+      opaqueBindingDetail: attachInput().opaqueBindingDetail,
+      workspace,
+      applicationOperationId: "steer-operation",
+      reconciliationToken: "steer-token",
+      steerTarget: { kind: "turn" as const, turnId: steerTurnId },
+    };
+    const clientId = codexClientUserMessageId({
+      toolProvenanceKey,
+      tenantId: scope.tenantId,
+      principalId: scope.principalId,
+      backendInstanceId: instance.id,
+      nativeThreadId: "thread-1",
+      correlationAncestorThreadIds: [],
+      applicationOperationId: "steer-operation",
+      reconciliationToken: "steer-token",
+    });
+    const unused = {
+      status: "not_accepted",
+      retryable: false,
+      diagnostic: {
+        text: "Codex's turn ended before Codex used this steering message, so it was not sent. Nothing was resent. Restore it to send it again, or dismiss it.",
+      },
+    };
+
+    // The turn is still running: Codex may still drain its pending input.
+    enqueueCompleteLegacyRead(
+      harness,
+      nativeThread({
+        status: { type: "active", activeFlags: [] },
+        turns: [
+          nativeTurn(0),
+          {
+            ...nativeTurn(1),
+            status: "inProgress",
+            completedAt: null,
+            durationMs: null,
+          },
+        ],
+      }),
+    );
+    await expect(target.reconcileSubmission(reconcileInput)).resolves.toMatchObject({
+      status: "unresolved",
+    });
+
+    // Stop cleared the pending input: the final history never recorded it.
+    for (const status of ["interrupted", "completed", "failed"] as const) {
+      enqueueCompleteLegacyRead(
+        harness,
+        nativeThread({ turns: [nativeTurn(0), { ...nativeTurn(1), status }] }),
+      );
+      await expect(target.reconcileSubmission(reconcileInput)).resolves.toEqual(
+        unused,
+      );
+    }
+
+    // A later turn did not start from it either; the target has ended.
+    enqueueCompleteLegacyRead(
+      harness,
+      nativeThread({
+        status: { type: "active", activeFlags: [] },
+        turns: [
+          nativeTurn(0),
+          { ...nativeTurn(1), status: "interrupted" },
+          {
+            ...nativeTurn(2),
+            status: "inProgress",
+            completedAt: null,
+            durationMs: null,
+          },
+        ],
+      }),
+    );
+    await expect(target.reconcileSubmission(reconcileInput)).resolves.toEqual(
+      unused,
+    );
+
+    // The steered turn is absent from history: no terminal evidence.
+    enqueueCompleteLegacyRead(harness, nativeThread({ turns: [nativeTurn(0)] }));
+    await expect(target.reconcileSubmission(reconcileInput)).resolves.toMatchObject({
+      status: "unresolved",
+    });
+
+    // The exact item recorded before the terminal event keeps it accepted.
+    enqueueCompleteLegacyRead(
+      harness,
+      nativeThread({
+        turns: [
+          nativeTurn(0),
+          {
+            ...nativeTurn(1),
+            status: "interrupted",
+            items: [
+              ...nativeTurn(1).items,
+              {
+                ...nativeTurn(1).items[0],
+                id: "steer-item",
+                clientId,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    await expect(target.reconcileSubmission(reconcileInput)).resolves.toMatchObject({
+      status: "accepted",
+      backendTurn: { backendTurnId: steerTurnId, status: "interrupted" },
+    });
+  });
+
+  it("returns a paginated Steer as not sent only from settled absence cuts", async () => {
+    const reconcileInput = {
+      scope,
+      binding: binding(),
+      opaqueBindingDetail: attachInput().opaqueBindingDetail,
+      workspace,
+      applicationOperationId: "paginated-steer-operation",
+      reconciliationToken: "paginated-steer-token",
+      steerTarget: {
+        kind: "turn" as const,
+        turnId: codexBackendTurnId("thread-1", "turn-0"),
+      },
+    };
+    const settledTurns = {
+      data: [{ ...notLoadedTurn(0), status: "interrupted" as const }],
+      nextCursor: null,
+      backwardsCursor: "turns-head",
+    };
+    const settled = new RpcHarness();
+    settled.enqueue(
+      "thread/read",
+      { thread: paginatedThread() },
+      { thread: paginatedThread() },
+      { thread: paginatedThread() },
+    );
+    settled.enqueue("thread/turns/list", settledTurns, settledTurns, settledTurns);
+    settled.enqueue(
+      "thread/items/list",
+      paginatedItems(0),
+      paginatedItems(0),
+      paginatedItems(0),
+      paginatedItems(0),
+      paginatedItems(0),
+      paginatedItems(0),
+    );
+    await expect(
+      driver(settled).reconcileSubmission(reconcileInput),
+    ).resolves.toMatchObject({ status: "not_accepted", retryable: false });
+
+    const activeMetadata = paginatedThread({
+      status: { type: "active", activeFlags: [] },
+    });
+    const active = new RpcHarness();
+    active.enqueue(
+      "thread/read",
+      { thread: activeMetadata },
+      { thread: activeMetadata },
+    );
+    active.enqueue("thread/turns/list", settledTurns, settledTurns);
+    active.enqueue(
+      "thread/items/list",
+      paginatedItems(0),
+      paginatedItems(0),
+      paginatedItems(0),
+      paginatedItems(0),
+    );
+    await expect(
+      driver(active).reconcileSubmission(reconcileInput),
+    ).resolves.toMatchObject({ status: "unresolved" });
+  });
+
   it("reconciles exact pre-rename client identities and retry anchors", async () => {
     const harness = new RpcHarness();
     const target = driver(harness);
@@ -12086,21 +12263,51 @@ describe("CodexConversationHandle", () => {
     harness.enqueue("turn/steer", (params: unknown) => ({
       turnId: (params as { expectedTurnId: string }).expectedTurnId,
     }));
-    await expect(
-      handle.steer({
-        applicationOperationId: "steer-operation",
-        mutationId: "mutation-2",
-        reconciliationToken: "steer-token",
-        target: { kind: "turn", turnId: submitted.backendTurnId! },
-        taskContexts: [],
-        contextExcerpts: [],
-        attachments: [],
-        text: "clarification",
-      }),
-    ).resolves.toMatchObject({
+    const steerInput = {
+      applicationOperationId: "steer-operation",
+      mutationId: "mutation-2",
+      reconciliationToken: "steer-token",
+      target: { kind: "turn" as const, turnId: submitted.backendTurnId! },
+      taskContexts: [],
+      contextExcerpts: [],
+      attachments: [],
+      text: "clarification",
+    };
+    // The response only admits the input to Codex's pending input.
+    await expect(handle.steer(steerInput)).resolves.toMatchObject({
+      status: "pending_materialization",
+      reconciliationToken: "steer-token",
+      backendTurnId: submitted.backendTurnId,
+    });
+    harness.notify("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "userMessage",
+        id: "steer-message",
+        clientId: codexClientUserMessageId({
+          toolProvenanceKey,
+          tenantId: scope.tenantId,
+          principalId: scope.principalId,
+          backendInstanceId: instance.id,
+          nativeThreadId: "thread-1",
+          correlationAncestorThreadIds: [],
+          applicationOperationId: "steer-operation",
+          reconciliationToken: "steer-token",
+        }),
+        content: [{ type: "text", text: "clarification", text_elements: [] }],
+      },
+      startedAtMs: 1_700_000_002_000,
+    });
+    // Its exact item proves consumption without another provider call.
+    await expect(handle.steer(steerInput)).resolves.toMatchObject({
       status: "accepted",
       reconciliationToken: "steer-token",
+      backendTurnId: submitted.backendTurnId,
     });
+    expect(
+      harness.calls.filter(({ method }) => method === "turn/steer"),
+    ).toHaveLength(1);
     harness.enqueue("turn/interrupt", {});
     await handle.interrupt({
       applicationOperationId: "interrupt-operation",
@@ -15539,6 +15746,71 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it("accepts a Codex steer at once when its exact item precedes the response", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    harness.enqueue("turn/start", {
+      turn: {
+        ...nativeTurn(1),
+        items: [],
+        itemsView: "notLoaded",
+        status: "inProgress",
+        completedAt: null,
+      },
+    });
+    const submitted = await handle.submit({
+      applicationOperationId: "early-item-submit",
+      source: { kind: "user" },
+      mutationId: "early-item-submit",
+      reconciliationToken: "early-item-submit-token",
+      taskContexts: [],
+      contextExcerpts: [],
+      attachments: [],
+      text: "Start",
+    });
+    harness.enqueue("turn/steer", () => {
+      harness.notify("item/started", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "userMessage",
+          id: "early-steer-item",
+          clientId: codexClientUserMessageId({
+            toolProvenanceKey,
+            tenantId: scope.tenantId,
+            principalId: scope.principalId,
+            backendInstanceId: instance.id,
+            nativeThreadId: "thread-1",
+            correlationAncestorThreadIds: [],
+            applicationOperationId: "early-item-steer",
+            reconciliationToken: "early-item-steer-token",
+          }),
+          content: [{ type: "text", text: "Already drained", text_elements: [] }],
+        },
+        startedAtMs: 1_700_000_002_000,
+      });
+      return { turnId: "turn-1" };
+    });
+    await expect(
+      handle.steer({
+        applicationOperationId: "early-item-steer",
+        mutationId: "early-item-steer",
+        reconciliationToken: "early-item-steer-token",
+        target: { kind: "turn", turnId: submitted.backendTurnId! },
+        taskContexts: [],
+        contextExcerpts: [],
+        attachments: [],
+        text: "Already drained",
+      }),
+    ).resolves.toMatchObject({
+      status: "accepted",
+      backendTurnId: submitted.backendTurnId,
+    });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
   it("steers the first turn of an initially unmaterialized thread from its accepted settings", async () => {
     const harness = new RpcHarness();
     const target = driver(harness);
@@ -15619,7 +15891,7 @@ describe("CodexConversationHandle", () => {
         text: "Continue with this clarification.",
       }),
     ).resolves.toMatchObject({
-      status: "accepted",
+      status: "pending_materialization",
       reconciliationToken: "first-steer-token",
     });
     expect(

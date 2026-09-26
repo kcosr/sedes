@@ -1874,6 +1874,9 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       let matchingTurn: CodexTurn | undefined;
       let matched = false;
       let duplicate = false;
+      // Whether the Steer's target turn has provably ended, so its pending
+      // input can no longer be recorded or used.
+      let steerTargetEnded = false;
       if (metadata.historyMode === "legacy") {
         const completeReceipt = await this.#client.requestWithReceipt(
           codexThreadReadMethod,
@@ -1917,6 +1920,23 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
             if (!matchingTurn) matchingTurn = turn;
           }
         }
+        // One complete rollout read. Codex persists every item of a turn
+        // before its terminal event and reports a turn in progress while the
+        // thread is active, so a terminal target turn is final.
+        const steerTurnId =
+          input.steerTarget?.kind === "turn"
+            ? input.steerTarget.turnId
+            : undefined;
+        const steerTurn =
+          steerTurnId === undefined
+            ? undefined
+            : evidenceThread.turns.find(
+                (turn) =>
+                  codexBackendTurnId(evidenceThread.id, turn.id) ===
+                  steerTurnId,
+              );
+        steerTargetEnded =
+          steerTurn !== undefined && steerTurn.status !== "inProgress";
       } else if (metadata.historyMode === "paginated") {
         const adapter = new CodexPaginatedHistoryAdapter({
           client: this.#client,
@@ -1937,6 +1957,13 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
           ...metadata,
           turns: evidence.terminalTurn ? [evidence.terminalTurn] : [],
         };
+        // Unmatched paginated evidence is returned only from repeated stable
+        // cuts taken while the thread is neither active nor failed. Codex
+        // keeps a thread active until it has handled the turn's terminal
+        // event, which it persists after every item of that turn, so the
+        // target turn can no longer record the input.
+        steerTargetEnded =
+          input.steerTarget?.kind === "turn" && !evidence.matched;
         const current = this.#client.lifecycleSnapshot();
         if (
           current.state !== "ready" ||
@@ -2007,6 +2034,13 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         return unresolvedSubmission(
           "Codex history contains duplicate submission correlation identities.",
         );
+      }
+      if (input.steerTarget) {
+        return steerTargetEnded
+          ? codexUnusedSteerReconciliation()
+          : unresolvedSubmission(
+              "Codex has not ended the steered turn, so this steering message may still be used.",
+            );
       }
       if (
         input.retryAnchor &&
@@ -2950,6 +2984,21 @@ function unresolvedSubmission(diagnostic: string): SubmissionReconciliation {
   return {
     status: "unresolved",
     diagnostic: boundDisplayText(diagnostic),
+  };
+}
+
+/**
+ * Codex accepted this Steer into its target turn's pending input, but the turn
+ * ended without recording it: an interrupt clears pending input, and no later
+ * turn can use it. It returns to the user and is never resent automatically.
+ */
+function codexUnusedSteerReconciliation(): SubmissionReconciliation {
+  return {
+    status: "not_accepted",
+    retryable: false,
+    diagnostic: boundDisplayText(
+      "Codex's turn ended before Codex used this steering message, so it was not sent. Nothing was resent. Restore it to send it again, or dismiss it.",
+    ),
   };
 }
 

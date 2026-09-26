@@ -874,6 +874,7 @@ export class QueuedInputDispatcher {
           ...(receipt.attachments.length > 0
             ? { attachments: receipt.attachments }
             : {}),
+          ...(receipt.target ? { steerTarget: receipt.target } : {}),
         },
       );
     } catch {

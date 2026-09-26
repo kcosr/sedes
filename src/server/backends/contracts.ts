@@ -406,6 +406,13 @@ export interface ReconcileSubmissionInput {
   readonly retryAnchor?: string;
   /** Ordered, path-free attachment identity re-resolved under durable ownership. */
   readonly attachmentEvidence?: readonly CanonicalComposerAttachmentEvidence[];
+  /**
+   * Present only when reconciling a Steer: the exact target durably recorded
+   * when it crossed the provider boundary. A backend may use it to prove that
+   * the targeted turn ended without using the input. It never authorizes a
+   * resend.
+   */
+  readonly steerTarget?: SteerTarget;
 }
 
 export type SubmissionReconciliation =

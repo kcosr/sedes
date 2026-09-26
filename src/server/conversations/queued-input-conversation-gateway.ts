@@ -59,6 +59,7 @@ export interface QueuedInputConversationGateway {
       readonly reconciliationToken?: string;
       readonly retryAnchor?: string;
       readonly attachments?: readonly ComposerAttachmentDescriptor[];
+      readonly steerTarget?: SteerTarget;
     },
   ): Promise<SubmissionReconciliation>;
 }
@@ -158,6 +159,7 @@ export class RuntimeBackedQueuedInputConversationGateway implements QueuedInputC
       readonly reconciliationToken?: string;
       readonly retryAnchor?: string;
       readonly attachments?: readonly ComposerAttachmentDescriptor[];
+      readonly steerTarget?: SteerTarget;
     },
   ): Promise<SubmissionReconciliation> {
     const target = await this.#targets.resolve(scope, applicationThreadId);
@@ -185,6 +187,7 @@ export class RuntimeBackedQueuedInputConversationGateway implements QueuedInputC
         : {}),
       ...(input.retryAnchor ? { retryAnchor: input.retryAnchor } : {}),
       ...(attachmentEvidence.length > 0 ? { attachmentEvidence } : {}),
+      ...(input.steerTarget ? { steerTarget: input.steerTarget } : {}),
     });
     if (reconciliation.status === "not_accepted") {
       try {
