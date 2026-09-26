@@ -127,6 +127,11 @@
   Closing or failing a query no longer releases the session while the old
   process can still write its transcript.
 
+- Recover a stale state or native-store lock whose PID was reused by an
+  unrelated process. New lock records include the owner's process start time
+  and boot identity on Linux and macOS; existing PID-only records keep the
+  previous PID check.
+
 ### Removed
 
 ## [0.1.1] - 2026-09-21

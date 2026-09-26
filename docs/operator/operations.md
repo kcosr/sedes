@@ -563,7 +563,11 @@ context, Task, attachment and history provenance, and principal Tool client
 verifiers. Losing or replacing it breaks continuity of that evidence and
 invalidates outstanding source references and Tool client credentials.
 Treat the entire directory as one backup unit. `.state.lock` is separate transient
-process-ownership metadata and is removed after a clean shutdown.
+process-ownership metadata and is removed after a clean shutdown. State and
+native-store locks record the owner's PID, and on Linux and macOS its process
+start time and boot identity. The next start recovers a lock whose owner exited,
+including one whose PID now belongs to an unrelated process; a PID-only record
+from an older build or from Windows is recovered only once that PID is gone.
 
 The overlay stores Sedes-owned state: projects, inventory, drafts, stashes,
 principal execution configuration, runtime preferences and receipts, the
