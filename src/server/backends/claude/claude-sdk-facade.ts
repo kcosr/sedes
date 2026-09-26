@@ -1,6 +1,5 @@
 import {
   getSessionInfo,
-  getSessionMessages,
   listSessions,
   query,
   renameSession,
@@ -17,6 +16,7 @@ import {
   assertClaudeSdkHelperEnvironment,
   type ClaudeChildEnvironment,
 } from "./claude-child-environment.js";
+import { readClaudeSessionMessages } from "./claude-native-transcript.js";
 
 export interface ClaudeCliAuthStatus {
   readonly loggedIn: boolean;
@@ -112,8 +112,9 @@ export interface ClaudeQueryInput {
 }
 
 /**
- * Injectable, provider-private boundary around the official SDK. Tests fake
- * this interface rather than recreating Claude Code's private wire protocol.
+ * Injectable, provider-private boundary around the official SDK and Claude
+ * Code's native store. Tests fake this interface rather than recreating Claude
+ * Code's private wire protocol.
  */
 export interface ClaudeSdkFacade {
   readCliRelease(
@@ -140,6 +141,10 @@ export interface ClaudeSdkFacade {
     options: GetSessionInfoOptions,
     environment: ClaudeChildEnvironment,
   ): Promise<SDKSessionInfo | undefined>;
+  /**
+   * Sedes-owned native history read through the transcript's true tip, never
+   * the SDK's leaf heuristic. `dir` is required.
+   */
   getSessionMessages(
     sessionId: string,
     options: GetSessionMessagesOptions,
@@ -227,13 +232,15 @@ export class OfficialClaudeSdkFacade implements ClaudeSdkFacade {
     return getSessionInfo(sessionId, options);
   }
 
-  getSessionMessages(
+  async getSessionMessages(
     sessionId: string,
     options: GetSessionMessagesOptions,
     environment: ClaudeChildEnvironment,
   ): Promise<SessionMessage[]> {
     assertClaudeSdkHelperEnvironment(environment);
-    return getSessionMessages(sessionId, options);
+    const { dir, ...readOptions } = options;
+    if (!dir) throw new Error("claude_session_history_directory_required");
+    return await readClaudeSessionMessages(sessionId, { ...readOptions, dir }, environment);
   }
 
   renameSession(
