@@ -9533,7 +9533,7 @@ describe("CodexConversationHandle", () => {
       .some(item => item.semanticKind === "image")).toBe(true));
     const after = (await handle.readCurrent()).snapshot;
     const completedTurn = after.turnsById[after.orderedBackendTurnIds.at(-1)!]!;
-    expect(completedTurn.orderedBackendItemIds.map(id => after.itemsById[id]!.semanticKind)).toEqual(["notice", "image", "assistant_message"]);
+    expect(completedTurn.orderedBackendItemIds.map(id => after.itemsById[id]!.semanticKind)).toEqual(["viewed_image", "image", "assistant_message"]);
     expect(after.itemsById[textBefore.backendItemId]).toEqual(textBefore);
     expect(capture).toHaveBeenCalledTimes(1);
     for (const event of events) expect(application.apply(event), event.event.type).not.toMatchObject({ kind: "resnapshot_required" });
@@ -9606,7 +9606,7 @@ describe("CodexConversationHandle", () => {
     established.subscribeFromNext(event => events.push(event));
     available = true;
     const page = await handle.history({ limit: 1 });
-    expect(Object.values(page.itemsById).map(item => item.semanticKind)).toEqual(["notice", "image"]);
+    expect(Object.values(page.itemsById).map(item => item.semanticKind)).toEqual(["viewed_image", "image"]);
     // This page overlaps the live window, which receives the child as an event rather than a replacement.
     const live = (await handle.readCurrent()).snapshot;
     for (const [id, item] of Object.entries(established.snapshot.itemsById)) expect(live.itemsById[id]).toEqual(item);
@@ -9685,7 +9685,7 @@ describe("CodexConversationHandle", () => {
     expect(capture).toHaveBeenCalledTimes(1);
     const olderTurn = older.turnsById[codexBackendTurnId("thread-1", "turn-0")]!;
     expect(olderTurn.orderedBackendItemIds.map(id => older.itemsById[id]!.semanticKind))
-      .toEqual(["user_message", "notice", "image"]);
+      .toEqual(["user_message", "viewed_image", "image"]);
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
   });

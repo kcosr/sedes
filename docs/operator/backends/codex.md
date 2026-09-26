@@ -266,13 +266,13 @@ model names or free-form provider text.
 
 ### Viewed images
 
-When Codex views a local image, the transcript keeps its **Codex viewed a local
-image.** notice. If Sedes can read the file, a **Viewed file snapshot** image
-appears right after it, shortly after the view completes or when that history
-is next loaded. It shows the file as Sedes read it, not necessarily the exact
-pixels Codex sent to the model. Once captured, the snapshot stays with the
-thread through reloads and restarts, even if the file later changes or is
-deleted.
+When Codex views a local image, the transcript shows a **Viewed image** row
+with the file's name (never its directory). If Sedes can read the file, the row
+becomes expandable, collapsed by default, shortly after the view completes or
+when that history is next loaded; expand it to see the snapshot. The snapshot
+shows the file as Sedes read it, not necessarily the exact pixels Codex sent to
+the model. Once captured, the snapshot stays with the thread through reloads
+and restarts, even if the file later changes or is deleted.
 
 Capture needs Files access to the path in the thread's execution environment:
 a local environment, or an SSH or outbound environment whose sidecar has the
@@ -386,7 +386,7 @@ mutation safe to repeat.
 | Models appear but a thread cannot run or fork                | Check model/effort, service tier, sandbox, network, approval policy, and reviewer against the live catalog and configured ceiling. Sedes does not invent or substitute an unconfirmed value.                                                                                                             |
 | Managed TUI is missing                                       | It requires an external UDS/TCP Codex connection—local, or hosted by a persistent sidecar whose runtime channel negotiated the managed-TUI operations—plus one completed first submission, healthy endpoint and PTY support on the hosting environment, a compatible operator-installed CLI there, fully representable settings, and catalog model policy. Set canonical `moduleConfiguration.tuiExecutablePath` to override normal `PATH` resolution. |
 | Sedes CLI tools are missing                                  | Check thread provenance, network policy, built CLI availability, proven isolation, and—on SSH—the `agent_tools_cli` sidecar capability.                                                                                                                                                                  |
-| A viewed image shows only its notice                         | Confirm the environment is local or its sidecar has `workspace_files`, the file's directory is within an allowed root, and the file is a PNG, JPEG, GIF, or WebP of at most 16 MiB with a matching extension, outside sensitive paths. Codex-native additional executors are unsupported. Automatic retries are bounded; a later history read or reattach may retry. A captured snapshot is never replaced. |
+| A viewed image row cannot be expanded                        | Confirm the environment is local or its sidecar has `workspace_files`, the file's directory is within an allowed root, and the file is a PNG, JPEG, GIF, or WebP of at most 16 MiB with a matching extension, outside sensitive paths. Codex-native additional executors are unsupported. Automatic retries are bounded; a later history read or reattach may retry. A captured snapshot is never replaced. |
 | A sent mutation times out or the transport drops             | Preserve the application recovery state. Sedes retries only reviewed safe reads and never infers an outcome from title, workspace, timing, or similar content.                                                                                                                                           |
 | A reloaded thread contains an older abandoned turn           | Sedes reads paginated history without changing Codex's native store and shows abandoned native `inProgress` turns as interrupted. A stale historical shell does not require Force reset or direct SQL/rollout repair.                                                                                    |
 

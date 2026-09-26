@@ -502,6 +502,10 @@ test.describe.serial("normalized Codex thread state", () => {
       const followingText = page.locator('[data-item-kind="assistant_message"]').filter({ hasText: "The file was viewed; work continues while its preview is captured." });
       await expect(followingText).toBeVisible();
       await expect.poll(async () => (await (await page.request.get("/__e2e/codex/viewed-image/state")).json())).toEqual({ reads: 1 });
+      // Before capture the row names the file but has nothing to disclose.
+      const viewedRow = page.getByTestId("viewed-image-group");
+      await expect(viewedRow).toHaveText("Viewed image · viewed-image-fixture.png");
+      await expect(viewedRow.getByRole("button")).toHaveCount(0);
       await expect(page.locator('[data-item-kind="image"]')).toHaveCount(0);
       await capture(page, testInfo, "codex-viewed-image-streaming.png");
 
@@ -510,8 +514,14 @@ test.describe.serial("normalized Codex thread state", () => {
       await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
       await expect(page.locator('[data-item-kind="image"]')).toHaveCount(0);
       expect((await page.request.post("/__e2e/codex/viewed-image/release")).status()).toBe(204);
-      const image = page.getByRole("img", { name: "Viewed file snapshot", exact: true });
+      const disclosure = page.getByRole("button", { name: "Viewed image · viewed-image-fixture.png", exact: true });
+      await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+      await expect(page.locator('[data-item-kind="image"]')).toHaveCount(0);
+      await capture(page, testInfo, "codex-viewed-image-collapsed.png");
+      await disclosure.click();
+      const image = page.getByRole("img", { name: "viewed-image-fixture.png", exact: true });
       await expect(image).toBeVisible();
+      await expect(viewedRow.locator("figcaption")).toHaveCount(0);
       await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
       const ordering = await page.locator('[data-item-kind]').evaluateAll(items => items.map(item => ({ kind: item.getAttribute("data-item-kind"), text: item.textContent ?? "" })));
       const imageIndex = ordering.findIndex(item => item.kind === "image");
@@ -530,7 +540,10 @@ test.describe.serial("normalized Codex thread state", () => {
       const retained = Object.values(snapshot.itemsById).find(item => item.kind === "image");
       if (retained?.kind !== "image" || retained.image.representation !== "artifact") throw new Error("viewed_image_artifact_missing");
       expect(retained.image).toMatchObject(expectedImage);
-      expect(JSON.stringify(snapshot)).not.toContain("viewed-image-fixture.png");
+      expect(Object.values(snapshot.itemsById).find(item => item.kind === "viewed_image"))
+        .toMatchObject({ fileName: { text: "viewed-image-fixture.png" } });
+      // Only the file name reaches the browser, never its directory.
+      expect(JSON.stringify(snapshot)).not.toMatch(/[\\/]viewed-image-fixture\.png/u);
       const content = await page.request.get(`/api${threadPath}/output-artifacts/${retained.image.artifactId}/content`);
       expect(content.ok()).toBe(true);
       expect(createHash("sha256").update(await content.body()).digest("hex")).toBe(expectedImage.sha256);
@@ -539,7 +552,8 @@ test.describe.serial("normalized Codex thread state", () => {
       await expect.poll(async () => (await page.request.post(`/__e2e/threads/${threadId}/close-idle-runtime`)).status()).toBe(204);
       await page.goto(threadPath);
       await page.reload();
-      await expect(page.getByRole("img", { name: "Viewed file snapshot", exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Viewed image · viewed-image-fixture.png", exact: true }).click();
+      await expect(page.getByRole("img", { name: "viewed-image-fixture.png", exact: true })).toBeVisible();
       const replay = await readSnapshot();
       const replayImage = Object.values(replay.itemsById).find(item => item.kind === "image");
       expect(replayImage?.kind === "image" ? replayImage.image : undefined).toEqual(retained.image);

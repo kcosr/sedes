@@ -2134,13 +2134,16 @@ opaque publication key derived from native coordinates (never the path,
 filename, bytes, or a rewritable native ID), the absolute path, and
 cancellation; it never receives a general Files provider. The service derives
 workspace and environment, reads only through that exact environment's Files
-provider, and rechecks binding and environment authority inside the
-publication transaction. A retained association wins over rereading on every
-observation, even after the source changes or disappears, and it is presented
-as a snapshot at capture time rather than provider-byte identity. Keep the
-native notice, add the image as a separate child in a reserved source-order
+provider, and rechecks binding and environment authority inside the publication
+transaction. A retained association wins over rereading on every observation,
+even after the source changes or disappears, and it is presented as a snapshot
+at capture time rather than provider-byte identity. Project the view as a
+terminal `viewed_image` item carrying only the path's final component as
+`fileName`, add the image as a separate child in the next reserved source-order
 position, and deliver a late child as a new item before its turn update rather
-than mutating a terminal item or forcing a resnapshot. When the native item
+than mutating a terminal item or forcing a resnapshot. `viewed_image` is a
+standalone, non-activity kind: summary mode passes it through unchanged, and
+the browser discloses the image that directly follows it. When the native item
 cannot attribute a path to the configured execution host, document that
 topology limit instead of guessing.
 

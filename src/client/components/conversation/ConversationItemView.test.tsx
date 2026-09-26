@@ -181,6 +181,7 @@ describe("normalized conversation renderers", () => {
         "review_marker",
         "tool",
         "user_message",
+        "viewed_image",
         "web_search",
       ].sort(),
     );

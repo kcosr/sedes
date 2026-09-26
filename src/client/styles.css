@@ -8066,6 +8066,22 @@ button.activity-group-summary:hover {
   display: block;
 }
 
+/* A viewed image keeps the chevron's space while static, so its label stays
+   put when the captured image makes the row expandable. */
+.viewed-image-summary.activity-group-summary-static {
+  display: flex;
+}
+
+.viewed-image-chevron-space {
+  flex: 0 0 12px;
+}
+
+/* File names can be long single tokens. */
+.viewed-image-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .activity-group-disclosure {
   display: grid;
   /* An implicit `auto` track adopts long command/search min-content widths

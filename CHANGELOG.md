@@ -4,6 +4,9 @@
 
 ### Breaking Changes
 
+- Codex viewed images use a new `viewed_image` transcript item. Requires
+  matching browser and packaged clients using protocol 123. (#11)
+
 - Sidecars must use runtime protocol 13, which serves `sedes mcp` and accepts
   Claude's Native agent-tool entry. Upgrade existing sidecars explicitly
   before reconnecting with this server version. (#10)
@@ -17,13 +20,13 @@
 
 ### Added
 
-- Show a **Viewed file snapshot** after Codex's "viewed a local image" notice.
-  Sedes reads the file once through the thread's execution environment
-  (local, or an SSH or outbound sidecar with `workspace_files`) within its
-  allowed roots and keeps the snapshot with the thread, so later file changes
-  do not alter it. Viewed paths are assumed to be on the thread's configured
-  execution host; Codex-native additional executor environments are
-  unsupported. (#11)
+- Show a collapsed **Viewed image** row, named by file, when Codex views a
+  local image; expand it to see the snapshot. Sedes reads the file once
+  through the thread's execution environment (local, or an SSH or outbound
+  sidecar with `workspace_files`) within its allowed roots and keeps the
+  snapshot with the thread, so later file changes do not alter it. Viewed
+  paths are assumed to be on the thread's configured execution host;
+  Codex-native additional executor environments are unsupported. (#11)
 
 - Let Codex and Claude threads use Native Sedes agent tools. Choose
   **Native tools** in **Agent tools…**; Sedes adds a per-thread `sedes` MCP
