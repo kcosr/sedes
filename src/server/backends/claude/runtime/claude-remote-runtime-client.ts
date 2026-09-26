@@ -1,6 +1,7 @@
 import type { EnvironmentVariableOverrides } from "../../../../shared/protocol/environment-variables.js";
 import { readClaudeSessionHistory, type ClaudeHistoryPage, type ClaudeHistoryPageOptions } from "../claude-session-history.js";
 import { BackendError } from "../../contracts.js";
+import { attachmentDiagnostic } from "../../../diagnostics/attachment-diagnostics.js";
 import type { BackgroundActivity } from "../../../../shared/protocol/background-activity.js";
 import { z } from "zod";
 import type { CanUseTool, SDKMessage, SDKSessionInfo } from "@anthropic-ai/claude-agent-sdk";
@@ -99,8 +100,22 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
   current(): Attachment | undefined { return this.#attachment; }
   report(error: unknown): void { try { this.input.onBackgroundError?.(error); } catch { /* Diagnostics do not own runtime lifecycle. */ } }
   async execute(command: Command, attachment?: Attachment): Promise<unknown> {
-    const attached = attachment ?? await this.attachment();
-    return attached.connection.execute({ ...command, runtimeId: attached.runtimeId, controllerEpoch: attached.lease.controllerEpoch } as ClaudePersistentCommand);
+    const started = performance.now();
+    let stage = "attachment";
+    try {
+      const attached = attachment ?? await this.attachment();
+      stage = "execute";
+      return await attached.connection.execute({ ...command, runtimeId: attached.runtimeId, controllerEpoch: attached.lease.controllerEpoch } as ClaudePersistentCommand);
+    } catch (error) {
+      attachmentDiagnostic("claude_runtime_command_failed", {
+        backendInstanceId: this.input.scope.backendInstanceId,
+        executionEnvironmentId: this.input.scope.executionEnvironmentId,
+        method: command.action,
+        stage,
+        durationMs: performance.now() - started,
+      }, error);
+      throw error;
+    }
   }
   async attachment(): Promise<Attachment> {
     this.#assertOpen();

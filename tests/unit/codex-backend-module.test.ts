@@ -232,6 +232,7 @@ function context(
     toolProvenanceKey: new Uint8Array(32),
     agentTools: new LateBoundBackendAgentToolFacade(),
     usage: NO_USAGE_SINK, outputArtifacts: createInMemoryOutputArtifactPublisher(),
+    viewedImageCapture: { capture: async () => undefined },
     agentToolSourceCapabilities,
     agentToolCli: {
       availability: "available",

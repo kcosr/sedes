@@ -53,6 +53,7 @@ import {
   type ChatHistoryEntry,
 } from "./ChatHistoryRail.js";
 import { ActivityGroup } from "./ActivityGroup.js";
+import { ViewedImageGroup } from "./ViewedImageGroup.js";
 import { isActivityItem, type ActivityItem } from "./activity-groups.js";
 import { navigationScrollBehavior } from "./navigation-scroll.js";
 
@@ -1995,6 +1996,8 @@ export function Transcript({
                       );
                     };
 
+                    // A viewed image's captured image directly follows it.
+                    const disclosedImageIds = new Set<string>();
                     turn.orderedItemIds.forEach((itemId, itemIndex) => {
                       const item = viewItemsById?.[itemId];
                       if (!item) return;
@@ -2004,7 +2007,26 @@ export function Transcript({
                         ) ?? [];
                       precedingTransfers.forEach(appendTransfer);
 
-                      if (isActivityItem(item)) {
+                      if (disclosedImageIds.has(item.id)) {
+                        // Rendered inside its viewed-image disclosure.
+                      } else if (item.kind === "viewed_image") {
+                        const next = viewItemsById?.[
+                          turn.orderedItemIds[itemIndex + 1] ?? ""
+                        ];
+                        const image = next?.kind === "image" ? next : undefined;
+                        if (image) disclosedImageIds.add(image.id);
+                        flushActivity();
+                        presentation.push(
+                          <ViewedImageGroup
+                            key={`viewed-image:${item.id}`}
+                            item={item}
+                            {...(image ? { image } : {})}
+                            {...(itemRenderContext
+                              ? { context: itemRenderContext }
+                              : {})}
+                          />,
+                        );
+                      } else if (isActivityItem(item)) {
                         activityItems.push(item);
                       } else {
                         flushActivity();

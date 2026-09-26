@@ -497,6 +497,40 @@ workspace, and execution environment and reapplies every containment and
 sensitive-file check. Markdown opens in the usual preview, editable text can
 enter the usual editor, and saves retain the same revision/conflict behavior.
 
+## Viewed-image capture reads
+
+[Viewed-image capture](output-artifacts.md#codex-viewed-image-capture) reads
+one provider-reported absolute path through
+`WorkspaceFileService.readAbsoluteImage`. The server derives the workspace and
+execution environment from the thread and routes to that exact environment's
+provider; SSH and outbound environments need the Files sidecar with
+`workspace_files`, and nothing falls back to the Sedes host or another
+environment. The read is independent of the Files panel and the thread's
+preferred linked worktree: it loads no tree, refreshes no root topology, and
+does not consult supplemental or linked-worktree roots.
+
+A path inside Primary reads through Primary after its canonical root is
+revalidated. Any other path uses the narrow absolute-path admission shared with
+unmatched conversation links: the parent and canonical root must pass the
+environment's allowed-root policy and the root must pass the sensitive-path
+policy. `/tmp` therefore works only when that policy admits it. Capture reads
+through that validated candidate root and never remembers it, so automatic
+captures do not consume the workspace's 256 remembered link-only roots; only an
+explicit conversation-link open persists one. The content is the ordinary
+bounded Files read (`files.read` on a sidecar), and only an available image
+preview of at most 16 MiB qualifies. A sidecar provider closes a candidate
+root's handle, without waiting, once its last concurrent operation finishes, so
+distinct capture directories do not accumulate in the session's bounded root
+table. The sidecar releases a root whose admission completes after every
+request for it has timed out or been cancelled. When cancellation or an unknown
+delivery outcome interrupts an open, the provider also reopens the same
+admission in the background, which returns a root admitted before the requests
+gave up, and closes it without waiting for a later read; a definite rejection
+needs no cleanup. Cancellation bounds every admission step and the provider
+read. Draining Primary or retiring the project aborts an in-flight capture read
+through Primary; a read outside Primary is bounded by the capture deadline and
+capture-service cancellation.
+
 ## Security boundary
 
 Workspace authority comes from the server-derived tenant and principal. After
@@ -574,7 +608,9 @@ changed a file, and invalidation events carry neither paths nor file contents.
 ## Compiled backend and environment dispositions
 
 Files authority belongs to the execution environment's reviewed file provider,
-not to the conversation backend. The compiled backends therefore have these
+not to the conversation backend. Codex viewed-image capture uses the
+application-owned [capture read](#viewed-image-capture-reads); the backend
+itself receives no Files provider. The compiled backends therefore have these
 truthful dispositions:
 
 ### Local execution environments
@@ -592,7 +628,8 @@ imply Files access.
 ### Codex over SSH or outbound
 
 Files is implemented only through the managed sidecar when `workspace_files`
-is enabled. Codex carrier health and Files-sidecar health remain independent.
+is enabled. Codex carrier health and Files-sidecar health remain independent;
+viewed-image capture needs the same Files grant.
 
 ### Claude over SSH or outbound
 
@@ -615,8 +652,8 @@ rules, sensitive-path denial, symlink and descriptor-swap resistance, partial
 and full-tree paging, cursor fencing, content classification and limits,
 revision conflicts, atomic saves, exact-byte downloads and cancellation,
 supplemental-root drain, context snapshots, link-only resolution, task links,
-Git Compare and review persistence, and every local/managed-SSH unavailable or
-carrier-loss path. Browser coverage must exercise retained state, dirty-draft
+viewed-image capture reads, Git Compare and review persistence, and every
+local/managed-SSH unavailable or carrier-loss path. Browser coverage must exercise retained state, dirty-draft
 navigation, desktop and narrow layouts, context capture, Compare, conflict
 recovery, and changed screenshots. Remote paths must never fall back to the
 Sedes host.

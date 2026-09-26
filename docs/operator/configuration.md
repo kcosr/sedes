@@ -253,7 +253,7 @@ no sidecar protocol update or remote environment setting. Re-enabling resumes
 accounting; backend history or cumulative counters may recover some earlier
 usage, but there is no automatic comprehensive reconciliation of the disabled
 period. Existing browser and packaged clients must be updated to client
-protocol 122 when installing this version.
+protocol 123 when installing this version.
 
 Provider Pulse is installation-owned, not tied to one environment, workspace,
 or thread. Sedes contacts it server-to-server on loopback and exposes only

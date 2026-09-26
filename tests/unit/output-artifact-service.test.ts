@@ -6,6 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { OutputImageArtifactRepository } from "../../src/server/db/repositories/output-image-artifact-repository.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
+import { WorkspaceFileRootRepository } from "../../src/server/db/repositories/workspace-file-root-repository.js";
+import { WorkspaceFileLinkedWorktreeRepository } from "../../src/server/db/repositories/workspace-file-linked-worktree-repository.js";
+import { WorkspaceFileService } from "../../src/server/domain/workspace-file-service.js";
+import { LocalExecutionEnvironment } from "../../src/server/execution/local-execution-environment.js";
+import { LocalWorkspaceFileProvider } from "../../src/server/workspace-files/local-workspace-file-provider.js";
+import { ViewedImageCaptureService } from "../../src/server/output-artifacts/viewed-image-capture.js";
 import {
   OutputArtifactBlobStore,
   OutputArtifactStorageError,
@@ -84,6 +90,96 @@ async function fixture() {
 }
 
 describe("OutputArtifactService", () => {
+  it("captures through real local Files and reattaches to retained bytes after the source disappears", async () => {
+    const current = await fixture();
+    const inventory = new InventoryRepository(current.database);
+    const bindings = new ConversationBindingRepository(current.database);
+    const environment = inventory.getLocalEnvironment(current.scope);
+    const nativeBinding = bindings.bindDiscoveredConversation(current.scope, current.firstThreadId, {
+      backendConversationId: "native-image-thread", now: 40,
+    });
+    const execution = new LocalExecutionEnvironment({ scope: current.scope, environmentId: environment.id,
+      allowedRoots: [current.root], configurationRevision: environment.configurationRevision,
+      activeConfigurationRevision: () => inventory.getEnvironment(current.scope, environment.id).configurationRevision });
+    const provider = new LocalWorkspaceFileProvider({ scope: current.scope, environmentId: environment.id });
+    const files = new WorkspaceFileService(inventory, new WorkspaceFileRootRepository(current.database),
+      new WorkspaceFileLinkedWorktreeRepository(current.database), execution, provider,
+      { publishApplicationThreadChanges: () => undefined });
+    const capture = new ViewedImageCaptureService({ artifacts: current.service, files, inventory, bindings });
+    const source = path.join(current.root, "viewed.png");
+    try {
+      await writeFile(source, png());
+      const request = { scope: current.scope, binding: { ...nativeBinding, createdAt: new Date(nativeBinding.createdAt).toISOString() },
+        publicationKey: "viewed-image", absolutePath: source };
+      const retained = await capture.capture(request);
+      expect(retained).toMatchObject({ mediaType: "image/png", byteSize: png().length });
+      if (!retained) throw new Error("expected retained image");
+      await capture.close();
+      await rm(source);
+      const reread = vi.spyOn(files, "readAbsoluteImage");
+      const reattached = new ViewedImageCaptureService({ artifacts: current.service, files, inventory, bindings });
+      expect(await reattached.capture(request)).toEqual(retained);
+      expect(reread).not.toHaveBeenCalled();
+      const opened = await current.service.openImage(current.scope, current.firstThreadId, retained.artifactId);
+      expect(await opened.handle.readFile()).toEqual(png());
+      await opened.handle.close();
+      await reattached.close();
+    } finally {
+      await capture.close();
+      await files.close();
+      current.database.close();
+    }
+  });
+
+  it("rechecks capture authority inside the database transaction after blob publication", async () => {
+    const current = await fixture();
+    try {
+      let allowed = true;
+      let checks = 0;
+      const original = current.store.publish.bind(current.store);
+      vi.spyOn(current.store, "publish").mockImplementation(async (...args) => {
+        await original(...args);
+        allowed = false;
+      });
+      await expect(current.service.publishCapturedImage({
+        scope: current.scope,
+        threadId: current.firstThreadId,
+        publicationKey: "captured-item",
+        mediaType: "image/png",
+        bytes: png(),
+      }, () => {
+        checks += 1;
+        if (checks === 2) expect(current.database.inTransaction).toBe(true);
+        if (!allowed) throw new Error("capture_authority_revoked");
+      })).rejects.toThrow("capture_authority_revoked");
+      expect(checks).toBe(2);
+      expect(current.repository.listRetainedBlobs()).toEqual([]);
+      expect(current.service.findImage(current.scope, current.firstThreadId, "captured-item")).toBeUndefined();
+      await expect(current.store.open(current.scope, createHash("sha256").update(png()).digest("hex"), png().length)).rejects.toThrow();
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("preserves a shared blob when a captured association loses authority", async () => {
+    const current = await fixture();
+    try {
+      const retained = await current.service.publishImage({ scope: current.scope,
+        threadId: current.firstThreadId, publicationKey: "existing", mediaType: "image/png", bytes: png() });
+      let checks = 0;
+      await expect(current.service.publishCapturedImage({ scope: current.scope,
+        threadId: current.secondThreadId, publicationKey: "capture", mediaType: "image/png", bytes: png() }, () => {
+        if (++checks > 1) throw new Error("capture_authority_revoked");
+      })).rejects.toThrow("capture_authority_revoked");
+      const opened = await current.service.openImage(current.scope, current.firstThreadId, retained.artifactId);
+      await opened.handle.close();
+      expect(current.service.findImage(current.scope, current.secondThreadId, "capture")).toBeUndefined();
+      expect(current.repository.listRetainedBlobs()).toHaveLength(1);
+    } finally {
+      current.database.close();
+    }
+  });
+
   it("publishes exact immutable bytes and returns path-free metadata", async () => {
     const current = await fixture();
     try {

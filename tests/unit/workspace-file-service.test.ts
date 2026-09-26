@@ -265,6 +265,90 @@ function fixture(input?: {
 }
 
 describe("WorkspaceFileService", () => {
+  it("captures an absolute image through an authorized hidden root without refreshing Files topology", async () => {
+    const files = provider();
+    const current = fixture({ files, preferredWorktreeRootId: "different-worktree" });
+    vi.mocked(files.discoverFileLinkRoot).mockResolvedValue({ canonicalPath: "/workspaces/captures", relativePath: "image.png" });
+    vi.mocked(files.resolveFileLink).mockResolvedValue("image.png");
+    vi.mocked(files.read).mockImplementation(async (_scope, target, relativePath) => ({
+      availability: "available", rootId: target.rootId, path: relativePath,
+      contentKind: "image", previewState: "available", mediaType: "image/png",
+      contentEncoding: "base64", content: "aW1hZ2U=", sizeBytes: 5, revision: "r1", editable: false,
+    }));
+    const result = await current.service.readAbsoluteImage(owner, "thread-1", "/workspaces/captures/image.png");
+    expect(result?.content).toBe("aW1hZ2U=");
+    expect(files.read).toHaveBeenCalledWith(owner, expect.objectContaining({
+      environmentId: primary.environmentId, canonicalPath: "/workspaces/captures", rootId: "link-candidate",
+    }), "image.png", expect.any(AbortSignal));
+    expect(current.roots.rememberLinkRoot).not.toHaveBeenCalled();
+    expect(files.discoverLinkedWorktrees).not.toHaveBeenCalled();
+    expect(files.list).not.toHaveBeenCalled();
+    expect(current.execution.validateWorkspace).toHaveBeenCalledWith(owner, primary.environmentId, "/workspaces/captures");
+  });
+
+  it("does not probe denied or malformed absolute image paths or unavailable remote providers", async () => {
+    const current = fixture();
+    current.execution.validateWorkspace.mockRejectedValue(new Error("denied"));
+    expect(await current.service.readAbsoluteImage(owner, "thread-1", "/tmp/private.png")).toBeUndefined();
+    expect(await current.service.readAbsoluteImage(owner, "thread-1", "../image.png")).toBeUndefined();
+    expect(current.files.discoverFileLinkRoot).not.toHaveBeenCalled();
+    expect(current.files.read).not.toHaveBeenCalled();
+    vi.mocked(current.files.supportsFileLinkRootDiscovery).mockReturnValue(false);
+    current.execution.validateWorkspace.mockClear();
+    expect(await current.service.readAbsoluteImage(owner, "thread-1", "/workspaces/image.png")).toBeUndefined();
+    expect(current.execution.validateWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("propagates capture cancellation through absolute-path discovery", async () => {
+    const current = fixture();
+    const controller = new AbortController();
+    vi.mocked(current.files.discoverFileLinkRoot).mockImplementation(async (_scope, _environmentId, _path, signal) => {
+      expect(signal).toBeDefined();
+      controller.abort(new Error("capture cancelled"));
+      signal!.throwIfAborted();
+      return undefined;
+    });
+    await expect(current.service.readAbsoluteImage(owner, "thread-1", "/workspaces/image.png", controller.signal))
+      .rejects.toThrow("capture cancelled");
+    expect(current.files.read).not.toHaveBeenCalled();
+    expect(current.roots.rememberLinkRoot).not.toHaveBeenCalled();
+  });
+
+  it("bounds uncancellable environment admission and forwards cancellation to link resolution", async () => {
+    const current = fixture();
+    const controller = new AbortController();
+    current.execution.validateWorkspace.mockImplementationOnce(() => new Promise(() => undefined));
+    const pending = current.service.readAbsoluteImage(owner, "thread-1", "/workspaces/image.png", controller.signal);
+    await vi.waitFor(() => expect(current.execution.validateWorkspace).toHaveBeenCalledOnce());
+    controller.abort(new Error("capture cancelled"));
+    await expect(pending).rejects.toThrow("capture cancelled");
+    expect(current.files.discoverFileLinkRoot).not.toHaveBeenCalled();
+    vi.mocked(current.files.discoverFileLinkRoot).mockResolvedValue({ canonicalPath: "/workspaces/captures", relativePath: "image.png" });
+    await current.service.readAbsoluteImage(owner, "thread-1", "/workspaces/captures/image.png", new AbortController().signal);
+    expect(current.files.resolveFileLink).toHaveBeenCalledWith(owner, expect.objectContaining({
+      canonicalPath: "/workspaces/captures",
+    }), { kind: "absolute", path: "/workspaces/captures/image.png" }, expect.any(AbortSignal));
+  });
+
+  it("reads a captured image inside Primary through Primary without remembering a hidden root", async () => {
+    const current = fixture();
+    vi.mocked(current.files.read).mockImplementation(async (_scope, target, relativePath) => ({
+      availability: "available", rootId: target.rootId, path: relativePath,
+      contentKind: "image", previewState: "available", mediaType: "image/png",
+      contentEncoding: "base64", content: "aW1hZ2U=", sizeBytes: 5, revision: "r1", editable: false,
+    }));
+    const result = await current.service.readAbsoluteImage(owner, "thread-1", "/workspaces/one/README.md");
+    expect(result?.rootId).toBe("primary");
+    expect(current.files.validateRoot).toHaveBeenCalledWith(owner, expect.objectContaining({
+      rootKind: "primary", canonicalPath: primary.canonicalPath,
+    }), expect.any(AbortSignal));
+    expect(current.files.read).toHaveBeenCalledWith(owner, expect.objectContaining({
+      rootId: "primary", canonicalPath: primary.canonicalPath,
+    }), "README.md", expect.any(AbortSignal));
+    expect(current.files.discoverFileLinkRoot).not.toHaveBeenCalled();
+    expect(current.roots.rememberLinkRoot).not.toHaveBeenCalled();
+  });
+
   it("denies removed-project file operations before contacting the provider", async () => {
     const current = fixture();
     current.inventory.assertWorkspaceActive.mockImplementation(() => {

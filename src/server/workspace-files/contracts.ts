@@ -34,6 +34,12 @@ import type {
 } from "../../shared/protocol/workspace-diffs.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 
+/**
+ * Transient root for validating or reading one absolute path. Providers must
+ * not retain its session authority beyond the operation using it.
+ */
+export const WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID = "link-candidate" as WorkspaceFileRootId;
+
 export interface WorkspaceFileRootTarget {
   readonly workspaceId: string;
   readonly environmentId: string;
@@ -139,6 +145,7 @@ export interface WorkspaceFileProvider {
     scope: RequestScope,
     environmentId: string,
     absolutePath: string,
+    signal?: AbortSignal,
   ): Promise<WorkspaceFileDiscoveredLinkRoot | undefined>;
   discoverLinkedWorktrees(
     scope: RequestScope,
@@ -154,6 +161,7 @@ export interface WorkspaceFileProvider {
     scope: RequestScope,
     root: WorkspaceFileRootTarget,
     reference: WorkspaceFileLinkReference,
+    signal?: AbortSignal,
   ): Promise<string | undefined>;
   list(
     scope: RequestScope,

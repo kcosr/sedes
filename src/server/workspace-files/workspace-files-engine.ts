@@ -428,15 +428,18 @@ export class WorkspaceFilesEngine {
 
   async discoverFileLinkRoot(
     absolutePath: string,
+    signal?: AbortSignal,
   ): Promise<WorkspaceFileDiscoveredLinkRoot | undefined> {
+    signal?.throwIfAborted();
     if (!path.isAbsolute(absolutePath)) {
       return undefined;
     }
     const canonicalFile = await realpath(absolutePath).catch(() => undefined);
+    signal?.throwIfAborted();
     if (!canonicalFile) return undefined;
     const canonicalParent = path.dirname(canonicalFile);
     const canonicalRoot =
-      (await this.#findWorktreeRoot(canonicalParent)) ?? canonicalParent;
+      (await this.#findWorktreeRoot(canonicalParent, signal)) ?? canonicalParent;
     const relativePath = normalizedPath(
       path.relative(canonicalRoot, canonicalFile).split(path.sep).join("/"),
     );
@@ -447,18 +450,21 @@ export class WorkspaceFilesEngine {
     ) {
       return undefined;
     }
+    signal?.throwIfAborted();
     const handle = await open(
       absolutePath,
       fileConstants.O_RDONLY | fileConstants.O_NOFOLLOW,
     ).catch(() => undefined);
     if (!handle) return undefined;
     try {
+      signal?.throwIfAborted();
       const openedPath = await revalidatedPathForOpenHandle(
         handle,
         canonicalFile,
       );
       const metadata = await handle.stat().catch(() => undefined);
       if (openedPath !== canonicalFile || !metadata?.isFile()) return undefined;
+      signal?.throwIfAborted();
       return { canonicalPath: canonicalRoot, relativePath };
     } finally {
       await handle.close();
@@ -1715,9 +1721,10 @@ export class WorkspaceFilesEngine {
     }
   }
 
-  async #findWorktreeRoot(start: string): Promise<string | undefined> {
+  async #findWorktreeRoot(start: string, signal?: AbortSignal): Promise<string | undefined> {
     let current = start;
     for (let depth = 0; depth <= MAXIMUM_WORKTREE_DISCOVERY_DEPTH; depth += 1) {
+      signal?.throwIfAborted();
       const marker = await lstat(path.join(current, ".git")).catch(
         () => undefined,
       );

@@ -118,7 +118,8 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
         displayName: "Disposable test", displayPath: workingDirectory, availability: "available" as const, trustState: "trusted" as const, revision: 1 } };
       const settings: CodexExecutionSettingsTuple = { model, reasoningEffort: "low", serviceTier: "standard", sandboxMode: "read-only", networkAccess: "disabled", approvalPolicy: "never", approvalReviewer: "user" };
       const diagnostics: unknown[] = [];
-      const driver = new CodexConversationBackendDriver({ usageSink: usage, nativeNamespace: "disposable-codex-store", instance, connection, client,
+      const driver = new CodexConversationBackendDriver({
+        viewedImageCapture: { capture: async () => undefined }, usageSink: usage, nativeNamespace: "disposable-codex-store", instance, connection, client,
         serverRequests: supervisor.serverRequests, ownership: new CodexConversationOwnershipRegistry(), toolProvenanceKey: new Uint8Array(32).fill(0x5a),
         modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"), outputArtifacts: createInMemoryOutputArtifactPublisher(),
         agentToolCliEnvironment: unavailableCodexAgentToolCliEnvironmentProvider, onError: error => diagnostics.push(error), executionSettings: {

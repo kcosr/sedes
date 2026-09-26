@@ -1,3 +1,5 @@
+import type { ViewedImageCapture } from "../../output-artifacts/viewed-image-capture.js";
+import { CodexViewedImageCaptureCoordinator } from "./codex-viewed-image-capture.js";
 import { parseCodexBindingDetail } from "./codex-binding-codec.js";
 import type { UsageSink } from "../../usage/contracts.js";
 import { CodexUsageCapture } from "./codex-usage-capture.js";
@@ -7,6 +9,7 @@ import type {
   BackendCapabilityDocument,
   BackendConversationEvent,
   BackendConversationSnapshot,
+  BackendItem,
   SequencedBackendEvent,
 } from "../../../shared/protocol/backend.js";
 import {
@@ -102,6 +105,7 @@ import {
 } from "../staged-attachment-manifest.js";
 import {
   CodexHistoryProjectionError,
+  CODEX_VIEWED_IMAGE_RESERVATION_BYTES,
   codexNativeItemCoordinate,
   codexBackendTurnId,
   materializeCodexGeneratedImagePublications,
@@ -287,6 +291,12 @@ type CodexWindowProjection = CodexHistoryProjection & {
   readonly startNativeTurnIndex: number;
 };
 
+interface CodexHistoryPageCapture {
+  readonly signal?: AbortSignal;
+  /** Runs once, after the page is projected and before any capture wait. */
+  readonly beforeCapture?: () => void;
+}
+
 export interface CodexConversationHandleInput {
   readonly usageSink: UsageSink;
   readonly nativeNamespace: string;
@@ -302,6 +312,7 @@ export interface CodexConversationHandleInput {
   readonly correlationAncestorThreadIds: readonly string[];
   readonly executionSettings: CodexExecutionSettingsProvider;
   readonly outputArtifacts: OutputArtifactPublisher;
+  readonly viewedImageCapture: ViewedImageCapture;
   readonly fastModeSessions?: CodexFastModeSessionRegistry;
   readonly agentToolCliEnvironment?: CodexAgentToolCliEnvironmentProvider;
   readonly composerSkillPreferences?: CodexComposerSkillPreferenceReader;
@@ -344,6 +355,11 @@ export class CodexConversationHandle implements ConversationHandle {
   readonly #client: CodexSharedClientFacade;
   readonly #executionSettings: CodexExecutionSettingsProvider;
   readonly #outputArtifacts: OutputArtifactPublisher;
+  readonly #viewedImageCapture: CodexViewedImageCaptureCoordinator;
+  #reservedViewedImageBytes = 0;
+  #reservedViewedImagesByTurn = new Map<string, number>();
+  #inflightNotificationProjection = 0;
+  #viewedImageCompletionPending = false;
   readonly #verifiedGeneratedImagePublicationKeys = new Set<string>();
   readonly #fastModeSessions: CodexFastModeSessionRegistry;
   readonly #agentToolCliEnvironment: CodexAgentToolCliEnvironmentProvider;
@@ -517,6 +533,14 @@ export class CodexConversationHandle implements ConversationHandle {
     this.#client = input.client;
     this.#executionSettings = input.executionSettings;
     this.#outputArtifacts = input.outputArtifacts;
+    this.#viewedImageCapture = new CodexViewedImageCaptureCoordinator({
+      binding: input.binding,
+      capture: input.viewedImageCapture,
+      onCaptured: () => {
+        this.#viewedImageCompletionPending = true;
+        this.#projectionWorkQueue.enqueue(() => this.#installCapturedViewedImages());
+      },
+    });
     this.#fastModeSessions =
       input.fastModeSessions ?? new CodexFastModeSessionRegistry();
     this.#agentToolCliEnvironment =
@@ -682,6 +706,7 @@ export class CodexConversationHandle implements ConversationHandle {
     } finally {
       clearTimeout(deadline);
       this.#establishing = false;
+      queueMicrotask(() => this.#projectionWorkQueue.enqueue(() => this.#installCapturedViewedImages()));
       this.#establishmentSettled = undefined;
       if (retainPaginatedCatchUp) {
         this.#releasePaginatedEstablishmentNotifications();
@@ -832,7 +857,7 @@ export class CodexConversationHandle implements ConversationHandle {
         const projection = await this.#projectNativeHistorySliceDurably(
           nativeThread,
           nativeThread.turns.length,
-          input.limit,
+          input.limit, new Map(), { signal: input.signal },
         );
         const retainedNativeTurnIds = new Set(
           nativeThread.turns
@@ -847,29 +872,42 @@ export class CodexConversationHandle implements ConversationHandle {
       }
       try {
         const expectedInstallEpoch = this.#projectionInstallEpoch;
+        let fetchedPageCurrent = false;
+        const assertPageCurrent = (includingInstalls: boolean) => {
+          if (
+            this.#projectionInvalidated ||
+            (includingInstalls &&
+              this.#projectionInstallEpoch !== expectedInstallEpoch) ||
+            this.#client.lifecycleSnapshot().generation !==
+              this.#establishedGeneration
+          ) {
+            throw codexError(
+              "unavailable",
+              "Codex history changed while the page was loading.",
+              "codex_history_reconciliation_required",
+              true,
+            );
+          }
+        };
         const page = await adapter.page(
           input.cursor,
           input.limit,
           input.signal,
         );
+        // The fetched page must match current authority. Ordinary installs
+        // during a bounded capture wait only enrich that page's own items.
         const projection = await this.#projectNativeHistorySliceDurably(
           page.thread,
           page.thread.turns.length,
-          input.limit,
+          input.limit, new Map(), {
+            signal: input.signal,
+            beforeCapture: () => {
+              assertPageCurrent(true);
+              fetchedPageCurrent = true;
+            },
+          },
         );
-        if (
-          this.#projectionInvalidated ||
-          this.#projectionInstallEpoch !== expectedInstallEpoch ||
-          this.#client.lifecycleSnapshot().generation !==
-            this.#establishedGeneration
-        ) {
-          throw codexError(
-            "unavailable",
-            "Codex history changed while the page was loading.",
-            "codex_history_reconciliation_required",
-            true,
-          );
-        }
+        assertPageCurrent(!fetchedPageCurrent);
         return historyPage(
           projection.snapshot,
           projection.snapshot.orderedBackendTurnIds,
@@ -893,7 +931,7 @@ export class CodexConversationHandle implements ConversationHandle {
     const projection = await this.#projectNativeHistorySliceDurably(
       nativeThread,
       beforeNativeTurnIndex,
-      input.limit,
+      input.limit, new Map(), { signal: input.signal },
     );
     const turnIds = projection.snapshot.orderedBackendTurnIds;
     return historyPage(
@@ -966,7 +1004,7 @@ export class CodexConversationHandle implements ConversationHandle {
           signal,
         );
         if (located.status !== "found") return located;
-        return await this.#projectLocatedTurn(nativeThread, located.turn);
+        return await this.#projectLocatedTurn(nativeThread, located.turn, signal);
       }
       if (nativeThread.historyMode !== "legacy") {
         throw codexError(
@@ -989,7 +1027,7 @@ export class CodexConversationHandle implements ConversationHandle {
         ) {
           continue;
         }
-        return await this.#projectLocatedTurn(nativeThread, turn);
+        return await this.#projectLocatedTurn(nativeThread, turn, signal);
       }
       return { status: "not_found" };
     } catch (error) {
@@ -1000,6 +1038,7 @@ export class CodexConversationHandle implements ConversationHandle {
   async #projectLocatedTurn(
     sourceThread: CodexThread,
     turn: CodexTurn,
+    signal: AbortSignal,
   ): Promise<LocateTurnResult> {
     const thread: CodexThread = {
       ...sourceThread,
@@ -1012,7 +1051,7 @@ export class CodexConversationHandle implements ConversationHandle {
     const projection = await this.#projectNativeHistorySliceDurably(
       thread,
       1,
-      1,
+      1, new Map(), { signal },
     );
     const turnIds = projection.snapshot.orderedBackendTurnIds;
     if (turnIds.length === 0) return { status: "not_found" };
@@ -3102,6 +3141,12 @@ export class CodexConversationHandle implements ConversationHandle {
         projection.projectedItemByNativeCoordinate,
       );
       this.#projectedItemCount = projection.projectedItemCount;
+      this.#reservedViewedImageBytes = projection.reservedViewedImageBytes;
+      this.#reservedViewedImagesByTurn = new Map();
+      for (const { identity } of projection.pendingViewedImages) {
+        this.#reservedViewedImagesByTurn.set(identity.backendTurnId,
+          (this.#reservedViewedImagesByTurn.get(identity.backendTurnId) ?? 0) + 1);
+      }
       this.#projectionSerializedBytes = projectionBytes;
       this.#nativeThread = retainedSettled;
       const projectedNativeTurnIds = new Set(
@@ -3152,6 +3197,10 @@ export class CodexConversationHandle implements ConversationHandle {
           );
       }
       this.#establishedGeneration = generation;
+      this.#viewedImageCapture.schedule(projection.pendingViewedImages, this.#establishing ? 4 : 32);
+      if (projection.pendingViewedImages.some(({ retained }) => retained)) {
+        this.#viewedImageCompletionPending = true;
+      }
       this.#interactions.activate(generation);
       if (this.#usageGeneration !== generation) {
         this.#usage = {};
@@ -3264,6 +3313,7 @@ export class CodexConversationHandle implements ConversationHandle {
     beforeNativeTurnIndex: number,
     visibleLimit: number,
     streamingNativeItems: CodexStreamingNativeItems = new Map(),
+    liveWindow = true,
   ): CodexWindowProjection {
     let candidateLimit = visibleLimit;
     for (;;) {
@@ -3279,7 +3329,7 @@ export class CodexConversationHandle implements ConversationHandle {
             selected.thread,
             this.#correlationScope,
             streamingNativeItems,
-            this.#generatedImageProjectionContext(),
+            this.#generatedImageProjectionContext(liveWindow),
           ),
           startNativeTurnIndex: selected.startNativeTurnIndex,
         };
@@ -3302,18 +3352,29 @@ export class CodexConversationHandle implements ConversationHandle {
     beforeNativeTurnIndex: number,
     visibleLimit: number,
     streamingNativeItems: CodexStreamingNativeItems = new Map(),
+    historyPage?: CodexHistoryPageCapture,
   ): Promise<CodexWindowProjection> {
     const context = this.#generatedImageProjectionContext();
     const normalized = normalizeCodexTurnStatuses(thread);
     let candidateLimit = visibleLimit;
+    let captureBudgetUsed = false;
     for (;;) {
       try {
-        const selected = this.#projectNativeHistorySlice(
+        let selected = this.#projectNativeHistorySlice(
           normalized,
           beforeNativeTurnIndex,
           candidateLimit,
           streamingNativeItems,
+          historyPage === undefined,
         );
+        if (historyPage && !captureBudgetUsed && selected.pendingViewedImages.length > 0) {
+          captureBudgetUsed = true;
+          historyPage.beforeCapture?.();
+          await this.#viewedImageCapture.capturePage(selected.pendingViewedImages, historyPage.signal);
+          historyPage.signal?.throwIfAborted();
+          selected = this.#projectNativeHistorySlice(normalized, beforeNativeTurnIndex,
+            candidateLimit, streamingNativeItems, false);
+        }
         const projection = await materializeCodexGeneratedImagePublications(
           selected,
           context,
@@ -3419,7 +3480,72 @@ export class CodexConversationHandle implements ConversationHandle {
     );
   }
 
-  #generatedImageProjectionContext() {
+  #installCapturedViewedImages(): void {
+    if (!this.#viewedImageCompletionPending) return;
+    const lifecycle = this.#client.lifecycleSnapshot();
+    const previous = this.#snapshotWindow;
+    if (this.#closing || this.#closed || this.#establishing || this.#projectionInvalidated ||
+        this.#pendingNotificationWork > 0 || this.#inflightNotificationProjection > 0 || !previous || !this.#nativeThread || lifecycle.state !== "ready" ||
+        lifecycle.generation !== this.#establishedGeneration) return;
+    this.#viewedImageCompletionPending = false;
+    // Mutate only the reviewed image children. Native deltas and live overlay remain authoritative.
+    const itemsById = { ...previous.itemsById };
+    const turnsById = { ...previous.turnsById };
+    const additions: BackendItem[] = [];
+    const coordinates = new Map(this.#projectedItemByNativeCoordinate);
+    const changedTurns = new Set<string>();
+    const additionsByTurn = new Map<string, number>();
+    for (const [key, coordinate] of coordinates) {
+      if (coordinate.itemType !== "imageView" || coordinate.orderedBackendItemIds.length !== 1 ||
+          this.#streamingNativeItems.get(coordinate.nativeTurnId)?.has(coordinate.nativeItemId)) continue;
+      const turn = this.#nativeTurnById.get(coordinate.nativeTurnId);
+      const nativeItem = turn?.items[coordinate.nativeOrdinal];
+      if (!turn || nativeItem?.type !== "imageView") continue;
+      const slice = projectCodexItemSlice(this.#nativeThread.id, turn, nativeItem,
+        coordinate.backendTurnId, coordinate.nativeOrdinal, coordinate.sourceOrder,
+        false, this.#correlationScope, undefined, undefined, this.#generatedImageProjectionContext(), []);
+      const image = slice[1];
+      if (!image || image.semanticKind !== "image" || itemsById[image.backendItemId]) continue;
+      const existingTurn = turnsById[image.backendTurnId]!;
+      // Only a child still holding its planned capacity enters the live window;
+      // streaming growth may have reclaimed it since planning.
+      const turnAdditions = additionsByTurn.get(image.backendTurnId) ?? 0;
+      if (existingTurn.orderedBackendItemIds.length >= CODEX_C1_MAX_ITEMS_PER_TURN ||
+          (this.#reservedViewedImagesByTurn.get(image.backendTurnId) ?? 0) <= turnAdditions ||
+          this.#reservedViewedImageBytes < (additions.length + 1) * CODEX_VIEWED_IMAGE_RESERVATION_BYTES) continue;
+      additionsByTurn.set(image.backendTurnId, turnAdditions + 1);
+      itemsById[image.backendItemId] = image;
+      additions.push(image);
+      turnsById[image.backendTurnId] = { ...existingTurn,
+        orderedBackendItemIds: [...existingTurn.orderedBackendItemIds, image.backendItemId]
+          .sort((left, right) => itemsById[left]!.sourceOrder - itemsById[right]!.sourceOrder) };
+      changedTurns.add(image.backendTurnId);
+      coordinates.set(key, { ...coordinate, orderedBackendItemIds: slice.map(item => item.backendItemId) });
+    }
+    if (additions.length === 0) return;
+    const candidate = { ...previous, itemsById, turnsById };
+    const bytes = serializedUtf8Bytes(candidate);
+    if (bytes > MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES) return;
+    const parsed = backendConversationSnapshotSchema.safeParse(candidate);
+    if (!parsed.success) return;
+    this.#snapshotWindow = parsed.data;
+    this.#projectionSerializedBytes = bytes;
+    this.#projectedItemCount += additions.length;
+    this.#reservedViewedImageBytes = Math.max(0, this.#reservedViewedImageBytes - additions.length * CODEX_VIEWED_IMAGE_RESERVATION_BYTES);
+    for (const { backendTurnId } of additions) {
+      const reserved = (this.#reservedViewedImagesByTurn.get(backendTurnId) ?? 0) - 1;
+      if (reserved > 0) this.#reservedViewedImagesByTurn.set(backendTurnId, reserved);
+      else this.#reservedViewedImagesByTurn.delete(backendTurnId);
+    }
+    this.#projectedItemByNativeCoordinate = coordinates;
+    for (const item of additions) this.#emit({ type: "item_completed", item });
+    for (const backendTurnId of changedTurns) this.#emit({ type: "turn_updated", turn: turnsById[backendTurnId]! });
+  }
+
+  #generatedImageProjectionContext(liveWindow = false) {
+    // Subscribers must receive a viewed-image child as an item before any turn
+    // names it, so live reprojection never absorbs one they have not seen.
+    const delivered = liveWindow && !this.#establishing ? this.#snapshotWindow : undefined;
     return {
       scope: {
         tenantId: this.binding.tenantId,
@@ -3428,6 +3554,10 @@ export class CodexConversationHandle implements ConversationHandle {
       applicationThreadId: this.binding.applicationThreadId,
       outputArtifacts: this.#outputArtifacts,
       verifiedPublicationKeys: this.#verifiedGeneratedImagePublicationKeys,
+      ...(delivered ? {
+        admitsRetainedViewedImage: (backendItemId: string) =>
+          delivered.itemsById[backendItemId] !== undefined,
+      } : {}),
     } as const;
   }
 
@@ -3637,6 +3767,7 @@ export class CodexConversationHandle implements ConversationHandle {
       }> = [];
       const publishedCoordinates = new Set<string>();
       let byteDelta = 0;
+      const releasedReservationTurns = new Set<string>();
       for (const live of items) {
         const liveKey = codexNativeItemCoordinate(
           live.nativeTurnId,
@@ -3735,6 +3866,12 @@ export class CodexConversationHandle implements ConversationHandle {
           if (nextOrderedIds.length > CODEX_C1_MAX_ITEMS_PER_TURN) {
             return false;
           }
+          // Transcript growth takes precedence over preview reservations.
+          if (nextOrderedIds.length +
+              (this.#reservedViewedImagesByTurn.get(coordinate.backendTurnId) ?? 0) >
+              CODEX_C1_MAX_ITEMS_PER_TURN) {
+            releasedReservationTurns.add(coordinate.backendTurnId);
+          }
           const newTurn = backendTurnSchema.parse({
             ...oldTurn,
             orderedBackendItemIds: nextOrderedIds,
@@ -3770,6 +3907,18 @@ export class CodexConversationHandle implements ConversationHandle {
         MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES
       ) {
         return false;
+      }
+      // A late child that no longer fits stays a notice; completion rechecks capacity.
+      if (this.#projectionSerializedBytes + byteDelta + this.#reservedViewedImageBytes >
+          MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES) {
+        this.#reservedViewedImageBytes = 0;
+        this.#reservedViewedImagesByTurn.clear();
+      }
+      for (const backendTurnId of releasedReservationTurns) {
+        const released = this.#reservedViewedImagesByTurn.get(backendTurnId) ?? 0;
+        this.#reservedViewedImagesByTurn.delete(backendTurnId);
+        this.#reservedViewedImageBytes = Math.max(0,
+          this.#reservedViewedImageBytes - released * CODEX_VIEWED_IMAGE_RESERVATION_BYTES);
       }
       for (const { newItem } of replacements) {
         snapshot.itemsById[newItem.backendItemId] = newItem;
@@ -3872,10 +4021,25 @@ export class CodexConversationHandle implements ConversationHandle {
       })
       .finally(() => {
         this.#pendingNotificationWork -= 1;
+        this.#projectionWorkQueue.enqueue(() => this.#installCapturedViewedImages());
       });
   };
 
   readonly #consumeNotificationNow = async (
+    notification: Parameters<CodexNotificationListener>[0],
+  ): Promise<void> => {
+    this.#inflightNotificationProjection += 1;
+    try {
+      await this.#applyNotificationNow(notification);
+    } finally {
+      this.#inflightNotificationProjection -= 1;
+      // Generated-image publication can await with a planned snapshot. Insert
+      // viewed children only after that install, never into its older baseline.
+      this.#projectionWorkQueue.enqueue(() => this.#installCapturedViewedImages());
+    }
+  };
+
+  readonly #applyNotificationNow = async (
     notification: Parameters<CodexNotificationListener>[0],
   ): Promise<void> => {
     if (this.#closing || this.#closed) return;
@@ -5239,6 +5403,7 @@ export class CodexConversationHandle implements ConversationHandle {
     }
     this.#usageCapture?.seal();
     this.#closing = true;
+    this.#viewedImageCapture.close();
     this.#projectionWorkQueue.execute(() => {
       this.#projectionInvalidated = true;
       this.#projectionInstallEpoch += 1;

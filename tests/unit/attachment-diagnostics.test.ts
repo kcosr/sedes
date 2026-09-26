@@ -3,6 +3,13 @@ import { attachmentDiagnostic, attachmentDiagnosticError } from "../../src/serve
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
+it("retains Claude machine codes while excluding provider exception text", () => {
+  expect(attachmentDiagnosticError(new Error("claude_sdk_initialization_timeout")))
+    .toEqual([{ name: "Error", code: "claude_sdk_initialization_timeout" }]);
+  expect(attachmentDiagnosticError(new Error("Claude rejected private prompt text")))
+    .toEqual([{ name: "Error" }]);
+});
+
 it("does not inspect diagnostic fields while disabled", () => {
   vi.stubEnv("SEDES_DEBUG_DELIVERY", "");
   const log = vi.spyOn(console, "error").mockImplementation(() => {});

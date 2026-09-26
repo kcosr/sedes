@@ -15,7 +15,7 @@ import type {
   BackendConversationEvent,
   SequencedBackendEvent,
 } from "../../src/shared/protocol/backend.js";
-import { serializedUtf8Bytes } from "../../src/shared/protocol/payload.js";
+import { MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES, serializedUtf8Bytes } from "../../src/shared/protocol/payload.js";
 import type {
   AgentBackendInstance,
   AgentConnectionProfile,
@@ -805,8 +805,10 @@ function driver(
   onError?: (error: unknown) => void,
   outputArtifacts = createInMemoryOutputArtifactPublisher(),
   usageSink: UsageSink = NO_USAGE_SINK,
+  viewedImageCapture: import("../../src/server/output-artifacts/viewed-image-capture.js").ViewedImageCapture = { capture: async () => undefined },
 ) {
   return new CodexConversationBackendDriver({
+    viewedImageCapture,
     usageSink,
     nativeNamespace: "test-codex-store",
     instance,
@@ -834,6 +836,7 @@ function driver(
 function driverWithOutputArtifacts(
   harness: RpcHarness,
   outputArtifacts: OutputArtifactPublisher,
+  viewedImageCapture: import("../../src/server/output-artifacts/viewed-image-capture.js").ViewedImageCapture = { capture: async () => undefined },
 ) {
   return driver(
     harness,
@@ -848,6 +851,8 @@ function driverWithOutputArtifacts(
     undefined,
     undefined,
     outputArtifacts,
+    NO_USAGE_SINK,
+    viewedImageCapture,
   );
 }
 
@@ -9490,6 +9495,265 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it("captures a viewed image without delaying turn settlement and inserts its stable child before later text", async () => {
+    const harness = new RpcHarness();
+    const artifacts = createInMemoryOutputArtifactPublisher();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const capture = vi.fn(async (input: import("../../src/server/output-artifacts/viewed-image-capture.js").ViewedImageCaptureInput) => {
+      await gate;
+      return artifacts.publishImage({ scope: input.scope, threadId: input.binding.applicationThreadId,
+        publicationKey: input.publicationKey, mediaType: "image/png", bytes: Buffer.from(generatedPngBase64, "base64") });
+    });
+    const handle = await attachIdle(harness, driverWithOutputArtifacts(harness, artifacts, { capture }));
+    const established = await establish(harness, handle);
+    const events: SequencedBackendEvent[] = [];
+    established.subscribeFromNext(event => events.push(event));
+    const application = new ConversationProjector({ backendInstanceId: instance.id, bindingIdentity: binding().applicationThreadId });
+    application.replace(established.snapshot, established.handleSequence);
+    const active = { ...nativeTurn(1), items: [], status: "inProgress" as const, completedAt: null, durationMs: null };
+    const viewed = { type: "imageView" as const, id: "viewed-1", path: "/workspace/preview.png" };
+    const text = { type: "agentMessage" as const, id: "after-image", text: "The image is ready.", phase: "final_answer" as const, memoryCitation: null, delivery: null, questions: null };
+    harness.notify("turn/started", { threadId: "thread-1", turn: active });
+    harness.notify("item/started", { threadId: "thread-1", turnId: active.id, item: viewed, startedAtMs: 1_700_000_002_000 });
+    harness.notify("item/completed", { threadId: "thread-1", turnId: active.id, item: viewed, completedAtMs: 1_700_000_002_100 });
+    harness.notify("item/completed", { threadId: "thread-1", turnId: active.id, item: text, completedAtMs: 1_700_000_002_500 });
+    harness.notify("turn/completed", { threadId: "thread-1", turn: { ...active, status: "completed", completedAt: 1_700_000_003,
+      items: [viewed, text], itemsView: "full" } });
+    await vi.waitFor(async () => {
+      const snapshot = (await handle.readCurrent()).snapshot;
+      expect(snapshot.turnsById[snapshot.orderedBackendTurnIds.at(-1)!]!.status).toBe("completed");
+      expect(capture).toHaveBeenCalledTimes(1);
+    });
+    const before = (await handle.readCurrent()).snapshot;
+    const textBefore = Object.values(before.itemsById).find(item => item.semanticKind === "assistant_message" && item.markdown.text === text.text)!;
+    expect(textBefore.sourceOrder).toBe(2);
+    release();
+    await vi.waitFor(async () => expect(Object.values((await handle.readCurrent()).snapshot.itemsById)
+      .some(item => item.semanticKind === "image")).toBe(true));
+    const after = (await handle.readCurrent()).snapshot;
+    const completedTurn = after.turnsById[after.orderedBackendTurnIds.at(-1)!]!;
+    expect(completedTurn.orderedBackendItemIds.map(id => after.itemsById[id]!.semanticKind)).toEqual(["viewed_image", "image", "assistant_message"]);
+    expect(after.itemsById[textBefore.backendItemId]).toEqual(textBefore);
+    expect(capture).toHaveBeenCalledTimes(1);
+    for (const event of events) expect(application.apply(event), event.event.type).not.toMatchObject({ kind: "resnapshot_required" });
+    expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
+    const native = nativeThread({ turns: [{ ...active, status: "completed", completedAt: 1_700_000_003, items: [viewed, text] }] });
+    const restarted = await establish(harness, handle, native);
+    expect(Object.values(restarted.snapshot.itemsById).filter(item => item.semanticKind === "image")).toEqual(
+      Object.values(after.itemsById).filter(item => item.semanticKind === "image"));
+    expect(capture).toHaveBeenCalledTimes(1);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("retains a viewed-image completion racing an awaited generated-image publication", async () => {
+    const harness = new RpcHarness();
+    const stored = createInMemoryOutputArtifactPublisher();
+    let releaseView!: () => void;
+    let releaseGenerated!: () => void;
+    const viewGate = new Promise<void>(resolve => { releaseView = resolve; });
+    const generatedGate = new Promise<void>(resolve => { releaseGenerated = resolve; });
+    let viewPersisted = false;
+    const capture = vi.fn(async (input: import("../../src/server/output-artifacts/viewed-image-capture.js").ViewedImageCaptureInput) => {
+      await viewGate;
+      const descriptor = await stored.publishImage({ scope: input.scope, threadId: input.binding.applicationThreadId,
+        publicationKey: input.publicationKey, mediaType: "image/png", bytes: Buffer.from(generatedPngBase64, "base64") });
+      viewPersisted = true;
+      return descriptor;
+    });
+    const artifacts = { findImage: stored.findImage, publishImage: vi.fn(async (input: Parameters<OutputArtifactPublisher["publishImage"]>[0]) => {
+      await generatedGate;
+      return stored.publishImage(input);
+    }) };
+    const handle = await attachIdle(harness, driverWithOutputArtifacts(harness, artifacts, { capture }));
+    const established = await establish(harness, handle);
+    const events: SequencedBackendEvent[] = [];
+    established.subscribeFromNext(event => events.push(event));
+    const active = { ...nativeTurn(1), items: [], status: "inProgress" as const, completedAt: null, durationMs: null };
+    const viewed = { type: "imageView" as const, id: "view", path: "/workspace/preview.png" };
+    harness.notify("turn/started", { threadId: "thread-1", turn: active });
+    harness.notify("item/completed", { threadId: "thread-1", turnId: active.id, item: viewed, completedAtMs: 1_700_000_002_100 });
+    harness.notify("item/completed", { threadId: "thread-1", turnId: active.id, item: nativeGeneratedImage(), completedAtMs: 1_700_000_002_500 });
+    await vi.waitFor(() => expect(artifacts.publishImage).toHaveBeenCalledTimes(1));
+    releaseView();
+    await vi.waitFor(() => expect(viewPersisted).toBe(true));
+    releaseGenerated();
+    await vi.waitFor(async () => expect(Object.values((await handle.readCurrent()).snapshot.itemsById)
+      .filter(item => item.semanticKind === "image")).toHaveLength(2));
+    const projector = new ConversationProjector({ backendInstanceId: instance.id, bindingIdentity: binding().applicationThreadId });
+    projector.replace(established.snapshot, established.handleSequence);
+    for (const event of events) expect(projector.apply(event)).not.toMatchObject({ kind: "resnapshot_required" });
+    expect(events.filter(({ event }) => event.type === "item_completed" && event.item.semanticKind === "image")).toHaveLength(2);
+    expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("captures explicit history and targeted reads without replacing the live baseline", async () => {
+    const harness = new RpcHarness();
+    const artifacts = createInMemoryOutputArtifactPublisher();
+    let available = false;
+    const capture = vi.fn(async (input: import("../../src/server/output-artifacts/viewed-image-capture.js").ViewedImageCaptureInput) => {
+      if (!available) return undefined;
+      return artifacts.publishImage({ scope: input.scope, threadId: input.binding.applicationThreadId,
+        publicationKey: input.publicationKey, mediaType: "image/png", bytes: Buffer.from(generatedPngBase64, "base64") });
+    });
+    const handle = await attachIdle(harness, driverWithOutputArtifacts(harness, artifacts, { capture }));
+    const established = await establish(harness, handle, nativeThread({ turns: [{ ...nativeTurn(0), items: [{ type: "imageView", id: "view", path: "/workspace/preview.png" }] }] }));
+    await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1));
+    const events: SequencedBackendEvent[] = [];
+    established.subscribeFromNext(event => events.push(event));
+    available = true;
+    const page = await handle.history({ limit: 1 });
+    expect(Object.values(page.itemsById).map(item => item.semanticKind)).toEqual(["viewed_image", "image"]);
+    // This page overlaps the live window, which receives the child as an event rather than a replacement.
+    const live = (await handle.readCurrent()).snapshot;
+    for (const [id, item] of Object.entries(established.snapshot.itemsById)) expect(live.itemsById[id]).toEqual(item);
+    expect(Object.values(live.itemsById).filter(item => item.semanticKind === "image")).toEqual(
+      Object.values(page.itemsById).filter(item => item.semanticKind === "image"));
+    const projector = new ConversationProjector({ backendInstanceId: instance.id, bindingIdentity: binding().applicationThreadId });
+    projector.replace(established.snapshot, established.handleSequence);
+    for (const event of events) expect(projector.apply(event), event.event.type).not.toMatchObject({ kind: "resnapshot_required" });
+    expect(events.filter(({ event }) => event.type === "item_completed")).toHaveLength(1);
+    const located = await handle.locateTurn({ matchesBackendTurnId: id => id === page.orderedBackendTurnIds[0], maximumTurnCandidates: 5 });
+    expect(located).toMatchObject({ status: "found", page: { itemsById: page.itemsById } });
+    expect(capture).toHaveBeenCalledTimes(2);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it.each([
+    ["a later turn start", (harness: RpcHarness) => harness.notify("turn/started", { threadId: "thread-1",
+      turn: { ...nativeTurn(1), items: [], status: "inProgress" as const, completedAt: null, durationMs: null } })],
+    ["an idle status change", (harness: RpcHarness) => harness.notify("thread/status/changed", {
+      threadId: "thread-1", status: { type: "idle" } })],
+  ])("delivers a viewed image retained by another reader as an event when %s reprojects the live window", async (_, trigger) => {
+    const harness = new RpcHarness();
+    const artifacts = createInMemoryOutputArtifactPublisher();
+    const keys: string[] = [];
+    const capture = vi.fn(async (input: import("../../src/server/output-artifacts/viewed-image-capture.js").ViewedImageCaptureInput) => {
+      keys.push(input.publicationKey);
+      return undefined;
+    });
+    const handle = await attachIdle(harness, driverWithOutputArtifacts(harness, artifacts, { capture }));
+    const established = await establish(harness, handle, nativeThread({ turns: [{ ...nativeTurn(0), items: [{ type: "imageView", id: "view", path: "/workspace/preview.png" }] }] }));
+    await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1));
+    const events: SequencedBackendEvent[] = [];
+    established.subscribeFromNext(event => events.push(event));
+    // A detached history read retained the snapshot outside this handle's own capture.
+    await artifacts.publishImage({ scope: { tenantId: binding().tenantId, principalId: binding().ownerPrincipalId },
+      threadId: binding().applicationThreadId, publicationKey: keys[0]!, mediaType: "image/png",
+      bytes: Buffer.from(generatedPngBase64, "base64") });
+    trigger(harness);
+    await vi.waitFor(async () => expect(Object.values((await handle.readCurrent()).snapshot.itemsById)
+      .some(item => item.semanticKind === "image")).toBe(true));
+    const projector = new ConversationProjector({ backendInstanceId: instance.id, bindingIdentity: binding().applicationThreadId });
+    projector.replace(established.snapshot, established.handleSequence);
+    for (const event of events) expect(projector.apply(event), event.event.type).not.toMatchObject({ kind: "resnapshot_required" });
+    expect(events.filter(({ event }) => event.type === "item_completed" && event.item.semanticKind === "image")).toHaveLength(1);
+    expect(capture).toHaveBeenCalledTimes(1);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("keeps an older paginated page when a live install lands during its bounded capture wait", async () => {
+    const harness = new RpcHarness();
+    const artifacts = createInMemoryOutputArtifactPublisher();
+    const events: SequencedBackendEvent[] = [];
+    const capture = vi.fn(async (input: import("../../src/server/output-artifacts/viewed-image-capture.js").ViewedImageCaptureInput) => {
+      harness.notify("thread/status/changed", { threadId: "thread-1", status: { type: "active", activeFlags: [] } });
+      await vi.waitFor(() => expect(events.some(({ event }) => event.type === "run_state_changed")).toBe(true));
+      return artifacts.publishImage({ scope: input.scope, threadId: input.binding.applicationThreadId,
+        publicationKey: input.publicationKey, mediaType: "image/png", bytes: Buffer.from(generatedPngBase64, "base64") });
+    });
+    const handle = await attachIdle(harness, driverWithOutputArtifacts(harness, artifacts, { capture }));
+    const initialIndexes = Array.from({ length: 10 }, (_, index) => 11 - index);
+    harness.enqueue("thread/read", { thread: paginatedThread() });
+    harness.enqueue("thread/resume", paginatedResumeResult({
+      shells: initialIndexes.map(notLoadedTurn), nextCursor: "older-page" }));
+    harness.enqueue("thread/items/list", ...initialIndexes.map(paginatedItems), paginatedItems(1));
+    harness.enqueue("thread/turns/list", { data: [notLoadedTurn(1)], nextCursor: null, backwardsCursor: "older-head" });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    established.subscribeFromNext(event => events.push(event));
+    const viewed = { type: "imageView" as const, id: "older-view", path: "/workspace/older.png" };
+    harness.enqueue("thread/turns/list", { data: [notLoadedTurn(1), notLoadedTurn(0)], nextCursor: null, backwardsCursor: "older-head" });
+    harness.enqueue("thread/items/list", paginatedItems(1), {
+      data: [...nativeTurn(0).items, viewed].map(item => ({ turnId: "turn-0", item })),
+      nextCursor: null, backwardsCursor: "item-head" });
+    const older = await handle.history({ limit: 2, cursor: established.history.previousCursor });
+    expect(capture).toHaveBeenCalledTimes(1);
+    const olderTurn = older.turnsById[codexBackendTurnId("thread-1", "turn-0")]!;
+    expect(olderTurn.orderedBackendItemIds.map(id => older.itemsById[id]!.semanticKind))
+      .toEqual(["user_message", "viewed_image", "image"]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("releases viewed-image reservations instead of resnapshotting when streaming text fills the page", async () => {
+    const harness = new RpcHarness();
+    const artifacts = createInMemoryOutputArtifactPublisher();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const capture = vi.fn(async (input: import("../../src/server/output-artifacts/viewed-image-capture.js").ViewedImageCaptureInput) => {
+      await gate;
+      return artifacts.publishImage({ scope: input.scope, threadId: input.binding.applicationThreadId,
+        publicationKey: input.publicationKey, mediaType: "image/png", bytes: Buffer.from(generatedPngBase64, "base64") });
+    });
+    const handle = await attachIdle(harness, driverWithOutputArtifacts(harness, artifacts, { capture }));
+    // Codex bounds one native text, so completed history carries most of the page.
+    const bulk = (id: string) => ({ type: "agentMessage" as const, id, text: "y".repeat(5 * 1_024 * 1_024),
+      phase: "final_answer" as const, memoryCitation: null, delivery: null, questions: null });
+    const established = await establish(harness, handle, nativeThread({ turns: [
+      { ...nativeTurn(0), items: [...nativeTurn(0).items,
+        { type: "imageView", id: "view", path: "/workspace/slow.png" }, bulk("bulk-0")] },
+      { ...nativeTurn(1), items: [...nativeTurn(1).items, bulk("bulk-1")] },
+    ] }));
+    await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1));
+    const events: SequencedBackendEvent[] = [];
+    established.subscribeFromNext(event => events.push(event));
+    harness.notify("turn/started", { threadId: "thread-1",
+      turn: { ...nativeTurn(2), items: [], status: "inProgress" as const, completedAt: null } });
+    harness.notify("item/started", { threadId: "thread-1", turnId: "turn-2", startedAtMs: 1_700_000_002_000,
+      item: { type: "agentMessage" as const, id: "agent-1", text: "", phase: "commentary" as const,
+        memoryCitation: null, delivery: null, questions: null } });
+    await vi.waitFor(async () => expect(Object.values((await handle.readCurrent()).snapshot.itemsById)
+      .some(item => item.status === "streaming")).toBe(true));
+    const seedBytes = serializedUtf8Bytes((await handle.readCurrent()).snapshot);
+    // The text fits the page but not the pending notice's reserved preview bytes.
+    harness.notify("item/agentMessage/delta", { threadId: "thread-1", turnId: "turn-2", itemId: "agent-1",
+      delta: "x".repeat(MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES - seedBytes - 800) });
+    await vi.waitFor(async () => expect(serializedUtf8Bytes((await handle.readCurrent()).snapshot))
+      .toBeGreaterThan(MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES - 1_024));
+    // A capture finishing into reclaimed headroom stays a notice, so later text still fits.
+    release();
+    await vi.waitFor(() => expect(artifacts.findImage({ tenantId: binding().tenantId, principalId: binding().ownerPrincipalId },
+      binding().applicationThreadId, capture.mock.calls[0]![0].publicationKey)).toBeDefined());
+    harness.notify("item/agentMessage/delta", { threadId: "thread-1", turnId: "turn-2", itemId: "agent-1", delta: "z".repeat(300) });
+    await vi.waitFor(async () => expect(Object.values((await handle.readCurrent()).snapshot.itemsById)
+      .some(item => item.semanticKind === "assistant_message" && item.markdown.text.endsWith("z".repeat(300)))).toBe(true));
+    expect(Object.values((await handle.readCurrent()).snapshot.itemsById).some(item => item.semanticKind === "image")).toBe(false);
+    expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("cancels a pending viewed-image subscription when closing without awaiting its bytes", async () => {
+    const harness = new RpcHarness();
+    const artifacts = createInMemoryOutputArtifactPublisher();
+    let captureSignal: AbortSignal | undefined;
+    const capture = vi.fn(async (input: import("../../src/server/output-artifacts/viewed-image-capture.js").ViewedImageCaptureInput) => {
+      captureSignal = input.signal;
+      return await new Promise<undefined>(() => undefined);
+    });
+    const handle = await attachIdle(harness, driverWithOutputArtifacts(harness, artifacts, { capture }));
+    await establish(harness, handle, nativeThread({ turns: [{ ...nativeTurn(0), items: [{ type: "imageView", id: "view", path: "/workspace/preview.png" }] }] }));
+    await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1));
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+    expect(captureSignal?.aborted).toBe(true);
+  });
+
   it("expands a live Codex image generation into one ordered tool and artifact image without resnapshotting", async () => {
     const harness = new RpcHarness();
     const stored = createInMemoryOutputArtifactPublisher();
@@ -15964,6 +16228,7 @@ describe("CodexBackendDriverFactory", () => {
       modelPolicy: catalogModelPolicy,
       executionSettings: executionSettingsProvider(),
       outputArtifacts: createInMemoryOutputArtifactPublisher(),
+      viewedImageCapture: { capture: async () => undefined },
       fastModeSessions: new CodexFastModeSessionRegistry(),
       agentToolCliEnvironment: unavailableCodexAgentToolCliEnvironmentProvider,
       materializedConnections: [
@@ -16080,6 +16345,7 @@ describe("CodexBackendDriverFactory", () => {
       ),
       executionSettings: executionSettingsProvider(),
       outputArtifacts: createInMemoryOutputArtifactPublisher(),
+      viewedImageCapture: { capture: async () => undefined },
       fastModeSessions: new CodexFastModeSessionRegistry(),
       agentToolCliEnvironment: unavailableCodexAgentToolCliEnvironmentProvider,
       materializedConnections: [connection],

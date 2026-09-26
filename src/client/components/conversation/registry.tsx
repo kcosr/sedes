@@ -19,6 +19,7 @@ import {
   noticeRenderer,
   planRenderer,
   reviewMarkerRenderer,
+  viewedImageRenderer,
 } from "./renderers/SemanticRenderers";
 import {
   defaultItemRenderContext,
@@ -48,6 +49,7 @@ export const conversationItemRenderers = {
   },
   collaboration: collaborationRenderer,
   image: imageRenderer,
+  viewed_image: viewedImageRenderer,
   review_marker: reviewMarkerRenderer,
   compaction: compactionRenderer,
   notice: noticeRenderer,

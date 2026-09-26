@@ -640,6 +640,7 @@ describe("Codex production application integration", () => {
         toolProvenanceKey: new Uint8Array(32),
         agentTools: new LateBoundBackendAgentToolFacade(),
         outputArtifacts: {} as never,
+        viewedImageCapture: { capture: async () => undefined },
         agentToolSourceCapabilities,
         agentToolCli: new Map([
           [

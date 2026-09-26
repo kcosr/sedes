@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { test, expect } from "./fixtures";
 import { normalizedThreadSnapshotSchema } from "../../src/shared/protocol/conversation.js";
 import {
@@ -476,6 +477,91 @@ test.describe.serial("normalized Codex thread state", () => {
     ).toBeDisabled();
     await expectNoPageOverflow(page);
     await capture(page, testInfo, "codex-thread-mobile.png");
+  });
+
+  test("viewed images arrive after later text and survive reload without the source file", async ({ page }, testInfo) => {
+    await page.goto("/");
+    await openSedesWorkspace(page);
+    await page.getByTestId("desktop-sidebar").getByTestId("new-thread-trigger").click();
+    await selectCustomNewThreadTarget(page, "Codex TCP external · Codex TCP");
+    const created = page.waitForResponse(response => response.request().method() === "POST" &&
+      response.url().endsWith("/api/threads") && response.status() === 201);
+    await page.getByRole("button", { name: "Create thread" }).click();
+    await created;
+    await expect(page).toHaveURL(/\/threads\/[0-9a-f-]+$/);
+    const threadPath = new URL(page.url()).pathname;
+    const threadId = threadPath.split("/").at(-1)!;
+    expect((await page.request.post("/__e2e/codex/turn-completion/arm")).status()).toBe(204);
+    try {
+      await fillAndPersistDraft(page, "View the fixture image and continue describing it", "Message Codex");
+      await sendCurrentDraft(page);
+      await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+      const emitted = await page.request.post(`/__e2e/codex/viewed-image/${threadId}/emit`);
+      expect(emitted.ok(), await emitted.text()).toBe(true);
+      const expectedImage = await emitted.json() as { sha256: string; byteSize: number };
+      const followingText = page.locator('[data-item-kind="assistant_message"]').filter({ hasText: "The file was viewed; work continues while its preview is captured." });
+      await expect(followingText).toBeVisible();
+      await expect.poll(async () => (await (await page.request.get("/__e2e/codex/viewed-image/state")).json())).toEqual({ reads: 1 });
+      // Before capture the row names the file but has nothing to disclose.
+      const viewedRow = page.getByTestId("viewed-image-group");
+      await expect(viewedRow).toHaveText("Viewed image · viewed-image-fixture.png");
+      await expect(viewedRow.getByRole("button")).toHaveCount(0);
+      await expect(page.locator('[data-item-kind="image"]')).toHaveCount(0);
+      await capture(page, testInfo, "codex-viewed-image-streaming.png");
+
+      // Settling provider work must not wait for the already-open file read.
+      expect((await page.request.post("/__e2e/codex/turn-completion/release")).status()).toBe(204);
+      await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
+      await expect(page.locator('[data-item-kind="image"]')).toHaveCount(0);
+      expect((await page.request.post("/__e2e/codex/viewed-image/release")).status()).toBe(204);
+      const disclosure = page.getByRole("button", { name: "Viewed image · viewed-image-fixture.png", exact: true });
+      await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+      await expect(page.locator('[data-item-kind="image"]')).toHaveCount(0);
+      await capture(page, testInfo, "codex-viewed-image-collapsed.png");
+      await disclosure.click();
+      const image = page.getByRole("img", { name: "viewed-image-fixture.png", exact: true });
+      await expect(image).toBeVisible();
+      await expect(viewedRow.locator("figcaption")).toHaveCount(0);
+      await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+      const ordering = await page.locator('[data-item-kind]').evaluateAll(items => items.map(item => ({ kind: item.getAttribute("data-item-kind"), text: item.textContent ?? "" })));
+      const imageIndex = ordering.findIndex(item => item.kind === "image");
+      const followingIndex = ordering.findIndex(item => item.text.includes("The file was viewed; work continues"));
+      expect(imageIndex).toBeGreaterThanOrEqual(0);
+      expect(followingIndex).toBeGreaterThan(imageIndex);
+      await expectNoPageOverflow(page);
+      await capture(page, testInfo, "codex-viewed-image-complete.png");
+
+      const readSnapshot = async () => {
+        const response = await page.request.get(`/api${threadPath}?activityDetail=full`);
+        expect(response.ok()).toBe(true);
+        return normalizedThreadSnapshotSchema.parse(await response.json());
+      };
+      const snapshot = await readSnapshot();
+      const retained = Object.values(snapshot.itemsById).find(item => item.kind === "image");
+      if (retained?.kind !== "image" || retained.image.representation !== "artifact") throw new Error("viewed_image_artifact_missing");
+      expect(retained.image).toMatchObject(expectedImage);
+      expect(Object.values(snapshot.itemsById).find(item => item.kind === "viewed_image"))
+        .toMatchObject({ fileName: { text: "viewed-image-fixture.png" } });
+      // Only the file name reaches the browser, never its directory.
+      expect(JSON.stringify(snapshot)).not.toMatch(/[\\/]viewed-image-fixture\.png/u);
+      const content = await page.request.get(`/api${threadPath}/output-artifacts/${retained.image.artifactId}/content`);
+      expect(content.ok()).toBe(true);
+      expect(createHash("sha256").update(await content.body()).digest("hex")).toBe(expectedImage.sha256);
+      expect((await page.request.post("/__e2e/codex/viewed-image/remove")).status()).toBe(204);
+      await page.goto("/");
+      await expect.poll(async () => (await page.request.post(`/__e2e/threads/${threadId}/close-idle-runtime`)).status()).toBe(204);
+      await page.goto(threadPath);
+      await page.reload();
+      await page.getByRole("button", { name: "Viewed image · viewed-image-fixture.png", exact: true }).click();
+      await expect(page.getByRole("img", { name: "viewed-image-fixture.png", exact: true })).toBeVisible();
+      const replay = await readSnapshot();
+      const replayImage = Object.values(replay.itemsById).find(item => item.kind === "image");
+      expect(replayImage?.kind === "image" ? replayImage.image : undefined).toEqual(retained.image);
+      expect((await (await page.request.get("/__e2e/codex/viewed-image/state")).json()).reads).toBe(1);
+    } finally {
+      await page.request.post("/__e2e/codex/viewed-image/release");
+      await page.request.post("/__e2e/codex/turn-completion/reset");
+    }
   });
 
   test("active Codex history keeps abandoned paginated turns readable", async ({

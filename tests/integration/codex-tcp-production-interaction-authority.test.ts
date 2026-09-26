@@ -97,6 +97,7 @@ describe.sequential("production-composed TCP interaction authority", () => {
       });
 
       handle = new CodexConversationHandle({
+        viewedImageCapture: { capture: async () => undefined },
         usageSink: NO_USAGE_SINK,
         nativeNamespace: "test-codex-store",
         usageProvenZero: false,

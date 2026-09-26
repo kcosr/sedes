@@ -1,4 +1,7 @@
 import path from "node:path";
+import { normalizedAbsolutePath } from "../../shared/absolute-path.js";
+import { WORKSPACE_FILE_MAX_PATH_BYTES } from "../../shared/workspace-file-limits.js";
+import { isWithinRemoteRoot, pathForRemoteRoot } from "../execution/remote-path.js";
 import type {
   WorkspaceFileContentResult,
   WorkspaceFileDirectoryQuery,
@@ -83,6 +86,7 @@ import {
   WorkspaceLinkedWorktreeDirtyError,
   WorkspaceLinkedWorktreeRemovalOutcomeUnknownError,
   WorkspaceLinkedWorktreeRemovalRejectedError,
+  WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID,
 } from "../workspace-files/contracts.js";
 import {
   mostSpecificWorkspaceFileRootMatch,
@@ -150,6 +154,21 @@ function optionalAbortSignal(
   signal: AbortSignal | undefined,
 ): [] | [AbortSignal] {
   return signal ? [signal] : [];
+}
+
+/** Bounds a provider call that has no cancellation; its late outcome is ignored. */
+function untilAborted<T>(
+  operation: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  if (!signal) return operation;
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+    operation.then(resolve, reject).finally(() =>
+      signal.removeEventListener("abort", abort));
+  });
 }
 
 /** Principal-scoped root topology and workspace-file application service. */
@@ -792,6 +811,85 @@ export class WorkspaceFileService {
     });
   }
 
+  /** Capture reads do not depend on Files visibility, preferred worktrees, or topology refresh. */
+  async readAbsoluteImage(
+    scope: RequestScope,
+    threadId: string,
+    absolutePath: string,
+    signal?: AbortSignal,
+  ): Promise<Extract<WorkspaceFileContentResult, {
+    availability: "available";
+    contentKind: "image";
+    previewState: "available";
+  }> | undefined> {
+    const thread = this.inventory.getThread(scope, threadId);
+    const workspace = this.inventory.getWorkspace(scope, thread.thread.workspaceId);
+    const controller = new AbortController();
+    const operationSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    return this.#withWorkspaceOperation(scope, workspace.id, async () => {
+      operationSignal.throwIfAborted();
+      if (workspace.availability !== "available") return undefined;
+      const located = await this.#primaryImageTarget(scope, workspace, absolutePath, operationSignal) ??
+        await this.#linkImageTarget(scope, workspace, absolutePath, operationSignal);
+      operationSignal.throwIfAborted();
+      if (!located) return undefined;
+      const { target } = located;
+      return this.#withRootOperation(scope, workspace.id, target.rootId, async () => {
+        operationSignal.throwIfAborted();
+        const result = this.#providerResult(target.rootId,
+          await this.providers.read(scope, target, located.path, operationSignal));
+        operationSignal.throwIfAborted();
+        return result.availability === "available" && result.contentKind === "image" &&
+          result.previewState === "available" ? result : undefined;
+      }, () => controller.abort(new Error("viewed_image_root_retired")));
+    });
+  }
+
+  /** An image inside Primary reads through it, like a listed link match, without a hidden root. */
+  async #primaryImageTarget(
+    scope: RequestScope,
+    workspace: InventoryWorkspaceRecord,
+    absolutePath: string,
+    signal: AbortSignal,
+  ): Promise<{ readonly target: WorkspaceFileRootTarget; readonly path: string } | undefined> {
+    if (!isWithinRemoteRoot(absolutePath, workspace.canonicalPath) ||
+        !this.providers.supportsPrimaryRoot(scope, workspace.environmentId)) return undefined;
+    const reopened = await untilAborted(this.execution.validateWorkspace(
+      scope, workspace.environmentId, workspace.canonicalPath), signal).catch(() => undefined);
+    signal.throwIfAborted();
+    if (reopened?.canonicalPath !== workspace.canonicalPath) return undefined;
+    const target: WorkspaceFileRootTarget = {
+      workspaceId: workspace.id,
+      environmentId: workspace.environmentId,
+      rootId: WORKSPACE_FILE_PRIMARY_ROOT_ID,
+      canonicalPath: workspace.canonicalPath,
+    };
+    const relativePath = await this.#withRootOperation(scope, workspace.id, target.rootId, async () => {
+      await this.providers.validateRoot(scope, {
+        workspaceId: target.workspaceId,
+        environmentId: target.environmentId,
+        rootKind: "primary",
+        canonicalPath: target.canonicalPath,
+      }, signal);
+      signal.throwIfAborted();
+      return this.providers.resolveFileLink(scope, target, { kind: "absolute", path: absolutePath }, signal);
+    }).catch((error: unknown) => this.#fileLinkMissOrThrow(error));
+    signal.throwIfAborted();
+    return relativePath === undefined ? undefined : { target, path: relativePath };
+  }
+
+  async #linkImageTarget(
+    scope: RequestScope,
+    workspace: InventoryWorkspaceRecord,
+    absolutePath: string,
+    signal: AbortSignal,
+  ): Promise<{ readonly target: WorkspaceFileRootTarget; readonly path: string } | undefined> {
+    if (!this.providers.supportsFileLinkRootDiscovery(scope, workspace.environmentId)) return undefined;
+    // Automatic captures read through the validated candidate and never use
+    // the workspace's remembered link-root capacity.
+    return await this.#absoluteFileCandidate(scope, workspace, absolutePath, signal);
+  }
+
   async withDownload<T>(
     scope: RequestScope,
     workspaceId: string,
@@ -1347,82 +1445,23 @@ export class WorkspaceFileService {
     ) {
       return { status: "not_found" };
     }
-    // Establish execution-environment authority before the file provider
-    // probes the candidate or chooses a hidden containing root. This keeps
-    // arbitrary absolute paths from turning link resolution into host-wide
-    // filesystem discovery.
-    const admittedParent = await this.execution
-      .validateWorkspace(
-        scope,
-        workspace.environmentId,
-        path.dirname(input.reference.path),
-      )
-      .catch(() => undefined);
-    if (!admittedParent) return { status: "not_found" };
-    const discovered = await this.providers
-      .discoverFileLinkRoot(
-        scope,
-        workspace.environmentId,
-        input.reference.path,
-      )
-      .catch((error: unknown) => this.#fileLinkMissOrThrow(error));
-    if (!discovered) return { status: "not_found" };
-    const policyPath = discovered.canonicalPath
-      .slice(path.parse(discovered.canonicalPath).root.length)
-      .split(path.sep)
-      .join("/");
-    if (isSensitiveWorkspacePath(policyPath)) {
-      return { status: "not_found" };
-    }
-    const validated = await this.execution
-      .validateWorkspace(
-        scope,
-        workspace.environmentId,
-        discovered.canonicalPath,
-      )
-      .catch(() => undefined);
-    if (!validated || validated.canonicalPath !== discovered.canonicalPath) {
-      return { status: "not_found" };
-    }
-    try {
-      await this.providers.validateRoot(scope, {
-        workspaceId: workspace.id,
-        environmentId: workspace.environmentId,
-        rootKind: "link_only",
-        canonicalPath: discovered.canonicalPath,
-      });
-    } catch (error) {
-      this.#fileLinkMissOrThrow(error);
-      return { status: "not_found" };
-    }
-    const candidateTarget: WorkspaceFileRootTarget = {
-      workspaceId: workspace.id,
-      environmentId: workspace.environmentId,
-      rootId: "link-candidate" as WorkspaceFileRootId,
-      canonicalPath: discovered.canonicalPath,
-    };
-    const canonicalReference: WorkspaceFileLinkReference = {
-      kind: "absolute",
-      path: path.join(
-        discovered.canonicalPath,
-        ...discovered.relativePath.split("/"),
-      ),
-    };
-    const relativePath = await this.providers
-      .resolveFileLink(scope, candidateTarget, canonicalReference)
-      .catch((error: unknown) => this.#fileLinkMissOrThrow(error));
-    if (
-      relativePath === undefined ||
-      relativePath !== discovered.relativePath
-    ) {
-      return { status: "not_found" };
-    }
+    return this.#admitAbsoluteFile(scope, workspace, input.reference.path);
+  }
+
+  /** Narrow absolute-path admission shared by capture and conversation links. */
+  async #admitAbsoluteFile(
+    scope: RequestScope,
+    workspace: InventoryWorkspaceRecord,
+    absolutePath: string,
+  ): Promise<WorkspaceFileLinkResolveResult> {
+    const candidate = await this.#absoluteFileCandidate(scope, workspace, absolutePath);
+    if (!candidate) return { status: "not_found" };
     let remembered;
     try {
       remembered = this.roots.rememberLinkRoot(
         scope,
         workspace.id,
-        discovered.canonicalPath,
+        candidate.target.canonicalPath,
         Date.now(),
       );
     } catch (error) {
@@ -1434,9 +1473,105 @@ export class WorkspaceFileService {
     return {
       status: "resolved",
       rootId: remembered.rootId as WorkspaceFileRootId,
-      path: relativePath,
+      path: candidate.path,
       rootVisibility: "link_only",
     };
+  }
+
+  /** Validated hidden-root candidate; only explicit links remember it as a root. */
+  async #absoluteFileCandidate(
+    scope: RequestScope,
+    workspace: InventoryWorkspaceRecord,
+    absolutePath: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly target: WorkspaceFileRootTarget; readonly path: string } | undefined> {
+    signal?.throwIfAborted();
+    if (!normalizedAbsolutePath(absolutePath) ||
+        Buffer.byteLength(absolutePath, "utf8") > WORKSPACE_FILE_MAX_PATH_BYTES) {
+      return undefined;
+    }
+    const paths = pathForRemoteRoot(absolutePath);
+    // Establish execution-environment authority before the file provider
+    // probes the candidate or chooses a hidden containing root. This keeps
+    // arbitrary absolute paths from turning link resolution into host-wide
+    // filesystem discovery.
+    const admittedParent = await untilAborted(this.execution
+      .validateWorkspace(
+        scope,
+        workspace.environmentId,
+        paths.dirname(absolutePath),
+      ), signal)
+      .catch(() => undefined);
+    signal?.throwIfAborted();
+    if (!admittedParent) return undefined;
+    const discovered = await this.providers
+      .discoverFileLinkRoot(
+        scope,
+        workspace.environmentId,
+        absolutePath,
+        ...optionalAbortSignal(signal),
+      )
+      .catch((error: unknown) => this.#fileLinkMissOrThrow(error));
+    signal?.throwIfAborted();
+    if (!discovered) return undefined;
+    const policyPath = discovered.canonicalPath
+      .slice(paths.parse(discovered.canonicalPath).root.length)
+      .split(paths.sep)
+      .join("/");
+    if (isSensitiveWorkspacePath(policyPath)) {
+      return undefined;
+    }
+    const validated = await untilAborted(this.execution
+      .validateWorkspace(
+        scope,
+        workspace.environmentId,
+        discovered.canonicalPath,
+      ), signal)
+      .catch(() => undefined);
+    signal?.throwIfAborted();
+    if (!validated || validated.canonicalPath !== discovered.canonicalPath) {
+      return undefined;
+    }
+    try {
+      await this.providers.validateRoot(scope, {
+        workspaceId: workspace.id,
+        environmentId: workspace.environmentId,
+        rootKind: "link_only",
+        canonicalPath: discovered.canonicalPath,
+      }, ...optionalAbortSignal(signal));
+    } catch (error) {
+      this.#fileLinkMissOrThrow(error);
+      return undefined;
+    }
+    const candidateTarget: WorkspaceFileRootTarget = {
+      workspaceId: workspace.id,
+      environmentId: workspace.environmentId,
+      rootId: WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID,
+      canonicalPath: discovered.canonicalPath,
+    };
+    const canonicalReference: WorkspaceFileLinkReference = {
+      kind: "absolute",
+      path: paths.join(
+        discovered.canonicalPath,
+        ...discovered.relativePath.split("/"),
+      ),
+    };
+    const relativePath = await this.providers
+      .resolveFileLink(
+        scope,
+        candidateTarget,
+        canonicalReference,
+        ...optionalAbortSignal(signal),
+      )
+      .catch((error: unknown) => this.#fileLinkMissOrThrow(error));
+    signal?.throwIfAborted();
+    if (
+      relativePath === undefined ||
+      relativePath !== discovered.relativePath
+    ) {
+      return undefined;
+    }
+    return { target: candidateTarget, path: relativePath };
   }
 
   async watch(

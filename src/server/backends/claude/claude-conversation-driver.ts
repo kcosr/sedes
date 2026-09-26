@@ -1747,5 +1747,6 @@ function mapClaudeReadError(error: unknown): BackendError {
     "Claude session data is temporarily unavailable.",
     "claude_sdk_read_failed",
     true,
+    error,
   );
 }

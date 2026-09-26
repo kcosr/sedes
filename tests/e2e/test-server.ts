@@ -1,3 +1,5 @@
+import { readFile, writeFile, unlink } from "node:fs/promises";
+import { ViewedImageCaptureService } from "../../src/server/output-artifacts/viewed-image-capture.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { EnvironmentVariablesService } from "../../src/server/environment-variables/environment-variables-service.js";
@@ -1777,6 +1779,26 @@ class CodexE2eRpcFixture {
     });
   }
 
+  emitViewedImage(nativeThreadId: string, absolutePath: string): void {
+    const thread = this.#threads.get(nativeThreadId);
+    const turn = thread?.turns.find(candidate => candidate.status === "inProgress");
+    if (!thread || !turn) throw new Error("e2e_viewed_image_turn_missing");
+    const image: CodexThread["turns"][number]["items"][number] = {
+      type: "imageView", id: `${turn.id}-viewed-image`, path: absolutePath,
+    };
+    const following: CodexThread["turns"][number]["items"][number] = {
+      type: "agentMessage", id: `${turn.id}-after-viewed-image`,
+      text: "The file was viewed; work continues while its preview is captured.",
+      phase: "commentary", memoryCitation: null, delivery: null, questions: null,
+    };
+    this.#replaceThread({ ...thread, turns: thread.turns.map(candidate => candidate.id === turn.id
+      ? { ...turn, items: [...turn.items, image, following] } : candidate) });
+    for (const item of [image, following]) {
+      this.#notify(this.#generation, "item/started", { threadId: nativeThreadId, turnId: turn.id, item, startedAtMs: Date.now() });
+      this.#notify(this.#generation, "item/completed", { threadId: nativeThreadId, turnId: turn.id, item, completedAtMs: Date.now() });
+    }
+  }
+
   interactionState(): Readonly<Record<string, unknown>> {
     return Object.freeze({
       records: Object.freeze(
@@ -3193,6 +3215,11 @@ async function main(): Promise<void> {
   // This scripted server explicitly exercises the experimental accounting surfaces.
   const config = { ...loadConfig(process.env, bootstrapConfiguration), experimentalUsageEnabled: true };
   const fixtureWorkspaceRoots = [path.resolve(process.cwd())];
+  const viewedImageFixturePath = path.join(config.stateDirectory, "viewed-image-fixture.png");
+  let viewedImageReadCount = 0;
+  let viewedImageReadGate: Promise<void> | undefined;
+  let releaseViewedImageRead: (() => void) | undefined;
+  let viewedImageCapture!: ViewedImageCaptureService;
   const configuredTarget = {
     id: "pi-sdk-local", kind: "pi_sdk" as const, label: "Pi SDK", backendInstanceId: "pi-local",
     executionEnvironmentId: "019196f7-a0a8-7bc4-a89b-8cf013978405", enabled: true,
@@ -3755,6 +3782,7 @@ async function main(): Promise<void> {
     instance: codexBackend,
     client: codexRpc.client,
     outputArtifacts,
+    viewedImageCapture: { capture: input => viewedImageCapture.capture(input) },
     serverRequests: codexRpc.serverRequests,
     toolProvenanceKey: new Uint8Array(32).fill(0x45),
     modelPolicy: codexModelPolicy,
@@ -3786,6 +3814,7 @@ async function main(): Promise<void> {
     instance: codexUdsBackend,
     client: codexUdsRpc.client,
     outputArtifacts,
+    viewedImageCapture: { capture: input => viewedImageCapture.capture(input) },
     serverRequests: codexUdsRpc.serverRequests,
     toolProvenanceKey: new Uint8Array(32).fill(0x45),
     modelPolicy: codexModelPolicy,
@@ -3817,6 +3846,7 @@ async function main(): Promise<void> {
     instance: codexStdioBackend,
     client: codexStdioRpc.client,
     outputArtifacts,
+    viewedImageCapture: { capture: input => viewedImageCapture.capture(input) },
     serverRequests: codexStdioRpc.serverRequests,
     toolProvenanceKey: new Uint8Array(32).fill(0x45),
     modelPolicy: codexModelPolicy,
@@ -3943,6 +3973,11 @@ async function main(): Promise<void> {
     new LocalWorkspaceFileProvider({
       scope,
       environmentId: environmentRecord.id,
+      testHooks: { afterReadMetadata: async (relativePath) => {
+        if (path.basename(relativePath) !== path.basename(viewedImageFixturePath)) return;
+        viewedImageReadCount += 1;
+        await viewedImageReadGate;
+      } },
     }),
     { publishApplicationThreadChanges: async () => undefined },
   );
@@ -3953,6 +3988,8 @@ async function main(): Promise<void> {
     new WorkspaceDiffReviewRepository(database),
   );
   const bindings = new ConversationBindingRepository(database);
+  viewedImageCapture = new ViewedImageCaptureService({ artifacts: outputArtifacts,
+    files: workspaceFiles, bindings, inventory: inventoryRepository });
   const creation = new ConversationCreationRepository(database);
   const drafts = new ConversationDraftRepository(database);
   const completion = new SubmissionCompletionRepository(database);
@@ -4993,6 +5030,39 @@ async function main(): Promise<void> {
       response.status(204).end();
     },
   );
+  app.post("/__e2e/codex/viewed-image/:threadId/emit", async (request, response, next) => {
+    try {
+      const binding = bindings.getBinding(scope, request.params.threadId);
+      if (!binding || binding.backendInstanceId !== codexBackend.id) {
+        response.status(409).json({ error: "e2e_viewed_image_binding_invalid" });
+        return;
+      }
+      const bytes = await readFile(path.join(process.cwd(), "public/sedes-mark.png"));
+      await writeFile(viewedImageFixturePath, bytes);
+      viewedImageReadCount = 0;
+      viewedImageReadGate = new Promise(resolve => { releaseViewedImageRead = resolve; });
+      codexRpc.emitViewedImage(binding.backendConversationId, viewedImageFixturePath);
+      response.json({ sha256: createHash("sha256").update(bytes).digest("hex"), byteSize: bytes.length });
+    } catch (error) { next(error); }
+  });
+  app.get("/__e2e/codex/viewed-image/state", (_request, response) => {
+    response.json({ reads: viewedImageReadCount });
+  });
+  app.post("/__e2e/codex/viewed-image/release", (_request, response) => {
+    releaseViewedImageRead?.();
+    releaseViewedImageRead = undefined;
+    viewedImageReadGate = undefined;
+    response.status(204).end();
+  });
+  app.post("/__e2e/codex/viewed-image/remove", async (_request, response, next) => {
+    try {
+      releaseViewedImageRead?.();
+      releaseViewedImageRead = undefined;
+      viewedImageReadGate = undefined;
+      await unlink(viewedImageFixturePath);
+      response.status(204).end();
+    } catch (error) { next(error); }
+  });
   app.post("/__e2e/codex/questions/:threadId", (request, response) => {
     const binding = bindings.getBinding(scope, request.params.threadId);
     if (!binding || binding.backendInstanceId !== codexBackend.id) {
@@ -5688,6 +5758,8 @@ async function main(): Promise<void> {
       await authoritativeCompletionFollowUp.close();
       await completionCallbackDispatcher.close();
       await mutations.close();
+      releaseViewedImageRead?.();
+      await viewedImageCapture.close();
       await runtimes.close();
       await queue.close();
       await interactions.close();

@@ -112,6 +112,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     scope: RequestScope,
     environmentId: string,
     absolutePath: string,
+    signal?: AbortSignal,
   ): Promise<WorkspaceFileDiscoveredLinkRoot | undefined> {
     if (
       !this.#supports(scope, environmentId) ||
@@ -119,7 +120,10 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     ) {
       return undefined;
     }
-    return this.#engine.discoverFileLinkRoot(absolutePath);
+    signal?.throwIfAborted();
+    const result = await this.#engine.discoverFileLinkRoot(absolutePath, signal);
+    signal?.throwIfAborted();
+    return result;
   }
 
   async discoverLinkedWorktrees(
@@ -152,6 +156,7 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     scope: RequestScope,
     root: WorkspaceFileRootTarget,
     reference: WorkspaceFileLinkReference,
+    signal?: AbortSignal,
   ): Promise<string | undefined> {
     if (
       reference.kind === "root_relative" &&
@@ -159,7 +164,10 @@ export class LocalWorkspaceFileProvider implements WorkspaceFileProvider {
     ) {
       return undefined;
     }
-    return this.#engine.resolveFileLink(this.#root(scope, root), reference);
+    signal?.throwIfAborted();
+    const result = await this.#engine.resolveFileLink(this.#root(scope, root), reference);
+    signal?.throwIfAborted();
+    return result;
   }
 
   async list(

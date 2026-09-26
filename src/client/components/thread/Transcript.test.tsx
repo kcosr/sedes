@@ -4295,3 +4295,76 @@ function asyncQuestionItem(turnId: string): ConversationItem {
     },
   };
 }
+
+describe("Transcript viewed images", () => {
+  it("discloses a captured viewed image inside its row between activity groups", () => {
+    const snapshot = makeSnapshot(["turn-1"], false);
+    snapshot.turnsById["turn-1"] = {
+      ...snapshot.turnsById["turn-1"]!,
+      orderedItemIds: ["command-1", "viewed-1", "image-1", "command-2", "viewed-2"],
+    };
+    const command = (id: string) => ({
+      id,
+      turnId: "turn-1",
+      kind: "command" as const,
+      status: "completed" as const,
+      revision: 1,
+      phase: "completed" as const,
+      command: { text: `echo ${id}` },
+    });
+    snapshot.itemsById = {
+      "command-1": command("command-1"),
+      "viewed-1": {
+        id: "viewed-1",
+        turnId: "turn-1",
+        kind: "viewed_image",
+        status: "completed",
+        revision: 1,
+        fileName: { text: "captured.png" },
+      },
+      "image-1": {
+        id: "image-1",
+        turnId: "turn-1",
+        kind: "image",
+        status: "completed",
+        revision: 1,
+        image: {
+          representation: "artifact",
+          artifactId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          mimeType: "image/png",
+          byteSize: 24,
+          sha256: "a".repeat(64),
+          fileName: { text: "captured.png" },
+        },
+      },
+      "command-2": command("command-2"),
+      "viewed-2": {
+        id: "viewed-2",
+        turnId: "turn-1",
+        kind: "viewed_image",
+        status: "completed",
+        revision: 1,
+        fileName: { text: "unavailable.png" },
+      },
+    };
+    const { container } = render(
+      <Transcript
+        store={new FakeTranscriptStore(snapshot) as unknown as ThreadClientStore}
+      />,
+    );
+
+    const rows = screen.getAllByTestId("viewed-image-group");
+    expect(rows).toHaveLength(2);
+    expect(screen.getAllByTestId("activity-group")).toHaveLength(2);
+    expect(container.querySelector('[data-item-kind="image"]')).toBeNull();
+    const captured = screen.getByRole("button", { name: "Viewed image · captured.png" });
+    expect(captured).toHaveAttribute("aria-expanded", "false");
+    expect(rows[1]).toHaveTextContent("Viewed image · unavailable.png");
+    expect(rows[1]!.querySelector("button")).toBeNull();
+
+    fireEvent.click(captured);
+    const images = container.querySelectorAll('[data-item-kind="image"]');
+    expect(images).toHaveLength(1);
+    expect(rows[0]).toContainElement(images[0] as HTMLElement);
+  });
+});
