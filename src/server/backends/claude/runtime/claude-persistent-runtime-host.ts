@@ -1,4 +1,5 @@
 import { claudeMessageIsChildOwned } from "../claude-message-scope.js";
+import { attachmentDiagnostic } from "../../../diagnostics/attachment-diagnostics.js";
 import { ClaudeBackgroundActivity } from "../claude-background-activity.js";
 import { claudeResultIsUnrelated, claudeResultUserMessageIds } from "../claude-result-lifecycle.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -174,7 +175,18 @@ export class ClaudePersistentRuntimeHost {
     // blocker; synchronous admission and journal changes update their own state.
     const mutation = ["rename", "interrupt", "set_model", "set_effort", "set_permission_mode"].includes(command.action);
     if (mutation) { this.#inflight++; this.#revision++; }
+    const started = performance.now();
     try { return await this.#execute(command, listener); }
+    catch (error) {
+      attachmentDiagnostic("claude_sidecar_command_failed", {
+        role: "sidecar",
+        backendInstanceId: this.input.configuration.backendInstanceId,
+        executionEnvironmentId: this.input.configuration.executionEnvironmentId,
+        method: command.action,
+        durationMs: performance.now() - started,
+      }, error);
+      throw error;
+    }
     finally { if (mutation) { this.#inflight--; this.#revision++; } }
   }
 

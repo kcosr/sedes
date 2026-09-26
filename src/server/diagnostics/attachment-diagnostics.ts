@@ -40,7 +40,7 @@ const names = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "Aggre
   "SidecarOperationError", "SidecarProtocolError", "SidecarProtocolDeliveryError", "SidecarFrameWriteError",
   "SidecarTransportCleanupError", "SidecarSessionCleanupError", "ZodError"]);
 const token = /^[a-zA-Z0-9][a-zA-Z0-9_./:-]{0,159}$/u;
-const machineCode = /^(?:(?:codex|sidecar|ssh|execution|provider|transport|runtime)_[a-z0-9_]+|SQLITE_[A-Z_]+|ERR_[A-Z0-9_]+|E(?:CONNRESET|CONNREFUSED|PIPE|TIMEDOUT|NOENT|ACCES|IO|NOMEM|NOSPC))$/u;
+const machineCode = /^(?:(?:codex|claude|sidecar|ssh|execution|provider|transport|runtime)_[a-z0-9_]+|SQLITE_[A-Z_]+|ERR_[A-Z0-9_]+|E(?:CONNRESET|CONNREFUSED|PIPE|TIMEDOUT|NOENT|ACCES|IO|NOMEM|NOSPC))$/u;
 const closureReasons = new Set(["exit", "spawn_error", "stderr_overflow", "end", "closed", "lease_closed", "lease_rejected", "idle_release", "operator_restart", "supervisor_close", "connection_failed", "receipt_record", "receipt_acknowledge", "thread_evict"]);
 const textFields = ["backendInstanceId", "executionEnvironmentId", "attachmentId", "role", "requestId", "operationId", "method", "stage", "outcome", "transportKind", "reason", "signal"] as const;
 const numberFields = ["generation", "controllerEpoch", "carrierGeneration", "attachmentAttempt", "durationMs", "exitCode", "pendingOperationRequests", "pendingOperationSends", "inboundIdleMs", "outboundIdleMs", "outcomeCount", "pendingRequestCount", "queuedWriteBytes", "queuedWriteFrames", "activeWriteBytes", "frameBytes"] as const;

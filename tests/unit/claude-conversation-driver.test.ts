@@ -649,6 +649,23 @@ describe("ClaudeConversationBackendDriver", () => {
     ).resolves.toMatchObject({ status: "unresolved" });
   });
 
+  it("retains a failed metadata read cause without changing its safe classification", async () => {
+    const sdk = fakeSdk();
+    const cause = new Error("sidecar_request_timeout");
+    sdk.getSessionInfo.mockRejectedValue(cause);
+    const driver = createDriver(sdk);
+    const input = {
+      scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
+    };
+    for (const operation of [() => driver.attach(input), () => driver.read(input)]) {
+      await expect(operation()).rejects.toMatchObject({
+        backendCode: "claude_sdk_read_failed", category: "unavailable",
+        retryable: true, cause,
+      });
+    }
+  });
+
   it("rejects metadata and history returned for another native session", async () => {
     const sdk = fakeSdk();
     sdk.getSessionInfo.mockResolvedValue(session(1));

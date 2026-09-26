@@ -75,6 +75,9 @@
 
 ### Fixed
 
+- Preserve underlying Claude read errors in gated thread-load diagnostics and
+  identify failed persistent-runtime commands without logging conversation content.
+
 - Reclaim acknowledged remote Claude output during long unfinished turns once
   native history covers it, preserving unfinished output and pending delivery.
   Restart recovery reads large histories in bounded, consistency-checked pages. (#9)
