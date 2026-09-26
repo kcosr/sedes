@@ -344,6 +344,7 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
       modelPolicy: input.prepared.modelPolicy,
       executionSettings,
       outputArtifacts: input.context.outputArtifacts,
+      viewedImageCapture: input.context.viewedImageCapture,
       agentToolCliEnvironment: new DatabaseCodexAgentToolCliEnvironmentProvider(
         {
           database: input.context.database,

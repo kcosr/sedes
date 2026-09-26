@@ -4,7 +4,8 @@ The Codex backend connects Sedes to Codex app-server while keeping Codex's
 native protocol and identifiers behind Sedes's normalized conversation
 contract. Choose it when you need explicit sandbox, network, approval, and
 reviewer settings; structured questions; Goal or Fast mode; native generated
-images; or an operator-owned app-server reached locally or through SSH.
+images and viewed-image snapshots; or an operator-owned app-server reached
+locally or through SSH.
 
 For provider-protocol, history, recovery, and feature implementation details,
 see the [Codex backend internals](../../internals/backends/codex.md). For a
@@ -215,7 +216,8 @@ The current Codex driver supports:
 - workspace skills;
 - provider approvals and structured questionnaires;
 - context and token usage;
-- selected-turn and latest-provider-snapshot native forks; and
+- selected-turn and latest-provider-snapshot native forks;
+- snapshots of local images Codex views, where Files can read them;
 - nonblocking follow-up questions in the Questions panel; and
 - provider features `codex.execution@1`,
   `codex.fast_mode@1`, `codex.goal@1`, and `codex.tui@1` where eligible.
@@ -261,6 +263,31 @@ does not offer or map Ultrafast to Fast. Goal stores one bounded objective and
 projects provider-observed lifecycle status; its create, pause, resume, and
 clear actions are capability- and revision-checked. Neither is inferred from
 model names or free-form provider text.
+
+### Viewed images
+
+When Codex views a local image, the transcript shows a **Viewed image** row
+with the file's name (never its directory). If Sedes can read the file, the row
+becomes expandable, collapsed by default, shortly after the view completes or
+when that history is next loaded; expand it to see the snapshot. The snapshot
+shows the file as Sedes read it, not necessarily the exact pixels Codex sent to
+the model. Once captured, the snapshot stays with the thread through reloads
+and restarts, even if the file later changes or is deleted.
+
+Capture needs Files access to the path in the thread's execution environment:
+a local environment, or an SSH or outbound environment whose sidecar has the
+`workspace_files` grant. The file's directory must be within that
+environment's allowed roots; `/tmp` qualifies only if the policy allows it. The
+Files panel need not be open and the file need not be in a visible Files root.
+Only PNG, JPEG, GIF, and WebP files up to 16 MiB with a matching extension are
+captured, and sensitive files are never read.
+
+Sedes assumes every viewed path belongs to the thread's configured execution
+host, because Codex's image-view event does not say which executor read it.
+Codex-native additional executor environments, such as a `view_image` call
+with another `environment_id`, are unsupported for this feature. Sedes cannot
+detect them and may show a same-named file from the configured host, or
+nothing.
 
 ### Agent tools
 
@@ -319,10 +346,11 @@ The following boundaries are intentionally unsupported:
 - Sedes-managed Codex MCP configuration beyond the per-thread `sedes` server
   for Native agent tools;
 - provider `openaiForm` MCP elicitation requests;
-- output artifacts other than completed, in-band PNG `imageGeneration`
-  results;
+- generated-image artifacts other than completed, in-band PNG
+  `imageGeneration` results;
 - path-only generated-output reads, including through the managed-SSH
   sidecar;
+- viewed-image capture from Codex-native additional executor environments;
 - durable promotion of ordinary tool-result images;
 - image-generation controls and a dedicated image download action; and
 - inference of native children or mutation outcomes from approximate matches.
@@ -358,6 +386,7 @@ mutation safe to repeat.
 | Models appear but a thread cannot run or fork                | Check model/effort, service tier, sandbox, network, approval policy, and reviewer against the live catalog and configured ceiling. Sedes does not invent or substitute an unconfirmed value.                                                                                                             |
 | Managed TUI is missing                                       | It requires an external UDS/TCP Codex connection—local, or hosted by a persistent sidecar whose runtime channel negotiated the managed-TUI operations—plus one completed first submission, healthy endpoint and PTY support on the hosting environment, a compatible operator-installed CLI there, fully representable settings, and catalog model policy. Set canonical `moduleConfiguration.tuiExecutablePath` to override normal `PATH` resolution. |
 | Sedes CLI tools are missing                                  | Check thread provenance, network policy, built CLI availability, proven isolation, and—on SSH—the `agent_tools_cli` sidecar capability.                                                                                                                                                                  |
+| A viewed image row cannot be expanded                        | Confirm the environment is local or its sidecar has `workspace_files`, the file's directory is within an allowed root, and the file is a PNG, JPEG, GIF, or WebP of at most 16 MiB with a matching extension, outside sensitive paths. Codex-native additional executors are unsupported. Automatic retries are bounded; a later history read or reattach may retry. A captured snapshot is never replaced. |
 | A sent mutation times out or the transport drops             | Preserve the application recovery state. Sedes retries only reviewed safe reads and never infers an outcome from title, workspace, timing, or similar content.                                                                                                                                           |
 | A reloaded thread contains an older abandoned turn           | Sedes reads paginated history without changing Codex's native store and shows abandoned native `inProgress` turns as interrupted. A stale historical shell does not require Force reset or direct SQL/rollout repair.                                                                                    |
 

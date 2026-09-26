@@ -136,6 +136,7 @@ describe("GrokBackendModule", () => {
         toolProvenanceKey: new Uint8Array(32),
         agentTools: {} as BackendModuleRuntimeContext["agentTools"],
         usage: NO_USAGE_SINK, outputArtifacts: {} as BackendModuleRuntimeContext["outputArtifacts"],
+        viewedImageCapture: {} as BackendModuleRuntimeContext["viewedImageCapture"],
         agentToolSourceCapabilities,
         agentToolCli: {
           availability: "unavailable",
@@ -232,6 +233,7 @@ describe("GrokBackendModule", () => {
           toolProvenanceKey: new Uint8Array(32),
           agentTools: {} as BackendModuleRuntimeContext["agentTools"],
           usage: NO_USAGE_SINK, outputArtifacts: {} as BackendModuleRuntimeContext["outputArtifacts"],
+          viewedImageCapture: {} as BackendModuleRuntimeContext["viewedImageCapture"],
           agentToolSourceCapabilities,
           agentToolCli: {
             availability: "unavailable",

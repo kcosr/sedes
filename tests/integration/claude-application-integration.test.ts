@@ -486,6 +486,7 @@ describe("Claude production application integration", () => {
         toolProvenanceKey: new Uint8Array(32),
         agentTools: new LateBoundBackendAgentToolFacade(),
         outputArtifacts: {} as never,
+        viewedImageCapture: {} as never,
         agentToolSourceCapabilities,
         agentToolCli: new Map([
           [

@@ -260,6 +260,7 @@ describe.runIf(tmuxAvailable)("Codex TUI remote live compatibility", () => {
         createdAt: new Date().toISOString(),
       });
       const normalizedHandle = new CodexConversationHandle({
+        viewedImageCapture: { capture: async () => undefined },
     usageSink: NO_USAGE_SINK,
     nativeNamespace: "test-codex-store",
     usageProvenZero: false,
@@ -1663,6 +1664,7 @@ async function startNormalizedLiveProjection(input: {
     createdAt: new Date().toISOString(),
   });
   const handle = new CodexConversationHandle({
+        viewedImageCapture: { capture: async () => undefined },
     usageSink: NO_USAGE_SINK,
     nativeNamespace: "test-codex-store",
     usageProvenZero: false,

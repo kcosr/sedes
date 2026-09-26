@@ -122,11 +122,13 @@ export class CompositeWorkspaceFileProvider implements WorkspaceFileProvider {
     scope: RequestScope,
     environmentId: string,
     absolutePath: string,
+    signal?: AbortSignal,
   ): Promise<WorkspaceFileDiscoveredLinkRoot | undefined> {
     return this.#provider(scope, environmentId).discoverFileLinkRoot(
       scope,
       environmentId,
       absolutePath,
+      ...optionalAbortSignal(signal),
     );
   }
 
@@ -160,11 +162,13 @@ export class CompositeWorkspaceFileProvider implements WorkspaceFileProvider {
     scope: RequestScope,
     root: WorkspaceFileRootTarget,
     reference: WorkspaceFileLinkReference,
+    signal?: AbortSignal,
   ): Promise<string | undefined> {
     return this.#provider(scope, root.environmentId).resolveFileLink(
       scope,
       root,
       reference,
+      ...optionalAbortSignal(signal),
     );
   }
 

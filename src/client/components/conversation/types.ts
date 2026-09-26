@@ -15,6 +15,8 @@ export interface ItemRenderContext {
     signal: AbortSignal,
   ) => Promise<Blob>;
   providerFeatureCapabilities?: readonly ProviderFeatureCapability[];
+  /** A disclosure already names the image, so the figure omits its caption. */
+  omitImageCaption?: boolean;
 }
 
 export const defaultItemRenderContext: ItemRenderContext = {

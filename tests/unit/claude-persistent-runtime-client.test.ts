@@ -38,6 +38,27 @@ function setup(input: { nativeDefault?: boolean; supportsRuntime?: boolean } = {
 }
 afterEach(() => { connectionState.instances.length = 0; vi.useRealTimers(); vi.unstubAllEnvs(); });
 
+it.each([false, true])("gates content-free command diagnostics and preserves the original error (enabled=%s)", async enabled => {
+  vi.stubEnv("SEDES_DEBUG_DELIVERY", enabled ? "1" : "");
+  const output = vi.spyOn(console, "error").mockImplementation(() => {});
+  const { client } = setup();
+  const error = new Error("private provider content", { cause: new Error("sidecar_request_timeout") });
+  try {
+    await client.attachment();
+    connectionState.instances[0]!.execute.mockRejectedValueOnce(error);
+    await expect(client.getSessionInfo(SESSION_ID, { dir: "/private/workspace" }, {})).rejects.toBe(error);
+    if (enabled) {
+      expect(output).toHaveBeenCalledOnce();
+      const record = String(output.mock.calls[0]![0]);
+      expect(record).toContain('"event":"claude_runtime_command_failed"');
+      expect(record).toContain('"method":"info"');
+      expect(record).toContain('"stage":"execute"');
+      expect(record).toContain("sidecar_request_timeout");
+      for (const secret of [SESSION_ID, "/private/workspace", "private provider content"]) expect(record).not.toContain(secret);
+    } else expect(output).not.toHaveBeenCalled();
+  } finally { await client.close(); output.mockRestore(); }
+});
+
 it("acquires lazily, reattaches the same native session after carrier loss, and detaches on main close", async () => {
   vi.useFakeTimers();
   const { client, acquire, carriers, options } = setup();

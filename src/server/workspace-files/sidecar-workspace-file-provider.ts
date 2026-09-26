@@ -24,6 +24,7 @@ import {
   workspaceFilesListDirectoryOperation,
   workspaceFilesReadOperation,
   workspaceFilesResolveLinkOperation,
+  workspaceFilesRootCloseOperation,
   workspaceFilesRootOpenOperation,
   workspaceFilesRootValidateOperation,
   workspaceFilesStatusOperation,
@@ -55,6 +56,7 @@ import {
   WorkspaceLinkedWorktreeRemovalOutcomeUnknownError,
   WorkspaceLinkedWorktreeDirtyError,
   WorkspaceLinkedWorktreeRemovalRejectedError,
+  WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID,
   type WorkspaceFileDiscoveredLinkRoot,
   type WorkspaceFileDownloadSource,
   type WorkspaceFileProvider,
@@ -92,6 +94,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     "primary" | "supplemental" | "linked_worktree" | "link_only"
   >();
   readonly #handles = new Map<number, Map<string, string>>();
+  readonly #candidateRootUsers = new Map<string, number>();
   #closed = false;
 
   constructor(input: {
@@ -192,6 +195,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     scope: RequestScope,
     environmentId: string,
     absolutePath: string,
+    signal?: AbortSignal,
   ): Promise<WorkspaceFileDiscoveredLinkRoot | undefined> {
     this.#assert(scope, environmentId);
     const policyRootPath = this.#policyRoot(absolutePath);
@@ -205,7 +209,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       lease = await this.#runtime.acquireOperation(
         scope,
         environmentId,
-        new AbortController().signal,
+        signal ?? new AbortController().signal,
       );
     } catch (error) {
       throw classifyError(error);
@@ -214,6 +218,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       const result = await lease.session.call(
         workspaceFilesDiscoverLinkRootOperation,
         { absolutePath, policyRootPath },
+        ...sidecarCallOptions(signal),
       );
       return result.status === "discovered"
         ? {
@@ -343,6 +348,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     scope: RequestScope,
     root: WorkspaceFileRootTarget,
     reference: Parameters<WorkspaceFileProvider["resolveFileLink"]>[2],
+    signal?: AbortSignal,
   ) {
     if (
       reference.kind === "root_relative" &&
@@ -354,13 +360,13 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       reference.kind === "root_relative"
         ? { kind: "workspace_relative" as const, path: reference.path }
         : reference;
-    return await this.#operation(scope, root, async (session, rootHandle) => {
+    return await this.#operation(scope, root, async (session, rootHandle, operationSignal) => {
       const result = await session.call(workspaceFilesResolveLinkOperation, {
         rootHandle,
         reference: sidecarReference,
-      });
+      }, ...sidecarCallOptions(operationSignal));
       return result.status === "resolved" ? result.path : undefined;
-    });
+    }, signal);
   }
 
   async list(
@@ -1032,22 +1038,90 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       if (signal?.aborted) throw signal.reason ?? error;
       throw classifyError(error);
     }
+    const rootKind = this.#rootKind(root);
+    const policyRootPath = this.#policyRoot(root.canonicalPath);
+    const candidateKey = root.rootId === WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID
+      ? rootHandleKey(root.workspaceId, root.rootId, rootKind, root.canonicalPath,
+        policyRootPath)
+      : undefined;
+    if (candidateKey) {
+      this.#candidateRootUsers.set(candidateKey, (this.#candidateRootUsers.get(candidateKey) ?? 0) + 1);
+    }
+    let outcomeUnknown = false;
     try {
       const rootHandle = await this.#rootHandle(
         lease,
         root.workspaceId,
         root.rootId,
-        this.#rootKind(root),
+        rootKind,
         root.canonicalPath,
         signal,
       );
       return await operation(lease.session, rootHandle, signal);
     } catch (error) {
+      outcomeUnknown = signal?.aborted === true || isUncertainSidecarMutationError(error);
       if (signal?.aborted) throw signal.reason ?? error;
       throw classifyError(error);
     } finally {
+      if (candidateKey) {
+        this.#releaseCandidateRoot(lease, candidateKey, outcomeUnknown, {
+          rootId: root.rootId,
+          rootKind,
+          declaredPath: root.canonicalPath,
+          policyRootPath,
+        });
+      }
       lease.release();
     }
+  }
+
+  // Candidate paths vary per link or capture; keeping their handles would
+  // exhaust the sidecar session's bounded root table.
+  #releaseCandidateRoot(
+    lease: {
+      readonly session: SidecarClientSession;
+      readonly carrierGeneration: number;
+    },
+    key: string,
+    outcomeUnknown: boolean,
+    open: {
+      readonly rootId: WorkspaceFileRootId;
+      readonly rootKind: "primary" | "supplemental" | "linked_worktree" | "link_only";
+      readonly declaredPath: string;
+      readonly policyRootPath: string | undefined;
+    },
+  ): void {
+    const users = (this.#candidateRootUsers.get(key) ?? 1) - 1;
+    if (users > 0) {
+      this.#candidateRootUsers.set(key, users);
+      return;
+    }
+    this.#candidateRootUsers.delete(key);
+    const generation = this.#handles.get(lease.carrierGeneration);
+    const rootHandle = generation?.get(key);
+    const admissionId = this.#admissionIds.get(key);
+    generation?.delete(key);
+    this.#admissionIds.delete(key);
+    // Cancellation and lease release never wait for the close.
+    const close = (handle: string) =>
+      lease.session.call(workspaceFilesRootCloseOperation, { rootHandle: handle });
+    if (rootHandle) {
+      void close(rootHandle).catch(() => undefined);
+      return;
+    }
+    // An interrupted open may still be admitted. Reopening the same admission
+    // joins or returns it, so the root closes without waiting for another read.
+    if (!outcomeUnknown || !admissionId || !open.policyRootPath) return;
+    void lease.session
+      .call(workspaceFilesRootOpenOperation, {
+        admissionId,
+        rootId: open.rootId,
+        rootKind: open.rootKind,
+        declaredPath: open.declaredPath,
+        policyRootPath: open.policyRootPath,
+      })
+      .then(({ rootHandle: admitted }) => close(admitted))
+      .catch(() => undefined);
   }
 
   async #rootHandle(
@@ -1063,7 +1137,7 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
   ): Promise<string> {
     const policyRootPath = this.#policyRoot(canonicalPath);
     if (!policyRootPath) throw new WorkspaceFileRootUnavailableError();
-    const key = `${workspaceId}\0${rootId}\0${rootKind}\0${canonicalPath}\0${policyRootPath}`;
+    const key = rootHandleKey(workspaceId, rootId, rootKind, canonicalPath, policyRootPath);
     let generation = this.#handles.get(lease.carrierGeneration);
     if (!generation) {
       generation = new Map();
@@ -1121,6 +1195,16 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       throw new WorkspaceFileProviderUnavailableError();
     }
   }
+}
+
+function rootHandleKey(
+  workspaceId: string,
+  rootId: WorkspaceFileRootId,
+  rootKind: "primary" | "supplemental" | "linked_worktree" | "link_only",
+  canonicalPath: string,
+  policyRootPath: string | undefined,
+): string {
+  return `${workspaceId}\0${rootId}\0${rootKind}\0${canonicalPath}\0${policyRootPath}`;
 }
 
 function classifyError(error: unknown): Error {

@@ -1,3 +1,5 @@
+import type { ConversationBinding } from "../contracts.js";
+import { CodexViewedImageCaptureCoordinator } from "./codex-viewed-image-capture.js";
 import { CodexSubagentUsageCoordinator } from "./codex-subagent-usage.js";
 import type { UsageSink } from "../../usage/contracts.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
@@ -223,6 +225,7 @@ export interface CodexConversationDriverInput {
   readonly modelPolicy: CompiledBackendModelPolicy;
   readonly executionSettings: CodexExecutionSettingsProvider;
   readonly outputArtifacts: import("../../output-artifacts/contracts.js").OutputArtifactPublisher;
+  readonly viewedImageCapture: import("../../output-artifacts/viewed-image-capture.js").ViewedImageCapture;
   readonly agentToolCliEnvironment: CodexAgentToolCliEnvironmentProvider;
   readonly composerSkillPreferences?: CodexComposerSkillPreferenceReader;
   readonly fastModeSessions?: CodexFastModeSessionRegistry;
@@ -246,6 +249,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
   readonly #modelPolicy: CompiledBackendModelPolicy;
   readonly #executionSettings: CodexExecutionSettingsProvider;
   readonly #outputArtifacts: import("../../output-artifacts/contracts.js").OutputArtifactPublisher;
+  readonly #viewedImageCapture: import("../../output-artifacts/viewed-image-capture.js").ViewedImageCapture;
   readonly #agentToolCliEnvironment: CodexAgentToolCliEnvironmentProvider;
   readonly #composerSkillPreferences: CodexComposerSkillPreferenceReader;
   readonly #fastModeSessions: CodexFastModeSessionRegistry;
@@ -297,6 +301,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     this.#modelPolicy = input.modelPolicy;
     this.#executionSettings = input.executionSettings;
     this.#outputArtifacts = input.outputArtifacts;
+    this.#viewedImageCapture = input.viewedImageCapture;
     this.#agentToolCliEnvironment = input.agentToolCliEnvironment;
     this.#composerSkillPreferences =
       input.composerSkillPreferences ??
@@ -1101,6 +1106,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         correlationAncestorThreadIds: detail.correlationAncestorThreadIds,
         executionSettings: this.#executionSettings,
         outputArtifacts: this.#outputArtifacts,
+        viewedImageCapture: this.#viewedImageCapture,
         fastModeSessions: this.#fastModeSessions,
         agentToolCliEnvironment: this.#agentToolCliEnvironment,
         composerSkillPreferences: this.#composerSkillPreferences,
@@ -1234,6 +1240,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       input.binding.applicationThreadId,
       10,
       metadata.historyMode,
+      input.binding,
     );
     const current = this.#client.lifecycleSnapshot();
     if (
@@ -2368,6 +2375,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     applicationThreadId: string,
     visibleLimit?: number,
     expectedHistoryMode: "legacy" | "paginated" = "legacy",
+    captureBinding?: ConversationBinding,
   ) {
     if (thread.historyMode !== expectedHistoryMode) {
       throw codexError(
@@ -2391,6 +2399,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       correlationAncestorThreadIds,
     );
     let candidateLimit = visibleLimit;
+    let captureBudgetUsed = false;
     for (;;) {
       try {
         const candidate =
@@ -2402,12 +2411,20 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
                 normalized.turns.length,
                 candidateLimit,
               ).thread;
-        const projection = projectCodexThreadHistory(
+        let projection = projectCodexThreadHistory(
           candidate,
           scope,
           new Map(),
           context,
         );
+        if (captureBinding && !captureBudgetUsed && projection.pendingViewedImages.length > 0) {
+          captureBudgetUsed = true;
+          const capture = new CodexViewedImageCaptureCoordinator({ binding: captureBinding,
+            capture: this.#viewedImageCapture, onCaptured: () => undefined });
+          try { await capture.capturePage(projection.pendingViewedImages); }
+          finally { capture.close(); }
+          projection = projectCodexThreadHistory(candidate, scope, new Map(), context);
+        }
         const materialized = await materializeCodexGeneratedImagePublications(
           projection,
           context,

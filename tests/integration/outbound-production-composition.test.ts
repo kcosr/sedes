@@ -12,11 +12,15 @@ import { normalizedThreadSnapshotSchema, threadEventEnvelopeSchema } from "../..
 import { OutboundCodexFixture } from "../support/outbound-codex-fixture.js";
 import { terminalAdmissionSchema, terminalMutationResultSchema, terminalResourceSchema, terminalServerFrameSchema, decodeTerminalBinaryFrame, encodeTerminalBinaryFrame, TERMINAL_WEBSOCKET_PATH, TERMINAL_WEBSOCKET_PROTOCOL, type TerminalServerFrame, type TerminalResource } from "../../src/shared/protocol/terminals.js";
 import { WebSocket } from "ws";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OUTBOUND_CONTROL_PATH, OUTBOUND_CONTROL_PROTOCOL, OUTBOUND_RUNTIME_PATH, OUTBOUND_RUNTIME_PROTOCOL } from "../../src/internal/outbound-protocol.js";
 import { readSidecarManagementRecord, writeSidecarManagementRecord } from "../../src/internal/sidecar-protocol/service-management-channel.js";
 import { sidecarManagementResponseSchema, type SidecarServiceScope } from "../../src/internal/sidecar-protocol/service-management-v1.js";
 import { startProductionApplication, type RunningApplication } from "../../src/server/production-application.js";
+import { ThreadRuntimeCoordinator } from "../../src/server/events/thread-runtime-coordinator.js";
+import { HostPairingRepository } from "../../src/server/host-pairing/host-pairing-repository.js";
+import { OutboundConnectionRegistry } from "../../src/server/outbound/outbound-connection-registry.js";
+import { ViewedImageCaptureService } from "../../src/server/output-artifacts/viewed-image-capture.js";
 import { loadSidecarArtifactRegistration, type SidecarArtifactRegistration } from "../../src/server/sidecar/sidecar-artifact.js";
 import { inspectAtEndpoint } from "../../src/server/sidecar/persistent-sidecar-bootstrap.js";
 import { persistentSidecarPaths } from "../../src/server/sidecar/persistent-sidecar-paths.js";
@@ -146,8 +150,17 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
     expect(fixture.codex?.requests.some(request => request.method === "turn/start")).toBe(false);
 
     const activePairing = (await fixture.pairings()).pairings[0]!;
+    const revoke = vi.spyOn(HostPairingRepository.prototype, "revoke");
+    const refresh = vi.spyOn(OutboundConnectionRegistry.prototype, "refresh");
+    const cancelEnvironment = vi.spyOn(ViewedImageCaptureService.prototype, "cancelEnvironment");
+    cleanups.push(async () => { revoke.mockRestore(); refresh.mockRestore(); cancelEnvironment.mockRestore(); });
     await fixture.json("/api/host-pairings/revoke", "POST", { mutationId: randomUUID(), pairingId: activePairing.id,
       expectedPairingRevision: activePairing.revision, expectedConfigurationRevision: (await fixture.configuration()).revision });
+    // Viewed-image captures are fenced in the revoke commit, before carriers are refreshed.
+    const revokedAt = revoke.mock.invocationCallOrder[0]!;
+    const fencedAt = cancelEnvironment.mock.invocationCallOrder.find((order, index) =>
+      order > revokedAt && cancelEnvironment.mock.calls[index]![1] === fixture.environmentId);
+    expect(fencedAt).toBeLessThan(refresh.mock.invocationCallOrder.find(order => order > revokedAt)!);
     await fixture.waitFor(async () => (await fixture.pairings()).pairings[0]!.state === "revoked" && !(await fixture.pairings()).pairings[0]!.connected);
     await fixture.waitFor(async () => !(await fixture.snapshot()).environments.find(environment => environment.id === fixture.environmentId)?.available);
     const revoked = workspaceFileContentResultSchema.parse(await fixture.json(`${fileUrl}/content?rootId=primary&path=example.txt`));
@@ -260,7 +273,14 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
     expect(events.filter(event => event.event === "permission_resolved")).toEqual([expect.objectContaining({ pid: send.pid, queryId: send.queryId, sessionId: send.sessionId, behavior: "allow" })]);
     expect(events.filter(event => event.event === "query_close" && event.queryId === send.queryId)).toHaveLength(0);
     expect(fixture.threadStreamErrors).toEqual([]);
+    const cancelThread = vi.spyOn(ViewedImageCaptureService.prototype, "cancelThread");
+    const stopRuntimes = vi.spyOn(ThreadRuntimeCoordinator.prototype, "runWithRuntimesStopped");
+    cleanups.push(async () => { cancelThread.mockRestore(); stopRuntimes.mockRestore(); });
     await fixture.stopBackend("outbound-claude-backend");
+    // Stop fences the thread's viewed-image captures before its provider effect runs.
+    const fencedAt = cancelThread.mock.invocationCallOrder.find((_order, index) =>
+      cancelThread.mock.calls[index]![1] === created.threadId);
+    expect(fencedAt).toBeLessThan(stopRuntimes.mock.invocationCallOrder[0]!);
   }, 120_000);
 });
 

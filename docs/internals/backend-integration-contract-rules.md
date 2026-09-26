@@ -2128,10 +2128,33 @@ provider path as local to the Sedes server, silently fall back from SSH to
 local access, or claim a sidecar operation that is not implemented and
 configured.
 
+Path-based provider image capture goes through the backend-neutral
+`ViewedImageCaptureService`. The backend supplies its scoped binding, a stable
+opaque publication key derived from native coordinates (never the path,
+filename, bytes, or a rewritable native ID), the absolute path, and
+cancellation; it never receives a general Files provider. The service derives
+workspace and environment, reads only through that exact environment's Files
+provider, and rechecks binding and environment authority inside the publication
+transaction. A retained association wins over rereading on every observation,
+even after the source changes or disappears, and it is presented as a snapshot
+at capture time rather than provider-byte identity. Project the view as a
+terminal `viewed_image` item carrying only the path's final component as
+`fileName`, add the image as a separate child in the next reserved source-order
+position, and deliver a late child as a new item before its turn update rather
+than mutating a terminal item or forcing a resnapshot. `viewed_image` is a
+standalone, non-activity kind: summary mode passes it through unchanged, and
+the browser discloses the image that directly follows it. When the native item
+cannot attribute a path to the configured execution host, document that
+topology limit instead of guessing.
+
 The current reviewed dispositions are: Codex supports completed native
-`imageGeneration` PNG results; owned-local Grok supports exact completed
-`ImageGen` and `ImageEdit` JPEG results; Pi and Claude intentionally report
-unsupported. The complete byte and topology contract is in
+`imageGeneration` PNG results and captures completed `imageView` paths on the
+thread's configured execution host; owned-local Grok supports exact completed
+`ImageGen` and `ImageEdit` JPEG results. Codex and Grok generated-image paths
+are unchanged by viewed-image capture. Pi and Claude intentionally report
+unsupported and gain no image-view capture. `providerOutputArtifacts.nativeImage`
+describes supported output images only; it is not proof of Files availability
+or native-executor attribution. The complete byte and topology contract is in
 [Provider output artifacts](output-artifacts.md).
 
 ## Creation, binding, and forks
@@ -2987,7 +3010,7 @@ surfaces that apply:
 | History and streaming              | Are snapshot bounds, ordering, correlation, reconnect, duplicates, and stale events covered?                                                                                                                                                                                                                                                                         |
 | Input lifecycle                    | Are send, steer, queue, stop, attachments, Task references, immutable acceptance snapshots, and active-turn races explicit?                                                                                                                                                                                                                                          |
 | Completion consumers               | Does each obligation bind one exact operation, register atomically, consume one immutable normalized terminal snapshot, materialize idempotently, recover after restart, retain authenticated provenance, and give Pi, Codex, Claude, and Grok an explicit Steer, Queue, or unsupported disposition without provider-native leakage?                                 |
-| Provider output artifacts          | Are exact native completion and byte authority, immutable scoped storage, duplicate live/history observation, normalized metadata, content retrieval, bounds, unavailable projection, topology, and input/tool-result separation explicit?                                                                                                                           |
+| Provider output artifacts          | Are exact native completion and byte authority, immutable scoped storage, duplicate live/history observation, normalized metadata, content retrieval, bounds, unavailable projection, topology, path-capture authority and host attribution, and input/tool-result separation explicit?                                                                              |
 | Settings and provider features     | Are policy, desired/effective evidence, generation, turn-boundary application, persistence, native mapping, revisions, receipts, Saved Agents, and unsupported paths covered?                                                                                                                                                                                        |
 | Model policy                       | Is it backend-owned and fingerprinted? Are native provider/model/effort matcher dispositions, catalog intersection, defaults, every new provider-effect boundary, stale stored selections, empty intersections, denylist future admission, and receipt/reconciliation ordering covered?                                                                              |
 | Interactions                       | Are kinds, answers, interruption, reconnect, and sensitive data covered?                                                                                                                                                                                                                                                                                             |

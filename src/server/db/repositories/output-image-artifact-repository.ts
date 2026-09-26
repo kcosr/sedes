@@ -108,9 +108,11 @@ export class OutputImageArtifactRepository implements OutputArtifactPersistence 
       byteSize: number;
       sha256: string;
       now: number;
+      assertPublicationAllowed?: () => void;
     }>,
   ): OutputImageArtifactDescriptor {
     return this.database.transaction(() => {
+      input.assertPublicationAllowed?.();
       this.database
         .prepare(
           `

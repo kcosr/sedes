@@ -47,6 +47,7 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
   readonly #toolProvenanceKey: Uint8Array;
   readonly #modelPolicy: CompiledBackendModelPolicy;
   readonly #executionSettings: CodexExecutionSettingsProvider;
+  readonly #viewedImageCapture: import("../../output-artifacts/viewed-image-capture.js").ViewedImageCapture;
   readonly #outputArtifacts: import("../../output-artifacts/contracts.js").OutputArtifactPublisher;
   readonly #agentToolCliEnvironment: CodexAgentToolCliEnvironmentProvider;
   readonly #composerSkillPreferences: CodexComposerSkillPreferenceReader;
@@ -75,6 +76,7 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
     readonly toolProvenanceKey: Uint8Array;
     readonly modelPolicy: CompiledBackendModelPolicy;
     readonly executionSettings: CodexExecutionSettingsProvider;
+    readonly viewedImageCapture: import("../../output-artifacts/viewed-image-capture.js").ViewedImageCapture;
     readonly outputArtifacts: import("../../output-artifacts/contracts.js").OutputArtifactPublisher;
     readonly agentToolCliEnvironment: CodexAgentToolCliEnvironmentProvider;
     readonly composerSkillPreferences?: CodexComposerSkillPreferenceReader;
@@ -99,6 +101,7 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
     this.#modelPolicy = input.modelPolicy;
     this.#executionSettings = input.executionSettings;
     this.#outputArtifacts = input.outputArtifacts;
+    this.#viewedImageCapture = input.viewedImageCapture;
     this.#agentToolCliEnvironment = input.agentToolCliEnvironment;
     this.#composerSkillPreferences =
       input.composerSkillPreferences ??
@@ -174,6 +177,7 @@ export class CodexBackendDriverFactory implements BackendDriverFactory {
         modelPolicy: this.#modelPolicy,
         executionSettings: this.#executionSettings,
         outputArtifacts: this.#outputArtifacts,
+        viewedImageCapture: this.#viewedImageCapture,
         agentToolCliEnvironment: this.#agentToolCliEnvironment,
         composerSkillPreferences: this.#composerSkillPreferences,
         fastModeSessions: this.#fastModeSessions,

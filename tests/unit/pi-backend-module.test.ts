@@ -147,6 +147,7 @@ describe("Pi backend module", () => {
       environmentOperations: unavailableEnvironmentOperations,
       toolProvenanceKey: new Uint8Array(32).fill(0x42),
       outputArtifacts: {} as BackendModuleRuntimeContext["outputArtifacts"],
+      viewedImageCapture: {} as BackendModuleRuntimeContext["viewedImageCapture"],
       agentTools: {
         eligibleCatalog: () => [],
         catalogSummaries: () => [],
@@ -291,6 +292,7 @@ describe("Pi backend module", () => {
       },
       toolProvenanceKey: new Uint8Array(32).fill(0x42),
       outputArtifacts: {} as BackendModuleRuntimeContext["outputArtifacts"],
+      viewedImageCapture: {} as BackendModuleRuntimeContext["viewedImageCapture"],
       agentTools: {
         eligibleCatalog: () => [],
         catalogSummaries: () => [],

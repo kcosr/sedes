@@ -270,9 +270,12 @@ fit-to-window, 25–400% zoom, pinch, Control/Command-scroll, keyboard controls,
 drag, scroll, and touch pan.
 
 Supported provider-generated images appear as their own transcript items and
-are loaded on demand. In the packaged Android client, long-press an inline or
-expanded image to **Save image** or **Copy image**. Desktop browsers retain
-their normal image context menu.
+are loaded on demand. When Codex views a local image, a collapsed **Viewed
+image** row names the file; if Files can read it, expand the row to see the
+file as Sedes read it, even if the file later changes or disappears. In the
+packaged Android client, long-press an inline or expanded image to **Save
+image** or **Copy image**. Desktop browsers retain their normal image context
+menu.
 
 ## Treat file content as sensitive
 
