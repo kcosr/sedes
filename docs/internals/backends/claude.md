@@ -823,6 +823,15 @@ normalized integration surface:
 - `claude-run-state-native.test.ts` qualifies the lifecycle and session-state
   frames described under runtime ownership against the actual executable and a
   loopback Messages fixture, including turns Claude starts itself;
+- `claude-compaction-native.test.ts` makes the actual executable compact
+  automatically against the loopback fixture, at a turn's start (keeping the
+  new prompt) and mid-turn. It qualifies the live boundary, the synthetic
+  summary frame, and the result's input identity. It also checks that Sedes
+  reads the written transcript with the SDK's read as its suffix;
+- `claude-process-loss-native.test.ts` kills the executable with SIGKILL while
+  a tool runs, then resumes as Sedes does. It qualifies the unfinished turn in
+  history and the `running`, startup-result, and `idle` frames that the
+  lost-process rule relies on;
 - `claude-background-activity-native.test.ts` runs the pinned SDK and actual
   Claude executable against an isolated loopback Messages fixture. Its finite
   gated Bash and Agent jobs prove the foreground result precedes background
