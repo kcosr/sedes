@@ -81,6 +81,8 @@ export interface OutputArtifactPersistence {
       byteSize: number;
       sha256: string;
       now: number;
+      /** Synchronous authority validation inside the publication transaction. */
+      assertPublicationAllowed?: () => void;
     }>,
   ): OutputImageArtifactDescriptor;
 
