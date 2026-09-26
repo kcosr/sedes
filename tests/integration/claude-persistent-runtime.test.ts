@@ -1341,10 +1341,10 @@ describe("persistent host shutdown evidence", () => {
   const running = (sessionId: string) => ({ type: "system", subtype: "session_state_changed", state: "running",
     uuid: randomUUID(), session_id: sessionId }) as SDKMessage;
   type Evidence = { phase: string; startedAfterConfirmation?: boolean;
-    sessions: { sessionId: string; liveWork: boolean; events: { kind: string; messageType?: string }[] }[] };
+    sessions: { sessionId: string; liveWork: boolean; events: { kind: string; messageType?: string; code?: string }[] }[] };
   const evidence = (archive: ReturnType<typeof vi.fn>) => archive.mock.calls.map(([record]) => (record as { evidence: Evidence }).evidence);
 
-  it("fails only interrupted work on a forced stop and keeps a settled session's unacknowledged result", async () => {
+  it("ends every session on a forced stop but marks a settled session's unacknowledged result as its outcome", async () => {
     const f = await fixture();
     const attached = await f.attach();
     const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
@@ -1367,11 +1367,14 @@ describe("persistent host shutdown evidence", () => {
     const [before, after] = evidence(f.archive);
     expect(before!.phase).toBe("before_shutdown");
     expect(before!.sessions.map(({ sessionId, liveWork }) => [sessionId, liveWork])).toEqual([[settled, false], [interrupted, true]]);
-    const kinds = (sessionId: string) => after!.sessions.find(session => session.sessionId === sessionId)!.events.map(event => event.messageType ?? event.kind);
+    const kinds = (sessionId: string) => after!.sessions.find(session => session.sessionId === sessionId)!.events.map(event => event.messageType ?? event.code);
     expect(after!.phase).toBe("after_shutdown");
-    expect(kinds(settled)).toEqual(["user", "command_lifecycle", "result"]);
-    expect(kinds(interrupted)).toEqual(["user", "command_lifecycle", "failed"]);
-    expect(delivered.filter(event => event.payload.kind === "failed").map(event => event.sessionId)).toEqual([interrupted]);
+    expect(kinds(settled)).toEqual(["user", "command_lifecycle", "result", "claude_persistent_operator_stopped_settled"]);
+    expect(kinds(interrupted)).toEqual(["user", "command_lifecycle", "claude_persistent_operator_stopped"]);
+    // An attached main learns that both queries ended.
+    expect(delivered.flatMap(event => event.payload.kind === "failed" ? [[event.sessionId, event.payload.code]] : [])).toEqual([
+      [settled, "claude_persistent_operator_stopped_settled"], [interrupted, "claude_persistent_operator_stopped"],
+    ]);
   });
 
   it("records a hard handover when Claude starts work after an unforced stop was confirmed", async () => {

@@ -119,10 +119,10 @@
 - Keep a conflicting Claude result from failing the thread; the first recorded
   outcome is kept.
 
-- Keep a remote Claude outcome that finished while main was away from being
-  recorded as failed when the service stops: only sessions with running work
-  fail. An automatic sidecar replacement that ends Claude work started after
-  its idle check now leaves an abandonment record.
+- Distinguish, in sidecar abandonment records, a remote Claude session whose
+  work had finished (its unacknowledged result is its outcome) from work the
+  stop interrupted. An automatic sidecar replacement that ends Claude work
+  started after its idle check now leaves an abandonment record.
 
 - Warn, naming each task, when a resumed Claude session reports background
   work the previous session left unfinished; its result never arrived and

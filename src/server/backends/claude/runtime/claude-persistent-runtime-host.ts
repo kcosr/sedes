@@ -125,6 +125,7 @@ export class ClaudePersistentRuntimeHost {
         retainedEventCount: session.events.size,
         events: [...session.events.values()].slice(0, 256).map(event => ({ sequence: event.sequence, kind: event.payload.kind,
           ...(event.payload.kind === "message" ? { messageType: event.payload.message.type } : {}),
+          ...(event.payload.kind === "failed" ? { code: event.payload.code } : {}),
           ...(event.payload.kind === "permission" ? { requestId: event.payload.request.options.requestId, toolUseID: event.payload.request.options.toolUseID } : {}) })),
       })) };
   }
@@ -142,9 +143,11 @@ export class ClaudePersistentRuntimeHost {
           const payload = permission.event.payload;
           if (payload.kind === "permission") permission.resolve({ behavior: "deny", message: "The operator stopped this runtime.", toolUseID: payload.request.options.toolUseID });
         }
-        // Only interrupted work fails. A settled session keeps its retained
-        // outcome, including an unacknowledged result, as its last word.
-        if (interrupted.has(session)) this.#fail(session, "claude_persistent_operator_stopped");
+        // Every session ends: its failure event is how an attached main learns
+        // the query is gone. A settled session's retained output, including an
+        // unacknowledged result, remains its outcome; its code says it was
+        // stopped after settling rather than interrupted.
+        this.#fail(session, interrupted.has(session) ? "claude_persistent_operator_stopped" : "claude_persistent_operator_stopped_settled");
       }
     }
     if (!this.#runtimeStopped) {
