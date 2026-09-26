@@ -2196,8 +2196,9 @@ targeted turn ended without the input. It never authorizes a resend.
 
 A tool call Stop aborted normalizes as `interrupted` (item status and tool
 phase) only on exact provider evidence, kept inside the backend; otherwise the
-provider's own outcome stands. Claude uses its tool-use interruption marker
-following the stopped batch's error results. Pi, Codex, and Grok expose no
+provider's own outcome stands. Claude requires both its tool-use interruption
+marker after the stopped batch and, on each call, its exact stop result; a
+sibling that failed on its own keeps `failed`. Pi, Codex, and Grok expose no
 exact per-call abort evidence (Pi records an ordinary error result, Codex's
 command and tool statuses have no interrupted value, and ACP tool statuses
 have no cancelled value), so an aborted call keeps the provider's reported

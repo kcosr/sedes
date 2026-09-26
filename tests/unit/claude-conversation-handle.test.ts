@@ -2792,7 +2792,7 @@ describe("ClaudeConversationHandle", () => {
     await reopened.close();
   });
 
-  it("replaces the snapshot when the tool-use marker makes a stopped call's error result interrupted", async () => {
+  it("replaces the snapshot when Stop interrupts one call of a batch whose sibling failed on its own, live and on reload", async () => {
     const provider = fixture();
     const { handle } = createHandle(provider);
     await handle.establishProjection({ signal: new AbortController().signal });
@@ -2805,23 +2805,36 @@ describe("ClaudeConversationHandle", () => {
     const prompt = await provider.prompt()[Symbol.asyncIterator]().next();
     provider.messages.push(prompt.value as SDKMessage);
     await submitted;
-    const call = {
-      type: "assistant", uuid: "33333333-3333-4333-8333-333333333333", session_id: SESSION_ID, parent_tool_use_id: null,
+    // Claude Code streams one row per parallel call, then each result: one
+    // command exits 1 on its own, then Stop aborts the other.
+    const call = (uuid: string, id: string, command: string) => ({
+      type: "assistant", uuid, session_id: SESSION_ID, parent_tool_use_id: null,
       message: { role: "assistant", id: "msg-stop-tool", stop_reason: "tool_use", usage: { input_tokens: 1, output_tokens: 1 },
-        content: [{ type: "tool_use", id: "tool-stopped", name: "Bash", input: { command: "sleep 60" } }] },
+        content: [{ type: "tool_use", id, name: "Bash", input: { command } }] },
+    }) as unknown as SDKMessage;
+    const calls = [call("33333333-3333-4333-8333-333333333333", "tool-failed", "cat missing.txt"),
+      call("44444444-4444-4444-8444-444444444444", "tool-stopped", "sleep 60")];
+    const failedResult = {
+      type: "user", uuid: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", session_id: SESSION_ID, parent_tool_use_id: null,
+      timestamp: "2026-09-26T10:00:03.000Z", tool_use_result: "Error: Exit code 1\ncat: missing.txt: No such file or directory",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-failed", is_error: true,
+        content: "Exit code 1\ncat: missing.txt: No such file or directory" }] },
     } as unknown as SDKMessage;
     const stoppedResult = {
       type: "user", uuid: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", session_id: SESSION_ID, parent_tool_use_id: null,
-      timestamp: "2026-09-26T10:00:04.000Z",
+      timestamp: "2026-09-26T10:00:04.000Z", tool_use_result: "User rejected tool use",
+      tool_result_meta: [{ id: "tool-stopped", non_execution_kind: "user-rejected" }],
       message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-stopped", is_error: true,
-        content: "The user doesn't want to proceed with this tool use." }] },
+        content: "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed." }] },
     } as unknown as SDKMessage;
-    provider.messages.push(call);
-    provider.messages.push(stoppedResult);
+    for (const message of [...calls, failedResult]) provider.messages.push(message);
     await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
       type: "item_completed", item: expect.objectContaining({ semanticKind: "command", status: "failed" }) })));
+    const published = (events.find(event => event.type === "item_completed" &&
+      event.item.semanticKind === "command") as Extract<BackendConversationEvent, { type: "item_completed" }>).item;
     const backendTurnId = (await handle.history({ limit: 10 })).orderedBackendTurnIds.at(-1)!;
     await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: backendTurnId });
+    provider.messages.push(stoppedResult);
     const marker = {
       type: "user" as const, uuid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" as const, session_id: SESSION_ID,
       parent_tool_use_id: null, timestamp: "2026-09-26T10:00:05.000Z",
@@ -2832,8 +2845,13 @@ describe("ClaudeConversationHandle", () => {
     expect(events).not.toContainEqual(expect.objectContaining({
       type: "item_updated", item: expect.objectContaining({ semanticKind: "command" }) }));
     const live = (await handle.establishProjection({ signal: new AbortController().signal })).snapshot;
-    const command = Object.values(live.itemsById).find(item => item.semanticKind === "command");
-    expect(command).toMatchObject({ status: "interrupted", phase: "interrupted", completedAt: marker.timestamp });
+    const commands = Object.values(live.itemsById).filter(item => item.semanticKind === "command");
+    expect(commands).toHaveLength(2);
+    // The failure keeps what Claude reported and was published: no Stop
+    // status or time. Only the call Stop aborted is interrupted.
+    expect(commands[0]).toEqual(published);
+    expect(commands[0]).not.toHaveProperty("completedAt");
+    expect(commands[1]).toMatchObject({ status: "interrupted", phase: "interrupted", completedAt: marker.timestamp });
     unsubscribe();
     await handle.close();
 
@@ -2841,12 +2859,12 @@ describe("ClaudeConversationHandle", () => {
       initialMessages: [
         { type: "user", uuid: OPERATION_ID, session_id: SESSION_ID, message: (prompt.value as SDKUserMessage).message,
           parent_tool_use_id: null, parent_agent_id: null },
-        ...[call, stoppedResult, marker].map(message => ({ ...message, parent_agent_id: null }) as unknown as SessionMessage),
+        ...[...calls, failedResult, stoppedResult, marker].map(message => ({ ...message, parent_agent_id: null }) as unknown as SessionMessage),
       ],
       resumeSession: true,
     }).handle;
     const recovered = (await reopened.establishProjection({ signal: new AbortController().signal })).snapshot;
-    expect(recovered.itemsById[command!.backendItemId]).toEqual(command);
+    for (const command of commands) expect(recovered.itemsById[command.backendItemId]).toEqual(command);
     await reopened.close();
   });
 

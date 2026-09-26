@@ -2460,7 +2460,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const liveTurn = (turn: BackendTurn): BackendTurn =>
       turn.status === "completed" ? reopenedTurn(turn) : turn;
     // A published outcome never changes in place. Claude Code's tool-use
-    // interruption marker arrives after the error results it reclassifies
+    // interruption marker arrives after the stop results it reclassifies
     // from failed to interrupted, so replace the snapshot instead.
     if (Object.entries(next.itemsById).some(([itemId, item]) => {
       const prior = previous.itemsById[itemId];

@@ -579,8 +579,8 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
         queue.push(working);
         this.#interruptions.set(sessionId, () => {
           this.#interruptions.delete(sessionId);
-          // Like Claude Code, Stop writes an error result for the call it
-          // aborted, then its tool-use interruption marker.
+          // Like Claude Code, Stop writes its exact stop result for the call
+          // it aborted, then its tool-use interruption marker.
           const aborted = { type: "user", uuid: crypto.randomUUID(), session_id: sessionId,
             parent_tool_use_id: null, parent_agent_id: null, timestamp: new Date().toISOString(),
             message: { role: "user", content: [{ type: "tool_result", tool_use_id: `stop-tool-${assistantUuid}`,

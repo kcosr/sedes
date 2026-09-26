@@ -213,9 +213,10 @@ export function completeClaudeTool(
 
 /**
  * Settle a call whose error result Claude Code wrote because the user's
- * interrupt stopped it. The caller supplies that proof: Claude Code's native
- * tool-use interruption marker following the call's batch. The result stays
- * visible; only the outcome differs from a failure.
+ * interrupt stopped it. The caller supplies that proof: the call's exact stop
+ * result and Claude Code's native tool-use interruption marker following the
+ * call's batch. The result stays visible; only the outcome differs from a
+ * failure.
  */
 export function interruptClaudeToolResult(
   existing: BackendItem,

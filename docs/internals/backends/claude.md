@@ -421,26 +421,52 @@ does not distinguish an unannotated external input that exactly copies the
 native sentinel shape; that reserved shape is interpreted as native control
 history. A late interrupt acknowledgment never overwrites a settled run state.
 
-When Stop lands while tools run, Claude Code writes an error `tool_result` for
-each call it aborts and then the tool-use sentinel. A tool batch is the tool
-calls of one assistant message, whose results can arrive between its rows. When
-the sentinel follows the latest batch with no other assistant message in
-between, each call in that batch with an `is_error` result ends `interrupted`
-(item status and tool phase) at the sentinel's timestamp instead of `failed`,
-and keeps its result text. Successful results stay `completed`, and a call
-without a result is interrupted as before. Error results stay `failed` when
-Claude continued after them, as it does after a permission denial, when they
-belong to an earlier batch, or when the sentinel is the plain streaming one or
-comes from a subagent's thread. Claude Code's per-result denial kind is not
-used. Sedes' Stop reaches Claude Code as a remote cancel, which labels an
-aborted call the same way as a rejected permission prompt, and neither the SDK
-history reader nor the worker protocol carries the field. Two residual cases
-also read as interrupted, although neither ran to a result the user asked for:
-a call in the stopped batch that had already failed on its own, and a
-permission prompt Claude Code retires with the same sentinel. Live projection
-publishes the error result as `failed` before the sentinel arrives. A published
-outcome never changes in place, so the handle then requires a resnapshot
-(`history_changed`), and reload projects the same item.
+When Stop lands while tools run, Claude Code writes an `is_error`
+`tool_result` for each call it stopped and then the tool-use sentinel. Each
+stopped call carries one of Claude Code's exact stop results as its string
+content: `The user doesn't want to proceed with this tool use. The tool use was
+rejected …` for a running or queued call it aborts and for a permission prompt
+still open, or `The user doesn't want to take this action right now. …` for a
+call that reaches execution after the interrupt. Either can end with Claude
+Code's memory correction note. Claude Code itself recognizes exactly these four
+strings as its stop results. Claude Code 2.1.281 through 2.1.283 write the same
+text live and in the transcript. The rows also carry a structured result
+(`User rejected tool use`) and a denial kind (`user-rejected`), but the denial
+kind has a different shape live (`tool_result_meta`) and in the transcript
+(`toolDenialKind`), and neither field crosses the worker protocol. The text is
+on the message that both the live path and the history reader already keep,
+so Sedes matches it exactly: the whole string, with no prefix match and no text
+inside array content.
+
+A tool batch is the tool calls of one assistant message, whose results can
+arrive between its rows. When the sentinel follows the latest batch with no
+other assistant message in between, each call in that batch whose result is an
+exact stop result ends `interrupted` (item status and tool phase) at the
+sentinel's timestamp instead of `failed`, and keeps its result text. Every
+other result keeps Claude's own outcome and has no Stop timestamp. For example,
+a parallel command that exited 1 while its sibling still ran stays `failed`.
+Successful results stay `completed`, and a call without a result is
+interrupted as before. Stop results stay `failed` when they belong to an
+earlier batch, or when the sentinel is the plain streaming one or comes from a
+subagent's thread.
+
+Permission prompts use the same stop text, so Sedes separates them by who
+answered. Sedes' permission callback answers every rejection with its own
+denial text, such as `User denied permission.`, and Claude Code writes that
+text as the result. A call Sedes denied therefore stays `failed`, even in a
+stopped batch. When Stop closes a prompt that is still open, Claude Code
+ignores the callback's late answer and writes its stop result, so the call ends
+`interrupted`: nobody decided it. One residual reads as interrupted: a
+rejection Claude Code makes itself. That can be a prompt rejected in Claude
+Code's own terminal UI on the same session, or a subagent's permission prompt
+that Claude Code retires as denied after a restart. Such a rejection writes the
+same text, denial kind, and sentinel as Stop, live and in the transcript. A
+decision recorded by Sedes cannot separate it, because the call never passed
+through Sedes' callback.
+
+Live projection publishes a stop result as `failed` before the sentinel
+arrives. A published outcome never changes in place, so the handle then
+requires a resnapshot (`history_changed`), and reload projects the same item.
 
 Claude Code closes a trailing user or attachment row when it resumes a session.
 That row can be the previous attach's startup message, an unanswered prompt, a
@@ -1258,6 +1284,11 @@ normalized integration surface:
   a tool runs, then resumes as Sedes does. It qualifies the unfinished turn in
   history and the `running`, startup-result, and `idle` frames that the
   lost-process rule relies on;
+- `claude-stopped-tool-batch-native.test.ts` stops a tool batch of the actual
+  executable against a loopback Messages fixture. A parallel command that failed
+  on its own and a call Sedes' callback denied stay `failed`. The call Stop
+  aborted, or whose permission prompt Stop closed, is `interrupted`. The live
+  stream and the transcript project the same items;
 - `claude-usage-continuation-native.test.ts` drives Sedes' session, fork
   launch, and usage accounting against the actual executable and a loopback
   Messages fixture. It qualifies that a resumed query's and a fork child's

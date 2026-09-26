@@ -62,6 +62,24 @@ const CLAUDE_NO_RESPONSE_REQUESTED = "No response requested.";
 const CLAUDE_INTERRUPTED_BY_USER = "[Request interrupted by user]";
 /** Claude Code writes this after the results of a tool batch the user stopped. */
 const CLAUDE_TOOL_USE_INTERRUPTED_BY_USER = "[Request interrupted by user for tool use]";
+/**
+ * Claude Code's exact `is_error` result for one call that an interrupt
+ * stopped: a running or queued call it aborts, or an open permission prompt
+ * (`rejected`), and a call that reached execution after the interrupt
+ * (`cancelled`). Claude Code appends its correction note to either when its
+ * memory feature asks for it, and recognizes exactly these four strings as
+ * its own stop results. A tool's own failure, and a denial Sedes returns
+ * from its permission callback, carry other text.
+ */
+const CLAUDE_TOOL_USE_REJECTED =
+  "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.";
+const CLAUDE_TOOL_USE_CANCELLED =
+  "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed.";
+const CLAUDE_CORRECTION_NOTE =
+  "\n\nNote: The user's next message may contain a correction or preference. Pay close attention — if they explain what went wrong or how they'd prefer you to work, consider saving that to memory for future sessions.";
+const CLAUDE_STOPPED_TOOL_RESULTS: ReadonlySet<string> = new Set(
+  [CLAUDE_TOOL_USE_REJECTED, CLAUDE_TOOL_USE_CANCELLED].flatMap((text) => [text, text + CLAUDE_CORRECTION_NOTE]),
+);
 const UNANSWERED_TURN_NOTICE =
   "Claude Code exited before this turn finished and closed it without a response when the conversation resumed.";
 /**
@@ -248,10 +266,11 @@ interface MutableTurn {
   readonly toolItemIdByNativeId: Map<string, string>;
   readonly unresolvedToolIds: Set<string>;
   /**
-   * Error results of the latest assistant message's tool calls, with each
-   * call's unsettled item, until another assistant message starts.
+   * Calls of the latest assistant message whose result is Claude Code's
+   * exact stop result, with each call's unsettled item, until another
+   * assistant message starts.
    */
-  readonly erroredToolBatch: ErroredToolResult[];
+  readonly stoppedToolBatch: StoppedToolResult[];
   toolBatchResponseId?: string;
   readonly taskNotificationBoundary: boolean;
   nativeUserMessageUuid?: string;
@@ -265,7 +284,7 @@ interface MutableTurn {
   sourceOrder: number;
 }
 
-interface ErroredToolResult {
+interface StoppedToolResult {
   readonly backendItemId: string;
   readonly unsettled: BackendItem;
   readonly content: unknown;
@@ -617,7 +636,7 @@ function buildTimeline(
       completionCorrelations: [],
       toolItemIdByNativeId: new Map(),
       unresolvedToolIds: new Set(),
-      erroredToolBatch: [],
+      stoppedToolBatch: [],
       nativeMessageStartIndex: messageIndex,
       userMessageOrdinal,
       taskNotificationBoundary,
@@ -771,7 +790,7 @@ function buildTimeline(
     if (current && isInterruptionMarker(message, content, authentication?.isApplicationInputOperation)) {
       current.interruptedAt = message.timestamp!;
       if (content[0]?.type === "text" && content[0].text === CLAUDE_TOOL_USE_INTERRUPTED_BY_USER) {
-        interruptErroredToolBatch(current, itemsById, message.timestamp!);
+        interruptStoppedToolBatch(current, itemsById, message.timestamp!);
       }
       current.lastRetainedMessageUuid = message.uuid;
       current.lastRetainedMessageIndex = messageIndex;
@@ -890,7 +909,7 @@ function buildTimeline(
       // a row per block and its results arrive between those rows.
       if (current.toolBatchResponseId !== responseGroupId) {
         current.toolBatchResponseId = responseGroupId;
-        current.erroredToolBatch.length = 0;
+        current.stoppedToolBatch.length = 0;
       }
       let responseGroup = responseGroups.get(responseGroupId);
       if (!responseGroup) {
@@ -1240,16 +1259,18 @@ function appendProcessLostNotice(
 
 /**
  * Claude Code writes its tool-use interruption marker after the results of
- * the batch the user's interrupt stopped: each call it aborted has an error
- * result. Those calls end interrupted rather than failed. Results before the
- * batch's assistant message, and successful results, are not evidence.
+ * the batch the user's interrupt stopped. Each call it stopped carries its
+ * exact stop result; those calls end interrupted rather than failed. Every
+ * other result keeps its own outcome: a call that failed on its own before
+ * Stop, a denial, a success, and any result before the batch's assistant
+ * message.
  */
-function interruptErroredToolBatch(
+function interruptStoppedToolBatch(
   turn: MutableTurn,
   itemsById: Record<string, BackendItem>,
   interruptedAt: string,
 ): void {
-  for (const { backendItemId, unsettled, content } of turn.erroredToolBatch) {
+  for (const { backendItemId, unsettled, content } of turn.stoppedToolBatch) {
     if (itemsById[backendItemId]?.status !== "failed") continue;
     try {
       itemsById[backendItemId] = interruptClaudeToolResult(unsettled, content, interruptedAt);
@@ -1257,7 +1278,12 @@ function interruptErroredToolBatch(
       invalid();
     }
   }
-  turn.erroredToolBatch.length = 0;
+  turn.stoppedToolBatch.length = 0;
+}
+
+/** Claude Code's own test: an error result whose text is exactly a stop result. */
+function isClaudeStoppedToolResult(block: Extract<ParsedContentBlock, { type: "tool_result" }>): boolean {
+  return block.isError && typeof block.content === "string" && CLAUDE_STOPPED_TOOL_RESULTS.has(block.content);
 }
 
 function terminalItem(
@@ -1678,8 +1704,8 @@ function applyToolResult(
       invalid();
     }
     turn.unresolvedToolIds.delete(block.toolUseId);
-    if (block.isError) {
-      turn.erroredToolBatch.push({ backendItemId: existingId, unsettled: existing, content: block.content });
+    if (isClaudeStoppedToolResult(block)) {
+      turn.stoppedToolBatch.push({ backendItemId: existingId, unsettled: existing, content: block.content });
     }
     return;
   }

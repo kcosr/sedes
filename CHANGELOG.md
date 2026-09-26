@@ -102,8 +102,10 @@
 
 - A Claude tool call that **Stop** aborted now reads as interrupted
   (**Activity · 1 tool call · Interrupted**) instead of failed, live and after
-  a reload. Pi and Codex report no exact per-call evidence of the abort, so
-  their calls keep the provider's own outcome.
+  a reload. Only the calls Stop itself stopped change: a parallel call that
+  had already failed on its own, or that you denied, still reads as failed.
+  Pi and Codex report no exact per-call evidence of the abort, so their calls
+  keep the provider's own outcome.
 
 - A Steer returned by **Stop** now shows a neutral **Not sent** label instead
   of a red **Steer failed**. A failed or not-sent queue entry offers

@@ -245,14 +245,18 @@ describe("Claude native interruption markers", () => {
 
 describe("Claude tool calls stopped by the user", () => {
   const timestamp = "2026-09-26T10:00:05.000Z";
+  // Claude Code 2.1.281-2.1.283's exact results for a call an interrupt stopped.
   const stopped = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.";
+  const cancelled = "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed.";
+  const correctionNote = "\n\nNote: The user's next message may contain a correction or preference. Pay close attention — if they explain what went wrong or how they'd prefer you to work, consider saving that to memory for future sessions.";
   const prompt = user(uuid(1), "Run the checks");
   const call = (index: number, messageId: string, id: string, name = "Bash", input: unknown = { command: `sleep ${index}` }) => ({
     ...assistant(uuid(index), [{ type: "tool_use", id, name, input }]),
     message: { role: "assistant", id: messageId, content: [{ type: "tool_use", id, name, input }], stop_reason: "tool_use" },
   });
-  const result = (index: number, id: string, content: string, isError = true) =>
-    user(uuid(index), [{ type: "tool_result", tool_use_id: id, content, is_error: isError }]);
+  const result = (index: number, id: string, content: unknown, isError = true) =>
+    ({ ...user(uuid(index), [{ type: "tool_result", tool_use_id: id, content, is_error: isError }]),
+      timestamp: `2026-09-26T10:00:04.${String(index).padStart(3, "0")}Z` });
   const marker = (index: number, text = "[Request interrupted by user for tool use]") =>
     ({ ...user(uuid(index), [{ type: "text", text }]), timestamp });
   const tools = (messages: readonly unknown[]) => {
@@ -260,21 +264,67 @@ describe("Claude tool calls stopped by the user", () => {
     expect(projectClaudeHistoryPage(messages, { limit: 10 }).itemsById).toEqual(snapshot.itemsById);
     return Object.values(snapshot.itemsById).filter(item => item.semanticKind !== "user_message" && item.semanticKind !== "assistant_message");
   };
+  const outcomes = (messages: readonly unknown[]) =>
+    tools(messages).map(item => [item.status, "phase" in item ? item.phase : undefined, item.completedAt]);
 
-  it("ends a running call interrupted when the tool-use marker follows its error result", () => {
+  it("ends a running call interrupted when the tool-use marker follows its stop result", () => {
     const [command] = tools([prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", stopped), marker(4)]);
     expect(command).toMatchObject({ semanticKind: "command", status: "interrupted", phase: "interrupted", completedAt: timestamp,
       output: { text: stopped } });
   });
 
-  it("interrupts only the batch's error results, in live and reordered history order", () => {
+  it("keeps a parallel call's own failure failed while Stop interrupts its running sibling", () => {
+    // Claude Code runs both; one exits 1, then Stop aborts the other.
+    const failure = "Exit code 1\ncat: missing.txt: No such file or directory";
+    const unstopped = [prompt, call(2, "msg-1", "tool-a"), call(3, "msg-1", "tool-b"), result(4, "tool-a", failure)];
+    const live = [...unstopped, result(5, "tool-b", stopped), marker(6)];
+    const reordered = [prompt, live[1], live[3], live[2], live[4], live[5]];
+    const [ownFailure] = tools(unstopped);
+    expect(ownFailure).toMatchObject({ status: "failed", phase: "failed", output: { text: failure } });
+    expect(ownFailure).not.toHaveProperty("completedAt");
+    for (const messages of [live, reordered]) {
+      const [failed, interrupted] = tools(messages);
+      // The failure is exactly what Claude reported: no Stop status or time.
+      expect(failed).toEqual(ownFailure);
+      expect(interrupted).toMatchObject({ status: "interrupted", phase: "interrupted", completedAt: timestamp, output: { text: stopped } });
+    }
+  });
+
+  it("keeps a successful sibling completed, in live and reordered history order", () => {
     const live = [prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", "done", false), call(4, "msg-1", "tool-b"),
       result(5, "tool-b", stopped), marker(6)];
     const reordered = [prompt, live[1], live[3], live[2], live[4], live[5]];
     for (const messages of [live, reordered]) {
-      expect(tools(messages).map(item => [item.status, "phase" in item ? item.phase : undefined]))
-        .toEqual([["completed", "completed"], ["interrupted", "interrupted"]]);
+      expect(outcomes(messages)).toEqual([["completed", "completed", undefined], ["interrupted", "interrupted", timestamp]]);
     }
+  });
+
+  it("interrupts every call of a batch Stop stopped, running, queued, or reaching execution late", () => {
+    const messages = [prompt, call(2, "msg-1", "tool-a"), call(3, "msg-1", "tool-b"), call(4, "msg-1", "tool-c"),
+      call(5, "msg-1", "tool-d"), result(6, "tool-a", stopped), result(7, "tool-b", stopped + correctionNote),
+      result(8, "tool-c", cancelled), result(9, "tool-d", cancelled + correctionNote), marker(10)];
+    expect(outcomes(messages)).toEqual(Array.from({ length: 4 }, () => ["interrupted", "interrupted", timestamp]));
+  });
+
+  it("keeps a permission Sedes denied failed in a stopped batch and interrupts a prompt Stop closed", () => {
+    // Sedes' callback supplies its own denial text, which Claude Code writes
+    // as the result; Claude Code writes its stop result when Stop closes an
+    // open prompt instead.
+    const denied = [prompt, call(2, "msg-1", "tool-a"), call(3, "msg-1", "tool-b"),
+      result(4, "tool-a", "User denied permission."), result(5, "tool-b", stopped), marker(6)];
+    expect(outcomes(denied)).toEqual([["failed", "failed", undefined], ["interrupted", "interrupted", timestamp]]);
+    const promptClosed = [prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", stopped), marker(4)];
+    expect(outcomes(promptClosed)).toEqual([["interrupted", "interrupted", timestamp]]);
+  });
+
+  it("requires Claude Code's exact stop result on the call itself", () => {
+    for (const content of ["The user doesn't want to proceed with this tool use.", `${stopped} `, `Error: ${stopped}`,
+      [{ type: "text", text: stopped }], "Permission request cancelled."]) {
+      expect(outcomes([prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", content), marker(4)]))
+        .toEqual([["failed", "failed", undefined]]);
+    }
+    expect(outcomes([prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", stopped, false), marker(4)]))
+      .toEqual([["completed", "completed", undefined]]);
   });
 
   it("keeps a denial or an earlier batch's failure failed", () => {
@@ -287,13 +337,19 @@ describe("Claude tool calls stopped by the user", () => {
     expect(tools(continued)[0]).toMatchObject({ status: "failed", phase: "failed" });
     const laterStop = [...denied, call(4, "msg-2", "tool-b"), result(5, "tool-b", stopped), marker(6)];
     expect(tools(laterStop).map(item => item.status)).toEqual(["failed", "interrupted"]);
+    // A stop result from an earlier batch is not this marker's evidence.
+    const earlier = [prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", stopped), call(4, "msg-2", "tool-b"),
+      result(5, "tool-b", "exit 1"), marker(6)];
+    expect(tools(earlier).map(item => item.status)).toEqual(["failed", "failed"]);
   });
 
-  it("keeps error results failed after the streaming interruption marker or a subagent's marker", () => {
-    const failed = [prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", "exit 1")];
-    expect(tools([...failed, marker(4, "[Request interrupted by user]")])[0]).toMatchObject({ status: "failed" });
-    const child = { ...marker(4), parent_tool_use_id: "tool-agent" };
-    expect(tools([...failed, child])[0]).toMatchObject({ status: "failed" });
+  it("keeps stop results failed after the streaming interruption marker or a subagent's marker", () => {
+    for (const content of ["exit 1", stopped]) {
+      const failed = [prompt, call(2, "msg-1", "tool-a"), result(3, "tool-a", content)];
+      expect(tools([...failed, marker(4, "[Request interrupted by user]")])[0]).toMatchObject({ status: "failed" });
+      const child = { ...marker(4), parent_tool_use_id: "tool-agent" };
+      expect(tools([...failed, child])[0]).toMatchObject({ status: "failed" });
+    }
   });
 
   it("interrupts a stopped subagent launch without calling it a launch failure", () => {
