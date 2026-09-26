@@ -250,7 +250,9 @@ identity and the last safe state before making the call. Reconciliation may
 classify an exact operation as:
 
 - accepted or applied;
-- proven not applied and eligible for bounded retry; or
+- proven not applied and eligible for bounded retry;
+- terminally untrackable with an unknown outcome, which fails the queue item
+  for the user to dismiss or restore; or
 - unresolved.
 
 Unknown outcomes are not silently retried or inferred from unrelated provider

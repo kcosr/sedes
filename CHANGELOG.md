@@ -106,6 +106,11 @@
 - Keep a conflicting Claude result from failing the thread; the first recorded
   outcome is kept.
 
+- Stop a Claude message whose remote session ended unconfirmed from pausing
+  the queue indefinitely. **Reconcile delivery** now marks it failed with an
+  unknown outcome, so you can review the conversation and dismiss it or
+  restore it to send again; later queued messages wait for that choice.
+
 - Let a remote Claude turn run twice as long while main is away before its
   retained output overflows. The sidecar counts each retained event once and
   folds streamed text that no main has seen yet into fewer events.

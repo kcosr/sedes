@@ -642,9 +642,11 @@ dead end and resent.
 On a remote runtime, an ordinary submission can reconcile as `failed_unknown`.
 This happens when the persistent owner reports that its session ended and the
 tip-correct history shows no acceptance: tracking is terminal, and
-consumption is unknown. The shared queue keeps that head uncertain, because
-only Steer adopts the terminal failed-item recovery. It therefore still blocks
-later queued input, and force reset is the remaining way to clear it.
+consumption is unknown. When the user reconciles the queue, or on recovery at
+startup, the shared queue fails that head with a "Claude may have received
+this; review the conversation" diagnostic. The user then dismisses it, deletes
+it, or restores it to the draft for an explicit resend; later queued input
+waits for that choice. Nothing is resent automatically.
 
 Persistent send admission returns a typed positive acceptance or a bounded
 pre-native refusal (busy, closed, or retention capacity). Main awaits that

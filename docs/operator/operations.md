@@ -1155,7 +1155,10 @@ does.
 When the composer shows **Queue paused: an earlier delivery needs reconciliation**,
 use **Reconcile delivery** to check that earlier message. Additional queued
 messages cannot dispatch until it is resolved. Your draft and queued messages
-remain intact; an unresolved check keeps the notice visible.
+remain intact; an unresolved check keeps the notice visible. When the backend
+reports that the delivery can no longer be tracked, the message becomes a
+failed item with an unknown outcome. Review the conversation, then dismiss the
+item or restore it to the draft; restoring does not send it.
 
 Follow the exact recovery callout. A reconnect or restart may reveal provider
 evidence that proves accepted or not applied. Do not repeat a write merely

@@ -287,7 +287,12 @@ Queue is Sedes-owned next-turn work. It is not SDK stream injection and is not
 relabeled as Steer. An unconfirmed delivery pauses subsequent dispatch and shows
 “Queue paused: an earlier delivery needs reconciliation” above the composer.
 Use **Reconcile delivery** to check the original submission; your draft and
-later queued messages remain intact while confirmation is pending.
+later queued messages remain intact while confirmation is pending. If the
+remote Claude session that received the message has ended and its history
+shows no acceptance, the message becomes a failed queue item marked with an
+unknown outcome: Claude may still have received it. Review the conversation,
+then dismiss it or restore its text to send again. Later queued messages wait
+for that choice, and Sedes never resends it automatically.
 
 On the reviewed 2.1.274 runtime, native background inventories keep subagents
 and commands visible after the main response finishes. Ordinary Send remains

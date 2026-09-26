@@ -2736,23 +2736,52 @@ describe("QueuedInputDispatcher", () => {
     }
   });
 
-  it("does not apply terminal conversation Steer recovery to an uncertain ordinary submission", async () => {
-    const fixture = createFixture();
-    const repository = new QueuedInputRepository(fixture.database);
-    const gateway = new FakeGateway();
-    const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 600 } });
-    const [threadId] = fixture.threadIds;
-    try {
-      enqueueUser(fixture, repository, threadId, "unknown-submit", 500);
-      gateway.submitBehaviors.push(new Error("transport lost after submission"));
-      await dispatcher.recover(fixture.scope);
-      gateway.reconciliationBehaviors.push({ status: "failed_unknown", diagnostic: { text: "Tracking ended" } });
-      await dispatcher.reconcileUncertain(fixture.scope, threadId, "unknown-submit");
-      expect(repository.get(fixture.scope, threadId, "unknown-submit")).toMatchObject({ state: "uncertain", deliveryMode: "submit" });
-      expect(gateway.submitted).toHaveLength(1);
-      expect(gateway.steered).toEqual([]);
-    } finally { await dispatcher.close(); fixture.database.close(); }
-  });
+  // Formerly the head stayed uncertain forever: only force reset cleared it.
+  // Terminal tracking now hands the decision to the user, as for a Steer.
+  it.each(["restore", "acknowledge"] as const)(
+    "fails an ordinary submission whose tracking ended unknown for the user to %s, never resending it",
+    async (resolution) => {
+      const fixture = createFixture();
+      const repository = new QueuedInputRepository(fixture.database);
+      const gateway = new FakeGateway();
+      const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 600 } });
+      const [threadId] = fixture.threadIds;
+      try {
+        enqueueUser(fixture, repository, threadId, "unknown-submit", 500);
+        enqueueUser(fixture, repository, threadId, "later-submit", 510);
+        gateway.submitBehaviors.push(new Error("transport lost after submission"));
+        await dispatcher.recover(fixture.scope);
+        expect(repository.get(fixture.scope, threadId, "unknown-submit")).toMatchObject({ state: "uncertain", deliveryMode: "submit" });
+        // The automatic dispatch check recognizes only acceptance.
+        gateway.reconciliationBehaviors.push({ status: "failed_unknown", diagnostic: { text: "Tracking ended" } });
+        await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+        expect(repository.get(fixture.scope, threadId, "unknown-submit")).toMatchObject({ state: "uncertain", deliveryMode: "submit" });
+        gateway.reconciliationBehaviors.push({ status: "failed_unknown", diagnostic: { text: "Tracking ended" } });
+        await dispatcher.reconcileUncertain(fixture.scope, threadId, "unknown-submit");
+        expect(repository.get(fixture.scope, threadId, "unknown-submit")).toMatchObject({
+          state: "failed", deliveryMode: null, failureAcknowledgedAt: null, retryCount: 0,
+          diagnostic: expect.stringMatching(/Delivery outcome is unknown.*may already have received.*Tracking ended/su),
+        });
+        // The unacknowledged failure still holds later input until the user decides.
+        expect(repository.get(fixture.scope, threadId, "later-submit").state).toBe("pending");
+        expect(gateway.submitted).toHaveLength(1);
+        if (resolution === "restore") {
+          const draft = new ConversationDraftRepository(fixture.database).get(fixture.scope, threadId);
+          await expect(dispatcher.restoreUserInput(fixture.scope, threadId, "unknown-submit", {
+            mutationId: "restore-unknown-submit", expectedThreadRevision: revision(fixture, threadId),
+            expectedDraftRevision: draft.revision, now: 610,
+          })).resolves.toMatchObject({ item: { state: "cancelled" }, draft: { text: "text-unknown-submit" } });
+        } else {
+          await expect(dispatcher.acknowledgeFailure(fixture.scope, threadId, "unknown-submit", 610))
+            .resolves.toMatchObject({ state: "failed", failureAcknowledgedAt: 610 });
+        }
+        await vi.waitFor(() => expect(gateway.submitted).toHaveLength(2));
+        expect(gateway.submitted[1]).toMatchObject({ applicationOperationId: "operation-later-submit" });
+        expect(repository.get(fixture.scope, threadId, "later-submit").state).toBe("accepted");
+        expect(gateway.steered).toEqual([]);
+      } finally { await dispatcher.close(); fixture.database.close(); }
+    },
+  );
 
   it.each(["settled", "later-dispatch"] as const)("accepts late ordinary history on %s without resending the uncertain head", async trigger => {
     const fixture = createFixture();

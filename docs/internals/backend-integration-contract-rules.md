@@ -2007,8 +2007,22 @@ and restoration to the draft provide user recovery; restoration itself does
 not send. Late exact consumption evidence may still accept an untouched,
 unacknowledged failed item; it must not revive one already restored or
 acknowledged by the user. A live or merely unreachable tracker remains unresolved. Codex/Pi
-exact-turn reconciliation and ordinary Submit retain their existing conservative
-uncertainty handling; they do not adopt this terminal Steer recovery path.
+exact-turn reconciliation retains its existing conservative uncertainty
+handling and does not adopt this terminal Steer recovery path.
+
+An ordinary queued Submit whose explicit or recovery reconciliation returns
+`failed_unknown` follows the same user recovery. Its uncertain head becomes a
+failed, unacknowledged item with a diagnostic that preserves the unknown
+outcome and asks the user to review the conversation first. It still blocks
+later queued input until the user dismisses, deletes, or restores it;
+restoration returns the text to the draft and sends nothing. The automatic
+dispatch check still closes uncertainty only on acceptance. Tracking is
+terminal, so there is no late-acceptance path for a failed Submit. `unresolved`
+keeps the head uncertain. Only Claude returns `failed_unknown` for Submit,
+when its remote delivery owner ended and tip-correct history shows no
+acceptance; Codex, Pi, and Grok return only accepted, not accepted, or
+unresolved, and a new backend must return `failed_unknown` only for terminally
+lost tracking.
 
 The same disposition applies explicitly to completion-callback delivery. Pi
 and Codex use their already-audited application delivery correlation and
