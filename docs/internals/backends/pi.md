@@ -237,14 +237,36 @@ later FIFO intents wait behind that evidence. Pi exposes no normalized
 operation for retracting one selected Steer after it crosses the provider
 boundary. Stop and runtime retirement are generation-wide: they clear Pi's
 volatile Steer and follow-up queues before aborting, without modifying Sedes's
-durable next-turn queue. Authenticated submission markers distinguish a Steer
-that materialized during that race from one withdrawn before materialization,
-so reconciliation reports the former accepted and the latter not accepted.
+durable next-turn queue.
+
+Authenticated submission markers record each Steer as `intent`, `enqueued`
+once Pi accepts it, and then either its materialized user entry or `lost`.
+Settlement, retirement, and restart reconciliation write `lost` for an
+accepted Steer whose run ended without using it; Pi drains queued steering
+before a run ends on its own, so only an abort (Stop, retirement, or an
+extension abort, each clearing the queue first) or loss of the Sedes process
+leaves one unused. Sedes's own Stop waits in the conversation actor behind
+an in-flight Steer, so it withdraws only admitted input. If retirement or an
+extension abort ends the targeted run while Pi is still admitting the input,
+the handle clears Pi's idle queue before writing `lost`, because an idle Pi
+hands queued steering to its next run; if another run is already active, the
+Steer fails closed as uncertain instead. Reconciliation reports a
+materialized Steer accepted and a `lost` one `not_accepted` without retry
+permission and with a not-sent diagnostic, so the queue returns it to the user
+to restore or dismiss and never resends it, as the backend-neutral
+[Stop rule](../backend-integration-contract-rules.md#interactions-input-and-interruption)
+requires. Absence of a user entry is never the evidence on its own: an owned
+Steer whose run has not settled stays unresolved.
 
 When Pi proves before that boundary that the exact target is no longer active,
 the adapter returns normalized stale-target evidence and Sedes preserves the
-same durable input as ordinary next-turn queue work. Every other rejection and
-every uncertain or crossed-boundary outcome fails closed.
+same durable input as ordinary next-turn queue work. The handle rechecks the
+target synchronously after preparing the input and before recording intent,
+because Pi starts a new run from steering input once nothing is streaming; a
+run that settles or a handle that closes during preparation therefore leaves
+the input as Sedes's own work instead of starting a turn from it. A `rejected` marker, written when Pi refuses input before accepting it,
+also reconciles `not_accepted` with retry permission. Every other rejection
+and every uncertain or crossed-boundary outcome fails closed.
 
 An explicitly selected completed turn can be forked while later source work is
 active. Pi copies root-to-selected history into a separately reserved child

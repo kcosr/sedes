@@ -26,7 +26,10 @@ import {
   hasDeliverableComposerInput,
   type UsageSnapshot,
 } from "../../../shared/protocol/conversation.js";
-import { boundText } from "../../conversations/payload-policy.js";
+import {
+  boundDisplayText,
+  boundText,
+} from "../../conversations/payload-policy.js";
 import type {
   ExecutionScope,
   ValidatedWorkspace,
@@ -303,6 +306,22 @@ function filterPiModels(
       ? [{ ...model, supportedReasoningEfforts }]
       : [];
   });
+}
+
+/**
+ * Pi accepted this Steer into its volatile steering queue, but the run ended
+ * (Stop, runtime retirement, or loss of the owning process) before Pi used it.
+ * The authenticated `lost` marker proves it never reached history or the
+ * model, so it returns to the user and is never resent automatically.
+ */
+function piWithdrawnSteerReconciliation(): SubmissionReconciliation {
+  return {
+    status: "not_accepted",
+    retryable: false,
+    diagnostic: boundDisplayText(
+      "Pi's turn ended, or its runtime stopped, before Pi used this steering message, so it was not sent. Nothing was resent. Restore it to send it again, or dismiss it.",
+    ),
+  };
 }
 
 function error(
@@ -2153,7 +2172,12 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
           operation.marker.reconciliationToken === input.reconciliationToken)
           ? operation
           : undefined;
+      if (found?.invalid === "lost_steer") {
+        // Pi accepted this Steer, then its run ended without using it.
+        return piWithdrawnSteerReconciliation();
+      }
       if (found?.rejected) {
+        // Pi refused it before accepting it into the steering queue.
         return { status: "not_accepted", retryable: true };
       }
       if (found?.invalid) {
@@ -2198,7 +2222,12 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
               : { phase: "rejected" as const }),
           } satisfies PiSubmissionMarker);
         }
-        return { status: "not_accepted", retryable: true };
+        // No settled or retired Pi generation can still use this input. A
+        // Steer Pi may have queued is withdrawn, never resent; an unpersisted
+        // Submit never started a Pi run.
+        return found.marker.mode === "steer"
+          ? piWithdrawnSteerReconciliation()
+          : { status: "not_accepted", retryable: true };
       }
       const snapshot = await backendCall(
         () =>
@@ -3130,6 +3159,19 @@ class PiConversationHandle implements ConversationHandle {
       this.#session.model,
       this.#session.thinkingLevel,
     );
+    // The run can settle, or retirement can close the handle, while the input
+    // is prepared (Sedes's own Stop waits behind this steer in the actor), and
+    // Pi starts a new run from steering input when nothing is streaming.
+    // Recheck the exact target synchronously before recording intent and
+    // handing it over, so input that never crossed this boundary stays
+    // Sedes's own work.
+    this.#assertOpen();
+    if (this.#session.isIdle || this.#activeTurnId !== expectedBackendTurnId) {
+      throw piSteerTargetUnavailable(
+        "The active Pi turn ended before steering.",
+        "pi_steer_target_changed",
+      );
+    }
     if (prepared.contextExcerptMarker) {
       this.#session.sessionManager.appendCustomEntry(
         piContextExcerptMarkerType,
@@ -3207,17 +3249,34 @@ class PiConversationHandle implements ConversationHandle {
         "pi_steer_target_mismatch",
       );
     }
+    if (!durable.userEntryId && (this.#closed || this.#session.isIdle)) {
+      // Pi accepted the input, but the run it targeted ended first (runtime
+      // retirement or an extension abort landed during admission). An idle Pi
+      // keeps queued steering for its next run, so withdraw it before
+      // recording the loss.
+      // It stays pending here; reconciliation after settlement returns it to
+      // the user as not sent and never resends it.
+      if (!this.#closed) this.#session.clearQueue();
+      this.#closeLivePendingSteerAsLost();
+      return {
+        status: "pending_materialization",
+        reconciliationToken: input.reconciliationToken,
+        completionCorrelation: input.applicationOperationId,
+        backendTurnId,
+      };
+    }
     if (
       !durable.userEntryId &&
-      (this.#closed ||
-        this.#session.isIdle ||
-        this.#activeTurnId !== expectedBackendTurnId)
+      this.#activeTurnId !== expectedBackendTurnId
     ) {
-      this.#closeLivePendingSteerAsLost();
+      // Another Pi run is active and may still drain this input. Keep the
+      // live pending record so that run's settlement records the exact
+      // outcome, and fail closed rather than claim either result now.
       throw error(
-        "rejected",
-        "The Pi generation ended before the steering input appeared.",
-        "pi_steer_generation_ended",
+        "submission_unknown",
+        "Pi started another run before this steering input appeared.",
+        "pi_steer_generation_changed",
+        false,
         true,
       );
     }

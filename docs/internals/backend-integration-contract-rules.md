@@ -2132,7 +2132,7 @@ the provider already started belongs to the stopped turn.
 | Backend | Accepted Steer not yet materialized when Stop lands |
 | --- | --- |
 | Claude | Withdrawn by `cancel_async_message` for each Sedes input awaiting its start, before the interrupt. The exact evidence is that input's `command_lifecycle` `cancelled` before any `started`; it reconciles `not_accepted` without retry permission. |
-| Pi | Cleared from Pi's generation-volatile steering queue. It reconciles `not_accepted` and retryable, so it runs after Stop as Queue work. |
+| Pi | Withdrawn by clearing Pi's generation-volatile steering queue before the abort. The exact evidence is that input's authenticated `lost` submission marker, written when its run settles without its user entry; it reconciles `not_accepted` without retry permission. |
 | Codex | Known gap: Sedes records it accepted at the `turn/steer` response, and Codex's interrupt clears pending input without evidence, so it can disappear while recorded as delivered. It never starts a later turn. |
 | Grok | No Steer. |
 
