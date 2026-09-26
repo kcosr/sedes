@@ -95,6 +95,74 @@ describe("WorkspaceFilesSidecarHost", () => {
     }
   });
 
+  it("releases a root admitted after every request for it stopped waiting", async () => {
+    const policy = await mkdtemp(path.join(tmpdir(), "h-sidecar-abandoned-"));
+    roots.push(policy);
+    const workspace = path.join(policy, "workspace");
+    await mkdir(workspace);
+    let validation = deferred<undefined>();
+    const engine = {
+      validateRoot: vi.fn(() => validation.promise),
+      close: vi.fn(),
+    } as unknown as WorkspaceFilesEngine;
+    const host = new WorkspaceFilesSidecarHost({
+      sessionNonce: "n".repeat(32),
+      engine,
+      sendInvalidation: async () => undefined,
+      sendWatchFailure: async () => undefined,
+      openDownloadStream: () => {
+        throw new Error("unexpected_download_stream");
+      },
+      onDownloadCleanupFailure: () => undefined,
+    });
+    const request = {
+      admissionId: "de8e220b-0000-4000-8000-000000000070",
+      rootId: "primary" as const,
+      rootKind: "primary" as const,
+      declaredPath: workspace,
+      policyRootPath: policy,
+    };
+    const waiter = (controller: AbortController) => ({
+      requestId: randomUUID(),
+      signal: controller.signal,
+    });
+    try {
+      // The original open and its recovery both time out before admission.
+      const original = new AbortController();
+      const recovery = new AbortController();
+      const abandoned = [
+        host.handlers.rootOpen(request, waiter(original)),
+        host.handlers.rootOpen(request, waiter(recovery)),
+      ];
+      original.abort(new Error("sidecar_request_timeout"));
+      recovery.abort(new Error("sidecar_request_timeout"));
+      validation.resolve(undefined);
+      const [first, second] = await Promise.all(abandoned);
+      expect(second).toEqual(first);
+      await expect(
+        host.handlers.rootClose({ rootHandle: first!.rootHandle }, context()),
+      ).rejects.toThrow();
+
+      // One request still waiting keeps the admitted root.
+      validation = deferred<undefined>();
+      const retry = { ...request, admissionId: "de8e220b-0000-4000-8000-000000000071" };
+      const gaveUp = new AbortController();
+      const kept = [
+        host.handlers.rootOpen(retry, waiter(gaveUp)),
+        host.handlers.rootOpen(retry, context()),
+      ];
+      gaveUp.abort(new Error("sidecar_request_cancelled"));
+      validation.resolve(undefined);
+      const [, live] = await Promise.all(kept);
+      expect(live!.rootHandle).not.toBe(first!.rootHandle);
+      await expect(
+        host.handlers.rootClose({ rootHandle: live!.rootHandle }, context()),
+      ).resolves.toEqual({ closed: true });
+    } finally {
+      host.close();
+    }
+  });
+
   it("discovers linked worktrees only from a primary handle and admitted policy roots", async () => {
     const policy = await mkdtemp(path.join(tmpdir(), "h-sidecar-worktrees-"));
     roots.push(policy);

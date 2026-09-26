@@ -144,14 +144,18 @@ is not browser authority.
 ## Codex viewed-image capture
 
 A completed Codex 0.153.0 `imageView` item carries only an ID and an absolute
-path. Sedes keeps its neutral notice and, once capture succeeds, adds a
-separate final image item immediately after it with the alt text
-`Viewed file snapshot`. The image is a snapshot of the file when Sedes read it,
-not proof of the bytes or pixels supplied to the model: the file can change
-after Codex reads it, Codex may prepare or resize the image, and a first
+path. Sedes projects it as a `viewed_image` item and, once capture succeeds,
+adds a separate final image item immediately after it. Both carry only the
+path's final component as `fileName`, bounded to 255 bytes with control and
+bidirectional formatting characters removed; the directory stays
+server-private. The browser shows the pair as one activity-style row, collapsed
+by default, that discloses the image; before capture, or when capture fails,
+the row has nothing to disclose. The image is a snapshot of the file when Sedes
+read it, not proof of the bytes or pixels supplied to the model: the file can
+change after Codex reads it, Codex may prepare or resize the image, and a first
 capture during a later history read can come much later. A denied, invalid, or
-unavailable capture leaves only the notice; failure diagnostics stay out of
-the transcript. Adapter ordering and delivery are described in
+unavailable capture leaves only the `viewed_image` row; failure diagnostics
+stay out of the transcript. Adapter ordering and delivery are described in
 [Codex internals](backends/codex.md#viewed-image-capture).
 
 The publication key is `codex-viewed-image:` plus the adapter's hashed item

@@ -98,6 +98,7 @@ export const normalizedItemKindSchema = z.enum([
   "activity_summary",
   "collaboration",
   "image",
+  "viewed_image",
   "review_marker",
   "compaction",
   "notice",
@@ -446,6 +447,12 @@ export const imageItemSchema = z.strictObject({
   kind: z.literal("image"),
   image: normalizedImageSchema,
 });
+/** A provider viewed an image file; its captured image, if any, follows it. */
+export const viewedImageItemSchema = z.strictObject({
+  ...conversationItemBaseShape,
+  kind: z.literal("viewed_image"),
+  fileName: boundedDisplayTextSchema.optional(),
+});
 export const reviewMarkerItemSchema = z.strictObject({
   ...conversationItemBaseShape,
   kind: z.literal("review_marker"),
@@ -486,6 +493,7 @@ export const conversationItemSchema = z
     activitySummaryItemSchema,
     collaborationItemSchema,
     imageItemSchema,
+    viewedImageItemSchema,
     reviewMarkerItemSchema,
     compactionItemSchema,
     noticeItemSchema,
@@ -514,6 +522,7 @@ export type WebSearchItem = z.infer<typeof webSearchItemSchema>;
 export type ActivitySummaryItem = z.infer<typeof activitySummaryItemSchema>;
 export type CollaborationItem = z.infer<typeof collaborationItemSchema>;
 export type ImageItem = z.infer<typeof imageItemSchema>;
+export type ViewedImageItem = z.infer<typeof viewedImageItemSchema>;
 export type ReviewMarkerItem = z.infer<typeof reviewMarkerItemSchema>;
 export type CompactionItem = z.infer<typeof compactionItemSchema>;
 export type NoticeItem = z.infer<typeof noticeItemSchema>;

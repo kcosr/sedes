@@ -521,11 +521,15 @@ bounded Files read (`files.read` on a sidecar), and only an available image
 preview of at most 16 MiB qualifies. A sidecar provider closes a candidate
 root's handle, without waiting, once its last concurrent operation finishes, so
 distinct capture directories do not accumulate in the session's bounded root
-table; an open interrupted by cancellation keeps its admission, and the next
-use of that root recovers and closes it. Cancellation bounds every admission
-step and the provider read. Draining Primary or retiring the project aborts an
-in-flight capture read through Primary; a read outside Primary is bounded by
-the capture deadline and capture-service cancellation.
+table. The sidecar releases a root whose admission completes after every
+request for it has timed out or been cancelled. When cancellation or an unknown
+delivery outcome interrupts an open, the provider also reopens the same
+admission in the background, which returns a root admitted before the requests
+gave up, and closes it without waiting for a later read; a definite rejection
+needs no cleanup. Cancellation bounds every admission step and the provider
+read. Draining Primary or retiring the project aborts an in-flight capture read
+through Primary; a read outside Primary is bounded by the capture deadline and
+capture-service cancellation.
 
 ## Security boundary
 

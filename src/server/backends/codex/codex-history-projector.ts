@@ -19,6 +19,7 @@ import {
   MAXIMUM_MESSAGE_ITEM_BYTES,
   PAYLOAD_LIMITS,
   serializedUtf8Bytes,
+  type BoundedDisplayText,
   type BoundedText,
 } from "../../../shared/protocol/payload.js";
 import {
@@ -44,6 +45,7 @@ import {
   inspectCodexSubmissionCorrelation,
   type CodexSubmissionCorrelationScope,
 } from "./codex-submission-correlation.js";
+import { displayFileName } from "../../output-artifacts/display-file-name.js";
 import { inspectCodexContextExcerptCarrier } from "./codex-context-excerpts.js";
 import { inspectCodexTaskContextCarrier } from "./codex-task-contexts.js";
 import { inspectStagedAttachmentManifest } from "../staged-attachment-manifest.js";
@@ -103,9 +105,10 @@ export interface CodexProjectedItemCoordinate {
   readonly orderedBackendItemIds: readonly string[];
 }
 
-// Covers a final bounded descriptor, its record key and its turn reference.
-// Empty reserved order positions never appear as browser items.
-export const CODEX_VIEWED_IMAGE_RESERVATION_BYTES = 1_024;
+// Covers a final bounded descriptor with its display file name, its record key
+// and its turn reference. Empty reserved order positions never appear as
+// browser items.
+export const CODEX_VIEWED_IMAGE_RESERVATION_BYTES = 2_048;
 
 export interface CodexViewedImageCandidate {
   readonly nativeTurnId: string;
@@ -125,6 +128,7 @@ export function codexViewedImagePublicationKey(backendItemId: string): string {
 export function codexViewedImageItem(
   identity: CodexViewedImageCandidate["identity"],
   descriptor: OutputImageArtifactDescriptor,
+  fileName: BoundedDisplayText | undefined,
 ): BackendItem {
   return {
     ...identity,
@@ -136,7 +140,7 @@ export function codexViewedImageItem(
       mimeType: descriptor.mediaType,
       byteSize: descriptor.byteSize,
       sha256: descriptor.sha256,
-      alt: boundDisplayText("Viewed file snapshot"),
+      ...(fileName ? { fileName } : {}),
     },
   };
 }
@@ -1128,7 +1132,13 @@ export function projectCodexItemSlice(
         },
       ];
     case "imageView": {
-      const viewed = notice(base(), "Codex viewed a local image.", "neutral");
+      const fileName = displayFileName(item.path);
+      const viewed: BackendItem = {
+        ...base(),
+        ...terminalItem,
+        semanticKind: "viewed_image",
+        ...(fileName ? { fileName } : {}),
+      };
       const identity = base("image", 1);
       // A retained snapshot is authoritative even when the source no longer exists.
       try {
@@ -1137,7 +1147,9 @@ export function projectCodexItemSlice(
           generatedImages.applicationThreadId,
           codexViewedImagePublicationKey(identity.backendItemId),
         );
-        return existing ? [viewed, backendItemSchema.parse(codexViewedImageItem(identity, existing))] : [viewed];
+        return existing
+          ? [viewed, backendItemSchema.parse(codexViewedImageItem(identity, existing, fileName))]
+          : [viewed];
       } catch {
         return [viewed];
       }

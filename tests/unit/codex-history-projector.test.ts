@@ -32,6 +32,7 @@ import {
   projectCodexUsage,
   selectCodexNativeHistorySlice,
 } from "../../src/server/backends/codex/codex-history-projector.js";
+import { displayFileName } from "../../src/server/output-artifacts/display-file-name.js";
 import {
   mapCodexHistoryProjectionError,
   verifiedCodexProjectionBytes,
@@ -648,7 +649,7 @@ const stableItems = [
       id: "image-view-1",
       path: "/private/viewed.png",
     },
-    kinds: ["notice"],
+    kinds: ["viewed_image"],
   },
   {
     item: { type: "sleep", id: "sleep-1", durationMs: 100 },
@@ -1783,7 +1784,7 @@ describe("Codex 0.153.0 C1 history projector", () => {
     expect(bounded.summaryParts[0]!.text.endsWith("…")).toBe(true);
   });
 
-  it("describes a historical local image view without exposing its path", () => {
+  it("describes a historical local image view by file name without exposing its directory", () => {
     const projected = Object.values(
       projectCodexHistory(
         thread([
@@ -1799,12 +1800,12 @@ describe("Codex 0.153.0 C1 history projector", () => {
     );
 
     expect(projected).toHaveLength(1);
-    expect(projected[0]).toMatchObject({
-      semanticKind: "notice",
-      tone: "neutral",
-      text: { text: "Codex viewed a local image." },
-    });
-    expect(JSON.stringify(projected)).not.toContain("/private/viewed.png");
+    expect(projected[0]).toEqual(expect.objectContaining({
+      semanticKind: "viewed_image",
+      status: "completed",
+      fileName: { text: "viewed.png" },
+    }));
+    expect(JSON.stringify(projected)).not.toContain("/private");
   });
 
   it.each([
@@ -3735,7 +3736,7 @@ it("reserves viewed-image order positions and immutable artifact identity across
   expect(retained.projectedItemCount).toBe(3);
   expect(retained.snapshot.itemsById[textBefore.backendItemId]).toEqual(textBefore);
   const ordered = retained.snapshot.turnsById[retained.snapshot.orderedBackendTurnIds[0]!]!.orderedBackendItemIds;
-  expect(ordered.map(id => retained.snapshot.itemsById[id]!.semanticKind)).toEqual(["notice", "image", "assistant_message"]);
+  expect(ordered.map(id => retained.snapshot.itemsById[id]!.semanticKind)).toEqual(["viewed_image", "image", "assistant_message"]);
   expect(JSON.stringify(retained.snapshot)).not.toContain("/missing-now.png");
 });
 
@@ -3769,13 +3770,17 @@ it("keeps repeated views of one path as distinct publications and withholds unde
 });
 
 it("reserves enough bytes for the largest viewed-image child, its record key and turn reference", () => {
-  const native = thread([turn("largest-child", [{ type: "imageView", id: "view", path: "/private/largest.png" }])]) as CodexThread;
+  // Quotes double when serialized, and an overlong name also carries truncation details.
+  const path = `/private/${"\"".repeat(300)}.png`;
+  const native = thread([turn("largest-child", [{ type: "imageView", id: "view", path }])]) as CodexThread;
   const projection = projectCodexHistory(native, correlationScope(), testOutputArtifactPublisher());
   const [pending] = projection.pendingViewedImages;
+  const fileName = displayFileName(path);
+  expect(fileName?.truncation?.truncated).toBe(true);
   const child = codexViewedImageItem(pending!.identity, {
     artifactId: "ffffffff-ffff-4fff-bfff-ffffffffffff", mediaType: "image/jpeg",
     byteSize: MAXIMUM_OUTPUT_IMAGE_BYTES, sha256: "f".repeat(64),
-  });
+  }, fileName);
   const turnId = pending!.identity.backendTurnId;
   const withChild = { ...projection.snapshot,
     itemsById: { ...projection.snapshot.itemsById, [child.backendItemId]: child },

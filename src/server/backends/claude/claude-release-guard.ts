@@ -1,8 +1,8 @@
 /**
  * Sticky runtime floor for the one reviewed Claude SDK protocol profile.
- * Earlier releases send Sedes' persisted startup message to the model with
- * the next prompt (fixed in 2.1.280), and resume after an interrupted tool
- * call with a hidden "Continue" prompt (fixed in 2.1.281).
+ * Earlier releases resume after an interrupted tool call with a hidden
+ * "Continue" prompt and fail SDK turns after plain-string assistant content
+ * (both fixed in 2.1.281).
  */
 export const CLAUDE_CODE_MINIMUM_VERSION = "2.1.281";
 /** Newest Claude Code release exercised against this profile. */

@@ -13,6 +13,7 @@ import type {
   NoticeItem,
   PlanItem,
   ReviewMarkerItem,
+  ViewedImageItem,
 } from "../../../../shared/index.js";
 import { ZoomablePreview } from "../../preview/ZoomablePreview.js";
 import { canSafelyPreviewRaster } from "../../../attachments/safeRasterPreview.js";
@@ -69,13 +70,31 @@ export const collaborationRenderer: ConversationItemRenderer<CollaborationItem> 
     },
   };
 
+export function viewedImageLabel(item: ViewedImageItem): string {
+  return item.fileName ? `Viewed image · ${item.fileName.text}` : "Viewed image";
+}
+
+// Transcript pairs this row with its captured image; alone it stays static.
+export const viewedImageRenderer: ConversationItemRenderer<ViewedImageItem> = {
+  kind: "viewed_image",
+  render(item) {
+    return (
+      <div className="activity-group-summary activity-group-summary-static viewed-image-summary">
+        <span aria-hidden="true" className="viewed-image-chevron-space" />
+        <span className="viewed-image-label">{viewedImageLabel(item)}</span>
+      </div>
+    );
+  },
+};
+
 export const imageRenderer: ConversationItemRenderer<ImageItem> = {
   kind: "image",
   render(item, context) {
     const image = item.image;
-    const caption =
-      image.alt?.text ??
-      (image.representation === "artifact" ? image.fileName?.text : undefined);
+    const caption = context.omitImageCaption
+      ? undefined
+      : (image.alt?.text ??
+        (image.representation === "artifact" ? image.fileName?.text : undefined));
     return (
       <figure className="image-figure">
         {image.representation === "artifact" ? (

@@ -120,13 +120,15 @@ known-bad releases.
 The minimum is 2.1.281 because earlier releases change the conversation when
 Sedes opens or resumes a thread:
 
-- Before 2.1.280, Claude Code sent Sedes' startup message to the model with
-  the next prompt, labelled as input from a non-user source. Claude sometimes
-  refused that first prompt.
 - Before 2.1.281, resuming a session that ended during a tool call added a
   hidden "Continue from where you left off." prompt. 2.1.281 also fixed Agent
   SDK sessions failing every turn after an assistant message with plain-string
   content.
+
+Sedes' startup message still reaches the model with the first prompt after
+each start, labelled as input from a non-user source, on every admitted
+release including 2.1.283. Claude sometimes treats that prompt with caution
+or refuses it; resend it if that happens.
 
 Update Claude Code on every execution host, local and remote, before
 upgrading Sedes. An older release now fails backend startup with a runtime

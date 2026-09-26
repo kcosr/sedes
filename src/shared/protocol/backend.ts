@@ -366,6 +366,12 @@ const schemas = [
   }),
   z.strictObject({
     ...backendItemBaseShape,
+    semanticKind: z.literal("viewed_image"),
+    /** Final path component only; native directories stay server-private. */
+    fileName: boundedDisplayTextSchema.optional(),
+  }),
+  z.strictObject({
+    ...backendItemBaseShape,
     semanticKind: z.literal("review_marker"),
     verdict: z.enum(["comment", "approve", "request_changes"]),
     label: boundedDisplayTextSchema,

@@ -1039,13 +1039,15 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       throw classifyError(error);
     }
     const rootKind = this.#rootKind(root);
+    const policyRootPath = this.#policyRoot(root.canonicalPath);
     const candidateKey = root.rootId === WORKSPACE_FILE_LINK_CANDIDATE_ROOT_ID
       ? rootHandleKey(root.workspaceId, root.rootId, rootKind, root.canonicalPath,
-        this.#policyRoot(root.canonicalPath))
+        policyRootPath)
       : undefined;
     if (candidateKey) {
       this.#candidateRootUsers.set(candidateKey, (this.#candidateRootUsers.get(candidateKey) ?? 0) + 1);
     }
+    let outcomeUnknown = false;
     try {
       const rootHandle = await this.#rootHandle(
         lease,
@@ -1057,10 +1059,18 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       );
       return await operation(lease.session, rootHandle, signal);
     } catch (error) {
+      outcomeUnknown = signal?.aborted === true || isUncertainSidecarMutationError(error);
       if (signal?.aborted) throw signal.reason ?? error;
       throw classifyError(error);
     } finally {
-      if (candidateKey) this.#releaseCandidateRoot(lease, candidateKey);
+      if (candidateKey) {
+        this.#releaseCandidateRoot(lease, candidateKey, outcomeUnknown, {
+          rootId: root.rootId,
+          rootKind,
+          declaredPath: root.canonicalPath,
+          policyRootPath,
+        });
+      }
       lease.release();
     }
   }
@@ -1073,6 +1083,13 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
       readonly carrierGeneration: number;
     },
     key: string,
+    outcomeUnknown: boolean,
+    open: {
+      readonly rootId: WorkspaceFileRootId;
+      readonly rootKind: "primary" | "supplemental" | "linked_worktree" | "link_only";
+      readonly declaredPath: string;
+      readonly policyRootPath: string | undefined;
+    },
   ): void {
     const users = (this.#candidateRootUsers.get(key) ?? 1) - 1;
     if (users > 0) {
@@ -1082,14 +1099,28 @@ export class SidecarWorkspaceFileProvider implements WorkspaceFileProvider {
     this.#candidateRootUsers.delete(key);
     const generation = this.#handles.get(lease.carrierGeneration);
     const rootHandle = generation?.get(key);
-    // An interrupted open may still have admitted a root; keeping its
-    // admission lets the next use of this key recover and close it.
-    if (!rootHandle) return;
-    generation!.delete(key);
+    const admissionId = this.#admissionIds.get(key);
+    generation?.delete(key);
     this.#admissionIds.delete(key);
     // Cancellation and lease release never wait for the close.
+    const close = (handle: string) =>
+      lease.session.call(workspaceFilesRootCloseOperation, { rootHandle: handle });
+    if (rootHandle) {
+      void close(rootHandle).catch(() => undefined);
+      return;
+    }
+    // An interrupted open may still be admitted. Reopening the same admission
+    // joins or returns it, so the root closes without waiting for another read.
+    if (!outcomeUnknown || !admissionId || !open.policyRootPath) return;
     void lease.session
-      .call(workspaceFilesRootCloseOperation, { rootHandle })
+      .call(workspaceFilesRootOpenOperation, {
+        admissionId,
+        rootId: open.rootId,
+        rootKind: open.rootKind,
+        declaredPath: open.declaredPath,
+        policyRootPath: open.policyRootPath,
+      })
+      .then(({ rootHandle: admitted }) => close(admitted))
       .catch(() => undefined);
   }
 

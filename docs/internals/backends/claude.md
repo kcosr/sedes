@@ -245,9 +245,9 @@ startup message that the launch has just persisted.
 
 Every launch sends Sedes' empty `shouldQuery: false` startup message, which
 Claude Code persists as a meta user row at the transcript tip. From 2.1.280 the
-row is `queueTranscriptOnly` and never reaches the model; earlier releases
-merged its "NON-USER SOURCE" label into the next prompt, one reason the
-runtime minimum is 2.1.281. SDK 0.3.274's
+row is marked `queueTranscriptOnly`, but on every admitted release (checked on
+2.1.283) the next prompt is still saved as its child and the model still
+receives the row's "NON-USER SOURCE" label with that prompt. SDK 0.3.274's
 `getSessionMessages` picked the file-latest childless row that is not meta.
 Parallel tool calls leave childless sibling tool results, so a transcript
 ending in a startup message read back only to its last parallel tool call:

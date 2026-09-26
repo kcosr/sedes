@@ -4,10 +4,13 @@
 
 ### Breaking Changes
 
+- Codex viewed images use a new `viewed_image` transcript item. Requires
+  matching browser and packaged clients using protocol 123. (#11)
+
 - Claude backends require Claude Code 2.1.281 or newer and are tested through
-  2.1.283. Earlier releases sent Sedes' startup message to the model with the
-  first prompt, which Claude sometimes refused, or added a hidden "Continue"
-  prompt when resuming after an interrupted tool call. Update Claude Code on
+  2.1.283. Earlier releases added a hidden "Continue" prompt when resuming
+  after an interrupted tool call, and failed Agent SDK turns after an
+  assistant message with plain-string content. Update Claude Code on
   every local and remote execution host before upgrading; an older release
   fails backend startup.
 
@@ -17,7 +20,7 @@
   retires remote Claude queries by session. Upgrade existing sidecars
   explicitly before reconnecting with this server version.
 
-- Browser and packaged clients must use client protocol 123, which carries
+- Browser and packaged clients must use client protocol 124, which carries
   per-turn fork availability, restartable fork aborts, the **Discard this
   fork** action and whether a fork's provider child was returned and how it
   is identified, the affected threads in the force reset preview, and
@@ -36,13 +39,13 @@
 
 ### Added
 
-- Show a **Viewed file snapshot** after Codex's "viewed a local image" notice.
-  Sedes reads the file once through the thread's execution environment
-  (local, or an SSH or outbound sidecar with `workspace_files`) within its
-  allowed roots and keeps the snapshot with the thread, so later file changes
-  do not alter it. Viewed paths are assumed to be on the thread's configured
-  execution host; Codex-native additional executor environments are
-  unsupported. (#11)
+- Show a collapsed **Viewed image** row, named by file, when Codex views a
+  local image; expand it to see the snapshot. Sedes reads the file once
+  through the thread's execution environment (local, or an SSH or outbound
+  sidecar with `workspace_files`) within its allowed roots and keeps the
+  snapshot with the thread, so later file changes do not alter it. Viewed
+  paths are assumed to be on the thread's configured execution host;
+  Codex-native additional executor environments are unsupported. (#11)
 
 - Let Codex and Claude threads use Native Sedes agent tools. Choose
   **Native tools** in **Agent tools…**; Sedes adds a per-thread `sedes` MCP

@@ -130,7 +130,7 @@ function associatedTask(
 
 describe("execution-target application protocol", () => {
   it("uses the current client protocol for associated task presentation", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(123);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(124);
   });
 
   it("enforces exact associated-workspace semantics on task projections", () => {
