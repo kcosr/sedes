@@ -3635,6 +3635,35 @@ describe("ClaudeConversationHandle", () => {
     await resumed.close();
   });
 
+  it("counts a resumed launch from the totals its startup message reports", async () => {
+    const opened: Parameters<UsageSink["open"]>[0][] = [];
+    const captured: UsageObservation[] = [];
+    const usage: UsageSink = {enabled: true, findSubagent: () => null, listSubagentRoots: () => ({bindings:[],nextCursor:null}), listSubagents: () => [],
+      open: (source) => { opened.push(source); return {registerTurns: () => {}, capture: (entries) => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: () => {}}; }};
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { usage, resumeSession: true });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const startup = await provider.rawPrompt()[Symbol.asyncIterator]().next();
+    if (startup.done || !startup.value.uuid) throw new Error("startup_probe_missing");
+    expect(opened.map(({ epoch }) => epoch)).toEqual(["history"]);
+    const result = (uuid: string, inputTokens: number, startupMessage?: string) => ({
+      type: "result", subtype: "success", duration_ms: 1, duration_api_ms: 1, is_error: false, num_turns: startupMessage ? 0 : 1,
+      result: "", stop_reason: null, total_cost_usd: inputTokens / 1000, permission_denials: [], uuid, session_id: SESSION_ID,
+      ...(startupMessage ? { user_message_uuid: startupMessage } : {}),
+      usage: { input_tokens: startupMessage ? 0 : 1, output_tokens: startupMessage ? 0 : 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      modelUsage: { "claude-sonnet-5": { inputTokens, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0,
+        costUSD: inputTokens / 1000, contextWindow: 200_000, maxOutputTokens: 32_000 } },
+    }) as unknown as SDKMessage;
+    const startupResult = crypto.randomUUID();
+    provider.messages.push(result(startupResult, 20, startup.value.uuid));
+    provider.messages.push(result(crypto.randomUUID(), 25));
+    await vi.waitFor(() => expect(captured.filter((o) => o.replaceCheckpoint)).toHaveLength(2));
+    expect(opened).toHaveLength(2);
+    expect(opened[1]).toMatchObject({ epoch: startup.value.uuid, initialBaseline: "proven_zero",
+      reportedBaseline: { id: `${startupResult}:baseline`, facts: expect.arrayContaining([expect.objectContaining({ id: "model:claude-sonnet-5", tokens: expect.objectContaining({ uncachedInput: "20" }) })]) } });
+    await handle.close();
+  });
+
   it("renames through the SDK and reconciles from native session metadata", async () => {
     const provider = fixture();
     (provider.sdk as ClaudeSdkFacade).getSessionInfo = vi.fn(async () => ({

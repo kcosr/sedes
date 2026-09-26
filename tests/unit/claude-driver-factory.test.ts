@@ -20,7 +20,7 @@ const instance: AgentBackendInstance = {
   label: "Claude",
   enabled: true,
   configurationRevision: 1,
-  protocolRelease: "0.3.274",
+  protocolRelease: "0.3.283",
 };
 const agentTools: BackendAgentToolFacade = {
   eligibleCatalog: () => [],

@@ -226,6 +226,8 @@ export const claudeRuntimeSessionMessageSchema = z.strictObject({
   timestamp: z.iso.datetime().optional(),
   /** Claude Code's compaction summary; the SDK carries it on history rows. */
   isCompactSummary: z.literal(true).optional(),
+  /** Queued input Claude read during a turn, converted from its attachment row. */
+  isQueuedCommand: z.literal(true).optional(),
 });
 
 export const claudeRuntimeSessionListRequestSchema = z.strictObject({

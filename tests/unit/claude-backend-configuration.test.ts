@@ -10,7 +10,7 @@ const input = {
   backend: {
     id: "claude-local",
     kind: "claude_agent_sdk" as const,
-    protocolRelease: "0.3.274",
+    protocolRelease: "0.3.283",
     enabled: true,
     modelPolicy: { type: "catalog" as const },
     moduleConfiguration: {

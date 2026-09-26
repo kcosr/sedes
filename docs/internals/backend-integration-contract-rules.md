@@ -121,6 +121,12 @@ fully acknowledged presentation must not invalidate the confirmation itself.
 Explicitly confirmed Stop, Restart, and Upgrade may abandon retained delivery
 records after bounded best-effort archival of scoped operation identities and
 known dispositions. Archive failure is diagnostic, not a new admission veto.
+A sidecar host's evidence carries its resource snapshot's `state` and
+`blockers` with its work lists. The archive skips only evidence that positively
+reports an idle resource, and an `after_shutdown` record follows its
+`before_shutdown` decision, so fence admission before the first record.
+Classify each new evidence field in the archive's predicate; until then it is
+recorded.
 Never turn abandonment into provider success or a claim that a sent mutation
 did not execute. Actual owned-process cleanup remains required; external Codex
 Stop closes Sedes's client only. Automatic retirement keeps its acknowledgement
@@ -1220,6 +1226,24 @@ its conservative partial result facts pending a replay-safe normalization update
 reclassifying the same stable result receipt would otherwise conflict with saved
 evidence. This is a deferred classification correction, not an SDK claim of
 missing main-loop tokens.
+
+A cumulative counter that resumes above zero, for example from provider totals
+saved by an earlier process, is not new work. Pass its starting value to
+`open()` as `reportedBaseline` when the series is created, so the service
+counts only the increase and treats a fall below it as a regression, never a
+negative charge. Keep the evidence as the provider reported it; do not
+subtract in the backend or estimate the start from transcript arithmetic. Use
+provider evidence that no work has happened yet as a proven start; otherwise
+pass the first observed value as an `unknown` start, which leaves earlier work
+out and records `unknown_baseline`. A reopened series keeps its first
+baseline and ignores one offered on reattachment. Audit per backend:
+
+| Backend | Resumed cumulative counters |
+| --- | --- |
+| Pi | Not applicable: native entries are additive and keyed by entry. |
+| Codex | Not used: one counter series per thread across warm resume and reconnect; a fork child's counter stays non-contributing, with turn intervals charged. |
+| Claude | Each resumed, forked, or reattached query opens its series at its first result. The startup message's own zero-turn result is a proven start; any other first result is an unknown one. |
+| Grok | Unsupported; no usage is captured. |
 
 Codex child capture uses native spawn ancestry under an admitted root binding,
 with independent lifetime counters and durable parent/root ownership. Children

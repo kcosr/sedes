@@ -31,7 +31,7 @@ async function fixture() {
   const context: BackendRuntimeRecoveryContext = {
     // No application thread is bound to these fixture sessions.
     database: { prepare: () => ({ get: () => undefined }) } as unknown as BackendRuntimeRecoveryContext["database"], scope,
-    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "claude_agent_sdk", label: "Claude", enabled: false, configurationRevision: 0, protocolRelease: "0.3.274" },
+    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "claude_agent_sdk", label: "Claude", enabled: false, configurationRevision: 0, protocolRelease: "0.3.283" },
     connections: [{ id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template", kind: "claude_agent_sdk", backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId, label: "Claude", enabled: false, configurationRevision: 0 }],
     sidecarRuntime: { acquireRecovery: vi.fn(async () => ({ channel: carrier.mainChannel, controllerEpoch, serviceIncarnation: services.serviceIncarnation, closed: new Promise(() => {}), release })) },
   };

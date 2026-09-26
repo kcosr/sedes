@@ -212,6 +212,8 @@ interface ParsedSessionMessage {
   readonly timestamp?: string;
   /** Claude Code's compaction summary: the model's context for what came before. */
   readonly compactSummary?: true;
+  /** Queued input Claude read during a running turn, not input that started one. */
+  readonly queuedCommand?: true;
 }
 
 interface ProjectedTimeline {
@@ -774,6 +776,9 @@ function buildTimeline(
       continue;
     }
     if (taskNotification) {
+      // Claude read this one while running a tool: it belongs to that turn
+      // and starts none, as the live stream shows it.
+      if (message.queuedCommand) continue;
       finishTurn();
       pendingProviderBoundary ??= { messageIndex };
       continue;
@@ -1293,6 +1298,7 @@ function parseMessages(
         : {}),
       ...(timestamp !== undefined ? { timestamp } : {}),
       ...(type === "user" && candidate.isCompactSummary === true ? { compactSummary: true as const } : {}),
+      ...(type === "user" && candidate.isQueuedCommand === true ? { queuedCommand: true as const } : {}),
     });
   }
   return result;

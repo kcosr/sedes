@@ -120,6 +120,21 @@
   Stop. Remote Claude needs a sidecar built from this version (runtime
   protocol 14).
 
+- A sidecar's `abandoned-work/` archive records only resources whose Stop,
+  Restart, or Upgrade interrupted or abandoned work; idle resources no longer
+  fill it. When full it removes its oldest records instead of ignoring new
+  ones, logging `sidecar_abandonment_archive_rotated` once per sidecar run.
+  Files other than its records are never removed. Sidecars apply this once
+  upgraded to this version.
+
+- Claude backends use Agent SDK 0.3.283 (was 0.3.274). Claude history now
+  reads task notifications Claude received while running a tool, and other
+  queued input, where Claude read them, as SDK 0.3.283 does; they stay inside
+  their turn, so existing threads show the same turns. The Claude Code
+  runtime policy is unchanged (2.1.281 or newer, tested through 2.1.283).
+  Upgrade sidecars together with the server: the sidecar build changes and
+  sidecar runtime protocol 14 now also carries the queued-input marker.
+
 ### Fixed
 
 - Create Claude forks with one locked-down Claude Code launch. It loads no
@@ -139,6 +154,14 @@
 - Claude fork children inherit the source turns' usage and terminal results,
   and copy background task results only when the copied history shows them
   finished. Migration 117 records this child evidence.
+
+- Count a resumed or forked Claude query's usage once. Claude Code 2.1.277 and
+  newer continue such a query's totals from those its transcript saved, and
+  Sedes counted the earlier turns again in session tokens, cost, and the Usage
+  page. Each query is now counted from the totals its startup message reported,
+  and a reattached query keeps that starting point. If the start was not
+  observed, earlier work is left out and the usage is marked partial. Totals
+  already recorded are not corrected.
 
 - Log every fork failure with its backend code and cause. A retry that fails
   transiently keeps the fork recoverable instead of discarding a child an

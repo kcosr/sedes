@@ -258,6 +258,9 @@ export class ClaudeRuntimeWorkerHost {
         ...("isCompactSummary" in message && message.isCompactSummary === true
           ? { isCompactSummary: true as const }
           : {}),
+        ...("isQueuedCommand" in message && message.isQueuedCommand === true
+          ? { isQueuedCommand: true as const }
+          : {}),
       }));
       return projected;
     });

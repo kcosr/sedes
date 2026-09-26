@@ -13,13 +13,15 @@ import { claudeConfigDirectory, type ClaudeChildEnvironment } from "./claude-chi
  * may be the meta row Claude Code persists for Sedes' startup message, or a
  * `<synthetic>` assistant row.
  *
- * SDK 0.3.274 `getSessionMessages` instead picks the file-latest childless row
- * that is not meta. Parallel tool calls leave childless sibling tool results,
- * so a transcript ending in the startup message reads back only to its last
- * parallel tool call. This reader walks from the true tip and otherwise
- * reproduces the SDK's conversion exactly: compaction relinking, parallel
- * fragment re-insertion, queued-command conversion, filtering, origin mapping,
- * and offset/limit slicing.
+ * SDK 0.3.274 `getSessionMessages` picked the file-latest childless row that
+ * is not meta, so a transcript ending in the startup message read back only to
+ * its last parallel tool call. SDK 0.3.283 walks up from the file-latest
+ * childless main-conversation row of any type, so a system notice Claude Code
+ * attaches to an old row still ends its read there. This reader walks from the
+ * true tip and otherwise reproduces 0.3.283's conversion exactly: compaction
+ * relinking, parallel fragment and tool-result re-insertion, queued-command
+ * conversion, completed local commands, filtering, origin mapping, and
+ * offset/limit slicing.
  *
  * The SDK, like Claude Code's own loader, stops at a compact boundary, whose
  * `parentUuid` is null: that segment is exactly what the model sees after the
@@ -42,8 +44,19 @@ const INTERRUPTION_MARKERS = [
   "[Request interrupted by user]",
   "[Request interrupted by user for tool use]",
   "[Tool call did not complete: the turn was ended to deliver the message that follows. Nothing refused it; re-run it if still needed.]",
+  "[Tool call interrupted: the session ended before this call's result was recorded, so its outcome is unknown. Check whether it took effect before relying on it or running it again.]",
+  "[Tool call result not in this copy: this session was copied from another session before that session recorded this call's result. The call may have finished there, may still be running there, or may never have run. Check whether it took effect before relying on it or running it again.]",
   "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed.",
+  "[Tool call skipped: the turn was stopped before this call ran, by the check whose denial is on another call in this batch. Nothing refused this call and it had no effects; re-run it if still needed.]",
   "[Tool call skipped: the turn ended to deliver the message that follows before this call ran. Nothing refused it; re-run it if still needed.]",
+] as const;
+// Claude Code's rows for a local slash command: a meta caveat, the command
+// record, then its output.
+const LOCAL_COMMAND_PREFIXES = [
+  ["<command-name>", "record"],
+  ["<local-command-stdout>", "output"],
+  ["<local-command-stderr>", "output"],
+  ["<local-command-caveat>", "caveat"],
 ] as const;
 
 /** One parsed transcript row with the fields this reader interprets. */
@@ -161,11 +174,14 @@ export async function resolveClaudeSessionMessages(
   options: ClaudeTranscriptReadOptions = {},
 ): Promise<SessionMessage[]> {
   const chain = await resolveActiveChain(entries, options.resumableOnly === true);
-  const replies = replyFollows(chain);
+  const localCommands = completedLocalCommands(chain);
+  const replies = replyFollows(chain, localCommands);
   const chainUuids = new Set(chain.map(({ uuid }) => uuid));
   const includeSystemMessages = options.includeSystemMessages ?? false;
   const messages = chain
-    .map((entry, index) => convertQueuedCommand(entry, replies[index]!, chainUuids))
+    .map((entry, index) => localCommands.has(index)
+      ? { ...entry, isCompletedLocalCommand: true }
+      : convertQueuedCommand(entry, replies[index]!, chainUuids))
     .filter((entry) => isVisible(entry, includeSystemMessages))
     .map(toSessionMessage);
   return page(messages, options);
@@ -320,7 +336,10 @@ async function relinkPreservedCompaction(byUuid: Map<string, ClaudeTranscriptEnt
  * Claude Code stores each assistant content block as its own row, and parallel
  * tool results hang off different blocks. Rows of an on-chain assistant
  * message that are off the chain are re-inserted after that message, followed
- * by their tool results, each group in timestamp order.
+ * by their tool results, each group in timestamp order. A result belongs to a
+ * message when its parent is one of the message's rows, or when it names one
+ * of them through `sourceToolAssistantUUID` or its `tool_use_id` and answers a
+ * call nothing on the chain answers yet.
  */
 function reinsertParallelFragments(
   byUuid: ReadonlyMap<string, ClaudeTranscriptEntry>,
@@ -335,20 +354,51 @@ function reinsertParallelFragments(
     if (messageId) lastOnChainByMessageId.set(messageId, entry);
   }
   const fragmentsByMessageId = new Map<string, ClaudeTranscriptEntry[]>();
-  const toolResultsByParent = new Map<string, ClaudeTranscriptEntry[]>();
+  // The row that made each tool call; null when rows of different messages claim one id.
+  const callers = new Map<string, ClaudeTranscriptEntry | null>();
+  const toolResults: ClaudeTranscriptEntry[] = [];
   for (const entry of byUuid.values()) {
     const messageId = assistantMessageId(entry);
     if (messageId) {
       const fragments = fragmentsByMessageId.get(messageId);
       if (fragments) fragments.push(entry);
       else fragmentsByMessageId.set(messageId, [entry]);
-    } else if (isToolResult(entry)) {
-      const parentUuid = entry.parentUuid as string;
-      const results = toolResultsByParent.get(parentUuid);
-      if (results) results.push(entry);
-      else toolResultsByParent.set(parentUuid, [entry]);
+      for (const id of blockStrings(entry, "tool_use", "id")) {
+        const caller = callers.get(id);
+        callers.set(id, caller === undefined || (caller !== null && assistantMessageId(caller) === messageId) ? entry : null);
+      }
+    } else if (isToolResult(entry)) toolResults.push(entry);
+  }
+  const resultsByRow = new Map<string, ClaudeTranscriptEntry[]>();
+  const linked = new Set<string>();
+  const link = (rowUuid: string, result: ClaudeTranscriptEntry) => {
+    const key = `${rowUuid}\n${result.uuid}`;
+    if (linked.has(key)) return;
+    linked.add(key);
+    const results = resultsByRow.get(rowUuid);
+    if (results) results.push(result);
+    else resultsByRow.set(rowUuid, [result]);
+  };
+  const sameThread = (left: ClaudeTranscriptEntry, right: ClaudeTranscriptEntry) =>
+    (left.isSidechain ?? false) === (right.isSidechain ?? false) && left.agentId === right.agentId;
+  for (const result of toolResults) {
+    link(result.parentUuid as string, result);
+    const source = typeof result.sourceToolAssistantUUID === "string" && result.sourceToolAssistantUUID !== result.parentUuid
+      ? byUuid.get(result.sourceToolAssistantUUID)
+      : undefined;
+    if (source && sameThread(result, source)) link(source.uuid, result);
+    for (const id of blockStrings(result, "tool_result", "tool_use_id")) {
+      const caller = callers.get(id);
+      if (caller && sameThread(result, caller)) link(caller.uuid, result);
     }
   }
+  const answeredOnChain = new Set<string>();
+  for (const entry of chain) for (const id of blockStrings(entry, "tool_result", "tool_use_id")) answeredOnChain.add(id);
+  let fileOrder: Map<string, number> | undefined;
+  const position = (entry: ClaudeTranscriptEntry) => {
+    fileOrder ??= new Map([...byUuid.keys()].map((uuid, index) => [uuid, index]));
+    return fileOrder.get(entry.uuid) ?? Number.MAX_SAFE_INTEGER;
+  };
   const seen = new Set<string>();
   const insertedAfter = new Map<string, ClaudeTranscriptEntry[]>();
   let inserted = 0;
@@ -357,11 +407,32 @@ function reinsertParallelFragments(
     if (!messageId || seen.has(messageId)) continue;
     seen.add(messageId);
     const fragments = fragmentsByMessageId.get(messageId) ?? [entry];
+    const fragmentUuids = new Set(fragments.map(({ uuid }) => uuid));
     const offChainFragments = fragments.filter(({ uuid }) => !onChain.has(uuid));
     const offChainResults: ClaudeTranscriptEntry[] = [];
+    const indirectResults: ClaudeTranscriptEntry[] = [];
+    const collected = new Set<string>();
     for (const fragment of fragments) {
-      for (const result of toolResultsByParent.get(fragment.uuid) ?? []) {
-        if (!onChain.has(result.uuid)) offChainResults.push(result);
+      for (const result of resultsByRow.get(fragment.uuid) ?? []) {
+        if (onChain.has(result.uuid) || collected.has(result.uuid)) continue;
+        collected.add(result.uuid);
+        if (fragmentUuids.has(result.parentUuid as string)) offChainResults.push(result);
+        else indirectResults.push(result);
+      }
+    }
+    if (indirectResults.length > 0) {
+      // A result linked only indirectly counts when it answers an open call of this message.
+      const answered = new Set(answeredOnChain);
+      for (const result of offChainResults) for (const id of blockStrings(result, "tool_result", "tool_use_id")) answered.add(id);
+      indirectResults.sort((left, right) => position(left) - position(right));
+      for (const result of indirectResults) {
+        const ids = blockStrings(result, "tool_result", "tool_use_id");
+        if (!ids.some((id) => {
+          const caller = callers.get(id);
+          return !answered.has(id) && !!caller && fragmentUuids.has(caller.uuid);
+        })) continue;
+        for (const id of ids) answered.add(id);
+        offChainResults.push(result);
       }
     }
     if (offChainFragments.length === 0 && offChainResults.length === 0) continue;
@@ -376,20 +447,59 @@ function reinsertParallelFragments(
   return chain.flatMap((entry) => [entry, ...(insertedAfter.get(entry.uuid) ?? [])]);
 }
 
-/** Marks rows whose next prompt-or-reply row, later in the chain, is a reply. */
-function replyFollows(chain: readonly ClaudeTranscriptEntry[]): boolean[] {
+/**
+ * Indexes of the rows that record a completed local slash command: after a
+ * meta caveat row, the command record and then its output rows.
+ */
+function completedLocalCommands(chain: readonly ClaudeTranscriptEntry[]): Set<number> {
+  const indexes = new Set<number>();
+  const kind = (entry: ClaudeTranscriptEntry) => entry.promptSource === undefined ? localCommandKind(entry) : undefined;
+  chain.forEach((entry, index) => {
+    if (entry.type !== "user" || !entry.isMeta || kind(entry) !== "caveat") return;
+    let recorded = false;
+    for (let next = index + 1; next < chain.length; next++) {
+      const candidate = chain[next]!;
+      if (candidate.type === "assistant") break;
+      if (candidate.type !== "user" || candidate.isMeta) continue;
+      const candidateKind = kind(candidate);
+      if (candidateKind === "record" && !recorded) recorded = true;
+      else if (candidateKind !== "output" || !recorded) break;
+      indexes.add(next);
+    }
+  });
+  return indexes;
+}
+
+function localCommandKind(entry: ClaudeTranscriptEntry): "record" | "output" | "caveat" | undefined {
+  const content = property(entry.message, "content");
+  const text = Array.isArray(content)
+    ? property(content.findLast((block) => property(block, "type") === "text"), "text")
+    : typeof content === "string" ? content : undefined;
+  if (typeof text !== "string") return undefined;
+  return LOCAL_COMMAND_PREFIXES.find(([prefix]) => text.startsWith(prefix))?.[1];
+}
+
+/**
+ * Marks rows whose next prompt-or-reply row, later in the chain, is a reply.
+ * A completed local command's rows are neither.
+ */
+function replyFollows(chain: readonly ClaudeTranscriptEntry[], localCommands: ReadonlySet<number>): boolean[] {
   const replies: boolean[] = [];
   let next: "reply" | "prompt" | undefined;
   for (let index = chain.length - 1; index >= 0; index--) {
     const entry = chain[index]!;
     replies[index] = next === "reply";
     if (entry.type === "assistant" || isToolResult(entry) || isInterruptionMarker(entry)) next = "reply";
-    else if (entry.type === "user" && !entry.isMeta && !entry.isCompactSummary) next = "prompt";
+    else if (entry.type === "user" && !entry.isMeta && !entry.isCompactSummary && !localCommands.has(index)) next = "prompt";
   }
   return replies;
 }
 
-/** An answered human queued-command attachment reads as the prompt it carried. */
+/**
+ * An answered queued-command attachment reads as the message it carried:
+ * a prompt, steer, task notification, or other queued input. Meta and
+ * forwarded commands stay attachments.
+ */
 function convertQueuedCommand(
   entry: ClaudeTranscriptEntry,
   answered: boolean,
@@ -399,13 +509,9 @@ function convertQueuedCommand(
   const attachment = record(entry.attachment);
   if (!attachment) return entry;
   const prompt = attachment.prompt;
-  const origin = typeof attachment.origin === "object" && attachment.origin !== null ? attachment.origin : undefined;
-  const originKind = property(origin, "kind");
   if (
     attachment.type !== "queued_command" ||
-    attachment.commandMode !== "prompt" ||
     Boolean(attachment.isMeta) ||
-    !(origin === undefined || originKind === "human" || originKind === "auto-continuation") ||
     (typeof prompt !== "string" && !Array.isArray(prompt)) ||
     isForwardedIntent(attachment.forwardedIntent)
   ) {
@@ -414,6 +520,7 @@ function convertQueuedCommand(
   const uuid = typeof attachment.source_uuid === "string" && attachment.source_uuid ? attachment.source_uuid : entry.uuid;
   if (uuid !== entry.uuid && chainUuids.has(uuid)) return entry;
   chainUuids.add(uuid);
+  const origin = queuedCommandOrigin(attachment);
   return {
     type: "user",
     uuid,
@@ -423,9 +530,17 @@ function convertQueuedCommand(
     message: { role: "user", content: prompt },
     isMeta: false,
     ...(origin !== undefined ? { origin } : {}),
+    isQueuedCommand: true,
     isSidechain: entry.isSidechain,
     teamName: entry.teamName,
   };
+}
+
+/** A task notification queued without an origin still reads as one, like the SDK. */
+function queuedCommandOrigin(attachment: Readonly<Record<string, unknown>>): unknown {
+  const origin = typeof property(attachment.origin, "kind") === "string" ? attachment.origin : undefined;
+  return (origin !== undefined ? sessionOrigin(origin) : undefined) ??
+    (attachment.commandMode === "task-notification" ? { kind: "task-notification" } : undefined);
 }
 
 function isVisible(entry: ClaudeTranscriptEntry, includeSystemMessages: boolean): boolean {
@@ -447,16 +562,22 @@ function toSessionMessage(entry: ClaudeTranscriptEntry): SessionMessage {
     ...(entry.isMeta === true || entry.isCompactSummary === true || entry.isVisibleInTranscriptOnly === true
       ? { is_meta: true }
       : {}),
+    ...(entry.isQueuedCommand === true ? { isQueuedCommand: true } : {}),
+    ...(entry.isCompletedLocalCommand === true ? { isCompletedLocalCommand: true } : {}),
     timestamp: entry.timestamp as string,
     ...(origin ? { origin } : {}),
   } as SessionMessage;
 }
 
-/** Task notifications expose only their kind and subkind, like the SDK. */
+/** Task notifications expose only their kind, subkind, and fire reason, like the SDK. */
 function sessionOrigin(origin: unknown): unknown {
   const value = record(origin);
   if (value?.kind !== "task-notification") return origin;
-  return { kind: "task-notification", ...(value.subkind !== undefined ? { subkind: value.subkind } : {}) };
+  return {
+    kind: "task-notification",
+    ...(value.subkind !== undefined ? { subkind: value.subkind } : {}),
+    ...(value.fireReason !== undefined ? { fireReason: value.fireReason } : {}),
+  };
 }
 
 function page(messages: SessionMessage[], options: ClaudeTranscriptReadOptions): SessionMessage[] {
@@ -469,6 +590,19 @@ function assistantMessageId(entry: ClaudeTranscriptEntry): string | undefined {
   if (entry.type !== "assistant") return undefined;
   const id = record(entry.message)?.id;
   return typeof id === "string" ? id : undefined;
+}
+
+/** String `field` values of the content blocks of `type` in a row's message. */
+function blockStrings(entry: ClaudeTranscriptEntry, type: string, field: string): string[] {
+  const content = property(entry.message, "content");
+  if (!Array.isArray(content)) return [];
+  const values: string[] = [];
+  for (const block of content) {
+    if (typeof block !== "object" || block === null || (block as Record<string, unknown>).type !== type) continue;
+    const value = (block as Record<string, unknown>)[field];
+    if (typeof value === "string") values.push(value);
+  }
+  return values;
 }
 
 function isToolResult(entry: ClaudeTranscriptEntry): boolean {

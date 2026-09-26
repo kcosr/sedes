@@ -343,7 +343,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   constructor(input: ClaudeConversationHandleInput) {
     this.binding = input.binding;
-    this.#usageAccounting = input.usage.enabled ? new ClaudeUsageAccounting({sink: input.usage, binding: input.binding, nativeNamespace: input.nativeNamespace}) : undefined;
+    this.#usageAccounting = input.usage.enabled ? new ClaudeUsageAccounting({sink: input.usage, binding: input.binding, nativeNamespace: input.nativeNamespace,
+      launch: input.launch ?? (input.resumeSession === true ? "resume" : "new")}) : undefined;
     this.#canonicalWorkspacePath = input.canonicalWorkspacePath;
     this.#workspaceId = input.workspaceId;
     this.#opaqueBindingDetail = input.opaqueBindingDetail;
