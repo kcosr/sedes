@@ -21,7 +21,7 @@ import {
   type ConversationBinding,
 } from "../../src/server/backends/contracts.js";
 import { projectClaudeHistory } from "../../src/server/backends/claude/claude-history-projector.js";
-import type { BackendCapabilityDocument, BackendConversationEvent } from "../../src/shared/protocol/backend.js";
+import { backendConversationSnapshotSchema, backendTurnSchema, type BackendCapabilityDocument, type BackendConversationEvent } from "../../src/shared/protocol/backend.js";
 import {
   ClaudeConversationHandle,
   type ClaudeEffortEvidence,
@@ -4993,6 +4993,47 @@ describe("Claude compaction, lost processes, and bounded Stop", () => {
     const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: history, resumeSession: true }).handle;
     expect(shape(await projectionSnapshot(reloaded))).toEqual(shape(live));
     await reloaded.close();
+  });
+
+  it("never publishes an unforkable reason on a turn that is still running", async () => {
+    // Claude answered, then compacted before its result: the answer precedes
+    // the compaction, so history calls the turn completed but unforkable.
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const submitted = handle.submit(submitInput("Refactor the parser"));
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.lifecycle(PROMPT_ID, "started"));
+    await submitted;
+    provider.messages.push(nativeFrames.text("msg-answer", "Refactored.", [PROMPT_ID]));
+    provider.messages.push(boundary([]));
+    provider.messages.push(summary);
+    await vi.waitFor(async () => expect(Object.values((await projectionSnapshot(handle)).itemsById)
+      .some(item => item.semanticKind === "compaction")).toBe(true));
+    const live = await projectionSnapshot(handle);
+    const turnId = live.activeBackendTurnId!;
+    expect(live).toMatchObject({ runState: "running" });
+    expect(backendConversationSnapshotSchema.safeParse(live).success).toBe(true);
+    expect(live.turnsById[turnId]).toEqual(expect.objectContaining({ status: "in_progress" }));
+    for (const key of ["forkUnavailableReason", "endedBy", "completedAt"]) {
+      expect(live.turnsById[turnId]).not.toHaveProperty(key);
+    }
+    const turnEvents = events.flatMap(event => "turn" in event ? [event.turn] : []);
+    expect(turnEvents.length).toBeGreaterThan(0);
+    for (const turn of turnEvents) expect(backendTurnSchema.safeParse(turn).success).toBe(true);
+    // The earlier turn became unforkable; that change alone is published.
+    const earlier = live.orderedBackendTurnIds[0]!;
+    expect(events).toContainEqual({ type: "turn_updated", turn: expect.objectContaining({ backendTurnId: earlier,
+      status: "completed", forkUnavailableReason: { text: expect.stringContaining("before its latest compaction") } }) });
+    provider.messages.push(nativeFrames.result([PROMPT_ID]));
+    provider.messages.push(nativeFrames.state("idle"));
+    await vi.waitFor(() => expect(runStates(events).at(-1)).toBe("idle"));
+    expect((await projectionSnapshot(handle)).turnsById[turnId]).toMatchObject({ status: "completed",
+      forkUnavailableReason: { text: expect.stringContaining("before its latest compaction") } });
+    await handle.close();
   });
 
   it("settles Stop during a compacted turn with Claude's interrupted result", async () => {

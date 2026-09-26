@@ -9,6 +9,7 @@ import type {
   BackendItem,
 } from "../../src/shared/protocol/backend.js";
 import type { DeliveryInputSnapshot } from "../../src/server/db/repositories/delivery-input-snapshot-repository.js";
+import { conversationTurnSchema } from "../../src/shared/protocol/conversation.js";
 
 function snapshot(): BackendConversationSnapshot {
   const item = {
@@ -452,6 +453,38 @@ describe("ConversationProjector", () => {
     const page = projector.projectHistoryPage({ orderedBackendTurnIds: backend.orderedBackendTurnIds, itemsById: backend.itemsById,
       turnsById: backend.turnsById }, { branching: { availability: "unavailable", reason: { text: "Unavailable" } }, sourceRunState: "idle" });
     expect(page.turnsById[turnId!]).toMatchObject({ forkUnavailableReason: reason });
+  });
+
+  it("publishes a fork unavailability that is added or cleared without any other turn change", () => {
+    const backend = snapshot();
+    const projector = new ConversationProjector({ backendInstanceId: "backend", bindingIdentity: "binding" });
+    const [turnId] = projector.replace(backend, -1).orderedTurnIds;
+    const reason = { text: "Claude cannot fork before its latest compaction." };
+    const marked = { ...backend.turnsById["user-1"]!, forkUnavailableReason: reason };
+    expect(projector.apply({ handleSequence: 0, event: { type: "turn_updated", turn: marked } })).toMatchObject({
+      kind: "events", events: [{ type: "turn_upsert", turn: { id: turnId, revision: 1, forkUnavailableReason: reason } }] });
+    expect(projector.timeline().turnsById[turnId!]).toMatchObject({ forkUnavailableReason: reason });
+    const cleared = projector.apply({ handleSequence: 1, event: { type: "turn_updated", turn: backend.turnsById["user-1"]! } });
+    expect(cleared).toMatchObject({ kind: "events", events: [{ type: "turn_upsert", turn: { id: turnId, revision: 2 } }] });
+    expect(projector.timeline().turnsById[turnId!]).not.toHaveProperty("forkUnavailableReason");
+  });
+
+  it("carries a fork unavailability only on a completed turn", () => {
+    const backend = snapshot();
+    const running = { backendTurnId: "user-1", status: "in_progress" as const,
+      orderedBackendItemIds: backend.turnsById["user-1"]!.orderedBackendItemIds };
+    backend.turnsById["user-1"] = running;
+    backend.runState = "running";
+    backend.activeBackendTurnId = "user-1";
+    const projector = new ConversationProjector({ backendInstanceId: "backend", bindingIdentity: "binding" });
+    const [turnId] = projector.replace(backend, -1).orderedTurnIds;
+    // A live event is not schema-checked at this boundary; the projection is.
+    const reason = { text: "This turn has no exact fork boundary." };
+    projector.apply({ handleSequence: 0, event: { type: "turn_updated", turn: { ...running, forkUnavailableReason: reason } } });
+    const turn = projector.timeline().turnsById[turnId!]!;
+    expect(turn).toMatchObject({ status: "in_progress" });
+    expect(turn).not.toHaveProperty("forkUnavailableReason");
+    expect(conversationTurnSchema.safeParse(turn).success).toBe(true);
   });
 
   it("allows active historical forks but keeps reconciling fail-closed", () => {

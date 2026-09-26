@@ -2251,7 +2251,9 @@ their contracts explicitly change.
 A backend that cannot copy history exactly through a completed turn marks that
 turn with a bounded user-facing `forkUnavailableReason`. Currently only Claude
 does so, for turns without a final answer and turns before its latest
-compaction. The turn's fork action shows the reason instead of forking. The
+compaction. The turn's fork action shows the reason instead of forking. Only a completed
+turn carries a reason, and the normalized projector publishes a change to the
+reason alone as a turn revision. The
 normalized actor and the backend both resolve `latest_completed` to the newest
 completed turn; interrupted and failed turns are not completed. If that turn
 carries a reason, the fork fails with it before any provider call rather than

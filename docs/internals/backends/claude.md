@@ -760,7 +760,9 @@ it has no fork checkpoint: it ended without a final answer (for example on a
 tool result or an attachment-ended structured output), it precedes the latest
 compaction, or it is only a compaction summary. The reason travels as
 `forkUnavailableReason` on the backend and normalized turn, and the fork button
-and the fork service both honor it. File-history and attachment fidelity
+and the fork service both honor it. A turn Claude is still running carries no
+reason, even when history already reads it as answered, and a change to the
+reason alone, such as after an automatic compaction, republishes the turn. File-history and attachment fidelity
 across a native fork are not guaranteed. Historical authenticated boundary
 carriers remain hidden when older sessions are read. Skill correlation crosses
 the fork only through the verified native UUID remap described above.

@@ -2292,11 +2292,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
     // remains active until its native result; publishing those intermediate
     // guesses makes the shared actor alternate idle/running and hides controls.
     const liveTurnId = this.#liveTurnId();
-    const liveTurn = (turn: BackendTurn): BackendTurn => {
-      if (turn.status !== "completed") return turn;
-      const { endedBy: _endedBy, completedAt: _completedAt, ...active } = turn;
-      return { ...active, status: "in_progress" };
-    };
+    const liveTurn = (turn: BackendTurn): BackendTurn =>
+      turn.status === "completed" ? reopenedTurn(turn) : turn;
     for (const turnId of next.orderedBackendTurnIds) {
       const prior = previous.turnsById[turnId];
       const priorTurn = prior && turnId === liveTurnId ? liveTurn(prior) : prior;
@@ -2378,8 +2375,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
         );
       for (const item of items) result.itemsById[item.backendItemId] = item;
       result.turnsById[activeBackendTurnId] = {
-        ...activeTurn,
-        ...(reopened ? { status: "in_progress" as const } : {}),
+        ...(reopened ? reopenedTurn(activeTurn) : activeTurn),
         orderedBackendItemIds: [
           ...new Set([
             ...activeTurn.orderedBackendItemIds,
@@ -2920,6 +2916,22 @@ function modelOutputMessageId(message: SDKMessage): string | undefined {
 
 function copySessionMessage(message: SessionMessage): SessionMessage {
   return structuredClone(message);
+}
+
+/**
+ * A turn kept live until its native result. History may already call it
+ * settled; while it runs it carries no terminal outcome, time, failure, or
+ * fork verdict.
+ */
+function reopenedTurn(turn: BackendTurn): BackendTurn {
+  const {
+    endedBy: _endedBy,
+    completedAt: _completedAt,
+    failure: _failure,
+    forkUnavailableReason: _forkUnavailableReason,
+    ...active
+  } = turn;
+  return { ...active, status: "in_progress" };
 }
 
 function partialItem(
