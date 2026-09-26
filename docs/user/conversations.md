@@ -235,8 +235,9 @@ the mode locally without submitting the draft. Tap the main button to submit. Th
 Sedes checks the current server state when it admits an action. If a turn
 finishes between clicking and admission, an ordinary delivery intent becomes
 Send. A Steer whose exact target has just ended becomes queued work only when
-Sedes can prove it was not accepted; it is never redirected into a different
-active turn.
+Sedes can prove the provider never accepted it; it is never redirected into a
+different active turn. A Steer the provider accepted but never used comes back
+to you as not sent, as described under [Stop a turn](#stop-a-turn).
 
 ### What happens to the composer
 
@@ -270,10 +271,11 @@ direct Steer can be admitted.
 
 ### Send more than one Steer
 
-You may submit several Steers while the same turn remains active. Their cards
-stay in first-in, first-out order while Sedes makes provider calls one at a
-time. Each card disappears only when its exact operation is represented in
-history.
+Sedes sends Steers to the provider one at a time, in first-in, first-out
+order. A Steer card shows **Steering** until its exact message appears in
+history, and then disappears. While it waits for the provider to use it, the
+composer waits too: Send, Steer, and Queue return when it appears, or when
+Stop returns it to you.
 
 ### Stop a turn
 
@@ -282,16 +284,27 @@ work already persisted by the provider, and it does not imply that every
 external side effect was rolled back. If the outcome cannot be confirmed, use
 the displayed recovery action rather than repeating Stop.
 
-Stop never removes Sedes's own Queue: queued entries keep their order and run
-after the stopped turn. A Steer card Sedes has not yet sent to the provider is
-also still Sedes's own work. What Stop does to a Steer the provider has
-received but not used yet depends on the backend:
+Stop means stop, on every backend:
 
-| Backend | A Steer the provider received but has not used when you press Stop |
+- Sedes's own Queue is untouched: queued entries keep their order and run
+  after the stopped turn. A Steer card Sedes has not yet sent to the provider
+  is also still Sedes's own work.
+- A Steer the provider received but has not used yet never runs. Its card
+  shows **Steer failed** and says it was not sent. Restore it to the composer
+  or dismiss it; later queued entries wait for that choice. Sedes never
+  resends it.
+- A Steer the provider already used stays with the stopped turn.
+
+If the provider's runtime ends or Sedes restarts before the provider used a
+Steer, Sedes also returns it as not sent when it can prove that. When it
+cannot, the card stays unconfirmed or says the outcome is unknown. Either way
+Sedes never resends it.
+
+| Backend | How Stop handles a Steer the provider has not used |
 | --- | --- |
-| Claude | Stop withdraws it, so it never runs. Its card shows it failed and was not sent. Restore it to the composer or dismiss it; later queued entries wait for that choice. Sedes never resends it. A Steer Claude already started stays with the stopped turn. Claude's own queued work, such as a finished background task's notification, can still start a turn afterwards. |
-| Pi | Stop clears Pi's steering queue, so it never runs. Its card shows it failed and was not sent. Restore it to the composer or dismiss it; later queued entries wait for that choice. Sedes never resends it. A Steer Pi already used stays with the stopped turn. |
-| Codex | Codex drops it without reporting that. Sedes counted it as delivered when Codex accepted it, so it is neither in history nor returned to you; send it again if you still need it. |
+| Claude | Stop asks Claude to withdraw it before interrupting. Claude's own queued work, such as a finished background task's notification, can still start a turn afterwards. |
+| Pi | Stop clears Pi's steering queue before interrupting. |
+| Codex | Codex discards it when it interrupts the turn. Sedes reports it not sent once the stopped turn's history is final without it. |
 | Grok | Grok has no Steer; active-turn input waits in Queue. |
 
 ### Mobile composer focus

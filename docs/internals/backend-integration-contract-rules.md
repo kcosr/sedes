@@ -2056,8 +2056,9 @@ operations, pre-boundary stale-target classifications, and authenticated
 delivery correlation. Active Submit may therefore resolve to Steer for these
 backends. Codex's provider-private adapter recognizes only its exact reviewed
 `turn/steer` no-active-turn and expected-turn-mismatch rejection responses;
-unknown wording fails closed. Pi may additionally remain pending until provider
-materialization is observed. Claude implements conversation-targeted Steer via
+unknown wording fails closed. Both remain pending until provider
+materialization is observed: an accepted receipt only admits the input to the
+provider's volatile queue for that turn. Claude implements conversation-targeted Steer via
 native `priority: "next"`. Native enqueue is pending materialization until exact
 user-message UUID evidence identifies incorporation and the receiving turn.
 Earlier assistant activity is never acceptance evidence for a new steer.
@@ -2115,26 +2116,43 @@ including whether it survives, is cancelled, or is fenced from a later turn. If
 any of target admission, receipt, history grouping, or interrupt-race evidence
 is absent, advertise only provider-neutral next-turn Queue and omit Steer.
 
-Stop never removes Sedes's durable Queue, including a Steer intent not yet sent
-to the provider. For input the provider accepted but has not materialized,
-each backend states what Stop does. Such input must neither start a turn after
-Stop without Sedes tracking it nor disappear while Sedes records it delivered.
-A backend that withdraws it on Stop confirms each withdrawal with exact
-per-input provider evidence, never with a receipt list, an empty provider
-queue, or a missing history row. It then reconciles that input as
-`not_accepted` with `retryable: false` and a bounded `diagnostic`. The queue
-fails the entry as not sent and returns it to the user to restore or dismiss;
-it never resends it, and later entries wait for that decision.
-`not_accepted` with `retryable: true` instead restores a proven-unsent Steer
-as Sedes's own work, which the stale-target rule dispatches after Stop. Input
-the provider already started belongs to the stopped turn.
+**Stop means stop.** This rule is the same for every backend:
 
-| Backend | Accepted Steer not yet materialized when Stop lands |
+- Stop never removes Sedes's durable Queue, including a Steer intent Sedes has
+  not yet sent to the provider. That input is Sedes's own work and runs after
+  the stopped turn.
+- A Steer the provider accepted but had not started or consumed when Stop
+  landed returns to the user as not sent. It must neither start a turn after
+  Stop nor disappear while Sedes records it delivered, and it is never resent
+  automatically. Runtime retirement or loss of the process holding it has the
+  same outcome.
+- A Steer the provider already started or consumed belongs to the stopped
+  turn and is accepted with it.
+
+Each backend proves the outcome per input: withdrawal evidence the provider
+emits for that input, or the input's absence from final history once its
+target turn can no longer use it. A receipt list, an empty provider queue, or
+a missing history row while the target turn can still use the input is never
+evidence. A proven unused Steer reconciles `not_accepted` with
+`retryable: false` and a bounded not-sent `diagnostic`; the queue fails the
+entry as not sent, returns it to restore or dismiss, and later entries wait for
+that decision. Insufficient evidence stays unresolved (or `failed_unknown`
+for terminally lost conversation-Steer tracking), never a guess.
+`not_accepted` with `retryable: true` is reserved for input proven unsent
+before the provider accepted it, such as pre-boundary stale-target evidence or
+a provider refusal; the queue keeps that as Sedes's own work, which the
+stale-target rule dispatches after Stop.
+
+Steer reconciliation receives `steerTarget`, the exact target durably recorded
+when the Steer crossed the provider boundary, so a backend can prove that the
+targeted turn ended without the input. It never authorizes a resend.
+
+| Backend | Accepted Steer not yet started when Stop lands |
 | --- | --- |
-| Claude | Withdrawn by `cancel_async_message` for each Sedes input awaiting its start, before the interrupt. The exact evidence is that input's `command_lifecycle` `cancelled` before any `started`; it reconciles `not_accepted` without retry permission. |
-| Pi | Withdrawn by clearing Pi's generation-volatile steering queue before the abort. The exact evidence is that input's authenticated `lost` submission marker, written when its run settles without its user entry; it reconciles `not_accepted` without retry permission. |
-| Codex | Known gap: Sedes records it accepted at the `turn/steer` response, and Codex's interrupt clears pending input without evidence, so it can disappear while recorded as delivered. It never starts a later turn. |
-| Grok | No Steer. |
+| Claude | Withdrawn by `cancel_async_message` for each Sedes input awaiting its start, before the interrupt. The exact evidence is that input's `command_lifecycle` `cancelled` before any `started`. |
+| Pi | Withdrawn by clearing Pi's generation-volatile steering queue before the abort (Stop and retirement). The exact evidence is that input's authenticated `lost` submission marker, written when its run settles, or restart reconciliation finds its generation gone, without its user entry. |
+| Codex | Dropped by Codex's interrupt, which clears the turn's pending input without an event; it can never start or join a later turn. The Steer stays pending until its exact `userMessage` appears. The evidence is its absence from final history once the target turn is terminal (complete legacy read) or the thread is settled (stable paginated cuts). Residual: a forced abort after Codex's 100 ms interrupt grace can leave a just-drained Steer in model history without its item. |
+| Grok | No Steer; active-turn input waits in Queue. |
 
 Text, context excerpts, attachments, and structured Task references are
 normalized application input, not provider-native IDs or browser-selected
@@ -3138,7 +3156,7 @@ surfaces that apply:
 | Capability projection              | Is support truthful at exact scope and generation? Does direct invocation fail closed?                                                                                                                                                                                                                                                                               |
 | Discovery/import/create            | Are namespace, paging, binding, titles, partial success, and recovery covered?                                                                                                                                                                                                                                                                                       |
 | History and streaming              | Are snapshot bounds, ordering, correlation, reconnect, duplicates, and stale events covered?                                                                                                                                                                                                                                                                         |
-| Input lifecycle                    | Are send, steer, queue, stop, attachments, Task references, immutable acceptance snapshots, and active-turn races explicit?                                                                                                                                                                                                                                          |
+| Input lifecycle                    | Are send, steer, queue, stop, attachments, Task references, immutable acceptance snapshots, and active-turn races explicit? Does Stop return an accepted, unstarted Steer as not sent on exact per-input evidence, per the Stop rule?                                                                                                                                  |
 | Completion consumers               | Does each obligation bind one exact operation, register atomically, consume one immutable normalized terminal snapshot, materialize idempotently, recover after restart, retain authenticated provenance, and give Pi, Codex, Claude, and Grok an explicit Steer, Queue, or unsupported disposition without provider-native leakage?                                 |
 | Provider output artifacts          | Are exact native completion and byte authority, immutable scoped storage, duplicate live/history observation, normalized metadata, content retrieval, bounds, unavailable projection, topology, path-capture authority and host attribution, and input/tool-result separation explicit?                                                                              |
 | Settings and provider features     | Are policy, desired/effective evidence, generation, turn-boundary application, persistence, native mapping, revisions, receipts, Saved Agents, and unsupported paths covered?                                                                                                                                                                                        |

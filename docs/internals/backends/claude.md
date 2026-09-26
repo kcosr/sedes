@@ -1037,12 +1037,13 @@ reattachment can still drain final receipts without classifying the stopped
 query as an unexpected failure or requiring another forced stop.
 
 Claude advertises conversation-targeted Steer using native `priority: "next"`.
-Stop also withdraws every input Sedes sent that Claude has not started, as
-Pi's Stop clears its steering queue:
+Following the backend-neutral
+[Stop rule](../backend-integration-contract-rules.md#interactions-input-and-interruption),
+Stop also withdraws every input Sedes sent that Claude has not started:
 
 - Before the interrupt, the handle sends Claude Code's `cancel_async_message`
   for each input of its own that still awaits its start. The pinned SDK
-  0.3.274 implements it as `Query.cancelAsyncMessage`, although its
+  0.3.283 implements it as `Query.cancelAsyncMessage`, although its
   declaration omits the method. It crosses the worker protocol as
   `query.cancel_input` and the persistent runtime as `cancel_input`. Then the
   handle sends the plain interrupt. A failed request proves nothing and does
