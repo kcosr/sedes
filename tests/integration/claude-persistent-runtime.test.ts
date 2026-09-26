@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { CanUseTool, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeRuntimeSessionOptions } from "../../src/server/backends/claude/claude-runtime-client.js";
-import { ClaudePersistentRuntimeClient } from "../../src/server/backends/claude/runtime/claude-remote-runtime-client.js";
+import { CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS, ClaudePersistentRuntimeClient } from "../../src/server/backends/claude/runtime/claude-remote-runtime-client.js";
 import { ClaudePersistentRuntimeRegistry } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-registry.js";
 import { claudePersistentAttachmentSchema, type ClaudePersistentEvent } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, registerClaudePersistentRuntimeHost } from "../../src/server/backends/claude/runtime/claude-sidecar-runtime.js";
@@ -1235,5 +1235,39 @@ describe("persistent owner run-state evidence", () => {
     await vi.waitFor(() => expect(f.services.status().resources[0]!.blockers).toEqual([]));
     await restored.close({ reason: "evicted" });
     await vi.waitFor(() => expect(native.closed).toBe(true));
+  });
+});
+
+describe("persistent event acknowledgement pipelining", () => {
+  it("applies events in order without waiting one acknowledgement round trip each, within a bounded window", async () => {
+    const f = await fixture(); await f.attach();
+    const sessionId = randomUUID();
+    const seen: string[] = [];
+    const session = f.client().createSession(sessionOptions(sessionId, { onMessage: message => {
+      if (message.type === "stream_event" && message.event.type === "content_block_delta" && message.event.delta.type === "text_delta") {
+        seen.push(message.event.delta.text);
+      }
+    } }));
+    await session.start();
+    const host = f.hosts.get(f.services.status().resources[0]!.resourceId);
+    let releaseAcknowledgements!: () => void;
+    const acknowledgementsHeld = new Promise<void>(resolve => { releaseAcknowledgements = resolve; });
+    const execute = host.execute.bind(host);
+    vi.spyOn(host, "execute").mockImplementation(async (command, listener) => {
+      if (command.action === "acknowledge") await acknowledgementsHeld;
+      return await execute(command, listener);
+    });
+    const texts = Array.from({ length: CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS + 4 }, (_, index) => `chunk-${index}`);
+    for (const text of texts) await f.sessions[0]!.emit(delta(sessionId, text));
+    // Every in-window event is applied while all acknowledgements are held;
+    // the next event is applied and then waits for an acknowledgement slot.
+    await vi.waitFor(() => expect(seen).toEqual(texts.slice(0, CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS + 1)));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(seen).toHaveLength(CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS + 1);
+    expect(host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(texts.length);
+    releaseAcknowledgements();
+    await session.flushMessages?.();
+    expect(seen).toEqual(texts);
+    expect(host.abandonmentEvidence().sessions[0]?.retainedEventCount).toBe(0);
   });
 });

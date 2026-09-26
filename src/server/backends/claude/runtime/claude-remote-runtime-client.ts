@@ -16,6 +16,8 @@ import { claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, 
 import { ClaudeSidecarRuntimeConnection, claudePersistentRuntimeOperations } from "./claude-sidecar-runtime.js";
 
 type Command = ClaudePersistentCommand extends infer C ? C extends ClaudePersistentCommand ? Omit<C, "runtimeId" | "controllerEpoch"> : never : never;
+/** Acknowledgements in flight per client; the sidecar peer admits 128 requests. */
+export const CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS = 16;
 interface Attachment { readonly lease: SidecarRuntimeLease; readonly connection: ClaudeSidecarRuntimeConnection; readonly runtimeId: string; readonly unsubscribe: () => void }
 
 /** Main owns subscriptions; the authenticated sidecar owns persistent SDK queries. */
@@ -27,6 +29,8 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
   #retry: ReturnType<typeof setTimeout> | undefined;
   #closed = false;
   #retainedIdentity: { readonly runtimeId: string; readonly serviceIncarnation: string } | undefined;
+  #acknowledgementsInFlight = 0;
+  readonly #acknowledgementWaiters: (() => void)[] = [];
   constructor(readonly input: {
     readonly scope: EnvironmentChannelScope;
     readonly sidecarRuntime: SidecarRuntimeProvider;
@@ -99,6 +103,18 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
   }
   current(): Attachment | undefined { return this.#attachment; }
   report(error: unknown): void { try { this.input.onBackgroundError?.(error); } catch { /* Diagnostics do not own runtime lifecycle. */ } }
+  /** Bounds pipelined event acknowledgements across this client's sessions. */
+  async acquireAcknowledgement(): Promise<void> {
+    if (this.#acknowledgementsInFlight < CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS) {
+      this.#acknowledgementsInFlight++;
+      return;
+    }
+    await new Promise<void>(resolve => this.#acknowledgementWaiters.push(resolve));
+  }
+  releaseAcknowledgement(): void {
+    const next = this.#acknowledgementWaiters.shift();
+    if (next) next(); else this.#acknowledgementsInFlight--;
+  }
   async execute(command: Command, attachment?: Attachment): Promise<unknown> {
     const started = performance.now();
     let stage = "attachment";
@@ -214,6 +230,7 @@ class PersistentSession implements ClaudeRuntimeSession {
   readonly #delivered = new Set<number>();
   readonly #acknowledged = new Set<number>();
   readonly #pending = new Set<number>();
+  readonly #acknowledgements = new Set<Promise<void>>();
   readonly #permissionControllers = new Map<string, AbortController>();
   readonly #permissionResponses = new Map<string, worker.ClaudeRuntimeCanUseToolResponse>();
   readonly #settledPermissions = new Set<string>();
@@ -228,7 +245,11 @@ class PersistentSession implements ClaudeRuntimeSession {
   get initialization() { return this.#initialization; }
   get startupProbeUuid() { return this.#startupProbeUuid; }
   get safeSkills() { return this.#safeSkills; }
-  async flushMessages(): Promise<void> { await this.#delivery; if (this.#deliveryFailure !== undefined) throw this.#deliveryFailure; }
+  async flushMessages(): Promise<void> {
+    await this.#delivery;
+    await Promise.all([...this.#acknowledgements]);
+    if (this.#deliveryFailure !== undefined) throw this.#deliveryFailure;
+  }
   async start() {
     this.#assertOpen();
     this.#started = true;
@@ -439,7 +460,7 @@ class PersistentSession implements ClaudeRuntimeSession {
         this.#permissionControllers.get(payload.requestId)?.abort();
       }
       this.#rememberDelivered(event.sequence);
-      await this.#ack(event.sequence).catch(error => this.client.report(error));
+      await this.#pipelineAck(event.sequence);
     }).catch(error => {
       this.#deliveryFailure = error;
       this.#failure(error);
@@ -485,6 +506,18 @@ class PersistentSession implements ClaudeRuntimeSession {
     await this.#execute({ action: "respond_permission", request: { sessionId: this.options.sessionId, requestId, toolUseID: request.options.toolUseID, response } });
     this.#rememberDelivered(event.sequence);
     await this.#ack(event.sequence);
+  }
+  /** Apply events strictly in order without one sidecar round trip each. ACKs
+   * name exact sequences, so their completion order does not matter. */
+  async #pipelineAck(sequence: number): Promise<void> {
+    await this.client.acquireAcknowledgement();
+    const acknowledgement: Promise<void> = this.#ack(sequence)
+      .catch(error => this.client.report(error))
+      .finally(() => {
+        this.client.releaseAcknowledgement();
+        this.#acknowledgements.delete(acknowledgement);
+      });
+    this.#acknowledgements.add(acknowledgement);
   }
   #rememberDelivered(sequence: number): void {
     // Pin applied events until exact ACK succeeds, even across arbitrarily many
