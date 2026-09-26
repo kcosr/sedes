@@ -97,7 +97,7 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
    * host retires it only when nothing is outstanding, so running provider
    * work is never stopped here.
    */
-  async retireSession(input: { readonly sessionId: string; readonly cwd: string }): Promise<"retired" | "absent" | "busy"> {
+  async retireSession(input: { readonly sessionId: string; readonly cwd: string }): Promise<"retired" | "absent" | "busy" | "undelivered"> {
     if (this.#sessions.has(input.sessionId)) return "busy";
     return claudePersistentRetireResponseSchema.parse(await this.execute({ action: "retire", request: input })).outcome;
   }

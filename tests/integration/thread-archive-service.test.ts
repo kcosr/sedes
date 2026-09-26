@@ -18,6 +18,7 @@ import { ThreadArchiveService } from "../../src/server/domain/thread-archive-ser
 import { DomainError } from "../../src/server/domain/errors.js";
 import type { ArchivedThreadRuntimeRetirement } from "../../src/server/domain/thread-runtime-archive-retirement.js";
 import {
+  ThreadProviderOutputUndeliveredError,
   ThreadRuntimeNotIdleError,
   ThreadRuntimeRetirementUnprovenError,
 } from "../../src/server/events/thread-runtime-coordinator.js";
@@ -636,6 +637,19 @@ describe("thread family archive service", () => {
           executionWorkspaceDisposition: { kind: "keep" },
         }),
       ).rejects.toMatchObject({ code: "invalid_transition" });
+      expect(current.inventory.getInventory(current.scope, current.rootId)).toMatchObject({ inventoryState: "active" });
+      // Retained output no runtime could apply is not reported as activity.
+      current.releaseProviderResidency.mockImplementation(async (_scope, threadId) => {
+        if (threadId === current.grandchildId) throw new ThreadProviderOutputUndeliveredError();
+      });
+      await expect(
+        current.service.archive(current.scope, current.rootId, {
+          includeDescendants: true,
+          expectedRevision: 0,
+          mutationId: "archive-remote-undelivered",
+          executionWorkspaceDisposition: { kind: "keep" },
+        }),
+      ).rejects.toMatchObject({ code: "invalid_transition", message: expect.stringContaining("Open the thread so its output is applied") });
       expect(current.inventory.getInventory(current.scope, current.rootId)).toMatchObject({ inventoryState: "active" });
       current.releaseProviderResidency.mockResolvedValue(undefined);
       await current.service.archive(current.scope, current.rootId, {

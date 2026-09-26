@@ -1183,7 +1183,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
 
   async releaseConversationResidency(
     input: ReleaseConversationResidencyInput,
-  ): Promise<"released" | "busy"> {
+  ): Promise<"released" | "busy" | "undelivered"> {
     this.#assertAttach(input);
     const retire = this.#runtimeClient.retireSession;
     if (!retire) return "released";
@@ -1191,11 +1191,23 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
     if ([...this.#handles].some((handle) => handle.binding.backendConversationId === sessionId)) {
       return "busy";
     }
-    const outcome = await retire.call(this.#runtimeClient, {
-      sessionId,
-      cwd: input.workspace.canonicalPath,
-    });
-    return outcome === "busy" ? "busy" : "released";
+    const request = { sessionId, cwd: input.workspace.canonicalPath };
+    let outcome = await retire.call(this.#runtimeClient, request);
+    if (outcome === "undelivered") {
+      // Only output no main has applied holds the query. Attaching applies
+      // and acknowledges it, as opening the thread would; a failed query
+      // drains the same way before its hydration fails and evicts it.
+      try {
+        const handle = await this.attach(input);
+        await handle.close({ reason: "evicted" });
+      } catch (error) {
+        console.warn("claude_residency_drain_failed", {
+          sessionId, reason: error instanceof Error ? error.message.slice(0, 240) : "unknown",
+        });
+      }
+      outcome = await retire.call(this.#runtimeClient, request);
+    }
+    return outcome === "retired" || outcome === "absent" ? "released" : outcome;
   }
 
   async close(): Promise<void> {

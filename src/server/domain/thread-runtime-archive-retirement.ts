@@ -1,4 +1,5 @@
 import {
+  ThreadProviderOutputUndeliveredError,
   ThreadRuntimeNotIdleError,
   ThreadRuntimeRetirementUnprovenError,
 } from "../events/thread-runtime-coordinator.js";
@@ -14,7 +15,8 @@ export interface ArchivedThreadRuntimeRetirement {
   /**
    * Within the retired fence, release provider residency that outlives the
    * runtime, such as a remote query; throws ThreadRuntimeNotIdleError while
-   * provider work is outstanding.
+   * provider work is outstanding, and ThreadProviderOutputUndeliveredError
+   * when provider output that could not be applied holds it.
    */
   releaseProviderResidency(
     scope: RequestScope,
@@ -54,6 +56,14 @@ export async function runWithArchivedThreadRuntimesRetired<Result>(input: {
         throw new DomainError(
           "invalid_transition",
           "A thread became active before the inventory change could commit. Wait for it to finish, then try again.",
+          false,
+          { cause: error },
+        );
+      }
+      if (error instanceof ThreadProviderOutputUndeliveredError) {
+        throw new DomainError(
+          "invalid_transition",
+          "A thread has agent output that Sedes could not apply yet. Open the thread so its output is applied, then try again.",
           false,
           { cause: error },
         );

@@ -699,11 +699,13 @@ export interface ConversationBackendDriver {
    * Release provider-owned residency (a service-owned remote query) for a
    * conversation Sedes has no runtime for, such as one being archived.
    * Backends whose provider state never outlives a handle omit this. It must
-   * never stop outstanding provider work: it reports `busy` instead.
+   * never stop outstanding provider work: it reports `busy` instead. It first
+   * applies retained provider output no runtime has applied, and reports
+   * `undelivered` if that output still holds the residency.
    */
   releaseConversationResidency?(
     input: ReleaseConversationResidencyInput,
-  ): Promise<"released" | "busy">;
+  ): Promise<"released" | "busy" | "undelivered">;
 }
 
 export interface ReleaseConversationResidencyInput {

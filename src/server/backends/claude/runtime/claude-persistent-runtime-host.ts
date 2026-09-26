@@ -339,7 +339,10 @@ export class ClaudePersistentRuntimeHost {
         if (session.listener) return { outcome: "busy" };
         session.evicted = true;
         await this.#retireIdle(session);
-        return { outcome: this.#sessions.get(session.id) === session ? "busy" : "retired" };
+        if (this.#sessions.get(session.id) !== session) return { outcome: "retired" };
+        // Output no main has applied is not provider work: an attachment can
+        // apply and acknowledge it, after which the query retires.
+        return { outcome: !this.#hasLiveWork(session) && session.events.size > 0 ? "undelivered" : "busy" };
       }
       case "acknowledge": {
         const session = this.#session(command.request.sessionId);

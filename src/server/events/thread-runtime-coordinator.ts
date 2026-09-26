@@ -182,6 +182,14 @@ export class ThreadRuntimeNotIdleError extends Error {
   }
 }
 
+/** Retained provider output no runtime has applied holds provider residency. */
+export class ThreadProviderOutputUndeliveredError extends Error {
+  constructor() {
+    super("The thread has provider output that has not been applied.");
+    this.name = "ThreadProviderOutputUndeliveredError";
+  }
+}
+
 export class ThreadRuntimeMaintenanceStaleError extends Error {
   constructor() {
     super("The thread runtime changed after maintenance preview.");
@@ -405,7 +413,8 @@ export class ThreadRuntimeCoordinator {
    * Inside a runtime-retired fence, release provider residency that outlives
    * Sedes' runtime (a remote query) for this thread. Threads with no bound,
    * enabled provider conversation have none. Outstanding provider work makes
-   * the thread busy; an unreachable provider is reported and left to the
+   * the thread busy, and provider output that could not be applied is
+   * reported as such; an unreachable provider is reported and left to the
    * provider's own residency limit.
    */
   async releaseProviderResidency(
@@ -421,7 +430,7 @@ export class ThreadRuntimeCoordinator {
     }
     const release = target.driver.releaseConversationResidency;
     if (!release) return;
-    let outcome: "released" | "busy";
+    let outcome: "released" | "busy" | "undelivered";
     try {
       outcome = await release.call(target.driver, {
         scope: target.scope,
@@ -434,6 +443,7 @@ export class ThreadRuntimeCoordinator {
       return;
     }
     if (outcome === "busy") throw new ThreadRuntimeNotIdleError();
+    if (outcome === "undelivered") throw new ThreadProviderOutputUndeliveredError();
   }
 
   /** Detaches exactly the previewed actor and keeps admission fenced through the operation. */

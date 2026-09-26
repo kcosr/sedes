@@ -68,4 +68,5 @@ export const claudePersistentAttachmentSchema = z.strictObject({
   events: z.array(claudePersistentEventSchema).max(8192),
 });
 /** A retired or absent query holds nothing; a busy one still has work outstanding. */
-export const claudePersistentRetireResponseSchema = z.strictObject({ outcome: z.enum(["retired", "absent", "busy"]) });
+/** `undelivered`: only output no main has applied and acknowledged holds the query. */
+export const claudePersistentRetireResponseSchema = z.strictObject({ outcome: z.enum(["retired", "absent", "busy", "undelivered"]) });

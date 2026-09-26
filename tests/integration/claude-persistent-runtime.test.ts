@@ -1511,6 +1511,26 @@ describe("persistent host shutdown evidence", () => {
     sessions: { sessionId: string; liveWork: boolean; events: { kind: string; messageType?: string; code?: string }[] }[] };
   const evidence = (archive: ReturnType<typeof vi.fn>) => archive.mock.calls.map(([record]) => (record as { evidence: Evidence }).evidence);
 
+  it("tells a retire request apart when only undelivered output holds the query", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const delivered: ClaudePersistentEvent[] = [];
+    const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
+    const sessionId = randomUUID();
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
+    const native = f.sessions.find(session => session.options.sessionId === sessionId)!;
+    await native.emit(delta(sessionId, "unapplied output"));
+    await host.execute({ ...authority, action: "detach", request: { sessionId } }, listener);
+    const retire = () => host.execute({ ...authority, action: "retire", request: { sessionId, cwd: "/workspace" } }, listener);
+    await expect(retire()).resolves.toEqual({ outcome: "undelivered" });
+    expect(native.closed).toBe(false);
+    await native.emit(running(sessionId));
+    await expect(retire()).resolves.toEqual({ outcome: "busy" });
+  });
+
   it("acknowledges an evicted query's last event without waiting for its retirement", async () => {
     const f = await fixture();
     const attached = await f.attach();

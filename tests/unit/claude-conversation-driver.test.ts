@@ -504,6 +504,25 @@ describe("ClaudeConversationBackendDriver", () => {
       .rejects.toThrow();
   });
 
+  it("applies a retained query's undelivered output before releasing it, and says so when it cannot", async () => {
+    const sdk = fakeSdk();
+    sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId, cwd: workspace.canonicalPath });
+    sdk.getSessionMessages.mockResolvedValue([]);
+    const residency = { scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) };
+    const outcomes: ("retired" | "absent" | "busy" | "undelivered")[] = ["undelivered", "retired"];
+    const retireSession = vi.fn(async () => outcomes.shift()!);
+    const driver = createDriver(sdk, { confirmSettings: true, retireSession });
+    // Only output no main has applied holds the query: attach once to apply it.
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("released");
+    expect(sdk.createQuery).toHaveBeenCalledOnce();
+    expect(retireSession).toHaveBeenCalledTimes(2);
+    outcomes.push("undelivered", "undelivered");
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("undelivered");
+    sdk.createQuery.mockImplementationOnce(() => { throw new Error("claude_persistent_session_configuration_conflict"); });
+    outcomes.push("undelivered", "undelivered");
+    await expect(driver.releaseConversationResidency(residency)).resolves.toBe("undelivered");
+  });
+
   it.each(["local", "not_sent", "session_ended"] as const)("reconciles an ordinary retained waiter using %s authority without inferring absence from the old anchor", async authority => {
     const sdk = fakeSdk();
     sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId, cwd: workspace.canonicalPath });

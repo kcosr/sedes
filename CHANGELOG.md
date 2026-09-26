@@ -138,7 +138,8 @@
 - Release remote Claude queries that are no longer useful. A failed query is
   retired once its output is delivered, so reopening the thread no longer
   needs a backend restart. A query detached for 30 minutes with nothing
-  outstanding is retired, and archiving a thread retires its query. Hitting
+  outstanding is retired, and archiving a thread retires its query, first
+  applying any output Sedes had not yet applied. Hitting
   the sidecar's 32-session limit reports the limit and how to free sessions.
 
 - Read Claude history through the transcript's newest row. After a resume,

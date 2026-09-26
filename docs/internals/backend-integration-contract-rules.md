@@ -343,7 +343,11 @@ persistent sidecar service does. A backend with such residency implements the
 optional driver method `releaseConversationResidency`. Inside each thread's
 retired fence, archive calls it for a thread with a bound, enabled target. The
 method must report `busy` rather than stop outstanding provider work, and
-`busy` refuses the archive before commit. An unreachable provider is logged
+`busy` refuses the archive before commit. Retained provider output that no
+runtime has applied is not work: the method first applies it as attaching
+would, and reports `undelivered` only if it still holds the residency. That
+also refuses the archive, with a message to open the thread so its output is
+applied, rather than one claiming the thread is active. An unreachable provider is logged
 and left to the provider's own residency limit. Claude implements it through
 the persistent `retire` command, and its local worker owns no residency beyond
 the handle. Pi, Codex, and Grok omit it; retiring their handles already

@@ -66,7 +66,11 @@ permission) is retired and resumes on demand. A query that still holds such
 retained work is never retired by eviction, this limit, or `retire`; it waits
 for an attachment to apply and acknowledge that work. Archiving a thread whose runtime
 is not loaded retires its query by session through the `retire` command, and
-the archive is refused while that query still has outstanding work. The host
+the archive is refused while that query still has outstanding work. When only
+unacknowledged output holds the query, `retire` reports it as `undelivered`;
+main then attaches once to apply and acknowledge that output, closes with
+eviction, and retires the query. If the output still cannot be applied, the
+archive says so instead of calling the thread active. The host
 holds at most 32 sessions and fork launches together; an open beyond that is a
 retryable overload whose message names the limit.
 

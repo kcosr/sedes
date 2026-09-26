@@ -145,7 +145,7 @@ export interface ClaudeRuntimeClient {
    * Service-owned runtimes only: retire a query no attachment attends, unless
    * work is outstanding. Local queries never outlive their handle.
    */
-  retireSession?(input: { readonly sessionId: string; readonly cwd: string }): Promise<"retired" | "absent" | "busy">;
+  retireSession?(input: { readonly sessionId: string; readonly cwd: string }): Promise<"retired" | "absent" | "busy" | "undelivered">;
   createSession(options: ClaudeRuntimeSessionOptions): ClaudeRuntimeSession;
   /**
    * One locked-down fork launch that copies the retained source prefix into
