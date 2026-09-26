@@ -409,7 +409,12 @@ and Grok do not gain a new persistent-runtime diagnostic path.
    commit, and delayed-frame entries.
 3. For mutation latency, enable `SEDES_DEBUG_DELIVERY`, restart, reproduce
    once, and compare the `[delivery]` total with its runtime, queue, capture,
-   and RPC steps.
+   and RPC steps. For Claude, `[delivery-dispatch] step=conversation.submit`
+   ends when Claude dequeues the input (its native `started` lifecycle frame),
+   not at the model's first output. With unchanged settings it includes one
+   runtime call (send). A long step means the input waited behind a turn Claude
+   started itself, or the runtime reported no dequeue and acceptance fell back
+   to the first stamped output.
 4. If events arrive promptly but draw slowly, use the console delta warnings
    and browser long-task reports.
 5. For a slow switch with no replay, compare the client interval from

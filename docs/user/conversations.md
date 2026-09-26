@@ -244,7 +244,8 @@ Send, Steer, and Queue transfer the captured content out of the composer
 immediately. New typing after the clear is a new draft.
 
 - Idle Send appears immediately as a normal user message while provider
-  history catches up.
+  history catches up, and the activity bar above the composer starts at once
+  rather than waiting for the provider's first output.
 - Steer and Queue appear as pending-input rows above the composer.
 - If a clean failure proves the input was not delivered, Sedes restores or
   reconciles it instead of leaving a failed chat bubble.
@@ -347,6 +348,10 @@ reasoning.
 During an active Codex turn, a recent provider-supplied reasoning summary may
 briefly appear above the composer. Select it to see the complete summary.
 Approval and question panels take precedence over that status area.
+
+Claude can start a turn on its own, for example when a background task
+finishes. The thread then shows as running and **Stop** is available, even
+though you sent nothing.
 
 Claude also shows **Waiting for subagent** or **Background command running**
 above the composer while its main response may already be finished. Multiple

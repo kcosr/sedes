@@ -73,7 +73,28 @@
 - New thread creation selects Custom by default, while explicit saved-Agent and
   template choices remain available. (#6)
 
+- Claude sends show running as soon as Claude dequeues the input instead of
+  after its first output. The composer activity bar starts at Send for every
+  backend. Claude skips settings calls the live session already confirmed and
+  applies sidecar events without one acknowledgement round trip each.
+
 ### Fixed
+
+- Show turns Claude starts itself, such as after a background task or peer
+  hand-back, as running with **Stop**, and keep idle retirement, eviction and
+  sidecar replacement from ending them. Sedes now launches Claude with
+  `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`.
+
+- Accept a Claude input only on Claude's exact dequeue or consumption evidence,
+  so output from a turn Claude started no longer claims a queued message or
+  writes its receipt. Local Claude threads now enter running and settle, so a
+  second message is accepted.
+
+- Keep a conflicting Claude result from failing the thread; the first recorded
+  outcome is kept.
+
+- Show a Claude task-notification turn as its own turn while it streams, as
+  reload does. Existing threads re-identify those turns once on first load.
 
 - Preserve underlying Claude read errors in gated thread-load diagnostics and
   identify failed persistent-runtime commands without logging conversation content.

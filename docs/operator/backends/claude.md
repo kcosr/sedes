@@ -128,6 +128,11 @@ For the most predictable deployment, pin the reviewed baseline. Before adopting
 a newer admitted runtime, deliberately run the opt-in live gate described
 below.
 
+Sedes launches Claude Code with `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` so
+that Claude reports its own run state, including turns it starts itself. The
+run-state and input-lifecycle frames Sedes relies on are verified on Claude
+Code 2.1.281 through 2.1.283.
+
 ## Topology and ownership
 
 For a local environment, Sedes launches a digest-verified Claude worker as a
@@ -262,7 +267,9 @@ files. Native image input does not imply provider-output image artifacts.
 Steer sends input at Claude’s next native opportunity, including during active
 work, using conversation-scoped delivery. It may join the current turn
 or start the next if the current turn has finished. Pending input remains
-visible until Claude confirms incorporation. Steer does not interrupt work.
+visible until Claude confirms incorporation. Steer does not interrupt work,
+and Stop does not withdraw a steer Claude has already queued: it starts the
+next turn.
 Claude Code 2.1.274 is the minimum because its consumption acknowledgments allow Sedes to track delivery reliably.
 If a server restart interrupts confirmation, Sedes exposes the delivery as
 unconfirmed for recovery and retains its original identity. Missing transcript
@@ -287,6 +294,12 @@ invalidates the displayed inventory until authoritative state returns.
 Subagent terminal notifications produce separate transcript rows retained in
 scoped Sedes receipts because SDK history does not retain those notifications.
 This feature does not expose child transcripts or individual task stop controls.
+
+When a background task finishes, or another Claude session hands work back,
+Claude can start a turn on its own. Sedes shows that turn as running, offers
+**Stop** for it, and does not retire or evict the runtime while Claude works.
+A message sent during that turn joins it as Steer or runs as its own next turn;
+the turn's output is never attributed to that message.
 
 ## Current limits
 
