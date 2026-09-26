@@ -219,20 +219,38 @@ The reader walks `parentUuid` from that tip. Claude Code's `last-prompt` leaf
 pointer is not used; it can omit a trailing meta row or name a system notice
 attached to an old row.
 
-Apart from the tip, the reader reproduces the SDK's projection exactly. That
-covers preserved-segment relinking at compact boundaries, re-insertion of
-off-chain assistant fragments and their parallel tool results, and conversion
-of answered human queued commands. It also covers meta, sidechain, and team
-filtering, `includeSystemMessages`, task-notification origin reduction, the
-`is_meta` flag, and offset/limit slicing. Unparseable lines, including a final
-line still being written, are skipped as the SDK skips them. A compact
-boundary still ends the chain, because its `parentUuid` is null. Unlike the
-SDK, an existing transcript that cannot be read fails the read instead of
-reading as empty. The reader searches only the workspace's own native project
-directory: the sanitized canonical path, length-hashed like Claude Code's, or
+Apart from the tip and compaction, the reader reproduces the SDK's projection
+exactly. That covers preserved-segment relinking at compact boundaries,
+re-insertion of off-chain assistant fragments and their parallel tool results,
+and conversion of answered human queued commands. It also covers meta,
+sidechain, and team filtering, `includeSystemMessages`, task-notification
+origin reduction, the `is_meta` flag, and offset/limit slicing. Unparseable
+lines, including a final line still being written, are skipped as the SDK skips
+them. Unlike the SDK, an existing transcript that cannot be read fails the read
+instead of reading as empty.
+
+The reader searches only the workspace's own native project directory: the
+sanitized canonical path, length-hashed like Claude Code's, or
 `CLAUDE_CODE_PROJECT_DIR_NAME` under an explicit `CLAUDE_CONFIG_DIR`. It skips
 the SDK's sibling-worktree and legacy hash-prefix fallbacks, because Sedes
 rejects a session recorded for another workspace.
+
+A compact boundary has a null `parentUuid`. The SDK, like Claude Code's own
+loader, stops there, and Claude Code also drops the earlier rows when it
+resumes. What remains is exactly the model's context: the summary, the rows
+the compaction preserved (relinked after the summary), and later rows. The
+reader returns that segment unchanged, so the SDK's read is always the suffix
+of Sedes' read, and prepends the history each compaction summarized. Each
+earlier segment continues from the last main-conversation row written before
+its boundary, using Claude Code's written parents wherever a relinked parent
+points into a newer segment. A row that a compaction preserved therefore
+appears once, after that compaction's summary. If the summary is the newest
+row, the read continues through the rows relinked after it, as the SDK's leaf
+does. Earlier turns keep their identities, so a compaction never re-identifies
+them. A native link missing from the transcript still ends the read, as it does
+in the SDK. Boundary rows appear only with `includeSystemMessages`. The summary
+row keeps the SDK's `isCompactSummary` marker, which the worker protocol
+carries under sidecar wire 14.
 
 Native history transfer uses byte-bounded pages from one captured native read.
 A private random acquisition ID binds continuation offsets to that snapshot,
@@ -288,10 +306,10 @@ Requesting the same complete oversized turn as a history page fails only that
 page request. More generally, normalized page overflow does not fence an
 attached query.
 
-The reader keeps the SDK's compaction semantics. Sedes does not infer or
-invent a compaction boundary from folded history. Provider history is
-the durable transcript authority and is reprojected as bounded whole turns
-after restart or generation replacement.
+Sedes marks a compaction only where Claude Code wrote its summary row; it
+does not infer a boundary from folded history. Provider history is the durable
+transcript authority and is reprojected as bounded whole turns after restart or
+generation replacement.
 
 Targeted turn lookup scans the retained authoritative messages newest first.
 It projects only the matched whole turn together with its durable terminal
@@ -337,6 +355,22 @@ but carry other text, so they stay ordinary assistant messages. Usage
 accounting ignores every `<synthetic>` row, because none records a model
 request.
 
+A fresh launch proves that the process that ran any earlier turn is gone, but
+Claude Code writes its closure only when it resumes, which can be after the
+handle reads history. When the handle starts a query that is not a reattachment
+and the newest turn in history is unfinished, it watches that turn. A resumed
+Claude reports `running` while it handles the startup message, then `idle`; the
+startup message's result names only itself. Once Claude reports idle, or starts
+an input of this attachment instead, a watched turn that is still unfinished and
+has no terminal receipt gets an `interrupted` receipt. The receipt has the
+Sedes-owned reason `process_lost` and no result UUID. The projector adds a
+warning notice: "Claude Code stopped before this turn finished. Sedes marked it
+interrupted when the conversation reopened." A reattached persistent query is
+never watched, because its turn may still be running. A turn is also left
+alone when the child environment sets `CLAUDE_CODE_RESUME_INTERRUPTED_TURN`,
+because Claude Code then re-runs it. The receipt is write-once, so a later
+closure row or result cannot change the outcome.
+
 SDK 0.3.274 can emit intermediate results while draining background task
 notifications. Only successful empty zero-turn results carrying native
 `task-notification` provenance are classified as those drain receipts, regardless
@@ -345,6 +379,23 @@ receipt identities must correlate with the pending/current foreground input.
 Unrelated receipts neither accept input nor settle the foreground turn, and
 acknowledging them cannot prune active persistent replay. Ordinary foreground
 zero-turn successes and errors retain terminal semantics.
+
+A compaction summary projects as a normalized compaction item whose summary
+is the text Claude Code wrote for the model. The item belongs to the turn that
+was running when Claude compacted, which is usually the turn whose prompt the
+compaction summarized. A compaction before a notification turn's first response
+belongs to that turn. A summary with no turn to join, such as the first row of a
+fork child, marks its own settled turn. The summary is never a prompt, a user
+ordinal, a retry anchor turn, or a fork checkpoint. Usage counters report the
+number of compactions. Live, the synthetic user row that follows a
+`compact_boundary` frame is that summary. The handle marks it the same way and
+places it before the rows the compaction preserved, then requests one
+resnapshot, so live and reloaded views agree.
+
+A foreground result settles the turn that holds its native input identity
+(`user_message_uuid(s)`), wherever that turn is, rather than the newest turn.
+It ends the run only if no later turn carries an input of its own. A result
+without input identity keeps the rules below.
 
 Claude messages project into normalized user, assistant, reasoning, tool,
 command, file-read, file-change, web-search, MCP, collaboration, status,
@@ -373,6 +424,15 @@ An intermediate SDK `session_state_changed: idle` frame cannot settle an
 otherwise in-progress normalized turn. These rules prevent duplicate or
 misplaced live text, premature turn footers, and Stop-button flicker between
 blocks, including after reload.
+
+Stop is bounded, because Claude has then acknowledged the interrupt. If
+Claude's reported state is `idle` when the interrupt is acknowledged, or
+becomes `idle` afterwards, the turn settles after a one-second grace, which
+lets a result Claude already emitted land. Otherwise it settles after 30
+seconds. A Sedes turn then gets an `interrupted` receipt with the reason
+`interrupt_unconfirmed`. A turn Claude started ends without one, as its result
+would. A result that arrives first settles the turn normally. A reattached
+query's state is not assumed idle until Claude reports it.
 
 ### Input acceptance and turns Claude starts
 
@@ -671,6 +731,16 @@ authenticated boundary carriers remain hidden when older sessions are read.
 Skill correlation crosses the fork only through the verified native UUID remap
 described above.
 
+Claude Code resumes a compacted conversation only from its latest compaction.
+`--resume-session-at` a row before it fails with "No message found", as
+verified on 2.1.283. Only turns whose checkpoint follows the latest compaction
+summary are forkable. The child holds the boundary, the summary, the preserved
+rows, and later rows up to the checkpoint, with the source's row UUIDs.
+Checkpoint prefixes are therefore counted, digested, and verified from the
+latest summary. Branching fidelity keeps `compaction: true`, because the child
+resumes the same compacted context, and states in a limitation that earlier
+turns are not copied or forkable.
+
 ## Recovery and unsupported mutations
 
 Provider history is the durable transcript authority. After restart or
@@ -747,12 +817,11 @@ an invented receiving turn. Existing assistant output cannot confirm a newly
 enqueued steer. Queue remains application-owned next-turn work. Native `now`
 interruption semantics are not exposed by this feature.
 
-Manual compaction is also unavailable. Public SDK history can erase compact
-boundary and summary classification after an unobserved automatic compact, so
-a command result cannot be recovered as one durable normalized compaction
-operation. Automatic provider folding remains provider-owned history behavior.
-Claude therefore emits neither a normalized compaction boundary nor an
-optional compaction summary.
+Manual compaction is also unavailable. `/compact` is a Claude Code local
+command, and a command result cannot be recovered as one durable normalized
+compaction operation. Automatic compaction remains Claude's own decision. Sedes
+displays it from the summary row, as described under
+[Semantic projection](#semantic-projection-and-terminal-receipts).
 
 Terminal-only, unclassified, reset-producing, and plan-mode commands fail
 before submission. Active-source forks, latest-provider-snapshot forks,
@@ -778,16 +847,24 @@ normalized integration surface:
   initialization admission;
 - `tests/unit/claude-conversation-handle.test.ts` and
   `tests/unit/claude-conversation-driver.test.ts` cover session lifecycle,
-  exact terminal receipts, capabilities, interactions, history, and recovery;
+  exact terminal receipts, capabilities, interactions, history, and recovery.
+  This includes live compaction against its reload, compacted fork prefixes,
+  `process_lost` on fresh launches and never on reattachment, and the Stop
+  bound;
 - `tests/unit/claude-native-transcript.test.ts` compares the transcript reader
   with the pinned SDK over synthetic native fixtures. The fixtures cover
   startup-message tips, parallel dead ends, rewinds, sidechains, queued
   commands, compaction, and partial lines. Revalidate this parity whenever the
-  SDK release changes. Its resume-shape fixtures also project the Claude Code
-  behaviours Sedes depends on: startup messages with and without
-  `queueTranscriptOnly`, one closure per later resume, closures after a
-  dangling startup message, prompt, tool result, or interruption, and resume
-  task-notification wording variants;
+  SDK release changes. For compacted transcripts the SDK's read must be the
+  exact suffix of Sedes' read. The automatic-compaction fixtures follow Claude
+  Code 2.1.28x rows: a mid-turn compaction with relinked kept rows, one with a
+  segment but no listed rows, several compactions, a resume after compaction,
+  a process that died right after compacting, a fork child that starts at the
+  summary, and a compaction before a notification turn's first response. Its
+  resume-shape fixtures also project the Claude Code behaviours Sedes depends
+  on: startup messages with and without `queueTranscriptOnly`, one closure per
+  later resume, closures after a dangling startup message, prompt, tool
+  result, or interruption, and resume task-notification wording variants;
 - `tests/unit/claude-native-images.test.ts`, skill/command tests, and
   agent-tool environment tests cover input projection and optional surfaces;
 - persistent-runtime tests cover exact-session attachment, event replay,
@@ -798,6 +875,15 @@ normalized integration surface:
 - `claude-resume-orphan-native.test.ts` kills a query while its background
   command runs, resumes the session against a loopback Messages fixture, and
   checks the notification that ends the orphaned task;
+- `claude-compaction-native.test.ts` makes the actual executable compact
+  automatically against the loopback fixture, at a turn's start (keeping the
+  new prompt) and mid-turn. It qualifies the live boundary, the synthetic
+  summary frame, and the result's input identity. It also checks that Sedes
+  reads the written transcript with the SDK's read as its suffix;
+- `claude-process-loss-native.test.ts` kills the executable with SIGKILL while
+  a tool runs, then resumes as Sedes does. It qualifies the unfinished turn in
+  history and the `running`, startup-result, and `idle` frames that the
+  lost-process rule relies on;
 - `claude-background-activity-native.test.ts` runs the pinned SDK and actual
   Claude executable against an isolated loopback Messages fixture. Its finite
   gated Bash and Agent jobs prove the foreground result precedes background

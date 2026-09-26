@@ -60,6 +60,15 @@ const CLAUDE_SYNTHETIC_MODEL = "<synthetic>";
 const CLAUDE_NO_RESPONSE_REQUESTED = "No response requested.";
 const UNANSWERED_TURN_NOTICE =
   "Claude Code exited before this turn finished and closed it without a response when the conversation resumed.";
+/**
+ * Terminal reasons Sedes writes itself, with no provider result. A fresh
+ * launch proves that the process running a trailing unfinished turn is gone.
+ * A Stop ends without a result once Claude reports idle or stays silent.
+ */
+export const CLAUDE_PROCESS_LOST_REASON = "process_lost";
+export const CLAUDE_INTERRUPT_UNCONFIRMED_REASON = "interrupt_unconfirmed";
+const PROCESS_LOST_NOTICE =
+  "Claude Code stopped before this turn finished. Sedes marked it interrupted when the conversation reopened.";
 const OPERATION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const CLAUDE_MESSAGE_TIMESTAMP_SCHEMA = z.iso.datetime();
@@ -186,6 +195,8 @@ interface ParsedSessionMessage {
   readonly assistantStopReason?: string | null;
   /** Provider-authored transcript time; absent on older Claude emitters. */
   readonly timestamp?: string;
+  /** Claude Code's compaction summary: the model's context for what came before. */
+  readonly compactSummary?: true;
 }
 
 interface ProjectedTimeline {
@@ -221,6 +232,7 @@ interface MutableTurn {
   terminalAt?: string;
   interruptedAt?: string;
   lastRetainedMessageUuid?: string;
+  lastRetainedMessageIndex?: number;
   readonly nativeMessageStartIndex: number;
   readonly userMessageOrdinal: number;
   sourceOrder: number;
@@ -245,6 +257,19 @@ export function projectClaudeHistory(
   authentication?: ClaudeHistoryAuthentication,
 ): ClaudeHistoryProjection {
   return projectClaudeLatestSnapshot(value, terminalReceipts, authentication);
+}
+
+/**
+ * Where the conversation Claude Code resumes begins: its latest compaction
+ * summary, or the start of history. A native fork copies only this part, so
+ * fork prefixes are counted and verified from here.
+ */
+export function claudeResumableHistoryStart(messages: readonly SessionMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as SessionMessage & { readonly isCompactSummary?: unknown };
+    if (message.type === "user" && message.isCompactSummary === true) return index;
+  }
+  return 0;
 }
 
 /** Authenticate an SDK history response against the requested native session. */
@@ -541,6 +566,11 @@ function buildTimeline(
   const lastResponseGroupByTurn = new Map<string, AssistantResponseGroup>();
   // Notification rows open a provider-started turn at their first response.
   let pendingProviderBoundary: { readonly messageIndex: number } | undefined;
+  // Compaction summaries seen between a notification and that turn's response.
+  const pendingCompactions: { readonly message: ParsedSessionMessage; readonly messageIndex: number; readonly text: string }[] = [];
+  let compactions = 0;
+  let lastCompactionIndex = -1;
+  const checkpointIndexByTurnId = new Map<string, number>();
   const openTurn = (backendTurnId: string, messageIndex: number, taskNotificationBoundary: boolean): MutableTurn => {
     if (seenTurnIds.has(backendTurnId)) {
       throw new ClaudeHistoryProjectionError("claude_history_invalid");
@@ -559,6 +589,30 @@ function buildTimeline(
       sourceOrder: 0,
     };
   };
+  /**
+   * A summary marks where Claude compacted the conversation. It belongs to the
+   * turn it interrupted and is never a prompt, answer, or fork checkpoint.
+   */
+  const addCompaction = (turn: MutableTurn, message: ParsedSessionMessage, text: string): void => {
+    addItem(turn, itemsById, message, 0, {
+      semanticKind: "compaction",
+      ...(text.trim().length > 0 ? { summary: boundText(text) } : {}),
+    });
+  };
+  /** A summary with no turn to join marks its own settled turn. */
+  const openCompactionTurn = (message: ParsedSessionMessage, messageIndex: number): MutableTurn => {
+    const turn = openTurn(stableId("claude-turn", `${message.sessionId}\0${message.uuid}`), messageIndex, false);
+    if (message.timestamp !== undefined) turn.terminalAt = message.timestamp;
+    return turn;
+  };
+  const flushPendingCompactions = (): void => {
+    const [first, ...rest] = pendingCompactions.splice(0);
+    if (!first) return;
+    finishTurn();
+    current = openCompactionTurn(first.message, first.messageIndex);
+    for (const pending of [first, ...rest]) addCompaction(current, pending.message, pending.text);
+    finishTurn();
+  };
 
   const finishTurn = (): void => {
     if (!current) return;
@@ -568,10 +622,13 @@ function buildTimeline(
       current = undefined;
       return;
     }
+    const turnItems = current.orderedBackendItemIds;
+    const compactionOnly = turnItems.length > 0 &&
+      turnItems.every((id) => itemsById[id]!.semanticKind === "compaction");
     const completed =
       current.interruptedAt === undefined &&
-      current.terminalAssistantUuid !== undefined &&
-      current.unresolvedToolIds.size === 0;
+      (compactionOnly || (current.terminalAssistantUuid !== undefined &&
+        current.unresolvedToolIds.size === 0));
     turnsById[current.backendTurnId] = {
       backendTurnId: current.backendTurnId,
       ...(current.completionCorrelations.length > 0
@@ -632,6 +689,7 @@ function buildTimeline(
         current.backendTurnId,
         current.lastRetainedMessageUuid,
       );
+      checkpointIndexByTurnId.set(current.backendTurnId, current.lastRetainedMessageIndex!);
     }
     current = undefined;
   };
@@ -647,11 +705,22 @@ function buildTimeline(
       if (!seenTurnIds.has(backendTurnId)) {
         finishTurn();
         current = openTurn(backendTurnId, messageIndex, false);
+        for (const pending of pendingCompactions.splice(0)) addCompaction(current, pending.message, pending.text);
       }
       continue;
     }
     if (!message.mainThread || message.type === "system") continue;
     const content = parseMessageContent(message.message, message.type);
+    if (message.compactSummary) {
+      compactions += 1;
+      lastCompactionIndex = messageIndex;
+      const text = content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n\n");
+      if (current) addCompaction(current, message, text);
+      // A notification turn compacted before its first response owns it.
+      else if (pendingProviderBoundary) pendingCompactions.push({ message, messageIndex, text });
+      else addCompaction(current = openCompactionTurn(message, messageIndex), message, text);
+      continue;
+    }
     if (isResumeClosure(message, content)) {
       // Never an answer, a turn, or a fork checkpoint. Most close the startup
       // message or another hidden row; one closing the turn itself proves that
@@ -669,11 +738,13 @@ function buildTimeline(
     if (current && isInterruptionMarker(message, content, authentication?.isApplicationInputOperation)) {
       current.interruptedAt = message.timestamp!;
       current.lastRetainedMessageUuid = message.uuid;
+      current.lastRetainedMessageIndex = messageIndex;
       continue;
     }
     if (!current && pendingProviderBoundary && isInterruptionMarker(message, content, authentication?.isApplicationInputOperation)) {
       // Stopped before its first response: no chat turn, as before.
       pendingProviderBoundary = undefined;
+      flushPendingCompactions();
       continue;
     }
     const taskNotification = isTaskNotification(message, content);
@@ -713,6 +784,7 @@ function buildTimeline(
     if (startsTurn && !joinsCurrent) {
       finishTurn();
       pendingProviderBoundary = undefined;
+      flushPendingCompactions();
     }
     if (!current && pendingProviderBoundary && message.type === "assistant") {
       current = openTurn(
@@ -727,7 +799,9 @@ function buildTimeline(
       messageIndex,
       false,
     );
+    for (const pending of pendingCompactions.splice(0)) addCompaction(current, pending.message, pending.text);
     current.lastRetainedMessageUuid = message.uuid;
+    current.lastRetainedMessageIndex = messageIndex;
 
     if (message.type === "user") {
       const ordinaryBlocks = content.filter(
@@ -869,6 +943,12 @@ function buildTimeline(
     }
   }
   finishTurn();
+  flushPendingCompactions();
+  // Claude Code resumes only the conversation after its latest compaction;
+  // an earlier row cannot anchor a native fork.
+  for (const [backendTurnId, index] of checkpointIndexByTurnId) {
+    if (index < lastCompactionIndex) terminalCheckpointUuidByBackendTurnId.delete(backendTurnId);
+  }
   applyTerminalReceipts(
     terminalReceipts,
     turnsById,
@@ -893,6 +973,7 @@ function buildTimeline(
       toolCalls,
       toolResults,
       totalMessages: safeAdd(userMessages, assistantMessages),
+      ...(compactions > 0 ? { compactions } : {}),
     },
   });
   const fingerprint = createHash("sha256")
@@ -1056,7 +1137,34 @@ function applyTerminalReceipts(
         itemsById[itemId] = terminalItem(item, candidate.status, completedAt);
       }
     }
+    if (candidate.status === "interrupted" && candidate.providerResultUuid === null &&
+        candidate.providerTerminalReason === CLAUDE_PROCESS_LOST_REASON) {
+      appendProcessLostNotice(turnsById, itemsById, candidate.backendTurnId);
+    }
   }
+}
+
+/** The process that ran this turn is gone; no native row records why it ended. */
+function appendProcessLostNotice(
+  turnsById: Record<string, BackendTurn>,
+  itemsById: Record<string, BackendItem>,
+  backendTurnId: string,
+): void {
+  const turn = turnsById[backendTurnId]!;
+  if (turn.orderedBackendItemIds.length >= MAXIMUM_BACKEND_ITEMS_PER_TURN) {
+    throw new ClaudeHistoryProjectionError("history_too_large");
+  }
+  // The next native slot: the process that could have used it is gone.
+  const sourceOrder = turn.orderedBackendItemIds.reduce((last, itemId) => {
+    const order = itemsById[itemId]!.sourceOrder;
+    return order % 2 === 0 ? Math.max(last, order) : last;
+  }, -2) + 2;
+  const backendItemId = stableId("claude-item-process-lost", backendTurnId);
+  itemsById[backendItemId] = {
+    backendItemId, backendTurnId, sourceOrder, semanticKind: "notice", status: "completed",
+    tone: "warning", text: boundText(PROCESS_LOST_NOTICE),
+  };
+  turnsById[backendTurnId] = { ...turn, orderedBackendItemIds: [...turn.orderedBackendItemIds, backendItemId] };
 }
 
 function terminalItem(
@@ -1144,6 +1252,7 @@ function parseMessages(
         ? { assistantStopReason: candidate.message.stop_reason }
         : {}),
       ...(timestamp !== undefined ? { timestamp } : {}),
+      ...(type === "user" && candidate.isCompactSummary === true ? { compactSummary: true as const } : {}),
     });
   }
   return result;
@@ -1418,7 +1527,7 @@ export function nextClaudeUserMessageOrdinal(
 ): number {
   let hasTurn = false;
   return parseMessages(value).filter((message) => {
-    if (!message.mainThread || message.type === "system") return false;
+    if (!message.mainThread || message.type === "system" || message.compactSummary) return false;
     const content = parseMessageContent(message.message, message.type);
     if (isResumeClosure(message, content)) return false;
     if (hasTurn && isInterruptionMarker(message, content, isApplicationInputOperation)) return false;

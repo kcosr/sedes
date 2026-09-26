@@ -12,8 +12,9 @@
   fails backend startup.
 
 - Sidecars must use runtime protocol 14, which reads Claude history through the
-  transcript's true tip and reports transcript presence. Upgrade existing
-  sidecars explicitly before reconnecting with this server version.
+  transcript's true tip and across automatic compactions, and reports
+  transcript presence. Upgrade existing sidecars explicitly before
+  reconnecting with this server version.
 
 - Sidecars must use runtime protocol 13, which serves `sedes mcp` and accepts
   Claude's Native agent-tool entry. Upgrade existing sidecars explicitly
@@ -105,6 +106,20 @@
   turn's final answer, and forks and usage ignore the placeholder. A prompt
   left unanswered because Claude Code exited now ends as interrupted with an
   explanation instead of completed.
+
+- Keep earlier Claude turns visible after Claude automatically compacts a long
+  conversation. **Conversation compacted** marks the point and expands to
+  Claude's summary, which no longer appears as a new prompt. A turn Claude
+  compacted mid-way keeps its prompt, settles with its result, and can be
+  stopped, instead of staying running. Threads already compacted re-identify
+  the former summary turn once. Only turns after the latest compaction can be
+  forked, because Claude resumes from its summary.
+
+- End a Claude turn left running after its Claude process was lost, for
+  example when the server, worker, or sidecar stopped mid-turn. The next launch
+  marks it interrupted with a notice; a reattached remote query that is still
+  running is unaffected. **Stop** no longer stays "stopping" without a result:
+  the turn ends a second after Claude reports idle, or after 30 seconds.
 
 - Show turns Claude starts itself, such as after a background task or peer
   hand-back, as running with **Stop**, and keep idle retirement, eviction and

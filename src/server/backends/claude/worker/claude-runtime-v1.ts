@@ -224,6 +224,8 @@ export const claudeRuntimeSessionMessageSchema = z.strictObject({
   parent_agent_id: z.string().max(256).nullable(),
   origin: boundedJsonValueSchema.optional(),
   timestamp: z.iso.datetime().optional(),
+  /** Claude Code's compaction summary; the SDK carries it on history rows. */
+  isCompactSummary: z.literal(true).optional(),
 });
 
 export const claudeRuntimeSessionListRequestSchema = z.strictObject({

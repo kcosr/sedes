@@ -56,6 +56,8 @@ import { claudeContextExcerptEnvelope } from "./claude-context-excerpts.js";
 import {
   assertClaudeHistorySession,
   assertClaudeMessageItemPayload,
+  CLAUDE_INTERRUPT_UNCONFIRMED_REASON,
+  CLAUDE_PROCESS_LOST_REASON,
   ClaudeHistoryProjectionError,
   projectClaudeHistoryPageAtIndex,
   locateClaudeHistoryTurn,
@@ -96,6 +98,10 @@ const MAXIMUM_EVENT_JOURNAL = 256;
 const MAXIMUM_ACKNOWLEDGEMENT_WAIT_MS = 30_000;
 const MAXIMUM_SUBMISSION_HISTORY_READ_MS = 5_000;
 const MAXIMUM_REPLAY_RECORDS = 1_024;
+/** A Stop Claude acknowledged but never settled with a result ends after this. */
+const STOP_CONFIRMATION_TIMEOUT_MS = 30_000;
+/** Once Claude reports idle, a result it already emitted has this long to land. */
+const STOP_IDLE_GRACE_MS = 1_000;
 const CLAUDE_HANDLE_HISTORY_CURSOR_PREFIX = "claude-handle-history:v1:";
 const EFFORTS = new Set<EffortLevel>(["low", "medium", "high", "xhigh", "max"]);
 
@@ -107,7 +113,7 @@ type SequencedSubscriber = {
 /** A live turn Claude started itself (task notification, peer hand-back). */
 type ProviderTurn = {
   /** Position in native messages where the live turn began, when observed. */
-  readonly startIndex?: number;
+  startIndex?: number;
   /** Anthropic ID of its first response, known from the first frame. */
   messageId?: string;
   /** Private live boundary marker opening its own normalized turn. */
@@ -116,6 +122,16 @@ type ProviderTurn = {
   ownsTurn: boolean;
   /** A complete response was appended to native messages. */
   responded?: true;
+};
+
+/**
+ * A compaction observed live. Provider history places the rows it preserved
+ * after its summary, where the model sees them (`anchor` is the summary).
+ */
+type LiveCompaction = {
+  readonly anchorUuid?: string;
+  readonly preservedUuids?: ReadonlySet<string>;
+  readonly preservedHeadUuid?: string;
 };
 
 type PendingSubmission = {
@@ -264,6 +280,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
   readonly #startupSupersededMessageUuids = new Set<string>();
   /** Claude Code's reported session state, including work it started itself. */
   #providerState: "idle" | "running" | "requires_action" = "idle";
+  /** A reattached query's state is unknown until Claude reports it. */
+  #providerStateReported = false;
+  /** A fresh launch's trailing unfinished turn, until Claude shows it is not running it. */
+  #processLostTurnId: string | undefined;
+  /** Bounds a Stop that Claude acknowledged but has not settled with a result. */
+  #stopConfirmation: { readonly backendTurnId: string; readonly timer: ReturnType<typeof setTimeout> } | undefined;
+  /** A live compact boundary; its summary is the next main-thread synthetic user row. */
+  #liveCompaction: LiveCompaction | undefined;
   /** A live turn Claude started itself; it carries no Sedes input identity. */
   #providerTurn: ProviderTurn | undefined;
   /** A non-ambient task finished; its notification can start the next turn. */
@@ -466,6 +490,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
       }
       this.#resolveInitialHistory();
       await this.#session.flushMessages?.();
+      // Held output is applied, so Claude's own state report is current.
+      if (this.#session.reattached !== true) this.#watchProcessLostTurn();
       if (
         this.#session.reattached &&
         this.#session.confirmedEffort !== undefined
@@ -711,12 +737,16 @@ export class ClaudeConversationHandle implements ConversationHandle {
               messages: true,
               toolCalls: true,
               toolResults: true,
+              // The child resumes the same compacted context: boundary, summary, and kept rows.
               compaction: true,
               attachments: false,
               settings: true,
               limitations: [
                 {
                   text: "Claude reloads environment instructions for the child and does not copy file-history snapshots. Attachment-ended structured-output turns are not forkable.",
+                },
+                {
+                  text: "After Claude compacts a conversation, a fork copies only the compaction summary and the turns after it; earlier turns are not forkable.",
                 },
               ],
             },
@@ -1181,7 +1211,61 @@ export class ClaudeConversationHandle implements ConversationHandle {
     if (this.#runState === "running" &&
         this.#activeBackendTurnId() === input.expectedBackendTurnId) {
       this.#setRunState("stopping");
+      // Claude reports every turn it runs; idle now means nothing was left
+      // to stop, so no result will follow. Otherwise bound the wait.
+      const idle = this.#providerState === "idle" && (this.#providerStateReported || this.#session.reattached !== true) &&
+        !this.#hasSubmissionAwaitingStart(true);
+      this.#awaitStopConfirmation(input.expectedBackendTurnId, idle ? STOP_IDLE_GRACE_MS : STOP_CONFIRMATION_TIMEOUT_MS);
     }
+  }
+
+  /** A Stop ends at its result; this bounds one that never gets one. */
+  #awaitStopConfirmation(backendTurnId: string, delayMs: number): void {
+    this.#clearStopConfirmation();
+    const timer = setTimeout(() => {
+      if (this.#stopConfirmation?.timer !== timer) return;
+      this.#stopConfirmation = undefined;
+      this.#endUnconfirmedStop(backendTurnId);
+    }, delayMs);
+    timer.unref?.();
+    this.#stopConfirmation = { backendTurnId, timer };
+  }
+
+  #clearStopConfirmation(): void {
+    if (!this.#stopConfirmation) return;
+    clearTimeout(this.#stopConfirmation.timer);
+    this.#stopConfirmation = undefined;
+  }
+
+  /**
+   * Ends a stopping turn that got no result. A turn Claude started itself
+   * ends without a receipt, as its result would; a Sedes turn records that
+   * Claude never confirmed the Stop.
+   */
+  #endUnconfirmedStop(backendTurnId: string): void {
+    if (this.#closed || this.#projectionInvalidated || this.#runState !== "stopping" ||
+        this.#activeBackendTurnId() !== backendTurnId) return;
+    this.#terminalResultRevision++;
+    if (this.#providerTurn) {
+      this.#endProviderTurn();
+      return;
+    }
+    const existing = this.#settings.findTerminalReceipt(this.#scope, {
+      applicationThreadId: this.binding.applicationThreadId, backendTurnId,
+    });
+    if (existing) {
+      this.#setRunState(existing.status === "failed" ? "failed" : "idle");
+      return;
+    }
+    const previous = this.#projection;
+    const terminalAt = this.#now();
+    this.#settings.writeTerminalReceipt(this.#scope, this.binding.applicationThreadId, {
+      backendTurnId, status: "interrupted", providerTerminalReason: CLAUDE_INTERRUPT_UNCONFIRMED_REASON,
+      terminalAt, now: terminalAt,
+    });
+    this.#refreshProjection();
+    this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot, backendTurnId);
+    this.#setRunState("idle");
   }
 
   async reconcileInterrupt(
@@ -1294,6 +1378,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   async close(options?: { readonly reason: "evicted" }): Promise<void> {
     if (this.#closed) return this.#closePromise;
     this.#closed = true;
+    this.#clearStopConfirmation();
     this.#usageAccounting?.close();
     // Detaching first fences remote permission callbacks before the local
     // interaction bridge settles its waiters during main-server shutdown.
@@ -1326,6 +1411,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
       return;
     }
     if (message.type === "system" && message.session_id === this.binding.backendConversationId) {
+      if (message.subtype === "compact_boundary") {
+        this.#liveCompaction = liveCompaction(message.compact_metadata);
+        return;
+      }
       if (this.#backgroundActivity.consume(message)) {
         this.#emit({ type: "background_activity_changed", activity: this.#backgroundActivity.snapshot() });
         return;
@@ -1440,7 +1529,12 @@ export class ClaudeConversationHandle implements ConversationHandle {
       return;
     }
     if (message.type !== "user" && message.type !== "assistant") return;
-    const sessionMessage = liveSessionMessage(message);
+    // Claude Code streams a compaction's summary right after its boundary, as
+    // a synthetic user row; history marks the same row as the summary.
+    const compaction = this.#liveCompaction;
+    this.#liveCompaction = undefined;
+    const compactSummary = compaction !== undefined && message.type === "user" && message.isSynthetic === true;
+    const sessionMessage = liveSessionMessage(message, compactSummary);
     if (!sessionMessage) {
       this.#emit({
         type: "resnapshot_required",
@@ -1466,11 +1560,24 @@ export class ClaudeConversationHandle implements ConversationHandle {
     if (!this.#messages.some(({ uuid }) => uuid === sessionMessage.uuid)) {
       if (message.type === "assistant" && this.#providerTurn) this.#providerTurn.responded = true;
       const previous = this.#projection;
-      this.#messages.push(sessionMessage);
-      this.#projectionMessages.push(sessionMessage);
-      this.#refreshProjection();
-      this.#usage = mergeUsage(this.#projection.usage ?? {}, this.#usage);
-      this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot);
+      const index = compactSummary && compaction
+        ? this.#compactionSummaryIndex(sessionMessage.uuid, compaction) : this.#messages.length;
+      this.#messages.splice(index, 0, sessionMessage);
+      const providerTurn = this.#providerTurn;
+      if (providerTurn?.startIndex !== undefined && index < providerTurn.startIndex) providerTurn.startIndex += 1;
+      if (index === this.#messages.length - 1) {
+        this.#projectionMessages.push(sessionMessage);
+        this.#refreshProjection();
+        this.#usage = mergeUsage(this.#projection.usage ?? {}, this.#usage);
+        this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot);
+      } else {
+        // The summary precedes the output the compaction preserved, as it
+        // does in history; items already published move.
+        this.#historyCursorNonce = randomBytes(16).toString("base64url");
+        this.#refreshProjection(true);
+        this.#usage = mergeUsage(this.#projection.usage ?? {}, this.#usage);
+        this.#emit({ type: "resnapshot_required", reason: "history_changed" });
+      }
       if (message.type === "user" && [...this.#projection.nativeUserMessageUuidByBackendTurnId.values()].includes(message.uuid!)) {
         this.#beginSedesTurn();
       }
@@ -1561,6 +1668,60 @@ export class ClaudeConversationHandle implements ConversationHandle {
       type: "resnapshot_required",
       reason: "contradictory_state",
     });
+  }
+
+  /**
+   * Where a live compaction summary goes. The native reader relinks rows a
+   * compaction preserved after its summary (their anchor); they are the
+   * newest rows this attachment holds.
+   */
+  #compactionSummaryIndex(summaryUuid: string, compaction: LiveCompaction): number {
+    const end = this.#messages.length;
+    if (compaction.anchorUuid !== summaryUuid) return end;
+    if (compaction.preservedUuids) {
+      let index = end;
+      while (index > 0 && compaction.preservedUuids.has(this.#messages[index - 1]!.uuid)) index -= 1;
+      return index;
+    }
+    const head = this.#messages.findIndex(({ uuid }) => uuid === compaction.preservedHeadUuid);
+    return head >= 0 ? head : end;
+  }
+
+  /**
+   * A fresh launch proves that the process which ran a trailing unfinished
+   * turn is gone: no result will settle it. Claude Code may close it with a
+   * synthetic row when it resumes, but not necessarily before this read. The
+   * new process reports `running` while it handles Sedes' startup message, so
+   * the turn is closed once Claude reports idle, or once it starts an input
+   * of this attachment. A reattached query may still be running its turn and
+   * is never watched.
+   */
+  #watchProcessLostTurn(): void {
+    const { snapshot } = this.#projection;
+    // Claude Code itself re-runs an interrupted turn when this is set.
+    if (snapshot.runState !== "running" || environmentFlag(this.#childEnvironment.CLAUDE_CODE_RESUME_INTERRUPTED_TURN)) return;
+    this.#processLostTurnId = snapshot.activeBackendTurnId;
+    this.#closeProcessLostTurn(false);
+  }
+
+  #closeProcessLostTurn(startedOther: boolean): void {
+    const backendTurnId = this.#processLostTurnId;
+    if (backendTurnId === undefined || this.#closed || this.#projectionInvalidated) return;
+    if (!startedOther && this.#providerState !== "idle") return;
+    this.#processLostTurnId = undefined;
+    const previous = this.#projection.snapshot;
+    if (previous.turnsById[backendTurnId]?.status !== "in_progress" ||
+        this.#settings.findTerminalReceipt(this.#scope, { applicationThreadId: this.binding.applicationThreadId, backendTurnId })) return;
+    const terminalAt = this.#now();
+    this.#settings.writeTerminalReceipt(this.#scope, this.binding.applicationThreadId, {
+      backendTurnId, status: "interrupted", providerTerminalReason: CLAUDE_PROCESS_LOST_REASON,
+      terminalAt, now: terminalAt,
+    });
+    this.#refreshProjection(true);
+    this.#emitProjectionDelta(previous, this.#projection.snapshot, backendTurnId);
+    if (previous.orderedBackendTurnIds.at(-1) !== backendTurnId) return;
+    this.#providerTurn = undefined;
+    this.#setRunState(this.#projection.snapshot.runState);
   }
 
   #installInitialMessages(messages: readonly SessionMessage[]): void {
@@ -1674,7 +1835,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const pendingIds = this.#session.lifetime === "persistent_service" ? [] : [...this.#submissions]
       .filter(([, submission]) => !submission.accepted && !submission.steering)
       .map(([id]) => id);
-    const expectedIds = [...pendingIds,
+    // The turn holding a result's native input identity is the one it settles,
+    // wherever that turn is: a mid-turn compaction adds rows after its prompt.
+    const consumingTurnId = this.#turnConsuming(correlatedIds);
+    const expectedIds = consumingTurnId !== undefined ? correlatedIds : [...pendingIds,
       ...(activeId ? this.#projection.snapshot.turnsById[activeId]?.completionCorrelations ?? [] : [])];
     if (claudeResultIsUnrelated(message, expectedIds)) return;
     const operationId = this.#resultSubmissionOperationId(message);
@@ -1682,7 +1846,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
     // Without a live turn, an uncorrelated result has no application turn to
     // settle; attributing it to the previous turn would forge its receipt.
     if (correlatedIds.length === 0 && this.#runState !== "running" && this.#runState !== "stopping") return;
-    const backendTurnId = this.#activeBackendTurnId();
+    const backendTurnId = this.#turnConsuming(correlatedIds) ?? this.#activeBackendTurnId();
+    // A result for an earlier input's turn does not end a later input's run.
+    const settlesRun = backendTurnId === undefined || this.#endsForegroundRun(backendTurnId);
     this.#captureResultUsage(message);
     const priorReceipt = backendTurnId
       ? this.#settings.findTerminalReceipt(this.#scope, {
@@ -1693,16 +1859,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
     // Main can persist a result just before losing its remote acknowledgement.
     // Replaying that receipt must not add the same cumulative usage twice.
     if (priorReceipt?.providerResultUuid === message.uuid) {
+      if (!settlesRun) return;
       this.#terminalResultRevision++;
       this.#setRunState(priorReceipt.status === "failed" ? "failed" : "idle");
       return;
     }
     const terminalStatus = terminalReceiptStatus(message);
     if (terminalStatus) {
-      this.#terminalResultRevision++;
-      const backendTurnId =
-        this.#projection.snapshot.activeBackendTurnId ??
-        this.#projection.snapshot.orderedBackendTurnIds.at(-1);
+      if (settlesRun) this.#terminalResultRevision++;
       let settledStatus: ClaudeTerminalStatus = terminalStatus;
       if (backendTurnId) {
         const previous = this.#projection;
@@ -1741,8 +1905,27 @@ export class ClaudeConversationHandle implements ConversationHandle {
         this.#refreshProjection();
         this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot, backendTurnId);
       }
-      this.#setRunState(settledStatus === "failed" ? "failed" : "idle");
+      if (settlesRun) this.#setRunState(settledStatus === "failed" ? "failed" : "idle");
     }
+  }
+
+  /** The turn whose native input identity a result names, newest first. */
+  #turnConsuming(inputIds: readonly string[]): string | undefined {
+    if (inputIds.length === 0) return undefined;
+    const turns = this.#projection.usageTurns;
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      const turn = turns[index]!;
+      if (turn.completionCorrelations?.some((id) => inputIds.includes(id))) return turn.backendTurnId;
+    }
+    return undefined;
+  }
+
+  /** No later turn carries an input of its own, so this result ends the run. */
+  #endsForegroundRun(backendTurnId: string): boolean {
+    const { orderedBackendTurnIds, turnsById } = this.#projection.snapshot;
+    const index = orderedBackendTurnIds.indexOf(backendTurnId);
+    return index >= 0 && orderedBackendTurnIds.slice(index + 1)
+      .every((turnId) => !turnsById[turnId]?.completionCorrelations?.length);
   }
 
   #materializePendingUser(operationId: string, nativeTurnRootUuid?: string): void {
@@ -1798,6 +1981,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
   }
 
   #beginSedesTurn(): void {
+    // Claude runs this input, not the turn a lost process left unfinished.
+    this.#closeProcessLostTurn(true);
     // A Sedes input can take over a turn Claude started, for example a steer
     // folded into a notification turn. Publish the new active turn either way.
     this.#providerTurn = undefined;
@@ -1830,12 +2015,23 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#providerTurnBoundaries.set(boundaryUuid, messageId);
     const previous = this.#projection.snapshot;
     const marker = this.#providerBoundaryMarker(boundaryUuid);
-    this.#messages.push(marker);
-    this.#projectionMessages.push(marker);
     turn.boundaryUuid = boundaryUuid;
     turn.ownsTurn = true;
-    this.#refreshProjection();
-    this.#emitProjectionDelta(previous, this.#projection.snapshot);
+    // A compaction before the first response belongs to this turn, as the
+    // notification row that precedes its summary makes it in history.
+    const compacted = turn.startIndex !== undefined && turn.startIndex < this.#messages.length &&
+      this.#messages.slice(turn.startIndex).every(isCompactSummaryMessage);
+    if (compacted) {
+      this.#messages.splice(turn.startIndex!, 0, marker);
+      this.#historyCursorNonce = randomBytes(16).toString("base64url");
+      this.#refreshProjection(true);
+      this.#emit({ type: "resnapshot_required", reason: "history_changed" });
+    } else {
+      this.#messages.push(marker);
+      this.#projectionMessages.push(marker);
+      this.#refreshProjection();
+      this.#emitProjectionDelta(previous, this.#projection.snapshot);
+    }
     this.#setRunState("running", true);
   }
 
@@ -1889,6 +2085,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
   #consumeProviderState(state: "idle" | "running" | "requires_action"): void {
     const previous = this.#providerState;
     this.#providerState = state;
+    this.#providerStateReported = true;
+    if (state === "idle") this.#closeProcessLostTurn(false);
     if (this.#initialHistoryLoaded) {
       if (state !== "idle") {
         // Claude began work while no Sedes input is awaiting its turn: a task
@@ -1899,6 +2097,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
         // Claude finished work that produced no result, for example a drain
         // that did not query the model.
         this.#endProviderTurn();
+      } else if (this.#stopConfirmation && !this.#hasSubmissionAwaitingStart(true)) {
+        // Claude went idle after Stop; its result, if any, preceded this.
+        this.#awaitStopConfirmation(this.#stopConfirmation.backendTurnId, STOP_IDLE_GRACE_MS);
       }
     }
     if ((previous === "idle") !== (state === "idle")) {
@@ -2120,6 +2321,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   }
 
   #setRunState(state: BackendConversationSnapshot["runState"], republish = false): void {
+    if (state !== "stopping") this.#clearStopConfirmation();
     if (this.#runState === state && !republish) return;
     this.#runState = state;
     this.#emit({
@@ -2603,10 +2805,38 @@ async function resolveClaudeAgentToolCli(
 type ClaudeObservedSessionMessage = SessionMessage & {
   readonly timestamp?: string;
   readonly origin?: unknown;
+  readonly isCompactSummary?: true;
 };
+
+function isCompactSummaryMessage(message: SessionMessage): boolean {
+  return (message as ClaudeObservedSessionMessage).isCompactSummary === true;
+}
+
+/** Which rows the model keeps after a live compaction's summary, if any. */
+function liveCompaction(metadata: unknown): LiveCompaction {
+  const listed = record(record(metadata)?.preserved_messages);
+  if (listed) {
+    const uuids = listed.uuids;
+    return typeof listed.anchor_uuid === "string" && Array.isArray(uuids) && uuids.every((uuid) => typeof uuid === "string")
+      ? { anchorUuid: listed.anchor_uuid, preservedUuids: new Set(uuids as string[]) } : {};
+  }
+  const segment = record(record(metadata)?.preserved_segment);
+  return segment && typeof segment.anchor_uuid === "string" && typeof segment.head_uuid === "string"
+    ? { anchorUuid: segment.anchor_uuid, preservedHeadUuid: segment.head_uuid } : {};
+}
+
+function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+/** Claude Code's reading of a boolean environment variable. */
+function environmentFlag(value: string | undefined): boolean {
+  return value !== undefined && ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
 
 function liveSessionMessage(
   message: SDKMessage,
+  compactSummary = false,
 ): ClaudeObservedSessionMessage | undefined {
   if (message.type !== "user" && message.type !== "assistant") return undefined;
   if (
@@ -2628,6 +2858,7 @@ function liveSessionMessage(
     ...(message.timestamp !== undefined
       ? { timestamp: message.timestamp }
       : {}),
+    ...(compactSummary ? { isCompactSummary: true as const } : {}),
   };
 }
 
