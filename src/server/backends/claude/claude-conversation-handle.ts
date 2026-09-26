@@ -5,7 +5,7 @@ import type { ResolvedEnvironmentVariables } from "../../environment-variables/r
 import { claudeMessageIsChildOwned } from "./claude-message-scope.js";
 import { ClaudeBackgroundActivity } from "./claude-background-activity.js";
 import { claudeCommandLifecycle, claudeResultIsUnrelated, claudeResultUserMessageIds } from "./claude-result-lifecycle.js";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type {
   EffortLevel,
   PermissionMode,
@@ -102,6 +102,20 @@ const EFFORTS = new Set<EffortLevel>(["low", "medium", "high", "xhigh", "max"]);
 type SequencedSubscriber = {
   readonly after: number;
   readonly listener: BackendEventListener;
+};
+
+/** A live turn Claude started itself (task notification, peer hand-back). */
+type ProviderTurn = {
+  /** Position in native messages where the live turn began, when observed. */
+  readonly startIndex?: number;
+  /** Anthropic ID of its first response, known from the first frame. */
+  messageId?: string;
+  /** Private live boundary marker opening its own normalized turn. */
+  boundaryUuid?: string;
+  /** False while its output extends the settled previous turn. */
+  ownsTurn: boolean;
+  /** A complete response was appended to native messages. */
+  responded?: true;
 };
 
 type PendingSubmission = {
@@ -250,16 +264,11 @@ export class ClaudeConversationHandle implements ConversationHandle {
   readonly #startupSupersededMessageUuids = new Set<string>();
   /** Claude Code's reported session state, including work it started itself. */
   #providerState: "idle" | "running" | "requires_action" = "idle";
-  /**
-   * A live turn Claude started itself; it carries no Sedes input identity.
-   * `ownsTurn` is false while its output extends the settled previous turn.
-   */
-  #providerTurn:
-    | { readonly startIndex?: number; messageId?: string; boundaryUuid?: string; ownsTurn: boolean }
-    | undefined;
+  /** A live turn Claude started itself; it carries no Sedes input identity. */
+  #providerTurn: ProviderTurn | undefined;
   /** A non-ambient task finished; its notification can start the next turn. */
   #taskNotificationPending = false;
-  /** Live boundary markers for provider-started turns, by first message ID. */
+  /** Live boundary marker UUID to the provider turn's first message ID. */
   readonly #providerTurnBoundaries = new Map<string, string>();
   #projection: ClaudeHistoryProjection;
   #projectionTurnOffset = 0;
@@ -645,6 +654,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const permittedByOperationId = new Map<string, boolean>();
     const skillByNativeUserUuid = new Map<string, string | null>();
     return {
+      providerTurnBoundaries: this.#providerTurnBoundaries,
       steerOperations: this.#settings.listSteerOperations(this.#scope, this.binding.applicationThreadId),
       taskLifecycleReceipts: this.#settings.listTaskLifecycleReceipts(this.#scope, this.binding.applicationThreadId, this.binding.backendConversationId),
       attachmentProvenanceKey: this.#attachmentProvenanceKey,
@@ -750,11 +760,13 @@ export class ClaudeConversationHandle implements ConversationHandle {
         "claude_retry_anchor_requires_settled",
       );
     }
+    // Live boundary markers never exist in provider history.
+    const native = this.#messages.filter(({ uuid }) => !this.#providerTurnBoundaries.has(uuid));
     return JSON.stringify({
       version: 1,
-      messageCount: this.#messages.length,
-      lastMessageUuid: this.#messages.at(-1)?.uuid ?? null,
-      transcriptFingerprint: transcriptFingerprint(this.#messages),
+      messageCount: native.length,
+      lastMessageUuid: native.at(-1)?.uuid ?? null,
+      transcriptFingerprint: transcriptFingerprint(native),
     });
   }
 
@@ -1440,6 +1452,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       return;
     }
     if (!this.#messages.some(({ uuid }) => uuid === sessionMessage.uuid)) {
+      if (message.type === "assistant" && this.#providerTurn) this.#providerTurn.responded = true;
       const previous = this.#projection;
       this.#messages.push(sessionMessage);
       this.#projectionMessages.push(sessionMessage);
@@ -1625,7 +1638,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     // A turn Claude started itself carries no Sedes input identity. Its result
     // ends that turn without writing a receipt for any application turn.
     if (this.#providerTurn && correlatedIds.length === 0) {
-      this.#endProviderTurn();
+      this.#endProviderTurn(message.origin);
       return;
     }
     const activeId = this.#activeBackendTurnId();
@@ -1766,20 +1779,81 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#setRunState("running");
   }
 
-  #endProviderTurn(): void {
+  #endProviderTurn(origin?: unknown): void {
+    const turn = this.#providerTurn;
     // Publish the settled turn before idle, as a Sedes turn result does.
     const previous = this.#projection.snapshot;
     this.#refreshProjection();
     this.#emitProjectionDelta(previous, this.#projection.snapshot, this.#activeBackendTurnId());
     this.#providerTurn = undefined;
     this.#setRunState("idle");
+    if (turn) this.#settleProviderBoundary(turn, origin);
+  }
+
+  /**
+   * Opens a provider-started turn live. Provider history starts it at the
+   * notification row, which Claude does not stream; both paths identify the
+   * turn by its first response so reload keeps the same turn and items.
+   */
+  #openProviderBoundary(turn: ProviderTurn, messageId: string): void {
+    const boundaryUuid = randomUUID();
+    this.#providerTurnBoundaries.set(boundaryUuid, messageId);
+    const previous = this.#projection.snapshot;
+    const marker = this.#providerBoundaryMarker(boundaryUuid);
+    this.#messages.push(marker);
+    this.#projectionMessages.push(marker);
+    turn.boundaryUuid = boundaryUuid;
+    turn.ownsTurn = true;
+    this.#refreshProjection();
+    this.#emitProjectionDelta(previous, this.#projection.snapshot);
+    this.#setRunState("running", true);
+  }
+
+  /** Exact result provenance confirms the live boundary: provider history
+   * keeps a task-notification row but not a peer hand-back's `isMeta` row. */
+  #settleProviderBoundary(turn: ProviderTurn, origin: unknown): void {
+    if (turn.startIndex === undefined) return;
+    const notification = typeof origin === "object" && origin !== null && !Array.isArray(origin)
+      ? Reflect.get(origin, "kind") === "task-notification" : undefined;
+    const boundaryUuid = turn.boundaryUuid;
+    let revised = false;
+    if (boundaryUuid !== undefined && (notification === false || !turn.responded)) {
+      // A peer turn, or one stopped before its first complete response, has
+      // no separate turn in provider history.
+      const index = this.#messages.findIndex(({ uuid }) => uuid === boundaryUuid);
+      if (index >= 0) this.#messages.splice(index, 1);
+      this.#providerTurnBoundaries.delete(boundaryUuid);
+      revised = true;
+    } else if (boundaryUuid === undefined && notification === true && turn.responded && turn.messageId !== undefined) {
+      const inserted = randomUUID();
+      this.#providerTurnBoundaries.set(inserted, turn.messageId);
+      this.#messages.splice(Math.min(turn.startIndex, this.#messages.length), 0, this.#providerBoundaryMarker(inserted));
+      revised = true;
+    }
+    if (!revised) return;
+    this.#historyCursorNonce = randomBytes(16).toString("base64url");
+    this.#refreshProjection(true);
+    this.#emit({ type: "resnapshot_required", reason: "history_changed" });
+  }
+
+  #providerBoundaryMarker(uuid: string): SessionMessage {
+    return { type: "system", uuid, session_id: this.binding.backendConversationId,
+      message: {}, parent_tool_use_id: null, parent_agent_id: null };
   }
 
   /** Model output with no Sedes input stamp while no turn is live. */
   #observeProviderOutput(messageId: string): void {
     if (!this.#initialHistoryLoaded) return;
     if (this.#runState !== "running" && this.#runState !== "stopping") this.#beginProviderTurn();
-    if (this.#providerTurn && this.#providerTurn.messageId === undefined) this.#providerTurn.messageId = messageId;
+    const turn = this.#providerTurn;
+    if (!turn || turn.messageId !== undefined) return;
+    turn.messageId = messageId;
+    // A finished background task's notification starts its own turn in
+    // provider history. Open it live; the result's provenance confirms it.
+    if (turn.startIndex !== undefined && this.#taskNotificationPending) {
+      this.#taskNotificationPending = false;
+      this.#openProviderBoundary(turn, messageId);
+    }
   }
 
   #consumeProviderState(state: "idle" | "running" | "requires_action"): void {

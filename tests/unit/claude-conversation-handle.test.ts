@@ -4570,19 +4570,94 @@ describe("Claude native run state without prompt echoes", () => {
     // A send while Claude works is refused locally; the actor steers instead.
     await expect(handle.submit(submitInput("66666666-6666-4666-8666-666666666666", "Wait")))
       .rejects.toMatchObject({ backendCode: "claude_turn_already_active", crossedSubmissionBoundary: false });
+    const settled = (await projectionSnapshot(handle)).orderedBackendTurnIds[0]!;
     provider.messages.push(nativeFrames.start("msg-notified"));
+    // Partial text streams under the notification turn, as on reload.
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "turn_started" })));
+    const notificationTurn = events.find(event => event.type === "turn_started")!;
+    const notificationTurnId = notificationTurn.type === "turn_started" ? notificationTurn.turn.backendTurnId : "";
+    expect(notificationTurnId).not.toBe(settled);
+    expect(events.filter(event => event.type === "run_state_changed").at(-1)).toMatchObject({
+      state: "running", activeBackendTurnId: notificationTurnId });
     provider.messages.push(nativeFrames.text("msg-notified", "The agents finished."));
     provider.messages.push(nativeFrames.result([], { origin: { kind: "task-notification" } }));
     await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
-    expect(JSON.stringify(await projectionSnapshot(handle))).toContain("The agents finished.");
+    const live = await projectionSnapshot(handle);
+    expect(live.orderedBackendTurnIds).toEqual([settled, notificationTurnId]);
+    expect(live.turnsById[notificationTurnId]).toMatchObject({ status: "completed" });
+    expect(live.turnsById[notificationTurnId]!.orderedBackendItemIds.map(id => JSON.stringify(live.itemsById[id])))
+      .toEqual([expect.stringContaining("The agents finished.")]);
+    expect(events.some(event => event.type === "resnapshot_required")).toBe(false);
     expect(writeTerminal).not.toHaveBeenCalled();
-    expect(runStates(events)).toEqual(["running", "idle"]);
+    expect(runStates(events)).toEqual(["running", "running", "idle"]);
     expect(handle.retirementBlocked).toBe(true);
     const nudges = events.filter(event => event.type === "background_activity_changed").length;
     provider.messages.push(nativeFrames.state("idle"));
     await vi.waitFor(() => expect(handle.retirementBlocked).toBe(false));
     // Retirement eligibility changed without a run-state edge; re-evaluate it.
     expect(events.filter(event => event.type === "background_activity_changed").length).toBeGreaterThan(nudges);
+    await handle.close();
+  });
+
+  it("projects a live notification turn exactly as reload does, and keeps a peer turn merged as history does", async () => {
+    const turnsOf = (snapshot: Awaited<ReturnType<typeof projectionSnapshot>>) => snapshot.orderedBackendTurnIds.map(id => ({
+      id, status: snapshot.turnsById[id]!.status,
+      items: snapshot.turnsById[id]!.orderedBackendItemIds.map(itemId => {
+        const { backendItemId, backendTurnId, sourceOrder, semanticKind } = snapshot.itemsById[itemId]!;
+        return { backendItemId, backendTurnId, sourceOrder, semanticKind };
+      }),
+    }));
+    const notification = { type: "user", uuid: "88888888-8888-4888-8888-888888888888", session_id: SESSION_ID,
+      parent_tool_use_id: null, parent_agent_id: null, origin: { kind: "task-notification" },
+      message: { role: "user", content: "<task-notification>\n<task-id>task-1</task-id>\n<status>completed</status>\n</task-notification>" } } as SessionMessage;
+    const response = (messageId: string, text: string) => ({ ...nativeFrames.text(messageId, text), uuid: crypto.randomUUID() });
+    for (const kind of ["task-notification", "peer"] as const) {
+      const provider = fixture();
+      const { handle } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+      await handle.establishProjection({ signal: new AbortController().signal });
+      if (kind === "task-notification") provider.messages.push(nativeFrames.taskNotification("task-1"));
+      provider.messages.push(nativeFrames.state("running"));
+      provider.messages.push(nativeFrames.start("msg-follow-up"));
+      const durable = response("msg-follow-up", "Follow-up answer");
+      provider.messages.push(durable);
+      provider.messages.push(nativeFrames.result([], { origin: { kind } }));
+      await vi.waitFor(async () => {
+        const current = await projectionSnapshot(handle);
+        expect(JSON.stringify(current)).toContain("Follow-up answer");
+        expect(current.runState).toBe("idle");
+      });
+      const live = await projectionSnapshot(handle);
+      // Provider history keeps the notification row but drops a peer's isMeta row.
+      const history = [...settledTurn, ...(kind === "task-notification" ? [notification] : []),
+        { ...durable, parent_agent_id: null } as unknown as SessionMessage];
+      const reloaded = createHandle(fixture(), vi.fn(), { initialMessages: history, resumeSession: true }).handle;
+      expect(turnsOf(live)).toEqual(turnsOf(await projectionSnapshot(reloaded)));
+      expect(live.orderedBackendTurnIds).toHaveLength(kind === "task-notification" ? 2 : 1);
+      await reloaded.close();
+      await handle.close();
+    }
+  });
+
+  it.each([
+    { observed: true, origin: "peer", turns: 1 },
+    { observed: false, origin: "task-notification", turns: 2 },
+  ] as const)("corrects a live boundary from exact result provenance (notification frame $observed, $origin)", async ({ observed, origin, turns }) => {
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    if (observed) provider.messages.push(nativeFrames.taskNotification("task-1"));
+    provider.messages.push(nativeFrames.start("msg-follow-up"));
+    provider.messages.push(nativeFrames.text("msg-follow-up", "Follow-up answer"));
+    provider.messages.push(nativeFrames.result([], { origin: { kind: origin } }));
+    await vi.waitFor(() => expect(events).toContainEqual({ type: "resnapshot_required", reason: "history_changed" }));
+    const corrected = await projectionSnapshot(handle);
+    expect(corrected.runState).toBe("idle");
+    expect(corrected.orderedBackendTurnIds).toHaveLength(turns);
+    expect(JSON.stringify(corrected.turnsById[corrected.orderedBackendTurnIds.at(-1)!]!.orderedBackendItemIds
+      .map(id => corrected.itemsById[id]))).toContain("Follow-up answer");
+    await expect(handle.captureSubmissionRetryAnchor()).resolves.toContain('"messageCount":3');
     await handle.close();
   });
 

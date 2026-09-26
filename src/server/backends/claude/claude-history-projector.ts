@@ -154,6 +154,18 @@ export interface ClaudeHistoryAuthentication {
   readonly forkBoundaryAuthentication: ClaudeForkBoundaryAuthentication;
   readonly isApplicationInputOperation?: (operationId: string) => boolean;
   readonly resolveSkillName?: (operationId: string) => string | undefined;
+  /**
+   * Live-only boundary markers for turns Claude started itself, keyed by the
+   * marker's private UUID and naming the turn's first Anthropic message ID.
+   * Claude does not stream the notification row that starts such a turn.
+   */
+  readonly providerTurnBoundaries?: ReadonlyMap<string, string>;
+}
+
+/** A turn Claude started is identified by its first response, which both
+ * live observation and provider history carry; its trigger row is not live. */
+function providerTurnId(sessionId: string, firstAssistantMessageId: string): string {
+  return stableId("claude-turn", `${sessionId}\0provider\0${firstAssistantMessageId}`);
 }
 
 interface ParsedSessionMessage {
@@ -522,6 +534,26 @@ function buildTimeline(
   const nextAssistantBlockIndexByMessageId = new Map<string, number>();
   const responseGroupsByTurn = new Map<string, Map<string, AssistantResponseGroup>>();
   const lastResponseGroupByTurn = new Map<string, AssistantResponseGroup>();
+  // Notification rows open a provider-started turn at their first response.
+  let pendingProviderBoundary: { readonly messageIndex: number } | undefined;
+  const openTurn = (backendTurnId: string, messageIndex: number, taskNotificationBoundary: boolean): MutableTurn => {
+    if (seenTurnIds.has(backendTurnId)) {
+      throw new ClaudeHistoryProjectionError("claude_history_invalid");
+    }
+    seenTurnIds.add(backendTurnId);
+    orderedBackendTurnIds.push(backendTurnId);
+    return {
+      backendTurnId,
+      orderedBackendItemIds: [],
+      completionCorrelations: [],
+      toolItemIdByNativeId: new Map(),
+      unresolvedToolIds: new Set(),
+      nativeMessageStartIndex: messageIndex,
+      userMessageOrdinal,
+      taskNotificationBoundary,
+      sourceOrder: 0,
+    };
+  };
 
   const finishTurn = (): void => {
     if (!current) return;
@@ -600,6 +632,19 @@ function buildTimeline(
   };
 
   for (const [messageIndex, message] of messages.entries()) {
+    const liveProviderBoundary = message.type === "system"
+      ? authentication?.providerTurnBoundaries?.get(message.uuid) : undefined;
+    if (liveProviderBoundary !== undefined) {
+      pendingProviderBoundary = undefined;
+      // A live marker can follow its own provider rows only after a merge;
+      // provider history already opened that turn.
+      const backendTurnId = providerTurnId(message.sessionId, liveProviderBoundary);
+      if (!seenTurnIds.has(backendTurnId)) {
+        finishTurn();
+        current = openTurn(backendTurnId, messageIndex, false);
+      }
+      continue;
+    }
     if (!message.mainThread || message.type === "system") continue;
     const content = parseMessageContent(message.message, message.type);
     if (current && isInterruptionMarker(message, content, authentication?.isApplicationInputOperation)) {
@@ -607,7 +652,17 @@ function buildTimeline(
       current.lastRetainedMessageUuid = message.uuid;
       continue;
     }
+    if (!current && pendingProviderBoundary && isInterruptionMarker(message, content, authentication?.isApplicationInputOperation)) {
+      // Stopped before its first response: no chat turn, as before.
+      pendingProviderBoundary = undefined;
+      continue;
+    }
     const taskNotification = isTaskNotification(message, content);
+    if (taskNotification) {
+      finishTurn();
+      pendingProviderBoundary ??= { messageIndex };
+      continue;
+    }
     const forkBoundaryOperationId =
       message.type === "user" &&
       content.length === 1 &&
@@ -636,36 +691,30 @@ function buildTimeline(
     // A pending enqueue is not evidence that a user message belongs to it.
     const joinsCurrent = startsTurn && current !== undefined && steerRoot !== undefined &&
       steerRoot !== null && current.completionCorrelations.includes(steerRoot);
-    if (startsTurn && !joinsCurrent) finishTurn();
-    if (!current) {
-      const backendTurnId = stableId(
-        "claude-turn",
-        `${message.sessionId}\0${message.uuid}`,
-      );
-      if (seenTurnIds.has(backendTurnId)) {
-        throw new ClaudeHistoryProjectionError("claude_history_invalid");
-      }
-      seenTurnIds.add(backendTurnId);
-      orderedBackendTurnIds.push(backendTurnId);
-      current = {
-        backendTurnId,
-        orderedBackendItemIds: [],
-        completionCorrelations: [],
-        toolItemIdByNativeId: new Map(),
-        unresolvedToolIds: new Set(),
-        nativeMessageStartIndex: messageIndex,
-        userMessageOrdinal,
-        taskNotificationBoundary: taskNotification,
-        sourceOrder: 0,
-      };
+    if (startsTurn && !joinsCurrent) {
+      finishTurn();
+      pendingProviderBoundary = undefined;
     }
+    if (!current && pendingProviderBoundary && message.type === "assistant") {
+      current = openTurn(
+        providerTurnId(message.sessionId, message.assistantMessageId ?? message.uuid),
+        pendingProviderBoundary.messageIndex,
+        true,
+      );
+      pendingProviderBoundary = undefined;
+    }
+    current ??= openTurn(
+      stableId("claude-turn", `${message.sessionId}\0${message.uuid}`),
+      messageIndex,
+      false,
+    );
     current.lastRetainedMessageUuid = message.uuid;
 
     if (message.type === "user") {
       const ordinaryBlocks = content.filter(
         (block) => block.type !== "tool_result",
       );
-      if (ordinaryBlocks.length > 0 && !taskNotification) {
+      if (ordinaryBlocks.length > 0) {
         userMessages += 1;
         if (isOperationId(message.uuid)) {
           current.completionCorrelations.push(message.uuid);
