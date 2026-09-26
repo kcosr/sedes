@@ -338,6 +338,17 @@ deletes provider-native durable conversation history. Audit this close
 disposition for Pi, Codex, Claude, and Grok whenever archive or runtime
 ownership changes.
 
+Provider residency can outlive Sedes' handle, as a Claude query owned by a
+persistent sidecar service does. A backend with such residency implements the
+optional driver method `releaseConversationResidency`. Inside each thread's
+retired fence, archive calls it for a thread with a bound, enabled target. The
+method must report `busy` rather than stop outstanding provider work, and
+`busy` refuses the archive before commit. An unreachable provider is logged
+and left to the provider's own residency limit. Claude implements it through
+the persistent `retire` command, and its local worker owns no residency beyond
+the handle. Pi, Codex, and Grok omit it; retiring their handles already
+releases what they hold for the thread.
+
 If policy and preference meet, document precedence explicitly. Installation
 policy is a ceiling; principal or thread state may select only admitted values.
 Persist the complete selection needed to reproduce behavior rather than
@@ -2204,6 +2215,20 @@ where it is truthfully implemented and otherwise choose the authoritative
 newest completed turn without silently falling back to an older one. Exact
 transcript and agent-tool selectors remain completed-turn boundaries unless
 their contracts explicitly change.
+
+A backend that cannot copy history exactly through a completed turn marks that
+turn with a bounded user-facing `forkUnavailableReason`. Currently only Claude
+does so, for turns without a final answer and turns before its latest
+compaction. The turn's fork action shows the reason instead of forking. The
+normalized actor and the backend then resolve `latest_completed` to the
+newest completed turn without such a reason. That turn is recorded as the
+lineage boundary, and the newer turn stays visibly marked, so this is not a
+silent fallback.
+
+A definite fork failure that another fork of the same boundary would repeat,
+such as a deterministic history mismatch or an unsupported runtime, sets
+`forkRestart: "futile"` on its `BackendError`. The aborted result is then not
+restartable, and clients do not offer to start the same fork again.
 
 Recovery must preserve the same distinction. Completed-turn forks may be
 adopted from exact authenticated parent-and-turn evidence. An acceptance-time

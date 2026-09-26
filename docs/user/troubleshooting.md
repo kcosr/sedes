@@ -275,7 +275,15 @@ Tailscale Funnel. Follow the [Android](../operator/clients/android.md),
 **Force reset…** is the final user-authoritative escape hatch for unresolved
 Sedes-owned recovery records. Read the preview carefully.
 
-Force reset abandons only the listed local blockers. It does not:
+Force reset abandons only the listed local blockers. The preview names every
+thread it affects and, for a thread with a loaded runtime, its run state and
+background work. Resetting a thread also resets its unfinished forks, but
+resetting a fork does not reset its source or sibling forks. Pending approvals
+and questions it abandons are answered as denied at the provider.
+
+When the preview warns that running work will stop, force reset replaces those
+loaded runtimes, which stops their running turns and background work.
+Otherwise force reset does not:
 
 - stop provider work;
 - delete provider history;

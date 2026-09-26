@@ -33,6 +33,30 @@ discovery may identify and quarantine the correlated native child, but it does
 not adopt that child or import it as an unrelated thread, and it never repeats
 the fork RPC. The user can abandon the unresolved Sedes child.
 
+Startup recovery runs after the server begins listening. It retries only
+attempts a crash interrupted, those still `prepared` or whose provider call had
+started, and logs each outcome. It never aborts a fork: a definite failure it
+finds becomes a visible recovery. Attempts already awaiting recovery wait for
+the user.
+
+An explicit recovery aborts the reservation only on a definite failure, one
+that did not cross the provider submission boundary. On an attempt already
+awaiting recovery, a retryable definite failure keeps the recovery instead,
+because an earlier call may already have created the child. Every failure is
+logged with its backend code and cause. The aborted result carries the
+backend's diagnostic and a `restartable` flag. The flag is false when the
+backend marked the failure futile (`forkRestart: "futile"`), because another
+fork of the same boundary would fail the same way, and the UI then does not
+offer **Start a new fork**.
+
+**Discard this fork** abandons an unfinished fork explicitly without repeating
+its provider call. It is offered while no provider child identity has been
+returned and the creation is not in flight. It removes the reserved child thread
+and publishes the replacement snapshot. An aborted or discarded fork keeps its
+application-reserved native child identity, and discovery never imports a
+provider conversation with that identity, so an orphaned provider child cannot
+reappear under the source's title.
+
 Provider markers and native IDs stay private. The browser sees normalized
 lineage and transcript history but cannot supply or edit provider ancestry.
 
@@ -58,7 +82,10 @@ Codex additionally advertises `latest_provider_snapshot`. Its native
 acceptance. This boundary is recorded as `provider_snapshot_at_acceptance` with
 a nullable application `sourceTurnId`; Sedes does not mislabel it as one exact
 completed normalized turn. Pi and Claude do not advertise snapshot semantics,
-so their generic fork action resolves the newest completed turn. The agent
+so their generic fork action resolves the newest completed turn. A backend may
+mark individual completed turns unforkable with a user-facing
+`forkUnavailableReason`; the fork button, the turn's fork capability, and
+latest-completed resolution all skip such turns. The agent
 `thread.fork` tool remains an exact completed-turn operation. Grok does not
 advertise fork capability, so both browser and agent-tool fork requests fail
 closed before any native operation.
@@ -67,7 +94,7 @@ closed before any native operation.
 | --- | --- |
 | Pi | Exact selected completed turn; idle-only latest-completed selection. |
 | Codex | Exact selected completed turn and atomic latest-provider snapshot. |
-| Claude | Exact selected completed turn while idle; idle-only latest-completed selection. |
+| Claude | Exact selected completed turn while idle with no background work; idle-only latest-completed selection that skips unforkable turns. |
 | Grok | Intentionally unsupported. |
 
 Cross-backend review requirements are defined in

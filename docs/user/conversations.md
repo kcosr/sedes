@@ -413,13 +413,25 @@ Provider capabilities determine when forking is available:
 
 - Pi and Codex can fork an explicitly selected completed turn while later
   source work is active.
-- Claude exact-turn forks require the source to be idle.
+- Claude forks require the source to be idle, with no background agents or
+  commands still running in it. Some Claude turns cannot be forked at, such as
+  a turn that ended without a final answer or one before Claude compacted the
+  conversation; the turn's fork action shows why.
 - Generic **Fork** may use a provider-supported latest snapshot; otherwise it
   uses the newest eligible completed turn.
 
 A child inherits eligible settings and records its source lineage. Detaching or
 reattaching its sidebar lineage changes organization, not history. Grok does
 not currently offer native fork support.
+
+A Claude fork of an earlier turn can include background work that had not
+finished by that turn. That work keeps running only in the source. The child
+shows a notice saying so, and any results appear in the source thread.
+
+If a fork fails or needs recovery, its thread explains why. **Recover fork** retries
+the same fork. **Discard this fork** removes the unfinished fork without
+retrying it; confirm with **Discard fork**. **Start a new fork** appears only
+when another attempt could succeed.
 
 ## Respond to approvals and questions
 

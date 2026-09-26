@@ -54,6 +54,20 @@ epoch, replays retained events, and restores the live stream. Native provider
 history remains authoritative after a service restart; retained transport
 events are recovery evidence, not an alternative transcript store.
 
+A remote query stays resident only while it can be useful. Main evicts a
+handle that fails or whose projection is invalidated, and the host retires that
+query once its events are acknowledged and nothing is outstanding, so reopening
+the thread starts a fresh query instead of requiring a backend restart. The host
+keeps the admission journal of up to 256 queries it retired after a failure, so
+submission reconciliation still resolves their inputs. A query detached for 30
+minutes with nothing outstanding (no admitted or running input, no Claude
+activity or background work, no unacknowledged event, and no unanswered
+permission) is retired and resumes on demand. Archiving a thread whose runtime
+is not loaded retires its query by session through the `retire` command, and
+the archive is refused while that query still has outstanding work. The host
+holds at most 32 sessions and fork launches together; an open beyond that is a
+retryable overload whose message names the limit.
+
 Connected replay is reclaimed incrementally instead of waiting for the entire
 foreground turn to finish. Exact unacknowledged events stay in the delivery
 journal. Fully acknowledged, completely framed streams can be replaced by their
@@ -687,15 +701,97 @@ turn. Sedes reserves the child first, resumes the selected provider prefix, and
 records native lineage without sending a synthetic follow-up prompt.
 
 The generic thread **Fork** action resolves the newest completed turn while the
-source is idle and records `completed_turn_inclusive`. Transcript and agent-tool
-forks continue to select an exact completed turn. Claude does not advertise
-`latest_provider_snapshot`.
+source is idle and records `completed_turn_inclusive`. It skips completed turns
+that carry a `forkUnavailableReason`, so it never picks a turn Claude cannot
+fork at. Transcript and agent-tool forks continue to select an exact completed
+turn. Claude does not advertise `latest_provider_snapshot`.
 
-Attachment-ended structured-output turns remain unforkable. File-history and
-attachment fidelity across a native fork are not guaranteed. Historical
-authenticated boundary carriers remain hidden when older sessions are read.
-Skill correlation crosses the fork only through the verified native UUID remap
-described above.
+The projector marks a completed turn unforkable, with a user-facing reason, when
+it has no fork checkpoint: it ended without a final answer (for example on a
+tool result or an attachment-ended structured output), it precedes the latest
+compaction, or it is only a compaction summary. The reason travels as
+`forkUnavailableReason` on the backend and normalized turn, and the fork button
+and the fork service both honor it. File-history and attachment fidelity
+across a native fork are not guaranteed. Historical authenticated boundary
+carriers remain hidden when older sessions are read. Skill correlation crosses
+the fork only through the verified native UUID remap described above.
+
+### Background work and the fork gate
+
+A fork copies native history only. Background agents and commands keep running
+in the source, and the child would be told they never finished. Branching is
+therefore unavailable, with an actionable reason, while the handle's background
+activity is unknown or non-empty, while a background result is still being
+recorded, or while Claude reports a session state other than `idle`. The
+capability revision includes the blocker, so the fork button updates as soon as
+background work settles.
+
+A historical boundary may still name background tasks that never reported a
+terminal notification before the checkpoint. When Claude resumes that prefix,
+it appends a transcript-only `<task-notification>` row for each such task,
+telling the model it did not finish. Sedes allows the fork, records those row
+UUIDs as child evidence, and shows one warning notice in the child: the work was
+not carried into the fork, and its results, if any, are in the source thread.
+The notification rows themselves are not projected as provider turn boundaries.
+
+### Launch
+
+The fork is one locked-down, one-shot Claude Code launch:
+`resume` the source at the exact retained leaf with `forkSession` into the
+reserved child UUID. The launch loads no setting sources, disables all hooks,
+uses a strict empty MCP configuration and no tools, and runs in `default`
+permission mode with a callback that denies and interrupts every tool request.
+It never sets `CLAUDE_CODE_RESUME_SOURCE_ALIVE`. The query sends only Sedes'
+`shouldQuery: false` startup message, so Claude writes the copied prefix, any
+unfinished-task notifications, and its startup row without a model request.
+Any assistant or stream event means Claude began a turn anyway: the launch is
+closed at once and fails with `claude_fork_launch_started_turn`, and with no
+tools, hooks, or MCP servers the turn cannot act meanwhile. The launch confirms
+the child's frozen model and the `default` permission mode, applies the frozen
+effort, then closes and waits for proven process cleanup. The child's own
+permission mode is applied later by its first ordinary query.
+
+Launch failures are classified before they reach the fork service:
+
+- `claude_fork_launch_refused*`: no Claude Code process started (unsupported
+  version, missing login, unavailable runtime, or the persistent host's
+  32-session capacity). Nothing was created.
+- settings or effort mismatch, a started turn, or another failure after launch
+  with proven cleanup: Sedes checks whether the child transcript exists and,
+  if so, verifies it as below before failing. Deterministic failures are
+  marked non-restartable, so the UI does not offer to start the same fork again.
+- `claude_fork_launch_cleanup_unproven` or a failure without a classification:
+  the outcome is unknown and the fork stays in recovery.
+
+On a persistent runtime, the `fork` command runs the launch inside the host
+with an empty admitted environment and never registers the child as an
+attachable session. `open` rejects fork launches, and reads of a child are
+refused while its launch is still running. The child is attached later like any
+other session.
+
+### Verification and child evidence
+
+The child's history must start with an exact content copy of the retained
+prefix, compared by a content fingerprint that ignores per-session row UUIDs.
+After the prefix, only two kinds of rows are accepted, each by exact shape:
+a task notification for a task the prefix launched and never saw finish, and
+Claude's `<synthetic>` "No response requested." row. At most 256 rows may
+follow the prefix. Anything else fails with `claude_fork_history_mismatch`,
+whose diagnostic names the expected and found counts and the first differing
+source and child UUIDs. A mismatched child is never adopted. When the mismatch
+is found on a retry, the message says an earlier attempt already created the
+child.
+
+On adoption, Sedes records provider-private child evidence in
+`claude_fork_children`: the fork operation, the positional map from child to
+source turns in `claude_fork_inherited_turns`, and the omitted-task rows in
+`claude_fork_omitted_tasks`. The child's usage projection inherits the source
+turns' usage by that map, and terminal receipts for inherited turns are copied.
+A task receipt is copied only when its terminal evidence is inside the prefix:
+a task notification naming it, or the ordinary result of a launch that did not
+ask to run in the background. Tasks Claude reported unfinished are never
+carried. Replaying the same evidence is idempotent; different evidence for the
+same child fails with `claude_fork_child_evidence_conflict`.
 
 Claude Code resumes a compacted conversation only from its latest compaction.
 `--resume-session-at` a row before it fails with "No message found", as
@@ -745,6 +841,20 @@ event was acknowledged. Thread reset detaches the presentation; it does not
 replace the remote owner. Use the confirmed backend Stop/Restart flow to review
 and abandon unresolved outcomes when necessary. Ordinary reattachment never
 replays an uncertain input or discards unknown background work.
+
+Force reset answers every pending Claude permission or question it abandons
+with a provider-side cancel, which Claude receives as a denial, and waits up to
+10 seconds for those answers before it replaces the runtime. A remote query
+therefore does not stay blocked on a prompt no client can answer.
+
+A fork failure is definite when it proves no child exists (a refused launch) or
+that the child is unusable (a history mismatch, a settings or effort mismatch,
+or a launch that started a turn). An explicit recovery then aborts the
+reservation, and deterministic failures set `forkRestart: "futile"`, so the UI
+does not offer to start the same fork again. An unproven launch cleanup, an
+unclassified failure, or a failed read of the child keeps the fork in recovery.
+The generic recovery, discard, and discovery rules are in
+[Native fork lineage](../native-fork-lineage.md#creation-and-recovery).
 
 Sidecar wire v10 fences older attachment/send response shapes and workers that
 cannot carry native steering priority before connecting to a retained runtime. Busy incompatible services require the existing explicit

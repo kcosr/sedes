@@ -13,8 +13,13 @@
 
 - Sidecars must use runtime protocol 14, which reads Claude history through the
   transcript's true tip and across automatic compactions, and reports
-  transcript presence. Upgrade existing sidecars explicitly before
-  reconnecting with this server version.
+  transcript presence. It also runs Claude forks as one-shot launches and
+  retires remote Claude queries by session. Upgrade existing sidecars
+  explicitly before reconnecting with this server version.
+
+- Browser and packaged clients must use client protocol 123, which carries
+  per-turn fork availability, restartable fork aborts, the **Discard this
+  fork** action, and the affected threads in the force reset preview.
 
 - Sidecars must use runtime protocol 13, which serves `sedes mcp` and accepts
   Claude's Native agent-tool entry. Upgrade existing sidecars explicitly
@@ -91,6 +96,44 @@
   applies sidecar events without one acknowledgement round trip each.
 
 ### Fixed
+
+- Create Claude forks with one locked-down Claude Code launch. It loads no
+  settings, hooks, MCP servers, or tools and denies any permission request.
+  It no longer uses the thread's permission mode, so it cannot act for the
+  child. A launch that starts a model turn is stopped and fails. Launch
+  failures are classified: a refused launch creates nothing, and a
+  deterministic failure is not offered as **Start a new fork**.
+
+- Withhold Claude forking while background agents or commands still run in the
+  source, with a reason on the fork action. A fork of an earlier turn whose
+  background work had not finished is allowed; its child shows that the work
+  was not carried over, instead of failing verification. Each turn Claude
+  cannot fork at shows why, and generic **Fork** picks the newest turn Claude
+  can fork at.
+
+- Claude fork children inherit the source turns' usage and terminal results,
+  and copy background task results only when the copied history shows them
+  finished. Migration 117 records this child evidence.
+
+- Log every fork failure with its backend code and cause. A retry that fails
+  transiently keeps the fork recoverable instead of discarding a child an
+  earlier attempt may have created. Startup fork recovery runs after the
+  server listens, retries only forks a crash interrupted, and never discards
+  one. Aborted and discarded forks keep their reserved provider identity, so
+  discovery never imports an orphaned fork child under the source's title
+  (migration 116). Add **Discard this fork** to abandon an unfinished fork.
+
+- Scope **Force reset** to the thread it starts from and its unfinished forks.
+  Resetting a fork no longer resets its source and sibling forks or stops the
+  source's running turn. The preview names each affected thread with its run
+  state and background work, and abandoned approvals and questions are
+  answered as denied at the provider.
+
+- Release remote Claude queries that are no longer useful. A failed query is
+  retired once its output is delivered, so reopening the thread no longer
+  needs a backend restart. A query detached for 30 minutes with nothing
+  outstanding is retired, and archiving a thread retires its query. Hitting
+  the sidecar's 32-session limit reports the limit and how to free sessions.
 
 - Read Claude history through the transcript's newest row. After a resume,
   history no longer stops at an earlier parallel tool call, forks from such

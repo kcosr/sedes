@@ -3,7 +3,9 @@ import { z } from "zod";
 
 // Wire v14 requires a sidecar whose Claude runtime reads native history through
 // the transcript's true tip and reports transcript presence; main's submission
-// reconciliation, fork verification, and resume decisions rely on both (v13
+// reconciliation, fork verification, and resume decisions rely on both. Its
+// persistent Claude runtime also runs forks as one-shot locked-down `fork`
+// launches, retires idle queries by session, and rejects fork `open`s (v13
 // added `sedes mcp` and the Native agent-tool MCP entry, v12 bounded Claude
 // history pages). Older persistent services must go through upgrade handling
 // before attachment.

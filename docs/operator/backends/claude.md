@@ -185,6 +185,17 @@ operator-tunable Claude session policy. Claude Code and its SDK remain
 authoritative for native conversation history. Sedes stores only its
 application overlay, recovery records, and provider-private binding metadata.
 
+A remote query that main no longer attends does not stay resident
+indefinitely. A query that failed is retired once its output is delivered,
+and reopening the thread starts a fresh one instead of requiring a backend
+restart. A query detached for 30 minutes with nothing outstanding is retired,
+and it resumes when the thread is next used. Archiving a thread retires its
+remote query, and the archive is refused while that query still has running
+work. The sidecar holds at most 32 Claude sessions, fork launches included.
+Beyond that, opening a thread or forking fails with a message naming the limit
+and asking you to archive or close idle Claude threads in that environment.
+These rules require sidecar runtime protocol 14.
+
 Remote queries can remain alive across SSH or outbound connection loss,
 connector restart, or main-server restart.
 Reconnect reattaches the existing session and recovers retained runtime events
@@ -352,8 +363,19 @@ Claude does not support:
 
 Unavailable operations are omitted from capabilities and fail closed at the
 backend boundary. Claude's generic **Fork** action resolves the newest completed
-turn only while the source is idle and records an inclusive completed-turn
-boundary. Transcript and agent-tool forks select an exact completed turn.
+turn that Claude can fork at, only while the source is idle, and records an
+inclusive completed-turn boundary. Transcript and agent-tool forks select an
+exact completed turn. A turn Claude cannot fork at shows why on its fork action.
+
+Forking also waits while Claude reports background agents or commands running in
+the source, because a fork copies history only. A fork of an earlier turn whose
+background work had not finished by that point is allowed. The child shows a
+notice that the work was not carried into it; any results are in the source.
+
+Sedes creates the fork with one short Claude Code launch that has no tools,
+hooks, MCP servers, or setting sources and denies any permission request. The
+launch does not start a model turn; if Claude starts one anyway, Sedes stops it
+and the fork fails.
 
 Claude Steer targets the conversation; it does not provide Codex’s exact-turn
 guarantee. A separate interrupt-and-send action is not exposed. Manual
@@ -397,6 +419,7 @@ workspace, and do not use sensitive files merely to validate connectivity.
 | No models or efforts are selectable                          | Confirm native initialization and catalog success, then inspect `modelPolicy`. Claude matchers use model IDs and efforts; `providerIds` are invalid.                                                                                                                                                                               |
 | Initialization times out on a healthy installation           | Investigate slow CLI startup first. If appropriate, increase `initializationTimeoutMs` within its supported one-to-120-second range; do not hide authentication or version failures with a longer timeout.                                                                                                                         |
 | The worker reports query capacity exceeded                   | The fixed 32-query worker guard indicates that too many Claude queries remain resident in one execution environment. Close or archive idle threads and inspect runtime retirement if capacity does not recover. Attaching the same native session twice is denied independently.                                                   |
+| "The remote Claude runtime already holds its maximum of 32 sessions" | The sidecar's Claude runtime holds 32 sessions and fork launches. Archive or close idle Claude threads in that environment and retry. Detached quiescent queries retire after 30 minutes on their own. A query with running background work or an unanswered permission stays resident until that work settles. |
 | A permission mode is missing                                 | Compare it with the backend `allowedModes`. `bypassPermissions` must be explicitly allowed and can never be the target default.                                                                                                                                                                                         |
 | Plan-mode tools appear or a reset command is selected        | Use a reviewed CLI/profile and keep those commands disabled. Sedes rejects `EnterPlanMode`, `ExitPlanMode`, and other reset-producing forms.                                                                                                                                                                                       |
 | An ordinary file is visible but its contents were not used   | Sedes sends the authenticated staged path, not the file body. Ask Claude to read it explicitly; native images use a separate SDK image-block path.                                                                                                                                                                                 |
@@ -404,7 +427,10 @@ workspace, and do not use sensitive files merely to validate connectivity.
 | Reopening a thread that was never sent to fails with "Session ID … is already in use" | Earlier versions launched a new session because the SDK reports no metadata for a transcript holding only the startup message. The current version resumes any existing transcript. |
 | Earlier turns disappeared, or a "This session is being continued…" message appeared as a prompt | Claude compacted the conversation automatically. Earlier versions stopped reading at the compaction. Upgrade main and any SSH or outbound sidecar to runtime protocol 14, then reload the thread. |
 | A turn shows "Claude Code stopped before this turn finished" | The Claude process running that turn was lost, and a fresh launch found the turn unfinished. Check the server, worker, or sidecar logs for the stop; resend the prompt if its work is still needed. |
-| Fork is missing                                              | The source must be idle and the boundary must be an exact successfully completed ordinary turn. Attachment-ended structured-output boundaries, turns before Claude's latest compaction, and active sources are unforkable.                                                                                                                                                   |
+| Fork is missing                                              | The source must be idle and the boundary must be an exact successfully completed ordinary turn. Attachment-ended structured-output boundaries, turns before Claude's latest compaction, and active sources are unforkable. The fork action's reason names the cause. |
+| Fork is unavailable while background work runs               | Claude reported background agents or commands still running in the source thread, or has not reported them yet. Wait for them to finish, or stop them, then fork. |
+| A fork failed or is waiting for recovery                     | The server log line `Fork <thread> creation (aborted, <code>)` or `(needs recovery, <code>)` names the failure and its cause. `claude_fork_launch_refused*` means Claude Code did not start. `claude_fork_history_mismatch` means the child's copied history differs from the selected turn, and the log names both counts and the first differing messages. Use **Recover fork** to retry, or **Discard this fork** to abandon an unfinished fork without retrying it. **Start a new fork** is not offered when the same fork would fail again. |
+| A reset thread's permission prompt disappeared               | **Force reset** answers pending prompts as denied at Claude before it replaces the runtime. Resend the request if its work is still needed. |
 
 Use [Debug diagnostics](../../developer/diagnostics.md) for safe inspection.
 Do not attach Claude credentials, complete provider payloads, or native
