@@ -11,7 +11,8 @@ export const CLAUDE_RUNTIME_WORKER_CLEANUP_PROVEN_FAILURE_EXIT_CODE = 72;
  * through ancestry while their leader or a recorded descendant is still alive.
  */
 export class ClaudeOuterProcessSupervisor {
-  readonly #processGroups = new Map<number, OwnedProcessTree>();
+  /** Registered group -> its tree, or undefined when the gate exited before registration. */
+  readonly #processGroups = new Map<number, OwnedProcessTree | undefined>();
   readonly #gracefulMilliseconds: number;
   readonly #terminateMilliseconds: number;
   readonly #killMilliseconds: number;
@@ -37,11 +38,14 @@ export class ClaudeOuterProcessSupervisor {
         throw new Error("claude_runtime_worker_process_group_registration_invalid");
       }
       // The inner worker registers a stopped, detached gate before it may exec.
+      // A gate killed before this message arrived never ran Claude and left no
+      // group; a live process that does not lead its own group is not a gate.
       const leader = readProcessEntrySync(message.processGroupId);
-      if (!leader || leader.exited || leader.processGroupId !== leader.pid) {
+      const live = leader !== undefined && !leader.exited;
+      if (live && leader.processGroupId !== leader.pid) {
         throw new Error("claude_runtime_worker_process_group_registration_invalid");
       }
-      this.#processGroups.set(message.processGroupId, new OwnedProcessTree(leader));
+      this.#processGroups.set(message.processGroupId, live ? new OwnedProcessTree(leader) : undefined);
     } else if (message.type === "process_group_unregistered") {
       if (!this.#processGroups.has(message.processGroupId) || groupExists(message.processGroupId)) {
         throw new Error("claude_runtime_worker_process_group_unregistration_invalid");
@@ -54,7 +58,7 @@ export class ClaudeOuterProcessSupervisor {
   async observe(): Promise<void> {
     if (this.#processGroups.size === 0) return;
     const table = await readProcessTable();
-    for (const tree of this.#processGroups.values()) tree.observe(table);
+    for (const tree of this.#processGroups.values()) tree?.observe(table);
   }
 
   close(): Promise<void> {
@@ -62,7 +66,7 @@ export class ClaudeOuterProcessSupervisor {
   }
 
   async #closeAll(): Promise<void> {
-    const trees = [...this.#processGroups.values()];
+    const trees = [...this.#processGroups.values()].filter((tree) => tree !== undefined);
     // The inner worker already had a graceful EOF opportunity before the
     // outer close path. Preserve one short observation phase for an in-flight
     // unregister before taking authority away from it.

@@ -440,13 +440,35 @@ describeWithProcessTable("Claude outer process supervisor descendant sessions", 
     );
   });
 
-  it("refuses to register a process that is not a live group leader", () => {
-    const supervisor = new ClaudeOuterProcessSupervisor();
-    expect(() => supervisor.accept({
-      type: "process_group_registered",
-      token: "t".repeat(43),
-      processGroupId: 2_147_483_646,
-    })).toThrow("claude_runtime_worker_process_group_registration_invalid");
+  it("refuses a live non-leader and accepts a gate that exited before registration", async () => {
+    const member = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
+    try {
+      await waitUntil(() => processAlive(member.pid!), 2_000);
+      const supervisor = new ClaudeOuterProcessSupervisor({
+        gracefulMilliseconds: 25,
+        terminateMilliseconds: 25,
+        killMilliseconds: 100,
+      });
+      expect(() => supervisor.accept({
+        type: "process_group_registered",
+        token: "t".repeat(43),
+        processGroupId: member.pid!,
+      })).toThrow("claude_runtime_worker_process_group_registration_invalid");
+      supervisor.accept({
+        type: "process_group_registered",
+        token: "t".repeat(43),
+        processGroupId: 2_147_483_646,
+      });
+      supervisor.accept({
+        type: "process_group_unregistered",
+        token: "t".repeat(43),
+        processGroupId: 2_147_483_646,
+      });
+      await expect(supervisor.close()).resolves.toBeUndefined();
+      expect(processAlive(member.pid!)).toBe(true);
+    } finally {
+      member.kill("SIGKILL");
+    }
   });
 });
 
