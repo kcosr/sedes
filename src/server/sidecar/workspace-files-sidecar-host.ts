@@ -75,6 +75,7 @@ export class WorkspaceFilesSidecarHost {
     {
       readonly key: string;
       readonly promise: Promise<{ readonly rootHandle: string }>;
+      waiters: number;
     }
   >();
   readonly #captureAdmission: () => () => void;
@@ -165,7 +166,8 @@ export class WorkspaceFilesSidecarHost {
         acknowledged: this.#receipts.acknowledge(operationId),
       }),
       rootValidate: (request) => this.#guard(() => this.#rootValidate(request)),
-      rootOpen: (request) => this.#guard(() => this.#rootOpen(request)),
+      rootOpen: (request, context) =>
+        this.#guard(() => this.#rootOpen(request, context.signal)),
       rootClose: (request) =>
         this.#guard(() => this.#rootClose(request.rootHandle)),
       list: (request, context) =>
@@ -520,25 +522,49 @@ export class WorkspaceFilesSidecarHost {
       "primary" | "supplemental" | "linked_worktree" | "link_only";
     readonly declaredPath: string;
     readonly policyRootPath: string;
-  }): Promise<{ readonly rootHandle: string }> {
+  }, signal: AbortSignal): Promise<{ readonly rootHandle: string }> {
     const key = JSON.stringify(request);
-    const pending = this.#opening.get(request.admissionId);
-    if (pending) {
-      if (pending.key !== key)
+    let opening = this.#opening.get(request.admissionId);
+    if (opening) {
+      if (opening.key !== key)
         throw new SidecarOperationError("sidecar_root_admission_mismatch");
-      return await pending.promise;
+    } else {
+      if (this.#opening.size >= 1024)
+        throw new SidecarOperationError(
+          "sidecar_workspace_admission_capacity",
+          true,
+        );
+      const admission: {
+        readonly key: string;
+        promise: Promise<{ readonly rootHandle: string }>;
+        waiters: number;
+      } = { key, promise: Promise.resolve({ rootHandle: "" }), waiters: 0 };
+      admission.promise = this.#rootOpenAdmitted(request).then((result) => {
+        // Every request for this admission stopped waiting, so no client can
+        // learn or close the handle; release it instead of filling the table.
+        if (admission.waiters === 0 && this.#roots.has(result.rootHandle)) {
+          this.#rootClose(result.rootHandle);
+        }
+        return result;
+      });
+      this.#opening.set(request.admissionId, admission);
+      opening = admission;
     }
-    if (this.#opening.size >= 1024)
-      throw new SidecarOperationError(
-        "sidecar_workspace_admission_capacity",
-        true,
-      );
-    const promise = this.#rootOpenAdmitted(request);
-    this.#opening.set(request.admissionId, { key, promise });
+    const current = opening;
+    current.waiters += 1;
+    let waiting = true;
+    const abandon = () => {
+      if (!waiting) return;
+      waiting = false;
+      current.waiters -= 1;
+    };
+    signal.addEventListener("abort", abandon, { once: true });
+    if (signal.aborted) abandon();
     try {
-      return await promise;
+      return await current.promise;
     } finally {
-      if (this.#opening.get(request.admissionId)?.promise === promise)
+      signal.removeEventListener("abort", abandon);
+      if (this.#opening.get(request.admissionId) === current)
         this.#opening.delete(request.admissionId);
     }
   }
