@@ -23,7 +23,9 @@ import {
 } from "../../src/server/backends/codex/codex-c1-protocol.js";
 import { decodeCodexC2Notification } from "../../src/server/backends/codex/codex-c2-protocol.js";
 import {
+  CODEX_VIEWED_IMAGE_RESERVATION_BYTES,
   CodexHistoryProjectionError,
+  codexViewedImageItem,
   materializeCodexGeneratedImagePublications,
   projectCodexHistory as projectCodexHistoryWithScope,
   codexNativeItemCoordinate,
@@ -36,6 +38,7 @@ import {
 } from "../../src/server/backends/codex/codex-conversation-handle.js";
 import {
   MAXIMUM_MESSAGE_TEXT_BYTES,
+  MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES,
   PAYLOAD_LIMITS,
   serializedUtf8Bytes,
 } from "../../src/shared/protocol/payload.js";
@@ -53,7 +56,8 @@ import { codexContextExcerptCarrier } from "../../src/server/backends/codex/code
 import { codexTaskContextCarrier } from "../../src/server/backends/codex/codex-task-contexts.js";
 import { stagedAttachmentManifest } from "../../src/server/backends/staged-attachment-manifest.js";
 import { USER_FORK_CONTEXT_BOUNDARY_TEXT } from "../../src/server/backends/fork-context-boundary.js";
-import type { OutputArtifactPublisher } from "../../src/server/output-artifacts/contracts.js";
+import { MAXIMUM_OUTPUT_IMAGE_BYTES, type OutputArtifactPublisher } from "../../src/server/output-artifacts/contracts.js";
+import { backendConversationSnapshotSchema } from "../../src/shared/protocol/backend.js";
 
 const baseThread = {
   id: "native-thread-secret",
@@ -3709,4 +3713,133 @@ it.each(["idle", "notLoaded", "active"])("retains native Codex failure details w
   const projectedTurn = Object.values(projection.snapshot.turnsById)[0]!;
   expect(projectedTurn).toMatchObject({ status: "failed", failure: { message: { text: "Unknown model" } } });
   expect(projection.snapshot.runState).toBe(state === "active" ? "running" : "failed");
+});
+
+
+it("reserves viewed-image order positions and immutable artifact identity across rewritten native IDs", async () => {
+  const artifacts = testOutputArtifactPublisher();
+  const view: CodexThreadItem = { type: "imageView", id: "view-before-persistence", path: "/private/viewed.png" };
+  const later: CodexThreadItem = { type: "agentMessage", id: "later", text: "After viewing", phase: "final_answer", memoryCitation: null, delivery: null, questions: null };
+  const initial = projectCodexHistory(thread([turn("view-turn", [view, later])]), correlationScope(), artifacts);
+  const [pending] = initial.pendingViewedImages;
+  expect(pending).toBeDefined();
+  expect(initial.projectedItemCount).toBe(2);
+  expect(initial.reservedViewedImageBytes).toBeGreaterThan(0);
+  const textBefore = Object.values(initial.snapshot.itemsById).find(item => item.semanticKind === "assistant_message")!;
+  expect(textBefore.sourceOrder).toBe(2);
+  await artifacts.publishImage({ scope: { tenantId: "tenant-one", principalId: "principal-one" },
+    threadId: "819dd2a6-012a-45b2-ac85-469743b7f503", publicationKey: pending!.publicationKey,
+    mediaType: "image/png", bytes: Buffer.from("stored bytes"), expectedSha256: "a".repeat(64) });
+  const retained = projectCodexHistory(thread([turn("view-turn", [{ ...view, id: "view-after-persistence", path: "/missing-now.png" }, later])]), correlationScope(), artifacts);
+  expect(retained.pendingViewedImages).toEqual([]);
+  expect(retained.projectedItemCount).toBe(3);
+  expect(retained.snapshot.itemsById[textBefore.backendItemId]).toEqual(textBefore);
+  const ordered = retained.snapshot.turnsById[retained.snapshot.orderedBackendTurnIds[0]!]!.orderedBackendItemIds;
+  expect(ordered.map(id => retained.snapshot.itemsById[id]!.semanticKind)).toEqual(["notice", "image", "assistant_message"]);
+  expect(JSON.stringify(retained.snapshot)).not.toContain("/missing-now.png");
+});
+
+
+it("keeps repeated views of one path as distinct publications and withholds undelivered live children", async () => {
+  const artifacts = testOutputArtifactPublisher();
+  const views: CodexThreadItem[] = [
+    { type: "imageView", id: "first-view", path: "/private/same.png" },
+    { type: "imageView", id: "second-view", path: "/private/same.png" },
+  ];
+  const native = thread([turn("repeat-turn", views)]) as CodexThread;
+  const initial = projectCodexHistory(native, correlationScope(), artifacts);
+  expect(initial.pendingViewedImages.map(({ absolutePath }) => absolutePath)).toEqual(["/private/same.png", "/private/same.png"]);
+  expect(new Set(initial.pendingViewedImages.map(({ publicationKey }) => publicationKey)).size).toBe(2);
+  const [first] = initial.pendingViewedImages;
+  await artifacts.publishImage({ scope: { tenantId: "tenant-one", principalId: "principal-one" },
+    threadId: "819dd2a6-012a-45b2-ac85-469743b7f503", publicationKey: first!.publicationKey,
+    mediaType: "image/png", bytes: Buffer.from("first view"), expectedSha256: "d".repeat(64) });
+  const context = { scope: { tenantId: "tenant-one", principalId: "principal-one" },
+    applicationThreadId: "819dd2a6-012a-45b2-ac85-469743b7f503", outputArtifacts: artifacts,
+    verifiedPublicationKeys: new Set<string>() };
+  const live = projectCodexHistoryWithScope(native, correlationScope(), new Map(),
+    { ...context, admitsRetainedViewedImage: () => false });
+  expect(Object.values(live.snapshot.itemsById).some(item => item.semanticKind === "image")).toBe(false);
+  expect(live.pendingViewedImages.map(({ publicationKey, retained }) => [publicationKey, retained])).toEqual(
+    initial.pendingViewedImages.map(({ publicationKey }, index) => [publicationKey, index === 0]));
+  const delivered = projectCodexHistoryWithScope(native, correlationScope(), new Map(),
+    { ...context, admitsRetainedViewedImage: id => id === first!.identity.backendItemId });
+  expect(delivered.snapshot.itemsById[first!.identity.backendItemId]).toMatchObject({ semanticKind: "image", sourceOrder: 1 });
+  expect(delivered.pendingViewedImages.map(({ retained }) => retained)).toEqual([false]);
+});
+
+it("reserves enough bytes for the largest viewed-image child, its record key and turn reference", () => {
+  const native = thread([turn("largest-child", [{ type: "imageView", id: "view", path: "/private/largest.png" }])]) as CodexThread;
+  const projection = projectCodexHistory(native, correlationScope(), testOutputArtifactPublisher());
+  const [pending] = projection.pendingViewedImages;
+  const child = codexViewedImageItem(pending!.identity, {
+    artifactId: "ffffffff-ffff-4fff-bfff-ffffffffffff", mediaType: "image/jpeg",
+    byteSize: MAXIMUM_OUTPUT_IMAGE_BYTES, sha256: "f".repeat(64),
+  });
+  const turnId = pending!.identity.backendTurnId;
+  const withChild = { ...projection.snapshot,
+    itemsById: { ...projection.snapshot.itemsById, [child.backendItemId]: child },
+    turnsById: { ...projection.snapshot.turnsById, [turnId]: { ...projection.snapshot.turnsById[turnId]!,
+      orderedBackendItemIds: [...projection.snapshot.turnsById[turnId]!.orderedBackendItemIds, child.backendItemId] } } };
+  expect(backendConversationSnapshotSchema.safeParse(withChild).success).toBe(true);
+  expect(serializedUtf8Bytes(withChild) - projection.serializedSnapshotBytes)
+    .toBeLessThanOrEqual(CODEX_VIEWED_IMAGE_RESERVATION_BYTES);
+});
+
+it("reserves a viewed-image child at the native turn item ceiling before reading bytes", async () => {
+  const artifacts = testOutputArtifactPublisher();
+  const view = { type: "imageView", id: "view-at-limit", path: "/private/limit.png" };
+  const notices = Array.from({ length: CODEX_C1_MAX_ITEMS_PER_TURN - 2 }, (_, index) => ({
+    type: "contextCompaction", id: `compact-${index}`,
+  }));
+  const native = thread([turn("item-cap", [view, ...notices])]);
+  const before = projectCodexHistory(native, correlationScope(), artifacts);
+  expect(before.projectedItemCount).toBe(CODEX_C1_MAX_ITEMS_PER_TURN - 1);
+  expect(before.pendingViewedImages).toHaveLength(1);
+  // Transcript items take precedence; an unreserved view keeps only its notice.
+  const crowded = projectCodexHistory(thread([turn("item-cap", [view, ...notices,
+    { type: "contextCompaction", id: "fills-reservation" }])]), correlationScope(), artifacts);
+  expect(crowded.projectedItemCount).toBe(CODEX_C1_MAX_ITEMS_PER_TURN);
+  expect(crowded.pendingViewedImages).toEqual([]);
+  expect(() => projectCodexHistory(thread([turn("item-cap", [view, ...notices,
+    { type: "contextCompaction", id: "fills-reservation" },
+    { type: "contextCompaction", id: "one-too-many" }])]), correlationScope(), artifacts))
+    .toThrowError(expect.objectContaining({ code: "history_too_large" }));
+  await artifacts.publishImage({ scope: { tenantId: "tenant-one", principalId: "principal-one" },
+    threadId: "819dd2a6-012a-45b2-ac85-469743b7f503", publicationKey: before.pendingViewedImages[0]!.publicationKey,
+    mediaType: "image/png", bytes: Buffer.from("retained"), expectedSha256: "b".repeat(64) });
+  const after = projectCodexHistory(native, correlationScope(), artifacts);
+  expect(after.projectedItemCount).toBe(CODEX_C1_MAX_ITEMS_PER_TURN);
+  for (const [id, item] of Object.entries(before.snapshot.itemsById)) expect(after.snapshot.itemsById[id]).toEqual(item);
+});
+
+it("reserves descriptor bytes before capture while later assistant text streams at the page limit", async () => {
+  const artifacts = testOutputArtifactPublisher();
+  const context = { scope: { tenantId: "tenant-one", principalId: "principal-one" },
+    applicationThreadId: "819dd2a6-012a-45b2-ac85-469743b7f503", outputArtifacts: artifacts,
+    verifiedPublicationKeys: new Set<string>() };
+  const project = (text: string) => projectCodexHistoryWithScope(thread([turn("byte-cap", [
+    { type: "imageView", id: "view", path: "/private/bounded.png" },
+    { type: "agentMessage", id: "earlier", text: text.slice(0, Math.floor(text.length / 2)), phase: "commentary", memoryCitation: null, delivery: null, questions: null },
+    { type: "agentMessage", id: "stream", text: text.slice(Math.floor(text.length / 2)), phase: "commentary", memoryCitation: null, delivery: null, questions: null },
+  ])]) as CodexThread, correlationScope(), new Map([["byte-cap", new Set(["stream"])]]), context);
+  const baseline = project("");
+  const text = "x".repeat(MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES - baseline.serializedSnapshotBytes - baseline.reservedViewedImageBytes);
+  const before = project(text);
+  expect(before.serializedSnapshotBytes + before.reservedViewedImageBytes).toBe(MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES);
+  // A reservation that no longer fits leaves the notice instead of failing or shrinking the window.
+  const crowded = project(`${text}x`);
+  expect(crowded.pendingViewedImages).toEqual([]);
+  expect(crowded.reservedViewedImageBytes).toBe(0);
+  expect(() => project(`${text}${"x".repeat(before.reservedViewedImageBytes + 1)}`))
+    .toThrowError(expect.objectContaining({ code: "history_too_large" }));
+  await artifacts.publishImage({ scope: context.scope, threadId: context.applicationThreadId,
+    publicationKey: before.pendingViewedImages[0]!.publicationKey,
+    mediaType: "image/png", bytes: Buffer.from("retained"), expectedSha256: "c".repeat(64) });
+  const after = project(text);
+  expect(after.serializedSnapshotBytes).toBeLessThanOrEqual(MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES);
+  const streaming = Object.values(before.snapshot.itemsById).find(item => item.status === "streaming")!;
+  expect(streaming.status).toBe("streaming");
+  expect(after.snapshot.itemsById[streaming.backendItemId]).toEqual(streaming);
+  expect(Object.values(after.snapshot.itemsById).filter(item => item.semanticKind === "image")).toHaveLength(1);
 });

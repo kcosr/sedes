@@ -183,6 +183,8 @@ export interface BackendModuleRuntimeContext {
   readonly agentTools: BackendAgentToolFacade;
   /** Shared durable publication boundary for backend-produced binary output. */
   readonly outputArtifacts: OutputArtifactPublisher;
+  /** Scoped execution-file capture; consumed only by reviewed backend image-view paths. */
+  readonly viewedImageCapture: import("../output-artifacts/viewed-image-capture.js").ViewedImageCapture;
   /** Process-local issuer for exact provider-handle source bindings. */
   readonly agentToolSourceCapabilities: AgentToolSourceCapabilityIssuer;
   /** Truthful CLI reachability from this runtime's execution environment. */

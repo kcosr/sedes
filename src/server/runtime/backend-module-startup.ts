@@ -185,6 +185,7 @@ export async function initializeBackendModuleRuntimes(input: {
   readonly toolProvenanceKey: Uint8Array;
   readonly agentTools: BackendAgentToolFacade;
   readonly outputArtifacts: OutputArtifactPublisher;
+  readonly viewedImageCapture: import("../output-artifacts/viewed-image-capture.js").ViewedImageCapture;
   readonly agentToolSourceCapabilities: AgentToolSourceCapabilityIssuer;
   readonly agentToolCli: ReadonlyMap<string, AgentToolCliAvailability>;
   readonly registry: AgentBackendRegistry;
@@ -289,6 +290,7 @@ export async function initializeBackendModuleRuntimes(input: {
       toolProvenanceKey: input.toolProvenanceKey,
       agentTools: input.agentTools,
       outputArtifacts: input.outputArtifacts,
+      viewedImageCapture: input.viewedImageCapture,
       agentToolSourceCapabilities: input.agentToolSourceCapabilities,
       agentToolCli: plan.agentToolCli,
     });

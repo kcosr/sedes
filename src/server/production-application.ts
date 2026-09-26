@@ -155,6 +155,7 @@ import { WorkspaceDiffReviewService } from "./domain/workspace-diff-review-servi
 import { ComposerAttachmentBlobStore } from "./composer-attachments/blob-store.js";
 import { ComposerAttachmentService } from "./composer-attachments/service.js";
 import { ComposerAttachmentDeliveryService } from "./composer-attachments/composer-attachment-delivery-service.js";
+import { ViewedImageCaptureService } from "./output-artifacts/viewed-image-capture.js";
 import { OutputArtifactBlobStore } from "./output-artifacts/blob-store.js";
 import { OutputArtifactService } from "./output-artifacts/service.js";
 import { PiSandboxAllocationRepository } from "./pi-sandbox/pi-sandbox-allocation-repository.js";
@@ -686,6 +687,14 @@ export async function startProductionApplication(
       new WorkspaceDiffReviewRepository(database),
     );
     resources.defer("workspace file watchers", () => workspaceFiles.close());
+    const bindings = new ConversationBindingRepository(database);
+    const viewedImageCapture = new ViewedImageCaptureService({
+      artifacts: outputArtifacts, files: workspaceFiles, bindings, inventory: inventoryRepository,
+    });
+    // Capture publication and blob cleanup still use SQLite; close only after it settles.
+    resources.defer("viewed image capture", () => viewedImageCapture.close(), {
+      mode: "ownership_critical",
+    });
     const localAgentToolCli = await resolveLocalAgentToolCliAvailability({
       endpoint: `http://127.0.0.1:${config.port}`,
       inheritedPath: environment.PATH,
@@ -772,7 +781,7 @@ export async function startProductionApplication(
             instance: backendInstance(backendConfiguration.getBackend(scope, backendId)),
             connections, environmentChannel, environmentOperations: operations,
             ...(workspaceIsolation ? { workspaceIsolation } : {}),
-            toolProvenanceKey, agentTools, outputArtifacts,
+            toolProvenanceKey, agentTools, outputArtifacts, viewedImageCapture,
             agentToolSourceCapabilities: agentToolSources, agentToolCli: cli,
             ...(environmentRuntimes.get(environmentId)?.sidecarRuntime ? {
               sidecarRuntime: {
@@ -811,7 +820,6 @@ export async function startProductionApplication(
     const presentationProviders = runtimeModules.presentation;
     const actionPersistence = runtimeModules.actionPersistence;
     const discoveryPersistence = runtimeModules.discoveryPersistence;
-    const bindings = new ConversationBindingRepository(database);
     const creation = new ConversationCreationRepository(database);
     const drafts = new ConversationDraftRepository(database);
     const completion = new SubmissionCompletionRepository(database);
@@ -1167,6 +1175,7 @@ export async function startProductionApplication(
             .all(scope.tenantId, scope.principalId, runtime.instance.id) as {id: string}[];
           let operation = change;
           for (const row of rows.reverse()) {
+            viewedImageCapture.cancelThread(scope, row.id);
             const next = operation;
             operation = () => runtimes!.runWithRuntimeRetired(scope, row.id, next);
           }
@@ -2045,6 +2054,7 @@ export async function startProductionApplication(
       };
     };
     const withdrawEnvironmentRuntime = async (id: string): Promise<void> => {
+      viewedImageCapture.cancelEnvironment(scope, id);
       const current = environmentRuntimes.get(id);
       if (!current) return;
       await terminalService.detachEnvironment(scope, id);
@@ -2186,6 +2196,7 @@ export async function startProductionApplication(
             await admission.drained;
             let operation = async () => { await effect?.(); return change(); };
             for (const preview of previews.reverse()) {
+              viewedImageCapture.cancelThread(scope, preview.id);
               const next = operation;
               operation = () => runtimes!.runWithRuntimeDetached(scope, preview.id, preview.evidence, next);
             }
@@ -2208,6 +2219,7 @@ export async function startProductionApplication(
         const threadIds = selected.flatMap(id => (database!.prepare(`SELECT id FROM application_threads
           WHERE tenant_id = ? AND owner_principal_id = ? AND backend_instance_id = ? ORDER BY id`)
           .all(scope.tenantId, scope.principalId, id) as {id: string}[]).map(row => row.id));
+        for (const threadId of threadIds) viewedImageCapture.cancelThread(scope, threadId);
         let value!: Result;
         let effectSucceeded = false;
         return await runtimes!.runWithRuntimesStopped(scope, threadIds, async () => {
@@ -2585,6 +2597,7 @@ export async function startProductionApplication(
       revoke: (candidate, request) => applyPairingMutation(candidate, () => {
         const result = hostPairings.revoke(candidate, request);
         authentication.revokeConnector(result.pairing.connectorId);
+        viewedImageCapture.cancelEnvironment(candidate, result.pairing.executionEnvironmentId);
         return result;
       }),
       reapprove: (candidate, request) => applyPairingMutation(candidate, () => hostPairings.reapprove(candidate, request)),

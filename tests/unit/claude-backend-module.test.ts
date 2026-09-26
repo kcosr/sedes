@@ -216,6 +216,7 @@ describe("ClaudeBackendModule", () => {
         toolProvenanceKey: new Uint8Array(32),
         agentTools: {} as BackendModuleRuntimeContext["agentTools"],
         outputArtifacts: {} as BackendModuleRuntimeContext["outputArtifacts"],
+        viewedImageCapture: {} as BackendModuleRuntimeContext["viewedImageCapture"],
         agentToolSourceCapabilities,
         agentToolCli: {
           availability: "unavailable",
@@ -360,6 +361,7 @@ describe("ClaudeBackendModule", () => {
           toolProvenanceKey: new Uint8Array(32),
           agentTools: {} as BackendModuleRuntimeContext["agentTools"],
           outputArtifacts: {} as BackendModuleRuntimeContext["outputArtifacts"],
+          viewedImageCapture: {} as BackendModuleRuntimeContext["viewedImageCapture"],
           agentToolSourceCapabilities,
           agentToolCli: {
             availability: "unavailable",

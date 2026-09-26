@@ -79,6 +79,7 @@ export interface CodexHistoryProjection {
   readonly snapshot: BackendConversationSnapshot;
   readonly serializedSnapshotBytes: number;
   readonly projectedItemCount: number;
+  readonly reservedViewedImageBytes: number;
   readonly nativeThreadId: string;
   readonly backendTurnIdByNativeId: ReadonlyMap<string, string>;
   readonly projectedItemByNativeCoordinate: ReadonlyMap<
@@ -89,6 +90,7 @@ export interface CodexHistoryProjection {
   readonly authenticatedForkContextBoundaryNativeTurnIds: ReadonlySet<string>;
   /** Server-private durable enrichment intents; never part of normalized history. */
   readonly pendingGeneratedImages: readonly DeferredCodexGeneratedImagePublication[];
+  readonly pendingViewedImages: readonly CodexViewedImageCandidate[];
 }
 
 export interface CodexProjectedItemCoordinate {
@@ -99,6 +101,44 @@ export interface CodexProjectedItemCoordinate {
   readonly backendTurnId: string;
   readonly sourceOrder: number;
   readonly orderedBackendItemIds: readonly string[];
+}
+
+// Covers a final bounded descriptor, its record key and its turn reference.
+// Empty reserved order positions never appear as browser items.
+export const CODEX_VIEWED_IMAGE_RESERVATION_BYTES = 1_024;
+
+export interface CodexViewedImageCandidate {
+  readonly nativeTurnId: string;
+  readonly nativeItemId: string;
+  readonly identity: { readonly backendItemId: string; readonly backendTurnId: string; readonly sourceOrder: number };
+  readonly publicationKey: string;
+  readonly absolutePath: string;
+  readonly completed: boolean;
+  /** Already captured, but new to a live window; installed with its own events. */
+  readonly retained: boolean;
+}
+
+export function codexViewedImagePublicationKey(backendItemId: string): string {
+  return `codex-viewed-image:${backendItemId}`;
+}
+
+export function codexViewedImageItem(
+  identity: CodexViewedImageCandidate["identity"],
+  descriptor: OutputImageArtifactDescriptor,
+): BackendItem {
+  return {
+    ...identity,
+    ...terminalItem,
+    semanticKind: "image",
+    image: {
+      representation: "artifact",
+      artifactId: descriptor.artifactId,
+      mimeType: descriptor.mediaType,
+      byteSize: descriptor.byteSize,
+      sha256: descriptor.sha256,
+      alt: boundDisplayText("Viewed file snapshot"),
+    },
+  };
 }
 
 const MAXIMUM_CODEX_REASONING_SUMMARY_BYTES = 128 * 1_024;
@@ -214,6 +254,8 @@ export interface CodexGeneratedImageProjectionContext {
   readonly outputArtifacts: OutputArtifactPublisher;
   /** Successful publications verified within this exact handle/read pass. */
   readonly verifiedPublicationKeys: Set<string>;
+  /** Live windows admit only viewed-image children their subscribers already received. */
+  readonly admitsRetainedViewedImage?: (backendItemId: string) => boolean;
 }
 
 export interface DeferredCodexGeneratedImagePublication {
@@ -488,6 +530,7 @@ export function projectCodexHistory(
     CodexProjectedItemCoordinate
   >();
   const pendingGeneratedImages: DeferredCodexGeneratedImagePublication[] = [];
+  const pendingViewedImages: CodexViewedImageCandidate[] = [];
   let projectedItemCount = 0;
 
   for (const turn of thread.turns) {
@@ -516,6 +559,8 @@ export function projectCodexHistory(
     const orderedBackendItemIds: string[] = [];
     const completionCorrelations: string[] = [];
     let sourceOrder = 0;
+    let actualTurnItemCount = 0;
+    let reservedTurnImageCount = 0;
     for (const [nativeItemOrdinal, item] of turn.items.entries()) {
       if (boundary.itemOrdinals.has(nativeItemOrdinal)) continue;
       let authenticatedClientUserMessageId: string | undefined;
@@ -546,7 +591,8 @@ export function projectCodexHistory(
         throw new CodexHistoryProjectionError("codex_history_invalid");
       }
       itemCoordinates.add(coordinate);
-      const projected = projectCodexItemSlice(
+      const itemSourceOrder = sourceOrder;
+      let projected = projectCodexItemSlice(
         thread.id,
         turn,
         item,
@@ -560,10 +606,37 @@ export function projectCodexHistory(
         generatedImages,
         pendingGeneratedImages,
       );
-      sourceOrder += projected.length;
+      const retained = item.type === "imageView" && projected.length === 2 &&
+        generatedImages.admitsRetainedViewedImage?.(projected[1]!.backendItemId) === false;
+      if (retained) projected = projected.slice(0, 1);
+      sourceOrder += item.type === "imageView" ? 2 : projected.length;
+      actualTurnItemCount += projected.length;
       projectedItemCount += projected.length;
-      if (sourceOrder > CODEX_C1_MAX_ITEMS_PER_TURN) {
+      if (actualTurnItemCount > CODEX_C1_MAX_ITEMS_PER_TURN) {
         throw new CodexHistoryProjectionError("history_too_large");
+      }
+      if (item.type === "imageView" && projected.length === 1) {
+        const identity = {
+          backendItemId: hashedId("item", thread.id, turn.id, String(nativeItemOrdinal), item.type, "image"),
+          backendTurnId,
+          sourceOrder: itemSourceOrder + 1,
+        };
+        pendingViewedImages.push({
+          identity,
+          nativeTurnId: turn.id,
+          nativeItemId: item.id,
+          publicationKey: codexViewedImagePublicationKey(identity.backendItemId),
+          absolutePath: item.path,
+          completed: !(streamingNativeItems.get(turn.id)?.has(item.id) ?? false),
+          retained,
+        });
+        reservedTurnImageCount += 1;
+      }
+      // Transcript items take precedence; an unreserved view keeps only its notice.
+      while (reservedTurnImageCount > 0 &&
+          actualTurnItemCount + reservedTurnImageCount > CODEX_C1_MAX_ITEMS_PER_TURN) {
+        pendingViewedImages.pop();
+        reservedTurnImageCount -= 1;
       }
       for (const backendItem of projected) {
         if (
@@ -585,7 +658,7 @@ export function projectCodexHistory(
         nativeOrdinal: nativeItemOrdinal,
         itemType: item.type,
         backendTurnId,
-        sourceOrder: sourceOrder - projected.length,
+        sourceOrder: itemSourceOrder,
         orderedBackendItemIds: projected.map(
           ({ backendItemId }) => backendItemId,
         ),
@@ -628,6 +701,14 @@ export function projectCodexHistory(
   if (provisionalSnapshotBytes > MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES) {
     throw new CodexHistoryProjectionError("history_too_large");
   }
+  // Reserve each eventual child's bounded bytes before admitting a capture.
+  // Previews never shrink or fail a projection; without capacity for every
+  // eventual child, this pass admits no capture and keeps the notices.
+  if (provisionalSnapshotBytes + pendingViewedImages.length * CODEX_VIEWED_IMAGE_RESERVATION_BYTES >
+      MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES) {
+    pendingViewedImages.length = 0;
+  }
+  const reservedViewedImageBytes = pendingViewedImages.length * CODEX_VIEWED_IMAGE_RESERVATION_BYTES;
   try {
     const validatedCandidate =
       backendConversationSnapshotSchema.parse(candidate);
@@ -640,12 +721,14 @@ export function projectCodexHistory(
       snapshot,
       serializedSnapshotBytes,
       projectedItemCount,
+      reservedViewedImageBytes,
       nativeThreadId: thread.id,
       backendTurnIdByNativeId,
       projectedItemByNativeCoordinate,
       authenticatedForkContextBoundaryOperationIds,
       authenticatedForkContextBoundaryNativeTurnIds,
       pendingGeneratedImages: Object.freeze(pendingGeneratedImages),
+      pendingViewedImages: Object.freeze(pendingViewedImages),
     });
   } catch (error) {
     if (error instanceof CodexHistoryProjectionError) throw error;
@@ -1044,8 +1127,21 @@ export function projectCodexItemSlice(
           ),
         },
       ];
-    case "imageView":
-      return [notice(base(), "Codex viewed a local image.", "neutral")];
+    case "imageView": {
+      const viewed = notice(base(), "Codex viewed a local image.", "neutral");
+      const identity = base("image", 1);
+      // A retained snapshot is authoritative even when the source no longer exists.
+      try {
+        const existing = generatedImages.outputArtifacts.findImage(
+          generatedImages.scope,
+          generatedImages.applicationThreadId,
+          codexViewedImagePublicationKey(identity.backendItemId),
+        );
+        return existing ? [viewed, backendItemSchema.parse(codexViewedImageItem(identity, existing))] : [viewed];
+      } catch {
+        return [viewed];
+      }
+    }
     case "sleep":
       return [
         {
