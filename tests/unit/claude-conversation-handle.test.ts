@@ -4580,6 +4580,11 @@ describe("Claude native run state without prompt echoes", () => {
     expect(events.filter(event => event.type === "run_state_changed").at(-1)).toMatchObject({
       state: "running", activeBackendTurnId: notificationTurnId });
     provider.messages.push(nativeFrames.text("msg-notified", "The agents finished."));
+    // An empty drain receipt for a coalesced notification does not end it.
+    provider.messages.push(nativeFrames.result([], { origin: { kind: "task-notification" }, num_turns: 0, result: "" }));
+    provider.messages.push(nativeFrames.state("running"));
+    await vi.waitFor(() => expect(handle.retirementBlocked).toBe(true));
+    expect((await projectionSnapshot(handle)).runState).toBe("running");
     provider.messages.push(nativeFrames.result([], { origin: { kind: "task-notification" } }));
     await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
     const live = await projectionSnapshot(handle);

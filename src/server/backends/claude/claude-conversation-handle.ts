@@ -1638,7 +1638,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
     // A turn Claude started itself carries no Sedes input identity. Its result
     // ends that turn without writing a receipt for any application turn.
     if (this.#providerTurn && correlatedIds.length === 0) {
-      this.#endProviderTurn(message.origin);
+      // Coalesced notification drains emit empty zero-turn receipts first.
+      if (!claudeResultIsUnrelated(message, [])) this.#endProviderTurn(message.origin);
       return;
     }
     const activeId = this.#activeBackendTurnId();
@@ -1706,6 +1707,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
           });
           if (!existing) throw error;
           settledStatus = existing.status;
+          console.warn("claude_terminal_receipt_conflict_kept_first", {
+            keptStatus: existing.status, conflictingStatus: terminalStatus,
+          });
           this.#onError(error);
         }
         this.#refreshProjection();
