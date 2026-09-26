@@ -3925,6 +3925,30 @@ describe("Claude outstanding background activity and subagent bookends", () => {
     await reopened.close();
   });
 
+  it("names each background task Claude reports orphaned by the previous session, and only those", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    provider.messages.push(started());
+    // A resumed Claude reports work the previous process left unfinished.
+    provider.messages.push(system({ subtype: "task_notification", task_id: "child", tool_use_id: "agent-launch",
+      status: "stopped", reason: "worker_restart", output_file: "/private", summary: "Private summary text" }));
+    provider.messages.push(system({ subtype: "task_notification", task_id: "unrecorded-shell",
+      status: "stopped", reason: "worker_restart", output_file: "/private", summary: "Private summary text" }));
+    provider.messages.push(system({ subtype: "task_notification", task_id: "stopped-by-user",
+      status: "stopped", output_file: "/private", summary: "Private summary text" }));
+    await vi.waitFor(() => expect(events.filter(event => event.type === "notice")).toHaveLength(2));
+    const notices = events.flatMap(event => event.type === "notice" ? [event.notice] : []);
+    expect(notices.map(notice => [notice.tone, notice.message.text])).toEqual([
+      ["warning", 'Background task "Sleep 20 seconds test" did not finish before the previous Claude session ended, and its result was not reported. Claude may restart it; check its output before relying on it.'],
+      ["warning", "Background task unrecorded-shell did not finish before the previous Claude session ended, and its result was not reported. Claude may restart it; check its output before relying on it."],
+    ]);
+    expect(JSON.stringify(notices)).not.toContain("Private summary text");
+    await handle.close();
+  });
+
   it.each(["completed", "failed", "stopped"] as const)("keeps Send independent and persists exactly one %s bookend across reopen", async status => {
     const provider = fixture();
     const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages });

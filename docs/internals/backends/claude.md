@@ -409,6 +409,13 @@ across reload; they contain no child messages, command output, or live-state
 claim. Projection requires the exact parent tool call to remain in native
 history. Replaying a receipt cannot complete the main turn again.
 
+When Claude resumes a session whose previous process left background work
+unfinished, it stops each such task with a `task_notification` whose `reason`
+is `worker_restart`, and it may relaunch the task. Sedes records the stopped
+bookend and shows a warning notice naming the task by its recorded
+description, or by its native ID, because the task's result never arrived.
+The provider's summary text is not shown.
+
 `background_tasks_changed` is the authoritative level inventory for live
 subagents, Bash commands, and other nonambient work. It maps to the shared
 generation-volatile background observation independently of lifecycle rows.

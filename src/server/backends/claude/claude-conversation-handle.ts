@@ -1352,6 +1352,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
         if (!message.ambient && !message.skip_transcript) {
           this.#consumeTaskTerminal({ nativeTaskId: message.task_id, nativeToolUseId: message.tool_use_id, status: message.status });
           this.#taskNotificationPending = true;
+          if (message.reason === "worker_restart") this.#noticeOrphanedTask(message.task_id, message.uuid);
         }
         if (this.#backgroundActivity.settleTask(message.task_id)) {
           // Reevaluate idle retirement only after the durable receipt above.
@@ -1477,6 +1478,20 @@ export class ClaudeConversationHandle implements ConversationHandle {
         submission.accept();
       }
     }
+  }
+
+  /** On resume Claude stops background work the previous process left
+   * unfinished and may relaunch it. Name each task, since its stopped bookend
+   * alone reads like an ordinary stop and its result never arrives. */
+  #noticeOrphanedTask(nativeTaskId: string, uuid: string): void {
+    const description = this.#settings.listTaskLifecycleReceipts(this.#scope, this.binding.applicationThreadId, this.binding.backendConversationId)
+      .find(receipt => receipt.nativeTaskId === nativeTaskId)?.description;
+    this.#emit({ type: "notice", notice: {
+      id: `claude-task-orphaned:${uuid}`.slice(0, 160),
+      tone: "warning",
+      message: boundDisplayText(`Background task ${description ? `"${description}"` : nativeTaskId} did not finish before the previous Claude session ended, and its result was not reported. Claude may restart it; check its output before relying on it.`),
+      createdAt: new Date(this.#now()).toISOString(),
+    } });
   }
 
   #consumeTaskTerminal(input: {

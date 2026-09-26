@@ -111,6 +111,10 @@
   fail. An automatic sidecar replacement that ends Claude work started after
   its idle check now leaves an abandonment record.
 
+- Warn, naming each task, when a resumed Claude session reports background
+  work the previous session left unfinished; its result never arrived and
+  Claude may run it again.
+
 - Show background work before it is interrupted. **Force reset…** counts the
   background agents and commands in the affected conversations, and backend
   and environment Stop, Restart, and Upgrade previews list running turns,
