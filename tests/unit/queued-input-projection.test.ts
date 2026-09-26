@@ -44,6 +44,7 @@ function queued(
     invalidStateRequeues: 0,
     nextAttemptAt: null,
     diagnostic: null,
+    failureReason: null,
     failureAcknowledgedAt: null,
     cancellationMutationId: null,
     cancellationRequestFingerprint: null,
@@ -228,6 +229,35 @@ describe("queued input projection", () => {
         later,
       ])[0],
     ).toMatchObject({ id: "later", isHead: true });
+  });
+
+  it("projects the normalized not-sent reason only on a failed item", () => {
+    const notSent = queued({
+      id: "not-sent",
+      sequence: 1,
+      state: "failed",
+      resolvedDeliveryMode: "steer",
+      resolvedSteerTarget: { kind: "conversation" },
+      requestedDeliveryMode: "steer",
+      requestedSteerTarget: { kind: "conversation" },
+      diagnostic: "Withdrawn by Stop.",
+      failureReason: "not_sent",
+    });
+    const plainFailure = queued({
+      id: "failed",
+      sequence: 2,
+      state: "failed",
+      diagnostic: "Rejected",
+    });
+    const [first, second] = projectQueuedInputSummaries([notSent, plainFailure]);
+    expect(first).toMatchObject({ id: "not-sent", failureReason: "not_sent" });
+    expect(second).not.toHaveProperty("failureReason");
+    expect(
+      projectQueuedInputSummaries([
+        { ...notSent, state: "cancelled", resolvedAt: notSent.createdAt + 1 },
+        { ...notSent, id: "pending", sequence: 3, state: "pending" },
+      ])[0],
+    ).not.toHaveProperty("failureReason");
   });
 
   it("projects durable Steer intent and its active delivery operation", () => {

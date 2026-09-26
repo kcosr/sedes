@@ -744,11 +744,11 @@ export class DatabaseThreadApplicationRecoveryReader implements ThreadApplicatio
     };
   }
 
-  async hasPendingDelivery(
+  async hasExclusivePendingSteer(
     scope: RequestScope,
     applicationThreadId: string,
   ): Promise<boolean> {
-    return this.operations.hasPendingMaterializationSteer(
+    return this.operations.hasPendingMaterializationDraftSteer(
       scope,
       applicationThreadId,
     );

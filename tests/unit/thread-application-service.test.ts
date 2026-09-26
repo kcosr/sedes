@@ -208,7 +208,7 @@ function createService(input?: {
   ) => ProviderFeatureConcurrency;
   queue?: readonly QueuedInputSummary[];
   recovery?: NonNullable<NormalizedThreadSnapshot["recovery"]>;
-  pendingDelivery?: boolean;
+  exclusivePendingSteer?: boolean;
   mutation?: (
     operation: ThreadApplicationOperation,
   ) => Promise<
@@ -421,7 +421,7 @@ function createService(input?: {
     },
     recovery: {
       read: async () => input?.recovery,
-      hasPendingDelivery: async () => input?.pendingDelivery ?? false,
+      hasExclusivePendingSteer: async () => input?.exclusivePendingSteer ?? false,
     },
     interactions: {
       listPending: () =>
@@ -504,7 +504,40 @@ describe("ThreadApplicationService", () => {
     });
   });
 
-  it("makes every composer delivery mode unavailable while Pi materialization is pending", async () => {
+  it("keeps Steer, Queue, and idle Send available while queue-owned Steers await materialization", async () => {
+    const awaiting = (id: string, sequence: number) => ({
+      id, sequence, state: "dispatching", isHead: sequence === 1,
+      origin: "user", requestedDeliveryMode: "steer", resolvedDeliveryMode: "steer",
+      deliveryMode: "steer", deliveryOperationId: `${id}-operation`,
+      preview: { text: `Steer ${sequence}` }, attachmentCount: 0, taskCount: 0,
+      createdAt: "2026-09-26T20:32:52.000Z",
+    } as const);
+    const queue = [awaiting("steer-1", 1), awaiting("steer-2", 2), awaiting("steer-3", 3)];
+    const running = await createService({
+      runState: "running",
+      includeInteraction: false,
+      deliveryModes: ["submit", "steer"],
+      steerTarget: "turn",
+      queue,
+    }).service.snapshot(scope, "thread-1");
+    expect(
+      running.capabilities.deliveryModes.map(({ id, available }) => [id, available]),
+    ).toEqual([["submit", false], ["steer", true], ["queue", true]]);
+    const idle = await createService({
+      runState: "idle",
+      includeInteraction: false,
+      deliveryModes: ["submit", "steer"],
+      steerTarget: "conversation",
+      queue,
+    }).service.snapshot(scope, "thread-1");
+    // An idle Send is admitted as queue work behind the unconfirmed Steers,
+    // which may start the next turn themselves; it never races ahead of them.
+    expect(
+      idle.capabilities.deliveryModes.find(({ id }) => id === "submit"),
+    ).toMatchObject({ available: true });
+  });
+
+  it("keeps the exclusive barrier of a legacy draft-source Steer awaiting materialization", async () => {
     const base = createService({
       runState: "running",
       includeInteraction: false,
@@ -516,7 +549,7 @@ describe("ThreadApplicationService", () => {
       includeInteraction: false,
       deliveryModes: ["submit", "steer"],
       steerTarget: "turn",
-      pendingDelivery: true,
+      exclusivePendingSteer: true,
     });
 
     const [baseSnapshot, pendingSnapshot] = await Promise.all([

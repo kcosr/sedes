@@ -1100,11 +1100,12 @@ export async function startProductionApplication(
         baseDelayMilliseconds: 1_000,
         maximumDelayMilliseconds: 60_000,
       },
-      isDispatchBlocked: (eventScope, applicationThreadId) =>
+      isDispatchBlocked: (eventScope, applicationThreadId, purpose) =>
         inventoryRepository.isWorkspaceRemoved(eventScope, inventoryRepository.getThread(eventScope, applicationThreadId).thread.workspaceId) ||
         operationRepository.hasBlockingThreadOperation(
           eventScope,
           applicationThreadId,
+          purpose,
         ),
     });
     questions = new QuestionRequestService({

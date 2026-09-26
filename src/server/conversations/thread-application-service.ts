@@ -194,7 +194,13 @@ export interface ThreadApplicationRecoveryReader {
     scope: RequestScope,
     applicationThreadId: string,
   ): Promise<NormalizedThreadRecovery | undefined>;
-  hasPendingDelivery(
+  /**
+   * A legacy draft-source Steer awaiting materialization. It keeps its
+   * exclusive barrier on every delivery mode. Queue-owned Steers awaiting
+   * materialization are ordered by the durable queue instead and leave the
+   * composer available.
+   */
+  hasExclusivePendingSteer(
     scope: RequestScope,
     applicationThreadId: string,
   ): Promise<boolean>;
@@ -467,7 +473,7 @@ export class ThreadApplicationService {
     capture: ThreadConversationCapture,
     presentationSource: "fresh" | "cached" = "fresh",
   ) {
-    const [queue, presentation, recovery, pendingDelivery] = await Promise.all([
+    const [queue, presentation, recovery, exclusivePendingSteer] = await Promise.all([
       this.#queue.list(scope, applicationThreadId),
       this.#presentation[
         presentationSource === "fresh" ? "read" : "readCached"
@@ -479,7 +485,7 @@ export class ThreadApplicationService {
           : undefined,
       ),
       this.#recovery.read(scope, applicationThreadId),
-      this.#recovery.hasPendingDelivery(scope, applicationThreadId),
+      this.#recovery.hasExclusivePendingSteer(scope, applicationThreadId),
     ]);
     const interactions = this.#interactions.listPending(
       scope,
@@ -512,7 +518,7 @@ export class ThreadApplicationService {
       backendCapabilities,
       presentation,
       recovery,
-      pendingDelivery,
+      exclusivePendingSteer,
       interactions,
       providerFeatureConcurrency: (feature, actionId) =>
         actionPersistence.providerFeatureConcurrency(feature, actionId),
@@ -536,7 +542,7 @@ export class ThreadApplicationService {
     } else if (recovery !== undefined) {
       forkSourceUnavailableReason =
         "Resolve the thread's uncertain operation before forking.";
-    } else if (pendingDelivery) {
+    } else if (exclusivePendingSteer) {
       forkSourceUnavailableReason =
         "Wait for the pending steering input to appear before forking.";
     }
@@ -801,7 +807,7 @@ function composeCapabilities(input: {
   readonly backendCapabilities: BackendCapabilityDocument;
   readonly presentation: ThreadApplicationPresentation;
   readonly recovery?: NormalizedThreadRecovery;
-  readonly pendingDelivery: boolean;
+  readonly exclusivePendingSteer: boolean;
   readonly interactions: readonly BackendInteraction[];
   readonly providerFeatureConcurrency: ThreadActionPersistenceProvider["providerFeatureConcurrency"];
   readonly historyOperational: boolean;
@@ -852,7 +858,7 @@ function composeCapabilities(input: {
     input.runState === "running" &&
     (input.backendCapabilities.steerTarget === "conversation" || input.activeTurnId !== undefined) &&
     input.recovery === undefined &&
-    !input.pendingDelivery &&
+    !input.exclusivePendingSteer &&
     input.backendCapabilities.deliveryModes.includes("steer");
   const initialSettingsReady = input.presentation.settingDescriptors
     .filter(({ requiredForFirstSubmission }) => requiredForFirstSubmission)
@@ -1074,7 +1080,7 @@ function composeCapabilities(input: {
         available &&
         !archived &&
         !snoozed &&
-        !input.pendingDelivery &&
+        !input.exclusivePendingSteer &&
         initialSettingsReady &&
         (input.inventory.thread.backingState === "unbound" ||
           (bound &&
@@ -1085,13 +1091,13 @@ function composeCapabilities(input: {
           available &&
           !archived &&
           !snoozed &&
-          !input.pendingDelivery &&
+          !input.exclusivePendingSteer &&
           initialSettingsReady &&
           (input.inventory.thread.backingState === "unbound" ||
             (bound &&
               settled &&
               input.backendCapabilities.deliveryModes.includes("submit"))),
-        input.pendingDelivery
+        input.exclusivePendingSteer
           ? "Wait for the previous steering input to appear before sending again."
           : !initialSettingsReady
             ? "Choose the required thread settings before sending."
@@ -1105,7 +1111,7 @@ function composeCapabilities(input: {
       available: steerAvailable,
       ...reason(
         steerAvailable,
-        input.pendingDelivery
+        input.exclusivePendingSteer
           ? "Wait for the previous steering input to appear before steering again."
           : "The active backend turn cannot be steered.",
       ),
@@ -1120,7 +1126,7 @@ function composeCapabilities(input: {
         !snoozed &&
         bound &&
         inFlight &&
-        !input.pendingDelivery &&
+        !input.exclusivePendingSteer &&
         backendCanSubmit &&
         initialSettingsReady &&
         input.queue.length < 500,
@@ -1130,11 +1136,11 @@ function composeCapabilities(input: {
           !snoozed &&
           bound &&
           inFlight &&
-          !input.pendingDelivery &&
+          !input.exclusivePendingSteer &&
           backendCanSubmit &&
           initialSettingsReady &&
           input.queue.length < 500,
-        input.pendingDelivery
+        input.exclusivePendingSteer
           ? "Wait for the previous steering input to appear before queueing more input."
           : !initialSettingsReady
             ? "Choose the required thread settings before queueing input."
@@ -1269,7 +1275,7 @@ function composeCapabilities(input: {
         queue: input.queue.map(({ id, state }) => [id, state]),
         interactions: input.interactions.map(({ id, kind }) => [id, kind]),
         recovery: input.recovery,
-        pendingDelivery: input.pendingDelivery,
+        exclusivePendingSteer: input.exclusivePendingSteer,
         historyOperational: input.historyOperational,
         attachmentStagingAvailable: input.attachmentStagingAvailable,
       }),

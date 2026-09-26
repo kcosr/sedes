@@ -54,6 +54,17 @@ export interface QueueEventPublisher {
   ): void;
 }
 
+/**
+ * Whether an application operation blocks provider dispatch. `steer` asks for
+ * a resolved Steer, which may be delivered while earlier queue-owned Steers
+ * await materialization; `submit` asks for ordinary work, which may not.
+ */
+export type QueueDispatchBlockCheck = (
+  scope: RequestScope,
+  applicationThreadId: string,
+  purpose: "submit" | "steer",
+) => boolean;
+
 export interface QueueDispatchClock {
   now(): number;
 }
@@ -119,10 +130,7 @@ export class QueuedInputDispatcher {
   readonly #retryPolicy: QueueRetryPolicy;
   readonly #clock: QueueDispatchClock;
   readonly #scheduler: QueueDispatchScheduler;
-  readonly #isDispatchBlocked: (
-    scope: RequestScope,
-    applicationThreadId: string,
-  ) => boolean;
+  readonly #isDispatchBlocked: QueueDispatchBlockCheck;
   readonly #threadTails = new Map<string, Promise<void>>();
   readonly #recoveryByScope = new Map<string, Promise<void>>();
   readonly #retryTimers = new Map<string, unknown>();
@@ -137,10 +145,7 @@ export class QueuedInputDispatcher {
     readonly gateway: QueuedInputConversationGateway;
     readonly publisher: QueueEventPublisher;
     readonly retryPolicy: QueueRetryPolicy;
-    readonly isDispatchBlocked: (
-      scope: RequestScope,
-      applicationThreadId: string,
-    ) => boolean;
+    readonly isDispatchBlocked: QueueDispatchBlockCheck;
     readonly clock?: QueueDispatchClock;
     readonly scheduler?: QueueDispatchScheduler;
   }) {
@@ -173,10 +178,14 @@ export class QueuedInputDispatcher {
     this.#recoveryByScope.set(key, recovery);
     void recovery
       .then(() => {
-        for (const head of this.#repository.listActiveHeads(scope)) {
-          if (head.state === "pending" && isResolvedSteer(head)) {
-            this.#scheduleRequestedSteer(scope, head);
-          }
+        const threads = new Set(
+          this.#repository
+            .listActiveHeads(scope)
+            .map(({ applicationThreadId }) => applicationThreadId),
+        );
+        for (const applicationThreadId of threads) {
+          const candidate = this.#steerCandidate(scope, applicationThreadId);
+          if (candidate) this.#scheduleRequestedSteer(scope, candidate);
         }
       })
       .catch(() => undefined);
@@ -275,12 +284,23 @@ export class QueuedInputDispatcher {
     return this.#track(async () => {
       await this.#requireRecovery(scope);
       await this.#serialize(scope, applicationThreadId, async () => {
-        const pending = this.#operations.findPendingMaterializationSteer(
+        // Several Steers may await materialization at once. Each has its own
+        // exact evidence, so reconcile every one, in queue order; one that
+        // stays unresolved does not hold back the others' outcomes.
+        for (const row of this.#repository.listSteersAwaitingMaterialization(
           scope,
           applicationThreadId,
-        );
-        if (pending?.source === "queued_input") {
-          await this.#reconcileQueuedSteer(scope, pending);
+        )) {
+          const pending = row.reconciliationToken
+            ? this.#operations.findSteer(scope, row.reconciliationToken)
+            : undefined;
+          if (
+            pending?.source === "queued_input" &&
+            pending.state === "pending_materialization" &&
+            pending.queuedInputId === row.id
+          ) {
+            await this.#reconcileQueuedSteer(scope, pending);
+          }
         }
         await this.#dispatchThread(scope, applicationThreadId);
         this.#scheduleRequestedSteerHead(scope, applicationThreadId);
@@ -501,7 +521,7 @@ export class QueuedInputDispatcher {
             };
           }
         }
-        if (this.#isDispatchBlocked(scope, applicationThreadId)) {
+        if (this.#isDispatchBlocked(scope, applicationThreadId, "steer")) {
           throw new DomainError(
             "operation_outcome_uncertain",
             "A prior operation must be reconciled before queued input can be steered.",
@@ -1259,7 +1279,13 @@ export class QueuedInputDispatcher {
     scope: RequestScope,
     applicationThreadId: string,
   ): Promise<void> {
-    if (this.#isDispatchBlocked(scope, applicationThreadId)) {
+    const steerCandidate = this.#steerCandidate(scope, applicationThreadId);
+    if (steerCandidate) {
+      this.#cancelRetryTimer(scope, applicationThreadId);
+      this.#scheduleRequestedSteer(scope, steerCandidate);
+      return;
+    }
+    if (this.#isDispatchBlocked(scope, applicationThreadId, "submit")) {
       this.#cancelRetryTimer(scope, applicationThreadId);
       return;
     }
@@ -1646,11 +1672,15 @@ export class QueuedInputDispatcher {
       .find(
         (candidate) => candidate.applicationThreadId === applicationThreadId,
       );
+    const steerCandidate =
+      head?.state === "retry_wait"
+        ? undefined
+        : this.#steerCandidate(scope, applicationThreadId);
     if (head?.state === "retry_wait") {
       this.#scheduleRetry(scope, head);
-    } else if (head?.state === "pending" && isResolvedSteer(head)) {
+    } else if (steerCandidate) {
       this.#cancelRetryTimer(scope, applicationThreadId);
-      this.#scheduleRequestedSteer(scope, head);
+      this.#scheduleRequestedSteer(scope, steerCandidate);
     } else {
       this.#cancelRetryTimer(scope, applicationThreadId);
     }
@@ -1661,14 +1691,27 @@ export class QueuedInputDispatcher {
     applicationThreadId: string,
   ): void {
     if (this.#closing || this.#closed) return;
-    const head = this.#repository
-      .listActiveHeads(scope)
-      .find(
-        (candidate) => candidate.applicationThreadId === applicationThreadId,
-      );
-    if (head?.state === "pending" && isResolvedSteer(head)) {
-      this.#scheduleRequestedSteer(scope, head);
-    }
+    const candidate = this.#steerCandidate(scope, applicationThreadId);
+    if (candidate) this.#scheduleRequestedSteer(scope, candidate);
+  }
+
+  /**
+   * The next resolved Steer that may be delivered now: the queue head, or the
+   * first row behind Steers that already crossed their provider boundary and
+   * await materialization. Delivery stays serial because each Steer must reach
+   * that state before the next is sent.
+   */
+  #steerCandidate(
+    scope: RequestScope,
+    applicationThreadId: string,
+  ): QueuedInputRecord | undefined {
+    const frontier = this.#repository.findSteerDispatchFrontier(
+      scope,
+      applicationThreadId,
+    );
+    return frontier?.state === "pending" && isResolvedSteer(frontier)
+      ? frontier
+      : undefined;
   }
 
   #scheduleRequestedSteer(scope: RequestScope, item: QueuedInputRecord): void {
@@ -1681,7 +1724,7 @@ export class QueuedInputDispatcher {
     ) {
       return;
     }
-    if (this.#isDispatchBlocked(scope, item.applicationThreadId)) {
+    if (this.#isDispatchBlocked(scope, item.applicationThreadId, "steer")) {
       this.#schedulePendingDispatch(scope, item.applicationThreadId);
       return;
     }
@@ -1738,20 +1781,11 @@ export class QueuedInputDispatcher {
       .finally(() => {
         this.#scheduledSteerIntents.delete(key);
         if (!deferredRetryScheduled && !this.#closing && !this.#closed) {
-          const head = this.#repository
-            .listActiveHeads(scope)
-            .find(
-              (candidate) =>
-                candidate.applicationThreadId === item.applicationThreadId,
-            );
+          const next = this.#steerCandidate(scope, item.applicationThreadId);
           // A failed durable transition can leave the same intent pending.
           // Yield through the retry scheduler instead of recursively filling
           // the microtask queue and starving every HTTP request.
-          if (
-            head?.id === item.id &&
-            head.state === "pending" &&
-            isResolvedSteer(head)
-          ) {
+          if (next?.id === item.id) {
             this.#schedulePendingDispatch(scope, item.applicationThreadId);
           } else {
             this.#scheduleRequestedSteerHead(scope, item.applicationThreadId);
@@ -1825,13 +1859,14 @@ export class QueuedInputDispatcher {
     applicationThreadId: string,
   ): void {
     if (this.#closing || this.#closed) return;
-    const pending = this.#repository
-      .listActiveHeads(scope)
-      .find(
-        (candidate) =>
-          candidate.applicationThreadId === applicationThreadId &&
-          candidate.state === "pending",
-      );
+    const pending =
+      this.#repository
+        .listActiveHeads(scope)
+        .find(
+          (candidate) =>
+            candidate.applicationThreadId === applicationThreadId &&
+            candidate.state === "pending",
+        ) ?? this.#steerCandidate(scope, applicationThreadId);
     if (!pending) return;
     const key = threadKey(scope, applicationThreadId);
     this.#cancelRetryTimer(scope, applicationThreadId);

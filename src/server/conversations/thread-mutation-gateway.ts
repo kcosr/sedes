@@ -1108,7 +1108,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     applicationThreadId: string,
   ): Promise<void> {
     if (
-      this.input.operations.hasPendingMaterializationSteer(
+      this.input.operations.hasPendingMaterializationDraftSteer(
         scope,
         applicationThreadId,
       )
@@ -1430,6 +1430,24 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
             expectedThreadRevision: steer.expectedThreadRevision,
           },
         );
+        if (result.status === "accepted" || result.status === "restored") {
+          // Several Steers can be uncertain at once, for example after a
+          // restart. Explicit recovery reconciles each, oldest first, until
+          // one stays uncertain; earlier outcomes reach clients through the
+          // queue projection.
+          const next = this.input.operations.findUncertainThreadOperation(
+            scope,
+            applicationThreadId,
+          );
+          if (
+            next?.operationKind === "conversation_steer" &&
+            next.mutationId !== steer.mutationId &&
+            this.input.operations.getSteer(scope, next.mutationId).source ===
+              "queued_input"
+          ) {
+            return this.#recoverCurrent(scope, applicationThreadId);
+          }
+        }
         if (result.status === "accepted") {
           return {
             status: "queue_steer_accepted",
@@ -1703,16 +1721,15 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       } else {
         resolvedDeliveryMode = "queue";
       }
+      // Queue-owned Steers awaiting materialization never block admission:
+      // a later Steer is delivered behind them, and Submit or Queue work waits
+      // behind them in the durable queue. Only a legacy draft-source Steer
+      // keeps its exclusive barrier.
       if (
-        resolvedDeliveryMode !== "steer" &&
-        this.input.operations.hasPendingMaterializationSteer(
+        this.input.operations.hasPendingMaterializationDraftSteer(
           scope,
           applicationThreadId,
-        ) &&
-        this.input.operations.findPendingMaterializationSteer(
-          scope,
-          applicationThreadId,
-        )?.source === "draft"
+        )
       ) {
         throw new DomainError(
           "invalid_transition",
