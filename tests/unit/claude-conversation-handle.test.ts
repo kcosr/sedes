@@ -4769,6 +4769,49 @@ describe("Claude conversation-scoped native next delivery", () => {
     await handle.close();
   });
 
+  it("holds three unstarted steers at once and on Stop withdraws each unstarted one on its own evidence", async () => {
+    const { handle, settings, provider, input, turnId } = await startedTurn();
+    const ids = [
+      "a7000000-0000-4000-8000-000000000001",
+      "a7000000-0000-4000-8000-000000000002",
+      "a7000000-0000-4000-8000-000000000003",
+    ];
+    // Sent one at a time; each returns while the earlier ones are unstarted.
+    for (const [index, id] of ids.entries()) {
+      await expect(handle.steer({ ...steerInput, applicationOperationId: id, mutationId: `steer-${index}`,
+        reconciliationToken: `steer-receipt-${index}`, text: `Steer ${index}` }))
+        .resolves.toMatchObject({ status: "pending_materialization" });
+      expect((await input.next()).value).toMatchObject({ uuid: id, priority: "next" });
+      provider.messages.push(nativeFrames.lifecycle(id, "queued"));
+    }
+    await vi.waitFor(() => expect(ids.every(id => handle.hasUnconfirmedSubmission(id))).toBe(true));
+    // Claude folds only the first before Stop lands; the others stay queued.
+    provider.messages.push(nativeFrames.lifecycle(ids[0]!, "started"));
+    await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(ids[0]!)).toBe(false));
+    expect(handle.hasUnconfirmedSubmission(ids[1]!)).toBe(true);
+    expect(handle.hasUnconfirmedSubmission(ids[2]!)).toBe(true);
+    provider.controls.cancelAsyncMessage.mockImplementation(async (uuid: string) => {
+      provider.messages.push(nativeFrames.lifecycle(uuid, "cancelled"));
+      return true;
+    });
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: turnId });
+    expect(provider.controls.cancelAsyncMessage.mock.calls.map(([uuid]) => uuid)).toEqual([ids[1], ids[2]]);
+    await vi.waitFor(() => expect(handle.withdrewSubmission(ids[1]!) && handle.withdrewSubmission(ids[2]!)).toBe(true));
+    expect(handle.withdrewSubmission(ids[0]!)).toBe(false);
+    provider.messages.push(nativeFrames.lifecycle(ids[0]!, "cancelled"));
+    provider.messages.push(result([OPERATION_ID, ids[0]!]));
+    provider.messages.push(nativeFrames.state("idle"));
+    await vi.waitFor(async () => expect((await snapshot(handle)).runState).toBe("idle"));
+    const settled = await snapshot(handle);
+    expect(settled.turnsById[turnId]!.completionCorrelations).toEqual([OPERATION_ID, ids[0]]);
+    expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(ids[0]!)).toBe(OPERATION_ID);
+    for (const id of [ids[1]!, ids[2]!]) {
+      expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(id)).toBeNull();
+      expect(JSON.stringify(settled)).not.toContain(`Steer ${ids.indexOf(id)}`);
+    }
+    await handle.close();
+  });
+
   describe("placement where Claude starts a steer", () => {
     const secondId = "99999999-9999-4999-8999-999999999999";
     const second = { ...steerInput, applicationOperationId: secondId, mutationId: "steer-second",

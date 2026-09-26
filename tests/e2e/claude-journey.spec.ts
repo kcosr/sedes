@@ -166,24 +166,43 @@ test("compiled Claude backend streams, settles, and reloads through normalized U
   // Claude takes the steer at its next tool boundary. It resolves there, in
   // place, while the turn still runs, and the composer can steer again.
   const messages = page.getByRole("region", { name: "Messages" });
+  const pendingInputs = page.getByRole("region", { name: "Pending inputs" });
   const firstSteer = "Use the revised Claude approach", secondSteer = "Also keep the Claude tests green";
-  const steeredAnswer = "Claude incorporated both corrections.";
+  const thirdSteer = "Mention the Claude changelog too";
+  const steeredAnswer = "Claude incorporated every correction.";
   await expect(messages.getByText(firstSteer, { exact: true })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Pending inputs" }).getByText(firstSteer, { exact: true })).toHaveCount(0);
+  await expect(pendingInputs.getByText(firstSteer, { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
   await capture(page, testInfo, "claude-steer-taken-mid-turn.png");
-  await page.getByRole("textbox", { name: /Message Claude/ }).fill(secondSteer);
-  await page.getByRole("button", { name: "Steer", exact: true }).click();
+  // Claude queues further steers until its next tool boundary. Several stay
+  // unconfirmed at once, in order, and the composer keeps steering.
+  const heldSteers = async () =>
+    ((await (await page.request.get("/__e2e/claude/steers/state")).json()) as { heldCount: number }).heldCount;
+  for (const [index, text] of [secondSteer, thirdSteer].entries()) {
+    await page.getByRole("textbox", { name: /Message Claude/ }).fill(text);
+    await expect(page.getByRole("button", { name: "Steer", exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: "Steer", exact: true }).click();
+    await expect(pendingInputs.getByRole("listitem").filter({ hasText: text })).toContainText("Steering");
+    await expect.poll(heldSteers).toBe(index + 1);
+  }
+  await expect(pendingInputs.getByRole("listitem")).toHaveText([
+    new RegExp(`${secondSteer}.*Steering`), new RegExp(`${thirdSteer}.*Steering`),
+  ]);
+  await expect(page.getByRole("textbox", { name: /Message Claude/ })).toBeEnabled();
+  await capture(page, testInfo, "claude-steers-unconfirmed.png");
+  expect((await page.request.post("/__e2e/claude/steers/fold")).status()).toBe(204);
   await expect(messages.getByText(steeredAnswer, { exact: true })).toBeVisible();
+  await expect(pendingInputs.getByRole("listitem")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
   const ordered = async () => {
     const text = await messages.innerText();
-    return [firstSteer, secondSteer, steeredAnswer].map(value => text.indexOf(value));
+    return [firstSteer, secondSteer, thirdSteer, steeredAnswer].map(value => text.indexOf(value));
   };
   expect(await ordered()).toEqual([...(await ordered())].sort((a, b) => a - b));
   await page.reload();
   await expect(messages.getByText(firstSteer, { exact: true })).toHaveCount(1);
   await expect(messages.getByText(secondSteer, { exact: true })).toHaveCount(1);
+  await expect(messages.getByText(thirdSteer, { exact: true })).toHaveCount(1);
   await expect(messages.getByText(steeredAnswer, { exact: true })).toHaveCount(1);
   const reloaded = await ordered();
   expect(reloaded.every(index => index >= 0)).toBe(true);
@@ -319,14 +338,43 @@ test("compiled Claude backend streams, settles, and reloads through normalized U
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
   await capture(page, testInfo, "claude-stop-working.png");
+  // Two steers Claude queued but never started when Stop lands.
+  const stopPending = page.getByRole("region", { name: "Pending inputs" });
+  const unstarted = ["Claude never started this steer", "Nor this second steer"];
+  for (const [index, text] of unstarted.entries()) {
+    await input.fill(text);
+    await page.getByRole("button", { name: "Steer", exact: true }).click();
+    await expect(stopPending.getByRole("listitem").filter({ hasText: text })).toContainText("Steering");
+    await expect.poll(async () =>
+      ((await (await page.request.get("/__e2e/claude/steers/state")).json()) as { heldCount: number }).heldCount,
+    ).toBe(index + 1);
+  }
   await page.getByRole("button", { name: "Stop", exact: true }).click();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
   await expect(page.getByText("[Request interrupted by user for tool use]", { exact: true })).toHaveCount(0);
+  // Stop means stop: each unstarted steer returns as not sent, never resent.
+  for (const text of unstarted) {
+    const row = stopPending.getByRole("listitem").filter({ hasText: text });
+    await expect(row).toContainText("Not sent");
+    await expect(row.getByRole("button", { name: `Restore queued input to composer: ${text}` })).toBeEnabled();
+    await expect(row.getByRole("button", { name: `Dismiss not-sent input: ${text}` })).toBeEnabled();
+    await expect(row.getByRole("button", { name: `Delete queued input: ${text}` })).toHaveCount(0);
+    await expect(messages.getByText(text, { exact: true })).toHaveCount(0);
+  }
+  await capture(page, testInfo, "claude-stop-steers-not-sent.png");
+  await stopPending.getByRole("button", { name: `Dismiss not-sent input: ${unstarted[0]}` }).click();
+  await expect(stopPending.getByRole("listitem").filter({ hasText: unstarted[0]! })).toHaveCount(0);
+  await expect(stopPending.getByRole("listitem").filter({ hasText: unstarted[1]! })).toContainText("Not sent");
+  await stopPending.getByRole("button", { name: `Restore queued input to composer: ${unstarted[1]}` }).click();
+  await expect(stopPending.getByRole("listitem")).toHaveCount(0);
+  await expect(input).toHaveValue(unstarted[1]!);
+  await input.fill("");
   await page.reload();
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
   await expect(page.getByText("[Request interrupted by user for tool use]", { exact: true })).toHaveCount(0);
+  for (const text of unstarted) await expect(messages.getByText(text, { exact: true })).toHaveCount(0);
   await capture(page, testInfo, "claude-stop-restored.png");
 });
 

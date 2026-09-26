@@ -726,7 +726,7 @@ plugins = false
     }
   }, 30_000);
 
-  it("returns a steer Codex never drained on Stop as not sent and keeps a drained steer with its turn", async () => {
+  it("returns steers Codex never drained on Stop as not sent, keeps drained ones with their turn, and resolves several pending steers individually", async () => {
     const temporaryRoot = await mkdtemp(
       path.join(os.homedir(), ".sedes-codex-steer-stop-live-"),
     );
@@ -1082,6 +1082,71 @@ plugins = false
       await expect(reconcileSteer(drained)).resolves.toMatchObject({
         status: "accepted",
       });
+
+      // 3. Three steers wait in one turn's pending input at once; each is
+      // sent while the earlier ones are unconfirmed. Codex drains them into
+      // its next request, and each resolves on its own exact item.
+      const severalTurnId = await holdTurn("Hold this turn for several steers.");
+      const several = ["first", "second", "third"].map((label) =>
+        steerInput(`several-${label}`, severalTurnId, `SEVERAL_STEER_${label.toUpperCase()}_${randomUUID()}`),
+      );
+      for (const input of several) {
+        await expect(handle.steer(input)).resolves.toMatchObject({
+          status: "pending_materialization",
+          backendTurnId: severalTurnId,
+        });
+      }
+      for (const input of several) {
+        await expect(reconcileSteer(input)).resolves.toMatchObject({ status: "unresolved" });
+      }
+      const requestsBeforeSeveral = provider.requestCount();
+      provider.releaseHeldResponse();
+      provider.holdNextResponse();
+      await waitUntil(() => provider.requestCount() > requestsBeforeSeveral, 10_000);
+      const drainedRequest = provider.requestBodies().at(-1)!;
+      const offsets = several.map(({ text }) => drainedRequest.indexOf(text));
+      expect(offsets.every((offset) => offset >= 0)).toBe(true);
+      expect(offsets).toEqual([...offsets].sort((left, right) => left - right));
+      for (const input of several) {
+        await waitUntil(async () => (await handle.steer(input)).status === "accepted", 10_000);
+      }
+      const afterSeveralStop = await stop(severalTurnId);
+      expect(afterSeveralStop.turnsById[severalTurnId]?.completionCorrelations).toEqual(
+        expect.arrayContaining(several.map(({ applicationOperationId }) => applicationOperationId)),
+      );
+      for (const input of several) {
+        await expect(reconcileSteer(input)).resolves.toMatchObject({ status: "accepted" });
+      }
+
+      // 4. Mixed: Codex drains the first steer, then two later ones are
+      // still pending when Stop lands. The used one stays with the turn and
+      // each unused one is not sent on its own absence.
+      const mixedTurnId = await holdTurn("Hold this turn for mixed steers.");
+      const mixedUsed = steerInput("mixed-used", mixedTurnId, `MIXED_USED_${randomUUID()}`);
+      await expect(handle.steer(mixedUsed)).resolves.toMatchObject({ status: "pending_materialization" });
+      const requestsBeforeMixed = provider.requestCount();
+      provider.releaseHeldResponse();
+      provider.holdNextResponse();
+      await waitUntil(() => provider.requestCount() > requestsBeforeMixed, 10_000);
+      await waitUntil(async () => (await handle.steer(mixedUsed)).status === "accepted", 10_000);
+      const mixedUnused = ["one", "two"].map((label) =>
+        steerInput(`mixed-unused-${label}`, mixedTurnId, `MIXED_UNUSED_${label.toUpperCase()}_${randomUUID()}`),
+      );
+      for (const input of mixedUnused) {
+        await expect(handle.steer(input)).resolves.toMatchObject({ status: "pending_materialization" });
+      }
+      const afterMixedStop = await stop(mixedTurnId);
+      await expect(reconcileSteer(mixedUsed)).resolves.toMatchObject({ status: "accepted" });
+      for (const input of mixedUnused) {
+        await expect(reconcileSteer(input)).resolves.toMatchObject({
+          status: "not_accepted",
+          retryable: false,
+        });
+        expect(provider.requestBodies().some((body) => body.includes(input.text))).toBe(false);
+      }
+      expect(afterMixedStop.turnsById[mixedTurnId]?.completionCorrelations).toContain(
+        mixedUsed.applicationOperationId,
+      );
       unsubscribe();
       await handle.close();
     } finally {
@@ -1089,7 +1154,7 @@ plugins = false
       await provider.close();
       await rm(temporaryRoot, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 90_000);
 
   it("creates a workspace-profile provider thread and confirms its exact first-turn policy", async () => {
     const temporaryRoot = await mkdtemp(
@@ -2147,7 +2212,7 @@ plugins = false
   );
 
   it.skipIf(!configuredSharedUdsLiveEndpoint)(
-    "returns a real Luna steer Codex never drained on Stop as not sent",
+    "returns every real Luna steer Codex never drained on Stop as not sent",
     async () => {
       const configured = configuredSharedUdsLiveEndpoint!;
       const workingDirectory = await mkdtemp(
@@ -2298,22 +2363,24 @@ plugins = false
               ),
             120_000,
           );
-          // Codex drains steering only after this model response finishes.
-          const steerText = `Reply UNUSED_STEER_${randomFixtureId()} instead.`;
-          const steer = {
-            applicationOperationId: `steer-stop-uds-${randomFixtureId()}`,
-            mutationId: `steer-stop-uds-${randomFixtureId()}`,
-            reconciliationToken: `steer-stop-uds-token-${randomFixtureId()}`,
+          // Codex drains steering only after this model response finishes,
+          // so three steers wait in the turn's pending input at once.
+          const steers = ["first", "second", "third"].map((label) => ({
+            applicationOperationId: `steer-stop-uds-${label}-${randomFixtureId()}`,
+            mutationId: `steer-stop-uds-${label}-${randomFixtureId()}`,
+            reconciliationToken: `steer-stop-uds-${label}-token-${randomFixtureId()}`,
             target: { kind: "turn" as const, turnId },
             contextExcerpts: [],
             taskContexts: [],
             attachments: [],
-            text: steerText,
-          };
-          await expect(handle.steer(steer)).resolves.toMatchObject({
-            status: "pending_materialization",
-            backendTurnId: turnId,
-          });
+            text: `Reply UNUSED_STEER_${label.toUpperCase()}_${randomFixtureId()} instead.`,
+          }));
+          for (const steer of steers) {
+            await expect(handle.steer(steer)).resolves.toMatchObject({
+              status: "pending_materialization",
+              backendTurnId: turnId,
+            });
+          }
           const interrupted = nextNotification(
             supervisor.client,
             "turn/completed",
@@ -2337,21 +2404,23 @@ plugins = false
           expect(projection.snapshot.turnsById[turnId]?.status).toBe(
             "interrupted",
           );
-          expect(
-            Object.values(projection.snapshot.itemsById).some(
-              (item) =>
-                item.semanticKind === "user_message" &&
-                JSON.stringify(item).includes(steerText),
-            ),
-          ).toBe(false);
-          await expect(
-            driver.reconcileSubmission({
-              ...boundInput,
-              applicationOperationId: steer.applicationOperationId,
-              reconciliationToken: steer.reconciliationToken,
-              steerTarget: steer.target,
-            }),
-          ).resolves.toMatchObject({ status: "not_accepted", retryable: false });
+          for (const steer of steers) {
+            expect(
+              Object.values(projection.snapshot.itemsById).some(
+                (item) =>
+                  item.semanticKind === "user_message" &&
+                  JSON.stringify(item).includes(steer.text),
+              ),
+            ).toBe(false);
+            await expect(
+              driver.reconcileSubmission({
+                ...boundInput,
+                applicationOperationId: steer.applicationOperationId,
+                reconciliationToken: steer.reconciliationToken,
+                steerTarget: steer.target,
+              }),
+            ).resolves.toMatchObject({ status: "not_accepted", retryable: false });
+          }
         } finally {
           unsubscribe();
           await handle.close();
