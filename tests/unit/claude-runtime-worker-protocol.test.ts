@@ -76,6 +76,7 @@ describe("claude_runtime@1 protocol", () => {
       listSessions: noHandler,
       getSessionInfo: noHandler,
       getSessionMessages: noHandler,
+      hasSessionTranscript: noHandler,
       renameSession: noHandler,
       openQuery: noHandler,
       sendQuery: noHandler,
@@ -103,10 +104,11 @@ describe("claude_runtime@1 protocol", () => {
           "session.list",
           "session.messages",
           "session.rename",
+          "session.transcript",
         ],
       },
     ]);
-    expect(claudeRuntimeWorkerOperations).toHaveLength(13);
+    expect(claudeRuntimeWorkerOperations).toHaveLength(14);
 
     const hostRegistry = new SidecarOperationRegistry();
     registerClaudeRuntimeV1HostOperations(hostRegistry, {
@@ -381,6 +383,17 @@ describe("ClaudeRuntimeWorkerHost", () => {
         ],
       });
       expect(sdk.getSessionMessages).toHaveBeenCalledWith(
+        SESSION_ID,
+        { dir: "/workspace" },
+        expect.objectContaining({ CLAUDE_CONFIG_DIR: configDirectory }),
+      );
+      await expect(
+        host.handlers.hasSessionTranscript(
+          { sessionId: SESSION_ID, dir: "/workspace" },
+          context(),
+        ),
+      ).resolves.toEqual({ present: true });
+      expect(sdk.hasSessionTranscript).toHaveBeenCalledWith(
         SESSION_ID,
         { dir: "/workspace" },
         expect.objectContaining({ CLAUDE_CONFIG_DIR: configDirectory }),
@@ -1121,6 +1134,7 @@ function helperFacade(): ClaudeSdkFacade {
         origin: { kind: "task-notification" },
       } as never,
     ]),
+    hasSessionTranscript: vi.fn(async () => true),
     renameSession: vi.fn(async () => undefined),
   };
 }
@@ -1190,6 +1204,7 @@ function queryFacade(
     listSessions: vi.fn(async () => []),
     getSessionInfo: vi.fn(async () => undefined),
     getSessionMessages: vi.fn(async () => []),
+    hasSessionTranscript: vi.fn(async () => false),
     renameSession: vi.fn(async () => undefined),
   };
   return {

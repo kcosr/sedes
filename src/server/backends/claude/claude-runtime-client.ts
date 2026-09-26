@@ -149,6 +149,15 @@ export interface ClaudeRuntimeClient {
     options: ClaudeHistoryPageOptions,
     environment: Readonly<Record<string, string | undefined>>,
   ): Promise<ClaudeHistoryPage>;
+  /**
+   * Native existence, independent of session metadata: the SDK reports no
+   * info for a transcript holding only Sedes' startup message.
+   */
+  hasSessionTranscript(
+    sessionId: string,
+    options: { readonly dir: string },
+    environment: Readonly<Record<string, string | undefined>>,
+  ): Promise<boolean>;
   renameSession(
     sessionId: string,
     title: string,
@@ -212,6 +221,14 @@ export class ClaudeSdkRuntimeAdapter implements ClaudeRuntimeClient {
     return this.#history.getPage(scope, options, async () => structuredClone(
       await this.#sdk.getSessionMessages(sessionId, nativeOptions, environment),
     ));
+  }
+
+  hasSessionTranscript(
+    sessionId: string,
+    options: { readonly dir: string },
+    environment: Readonly<Record<string, string | undefined>>,
+  ): Promise<boolean> {
+    return this.#sdk.hasSessionTranscript(sessionId, options, environment);
   }
 
   renameSession(

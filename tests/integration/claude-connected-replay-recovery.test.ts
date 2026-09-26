@@ -174,6 +174,39 @@ describe("connected Claude replay reclamation recovery", () => {
     }
   }, 30_000);
 
+  it.each([false, true])("reports native transcript presence through the remote carrier (stopped=%s)", async stopped => {
+    const f = await fixture();
+    const carrier = await f.attach();
+    const client = f.client();
+    const sessionId = randomUUID();
+    const runtimeId = await carrier.connection.ensure(configuration);
+    carrier.connection.onEvent(runtimeId, () => {});
+    await carrier.connection.execute({ runtimeId, controllerEpoch: carrier.lease.controllerEpoch,
+      action: "open", replay: "full", request: { queryId: sessionId, sessionId, cwd: "/workspace",
+        launch: "new", environment: {}, enableCanUseTool: false } });
+    // Only Sedes' startup message was persisted, so the SDK reports no metadata.
+    f.runtime.getSessionInfo.mockResolvedValue(undefined);
+    f.runtime.hasSessionTranscript.mockResolvedValue(true);
+    if (stopped) {
+      const native = f.sessions[0]!;
+      f.runtime.close.mockImplementationOnce(async () => {
+        await native.emit(delta(sessionId, "late output"));
+        await native.close();
+      });
+      await expect(f.hosts.get(runtimeId).stop()).rejects.toThrow("sidecar_resource_handoff_pending");
+      f.runtime.hasSessionTranscript.mockRejectedValue(new Error("worker has stopped"));
+    }
+    await expect(client.hasSessionTranscript(sessionId, { dir: "/workspace" }, {})).resolves.toBe(true);
+    expect(f.runtime.hasSessionTranscript).toHaveBeenCalledWith(sessionId, { dir: "/workspace" }, {});
+    if (stopped) {
+      await expect(client.hasSessionTranscript(sessionId, { dir: "/elsewhere" }, {}))
+        .rejects.toThrow();
+    } else {
+      f.runtime.hasSessionTranscript.mockResolvedValue(false);
+      await expect(client.hasSessionTranscript(randomUUID(), { dir: "/workspace" }, {})).resolves.toBe(false);
+    }
+  }, 30_000);
+
   it.each([false, true])("hydrates reclaimed history and an unfinished response after main replacement (usage=%s)", async enabled => {
     const f = await fixture();
     const firstCarrier = await f.attach();

@@ -145,6 +145,7 @@ function fakeQuery(
     listSessions: vi.fn(),
     getSessionInfo: vi.fn(),
     getSessionMessages: vi.fn(),
+    hasSessionTranscript: vi.fn(),
     renameSession: vi.fn(),
   } satisfies ClaudeSdkFacade;
 

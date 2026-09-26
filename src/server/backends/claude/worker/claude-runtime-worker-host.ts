@@ -111,6 +111,16 @@ export class ClaudeRuntimeWorkerHost {
       getSessionInfo: async (request) => await this.#getSessionInfo(request),
       getSessionMessages: async (request) =>
         await this.#getSessionMessages(request),
+      hasSessionTranscript: async (request) => {
+        this.#assertOpen();
+        return {
+          present: await this.#sdk.hasSessionTranscript(
+            request.sessionId,
+            { dir: request.dir },
+            this.#configured().environment,
+          ),
+        };
+      },
       renameSession: async (request) => await this.#renameSession(request),
       openQuery: async (request, context) =>
         await this.#openQuery(request, context.signal),

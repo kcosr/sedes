@@ -48,6 +48,7 @@ export class FakeOutboundClaudeSdkFacade implements ClaudeSdkFacade {
   async listSessions() { return [...this.#sessions.values()].map((value) => value.info); }
   async getSessionInfo(sessionId: string) { return this.#sessions.get(sessionId)?.info; }
   async getSessionMessages(sessionId: string) { return [...(this.#sessions.get(sessionId)?.messages ?? [])]; }
+  async hasSessionTranscript(sessionId: string) { return this.#sessions.has(sessionId); }
   async renameSession(sessionId: string, title: string) {
     const session = this.#sessions.get(sessionId);
     if (!session) throw new Error("outbound_claude_fixture_session_missing");

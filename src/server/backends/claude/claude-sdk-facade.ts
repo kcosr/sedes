@@ -16,7 +16,10 @@ import {
   assertClaudeSdkHelperEnvironment,
   type ClaudeChildEnvironment,
 } from "./claude-child-environment.js";
-import { readClaudeSessionMessages } from "./claude-native-transcript.js";
+import {
+  locateClaudeSessionTranscript,
+  readClaudeSessionMessages,
+} from "./claude-native-transcript.js";
 
 export interface ClaudeCliAuthStatus {
   readonly loggedIn: boolean;
@@ -150,6 +153,12 @@ export interface ClaudeSdkFacade {
     options: GetSessionMessagesOptions,
     environment: ClaudeChildEnvironment,
   ): Promise<SessionMessage[]>;
+  /** Whether Claude Code has a non-empty transcript for this workspace session. */
+  hasSessionTranscript(
+    sessionId: string,
+    options: { readonly dir: string },
+    environment: ClaudeChildEnvironment,
+  ): Promise<boolean>;
   renameSession(
     sessionId: string,
     title: string,
@@ -241,6 +250,15 @@ export class OfficialClaudeSdkFacade implements ClaudeSdkFacade {
     const { dir, ...readOptions } = options;
     if (!dir) throw new Error("claude_session_history_directory_required");
     return await readClaudeSessionMessages(sessionId, { ...readOptions, dir }, environment);
+  }
+
+  async hasSessionTranscript(
+    sessionId: string,
+    options: { readonly dir: string },
+    environment: ClaudeChildEnvironment,
+  ): Promise<boolean> {
+    assertClaudeSdkHelperEnvironment(environment);
+    return (await locateClaudeSessionTranscript(sessionId, options.dir, environment)) !== undefined;
   }
 
   renameSession(

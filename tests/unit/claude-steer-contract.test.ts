@@ -230,6 +230,7 @@ function provider(
     listSessions: vi.fn(),
     getSessionInfo: vi.fn(),
     getSessionMessages: vi.fn(async () => []),
+    hasSessionTranscript: vi.fn(async () => false),
     renameSession: vi.fn(),
   } satisfies ClaudeSdkFacade;
   return {

@@ -86,6 +86,7 @@ function facade(
     listSessions: vi.fn(async () => []),
     getSessionInfo: vi.fn(async () => undefined),
     getSessionMessages: vi.fn(async () => []),
+    hasSessionTranscript: vi.fn(async () => false),
     renameSession: vi.fn(async () => undefined),
   };
 }

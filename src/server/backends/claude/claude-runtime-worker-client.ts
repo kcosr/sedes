@@ -44,6 +44,7 @@ import {
   claudeRuntimeSessionInfoOperation,
   claudeRuntimeSessionListOperation,
   claudeRuntimeSessionMessagesOperation,
+  claudeRuntimeSessionTranscriptOperation,
   claudeRuntimeSessionRenameOperation,
   registerClaudeRuntimeV1HostOperations,
   type ClaudeRuntimeCanUseToolRequest,
@@ -205,6 +206,19 @@ export class ClaudeRuntimeWorkerClient implements ClaudeRuntimeClient {
       },
     );
     return result as ClaudeHistoryPage;
+  }
+
+  async hasSessionTranscript(
+    sessionId: string,
+    options: { readonly dir: string },
+  ): Promise<boolean> {
+    this.#assertOpen();
+    await this.#initialize();
+    const result = await this.#peer.call(
+      claudeRuntimeSessionTranscriptOperation,
+      { sessionId, dir: options.dir },
+    );
+    return result.present;
   }
 
   async renameSession(

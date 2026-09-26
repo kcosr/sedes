@@ -43,7 +43,7 @@ export class ClaudePersistentRuntimeHost {
   #frozen = false;
   #abandoning = false;
   #inflight = 0;
-  readonly #stoppedHistory = new Map<string, { info: Awaited<ReturnType<ClaudeRuntimeClient["getSessionInfo"]>>; messages: Awaited<ReturnType<ClaudeRuntimeClient["getSessionMessages"]>> }>();
+  readonly #stoppedHistory = new Map<string, { info: Awaited<ReturnType<ClaudeRuntimeClient["getSessionInfo"]>>; present: boolean; messages: Awaited<ReturnType<ClaudeRuntimeClient["getSessionMessages"]>> }>();
   freezeAdmission(): void { this.#frozen = true; }
   restoreAdmission(): void {
     if (this.#abandoning) return;
@@ -117,10 +117,12 @@ export class ClaudePersistentRuntimeHost {
       // provider history is not a prerequisite for terminating an unavailable worker.
       for (const session of force ? [] : this.#sessions.values()) {
         const info = await this.input.client.getSessionInfo(session.id, { dir: session.cwd }, {});
-        const messages = info ? await this.input.client.getSessionMessages(session.id, { dir: session.cwd, includeSystemMessages: true }, {}) : [];
+        // Metadata implies a transcript; a startup-only transcript has none.
+        const present = info !== undefined || await this.input.client.hasSessionTranscript(session.id, { dir: session.cwd }, {});
+        const messages = present ? await this.input.client.getSessionMessages(session.id, { dir: session.cwd, includeSystemMessages: true }, {}) : [];
         historyBytes += Buffer.byteLength(JSON.stringify({ info, messages }), "utf8");
         if (historyBytes > 64 * 1024 * 1024) throw new Error("claude_persistent_recovery_history_capacity_exceeded");
-        this.#stoppedHistory.set(session.id, { info, messages });
+        this.#stoppedHistory.set(session.id, { info, present, messages });
       }
       this.#closing = true;
       try { await this.input.close(); }
@@ -165,8 +167,8 @@ export class ClaudePersistentRuntimeHost {
       (this.#sessions.get(command.request.sessionId)?.permissionResponses.has(permissionKey(command.request)) ||
         ((!this.#runtimeStopped && !this.#frozen || command.request.response.behavior === "deny") &&
           this.#sessions.get(command.request.sessionId)?.permissions.has(permissionKey(command.request))));
-    if (this.#runtimeStopped && !existingOpen && !permissionSettlement && !["attach", "detach", "evict", "acknowledge", "submission_disposition", "info", "messages", "list", "probe"].includes(command.action)) throw new Error("claude_persistent_runtime_stopped");
-    if (!existingOpen && !retainedProbe && !permissionSettlement && !["attach", "detach", "evict", "acknowledge", "list", "info", "messages", "submission_disposition"].includes(command.action)) {
+    if (this.#runtimeStopped && !existingOpen && !permissionSettlement && !["attach", "detach", "evict", "acknowledge", "submission_disposition", "info", "messages", "transcript", "list", "probe"].includes(command.action)) throw new Error("claude_persistent_runtime_stopped");
+    if (!existingOpen && !retainedProbe && !permissionSettlement && !["attach", "detach", "evict", "acknowledge", "list", "info", "messages", "transcript", "submission_disposition"].includes(command.action)) {
       if (this.#frozen) throw new Error("claude_persistent_admission_frozen");
       this.input.services.assertAdmission(command.controllerEpoch);
     }
@@ -193,12 +195,13 @@ export class ClaudePersistentRuntimeHost {
   async #execute(command: ClaudePersistentCommand, listener: (event: ClaudePersistentEvent) => void): Promise<unknown> {
     const config = this.input.configuration;
     if (this.#runtimeStopped) {
-      if (command.action === "info" || command.action === "messages") {
+      if (command.action === "info" || command.action === "messages" || command.action === "transcript") {
         const session = this.#session(command.request.sessionId);
         if (command.request.dir && command.request.dir !== session.cwd) throw new Error("claude_persistent_session_configuration_conflict");
         const baseline = this.#stoppedHistory.get(session.id);
         if (!baseline) throw new Error("claude_persistent_recovery_history_unavailable");
         if (command.action === "info") return { session: baseline.info ?? null };
+        if (command.action === "transcript") return { present: baseline.present };
         const messages = command.request.includeSystemMessages ? baseline.messages : baseline.messages.filter(message => message.type !== "system");
         return this.#stoppedHistoryPager.getPage(session.id, command.request, async () => messages);
       }
@@ -231,6 +234,7 @@ export class ClaudePersistentRuntimeHost {
         const { sessionId, ...options } = command.request;
         return await this.input.client.getSessionMessagesPage(sessionId, options, {});
       }
+      case "transcript": return { present: await this.input.client.hasSessionTranscript(command.request.sessionId, { dir: command.request.dir }, {}) };
       case "rename": await this.input.client.renameSession(command.request.sessionId, command.request.title, { dir: command.request.dir }, {}); return { renamed: true };
       case "open": return await this.#open(command, listener);
       case "attach": return await this.#attach(this.#session(command.request.sessionId), command.controllerEpoch, listener, true, command.replay);

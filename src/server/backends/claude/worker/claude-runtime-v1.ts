@@ -243,6 +243,13 @@ export const claudeRuntimeSessionInfoRequestSchema = z.strictObject({
 export const claudeRuntimeSessionInfoResponseSchema = z.strictObject({
   session: claudeRuntimeSessionInfoSchema.nullable(),
 });
+export const claudeRuntimeSessionTranscriptRequestSchema = z.strictObject({
+  sessionId: uuidSchema,
+  dir: absolutePathSchema,
+});
+export const claudeRuntimeSessionTranscriptResponseSchema = z.strictObject({
+  present: z.boolean(),
+});
 const claudeHistoryCursorSchema = z.strictObject({
   offset: nonnegativeSafeIntegerSchema,
   end: positiveSafeIntegerSchema,
@@ -476,6 +483,13 @@ export const claudeRuntimeSessionMessagesOperation = operation({
   maximumDeadlineMilliseconds: 120_000,
   lane: "operation",
 });
+export const claudeRuntimeSessionTranscriptOperation = operation({
+  operation: "session.transcript",
+  requestSchema: claudeRuntimeSessionTranscriptRequestSchema,
+  responseSchema: claudeRuntimeSessionTranscriptResponseSchema,
+  maximumDeadlineMilliseconds: 60_000,
+  lane: "operation",
+});
 export const claudeRuntimeSessionRenameOperation = operation({
   operation: "session.rename",
   requestSchema: claudeRuntimeSessionRenameRequestSchema,
@@ -553,6 +567,7 @@ export const claudeRuntimeWorkerOperations = Object.freeze([
   claudeRuntimeSessionListOperation,
   claudeRuntimeSessionInfoOperation,
   claudeRuntimeSessionMessagesOperation,
+  claudeRuntimeSessionTranscriptOperation,
   claudeRuntimeSessionRenameOperation,
   claudeRuntimeQueryOpenOperation,
   claudeRuntimeQuerySendOperation,
@@ -581,6 +596,9 @@ export interface ClaudeRuntimeV1WorkerHandlers {
   readonly getSessionInfo: HandlerFor<typeof claudeRuntimeSessionInfoOperation>;
   readonly getSessionMessages: HandlerFor<
     typeof claudeRuntimeSessionMessagesOperation
+  >;
+  readonly hasSessionTranscript: HandlerFor<
+    typeof claudeRuntimeSessionTranscriptOperation
   >;
   readonly renameSession: HandlerFor<
     typeof claudeRuntimeSessionRenameOperation
@@ -613,6 +631,10 @@ export function registerClaudeRuntimeV1WorkerOperations(
   registry.register(
     claudeRuntimeSessionMessagesOperation,
     handlers.getSessionMessages,
+  );
+  registry.register(
+    claudeRuntimeSessionTranscriptOperation,
+    handlers.hasSessionTranscript,
   );
   registry.register(
     claudeRuntimeSessionRenameOperation,

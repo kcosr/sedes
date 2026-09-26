@@ -113,6 +113,10 @@ export class TrackedClaudeSdkFacade implements ClaudeSdkFacade {
     return this.#delegate.getSessionMessages(...input);
   }
 
+  hasSessionTranscript(...input: Parameters<ClaudeSdkFacade["hasSessionTranscript"]>) {
+    return this.#delegate.hasSessionTranscript(...input);
+  }
+
   renameSession(...input: Parameters<ClaudeSdkFacade["renameSession"]>) {
     return this.#delegate.renameSession(...input);
   }

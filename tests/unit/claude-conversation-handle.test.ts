@@ -315,6 +315,9 @@ function fixture(options: { readonly safeSkill?: boolean } = {}) {
     getSessionMessages: vi.fn<ClaudeSdkFacade["getSessionMessages"]>(
       async () => [],
     ),
+    hasSessionTranscript: vi.fn<ClaudeSdkFacade["hasSessionTranscript"]>(
+      async () => false,
+    ),
     renameSession: vi.fn(async () => undefined),
   } satisfies ClaudeSdkFacade;
   return {

@@ -157,6 +157,10 @@ class FakeClaudeSdk implements ClaudeSdkFacade {
       : undefined;
   }
 
+  async hasSessionTranscript(sessionId: string) {
+    return this.#sessions.has(sessionId);
+  }
+
   async forkSession() {
     return { sessionId: "55555555-5555-4555-8555-555555555555" };
   }

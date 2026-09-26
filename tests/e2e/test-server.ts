@@ -425,6 +425,10 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
     return structuredClone(this.#sessions.get(sessionId) ?? []);
   }
 
+  async hasSessionTranscript(sessionId: string) {
+    return this.#sessions.has(sessionId);
+  }
+
   async renameSession(): Promise<void> {}
 
   async forkSession() {

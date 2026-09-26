@@ -123,6 +123,7 @@ export function createFakePersistentClaudeRuntime() {
       const { offset: _offset, limit: _limit, cursor: _cursor, maintenance: _maintenance, ...nativeOptions } = options;
       return history.getPage(sessionId, options, async () => structuredClone(await getSessionMessages(sessionId, nativeOptions, environment)));
     }),
+    hasSessionTranscript: vi.fn<ClaudeRuntimeClient["hasSessionTranscript"]>(async () => false),
     renameSession: vi.fn<ClaudeRuntimeClient["renameSession"]>(async () => undefined),
     close: vi.fn(async () => { history.close(); await Promise.all(sessions.map(session => session.close())); }),
   } satisfies ClaudeRuntimeClient & { close(): Promise<void> };

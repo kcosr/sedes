@@ -496,17 +496,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
       releaseAdmission();
     };
     try {
-      const info = await this.#runtimeClient.getSessionInfo(
-        sessionId,
-        { dir: input.workspace.canonicalPath },
-        this.#childEnvironment,
-      );
-      if (info && info.sessionId !== sessionId) {
-        throw sessionIdentityMismatch();
-      }
-      if (info?.cwd && info.cwd !== input.workspace.canonicalPath) {
-        throw new Error("claude_session_workspace_mismatch");
-      }
+      const exists = await this.#sessionExists(sessionId, input.workspace);
       const priorSettings = this.#settings.get(
         input.scope,
         input.binding.applicationThreadId,
@@ -612,8 +602,11 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         onVersionAssessment: versionObservation.observeVersionAssessment,
         onVersionAssessmentFailed: versionObservation.failed,
         forkBoundaryAuthentication: this.#forkBoundaryAuthentication,
+        // Read only after start: a reattached remote query holds its replay
+        // until this history is installed. The read resolves through the
+        // startup message this launch just persisted.
         loadInitialMessages: async () => {
-          if (!info) return [];
+          if (!exists) return [];
           const messages = await this.#runtimeClient.getSessionMessages(
             sessionId,
             { dir: input.workspace.canonicalPath },
@@ -626,7 +619,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
           }
           return messages;
         },
-        resumeSession: info !== undefined,
+        resumeSession: exists,
         releaseSession: () => {
           if (handle) this.#handles.delete(handle);
           release();
@@ -853,10 +846,9 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         sessionId: childSessionId,
       }),
     });
-    const existingChild = await this.#runtimeClient.getSessionInfo(
+    const existingChild = await this.#sessionExists(
       childSessionId,
-      { dir: input.workspace.canonicalPath },
-      this.#childEnvironment,
+      input.workspace,
     );
     if (existingChild) {
       const existingMessages = await this.#readMessages(
@@ -1362,20 +1354,27 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
     );
   }
 
-  async #readMessages(
+  /**
+   * Claude Code persists Sedes' startup message on every launch, but the SDK
+   * reports session info only once a transcript has a prompt or title. A
+   * transcript holding only startup messages still exists natively: it must
+   * be resumed, because a fresh launch reusing its ID is rejected, and it
+   * reads as an empty history.
+   */
+  async #sessionExists(
     sessionId: string,
     workspace: ValidatedWorkspace,
-  ): Promise<SessionMessage[]> {
+  ): Promise<boolean> {
     const info = await this.#runtimeClient.getSessionInfo(
       sessionId,
       { dir: workspace.canonicalPath },
       this.#childEnvironment,
     );
     if (!info) {
-      throw claudeError(
-        "not_found",
-        "The Claude session was not found.",
-        "claude_session_not_found",
+      return await this.#runtimeClient.hasSessionTranscript(
+        sessionId,
+        { dir: workspace.canonicalPath },
+        this.#childEnvironment,
       );
     }
     if (info.sessionId !== sessionId) {
@@ -1383,6 +1382,21 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
     }
     if (info.cwd && info.cwd !== workspace.canonicalPath) {
       throw new Error("claude_session_workspace_mismatch");
+    }
+    return true;
+  }
+
+  /** Native history through the transcript's true tip. */
+  async #readMessages(
+    sessionId: string,
+    workspace: ValidatedWorkspace,
+  ): Promise<SessionMessage[]> {
+    if (!(await this.#sessionExists(sessionId, workspace))) {
+      throw claudeError(
+        "not_found",
+        "The Claude session was not found.",
+        "claude_session_not_found",
+      );
     }
     const messages = await this.#runtimeClient.getSessionMessages(
       sessionId,

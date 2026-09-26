@@ -375,6 +375,7 @@ function lifecycleHandlers(): ClaudeRuntimeV1WorkerHandlers {
     probe: unused,
     getSessionInfo: unused,
     getSessionMessages: unused,
+    hasSessionTranscript: unused,
     renameSession: unused,
     openQuery: unused,
     sendQuery: unused,

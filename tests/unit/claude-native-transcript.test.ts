@@ -368,7 +368,7 @@ describe("Claude native transcript location", () => {
     await expect(facade.getSessionMessages(randomUUID(), {}, process.env)).rejects.toThrow(
       "claude_session_history_directory_required",
     );
-    await expect(facade.getSessionMessages(randomUUID(), { dir: workspace }, { CLAUDE_CONFIG_DIR: path.join(root, "other") }))
+    await expect(facade.hasSessionTranscript(randomUUID(), { dir: workspace }, { CLAUDE_CONFIG_DIR: path.join(root, "other") }))
       .rejects.toThrow("claude_sdk_helper_environment_mismatch");
   });
 });

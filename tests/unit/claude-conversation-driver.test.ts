@@ -9,7 +9,10 @@ import type {
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { createHash } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentBackendInstance,
   AgentConnectionProfile,
@@ -17,10 +20,12 @@ import type {
 } from "../../src/server/backends/contracts.js";
 import { BackendError } from "../../src/server/backends/contracts.js";
 import { ClaudeConversationBackendDriver } from "../../src/server/backends/claude/claude-conversation-driver.js";
-import type {
-  ClaudeQueryInput,
-  ClaudeSdkFacade,
+import {
+  OfficialClaudeSdkFacade,
+  type ClaudeQueryInput,
+  type ClaudeSdkFacade,
 } from "../../src/server/backends/claude/claude-sdk-facade.js";
+import { ClaudeTranscriptFixture } from "../helpers/claude-native-transcript-fixture.js";
 import { ClaudeSdkRuntimeAdapter, type ClaudeRuntimeClient } from "../../src/server/backends/claude/claude-runtime-client.js";
 import type { ClaudeThreadRepository } from "../../src/server/backends/claude/claude-thread-repository.js";
 import type { ClaudePermissionMode } from "../../src/server/backends/claude/claude-permission-policy.js";
@@ -1567,6 +1572,92 @@ describe("ClaudeConversationBackendDriver", () => {
   });
 });
 
+describe("ClaudeConversationBackendDriver native history", () => {
+  let configDirectory: string;
+
+  beforeEach(async () => {
+    configDirectory = await realpath(await mkdtemp(path.join(tmpdir(), "sedes-claude-driver-native-")));
+    vi.stubEnv("CLAUDE_CONFIG_DIR", configDirectory);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(configDirectory, { recursive: true, force: true });
+  });
+
+  /** Query fakes over the real native store: SDK session info and Sedes' tip-correct reader. */
+  function nativeStoreDriver(options: Parameters<typeof createDriver>[1] = {}) {
+    const sdk = fakeSdk();
+    const native = new OfficialClaudeSdkFacade();
+    sdk.getSessionInfo.mockImplementation((...input) => native.getSessionInfo(...input));
+    sdk.getSessionMessages.mockImplementation((...input) => native.getSessionMessages(...input));
+    sdk.hasSessionTranscript.mockImplementation((...input) => native.hasSessionTranscript(...input));
+    const driver = createDriver(sdk, { ...options, childEnvironment: { HOME: "/operator", CLAUDE_CONFIG_DIR: configDirectory } });
+    return { sdk, driver };
+  }
+
+  function transcript(id = sessionId): ClaudeTranscriptFixture {
+    const fixture = new ClaudeTranscriptFixture(workspace.canonicalPath);
+    Object.defineProperty(fixture, "sessionId", { value: id });
+    return fixture;
+  }
+
+  const attachment = () => ({ scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) });
+
+  it("resumes and reads a session whose transcript holds only startup messages", async () => {
+    const fixture = transcript();
+    fixture.startupMessage();
+    await fixture.write(configDirectory, workspace.canonicalPath);
+    const { sdk, driver } = nativeStoreDriver();
+    // The SDK exposes no metadata for this transcript, but Claude Code rejects a fresh launch reusing its ID.
+    await expect(sdk.getSessionInfo(sessionId, { dir: workspace.canonicalPath }, process.env)).resolves.toBeUndefined();
+
+    await expect(driver.read(attachment())).resolves.toMatchObject({ snapshot: { orderedBackendTurnIds: [] } });
+    const handle = await driver.attach(attachment());
+    try {
+      const options = sdk.createQuery.mock.calls.at(-1)![0].options;
+      expect(options).toMatchObject({ resume: sessionId });
+      expect(options).not.toHaveProperty("sessionId");
+      expect(sdk.getSessionMessages).toHaveBeenCalled();
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("launches a new session only when no native transcript exists", async () => {
+    const { sdk, driver } = nativeStoreDriver();
+    await expect(driver.read(attachment())).rejects.toMatchObject({ backendCode: "claude_session_not_found" });
+    const handle = await driver.attach(attachment());
+    try {
+      const options = sdk.createQuery.mock.calls.at(-1)![0].options;
+      expect(options).toMatchObject({ sessionId });
+      expect(options).not.toHaveProperty("resume");
+      expect(sdk.getSessionMessages).not.toHaveBeenCalled();
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("resolves creation reconciliation from a transcript holding only the startup message", async () => {
+    const fixture = transcript();
+    fixture.startupMessage();
+    await fixture.write(configDirectory, workspace.canonicalPath);
+    const { driver } = nativeStoreDriver();
+    const input = { ...attachment(), applicationOperationId: operationId, retryAnchor: retryAnchor([]) };
+    // The first prompt never reached the transcript before its process ended.
+    await expect(driver.reconcileSubmission(input)).resolves.toEqual({ status: "not_accepted", retryable: true });
+
+    fixture.prompt("First prompt.", { uuid: operationId });
+    fixture.text("First answer.");
+    await fixture.write(configDirectory, workspace.canonicalPath);
+    await expect(driver.reconcileSubmission(input)).resolves.toMatchObject({ status: "accepted" });
+  });
+});
+
+function uuids(messages: readonly SessionMessage[]): string[] {
+  return messages.map(({ uuid }) => uuid);
+}
+
 function createDriver(
   sdk: ReturnType<typeof fakeSdk>,
   options: {
@@ -1583,6 +1674,7 @@ function createDriver(
     readonly submissionDisposition?: ClaudeRuntimeClient["submissionDisposition"];
     readonly steerOperations?: ReadonlyMap<string, string | null>;
     readonly forgetUnconsumedSteerOperation?: ClaudeThreadRepository["forgetUnconsumedSteerOperation"];
+    readonly childEnvironment?: Readonly<Record<string, string | undefined>>;
   } = {},
 ) {
   let settingsRecord: Partial<ReturnType<ClaudeThreadRepository["get"]>> & {
@@ -1632,7 +1724,7 @@ function createDriver(
       : agentTools,
     ...(options.agentToolCli ? { agentToolCli: options.agentToolCli } : {}),
     attachmentProvenanceKey: new Uint8Array(32).fill(0x42),
-    childEnvironment: {
+    childEnvironment: options.childEnvironment ?? {
       HOME: "/operator",
       CLAUDE_CONFIG_DIR: "/operator/.claude",
     },
@@ -1816,6 +1908,9 @@ function fakeSdk(
     ),
     getSessionMessages: vi.fn<ClaudeSdkFacade["getSessionMessages"]>(
       async () => [],
+    ),
+    hasSessionTranscript: vi.fn<ClaudeSdkFacade["hasSessionTranscript"]>(
+      async () => false,
     ),
     renameSession: vi.fn<ClaudeSdkFacade["renameSession"]>(
       async () => undefined,

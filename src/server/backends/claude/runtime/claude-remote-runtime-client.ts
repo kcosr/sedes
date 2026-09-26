@@ -78,6 +78,10 @@ export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
     assertEmptyEnvironment(environment);
     return worker.claudeRuntimeSessionMessagesResponseSchema.parse(await this.execute({ action: "messages", request: { sessionId, ...options } })) as ClaudeHistoryPage;
   }
+  async hasSessionTranscript(sessionId: string, options: { readonly dir: string }, environment: Readonly<Record<string, string | undefined>>) {
+    assertEmptyEnvironment(environment);
+    return worker.claudeRuntimeSessionTranscriptResponseSchema.parse(await this.execute({ action: "transcript", request: { sessionId, dir: options.dir } })).present;
+  }
   async renameSession(sessionId: string, title: string, options: { readonly dir: string }, environment: Readonly<Record<string, string | undefined>>) {
     assertEmptyEnvironment(environment);
     worker.claudeRuntimeSessionRenameResponseSchema.parse(await this.execute({ action: "rename", request: { sessionId, title, dir: options.dir } }));
