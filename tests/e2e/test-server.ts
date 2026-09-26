@@ -332,6 +332,8 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
   readonly #sessions = new Map<string, ClaudeSessionMessage[]>();
   readonly #interruptions = new Map<string, () => void>();
   readonly #steerPrompts = new Map<string, string>();
+  /** Steers Claude folded into the running steer-fixture turn, in order. */
+  readonly #foldedSteers = new Map<string, string[]>();
   readonly #backgroundTasks = new Map<string, { taskId: string; toolId: string }>();
 
   async readCliRelease(): Promise<string> {
@@ -454,9 +456,13 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
         parent_agent_id: null,
       } as ClaudeSessionMessage & ClaudeMessage;
       const assistantUuid = crypto.randomUUID();
-      const messages = [...(this.#sessions.get(sessionId) ?? []), user];
+      // Like Claude Code, the steer fixture neither echoes nor records a steer
+      // until Claude takes it; its lifecycle reports that point.
+      const foldedSteer = prompt.priority === "next" &&
+        (promptText === "Use the revised Claude approach" || promptText === "Also keep the Claude tests green");
+      const messages = [...(this.#sessions.get(sessionId) ?? []), ...(foldedSteer ? [] : [user])];
       this.#sessions.set(sessionId, messages);
-      queue.push(user);
+      if (!foldedSteer) queue.push(user);
       if (promptText === "Exercise Claude Steer") {
         this.#steerPrompts.set(sessionId, prompt.uuid!);
         const working = {
@@ -470,28 +476,42 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
         queue.push(working);
         continue;
       }
-      if (promptText === "Use the revised Claude approach") {
+      if (foldedSteer) {
         const originalUuid = this.#steerPrompts.get(sessionId);
-        if (!originalUuid || prompt.priority !== "next") throw new Error("claude_steer_fixture_missing_native_priority");
+        const folded = this.#foldedSteers.get(sessionId) ?? [];
+        const first = promptText === "Use the revised Claude approach";
+        if (!originalUuid || folded.length !== (first ? 0 : 1)) throw new Error("claude_steer_fixture_out_of_order");
+        queue.push(claudeCommandLifecycle(sessionId, prompt.uuid!, "queued"));
+        if (first) {
+          const toolResult = { type: "user", uuid: crypto.randomUUID(), session_id: sessionId,
+            parent_tool_use_id: null, parent_agent_id: null,
+            message: { role: "user", content: [{ type: "tool_result", tool_use_id: `steer-tool-${originalUuid}`,
+              content: "Command completed without interruption." }] },
+          } as unknown as ClaudeSessionMessage & ClaudeMessage;
+          messages.push(toolResult); queue.push(toolResult);
+        }
+        // Claude folds the steer into the running turn before its next model
+        // request, recording it there as a queued command.
+        messages.push({ ...user, isQueuedCommand: true } as unknown as ClaudeSessionMessage & ClaudeMessage);
+        queue.push(claudeCommandLifecycle(sessionId, prompt.uuid!, "started"));
+        folded.push(prompt.uuid!);
+        this.#foldedSteers.set(sessionId, folded);
+        // The turn keeps running until the second steer, so the browser can
+        // show the first one taken mid-turn and send another.
+        if (first) continue;
         this.#steerPrompts.delete(sessionId);
-        const toolResult = { type: "user", uuid: crypto.randomUUID(), session_id: sessionId,
-          parent_tool_use_id: null, parent_agent_id: null,
-          message: { role: "user", content: [{ type: "tool_result", tool_use_id: `steer-tool-${originalUuid}`,
-            content: "Command completed without interruption." }] },
-        } as unknown as ClaudeSessionMessage & ClaudeMessage;
-        messages.push(toolResult); queue.push(toolResult);
+        this.#foldedSteers.delete(sessionId);
         const answer = { type: "assistant", uuid: assistantUuid, session_id: sessionId,
           parent_tool_use_id: null, parent_agent_id: null,
-          user_message_uuids: [originalUuid, prompt.uuid], user_message_uuid: prompt.uuid,
           message: { id: `steered-${assistantUuid}`, role: "assistant", stop_reason: "end_turn",
-            content: [{ type: "text", text: "Claude incorporated the revised approach." }] },
+            content: [{ type: "text", text: "Claude incorporated both corrections." }] },
         } as unknown as ClaudeSessionMessage & ClaudeMessage;
         messages.push(answer); queue.push(answer);
         queue.push({ type: "result", subtype: "success", uuid: crypto.randomUUID(),
           session_id: sessionId, duration_ms: 1, duration_api_ms: 1, is_error: false,
-          num_turns: 1, result: "Claude incorporated the revised approach.", stop_reason: "end_turn",
+          num_turns: 1, result: "Claude incorporated both corrections.", stop_reason: "end_turn",
           total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [],
-          user_message_uuid: originalUuid, user_message_uuids: [originalUuid, prompt.uuid],
+          user_message_uuid: prompt.uuid, user_message_uuids: [originalUuid, ...folded],
         } as unknown as ClaudeMessage);
         continue;
       }
@@ -873,6 +893,12 @@ function claudeFixtureResult(sessionId: string, operationId: string): ClaudeMess
     stop_reason: "end_turn", total_cost_usd: 0, usage: {}, modelUsage: {},
     permission_denials: [], user_message_uuid: operationId, user_message_uuids: [operationId],
   } as unknown as ClaudeMessage;
+}
+
+/** Claude Code's stream-json lifecycle frame for a uuid-stamped input. */
+function claudeCommandLifecycle(sessionId: string, commandUuid: string, state: "queued" | "started"): ClaudeMessage {
+  return { type: "command_lifecycle", command_uuid: commandUuid, state, uuid: crypto.randomUUID(),
+    session_id: sessionId } as unknown as ClaudeMessage;
 }
 
 function claudePromptText(prompt: ClaudeUserMessage): string {
