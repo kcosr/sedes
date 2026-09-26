@@ -33,11 +33,14 @@ discovery may identify and quarantine the correlated native child, but it does
 not adopt that child or import it as an unrelated thread, and it never repeats
 the fork RPC. The user can abandon the unresolved Sedes child.
 
-Startup recovery runs after the server begins listening. It retries only
-attempts a crash interrupted, those still `prepared` or whose provider call had
-started, and logs each outcome. It never aborts a fork: a definite failure it
-finds becomes a visible recovery. Attempts already awaiting recovery wait for
-the user.
+Startup recovery runs after the server begins listening and logs each outcome.
+It finalizes, locally and without a provider call, every fork whose provider
+child was already returned: an identified attempt, or one awaiting recovery
+that recorded the child's identity and binding detail. It retries only the
+attempts a crash interrupted before a response, those still `prepared` or
+whose provider call had started. It never aborts a fork: a definite failure it
+finds becomes a visible recovery. Other attempts awaiting recovery wait for the
+user.
 
 An explicit recovery aborts the reservation only on a definite failure, one
 that did not cross the provider submission boundary. On an attempt already

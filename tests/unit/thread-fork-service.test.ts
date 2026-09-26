@@ -1803,6 +1803,51 @@ describe("ThreadForkService", () => {
     }
   });
 
+  it("finalizes forks whose provider child was already returned at startup without a provider call", async () => {
+    const current = fixture();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      current.setBranching(branching("provider_assigned", "potentially_unknown"));
+      let created = 0;
+      current.branchConversation.mockImplementation(async () => {
+        created += 1;
+        return { backendConversationId: `provider-child-${created}`,
+          reconciliationToken: `token-${created}`, opaqueBindingDetail: `detail-${created}` };
+      });
+      // Binding the returned child failed, so recovery awaits the user.
+      current.failBoundDetailSaveOnce();
+      const awaiting = await current.service.forkManual(current.manual("returned-awaiting"));
+      expect(awaiting).toMatchObject({ status: "recovery_required" });
+      // A crash left this one between recording the child and binding it.
+      current.failBoundDetailSaveOnce();
+      const identified = await current.service.forkManual(current.manual("returned-identified"));
+      current.database.prepare(`UPDATE conversation_creation_attempts SET phase = 'conversation_identified',
+        diagnostic = NULL WHERE application_thread_id = ?`).run(identified.childThreadId);
+      expect(current.creation.findActiveForThread(current.scope, identified.childThreadId)).toMatchObject({
+        phase: "conversation_identified", provisionalBackendConversationId: "provider-child-2" });
+      current.branchConversation.mockClear();
+
+      await current.service.recoverInterruptedForks(current.scope);
+
+      expect(current.branchConversation).not.toHaveBeenCalled();
+      for (const [result, mutationId, child, phase] of [
+        [awaiting, "returned-awaiting", "provider-child-1", "recovery_required"],
+        [identified, "returned-identified", "provider-child-2", "conversation_identified"],
+      ] as const) {
+        expect(current.creation.findByMutationId(current.scope, mutationId)).toMatchObject({ phase: "bound" });
+        expect(current.bindings.getBinding(current.scope, result.childThreadId)).toMatchObject({
+          backendConversationId: child });
+        expect(warn).toHaveBeenCalledWith("thread_fork_startup_recovery", {
+          childThreadId: result.childThreadId, phase, outcome: "created" });
+      }
+    } finally {
+      stderr.mockRestore();
+      warn.mockRestore();
+      current.database.close();
+    }
+  });
+
   it("discards an unfinished fork on request without another provider call and quarantines its child", async () => {
     const current = fixture();
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);

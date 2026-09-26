@@ -131,8 +131,9 @@
 - Log every fork failure with its backend code and cause. A retry that fails
   transiently keeps the fork recoverable instead of discarding a child an
   earlier attempt may have created. Startup fork recovery runs after the
-  server listens, retries only forks a crash interrupted, and never discards
-  one. Aborted and discarded forks keep their reserved provider identity, so
+  server listens. It finishes forks whose provider child was already returned
+  without contacting the provider, retries only forks a crash interrupted
+  before a response, and never discards one. Aborted and discarded forks keep their reserved provider identity, so
   discovery never imports an orphaned fork child under the source's title
   (migration 116). Add **Discard this fork** to abandon an unfinished fork.
 
