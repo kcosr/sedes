@@ -596,6 +596,35 @@ describe("ClaudeConversationBackendDriver", () => {
     expect(sdk.createQuery).not.toHaveBeenCalled();
   });
 
+  it.each(["local", "session_ended"] as const)(
+    "finds an accepted submission older than the latest turns (%s authority)", async (authority) => {
+      const sdk = fakeSdk(); sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
+      // The accepted turn, then more turns than the latest snapshot holds.
+      const later = Array.from({ length: 12 }, (_, index) => {
+        const id = (offset: number) => `33333333-3333-4333-8333-${String(index * 2 + offset).padStart(12, "0")}`;
+        return [user(id(0), `Later ${index}`), assistant(id(1), `Answer ${index}`)];
+      }).flat();
+      sdk.getSessionMessages.mockResolvedValue([user(operationId, "Accepted"),
+        assistant("44444444-4444-4444-8444-444444444444", "Done"), ...later]);
+      const driver = createDriver(sdk, authority === "local" ? {} : { submissionDisposition: async () => authority });
+      const result = await driver.reconcileSubmission({ scope, workspace, binding: binding(),
+        opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), applicationOperationId: operationId,
+        retryAnchor: retryAnchor([]) });
+      expect(result).toMatchObject({ status: "accepted",
+        backendTurn: { status: "completed", completionCorrelations: [operationId] } });
+    },
+  );
+
+  it("never reports no acceptance for an ended owner while history holds the message", async () => {
+    const sdk = fakeSdk(); sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
+    // A native row with the input's identity that no turn correlates.
+    sdk.getSessionMessages.mockResolvedValue([{ ...user(operationId, "Accepted"), parent_agent_id: "agent-1" }]);
+    const driver = createDriver(sdk, { submissionDisposition: async () => "session_ended" });
+    await expect(driver.reconcileSubmission({ scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }), applicationOperationId: operationId }))
+      .resolves.toMatchObject({ status: "unresolved" });
+  });
+
   it("preserves exact consumption that races an ended-owner response", async () => {
     const sdk = fakeSdk(); sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
     sdk.getSessionMessages.mockResolvedValue([]);

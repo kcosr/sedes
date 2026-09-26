@@ -1069,6 +1069,12 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
               return unresolved("Claude consumed this input while its delivery owner was being checked.");
             }
           }
+          // A native row with this input's identity that no turn correlates
+          // is not proof of absence.
+          if (!steerOperations.has(input.applicationOperationId) &&
+              messages.some(message => message.type === "user" && message.uuid === input.applicationOperationId)) {
+            return unresolved("Claude's history holds this message, but no turn could be identified for it.");
+          }
           // The owner can report nothing more, and the tip-verified history
           // read above shows no acceptance. Tracking is terminal; whether
           // Claude consumed the input stays unknown and is never retried.
@@ -1532,8 +1538,10 @@ function reconcileProjectedSubmission(
   operationId: string,
   retryAnchor: string | undefined,
 ): SubmissionReconciliation {
-  const matches = Object.entries(projection.snapshot.turnsById).filter(
-    ([, turn]) => turn.completionCorrelations?.includes(operationId),
+  // Search every turn, not just the latest snapshot window: an accepted input
+  // can scroll out of it behind later turns, including turns Claude started.
+  const matches = projection.usageTurns.filter(
+    (turn) => turn.completionCorrelations?.includes(operationId),
   );
   if (matches.length === 0) {
     const anchor = parseRetryAnchor(retryAnchor);
@@ -1549,20 +1557,14 @@ function reconcileProjectedSubmission(
       "Claude exposed duplicate user-message identities for this submission.",
     );
   }
-  const [backendTurnId] = matches[0]!;
-  const backendTurn = projection.snapshot.turnsById[backendTurnId];
-  if (!backendTurn) {
-    return unresolved(
-      "Claude accepted the message but its turn could not be projected.",
-    );
-  }
+  const backendTurn = matches[0]!;
   return {
     status: "accepted",
     backendTurn,
     ...(backendTurn.status === "completed" ||
     backendTurn.status === "interrupted" ||
     backendTurn.status === "failed"
-      ? { completionIdentity: `${backendTurnId}:${backendTurn.status}` }
+      ? { completionIdentity: `${backendTurn.backendTurnId}:${backendTurn.status}` }
       : {}),
   };
 }

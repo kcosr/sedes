@@ -872,8 +872,11 @@ dead end and resent.
 
 On a remote runtime, an ordinary submission can reconcile as `failed_unknown`.
 This happens when the persistent owner reports that its session ended and the
-tip-correct history shows no acceptance: tracking is terminal, and
-consumption is unknown. When the user reconciles the queue, or on recovery at
+tip-correct history shows no acceptance: no turn in the whole history
+correlates the input and no row carries its identity. Tracking is then
+terminal, and consumption is unknown. Reconciliation searches every turn,
+not just the latest snapshot window, so an input accepted before later turns
+still reconciles as accepted. When the user reconciles the queue, or on recovery at
 startup, the shared queue fails that head with a "Claude may have received
 this; review the conversation" diagnostic. The user then dismisses it, deletes
 it, or restores it to the draft for an explicit resend; later queued input
