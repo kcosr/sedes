@@ -88,6 +88,30 @@ export class ClaudePersistentRuntimeHost {
       revision: String(this.#revision), blockers };
   }
 
+  /** Sessions whose work needs a main attachment, live work first, so a
+   * replacement main applies and acknowledges their output instead of letting
+   * it accumulate; and bounded activity counts for interruption previews. */
+  retainedWork() {
+    const sessions = [...this.#sessions.values()];
+    const live = sessions.filter(session => this.#hasLiveWork(session));
+    const unacknowledged = sessions.filter(session => !this.#hasLiveWork(session) && session.events.size > 0);
+    const background = { agents: 0, commands: 0, other: 0, unknownSessions: 0 };
+    for (const session of sessions) {
+      const snapshot = session.backgroundActivity.snapshot();
+      if (snapshot.state === "unknown") background.unknownSessions++;
+      background.agents += snapshot.agents; background.commands += snapshot.commands; background.other += snapshot.other;
+    }
+    return {
+      retainedSessionIds: [...live, ...unacknowledged].map(session => session.id),
+      activity: {
+        runningTurns: sessions.filter(session => session.active.size > 0 || session.providerState !== "idle").length,
+        pendingInteractions: sessions.reduce((count, session) => count + session.permissions.size, 0),
+        unacknowledgedSessions: sessions.filter(session => session.events.size > 0).length,
+        background,
+      },
+    };
+  }
+
   abandonmentEvidence() {
     return { ...this.snapshot(), sessionCount: this.#sessions.size,
       sessions: [...this.#sessions.values()].slice(0, 256).map(session => ({ sessionId: session.id,
@@ -725,6 +749,11 @@ export class ClaudePersistentRuntimeHost {
       try { return await promise; }
       finally { signal.removeEventListener("abort", abort); }
     };
+  }
+  /** Work the provider is still doing or waiting on, as opposed to settled output. */
+  #hasLiveWork(session: Session): boolean {
+    return session.active.size > 0 || session.pendingInputs.size > 0 || session.providerState !== "idle" || session.permissions.size > 0 ||
+      session.backgroundActivity.active || session.backgroundActivity.retirementBlocked;
   }
   #hasUnsettledOutcomes(session: Session): boolean {
     return [...session.events.values()].some(event => event.payload.kind !== "permission");

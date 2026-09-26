@@ -29,8 +29,13 @@ export const claudePersistentRuntimeLookupOperation = {
   ...capability, operation: "runtime.lookup", requestSchema: lookupRequestSchema,
   responseSchema: z.strictObject({ runtimeId: z.string().uuid().nullable() }), lane: "operation", maximumDeadlineMilliseconds: 120_000,
 } satisfies SidecarOperationDefinition<z.infer<typeof lookupRequestSchema>, { runtimeId: string | null }>;
+const count = z.number().int().nonnegative().max(1_000_000);
 const inspectionSchema = z.strictObject({ startupEnvironmentFingerprint: z.string().regex(/^[a-f0-9]{64}$/), state: z.enum(["idle", "active", "unknown"]), incarnation: z.string().uuid(),
-  revision: z.string().min(1).max(512), blockers: z.array(sidecarUpgradeBlockerSchema).max(7) });
+  revision: z.string().min(1).max(512), blockers: z.array(sidecarUpgradeBlockerSchema).max(7),
+  // Retained sessions whose work needs a main attachment, live work first.
+  retainedSessionIds: z.array(z.string().uuid()).max(32),
+  activity: z.strictObject({ runningTurns: count, pendingInteractions: count, unacknowledgedSessions: count,
+    background: z.strictObject({ agents: count, commands: count, other: count, unknownSessions: count }) }) });
 export const claudePersistentRuntimeInspectOperation = {
   ...capability, operation: "runtime.inspect", requestSchema: administrationRequestSchema, responseSchema: inspectionSchema,
   lane: "operation", maximumDeadlineMilliseconds: 120_000,

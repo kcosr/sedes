@@ -819,6 +819,24 @@ its applied launch environment and report the pending definitions until an
 explicit provider restart. Initial observation must recover the retained
 fingerprint without launching a provider.
 
+Provider work can outlive main in a service-owned runtime that journals
+per-thread events until main acknowledges them. The runtime's administrative
+inspection then reports `retainedThreadIds`: the application threads whose
+retained work (a running turn, a pending interaction or input, or
+unacknowledged output) needs a main attachment. Whenever main inspects the
+runtime, which it does soon after startup, after the service's controller
+changes, and for every lifecycle preview, it opens those threads one at a time
+within the shared conversation-runtime budget. Their output is then applied and
+acknowledged instead of overflowing the owner's retention bound. A pass cut
+short at the budget retries at the next inspection. Inspection uses the
+existing recovery attachment and never launches a provider. The inspection
+may also report bounded `activity` counts (running turns, background work,
+pending interactions, and conversations with unacknowledged output) that
+interruption previews show; absent counts are not zero. Claude's persistent
+host reports both. Codex's runtime-wide attachment already records and
+acknowledges retained outcomes without a thread handle, and Pi, Grok, and
+local Claude workers end with main, so they report neither.
+
 **Execution** definitions are principal-owned Environment → Backend → Saved
 Agent → Thread layers. Capture definitions and provenance transactionally before
 native creation, fence the preview's configuration and agent revisions, and

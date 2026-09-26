@@ -83,6 +83,7 @@ import { RuntimeBackedQueuedInputConversationGateway } from "./conversations/que
 import { QueuedInputDispatcher } from "./conversations/queued-input-dispatcher.js";
 import { ThreadCompletionCallbackDispatcher } from "./conversations/thread-completion-callback-dispatcher.js";
 import { reportBackgroundError } from "./report-background-error.js";
+import { attachRetainedThreads } from "./runtime/retained-provider-work.js";
 import {
   ActorBackedThreadApplicationConversationReader,
   ThreadApplicationService,
@@ -1933,6 +1934,27 @@ export async function startProductionApplication(
       if (!administration) observedBackends.delete(id);
       return administration;
     };
+    // Provider work that outlived main (or a lost connection) in a
+    // service-owned runtime is attached when an observation reports it, so
+    // its output is applied and acknowledged instead of accumulating. A pass
+    // cut short at the runtime budget retries at the next observation.
+    const retainedAttachments = new Set<string>();
+    const attachRetainedWork = (backendId: string): void => {
+      const threadIds = observedBackends.get(backendId)?.retainedThreadIds ?? [];
+      if (threadIds.length === 0 || retainedAttachments.has(backendId) || !runtimes) return;
+      const coordinator = runtimes;
+      retainedAttachments.add(backendId);
+      const admitted = discoveryOperations.admit(async signal => {
+        const result = await attachRetainedThreads({ threadIds, signal,
+          acquire: threadId => coordinator.acquire(scope, threadId),
+          report: (context, error) => reportBackgroundError(`Backend ${backendId}: ${context}`)(error) });
+        const owned = moduleRuntimes.get(backendId);
+        if (!result.complete && owned) remoteBackendObservations.delete(owned);
+      });
+      if (!admitted) { retainedAttachments.delete(backendId); return; }
+      void admitted.catch(reportBackgroundError(`Backend ${backendId} retained work attachment`))
+        .finally(() => retainedAttachments.delete(backendId));
+    };
     const captureAdministrativeResource = async (record: ConfigurationRuntimeState, refresh: boolean, refreshProvider = true) => {
       const current = configurationRepository.get(scope);
       const id = record.resourceId;
@@ -1950,7 +1972,7 @@ export async function startProductionApplication(
           // impact token. The independent management status still works when a
           // provider runtime cannot be recovered or speaks an older dialect.
           for (const backend of (refreshProvider ? current.configuration.backends : []).filter(backend => current.configuration.targets.some(target => target.backendInstanceId === backend.id && target.executionEnvironmentId === id))) {
-            try { const control = backendHasRemoteProvider(backend.id) ? await recoverBackendAdministration(backend.id) : moduleRuntimes.get(backend.id)?.administration; if (control) observedBackends.set(backend.id, await control.inspect()); }
+            try { const control = backendHasRemoteProvider(backend.id) ? await recoverBackendAdministration(backend.id) : moduleRuntimes.get(backend.id)?.administration; if (control) { observedBackends.set(backend.id, await control.inspect()); attachRetainedWork(backend.id); } }
             catch { /* Stable management inventory remains authoritative below. */ }
           }
           try { observedServices.set(id, await owner.inspectService(managementSignal()) ?? null); observationFailures.delete(key); }
@@ -2006,7 +2028,7 @@ export async function startProductionApplication(
           observation.pending = (async () => {
             try {
               administration = remote ? await recoverBackendAdministration(id) : owned?.administration;
-              if (administration) observedBackends.set(id, await administration.inspect());
+              if (administration) { observedBackends.set(id, await administration.inspect()); attachRetainedWork(id); }
               observationFailures.delete(key);
             } catch (error) {
               observationFailures.set(key, observationFailure(error));

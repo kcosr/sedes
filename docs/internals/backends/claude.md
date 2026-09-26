@@ -74,6 +74,17 @@ stamp, time to first token, or any other field never fold. A long turn that
 runs while main is away therefore retains a few merged deltas rather than one
 frame per token.
 
+The runtime inspection lists the retained sessions that still hold work, live
+work first: a running turn (including one Claude started), a pending input or
+permission, background activity, or unacknowledged events. Main maps each to
+its bound thread and opens it within the runtime budget whenever it inspects
+the runtime: within one 30-second maintenance pass of startup, after the
+service's controller changes, and for each lifecycle preview. Retained output
+is therefore applied and acknowledged without anyone opening the thread. The
+same inspection counts running turns, background agents and commands, pending
+permissions, and sessions with unacknowledged output for Stop, Restart, and
+Upgrade previews.
+
 Cleanup is independent of optional usage accounting. A failed accounting
 capture still withholds its event ACK. Disconnect stops connected reclamation;
 long outages or unavailable history can still exhaust the existing retention

@@ -74,7 +74,7 @@ export class ClaudePersistentRuntimeRegistry {
 
   inspect(runtimeId: string) {
     const host = this.get(runtimeId);
-    return { ...host.snapshot(), incarnation: host.runtimeId, startupEnvironmentFingerprint: configurationFingerprint(host.input.configuration.startupEnvironmentVariables ?? {}) };
+    return { ...host.snapshot(), ...host.retainedWork(), incarnation: host.runtimeId, startupEnvironmentFingerprint: configurationFingerprint(host.input.configuration.startupEnvironmentVariables ?? {}) };
   }
 
   async stop(runtimeId: string, expectedRevision: string, force: boolean): Promise<void> {
