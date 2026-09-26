@@ -815,6 +815,8 @@ describe("ClaudeConversationBackendDriver", () => {
           env: {
             HOME: "/operator",
             CLAUDE_CONFIG_DIR: "/operator/.claude",
+            // Sedes-owned: every launch reports Claude's own run state.
+            CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
           },
         }),
       }),

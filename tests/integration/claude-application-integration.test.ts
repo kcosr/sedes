@@ -114,8 +114,16 @@ class AsyncMessageQueue implements AsyncIterable<SDKMessage> {
   }
 }
 
+/**
+ * `echo` is the historical fixture shape. The installed CLI never echoes a
+ * prompt: `stamps` has only reply consumption stamps, and `native` adds the
+ * lifecycle and run-state frames Claude emits for Sedes' launch environment.
+ */
+type NativeSignals = "echo" | "stamps" | "native";
+
 class FakeClaudeSdk implements ClaudeSdkFacade {
   deferResult = false;
+  constructor(readonly signals: NativeSignals = "echo") {}
   emitDuringTurn: ((message: SDKMessage) => void) | undefined;
   finishTurn: (() => void) | undefined;
   readonly createQuery = vi.fn((input: ClaudeQueryInput): Query =>
@@ -235,8 +243,16 @@ class FakeClaudeSdk implements ClaudeSdkFacade {
         },
       } as unknown as SessionMessage & SDKMessage;
       this.#sessions.set(sessionId, [user, assistant]);
-      queue.push(user);
-      queue.push(assistant);
+      const system = { uuid: crypto.randomUUID(), session_id: sessionId };
+      if (this.signals === "echo") queue.push(user);
+      if (this.signals === "native") {
+        queue.push({ ...system, type: "system", subtype: "session_state_changed", state: "running" } as SDKMessage);
+        for (const state of ["queued", "started"]) {
+          queue.push({ ...system, uuid: crypto.randomUUID(), type: "command_lifecycle", command_uuid: prompt.uuid, state } as unknown as SDKMessage);
+        }
+      }
+      queue.push(this.signals === "echo" ? assistant
+        : { ...assistant, user_message_uuid: prompt.uuid, user_message_uuids: [prompt.uuid] } as SDKMessage);
       this.emitDuringTurn = (message) => {
         if (message.type === "assistant" || message.type === "user") {
           this.#sessions.get(sessionId)!.push(message as unknown as SessionMessage);
@@ -251,6 +267,7 @@ class FakeClaudeSdk implements ClaudeSdkFacade {
           duration_ms: 1, duration_api_ms: 1, stop_reason: "end_turn", total_cost_usd: 0,
           usage: {}, modelUsage: {}, permission_denials: [],
         } as unknown as SDKMessage);
+        if (this.signals === "stamps") return;
         queue.push({
           type: "system",
           subtype: "session_state_changed",
@@ -297,10 +314,10 @@ function connectionProfile(
 }
 
 describe("Claude production application integration", () => {
-  it("creates, submits, persists, projects, and fails closed through normalized application services", async () => {
+  it.each(["echo", "stamps", "native"] as const)("creates, submits, persists, projects, and fails closed through normalized application services (%s)", async (signals) => {
     const database = openOverlayDatabase(":memory:");
     const resources = new StartupResourceStack();
-    const sdk = new FakeClaudeSdk();
+    const sdk = new FakeClaudeSdk(signals);
     sdk.deferResult = true;
     let actors: ConversationActorManager | undefined;
     let releaseObservedActor: (() => void) | undefined;
@@ -674,6 +691,8 @@ describe("Claude production application integration", () => {
       });
       sdk.finishTurn!();
       await vi.waitFor(async () => expect((await threads.snapshot(scope, created.applicationThreadId)).runState).toBe("idle"));
+      // Send and queue dispatch require the actor's authoritative idle edge.
+      await vi.waitFor(() => expect(observed.actor.authoritativelySettled).toBe(true));
       expectBackendSessionSummary(database, scope, created.applicationThreadId, SESSION_ID);
       const snapshot = await threads.snapshot(scope, created.applicationThreadId);
       expect(observed.actor.timeline.generation).toBe(activeGeneration);

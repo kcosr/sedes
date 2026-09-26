@@ -29,6 +29,14 @@ import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v1.js";
 
 const CLAUDE_SETTING_SOURCES = ["user", "project", "local"] as const;
 
+/**
+ * Claude Code emits `session_state_changed` only when this variable is set.
+ * Sedes owns it for every launch: turns Claude starts itself (task
+ * notifications, peer hand-backs) are otherwise invisible to run state.
+ */
+export const CLAUDE_SESSION_STATE_EVENTS_VARIABLE =
+  "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS";
+
 const SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE =
   "SEDES_AGENT_TOOL_SOURCE_CAPABILITY";
 
@@ -263,6 +271,7 @@ export class ClaudeSdkSession {
                   this.#options.agentToolMcp.sourceCapability,
               }
             : {}),
+          [CLAUDE_SESSION_STATE_EVENTS_VARIABLE]: "1",
         },
       },
     });

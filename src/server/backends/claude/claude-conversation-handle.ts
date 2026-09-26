@@ -4,7 +4,7 @@ import { turnFailure } from "../turn-failure.js";
 import type { ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { claudeMessageIsChildOwned } from "./claude-message-scope.js";
 import { ClaudeBackgroundActivity } from "./claude-background-activity.js";
-import { claudeResultIsUnrelated, claudeResultUserMessageIds } from "./claude-result-lifecycle.js";
+import { claudeCommandLifecycle, claudeResultIsUnrelated, claudeResultUserMessageIds } from "./claude-result-lifecycle.js";
 import { createHash, randomBytes } from "node:crypto";
 import type {
   EffortLevel,
@@ -248,6 +248,19 @@ export class ClaudeConversationHandle implements ConversationHandle {
   #partialMessageId: string | undefined;
   #partialMessageSourceOrderBase: number | undefined;
   readonly #startupSupersededMessageUuids = new Set<string>();
+  /** Claude Code's reported session state, including work it started itself. */
+  #providerState: "idle" | "running" | "requires_action" = "idle";
+  /**
+   * A live turn Claude started itself; it carries no Sedes input identity.
+   * `ownsTurn` is false while its output extends the settled previous turn.
+   */
+  #providerTurn:
+    | { readonly startIndex?: number; messageId?: string; boundaryUuid?: string; ownsTurn: boolean }
+    | undefined;
+  /** A non-ambient task finished; its notification can start the next turn. */
+  #taskNotificationPending = false;
+  /** Live boundary markers for provider-started turns, by first message ID. */
+  readonly #providerTurnBoundaries = new Map<string, string>();
   #projection: ClaudeHistoryProjection;
   #projectionTurnOffset = 0;
   #projectionUserMessageOrdinalBase = 0;
@@ -513,7 +526,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
   get retirementBlocked(): boolean {
     return this.#backgroundActivity.retirementBlocked ||
       (!this.#closed && !this.#projectionInvalidated &&
-        [...this.#submissions.values()].some(submission => !submission.accepted && !submission.observationEnded));
+        (this.#providerState !== "idle" ||
+          [...this.#submissions.values()].some(submission => !submission.accepted && !submission.observationEnded)));
   }
 
   async establishProjection(
@@ -822,7 +836,12 @@ export class ClaudeConversationHandle implements ConversationHandle {
     }
     if (
       this.#submissionReserved ||
-      (!steering && this.#runState !== "idle" && this.#runState !== "failed")
+      (!steering && (
+        (this.#runState !== "idle" && this.#runState !== "failed") ||
+        // Claude merges inputs queued together into one turn; admit the next
+        // ordinary input only after the previous one has started its turn.
+        this.#hasSubmissionAwaitingStart(false)
+      ))
     ) {
       throw claudeError(
         "invalid_state",
@@ -1273,6 +1292,11 @@ export class ClaudeConversationHandle implements ConversationHandle {
       // parent timeline and are not evidence of ambiguous parent correlation.
       return;
     }
+    const lifecycle = claudeCommandLifecycle(message);
+    if (lifecycle) {
+      this.#consumeCommandLifecycle(lifecycle);
+      return;
+    }
     if (message.type === "system" && message.session_id === this.binding.backendConversationId) {
       if (this.#backgroundActivity.consume(message)) {
         this.#emit({ type: "background_activity_changed", activity: this.#backgroundActivity.snapshot() });
@@ -1301,6 +1325,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       if (message.subtype === "task_notification") {
         if (!message.ambient && !message.skip_transcript) {
           this.#consumeTaskTerminal({ nativeTaskId: message.task_id, nativeToolUseId: message.tool_use_id, status: message.status });
+          this.#taskNotificationPending = true;
         }
         if (this.#backgroundActivity.settleTask(message.task_id)) {
           // Reevaluate idle retirement only after the durable receipt above.
@@ -1343,8 +1368,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
     ) {
       this.#recordPermissionModeEvidence(message.permissionMode, "status");
     }
-    // A normal idle send can be inferred from its first output. A concurrent
-    // next message requires its exact native consumed-input UUID instead.
+    // Only an exact native input UUID proves which turn consumed a Sedes
+    // input. Unstamped output belongs to whatever turn Claude is running.
     if (message.type === "stream_event" || message.type === "assistant" || message.type === "result") {
       const consumed = claudeResultUserMessageIds(message);
       for (const operationId of consumed) {
@@ -1358,27 +1383,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
         }
         this.#materializePendingUser(operationId, consumed[0]);
       }
-      if (message.type !== "result") this.#materializePendingUser();
+      const outputMessageId = modelOutputMessageId(message);
+      if (consumed.length === 0 && outputMessageId !== undefined) this.#observeProviderOutput(outputMessageId);
     }
     if (
       message.type === "system" &&
       message.subtype === "session_state_changed"
     ) {
-      if (message.state === "running") this.#materializePendingUser();
-      const projectedState = this.#projection.snapshot.runState;
-      // Native idle pulses can occur between message/tool blocks. The result
-      // owns foreground completion once a live turn has started.
-      this.#setRunState(
-        message.state === "running" || message.state === "requires_action"
-          ? "running"
-          : projectedState === "failed"
-            ? "failed"
-            : this.#runState === "running" || this.#runState === "stopping"
-              ? this.#runState
-              : projectedState === "running"
-                ? "running"
-                : "idle",
-      );
+      this.#consumeProviderState(message.state);
       return;
     }
     if (message.type === "result") {
@@ -1421,7 +1433,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       this.#usage = mergeUsage(this.#projection.usage ?? {}, this.#usage);
       this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot);
       if (message.type === "user" && [...this.#projection.nativeUserMessageUuidByBackendTurnId.values()].includes(message.uuid!)) {
-        this.#setRunState("running");
+        this.#beginSedesTurn();
       }
       this.#emit({ type: "usage_changed", usage: this.#usage });
     }
@@ -1524,6 +1536,11 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#usage = this.#projection.usage ?? {};
     this.#captureHistoryUsage();
     this.#runState = this.#projection.snapshot.runState;
+    const activeTurn = this.#projection.snapshot.activeBackendTurnId === undefined ? undefined
+      : this.#projection.snapshot.turnsById[this.#projection.snapshot.activeBackendTurnId];
+    // Attaching during a turn Claude started: its result carries no Sedes input.
+    this.#providerTurn = this.#runState === "running" && activeTurn && !activeTurn.completionCorrelations?.length
+      ? { ownsTurn: true } : undefined;
   }
 
   #captureHistoryUsage(): void {
@@ -1590,17 +1607,27 @@ export class ClaudeConversationHandle implements ConversationHandle {
     // the confirmed model's row; unknown stays null.
     this.#usageAccounting?.pipeline(message, this.#effectiveEffort ?? null, this.#effectiveModel ?? null);
     this.#captureResultUsage(message);
+    const correlatedIds = claudeResultUserMessageIds(message);
+    // A turn Claude started itself carries no Sedes input identity. Its result
+    // ends that turn without writing a receipt for any application turn.
+    if (this.#providerTurn && correlatedIds.length === 0) {
+      this.#endProviderTurn();
+      return;
+    }
     const activeId = this.#activeBackendTurnId();
     // Persistent output is correlated by the owner's exact user-message event.
     // A send awaiting admission must not hide a terminal result for older work.
     const pendingIds = this.#session.lifetime === "persistent_service" ? [] : [...this.#submissions]
       .filter(([, submission]) => !submission.accepted && !submission.steering)
       .map(([id]) => id);
-    const expectedIds = pendingIds.length > 0 ? pendingIds :
-      activeId ? this.#projection.snapshot.turnsById[activeId]?.completionCorrelations ?? [] : [];
+    const expectedIds = [...pendingIds,
+      ...(activeId ? this.#projection.snapshot.turnsById[activeId]?.completionCorrelations ?? [] : [])];
     if (claudeResultIsUnrelated(message, expectedIds)) return;
     const operationId = this.#resultSubmissionOperationId(message);
     if (operationId) this.#materializePendingUser(operationId);
+    // Without a live turn, an uncorrelated result has no application turn to
+    // settle; attributing it to the previous turn would forge its receipt.
+    if (correlatedIds.length === 0 && this.#runState !== "running" && this.#runState !== "stopping") return;
     const backendTurnId = this.#activeBackendTurnId();
     this.#captureResultUsage(message);
     const priorReceipt = backendTurnId
@@ -1622,52 +1649,50 @@ export class ClaudeConversationHandle implements ConversationHandle {
       const backendTurnId =
         this.#projection.snapshot.activeBackendTurnId ??
         this.#projection.snapshot.orderedBackendTurnIds.at(-1);
+      let settledStatus: ClaudeTerminalStatus = terminalStatus;
       if (backendTurnId) {
         const previous = this.#projection;
         const terminalAt = this.#now();
-        this.#settings.writeTerminalReceipt(
-          this.#scope,
-          this.binding.applicationThreadId,
-          {
+        try {
+          settledStatus = this.#settings.writeTerminalReceipt(
+            this.#scope,
+            this.binding.applicationThreadId,
+            {
+              backendTurnId,
+              status: terminalStatus,
+              ...(terminalStatus === "failed" ? {
+                failureMessage: turnFailure(terminalFailureMessage(message)).message.text,
+              } : {}),
+              providerTerminalReason: message.terminal_reason ?? message.subtype,
+              providerResultUuid: message.uuid,
+              terminalAt,
+              now: terminalAt,
+            },
+          ).status;
+        } catch (error) {
+          if (!(error instanceof Error) || error.message !== "claude_terminal_receipt_status_conflict") throw error;
+          // Receipts are write-once. A contradictory later result for the same
+          // turn keeps the first outcome and must not end the live query.
+          const existing = this.#settings.findTerminalReceipt(this.#scope, {
+            applicationThreadId: this.binding.applicationThreadId,
             backendTurnId,
-            status: terminalStatus,
-            ...(terminalStatus === "failed" ? {
-              failureMessage: turnFailure(terminalFailureMessage(message)).message.text,
-            } : {}),
-            providerTerminalReason: message.terminal_reason ?? message.subtype,
-            providerResultUuid: message.uuid,
-            terminalAt,
-            now: terminalAt,
-          },
-        );
+          });
+          if (!existing) throw error;
+          settledStatus = existing.status;
+          this.#onError(error);
+        }
         this.#refreshProjection();
         this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot, backendTurnId);
       }
-      this.#setRunState(terminalStatus === "failed" ? "failed" : "idle");
+      this.#setRunState(settledStatus === "failed" ? "failed" : "idle");
     }
   }
 
-  #materializePendingUser(expectedOperationId?: string, nativeTurnRootUuid?: string): void {
+  #materializePendingUser(operationId: string, nativeTurnRootUuid?: string): void {
     // The persistent owner emits the exact admitted user UUID before output.
-    // Output from an older turn racing a rejected send cannot prove acceptance.
     if (this.#session.lifetime === "persistent_service") return;
-    const candidates = expectedOperationId
-      ? [
-          [
-            expectedOperationId,
-            this.#submissions.get(expectedOperationId),
-          ] as const,
-        ].filter(
-          (entry): entry is readonly [string, PendingSubmission] =>
-            entry[1] !== undefined,
-        )
-      : [...this.#submissions.entries()].filter(
-          ([operationId, submission]) =>
-            !submission.accepted && !submission.steering && !submission.admissionError &&
-            !this.#messages.some(({ uuid }) => uuid === operationId),
-        );
-    if (candidates.length !== 1) return;
-    const [operationId, submission] = candidates[0]!;
+    const submission = this.#submissions.get(operationId);
+    if (!submission) return;
     if (submission.steering) {
       if (!nativeTurnRootUuid) return;
       this.#settings.associateSteerOperation(this.#scope, this.binding.applicationThreadId, operationId, nativeTurnRootUuid);
@@ -1685,6 +1710,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
       this.#projectionMessages.push(this.#messages.at(-1)!);
       this.#refreshProjection();
       this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot);
+      if ([...this.#projection.nativeUserMessageUuidByBackendTurnId.values()].includes(operationId)) {
+        this.#beginSedesTurn();
+      }
     }
     submission.accepted = true;
     submission.accept();
@@ -1692,17 +1720,73 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   #resultSubmissionOperationId(message: SDKResultMessage): string | undefined {
     const correlatedIds = claudeResultUserMessageIds(message);
-    if (correlatedIds.length > 0) {
-      return correlatedIds.find(id => this.#submissions.get(id)?.accepted === false) ??
-        correlatedIds.find(id => this.#submissions.has(id));
+    return correlatedIds.find(id => this.#submissions.get(id)?.accepted === false) ??
+      correlatedIds.find(id => this.#submissions.has(id));
+  }
+
+  /** `started` is emitted when Claude dequeues an input into a turn. */
+  #consumeCommandLifecycle(lifecycle: NonNullable<ReturnType<typeof claudeCommandLifecycle>>): void {
+    if (lifecycle.state !== "started") return;
+    const submission = this.#submissions.get(lifecycle.commandUuid);
+    // The startup probe and inputs this attachment did not send are ignored.
+    // A steer's receiving turn is identified only by its consumption stamp.
+    if (!submission || submission.steering || submission.accepted || submission.observationEnded) return;
+    this.#materializePendingUser(lifecycle.commandUuid);
+  }
+
+  #hasSubmissionAwaitingStart(includeSteering: boolean): boolean {
+    return [...this.#submissions.values()].some(submission =>
+      (includeSteering || !submission.steering) && !submission.accepted &&
+      !submission.admissionError && !submission.observationEnded);
+  }
+
+  #beginSedesTurn(): void {
+    // A Sedes input can take over a turn Claude started, for example a steer
+    // folded into a notification turn. Publish the new active turn either way.
+    this.#providerTurn = undefined;
+    this.#setRunState("running", true);
+  }
+
+  #beginProviderTurn(): void {
+    this.#providerTurn = { startIndex: this.#messages.length, ownsTurn: false };
+    this.#setRunState("running");
+  }
+
+  #endProviderTurn(): void {
+    // Publish the settled turn before idle, as a Sedes turn result does.
+    const previous = this.#projection.snapshot;
+    this.#refreshProjection();
+    this.#emitProjectionDelta(previous, this.#projection.snapshot, this.#activeBackendTurnId());
+    this.#providerTurn = undefined;
+    this.#setRunState("idle");
+  }
+
+  /** Model output with no Sedes input stamp while no turn is live. */
+  #observeProviderOutput(messageId: string): void {
+    if (!this.#initialHistoryLoaded) return;
+    if (this.#runState !== "running" && this.#runState !== "stopping") this.#beginProviderTurn();
+    if (this.#providerTurn && this.#providerTurn.messageId === undefined) this.#providerTurn.messageId = messageId;
+  }
+
+  #consumeProviderState(state: "idle" | "running" | "requires_action"): void {
+    const previous = this.#providerState;
+    this.#providerState = state;
+    if (this.#initialHistoryLoaded) {
+      if (state !== "idle") {
+        // Claude began work while no Sedes input is awaiting its turn: a task
+        // notification or peer hand-back started this turn.
+        if (previous === "idle" && this.#runState !== "running" && this.#runState !== "stopping" &&
+            !this.#hasSubmissionAwaitingStart(true)) this.#beginProviderTurn();
+      } else if (this.#providerTurn) {
+        // Claude finished work that produced no result, for example a drain
+        // that did not query the model.
+        this.#endProviderTurn();
+      }
     }
-    if (message.num_turns < 1) return undefined;
-    const pending = [...this.#submissions.entries()].filter(
-      ([operationId, submission]) =>
-        !submission.accepted && !submission.steering &&
-        !this.#messages.some(({ uuid }) => uuid === operationId),
-    );
-    return pending.length === 1 ? pending[0]![0] : undefined;
+    if ((previous === "idle") !== (state === "idle")) {
+      // Retirement eligibility follows Claude's own state; re-evaluate it.
+      this.#emit({ type: "background_activity_changed", activity: this.#backgroundActivity.snapshot() });
+    }
   }
 
   #consumePartial(
@@ -1872,9 +1956,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     // History infers completion between assistant/tool blocks. A live turn
     // remains active until its native result; publishing those intermediate
     // guesses makes the shared actor alternate idle/running and hides controls.
-    const liveTurnId = this.#runState === "running" || this.#runState === "stopping"
-      ? this.#activeBackendTurnId()
-      : undefined;
+    const liveTurnId = this.#liveTurnId();
     const liveTurn = (turn: BackendTurn): BackendTurn => {
       if (turn.status !== "completed") return turn;
       const { endedBy: _endedBy, completedAt: _completedAt, ...active } = turn;
@@ -1919,8 +2001,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
     }
   }
 
-  #setRunState(state: BackendConversationSnapshot["runState"]): void {
-    if (this.#runState === state) return;
+  #setRunState(state: BackendConversationSnapshot["runState"], republish = false): void {
+    if (this.#runState === state && !republish) return;
     this.#runState = state;
     this.#emit({
       type: "run_state_changed",
@@ -1948,6 +2030,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       activeBackendTurnId &&
       (this.#runState === "running" || this.#runState === "stopping")
     ) {
+      const reopened = activeBackendTurnId === this.#liveTurnId();
       const items = [...this.#partialItems.values()]
         .filter((partial) => partial.backendTurnId === activeBackendTurnId)
         .map((partial) =>
@@ -1960,7 +2043,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       for (const item of items) result.itemsById[item.backendItemId] = item;
       result.turnsById[activeBackendTurnId] = {
         ...activeTurn,
-        status: "in_progress",
+        ...(reopened ? { status: "in_progress" as const } : {}),
         orderedBackendItemIds: [
           ...new Set([
             ...activeTurn.orderedBackendItemIds,
@@ -1978,6 +2061,15 @@ export class ClaudeConversationHandle implements ConversationHandle {
         ? { activeBackendTurnId: this.#activeBackendTurnId() }
         : { activeBackendTurnId: undefined }),
     };
+  }
+
+  /** The turn kept in progress until its native result, if any. */
+  #liveTurnId(): string | undefined {
+    if (this.#runState !== "running" && this.#runState !== "stopping") return undefined;
+    // Output from a turn Claude started without a visible boundary extends the
+    // settled previous turn, as provider history does; it does not reopen it.
+    if (this.#providerTurn && !this.#providerTurn.ownsTurn) return undefined;
+    return this.#activeBackendTurnId();
   }
 
   #activeBackendTurnId(): string | undefined {
@@ -2419,6 +2511,13 @@ function liveSessionMessage(
       ? { timestamp: message.timestamp }
       : {}),
   };
+}
+
+/** Anthropic message ID of a main-thread model response's first frame. */
+function modelOutputMessageId(message: SDKMessage): string | undefined {
+  if (message.type === "assistant") return message.parent_tool_use_id === null ? message.message.id : undefined;
+  if (message.type !== "stream_event" || message.parent_tool_use_id !== null) return undefined;
+  return message.event.type === "message_start" ? message.event.message.id : undefined;
 }
 
 function copySessionMessage(message: SessionMessage): SessionMessage {
