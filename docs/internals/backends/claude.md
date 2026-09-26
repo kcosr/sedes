@@ -410,11 +410,16 @@ claim. Projection requires the exact parent tool call to remain in native
 history. Replaying a receipt cannot complete the main turn again.
 
 When Claude resumes a session whose previous process left background work
-unfinished, it stops each such task with a `task_notification` whose `reason`
-is `worker_restart`, and it may relaunch the task. Sedes records the stopped
+unfinished, it ends each such task with a `stopped` or `failed`
+`task_notification`, before its initialization frame, and it may relaunch the
+task. An in-process worker restart adds `reason: "worker_restart"`; a new
+process resuming the session does not. Sedes therefore treats a non-completed
+notification in a fresh (not reattached) query for a task that query never
+started, or any `worker_restart` notification, as orphaned work. It records the
 bookend and shows a warning notice naming the task by its recorded
 description, or by its native ID, because the task's result never arrived.
 The provider's summary text is not shown.
+`claude-resume-orphan-native.test.ts` qualifies this on Claude Code 2.1.283.
 
 `background_tasks_changed` is the authoritative level inventory for live
 subagents, Bash commands, and other nonambient work. It maps to the shared
@@ -758,6 +763,9 @@ normalized integration surface:
 - `claude-run-state-native.test.ts` qualifies the lifecycle and session-state
   frames described under runtime ownership against the actual executable and a
   loopback Messages fixture, including turns Claude starts itself;
+- `claude-resume-orphan-native.test.ts` kills a query while its background
+  command runs, resumes the session against a loopback Messages fixture, and
+  checks the notification that ends the orphaned task;
 - `claude-background-activity-native.test.ts` runs the pinned SDK and actual
   Claude executable against an isolated loopback Messages fixture. Its finite
   gated Bash and Agent jobs prove the foreground result precedes background

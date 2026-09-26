@@ -3925,28 +3925,41 @@ describe("Claude outstanding background activity and subagent bookends", () => {
     await reopened.close();
   });
 
-  it("names each background task Claude reports orphaned by the previous session, and only those", async () => {
+  it("names each background task a resumed query reports its previous process left unfinished, and only those", async () => {
     const provider = fixture();
-    const { handle } = createHandle(provider, vi.fn(), { initialMessages });
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages });
     const established = await handle.establishProjection({ signal: new AbortController().signal });
     const events: BackendConversationEvent[] = [];
     established.subscribeFromNext(({ event }) => events.push(event));
+    // The previous query started this agent; its launch receipt persists.
     provider.messages.push(started());
-    // A resumed Claude reports work the previous process left unfinished.
-    provider.messages.push(system({ subtype: "task_notification", task_id: "child", tool_use_id: "agent-launch",
-      status: "stopped", reason: "worker_restart", output_file: "/private", summary: "Private summary text" }));
-    provider.messages.push(system({ subtype: "task_notification", task_id: "unrecorded-shell",
-      status: "stopped", reason: "worker_restart", output_file: "/private", summary: "Private summary text" }));
-    provider.messages.push(system({ subtype: "task_notification", task_id: "stopped-by-user",
-      status: "stopped", output_file: "/private", summary: "Private summary text" }));
-    await vi.waitFor(() => expect(events.filter(event => event.type === "notice")).toHaveLength(2));
+    await vi.waitFor(() => expect(settings.listTaskLifecycleReceipts({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId },
+      BINDING.applicationThreadId, SESSION_ID)).toHaveLength(1));
+    await handle.close();
+    const provider2 = fixture();
+    const resumed = createHandle(provider2, vi.fn(), { settings, resumeSession: true, initialMessages });
+    const reopened = await resumed.handle.establishProjection({ signal: new AbortController().signal });
+    events.length = 0;
+    reopened.subscribeFromNext(({ event }) => events.push(event));
+    const notification = (body: Record<string, unknown>) => system({ subtype: "task_notification", output_file: "/private", summary: "Private summary text", ...body });
+    // A resumed Claude stops or fails the work the previous process left.
+    provider2.messages.push(notification({ task_id: "child", status: "stopped" }));
+    provider2.messages.push(notification({ task_id: "unrecorded-shell", status: "failed" }));
+    // Work this query started and stopped, and ordinary completion, are not orphans.
+    provider2.messages.push(system({ subtype: "task_started", task_id: "own", task_type: "local_bash", description: "Own work" }));
+    provider2.messages.push(notification({ task_id: "own", status: "stopped" }));
+    provider2.messages.push(notification({ task_id: "finished-late", status: "completed" }));
+    // An in-process worker restart says so explicitly, even on a reattachment.
+    provider2.messages.push(notification({ task_id: "restarted", status: "stopped", reason: "worker_restart" }));
+    await vi.waitFor(() => expect(events.filter(event => event.type === "notice")).toHaveLength(3));
+    await new Promise(resolve => setTimeout(resolve, 20));
     const notices = events.flatMap(event => event.type === "notice" ? [event.notice] : []);
+    const text = (task: string) => `Background task ${task} did not finish before the previous Claude session ended, and its result was not reported. Claude may restart it; check its output before relying on it.`;
     expect(notices.map(notice => [notice.tone, notice.message.text])).toEqual([
-      ["warning", 'Background task "Sleep 20 seconds test" did not finish before the previous Claude session ended, and its result was not reported. Claude may restart it; check its output before relying on it.'],
-      ["warning", "Background task unrecorded-shell did not finish before the previous Claude session ended, and its result was not reported. Claude may restart it; check its output before relying on it."],
+      ["warning", text('"Sleep 20 seconds test"')], ["warning", text("unrecorded-shell")], ["warning", text("restarted")],
     ]);
     expect(JSON.stringify(notices)).not.toContain("Private summary text");
-    await handle.close();
+    await resumed.handle.close();
   });
 
   it.each(["completed", "failed", "stopped"] as const)("keeps Send independent and persists exactly one %s bookend across reopen", async status => {
