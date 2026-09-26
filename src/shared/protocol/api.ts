@@ -804,12 +804,23 @@ const forceResetFingerprintSchema = z
   .length(64)
   .regex(/^[0-9a-f]{64}$/);
 
+const backgroundCountSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+/** Background work that the affected loaded runtimes report. Replacing a
+ * runtime can end it; unknown inventories are counted, never assumed empty. */
+export const threadForceResetBackgroundActivitySchema = z.strictObject({
+  agents: backgroundCountSchema,
+  commands: backgroundCountSchema,
+  other: backgroundCountSchema,
+  unknownThreads: z.number().int().nonnegative().max(10_000),
+});
+
 export const threadForceResetImpactSchema = z.strictObject({
   blockerFingerprint: forceResetFingerprintSchema,
   resettable: z.boolean(),
   blockers: threadForceResetBlockerSummariesSchema,
   affectedThreadIds: z.array(threadIdSchema).min(1).max(10_000),
   warnings: z.array(threadForceResetWarningSchema).max(3),
+  backgroundActivity: threadForceResetBackgroundActivitySchema,
 });
 export type ThreadForceResetImpact = z.infer<
   typeof threadForceResetImpactSchema

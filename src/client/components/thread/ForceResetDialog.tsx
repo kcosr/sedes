@@ -32,6 +32,33 @@ const blockerLabels: Record<
   conversation_runtime: ["conversation runtime", "conversation runtimes"],
 };
 
+function countLabel(count: number, singular: string, plural: string): string | undefined {
+  return count === 0 ? undefined : `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
+}
+
+/** Replacing a runtime can end the background work it owns. */
+function backgroundSummary(
+  activity: ThreadForceResetImpact["backgroundActivity"],
+): React.JSX.Element | null {
+  const counts = [
+    countLabel(activity.agents, "background agent", "background agents"),
+    countLabel(activity.commands, "background command", "background commands"),
+    countLabel(activity.other, "other background task", "other background tasks"),
+  ].filter((label): label is string => label !== undefined);
+  if (counts.length === 0 && activity.unknownThreads === 0) return null;
+  return (
+    <p data-testid="force-reset-background">
+      {counts.length > 0
+        ? `Running in the affected conversations: ${counts.join(", ")}. Replacing their runtimes may stop this work.`
+        : null}
+      {counts.length > 0 && activity.unknownThreads > 0 ? " " : null}
+      {activity.unknownThreads > 0
+        ? `Background work is unknown in ${activity.unknownThreads === 1 ? "one conversation" : `${activity.unknownThreads.toLocaleString()} conversations`}.`
+        : null}
+    </p>
+  );
+}
+
 export function ForceResetDialog({
   open,
   onOpenChange,
@@ -201,6 +228,7 @@ export function ForceResetDialog({
                       ? "This affects this thread."
                       : `This affects ${impact.affectedThreadIds.length.toLocaleString()} related threads.`}
                   </p>
+                  {backgroundSummary(impact.backgroundActivity)}
                 </>
               ) : (
                 <p role="status">No unresolved Sedes work was found.</p>

@@ -106,6 +106,13 @@
 - Keep a conflicting Claude result from failing the thread; the first recorded
   outcome is kept.
 
+- Show background work before it is interrupted. **Force reset…** counts the
+  background agents and commands in the affected conversations, and backend
+  and environment Stop, Restart, and Upgrade previews list running turns,
+  background work, pending approvals, and undelivered output that remote
+  Claude reports, including for threads nobody has open. Clients must match
+  this server's protocol 122 build.
+
 - Stop a Claude message whose remote session ended unconfirmed from pausing
   the queue indefinitely. **Reconcile delivery** now marks it failed with an
   unknown outcome, so you can review the conversation and dismiss it or

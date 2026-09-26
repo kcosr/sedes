@@ -273,7 +273,9 @@ Tailscale Funnel. Follow the [Android](../operator/clients/android.md),
 ## Force reset
 
 **Force reset…** is the final user-authoritative escape hatch for unresolved
-Sedes-owned recovery records. Read the preview carefully.
+Sedes-owned recovery records. Read the preview carefully. It also counts the
+background agents and commands running in the affected conversations, or says
+when that work is unknown; replacing their loaded runtimes may stop it.
 
 Force reset abandons only the listed local blockers. It does not:
 

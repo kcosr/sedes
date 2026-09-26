@@ -1178,6 +1178,7 @@ describe("ApiClient normalized contract", () => {
           message: "Provider-side effects may remain.",
         },
       ],
+      backgroundActivity: { agents: 0, commands: 0, other: 0, unknownThreads: 0 },
     };
     const fetchMock = vi.fn(
       async (input: string | URL | Request, init?: RequestInit) => {

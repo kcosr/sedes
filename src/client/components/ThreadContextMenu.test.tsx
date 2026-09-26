@@ -188,6 +188,7 @@ function makeStore(): ApplicationClientStore & {
           message: "Provider-side effects may remain.",
         },
       ],
+      backgroundActivity: { agents: 0, commands: 0, other: 0, unknownThreads: 0 },
     }),
     forceResetThread: vi.fn().mockResolvedValue({
       resetAt: Date.now(),

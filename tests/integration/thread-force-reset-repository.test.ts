@@ -1286,4 +1286,46 @@ describe("thread force-reset repository", () => {
       current.database.close();
     }
   });
+
+  it("counts loaded runtimes' background work and makes a changed inventory stale", () => {
+    const current = fixture();
+    try {
+      const resets = new ThreadForceResetRepository(current.database);
+      const runtime = {
+        kind: "conversation_runtime" as const,
+        threadId: current.rootId,
+        generation: "runtime-generation-1",
+        runState: "idle" as const,
+        backgroundActivity: { state: "known" as const, agents: 2, commands: 1, other: 0 },
+      };
+      const impact = resets.impact(current.scope, current.rootId, [], [runtime]);
+      expect(impact).toMatchObject({
+        resettable: true,
+        backgroundActivity: { agents: 2, commands: 1, other: 0, unknownThreads: 0 },
+        warnings: expect.arrayContaining([expect.objectContaining({ code: "provider_side_effects_may_remain" })]),
+      });
+      expect(resets.impact(current.scope, current.rootId, [], [{ ...runtime,
+        backgroundActivity: { state: "unknown", agents: 0, commands: 0, other: 0 } }]).backgroundActivity)
+        .toEqual({ agents: 0, commands: 0, other: 0, unknownThreads: 1 });
+      expect(() => resets.impact(current.scope, current.rootId, [], [{ ...runtime,
+        backgroundActivity: { state: "known", agents: -1, commands: 0, other: 0 } }])).toThrow("invalid or stale");
+      // Background work that started or ended after the preview needs a new one.
+      expect(() =>
+        resets.forceReset(current.scope, current.rootId, {
+          expectedBlockerFingerprint: impact.blockerFingerprint,
+          mutationId: "background-stale",
+          now: 500,
+          conversationRuntimes: [{ ...runtime, backgroundActivity: { ...runtime.backgroundActivity, agents: 3 } }],
+        }),
+      ).toThrow("state changed");
+      expect(resets.forceReset(current.scope, current.rootId, {
+        expectedBlockerFingerprint: impact.blockerFingerprint,
+        mutationId: "background-reset",
+        now: 510,
+        conversationRuntimes: [runtime],
+      })).toMatchObject({ replayed: false, resetConversationRuntimes: [runtime] });
+    } finally {
+      current.database.close();
+    }
+  });
 });

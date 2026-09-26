@@ -268,6 +268,7 @@ function fixture(
       blockers: [{ kind: "conversation_operation", count: 1 }],
       affectedThreadIds: ["thread-1"],
       warnings: [],
+      backgroundActivity: { agents: 0, commands: 0, other: 0, unknownThreads: 0 },
     })),
     forceResetThread: vi.fn(async () => undefined),
   } as unknown as ApplicationClientStore & {

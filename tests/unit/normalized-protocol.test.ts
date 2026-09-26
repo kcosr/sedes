@@ -861,6 +861,7 @@ describe("thread force-reset protocol", () => {
             message: "Provider effects may remain.",
           },
         ],
+        backgroundActivity: { agents: 0, commands: 0, other: 0, unknownThreads: 0 },
       }),
     ).toBeTruthy();
     expect(
@@ -886,8 +887,13 @@ describe("thread force-reset protocol", () => {
       blockers: [blockers[0], blockers[0]],
       affectedThreadIds: [threadId],
       warnings: [],
+      backgroundActivity: { agents: 0, commands: 0, other: 0, unknownThreads: 0 },
     };
     expect(threadForceResetImpactSchema.safeParse(impact).success).toBe(false);
+    const { backgroundActivity: _backgroundActivity, ...withoutBackground } = impact;
+    expect(threadForceResetImpactSchema.safeParse({ ...withoutBackground, blockers }).success).toBe(false);
+    expect(threadForceResetImpactSchema.safeParse({ ...impact, blockers,
+      backgroundActivity: { agents: -1, commands: 0, other: 0, unknownThreads: 0 } }).success).toBe(false);
     expect(
       threadForceResetImpactSchema.safeParse({
         ...impact,

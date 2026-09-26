@@ -11,6 +11,11 @@ import {
   threadRunStateSchema,
   type ThreadRunState,
 } from "../../../shared/protocol/conversation.js";
+import {
+  backgroundActivitySchema,
+  hasOutstandingBackgroundActivity,
+  type BackgroundActivity,
+} from "../../../shared/protocol/background-activity.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 
@@ -48,6 +53,8 @@ export interface ThreadForceResetConversationRuntimeBlocker {
   readonly generation: string;
   readonly runState: ThreadRunState;
   readonly activeTurnId?: string;
+  /** The runtime's reported background inventory, when it has one. */
+  readonly backgroundActivity?: BackgroundActivity;
 }
 
 type PreparedFork = {
@@ -63,6 +70,7 @@ type Capture = {
   readonly blockerFingerprint: string;
   readonly summaries: readonly ThreadForceResetBlockerSummary[];
   readonly conversationRuntimes: readonly ThreadForceResetConversationRuntimeBlocker[];
+  readonly backgroundActivity: ThreadForceResetImpact["backgroundActivity"];
 };
 
 export type ThreadForceResetCommit = ThreadForceResetResult & {
@@ -166,6 +174,7 @@ export class ThreadForceResetRepository {
       blockers: [...capture.summaries],
       affectedThreadIds: [...capture.affectedThreadIds],
       warnings,
+      backgroundActivity: { ...capture.backgroundActivity },
     };
   }
 
@@ -741,7 +750,9 @@ export class ThreadForceResetRepository {
           !threadRunStateSchema.safeParse(runtime.runState).success ||
           (runtime.activeTurnId !== undefined &&
             (runtime.activeTurnId.length === 0 ||
-              runtime.activeTurnId.length > 240))
+              runtime.activeTurnId.length > 240)) ||
+          (runtime.backgroundActivity !== undefined &&
+            !backgroundActivitySchema.safeParse(runtime.backgroundActivity).success)
         ) {
           throw new DomainError(
             "conflict",
@@ -757,18 +768,26 @@ export class ThreadForceResetRepository {
           ...(runtime.activeTurnId
             ? { activeTurnId: runtime.activeTurnId }
             : {}),
+          ...(runtime.backgroundActivity
+            ? { backgroundActivity: runtime.backgroundActivity }
+            : {}),
         };
+        const background = normalized.backgroundActivity;
         blockers.push({
           kind: normalized.kind,
           id: normalized.generation,
           threadId: normalized.threadId,
+          // A changed background inventory makes an earlier preview stale.
           state: JSON.stringify([
             normalized.runState,
             normalized.activeTurnId ?? null,
+            ...(background
+              ? [[background.state, background.agents, background.commands, background.other]]
+              : []),
           ]),
-          mayHaveProviderSideEffect: !["idle", "failed"].includes(
-            normalized.runState,
-          ),
+          mayHaveProviderSideEffect:
+            !["idle", "failed"].includes(normalized.runState) ||
+            hasOutstandingBackgroundActivity(background),
         });
         return normalized;
       },
@@ -834,6 +853,15 @@ export class ThreadForceResetRepository {
       summaries,
       conversationRuntimes: normalizedConversationRuntimes.sort((left, right) =>
         left.threadId.localeCompare(right.threadId),
+      ),
+      backgroundActivity: normalizedConversationRuntimes.reduce(
+        (total, { backgroundActivity: activity }) => activity === undefined ? total : {
+          agents: total.agents + activity.agents,
+          commands: total.commands + activity.commands,
+          other: total.other + activity.other,
+          unknownThreads: total.unknownThreads + (activity.state === "unknown" ? 1 : 0),
+        },
+        { agents: 0, commands: 0, other: 0, unknownThreads: 0 },
       ),
     };
   }

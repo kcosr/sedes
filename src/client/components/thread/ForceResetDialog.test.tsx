@@ -39,6 +39,7 @@ const impact: ThreadForceResetImpact = {
       message: "A native fork orphan may remain.",
     },
   ],
+  backgroundActivity: { agents: 2, commands: 1, other: 0, unknownThreads: 0 },
 };
 
 describe("ForceResetDialog", () => {
@@ -72,6 +73,40 @@ describe("ForceResetDialog", () => {
     );
     expect(dialog).toHaveTextContent("provider work may already have happened");
     expect(dialog).toHaveTextContent("A native fork orphan may remain.");
+    expect(within(dialog).getByTestId("force-reset-background")).toHaveTextContent(
+      "Running in the affected conversations: 2 background agents, 1 background command. Replacing their runtimes may stop this work.",
+    );
+  });
+
+  it("reports unknown background inventories and omits the note when there is none", async () => {
+    const { unmount } = render(
+      <ForceResetDialog
+        open
+        onOpenChange={vi.fn()}
+        loadImpact={vi.fn().mockResolvedValue({
+          ...impact,
+          backgroundActivity: { agents: 0, commands: 0, other: 0, unknownThreads: 1 },
+        })}
+        onForceReset={vi.fn()}
+      />,
+    );
+    expect(await screen.findByTestId("force-reset-background")).toHaveTextContent(
+      "Background work is unknown in one conversation.",
+    );
+    unmount();
+    render(
+      <ForceResetDialog
+        open
+        onOpenChange={vi.fn()}
+        loadImpact={vi.fn().mockResolvedValue({
+          ...impact,
+          backgroundActivity: { agents: 0, commands: 0, other: 0, unknownThreads: 0 },
+        })}
+        onForceReset={vi.fn()}
+      />,
+    );
+    await screen.findByText("This affects 2 related threads.");
+    expect(screen.queryByTestId("force-reset-background")).toBeNull();
   });
 
   it("keeps load failures in the dialog and retries", async () => {

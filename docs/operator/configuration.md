@@ -708,7 +708,11 @@ still runs on main Sedes and does not survive its shutdown.
 
 **Disconnect** drops the main connection and persists that preference without
 stopping remote work. **Stop**, **Restart**, and **Upgrade and restart** operate
-on the service and require a current impact check. Intentional Disconnect/Stop
+on the service and require a current impact check. For a provider runtime
+that reports its work, such as remote Claude, the check lists running turns,
+background agents and commands, pending approvals, and conversations with
+undelivered output, including conversations nobody has open, as well as
+loaded threads that still have background work. Intentional Disconnect/Stop
 survives main restart and is never overridden by background discovery or an
 automatic upgrade. An unreachable stop reports uncertainty, not confirmed cleanup.
 
