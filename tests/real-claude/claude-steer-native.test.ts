@@ -10,24 +10,27 @@ import { expect, it } from "vitest";
 import { ClaudeInputQueue } from "../../src/server/backends/claude/claude-input-queue.js";
 import { claudeCommandLifecycle, claudeResultUserMessageIds } from "../../src/server/backends/claude/claude-result-lifecycle.js";
 import { cancelClaudeQueuedInput } from "../../src/server/backends/claude/claude-sdk-session.js";
+import { readClaudeSessionMessages } from "../../src/server/backends/claude/claude-native-transcript.js";
+import { projectClaudeHistory } from "../../src/server/backends/claude/claude-history-projector.js";
 
 /** Actual native CLI with an isolated localhost provider and one finite command.
  * No subscription credentials or existing session state enter this fixture.
  * Sedes' Stop withdraws each steer (`cancelClaudeQueuedInput`), then interrupts.
  * `stop-pending`: a steer Claude has not started never reaches the provider or
  * history. `stop-after-fold`: one Claude folded into the turn before Stop
- * stays with that turn. */
-it.each(["tool-boundary", "turn-finished", "stop-pending", "stop-after-fold", "slow-provider-history"] as const)("native next delivers at %s without preempting or duplicating", async scenario => {
+ * stays with that turn. `two-folded`: Claude starts two steers at one tool
+ * boundary, which is where Sedes accepts and places each of them. */
+it.each(["tool-boundary", "two-folded", "turn-finished", "stop-pending", "stop-after-fold", "slow-provider-history"] as const)("native next delivers at %s without preempting or duplicating", async scenario => {
   const root = await mkdtemp(path.join(os.tmpdir(), "sedes-steer-native-"));
   const home = path.join(root, "home"); const cwd = path.join(root, "workspace");
   await mkdir(home); await mkdir(cwd);
   const marker = path.join(cwd, "started"), release = path.join(cwd, "release"), finished = path.join(cwd, "finished");
   const command = `: > '${marker}'; i=0; while [ "$i" -lt 150 ]; do if [ -f '${release}' ]; then : > '${finished}'; printf 'TOOL_FINISHED'; exit 0; fi; i=$((i+1)); sleep 0.1; done; exit 42`;
-  const toolScenario = scenario === "tool-boundary" || scenario === "stop-pending" || scenario === "stop-after-fold";
-  const persistSession = scenario === "slow-provider-history" || scenario === "stop-pending";
+  const toolScenario = scenario === "tool-boundary" || scenario === "two-folded" || scenario === "stop-pending" || scenario === "stop-after-fold";
+  const persistSession = scenario === "slow-provider-history" || scenario === "stop-pending" || scenario === "two-folded";
   let releaseProvider!: () => void;
   const providerGate = new Promise<void>(resolve => { releaseProvider = resolve; });
-  const requests: { released: boolean; correction: boolean; finished: boolean }[] = [];
+  const requests: { released: boolean; correction: boolean; followUp: boolean; finished: boolean }[] = [];
   const errors: unknown[] = [];
   let released = false;
   const stream = (response: ServerResponse, ordinal: number, command?: string) => {
@@ -47,7 +50,8 @@ it.each(["tool-boundary", "turn-finished", "stop-pending", "stop-after-fold", "s
       expect(request.headers["x-api-key"]).toBe("sedes-local-fixture-only");
       const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const messages = JSON.stringify(JSON.parse(Buffer.concat(chunks).toString()).messages);
-      requests.push({ released, correction: messages.includes("STEER_CORRECTION"), finished: messages.includes("TOOL_FINISHED") });
+      requests.push({ released, correction: messages.includes("STEER_CORRECTION"), followUp: messages.includes("STEER_FOLLOW_UP"),
+        finished: messages.includes("TOOL_FINISHED") });
       expect(requests.length).toBeLessThanOrEqual(3);
       if ((scenario === "slow-provider-history" && requests.length === 1) ||
           (scenario === "stop-after-fold" && requests.length === 2)) await providerGate;
@@ -60,7 +64,7 @@ it.each(["tool-boundary", "turn-finished", "stop-pending", "stop-after-fold", "s
   const address = server.address(); if (!address || typeof address === "string") throw new Error("address_missing");
   const env: Record<string, string | undefined> = Object.fromEntries(Object.keys(process.env).map(key => [key, undefined]));
   Object.assign(env, { PATH: process.env.PATH, HOME: home, TMPDIR: root, CLAUDE_CONFIG_DIR: path.join(home, ".claude"), ANTHROPIC_API_KEY: "sedes-local-fixture-only", ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_AUTOUPDATER: "1" });
-  const input = new ClaudeInputQueue<SDKUserMessage>(); const firstId = randomUUID(), secondId = randomUUID();
+  const input = new ClaudeInputQueue<SDKUserMessage>(); const firstId = randomUUID(), secondId = randomUUID(), thirdId = randomUUID();
   const user = (uuid: ReturnType<typeof randomUUID>, content: string, priority?: "next"): SDKUserMessage => ({ type: "user", uuid, session_id: "", parent_tool_use_id: null, message: { role: "user", content }, ...(priority ? { priority } : {}) });
   const abortController = new AbortController(); const timeout = setTimeout(() => abortController.abort(), 30_000);
   const session = query({ prompt: input, options: {
@@ -77,6 +81,8 @@ it.each(["tool-boundary", "turn-finished", "stop-pending", "stop-after-fold", "s
     const lifecycle = claudeCommandLifecycle(event);
     return lifecycle?.commandUuid === uuid ? [lifecycle.state] : [];
   });
+  const lifecycleAt = (uuid: string, state: string) => events.findIndex(event =>
+    claudeCommandLifecycle(event)?.commandUuid === uuid && claudeCommandLifecycle(event)?.state === state);
   const sdkModule = new URL("../../node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs", import.meta.url).href;
   // Run the official history helper in the exact isolated CLI environment;
   // never inspect the developer's real profile or change process.env.
@@ -102,6 +108,7 @@ it.each(["tool-boundary", "turn-finished", "stop-pending", "stop-after-fold", "s
     if (toolScenario) await waitFor(() => stat(marker).then(() => true, () => false));
     else await waitFor(() => events.some(event => event.type === "result"));
     input.push(user(secondId, "STEER_CORRECTION", "next"));
+    if (scenario === "two-folded") input.push(user(thirdId, "STEER_FOLLOW_UP", "next"));
     if (toolScenario) {
       await new Promise(resolve => setTimeout(resolve, 200));
       expect(requests).toHaveLength(1);
@@ -116,6 +123,54 @@ it.each(["tool-boundary", "turn-finished", "stop-pending", "stop-after-fold", "s
         expect(receipt?.still_queued ?? []).not.toContain(secondId);
       }
       released = true; await writeFile(release, "release");
+    }
+    if (scenario === "two-folded") {
+      await waitFor(() => events.some(event => event.type === "result"));
+      const resultAt = events.findIndex(event => event.type === "result");
+      const toolResultAt = events.findIndex(event => event.type === "user" && JSON.stringify(event.message.content).includes("TOOL_FINISHED"));
+      const answerAt = events.findIndex(event => event.type === "assistant" && JSON.stringify(event.message.content).includes("STEER_DONE"));
+      // Sedes accepts each steer at its own `started`: in order, after the
+      // tool result and before the next reply and the turn's result. No
+      // result came since the turn began, so both join it.
+      expect(lifecycleOf(secondId)).toEqual(["queued", "started", "completed"]);
+      expect(lifecycleOf(thirdId)).toEqual(["queued", "started", "completed"]);
+      expect(toolResultAt).toBeLessThan(lifecycleAt(secondId, "started"));
+      expect(lifecycleAt(secondId, "started")).toBeLessThan(lifecycleAt(thirdId, "started"));
+      expect(lifecycleAt(thirdId, "started")).toBeLessThan(answerAt);
+      expect(answerAt).toBeLessThan(resultAt);
+      expect(events.slice(lifecycleAt(firstId, "started"), lifecycleAt(thirdId, "started")).some(event => event.type === "result")).toBe(false);
+      // The result's consumption list agrees with that placement.
+      const results = events.filter(event => event.type === "result");
+      expect(results).toHaveLength(1);
+      expect(claudeResultUserMessageIds(results[0]!)).toEqual([firstId, secondId, thirdId]);
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toMatchObject({ correction: true, followUp: true, finished: true });
+      // History keeps both where Claude took them, and Sedes projects them
+      // there with the placement it recorded at each start.
+      const nativeSessionId = events.find(event => event.type === "system" && event.subtype === "init")!.session_id;
+      const history = await readClaudeSessionMessages(nativeSessionId, { dir: cwd }, env);
+      const blocks = (message: { readonly message: unknown }) => {
+        const content = (message.message as { content?: unknown }).content;
+        return Array.isArray(content) ? content.map(block => (block as { type: string }).type).join(",") : "text";
+      };
+      expect(history.map(message => [firstId, secondId, thirdId].some(id => id === message.uuid) ? message.uuid : `${message.type}:${blocks(message)}`))
+        .toEqual([firstId, "assistant:tool_use", "user:tool_result", secondId, thirdId, "assistant:text"]);
+      expect(history.filter(message => message.uuid === secondId || message.uuid === thirdId))
+        .toEqual([expect.objectContaining({ isQueuedCommand: true }), expect.objectContaining({ isQueuedCommand: true })]);
+      const projected = projectClaudeHistory(history, [], {
+        steerOperations: new Map([[secondId, firstId], [thirdId, firstId]]),
+        attachmentProvenanceKey: new Uint8Array(32),
+        forkBoundaryAuthentication: { installationKey: new Uint8Array(32).fill(1), tenantId: "fixture", principalId: "fixture", backendInstanceId: "fixture" },
+      }).snapshot;
+      expect(projected.orderedBackendTurnIds).toHaveLength(1);
+      const turn = projected.turnsById[projected.orderedBackendTurnIds[0]!]!;
+      expect(turn.completionCorrelations).toEqual([firstId, secondId, thirdId]);
+      expect(turn.orderedBackendItemIds.map(id => {
+        const item = projected.itemsById[id]!;
+        return item.semanticKind === "user_message" ? item.deliveryOperationId : item.semanticKind;
+      })).toEqual([firstId, "command", secondId, thirdId, "assistant_message"]);
+      expect(errors).toEqual([]);
+      return;
     }
     if (scenario === "stop-after-fold") {
       // Claude folds the steer into the turn at the tool boundary, then asks
@@ -167,7 +222,12 @@ it.each(["tool-boundary", "turn-finished", "stop-pending", "stop-after-fold", "s
       expect(requests[1]).toMatchObject({ released: true, finished: true });
       expect(results).toHaveLength(1);
       expect(claudeResultUserMessageIds(results[0]!)).toEqual([firstId, secondId]);
-    } else expect(results).toHaveLength(2);
+    } else {
+      expect(results).toHaveLength(2);
+      // Taken after the first turn's result, the steer starts the next turn.
+      expect(lifecycleAt(secondId, "started")).toBeGreaterThan(events.indexOf(results[0]!));
+      expect(claudeResultUserMessageIds(results[0]!)).toEqual([firstId]);
+    }
     expect(errors).toEqual([]);
   } finally {
     clearTimeout(timeout); releaseProvider(); await writeFile(release, "cleanup"); input.close(); session.close(); await consume.catch(() => {});
