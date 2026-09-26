@@ -872,7 +872,8 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     expect(native.closed).toBe(false);
     for (const event of delivered.splice(0)) await host.execute({ ...authority, action: "acknowledge",
       request: { sessionId, sequence: event.sequence } }, listener);
-    expect(host.snapshot().blockers).not.toContain("active_work");
+    // The acknowledgement returns at once; retiring the evicted query follows.
+    await vi.waitFor(() => expect(host.snapshot().blockers).not.toContain("active_work"));
     await host.execute({ ...authority, action: "evict", request: { sessionId } }, listener);
     expect(native.closed).toBe(true);
   });
@@ -1509,6 +1510,31 @@ describe("persistent host shutdown evidence", () => {
   type Evidence = { phase: string; startedAfterConfirmation?: boolean;
     sessions: { sessionId: string; liveWork: boolean; events: { kind: string; messageType?: string; code?: string }[] }[] };
   const evidence = (archive: ReturnType<typeof vi.fn>) => archive.mock.calls.map(([record]) => (record as { evidence: Evidence }).evidence);
+
+  it("acknowledges an evicted query's last event without waiting for its retirement", async () => {
+    const f = await fixture();
+    const attached = await f.attach();
+    const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+    const delivered: ClaudePersistentEvent[] = [];
+    const listener = (event: ClaudePersistentEvent) => { delivered.push(event); };
+    const sessionId = randomUUID();
+    await host.execute({ ...authority, action: "open", replay: "full", request: {
+      queryId: sessionId, sessionId, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {} } }, listener);
+    const native = f.sessions.find(session => session.options.sessionId === sessionId)!;
+    await native.emit(delta(sessionId, "last output"));
+    await host.execute({ ...authority, action: "evict", request: { sessionId } }, listener);
+    // Closing the Claude process can take seconds; retirement runs on its own.
+    let finishClose!: () => void;
+    native.close.mockImplementationOnce(() => new Promise<void>(resolve => { finishClose = () => { native.closed = true; resolve(); }; }));
+    const acknowledged = host.execute({ ...authority, action: "acknowledge",
+      request: { sessionId, sequence: delivered.at(-1)!.sequence } }, listener);
+    await expect(Promise.race([acknowledged, new Promise(resolve => setTimeout(() => resolve("pending"), 200))]))
+      .resolves.toEqual({ acknowledged: true });
+    await vi.waitFor(() => expect(native.close).toHaveBeenCalled());
+    finishClose();
+    await vi.waitFor(() => expect(host.abandonmentEvidence().sessions).toEqual([]));
+  });
 
   it("replays Claude's running state after pruning a result Claude chained into a turn of its own", async () => {
     const f = await fixture();

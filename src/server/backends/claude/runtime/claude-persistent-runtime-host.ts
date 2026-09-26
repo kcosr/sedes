@@ -384,7 +384,10 @@ export class ClaudePersistentRuntimeHost {
           this.#scheduleHistorySweep(session);
           this.#revision++;
         }
-        await this.#retireIdle(session);
+        // Retiring closes a Claude process, which can take seconds. Main bounds
+        // its in-flight acknowledgements across every session, so an
+        // acknowledgement never waits for it; failed cleanup records itself.
+        void this.#retireIdle(session).catch(() => undefined);
         return { acknowledged: true };
       }
       case "respond_permission": {

@@ -183,7 +183,10 @@ query generation has not already applied and confirmed. Contrary evidence
 query generation reapplies it. Main applies persistent-runtime events strictly
 in order, but does not wait for each acknowledgement round trip. At most 16
 acknowledgements per client are in flight. They name exact sequences, and
-`flushMessages` still waits for them.
+`flushMessages` still waits for them. The host answers an acknowledgement
+without waiting for the retirement it may allow, which closes a Claude process
+and can take seconds, so evicting many queries cannot stall delivery for the
+client's other sessions.
 
 Worker permission delivery uses an application-level round trip: after the
 worker receives a `can_use_tool` result, it acknowledges the exact query,
