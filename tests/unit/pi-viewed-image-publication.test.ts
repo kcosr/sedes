@@ -187,10 +187,32 @@ function nativeBlock(block: Block): unknown {
     : { type: "toolCall", id: block.read.id, name: "read", arguments: { path: block.read.path } };
 }
 
-/** A Pi session whose prompts run the next scripted tool-read message. */
-function scriptedSessionFactory(script: Block[][]): PiSdkSessionFactory {
+interface PromptScript {
+  /** Tool-read assistant messages, each followed by its tool results. */
+  readonly messages: readonly (readonly Block[])[];
+  /**
+   * Runs after a message's tools end and before Pi persists their results,
+   * which it does together once the whole batch finishes.
+   */
+  readonly beforeResults?: (
+    messageIndex: number,
+    emit: (event: unknown) => void,
+  ) => void | Promise<void>;
+}
+
+/** Wraps one tool-read message as a prompt script. */
+function single(blocks: readonly Block[]): PromptScript {
+  return { messages: [blocks] };
+}
+
+/** A Pi session whose prompts run the next scripted tool-read messages. */
+function scriptedSessionFactory(
+  script: PromptScript[],
+  managers: SessionManager[] = [],
+): PiSdkSessionFactory {
   return {
     async create({ manager, customTools = [] }) {
+      managers.push(manager);
       const listeners = new Set<Parameters<PiSdkSession["subscribe"]>[0]>();
       const emit = (event: unknown): void => {
         for (const listener of listeners) listener(event as never);
@@ -220,7 +242,8 @@ function scriptedSessionFactory(script: Block[][]): PiSdkSessionFactory {
           manager.appendMessage(user);
           emit({ type: "message_end", message: user });
           await Promise.resolve();
-          const blocks = script.shift() ?? [];
+          const prompt = script.shift() ?? { messages: [] };
+          for (const [messageIndex, blocks] of prompt.messages.entries()) {
           const content = blocks.map(nativeBlock);
           const assistant = assistantMessage(content, "toolUse");
           emit({ type: "message_start", message: assistant });
@@ -268,6 +291,7 @@ function scriptedSessionFactory(script: Block[][]): PiSdkSessionFactory {
           manager.appendMessage(assistant as never);
           emit({ type: "message_end", message: assistant });
           await Promise.resolve();
+          const results: unknown[] = [];
           for (const block of blocks) {
             if (!("read" in block)) continue;
             const { id, path: readPath } = block.read;
@@ -281,17 +305,21 @@ function scriptedSessionFactory(script: Block[][]): PiSdkSessionFactory {
               result: { content: resultContent, details: undefined },
               isError,
             });
-            const result = {
+            results.push({
               role: "toolResult" as const,
               toolCallId: id,
               toolName: "read",
               content: resultContent,
               isError,
               timestamp: Date.now(),
-            };
+            });
+          }
+          await prompt.beforeResults?.(messageIndex, emit);
+          for (const result of results) {
             manager.appendMessage(result as never);
             emit({ type: "message_end", message: result });
             await Promise.resolve();
+          }
           }
           const final = assistantMessage([{ type: "text", text: "done" }], "stop");
           emit({ type: "message_start", message: final });
@@ -396,7 +424,7 @@ function recordingPublisher() {
 function driverWith(
   fixture: Awaited<ReturnType<typeof workspace>>,
   outputArtifacts: OutputArtifactPublisher,
-  script: Block[][] = [],
+  script: PromptScript[] = [],
   extra: Partial<PiDriverOptions> = {},
 ) {
   return new PiConversationBackendDriver({
@@ -539,13 +567,13 @@ describe("Pi viewed-image publication", () => {
     const fixture = await workspace();
     const recorder = recordingPublisher();
     const driver = driverWith(fixture, recorder.publisher, [
-      [
+      single([
         { text: "Looking" },
         { read: { id: "first", path: "/private/shots/one.png" } },
         { text: "Between" },
         { read: { id: "second", path: "/private/shots/TWO.BMP" } },
         { text: "After" },
-      ],
+      ]),
     ]);
     const conversation = await created(driver, fixture);
     const handle = await driver.attach(conversation.attach);
@@ -638,7 +666,7 @@ describe("Pi viewed-image publication", () => {
     const fixture = await workspace();
     const recorder = recordingPublisher();
     const driver = driverWith(fixture, recorder.publisher, [
-      [{ read: { id: "call", path: "diagram.png" } }],
+      single([{ read: { id: "call", path: "diagram.png" } }]),
     ]);
     const conversation = await created(driver, fixture);
     const handle = await driver.attach(conversation.attach);
@@ -673,7 +701,7 @@ describe("Pi viewed-image publication", () => {
     const fixture = await workspace();
     const recorder = recordingPublisher();
     const driver = driverWith(fixture, recorder.publisher, [
-      [{ read: { id: "call", path: "slow.png" } }],
+      single([{ read: { id: "call", path: "slow.png" } }]),
     ]);
     const conversation = await created(driver, fixture);
     const handle = await driver.attach(conversation.attach);
@@ -825,7 +853,7 @@ describe("Pi viewed-image publication", () => {
     const fixture = await workspace();
     const recorder = recordingPublisher();
     const driver = driverWith(fixture, recorder.publisher, [
-      [
+      single([
         {
           read: {
             id: "missing",
@@ -837,7 +865,7 @@ describe("Pi viewed-image publication", () => {
         { read: { id: "text", path: "big.gif", content: [{ type: "text", text: "Read image file [image/gif]\n[Image omitted: could not be converted to a supported inline image format.]" }] } },
         { read: { id: "blind", path: "seen.webp", content: imageContent(PI_NON_VISION_IMAGE_NOTE) } },
         { read: { id: "corrupt", path: "corrupt.jpg", content: imageContent(undefined, "AAAA") } },
-      ],
+      ]),
     ]);
     const conversation = await created(driver, fixture);
     const handle = await driver.attach(conversation.attach);
@@ -898,6 +926,73 @@ describe("Pi viewed-image publication", () => {
     const published = await driver.read(conversation.attach);
     expect(childImages(published.snapshot.itemsById)).toHaveLength(1);
     expect(recorder.published).toHaveLength(1);
+  });
+});
+
+describe("Pi viewed images near the per-turn item bound", () => {
+  it("opens, reads and pages a turn whose children exceed Pi's item bound", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const driver = driverWith(fixture, recorder.publisher);
+    const conversation = await created(driver, fixture);
+    const manager = await persisted(fixture, conversation.backendConversationId);
+    // 1 user + 260 x (text + 2 image reads) + final: 782 items, 1302 with children.
+    const turnId = manager.appendMessage({ role: "user", content: [{ type: "text", text: "look" }], timestamp: Date.now() });
+    for (let index = 0; index < 260; index += 1) {
+      const calls = [`a-${index}`, `b-${index}`];
+      const assistantEntryId = manager.appendMessage(
+        assistantMessage(
+          [
+            { type: "text", text: `step ${index}` },
+            ...calls.map((id) => ({ type: "toolCall", id, name: "read", arguments: { path: `${id}.png` } })),
+          ],
+          "toolUse",
+        ) as never,
+      );
+      for (const toolCallId of calls) {
+        manager.appendCustomEntry(
+          piToolIdentityMarkerType,
+          createPiToolIdentityMarker(
+            { assistantEntryId, toolCallId, toolName: "read", identity: readIdentity },
+            { conversationId: conversation.backendConversationId, installationKey: toolProvenanceKey },
+          ),
+        );
+      }
+      for (const toolCallId of calls) {
+        manager.appendMessage({ role: "toolResult", toolCallId, toolName: "read", content: imageContent(), isError: false, timestamp: Date.now() } as never);
+        // Published before, as by an earlier attachment's backfill.
+        await recorder.publisher.publishImage({
+          scope,
+          threadId: "thread",
+          publicationKey: piViewedImagePublicationKey({
+            sessionId: conversation.backendConversationId,
+            assistantEntryId,
+            toolCallId,
+            imageIndex: 1,
+          }),
+          mediaType: "image/png",
+          bytes: Buffer.from(pixel, "base64"),
+        });
+      }
+    }
+    manager.appendMessage(assistantMessage([{ type: "text", text: "done" }], "stop") as never);
+    const publishedBefore = recorder.published.length;
+
+    const unattached = await driver.read(conversation.attach);
+    expect(unattached.snapshot.turnsById[turnId]!.orderedBackendItemIds).toHaveLength(1_302);
+    const handle = await driver.attach(conversation.attach);
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    expect(established.snapshot.turnsById[turnId]!.orderedBackendItemIds).toHaveLength(1_302);
+    expect(childImages(established.snapshot.itemsById)).toHaveLength(520);
+    const located = await handle.locateTurn({
+      maximumTurnCandidates: 1,
+      matchesBackendTurnId: (candidate) => candidate === turnId,
+    });
+    expect(located).toMatchObject({ status: "found" });
+    const page = await handle.history({ limit: 5 });
+    expect(page.turnsById[turnId]!.orderedBackendItemIds).toHaveLength(1_302);
+    expect(recorder.published).toHaveLength(publishedBefore);
+    await handle.close();
   });
 });
 

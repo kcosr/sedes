@@ -1008,9 +1008,51 @@ function fillPublishedPiViewedImages(
   );
 }
 
+/** Pi's only image items are the children of viewed images. */
+function isPiViewedImageChild(item: BackendItem | undefined): boolean {
+  return item?.semanticKind === "image" && item.origin.kind === "viewed";
+}
+
+/**
+ * The snapshot without viewed-image children. Window selection and Pi's
+ * per-turn item bound measure this, so a child never changes which turns are
+ * transferred and never fails a transfer.
+ */
+function withoutPiViewedImageChildren(
+  snapshot: BackendConversationSnapshot,
+): BackendConversationSnapshot {
+  const entries = Object.entries(snapshot.itemsById);
+  if (!entries.some(([, item]) => isPiViewedImageChild(item))) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    itemsById: Object.fromEntries(
+      entries.filter(([, item]) => !isPiViewedImageChild(item)),
+    ),
+    turnsById: Object.fromEntries(
+      Object.entries(snapshot.turnsById).map(([turnId, turn]) => [
+        turnId,
+        {
+          ...turn,
+          orderedBackendItemIds: turn.orderedBackendItemIds.filter(
+            (itemId) => !isPiViewedImageChild(snapshot.itemsById[itemId]),
+          ),
+        },
+      ]),
+    ),
+  };
+}
+
 /**
  * Selects the newest contiguous whole-turn window that satisfies both Pi's
  * count policy and the backend aggregate wire contract.
+ *
+ * Viewed-image children are excluded from every measurement. Each pairs with
+ * a counted viewed item, so a selected turn carries at most twice Pi's item
+ * bound, far below the shared per-turn limit. The children are returned with
+ * their turns unless they would exceed the byte ceiling, in which case the
+ * rows are returned without them.
  */
 export function selectPiSnapshotWindow(
   snapshot: BackendConversationSnapshot,
@@ -1023,12 +1065,13 @@ export function selectPiSnapshotWindow(
       snapshotPayload(snapshot, []),
     );
   }
+  const measured = withoutPiViewedImageChildren(snapshot);
   const earliestByCount = Math.max(0, end - maximumTurns);
-  const bytesAt = (start: number) => {
-    const candidateIds = snapshot.orderedBackendTurnIds.slice(start, end);
-    const candidate = snapshotPayload(snapshot, candidateIds);
+  const bytesFrom = (source: BackendConversationSnapshot, start: number) => {
+    const candidateIds = source.orderedBackendTurnIds.slice(start, end);
+    const candidate = snapshotPayload(source, candidateIds);
     const historyCandidate = historyPagePayload(
-      snapshot,
+      source,
       conversationId,
       start,
       end,
@@ -1038,6 +1081,7 @@ export function selectPiSnapshotWindow(
       serializedUtf8Bytes(historyCandidate),
     );
   };
+  const bytesAt = (start: number) => bytesFrom(measured, start);
   const newestBytes = bytesAt(end - 1);
   if (newestBytes > maximumPiSnapshotOrPageBytes) {
     throw oversizedTurn();
@@ -1052,9 +1096,14 @@ export function selectPiSnapshotWindow(
           bytesAt,
         );
   const selectedIds = snapshot.orderedBackendTurnIds.slice(start, end);
-  assertTransferablePiTurns(snapshot, selectedIds);
+  assertTransferablePiTurns(measured, selectedIds);
+  const source =
+    measured === snapshot ||
+    bytesFrom(snapshot, start) > maximumPiSnapshotOrPageBytes
+      ? measured
+      : snapshot;
   return backendConversationSnapshotSchema.parse(
-    snapshotPayload(snapshot, selectedIds),
+    snapshotPayload(source, selectedIds),
   );
 }
 
@@ -1207,10 +1256,12 @@ export function selectPiHistoryPage(
       itemsById: {},
     });
   }
+  // Measured without viewed-image children, as for the snapshot window.
+  const measured = withoutPiViewedImageChildren(snapshot);
   const earliestByCount = Math.max(0, before - maximumTurns);
   const bytesAt = (start: number) =>
     serializedUtf8Bytes(
-      historyPagePayload(snapshot, conversationId, start, before),
+      historyPagePayload(measured, conversationId, start, before),
     );
   const newestBytes = bytesAt(before - 1);
   if (newestBytes > maximumPiSnapshotOrPageBytes) {
@@ -1226,9 +1277,13 @@ export function selectPiHistoryPage(
           bytesAt,
         );
   const selectedIds = snapshot.orderedBackendTurnIds.slice(start, before);
-  assertTransferablePiTurns(snapshot, selectedIds);
+  assertTransferablePiTurns(measured, selectedIds);
+  const page = historyPagePayload(snapshot, conversationId, start, before);
   return backendHistoryPageSchema.parse(
-    historyPagePayload(snapshot, conversationId, start, before),
+    measured === snapshot ||
+      serializedUtf8Bytes(page) <= maximumPiSnapshotOrPageBytes
+      ? page
+      : historyPagePayload(measured, conversationId, start, before),
   );
 }
 
