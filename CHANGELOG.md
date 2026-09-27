@@ -6,7 +6,7 @@
 
 - Codex viewed images use a new `viewed_image` transcript item, introduced
   in client protocol 123. This build requires client protocol 126; see the
-  client protocol entries below. (#11, #13)
+  client protocol entries below. (#11, #13, #14)
 
 - Claude backends require Claude Code 2.1.281 or newer and are tested through
   2.1.283. Earlier releases added a hidden "Continue" prompt when resuming
@@ -25,7 +25,7 @@
   an `origin` on every image item: generated, or viewed and either the exact
   image the provider gave the model or a later snapshot of the file. A
   **Viewed image** row pairs only with a viewed image, and can now be working,
-  failed, or interrupted.
+  failed, or interrupted. (#14)
 
 - Browser and packaged clients must use client protocol 125, which marks a
   queue entry a provider returned as not sent with a normalized
@@ -58,7 +58,7 @@
   own copy. The row shows **Working…** during the read, and a failed read
   shows an error without the path. Images from MCP servers, extensions, other
   tools, or Claude subagents are not shown; Grok image reads remain tool
-  cards.
+  cards. (#14)
 
 - Steer a running turn several times without waiting, on Claude, Pi, and
   Codex. Each Steer gets its own **Steering** card, in the order sent, and
@@ -193,7 +193,7 @@
 - Claude's note after a resized image read (`[Image: original …]`) no longer
   opens a running turn that exists only live and disappears on reload. Sedes
   now drops Claude's live meta rows, as history already did, and still shows
-  the compaction summary.
+  the compaction summary. (#14)
 
 - **Stop** on a Codex thread no longer silently loses a steering message Codex
   accepted but had not used, while showing it as delivered. A Codex steer now
