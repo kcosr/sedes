@@ -5,9 +5,9 @@ import { createPersistentOpenCodeFixture } from "../helpers/persistent-opencode-
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
-async function fixture() {
+async function fixture(openCodeTools = true) {
   const f = createPersistentOpenCodeFixture(); cleanups.push(() => f.close());
-  const carrier = await f.attach(), client = f.client(); await client.start();
+  const carrier = await f.attach({ openCodeTools }), client = f.client(); await client.start();
   const owner = f.owners[0]!;
   const tools = new OpenCodeHostAgentTools({ adapter: f.adapter,
     cli: () => ({ endpoint: "unix:///execution-host/agent-tools.sock", executableDirectory: "/execution-host/bin" }),
@@ -21,6 +21,17 @@ async function fixture() {
 const admission = { sourceCapability: "mcp-source", catalog: [], cli: { sourceCapability: "cli-source", mode: "progressive" as const } };
 
 describe("OpenCode sidecar tool admission", () => {
+  it("reports the missing private relay without installing tools or losing native reads", async () => {
+    const f = await fixture(false);
+    const lease = f.client.acquire(f.target);
+    await lease.client.read("getSession", { sessionID: f.wire.sessionID });
+    await expect(f.client.admitToolSession(f.target, admission)).rejects.toMatchObject({ code: "opencode_tools_capability_unavailable" });
+    expect(f.admit).not.toHaveBeenCalled();
+    expect(f.wire.requests.some(request => request.method === "POST")).toBe(false);
+    await expect(lease.client.read("getSession", { sessionID: f.wire.sessionID })).resolves.toMatchObject({ id: f.wire.sessionID });
+    lease.release();
+  });
+
   it("uses the admitted native host and returns opaque IDs with host-local CLI paths", async () => {
     const f = await fixture();
     const lease = f.client.acquire(f.target);

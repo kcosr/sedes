@@ -274,12 +274,17 @@ export class SidecarClientSession implements SidecarRuntimeSession {
       }
       for (const expected of runtimeCapabilities) {
         const actual = hello.sidecarCapabilities.find((capability) => capability.capabilityId === expected.capabilityId && capability.majorVersion === expected.majorVersion);
-        if (!actual && (expected.capabilityId === "codex_managed_tui" || expected.capabilityId === "claude_persistent_runtime")) continue;
+        if (!actual && (expected.capabilityId === "codex_managed_tui" || expected.capabilityId === "claude_persistent_runtime" || expected.capabilityId === "opencode_runtime")) continue;
         if (!actual || JSON.stringify([...actual.operations].sort()) !== JSON.stringify([...expected.operations].sort())) throw new Error("sidecar_runtime_capability_mismatch");
       }
+      // An older sidecar can lack the private tool route while retaining other
+      // useful operations. Keep its actual hello inventory; backend tool
+      // admission checks that exact reverse route before installing anything.
+      const acceptedSedesCapabilities = hello.sedesCapabilities.some(capability => capability.capabilityId === "opencode_tools")
+        ? offeredSedesCapabilities : offeredSedesCapabilities.filter(capability => capability.capabilityId !== "opencode_tools");
       if (
         JSON.stringify(hello.sedesCapabilities) !==
-        JSON.stringify(offeredSedesCapabilities)
+        JSON.stringify(acceptedSedesCapabilities)
       ) {
         throw new Error("sidecar_capability_mismatch");
       }

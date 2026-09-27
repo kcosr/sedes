@@ -96,7 +96,7 @@ const workspaceContextEvidence = Object.freeze({
 });
 
 describe("SidecarClientSession", () => {
-  it.each(["ssh_stdio", "outbound_websocket"] as const)("negotiates private OpenCode tool invocation with both grants over %s", async transportKind => {
+  it.each(["ssh_stdio", "outbound_websocket"].flatMap(transportKind => [true, false].map(privateSupported => ({ transportKind, privateSupported }))))("negotiates exact OpenCode tools over $transportKind (private support $privateSupported)", async ({ transportKind, privateSupported }) => {
     const streams = byteStreamPair(), registry = new SidecarOperationRegistry();
     const runtime = { capabilityId: "opencode_runtime", majorVersion: 1, operations: openCodeRuntimeOperations.map(operation => operation.operation) };
     const body = { capabilityId: sidecarRuntimeBodyOffer.capabilityId, majorVersion: 1, operations: [sidecarRuntimeBodyOffer.operation] };
@@ -106,7 +106,7 @@ describe("SidecarClientSession", () => {
     const prepare = vi.fn(() => ({ endpoint: "unix:///run/user/1000/sedes/agent-tools.sock", executableDirectory: installation.executableDirectory, inheritedPath: "/usr/bin" }));
     registerControlV2Operations(registry, { buildId: artifact.buildId, artifactSha256: artifact.artifactSha256,
       enabledSidecarCapabilities: [runtime, body].map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion })),
-      enabledSedesCapabilities: [agentToolsInventory, privateTools, body], prepareSedesCapabilities: prepare });
+      enabledSedesCapabilities: [agentToolsInventory, ...(privateSupported ? [privateTools] : []), body], prepareSedesCapabilities: prepare });
     const host = new SidecarProtocolPeer({ role: "sidecar", sessionNonce, registry,
       transport: new LengthPrefixedSidecarFrameTransport({ assurance: { kind: "test_server", carrierGeneration: 1 }, stream: streams.right }) });
     host.start();
@@ -117,13 +117,21 @@ describe("SidecarClientSession", () => {
     const session = await SidecarClientSession.start({ stream: streams.left, transportKind, carrierGeneration: 1, sessionNonce, artifact, installation,
       signal: new AbortController().signal, authorizedCapabilities: [agentToolsCapability], authorizedRuntimeCapabilities: [runtime], sedesOperations });
     try {
-      expect(host.supportsOperation(openCodeToolInvokeOperation)).toBe(true); expect(prepare).toHaveBeenCalledOnce();
+      expect(host.supportsOperation(openCodeToolInvokeOperation)).toBe(privateSupported);
+      expect(session.runtimeChannel.supportsIncomingOperation(openCodeToolInvokeOperation)).toBe(privateSupported);
+      expect(session.runtimeChannel.supportsOperation(openCodeRuntimeOperations[0]!)).toBe(true);
+      expect(prepare).toHaveBeenCalledOnce();
       const stamp = { authority: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "environment", backendInstanceId: "backend",
         runtimeId: "runtime", nativeGeneration: "generation", directory: "/workspace", session: { applicationThreadId: randomUUID(), nativeSessionID: "ses_source", bindingFingerprint: "binding" } },
         journalId: "journal", throughSequence: 1, nativeContinuity: "continuity", inputId: "msg_current", authorityEpoch: 1, nativeConnected: true };
+      if (privateSupported) {
       await expect(host.call(openCodeToolInvokeOperation, { stamp, request: { sourceCapability: "c".repeat(48), toolId: "agent.context", schemaVersion: 1, requestId: "read", input: {} } }, { signal: new AbortController().signal }))
         .resolves.toMatchObject({ outcome: "error", error: { code: "permission_denied" } });
       expect(invoked).toHaveBeenCalledWith(expect.objectContaining({ stamp }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      } else {
+        await expect(host.call(openCodeToolInvokeOperation, { stamp, request: { sourceCapability: "c".repeat(48), toolId: "agent.context", schemaVersion: 1, requestId: "read", input: {} } })).rejects.toThrow("sidecar_operation_not_negotiated");
+        expect(invoked).not.toHaveBeenCalled();
+      }
       await expect(host.call(agentToolsCatalogOperation, { sourceCapability: "c".repeat(48) })).resolves.toMatchObject({ outcome: "ok", tools: [] });
     } finally { await session.close("test_complete"); await host.close("test_complete"); }
   });
@@ -290,6 +298,8 @@ describe("SidecarClientSession", () => {
     "partial_terminal",
     "partial_tui",
     "partial_claude",
+    "partial_opencode",
+    "absent_opencode",
     "missing_files",
     "missing_provider",
   ] as const)(
@@ -317,7 +327,9 @@ describe("SidecarClientSession", () => {
         majorVersion: 1,
         operations: ["claude.open"],
       };
+      const opencode = { capabilityId: "opencode_runtime", majorVersion: 1, operations: ["opencode.execute", "opencode.control"] };
       for (const capability of [
+        opencode, { ...opencode, operations: ["opencode.wrong"] },
         provider,
         tui,
         claude,
@@ -378,7 +390,8 @@ describe("SidecarClientSession", () => {
             : []),
           ...(variant === "partial_claude"
             ? [{ ...claude, operations: ["claude.wrong"] }]
-            : []),
+            : variant === "absent_opencode" ? [claude] : []),
+          ...(variant === "partial_opencode" ? [{ ...opencode, operations: ["opencode.wrong"] }] : []),
         ],
         capabilityEvidence:
           variant === "partial_terminal"
@@ -413,10 +426,10 @@ describe("SidecarClientSession", () => {
           workspaceCapability,
           interactiveTerminalCapability,
         ],
-        authorizedRuntimeCapabilities: [provider, tui, claude],
+        authorizedRuntimeCapabilities: [provider, tui, claude, opencode],
         sedesOperations: new SidecarOperationRegistry(),
       });
-      if (variant !== "absent_native") {
+      if (variant !== "absent_native" && variant !== "absent_opencode") {
         await expect(started).rejects.toThrow(
           /sidecar_(?:runtime_)?capability_mismatch/u,
         );
@@ -426,7 +439,9 @@ describe("SidecarClientSession", () => {
           session.negotiatedCapabilities.map(
             (capability) => capability.capabilityId,
           ),
-        ).toEqual(["workspace_files", "codex_runtime", "runtime_bodies"]);
+        ).toEqual(["workspace_files", "codex_runtime", "runtime_bodies", ...(variant === "absent_opencode" ? ["claude_persistent_runtime"] : [])]);
+        expect(session.runtimeChannel.supportsOperation({ ...opencode, operation: "opencode.execute" })).toBe(false);
+        if (variant === "absent_opencode") expect(session.runtimeChannel.supportsOperation({ ...claude, operation: "claude.open" })).toBe(true);
         await expect(
           session.call(workspaceFilesListOperation, {
             rootHandle: randomUUID(),

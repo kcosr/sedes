@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenCodeAgentTools } from "../../src/server/backends/opencode/opencode-agent-tools.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
 import { OpenCodeNativeMutationDeliveryError } from "../../src/server/backends/opencode/opencode-native-codecs.js";
+import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
 import { OpenCodeMcpIngress, type OpenCodeMcpChannel } from "../../src/server/backends/opencode/opencode-mcp-ingress.js";
 import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 import { createOpenCodeConversationFixture } from "../support/opencode-conversation-fixture.js";
@@ -80,6 +81,25 @@ async function connect(environment: Record<string, string>) {
     body: JSON.stringify({ operation: "list", sessionID }) }) };
 }
 describe("OpenCode MCP runtime admission", () => {
+  it("explains explicit runtime renewal when retained tool capacity is exhausted", async () => {
+    const f = fixture();
+    vi.spyOn(f.runtime, "admitToolSession").mockRejectedValue(new OpenCodeRuntimeError("opencode_agent_tools_capacity_reached"));
+    await f.admit();
+    expect(f.tools.diagnostic(f.target.binding.applicationThreadId)).toContain("Inspect retained work, then explicitly Stop and Connect");
+    expect(f.tools.diagnostic(f.target.binding.applicationThreadId)).not.toContain("later message");
+    expect(f.registrations).toHaveLength(0);
+    expect(f.tools.cliAdmission(f.target.binding.applicationThreadId)).toBeNull();
+  });
+
+  it("explains the required sidecar upgrade when tool admission lacks the private relay", async () => {
+    const f = fixture();
+    vi.spyOn(f.runtime, "admitToolSession").mockRejectedValue(new OpenCodeRuntimeError("opencode_tools_capability_unavailable"));
+    await f.admit();
+    expect(f.tools.diagnostic(f.target.binding.applicationThreadId)).toContain("Upgrade and restart that sidecar");
+    expect(f.registrations).toHaveLength(0);
+    expect(f.tools.cliAdmission(f.target.binding.applicationThreadId)).toBeNull();
+  });
+
   it("recovers stamped invocation authority after main observer replacement without registering or sending native work", async () => {
     const f = fixture({ cli: true });
     const handle = await f.driver.attach(f.target); cleanups.push(() => handle.close());

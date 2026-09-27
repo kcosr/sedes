@@ -13,6 +13,9 @@ export class SidecarRuntimeChannel {
   supportsOperation(definition: { readonly capabilityId: string; readonly majorVersion: number; readonly operation: string }): boolean {
     return this.peer.supportsOperation(definition);
   }
+  supportsIncomingOperation(definition: { readonly capabilityId: string; readonly majorVersion: number; readonly operation: string }): boolean {
+    return this.peer.supportsIncomingOperation(definition);
+  }
   assertReady(): void { this.peer.assertReady(); }
   call<Request, Response>(definition: SidecarOperationDefinition<Request, Response>, request: Request,
     options?: Parameters<SidecarProtocolPeer["call"]>[2]): Promise<Response> {

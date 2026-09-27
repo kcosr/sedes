@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { vi } from "vitest";
 import { OpenCodeRuntimeHostRegistry } from "../../src/server/backends/opencode/opencode-runtime-host-registry.js";
 import { OpenCodeRemoteRuntime } from "../../src/server/backends/opencode/opencode-remote-runtime.js";
+import { openCodeToolInvokeOperation } from "../../src/server/backends/opencode/opencode-tool-relay-wire.js";
 import { OpenCodeNativeHost } from "../../src/server/backends/opencode/opencode-native-host.js";
 import { OpenCodeHttpNativeAdapter } from "../../src/server/backends/opencode/opencode-http-native-adapter.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
@@ -77,10 +78,11 @@ export function createPersistentOpenCodeFixture(ownership: "owned" | "external" 
     if (!current) throw new Error("fixture_carrier_missing"); return current;
   }) };
   const carriers: { close(): Promise<void> }[] = [], clients: OpenCodeRemoteRuntime[] = [];
-  async function attach(options: { recovery?: boolean; environmentRevision?: number } = {}) {
+  async function attach(options: { recovery?: boolean; environmentRevision?: number; openCodeTools?: boolean } = {}) {
     const carrier = await createSidecarFramedCarrier(), controllerEpoch = services.attach(
       { ...serviceConfiguration, environmentRevision: options.environmentRevision ?? serviceConfiguration.environmentRevision }, options.recovery ? "recovery" : "normal");
     const detach = registerOpenCodeRuntimeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, services, controllerEpoch });
+    if (options.openCodeTools) carrier.mainRegistry.register(openCodeToolInvokeOperation, () => { throw new Error("unexpected_fixture_tool_invocation"); });
     await carrier.start();
     let disconnect!: () => void, closed = false;
     const lease: SidecarRuntimeLease = { channel: carrier.mainChannel, controllerEpoch, serviceIncarnation: services.serviceIncarnation,

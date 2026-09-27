@@ -5,6 +5,34 @@ import { AgentToolCliIngressError } from "./agent-tool-cli-local-ingress.js";
 import { SidecarRuntimeAttachment, SidecarUpstreamUnavailableError } from "./sidecar-runtime-attachment.js";
 import { openCodeToolInvokeOperation } from "../backends/opencode/opencode-tool-relay-wire.js";
 import type { OpenCodeToolInvocationStamp } from "../backends/opencode/opencode-tool-invocation.js";
+import { OpenCodeRuntimeError } from "../backends/opencode/opencode-release.js";
+import { BackendAgentToolRequestError } from "../agent-tools/adapters/backend-facade.js";
+
+/** Capture host authority before any asynchronous relay work. A recognized but
+ * revoked source must fail here, never fall through to the generic tool route. */
+export async function relayAgentToolCliRequest(
+  peer: SidecarRuntimeAttachment,
+  request: AgentToolCliRequest,
+  signal: AbortSignal,
+  capture: (sourceCapability: string) => OpenCodeToolInvocationStamp | undefined,
+): Promise<AgentToolCliResult> {
+  let stamp: OpenCodeToolInvocationStamp | undefined;
+  try {
+    stamp = request.operation.type === "invoke" ? capture(request.sourceCapability) : undefined;
+  } catch (error) {
+    if (error instanceof BackendAgentToolRequestError) throw new AgentToolCliIngressError(error.toolError);
+    if (error instanceof OpenCodeRuntimeError) {
+      if (error.code === "configuration_scope_denied" || error.code === "opencode_request_authority_mismatch") {
+        throw new AgentToolCliIngressError({ code: "permission_denied", message: "This OpenCode session is not admitted to Sedes tools.", retryable: false });
+      }
+      if (error.code === "opencode_runtime_unavailable") {
+        throw new AgentToolCliIngressError({ code: "unavailable", message: "The OpenCode runtime is currently unavailable.", retryable: true });
+      }
+    }
+    throw error;
+  }
+  return relayAgentToolRequest(peer, request, signal, stamp);
+}
 
 export async function relayAgentToolRequest(
   peer: SidecarRuntimeAttachment,
@@ -51,6 +79,12 @@ export async function relayAgentToolRequest(
     case "invoke": {
       let response;
       try {
+        const current = peer.currentPeer;
+        if (stamp && current) {
+          try { current.assertReady(); } catch { throw new SidecarUpstreamUnavailableError(); }
+          if (!current.supportsOperation(openCodeToolInvokeOperation)) throw new AgentToolCliIngressError({ code: "unavailable", retryable: false,
+            message: "Sedes OpenCode tools require a current main server and execution-host sidecar. Upgrade and reconnect them before retrying." });
+        }
         response = stamp ? await peer.call(openCodeToolInvokeOperation, {
           stamp, request: { sourceCapability: request.sourceCapability, ...request.operation.request },
         }, { signal }) : await peer.call(

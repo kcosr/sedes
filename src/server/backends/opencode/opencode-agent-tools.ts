@@ -6,6 +6,7 @@ import { openCodeRuntimeTarget, requireOpenCodeBinding, type OpenCodeConversatio
 import { acquireOpenCodeInputObserver } from "./opencode-input-observer.js";
 import type { OpenCodeNativePort } from "./opencode-native-port.js";
 import { OpenCodeNativeApi } from "./opencode-native-api.js";
+import { OpenCodeRuntimeError } from "./opencode-release.js";
 import type { OpenCodeMcpRequest } from "../../../internal/opencode-mcp/contracts.js";
 import type { OpenCodeHostToolAdmissionResult } from "./opencode-host-agent-tools.js";
 import { acknowledgeOpenCodeMutation } from "./opencode-operation-control.js";
@@ -97,11 +98,15 @@ export class OpenCodeAgentTools {
         }
       }
       admission.diagnostic = undefined;
-    } catch {
+    } catch (error) {
       // A retry receives a fresh host operation identity even when refusal
       // happened before the registration hook could mark its location failed.
       runtime.releaseToolSession(openCodeRuntimeTarget(input)); admission.host = undefined;
-      admission.diagnostic = "Sedes OpenCode tools are unavailable. Conversation controls remain available; retry tool admission on a later message.";
+      admission.diagnostic = error instanceof OpenCodeRuntimeError && error.code === "opencode_tools_capability_unavailable"
+        ? "Sedes OpenCode tools require a newer execution-host sidecar. Upgrade and restart that sidecar, then retry tool admission on a later message. Conversation controls remain available."
+        : error instanceof OpenCodeRuntimeError && error.code === "opencode_agent_tools_capacity_reached"
+        ? "Sedes OpenCode tools have reached this runtime's retained session limit. Inspect retained work, then explicitly Stop and Connect the backend to renew tool capacity. Conversation controls remain available."
+        : "Sedes OpenCode tools are unavailable. Conversation controls remain available; retry tool admission on a later message.";
     }
   }
   release(threadId: string): void {

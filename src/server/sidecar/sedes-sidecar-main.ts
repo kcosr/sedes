@@ -30,7 +30,7 @@ import {
 import type {
   AgentToolCliRequest,
 } from "../../internal/agent-tool-cli-protocol/index.js";
-import { relayAgentToolRequest } from "./agent-tool-request-relay.js";
+import { relayAgentToolCliRequest, relayAgentToolRequest } from "./agent-tool-request-relay.js";
 import { runSedesCli } from "../../cli/sedes-cli.js";
 import { ComposerAttachmentsSidecarHost } from "./composer-attachments-sidecar-host.js";
 import { DirectoryBrowserSidecarHost } from "./directory-browser-sidecar-host.js";
@@ -230,10 +230,8 @@ async function main(): Promise<void> {
       agentToolIngress ??= await AgentToolCliLocalIngress.start({
         endpointKey: input.agentToolEndpointKey,
         relay: {
-          handle: (request, options) => {
-            const stamp = request.operation.type === "invoke" ? openCodeHosts.captureCliInvocation(request.sourceCapability) : undefined;
-            return relayAgentToolRequest(attachment, request, options.signal, stamp);
-          },
+          handle: (request, options) => relayAgentToolCliRequest(attachment, request, options.signal,
+            sourceCapability => openCodeHosts.captureCliInvocation(sourceCapability)),
         },
       });
       return {
