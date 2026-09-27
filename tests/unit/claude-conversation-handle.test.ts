@@ -6326,6 +6326,41 @@ describe("Claude image reads and meta rows", () => {
     expect(events.filter(event => event.type.startsWith("item_"))).toEqual([]);
   });
 
+  it("projects the window ahead of a result only for a built-in image read", async () => {
+    const transcript = new ClaudeTranscriptFixture();
+    transcript.prompt("Look at the screenshot", { uuid: PROMPT_ID });
+    const call = (id: string, name: string, input: unknown) =>
+      transcript.reply([{ type: "tool_use", id, name, input }], { stopReason: "tool_use" })[0]!;
+    const screenshot = call("toolu-browser", "mcp__browser__screenshot", {});
+    const screenshotResult = transcript.imageResult("toolu-browser", screenshot, { data: PNG.toString("base64"), mediaType: "image/png" });
+    const listing = call("toolu-list", "mcp__browser__list", {});
+    const listingResult = transcript.toolResult("toolu-list", listing, "two tabs");
+    const read = call("toolu-read", "Read", { file_path: "/workspace/shot.png" });
+    const readResult = transcript.imageResult("toolu-read", read, { data: PNG.toString("base64"), mediaType: "image/png" });
+    const { publisher, published } = recordingPublisher();
+    const { handle, settings, provider, turnId } = await startedTurn({ outputArtifacts: publisher });
+    // Every projection reads the thread's lifecycle receipts once.
+    const projections = vi.spyOn(settings, "listTaskLifecycleReceipts");
+    const settle = async (callUuid: string, resultUuid: string, items: number) => {
+      provider.messages.push(live(transcript, callUuid));
+      await vi.waitFor(async () => expect((await projectionSnapshot(handle)).turnsById[turnId]!.orderedBackendItemIds).toHaveLength(items));
+      const before = projections.mock.calls.length;
+      provider.messages.push(live(transcript, resultUuid));
+      await vi.waitFor(async () => {
+        const snapshot = await projectionSnapshot(handle);
+        expect(snapshot.itemsById[snapshot.turnsById[turnId]!.orderedBackendItemIds[items - 1]!]).toMatchObject({ status: "completed" });
+      });
+      return projections.mock.calls.length - before;
+    };
+    const screenshotProjections = await settle(screenshot, screenshotResult, 2);
+    const listingProjections = await settle(listing, listingResult, 3);
+    const readProjections = await settle(read, readResult, 4);
+    expect(screenshotProjections).toBe(listingProjections);
+    expect(readProjections).toBeGreaterThan(listingProjections);
+    expect(published).toHaveLength(1);
+    await handle.close();
+  });
+
   it("publishes the reads in the first snapshot, a history page, and a located turn when first opened", async () => {
     const transcript = new ClaudeTranscriptFixture();
     const turn = (index: number, fileName: string) => {

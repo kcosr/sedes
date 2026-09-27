@@ -160,6 +160,8 @@ export interface ClaudeHistoryProjection {
   readonly authenticatedTaskContextOperationIds: ReadonlySet<string>;
   /** Completed image reads in the snapshot whose image is not yet published. */
   readonly pendingViewedImages: readonly ClaudeViewedImageCandidate[];
+  /** Native tool-use IDs of built-in image reads in the supplied messages. */
+  readonly imageReadToolUseIds: ReadonlySet<string>;
   /** Private live-projection window coordinates within the supplied messages. */
   readonly window: {
     readonly sourceTurnCount: number;
@@ -271,6 +273,7 @@ interface ProjectedTimeline {
   readonly authenticatedTaskContextOperationIds: ReadonlySet<string>;
   /** Completed image reads whose image is shown once their turn is selected. */
   readonly imageReads: readonly CompletedImageRead[];
+  readonly imageReadToolUseIds: ReadonlySet<string>;
   readonly fingerprint: string;
   readonly nativeMessageStartIndexByBackendTurnId: ReadonlyMap<string, number>;
   readonly userMessageOrdinalByBackendTurnId: ReadonlyMap<string, number>;
@@ -444,6 +447,7 @@ export function projectClaudeLatestSnapshot(
     authenticatedTaskContextOperationIds:
       timeline.authenticatedTaskContextOperationIds,
     pendingViewedImages: shown.pending,
+    imageReadToolUseIds: timeline.imageReadToolUseIds,
     window: {
       sourceTurnCount:
         coordinates.turnOffset + timeline.orderedBackendTurnIds.length,
@@ -653,6 +657,7 @@ function buildTimeline(
   let toolCalls = 0;
   let toolResults = 0;
   const completedImageReads: CompletedImageRead[] = [];
+  const imageReadToolUseIds = new Set<string>();
   const nextAssistantBlockIndexByMessageId = new Map<string, number>();
   const responseGroupsByTurn = new Map<string, Map<string, AssistantResponseGroup>>();
   const lastResponseGroupByTurn = new Map<string, AssistantResponseGroup>();
@@ -1038,6 +1043,7 @@ function buildTimeline(
           }
           current.toolItemIdByNativeId.set(block.id, backendItemId);
           toolItemsByNativeId.set(block.id, backendItemId);
+          if (itemsById[backendItemId]!.semanticKind === "viewed_image") imageReadToolUseIds.add(block.id);
           current.unresolvedToolIds.add(block.id);
         } else if (block.type === "image") {
           addItem(current, itemsById, message, blockIndex, {
@@ -1138,6 +1144,7 @@ function buildTimeline(
     // Images are shown only in a selected window, after the fingerprint:
     // publishing one never moves a turn or invalidates a history cursor.
     imageReads: completedImageReads,
+    imageReadToolUseIds,
     fingerprint,
     nativeMessageStartIndexByBackendTurnId,
     userMessageOrdinalByBackendTurnId,

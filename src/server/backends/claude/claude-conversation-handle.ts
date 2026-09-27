@@ -2438,7 +2438,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
    * completes is published before the real projection sees the result.
    */
   async #publishArrivingViewedImages(message: SessionMessage): Promise<void> {
-    if (!carriesToolResultImage(message)) return;
+    if (!carriesImageReadResult(message, this.#projection.imageReadToolUseIds)) return;
     let pending: readonly ClaudeViewedImageCandidate[];
     try {
       pending = this.#projectLatest([...this.#projectionMessages, message], {
@@ -3202,11 +3202,12 @@ function modelOutputMessageId(message: SDKMessage): string | undefined {
   return message.event.type === "message_start" ? message.event.message.id : undefined;
 }
 
-/** A user row with a tool result that carries an image block. */
-function carriesToolResultImage(message: SessionMessage): boolean {
+/** A user row with an image result for one of the given built-in image reads. */
+function carriesImageReadResult(message: SessionMessage, imageReadToolUseIds: ReadonlySet<string>): boolean {
   const content = (message.message as { readonly content?: unknown } | null)?.content;
-  return Array.isArray(content) && content.some((block: unknown) =>
-    isRecord(block) && block.type === "tool_result" && Array.isArray(block.content) &&
+  return imageReadToolUseIds.size > 0 && Array.isArray(content) && content.some((block: unknown) =>
+    isRecord(block) && block.type === "tool_result" && typeof block.tool_use_id === "string" &&
+    imageReadToolUseIds.has(block.tool_use_id) && Array.isArray(block.content) &&
     block.content.some((part: unknown) => isRecord(part) && part.type === "image"));
 }
 
