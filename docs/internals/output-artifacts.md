@@ -272,15 +272,31 @@ also gives it new keys. Associations use the same scoped storage, thread
 deletion, and backup rules as other artifacts.
 
 History projection stays synchronous and never decodes; it looks up retained
-associations and lists the missing ones. For Claude, opening the thread, a
-live result, `history()`, `locateTurn()`, and `read()` publish those for the
-window or page being returned and reproject. A live image is published before
-its delta, so the row and image arrive together, and each handle remembers up
-to 4096 verified and 4096 failed keys. For Pi, only the conversation handle
-publishes: a late live child is delivered as `item_completed` only, each
-projection seed backfills at most 32 missing children in the background,
-`history()` publishes at most 16 per page, and `read()` and `locateTurn()`
-only look images up. Details are in [Claude
+associations for the selected window or page and lists the missing ones. Images
+never change which turns a window or page selects: Claude counts a fixed 2 KiB
+for every completed image read, and Pi measures turns without their image
+children.
+
+For Claude, the first snapshot, `history()`, `locateTurn()`, and `read()` each
+wait at most two seconds for their four newest missing images. The rest publish
+in the background, two at a time, and arrive as ordinary live updates inside
+the live window or on the next fetch. A new live result publishes its image
+before its delta, so the row and image arrive together. A shown image keeps its
+slot in the turn, so a turn with k images reaches the per-turn item limit k
+items earlier. A failed key only suppresses publish retries; a lookup still
+finds an image another reader published.
+
+For Pi, only the conversation handle publishes: a late live child is delivered
+as `item_completed` only, each projection seed backfills at most 32 missing
+children in the background, `history()` publishes at most 16 per page, and
+`read()` and `locateTurn()` only look images up. A row seeded before its result
+persists completes when the result is saved, or becomes `interrupted`
+(`pi_tool_result_missing`) when its turn settles.
+
+Each handle remembers up to 4096 failed keys, so a failed publication is
+retried only after the thread is reattached. Closing a handle stops further
+publication; Pi also waits for publications already started before disposing
+its session. Details are in [Claude
 internals](backends/claude.md#semantic-projection-and-terminal-receipts) and
 [Pi internals](backends/pi.md#viewed-images).
 
