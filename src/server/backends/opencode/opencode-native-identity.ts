@@ -76,15 +76,62 @@ export async function readOpenCodeNativeIdentity(input: {
     const executable = await openCodeFileIdentity(`${proc}/exe`);
     const nativeStorePath = await canonicalOpenCodeStore(input.nativeStorePath, false);
     const store = await openCodeFileIdentity(nativeStorePath);
+    // OPENCODE_DB is concrete native configuration evidence, not an operator
+    // declaration. Its relative-path rule is pinned in CLI database-path.ts
+    // and util/global-roots.ts. Never admit a known different store namespace.
+    const environment = new Map((await boundedOpenCodeProcessFile(`${proc}/environ`, 1_048_576))
+      .toString("utf8").split("\0").map(entry => {
+        const equals = entry.indexOf("=");
+        return [entry.slice(0, equals), entry.slice(equals + 1)] as const;
+      }));
+    const database = environment.get("OPENCODE_DB");
+    const home = environment.get("HOME");
+    const data = environment.get("XDG_DATA_HOME") || (home && path.join(home, ".local", "share"));
+    if (database !== undefined) {
+      if (database === ":memory:") throw new Error();
+      let selected = database;
+      if (!path.isAbsolute(selected)) {
+        if (!data || !path.isAbsolute(data)) throw new Error();
+        selected = path.resolve(data, "opencode", selected);
+      }
+      if (await realpath(selected) !== nativeStorePath) throw new Error();
+    }
+    let nativeDefaultDirectory: string | undefined;
+    if (database === undefined && data && path.isAbsolute(data)) {
+      try { nativeDefaultDirectory = await realpath(path.join(data, "opencode")); }
+      catch (cause) { if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause; }
+    }
     let storeObservation: OpenCodeNativeIdentity["storeObservation"] = "operator_declared";
     const descriptors = await readdir(`${proc}/fd`);
     if (descriptors.length > 16_384) throw new Error();
     for (const descriptor of descriptors) {
       try {
         const file = await stat(`${proc}/fd/${descriptor}`, { bigint: true });
-        if (file.isFile() && String(file.dev) === store.device && String(file.ino) === store.inode) {
-          storeObservation = "open_file"; break;
+        if (!file.isFile()) continue;
+        const matches = String(file.dev) === store.device && String(file.ino) === store.inode;
+        if (database !== undefined || nativeDefaultDirectory) {
+          let opened = await readlink(`${proc}/fd/${descriptor}`);
+          if (opened.endsWith(" (deleted)")) {
+            // Linux appends this suffix to unlinked descriptors, but it can
+            // also be a literal filename. An exact current inode match proves
+            // the literal case; never discard that concrete file identity.
+            let literal: Awaited<ReturnType<typeof openCodeFileIdentity>> | undefined;
+            try {
+              const candidate = await stat(opened, { bigint: true });
+              literal = { device: String(candidate.dev), inode: String(candidate.ino) };
+            } catch (cause) { if (!["ENOENT", "ENOTDIR"].includes((cause as NodeJS.ErrnoException).code ?? "")) throw cause; }
+            if (!literal || literal.device !== String(file.dev) || literal.inode !== String(file.ino)) {
+              opened = opened.slice(0, -" (deleted)".length);
+            }
+          }
+          if (database !== undefined && opened === nativeStorePath && !matches) throw new Error();
+          // The server API omits the compile-time channel. Observe the actual
+          // default filename instead of guessing one from the release number.
+          if (nativeDefaultDirectory && path.dirname(opened) === nativeDefaultDirectory && /^opencode(?:-[a-zA-Z0-9._-]+)?\.db$/u.test(path.basename(opened)) && !matches) {
+            throw new Error();
+          }
         }
+        if (matches) storeObservation = "open_file";
       } catch (cause) { if (!["ENOENT", "ESRCH"].includes((cause as NodeJS.ErrnoException).code ?? "")) throw cause; }
     }
     const after = parseLinuxProcessStat(input.pid, (await boundedOpenCodeProcessFile(`${proc}/stat`, 4_096)).toString("utf8"));

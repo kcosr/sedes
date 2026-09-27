@@ -1922,13 +1922,13 @@ export class CodexConversationHandle implements ConversationHandle {
             throw codexError("rejected", "The Codex turn changed before Stop was applied.", "codex_interrupt_target_changed", false, error);
           }
         }
-        throw mapCodexMutationError(error, "interrupt");
+        throw mapCodexMutationError(error, "interrupt", true);
       }
       if (response.generation !== generation) throw mutationOutcomeUnknown("generation_changed");
       interrupted = true;
       // The private target is chosen once. A native stale-target rejection does
       // not authorize chasing another turn, nor does inactivity prove an ACK.
-    }).catch(error => { throw dispatched || error instanceof BackendError ? mapCodexMutationError(error, "interrupt") : mapCodexReadError(error); });
+    }).catch(error => { throw dispatched || error instanceof BackendError ? mapCodexMutationError(error, "interrupt", dispatched) : mapCodexReadError(error); });
     this.#acceptedStop = input;
     if (Date.now() < input.deadlineAt && !input.signal?.aborted && !lifetime.aborted && interrupted && selected &&
         this.#snapshotWindow?.activeBackendTurnId === codexBackendTurnId(this.binding.backendConversationId, selected) &&
@@ -2347,8 +2347,10 @@ export class CodexConversationHandle implements ConversationHandle {
         projectedState: outcome.state,
       };
     }
-    checkBudget();
     if (outcome.kind === "uncertain") {
+      // Uncertainty must replace stale Goal state even after the Stop budget
+      // elapsed. Its evidence belongs only to the captured control generation.
+      if (stop) this.#assertControlGeneration(generation);
       if (outcome.observed) {
         this.#goalSessions.publishObserved({
           scope,
@@ -2373,6 +2375,7 @@ export class CodexConversationHandle implements ConversationHandle {
           "The Goal mutation could not be confirmed. Refresh the thread.",
       };
     }
+    checkBudget();
     return {
       outcome: "rejected",
       safeMessage: outcome.reason,
@@ -2398,14 +2401,19 @@ export class CodexConversationHandle implements ConversationHandle {
 
   async #refreshGoalProjection(signal?: AbortSignal): Promise<void> {
     if (!this.#goalSessions || this.#establishedGeneration === 0) return;
-    await this.#goalSessions.refresh({
-      scope: this.#scope(),
-      applicationThreadId: this.binding.applicationThreadId,
-      nativeThreadId: this.binding.backendConversationId,
-      connectionGeneration: this.#establishedGeneration,
-      client: this.#client,
-      ...(signal ? { signal } : {}),
-    });
+    try {
+      await this.#goalSessions.refresh({
+        scope: this.#scope(),
+        applicationThreadId: this.binding.applicationThreadId,
+        nativeThreadId: this.binding.backendConversationId,
+        connectionGeneration: this.#establishedGeneration,
+        client: this.#client,
+        ...(signal ? { signal } : {}),
+      });
+    } catch (cause) {
+      if (signal?.aborted) throw projectionCancelled(cause);
+      throw cause;
+    }
   }
 
   /** Replay only Sedes's durable tier; all other resume fields stay native. */
@@ -6877,9 +6885,10 @@ function mapCodexInteractionError(error: unknown): BackendError {
 function mapCodexMutationError(
   error: unknown,
   operation: string,
+  dispatched = false,
 ): BackendError {
   if (error instanceof BackendError) return error;
-  if (error instanceof Error && error.message === "codex_skill_unavailable") {
+  if (!dispatched && error instanceof Error && error.message === "codex_skill_unavailable") {
     return codexError(
       "rejected",
       "The selected Codex skill is no longer available in this workspace.",
@@ -6919,6 +6928,7 @@ function mapCodexMutationError(
         true,
       );
     }
+    if (dispatched) return mutationOutcomeUnknown(operation);
     return codexError(
       "internal",
       "Codex could not complete the mutation safely.",
@@ -6972,7 +6982,7 @@ function mapCodexMutationError(
       true,
     );
   }
-  if (error instanceof Error && error.name === "ZodError") {
+  if (!dispatched && error instanceof Error && error.name === "ZodError") {
     return codexError(
       "rejected",
       "The Codex mutation input is invalid or too large.",
@@ -6981,6 +6991,7 @@ function mapCodexMutationError(
       error,
     );
   }
+  if (dispatched) return mutationOutcomeUnknown(operation);
   return codexError(
     "internal",
     "Codex could not complete the mutation safely.",

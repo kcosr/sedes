@@ -209,7 +209,7 @@ export class OpenCodeRuntime {
 
   async #close(): Promise<OpenCodeRuntimeStopResult> {
     await this.#starting?.catch(() => undefined);
-    if (this.#state === "cleanup_unproved") throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved");
+    if (this.#state === "cleanup_unproved" && !this.#owned) throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved");
     let nativeInterrupts: OpenCodeRuntimeStopResult["nativeInterrupts"] = this.#owned ? "incomplete" : "not_owned";
     if (this.#owned && this.#client && this.#state === "ready") {
       const deadline = AbortSignal.timeout(5_000);

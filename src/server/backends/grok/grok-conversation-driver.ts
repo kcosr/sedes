@@ -2038,10 +2038,14 @@ class GrokConversationHandle implements ConversationHandle {
       }
       const promptId = this.#lifecycle.activePromptId(this.#sessionId);
       if (!promptId) return;
+      let dispatched = false;
       try {
-        await this.#lifecycle.interruptPrompt(this.#sessionId, promptId, budget);
+        await this.#lifecycle.interruptPrompt(this.#sessionId, promptId, {
+          ...budget,
+          dispatch() { budget.dispatch(); dispatched = true; },
+        });
       } catch (cause) {
-        throw mapInterruptError(cause);
+        throw mapInterruptError(cause, dispatched);
       }
     });
   }
@@ -3126,7 +3130,10 @@ function mapSubmissionError(
   );
 }
 
-function mapInterruptError(error: unknown): BackendError {
+function mapInterruptError(error: unknown, dispatched: boolean): BackendError {
+  // Errors while waiting for prompt completion describe that separate RPC,
+  // not whether the already-dispatched session/cancel took effect.
+  if (dispatched) return interruptOutcomeUnknown(error);
   if (error instanceof BackendError) return error;
   if (
     error instanceof Error &&

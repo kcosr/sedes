@@ -36,7 +36,10 @@ export interface AcquiredConversationActor {
 }
 
 export interface AcquiredConversationControl {
-  readonly control: ConversationControl;
+  readonly control: Omit<ConversationControl, "interrupt"> & {
+    /** Runs after the native-effect fence admits dispatch, before calling the driver. */
+    interrupt(input: Parameters<ConversationControl["interrupt"]>[0], onDispatch?: () => void): Promise<void>;
+  };
   release(): void;
 }
 
@@ -448,12 +451,13 @@ export class ConversationActorManager {
     return {
       control: {
         generation: control.generation, lifetime,
-        interrupt: input => entry.nativeEffects.run(async () => {
+        interrupt: (input, onDispatch) => entry.nativeEffects.run(async () => {
           assertCurrent();
           if (input.signal?.aborted || Date.now() >= input.deadlineAt) {
             throw new BackendError({ category: "unavailable", retryable: false, crossedSubmissionBoundary: false,
               safeMessage: "The conversation Stop budget expired before dispatch." });
           }
+          onDispatch?.();
           await control.interrupt({ ...input, signal: input.signal ? AbortSignal.any([input.signal, lifetime]) : lifetime });
         }),
         reconcileInterrupt: async input => {

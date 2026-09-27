@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -6,9 +6,67 @@ import { expect, it } from "vitest";
 import { z } from "zod";
 import { OpenCodeRuntime } from "../../src/server/backends/opencode/opencode-runtime.js";
 import { startOpenCodeOwnedProcess } from "../../src/server/backends/opencode/opencode-owned-process.js";
-import { boundedOpenCodeProcessFile } from "../../src/server/backends/opencode/opencode-native-identity.js";
+import { boundedOpenCodeProcessFile, readOpenCodeNativeIdentity } from "../../src/server/backends/opencode/opencode-native-identity.js";
+import { startOpencodeNativeFixture } from "../support/opencode-native-fixture.js";
 
 const enabled = process.platform === "linux" && process.env.SEDES_RUN_REAL_OPENCODE === "1";
+
+it.skipIf(!enabled)("rejects a conflicting observed native default database without OPENCODE_DB", async () => {
+  const fixture = await startOpencodeNativeFixture();
+  try {
+    const environment = await boundedOpenCodeProcessFile(`/proc/${fixture.pid}/environ`, 1_048_576);
+    expect(environment.toString("utf8").split("\0").some(entry => entry.startsWith("OPENCODE_DB="))).toBe(false);
+    const nativeStorePath = path.join(fixture.rootDirectory, "data", "opencode", "opencode.db");
+    const wrongStorePath = path.join(fixture.rootDirectory, "wrong.db");
+    await writeFile(wrongStorePath, "unrelated database canary");
+    await expect(readOpenCodeNativeIdentity({ pid: fixture.pid, nativeStorePath: wrongStorePath }))
+      .rejects.toThrow("opencode_local_process_identity_unproved");
+    await expect(readOpenCodeNativeIdentity({ pid: fixture.pid, nativeStorePath }))
+      .resolves.toMatchObject({ nativeStorePath, storeObservation: "open_file" });
+    await unlink(nativeStorePath);
+    await writeFile(nativeStorePath, "replacement database canary");
+    await expect(readOpenCodeNativeIdentity({ pid: fixture.pid, nativeStorePath }))
+      .rejects.toThrow("opencode_local_process_identity_unproved");
+    expect((await fixture.api("GET", "/api/info")).status).toBe(200);
+  } finally { await fixture.stop(); }
+});
+
+it.skipIf(!enabled).each(["opencode.db", "opencode.db (deleted)"])("rejects replacement of explicit native database %s while its original descriptor remains open", async name => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sedes-opencode-replaced-database-"));
+  const configDirectory = path.join(root, "config");
+  const nativeStorePath = path.join(root, name);
+  let native: Awaited<ReturnType<typeof startOpenCodeOwnedProcess>> | undefined;
+  let proved = false;
+  try {
+    await mkdir(configDirectory);
+    await writeFile(path.join(root, "models.json"), "{}");
+    await writeFile(path.join(configDirectory, "opencode.json"), JSON.stringify({ update: "disable" }));
+    native = await startOpenCodeOwnedProcess({
+      executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2",
+      workingDirectory: root, nativeStorePath, configDirectory,
+      environment: { HOME: root, PATH: process.env.PATH, SHELL: "/bin/sh",
+        XDG_DATA_HOME: path.join(root, "data"), XDG_STATE_HOME: path.join(root, "state"), XDG_CACHE_HOME: path.join(root, "cache"),
+        OPENCODE_DISABLE_MODELS_FETCH: "1", OPENCODE_MODELS_PATH: path.join(root, "models.json"), OPENCODE_DISABLE_FFF: "1", OPENCODE_FILEWATCHER_DISABLE: "1" },
+    });
+    // Literal suffixes must remain intact when their pathname and FD inode
+    // agree. A same-spelling literal sibling cannot hide a different deleted
+    // native inode merely because that literal pathname also exists.
+    const literalSibling = await open(`${nativeStorePath} (deleted)`, "wx");
+    try {
+      await expect(readOpenCodeNativeIdentity({ pid: native.pid, nativeStorePath }))
+        .resolves.toMatchObject({ nativeStorePath, storeObservation: "open_file" });
+      await unlink(nativeStorePath);
+      await writeFile(nativeStorePath, "replacement database canary");
+      await expect(readOpenCodeNativeIdentity({ pid: native.pid, nativeStorePath }))
+        .rejects.toThrow("opencode_local_process_identity_unproved");
+      expect(await readFile(nativeStorePath, "utf8")).toBe("replacement database canary");
+    } finally { await literalSibling.close(); }
+    await native.stop(); proved = true;
+  } finally {
+    if (native && !proved) { await native.stop(); proved = true; }
+    if (proved || !native) await rm(root, { recursive: true, force: true });
+  }
+});
 
 async function alive(pid: number): Promise<boolean> {
   try {
@@ -136,6 +194,18 @@ it.skipIf(!enabled)("external stock opencode2 keeps its daemon and background sh
     const processEnvironment = await boundedOpenCodeProcessFile(`/proc/${native.pid}/environ`, 1_048_576);
     const password = processEnvironment.toString("utf8").split("\0").find(value => value.startsWith("OPENCODE_PASSWORD="))?.slice("OPENCODE_PASSWORD=".length);
     if (!password) throw new Error("isolated fixture password unavailable");
+    const wrongStorePath = path.join(root, "wrong.db");
+    await writeFile(wrongStorePath, "unrelated database canary");
+    const mismatched = new OpenCodeRuntime({
+      authority: { tenantId: "qualification", principalId: "qualification", backendInstanceId: "mismatch", executionEnvironmentId: "local" },
+      nativeStorePath: wrongStorePath, environment: {}, externalPassword: async () => password,
+      connection: { ownership: "external", channel: { type: "http", url: native.endpoint } },
+    });
+    await expect(mismatched.start()).rejects.toThrow("opencode_local_process_identity_unproved");
+    expect(mismatched.snapshot().state).toBe("stopped");
+    expect(await readFile(wrongStorePath, "utf8")).toBe("unrelated database canary");
+    expect((await readdir(root)).some(name => name.endsWith(".lock"))).toBe(false);
+    expect(await alive(native.pid)).toBe(true);
     runtime = new OpenCodeRuntime({
       authority: { tenantId: "qualification", principalId: "qualification", backendInstanceId: "external", executionEnvironmentId: "local" },
       nativeStorePath, environment: {}, externalPassword: async () => password,

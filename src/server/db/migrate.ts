@@ -9,6 +9,7 @@ import { claudeForkChildrenMigration } from "./migrations/117-claude-fork-childr
 import { queuedInputFailureReasonMigration } from "./migrations/118-queued-input-failure-reason.js";
 import { openCodeBackendKindMigration } from "./migrations/120-opencode-backend-kind.js";
 import { openCodeNativeEvidenceMigration } from "./migrations/121-opencode-native-evidence.js";
+import { openCodeAgentToolDefaultsMigration } from "./migrations/122-opencode-agent-tool-defaults.js";
 import { conversationStopReceiptsMigration } from "./migrations/119-conversation-stop-receipts.js";
 import { claudeTurnFailureDetailsMigration } from "./migrations/109-claude-turn-failure-details.js";
 import { forkEnvironmentFingerprintsMigration } from "./migrations/108-fork-environment-fingerprints.js";
@@ -256,6 +257,7 @@ export const backendNormalizedMigrations = [
   conversationStopReceiptsMigration,
   openCodeBackendKindMigration,
   openCodeNativeEvidenceMigration,
+  openCodeAgentToolDefaultsMigration,
 ] as const;
 
 export type DatabaseMigration = {

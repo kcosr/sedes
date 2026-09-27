@@ -6,7 +6,8 @@ import type { AgentConnectionProfile } from "../contracts.js";
 import { NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES, type BackendModule, type BackendModuleConfigurationInput, type BackendModuleRuntime, type BackendModuleRuntimeContext, type BackendRuntimeAdministration, type BackendRuntimeInspection, type PreparedBackendModule } from "../module.js";
 import { parseOpenCodeBackendConfiguration, type PreparedOpenCodeBackendConfiguration } from "./opencode-backend-configuration.js";
 import { OpenCodeRuntime, openCodeRuntimeNamespaceKey, type OpenCodeRuntimeInput } from "./opencode-runtime.js";
-import { OPENCODE_RELEASE } from "./opencode-release.js";
+import { OPENCODE_RELEASE, OpenCodeRuntimeError } from "./opencode-release.js";
+import { BackendRuntimeControlRejectedError } from "../runtime-control.js";
 import { OpenCodeThreadRepository } from "./opencode-thread-repository.js";
 import { OpenCodeBackendThreadPersistenceAdapter } from "./opencode-backend-thread-persistence-adapter.js";
 import { OpenCodeBackendDriverFactory } from "./opencode-driver-factory.js";
@@ -191,13 +192,20 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
   }
   async #administer(input: { expectedRevision: string; force: boolean }, restart: boolean): Promise<void> {
     const state = this.#inspect();
-    if (this.#administrating || state.revision !== input.expectedRevision || (!input.force && state.blockers.length)) {
-      throw new Error("opencode_runtime_administration_conflict");
+    if (this.#administrating || state.revision !== input.expectedRevision) {
+      throw new BackendRuntimeControlRejectedError("confirmation_stale");
     }
+    if (!input.force && state.blockers.length) throw new BackendRuntimeControlRejectedError("blocked");
     this.#administrating = true; this.#revision++;
     try {
       await this.#stop();
       if (restart) { const owner = await this.#native(); await owner.start(); this.#lastShutdownIncomplete = false; }
+    } catch (error) {
+      if (error instanceof OpenCodeRuntimeError &&
+          ["opencode_owned_cleanup_unproved", "opencode_native_store_initialization_unproved"].includes(error.code)) {
+        throw new BackendRuntimeControlRejectedError("cleanup_unproven", { cause: error });
+      }
+      throw error;
     } finally { this.#administrating = false; this.#revision++; }
   }
   async #stop(): Promise<void> {

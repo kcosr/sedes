@@ -17137,6 +17137,42 @@ it("Codex history installation cannot revive a Stop target completed during pagi
   await handle.close();
 });
 
+it.each([
+  new Error("unclassified interrupt completion failure"),
+  Object.assign(new Error("late schema failure"), { name: "ZodError" }),
+  new CodexAppServerBindingError({ code: "late_binding_failure", direction: "server_notification", method: "turn/completed" }),
+])("Codex keeps unclassified post-dispatch Stop failures uncertain: $message", async failure => {
+  const harness = new RpcHarness();
+  const handle = await attachIdle(harness);
+  const active = { ...nativeTurn(1), status: "inProgress" as const, completedAt: null, durationMs: null };
+  await establish(harness, handle, nativeThread({ status: { type: "active", activeFlags: [] }, turns: [active] }));
+  harness.enqueue("turn/interrupt", failure);
+  const input = { applicationOperationId: "unclassified-stop", deadlineAt: Date.now() + 30_000 };
+  await expect(handle.interrupt(input)).rejects.toMatchObject({ category: "submission_unknown", crossedSubmissionBoundary: true });
+  expect(await handle.reconcileInterrupt(input)).toEqual({ outcome: "unknown" });
+  await expect(handle.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+  expect(harness.calls.filter(call => call.method === "turn/interrupt")).toHaveLength(1);
+  harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+  await handle.close();
+});
+
+it("Codex normalizes cancellation during establishment's Goal refresh and permits a later retry", async () => {
+  const harness = new RpcHarness();
+  const goals = new CodexGoalSessionRegistry();
+  const handle = await attachIdle(harness, driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy, executionSettingsProvider(), goals));
+  const cancellation = new AbortController();
+  harness.enqueue("thread/read", { thread: nativeThread() });
+  harness.enqueue("thread/resume", resumeResult());
+  harness.enqueue("thread/goal/get", () => { cancellation.abort(new Error("caller cancelled history")); throw cancellation.signal.reason; });
+  await expect(handle.establishProjection({ signal: cancellation.signal })).rejects.toMatchObject({
+    category: "unavailable", backendCode: "codex_projection_cancelled", crossedSubmissionBoundary: false,
+  });
+  harness.enqueue("thread/goal/get", { goal: null });
+  await expect(establish(harness, handle)).resolves.toMatchObject({ snapshot: { runState: "idle" } });
+  harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+  await handle.close();
+});
+
 it("Codex publishes a confirmed Goal pause even when the Stop budget ends just after its response", async () => {
   const harness = new RpcHarness();
   const goals = new CodexGoalSessionRegistry();
@@ -17156,4 +17192,60 @@ it("Codex publishes a confirmed Goal pause even when the Stop budget ends just a
     const identity = binding();
     expect(goals.projection({ tenantId: identity.tenantId, principalId: identity.ownerPrincipalId }, identity.applicationThreadId)?.state).toMatchObject({ status: "paused" });
   } finally { vi.useRealTimers(); harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }); await handle.close(); }
+});
+
+it.each([true, false])("Codex replaces stale Goal state after an uncertain pause crosses the Stop deadline (observed=%s)", async observed => {
+  const harness = new RpcHarness();
+  const goals = new CodexGoalSessionRegistry();
+  const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy, executionSettingsProvider(), goals);
+  let control: import("../../src/server/backends/contracts.js").ConversationControl | undefined;
+  const handle = await target.attach({ ...attachInput(), onControlReady: value => { control = value; } });
+  await establish(harness, handle);
+  harness.enqueue("thread/read", { thread: nativeThread() });
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const input = { applicationOperationId: "uncertain-goal-stop", deadlineAt: Date.now() + 30_000 };
+    await control!.interrupt(input);
+    const goal = { threadId: "thread-1", objective: "Keep working", status: "active", tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 };
+    harness.enqueue("thread/goal/get", { goal });
+    harness.enqueue("thread/goal/set", () => {
+      vi.setSystemTime(input.deadlineAt + 1);
+      if (observed) return { goal: { ...goal, objective: "Native objective changed", updatedAt: 2 } };
+      throw new CodexRpcDeliveryError({ code: "goal_response_lost", delivery: "sent_outcome_unknown", generation: 1, method: "thread/goal/set" });
+    });
+    await expect(control!.mutateProviderFeature!({ featureId: "codex.goal", schemaVersion: 1, actionId: "pause", arguments: {} })).resolves.toMatchObject({ outcome: "uncertain" });
+    const identity = binding();
+    const projection = goals.projection({ tenantId: identity.tenantId, principalId: identity.ownerPrincipalId }, identity.applicationThreadId);
+    expect(projection).toMatchObject(observed ? { availability: "available", state: { status: "active", objective: "Native objective changed" } } : { availability: "unavailable" });
+    // The original budget does not authorize a post-deadline recovery RPC.
+    expect(harness.calls.filter(call => call.method === "thread/goal/get")).toHaveLength(2);
+  } finally { vi.useRealTimers(); harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }); await handle.close(); }
+});
+
+it.each([true, false])("Codex uncertain Goal pause cannot replace a newer control generation (observed=%s)", async observed => {
+  const harness = new RpcHarness();
+  const goals = new CodexGoalSessionRegistry();
+  const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy, executionSettingsProvider(), goals);
+  let control: import("../../src/server/backends/contracts.js").ConversationControl | undefined;
+  const handle = await target.attach({ ...attachInput(), onControlReady: value => { control = value; } });
+  await establish(harness, handle);
+  harness.enqueue("thread/read", { thread: nativeThread() });
+  const identity = binding();
+  const goalScope = { tenantId: identity.tenantId, principalId: identity.ownerPrincipalId };
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const input = { applicationOperationId: "replaced-goal-stop", deadlineAt: Date.now() + 30_000 };
+    await control!.interrupt(input);
+    const goal = { threadId: "thread-1", objective: "Keep working", status: "active", tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 };
+    harness.enqueue("thread/goal/get", { goal });
+    harness.enqueue("thread/goal/set", () => {
+      vi.setSystemTime(input.deadlineAt + 1);
+      harness.lifecycle("ready", 2);
+      goals.publishObserved({ scope: goalScope, applicationThreadId: identity.applicationThreadId, nativeThreadId: "thread-1", connectionGeneration: 2, state: { state: "unset" } });
+      if (observed) return { goal: { ...goal, tokensUsed: 7, updatedAt: 2 } };
+      throw new CodexRpcDeliveryError({ code: "goal_response_lost", delivery: "sent_outcome_unknown", generation: 1, method: "thread/goal/set" });
+    });
+    await expect(control!.mutateProviderFeature!({ featureId: "codex.goal", schemaVersion: 1, actionId: "pause", arguments: {} })).rejects.toMatchObject({ category: "unavailable" });
+    expect(goals.projection(goalScope, identity.applicationThreadId)).toMatchObject({ availability: "available", connectionGeneration: 2, state: { state: "unset" } });
+  } finally { vi.useRealTimers(); await handle.close(); }
 });

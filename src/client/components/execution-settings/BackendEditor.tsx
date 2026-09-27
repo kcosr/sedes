@@ -26,7 +26,8 @@ export function BackendEditor({ draft, setDraft, configuration, saving, loading,
   const environmentId = draft.targets[0]?.executionEnvironmentId ?? "";
   const environment = configuration.executionEnvironments.find(entry => entry.id === environmentId);
   const eligibleKinds = (Object.keys(backendEditors) as BackendDefinition["kind"][]).filter(kind =>
-    environment && allowedEnvironments(backendEditors[kind].createBackend("eligibility"), [environment]).length > 0);
+    // OpenCode remains outside the production catalog until execution is admitted.
+    kind !== "opencode" && environment && allowedEnvironments(backendEditors[kind].createBackend("eligibility"), [environment]).length > 0);
   const draftUnsupportedEnvironment = !eligibleKinds.includes(draft.backend.kind);
   const invalidEnvironment = !environment || (draftUnsupportedEnvironment
     && (draft.creating || draft.backend.enabled || draft.targets.some(target => target.enabled)));
@@ -56,7 +57,7 @@ export function BackendEditor({ draft, setDraft, configuration, saving, loading,
                 description={!draft.creating ? "An existing backend keeps its execution environment. Add a new backend to use a different host." : "All connections for this backend use this environment."}
                 onChange={chooseEnvironment} />
               <SelectField label="Backend type" value={draft.backend.kind} disabled={!draft.creating}
-                options={(Object.entries(backendEditors) as Array<[BackendDefinition["kind"], typeof selectedEditor]>).map(([value, editor]) => ({ value, label: editor.label, disabled: !eligibleKinds.includes(value) }))}
+                options={(Object.entries(backendEditors) as Array<[BackendDefinition["kind"], typeof selectedEditor]>).map(([value, editor]) => ({ value, label: value === "opencode" ? `${editor.label} (unavailable)` : editor.label, disabled: !eligibleKinds.includes(value) }))}
                 onChange={chooseKind} />
               <p className="execution-settings-muted">{selectedEditor.description}</p>
               {!environment ? <p role="status">Choose an execution environment to select a supported backend type.</p>

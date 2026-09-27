@@ -16,6 +16,8 @@ import {
 import { createThreadCreateToolDefinition } from "../../src/server/agent-tools/tools/thread-management-tools.js";
 import { createPiAgentToolSet } from "../../src/server/backends/pi/pi-agent-tool-adapter.js";
 import { PiToolAccessController } from "../../src/server/backends/pi/pi-tool-access.js";
+import { OpenCodeSavedAgentBackendAdapter } from "../../src/server/backends/opencode/opencode-saved-agent-adapter.js";
+import { backendBrandSchema } from "../../src/shared/protocol/conversation.js";
 
 const agentId = "10000000-0000-4000-8000-000000000001";
 const workspaceId = "10000000-0000-4000-8000-000000000002";
@@ -111,6 +113,45 @@ function context(): TrustedToolInvocationContext {
 }
 
 describe("Saved Agent canonical tools", () => {
+  it.each(backendBrandSchema.options)("validates executed Saved Agent outputs for the %s presentation brand", async (brand) => {
+    const backend = brand === "opencode"
+      ? new OpenCodeSavedAgentBackendAdapter().presentation
+      : { typeId: brand, label: { text: brand }, brand };
+    const agent = {
+      ...await service().get({ tenantId: "tenant-1", principalId: "principal-1" }, agentId),
+      backendTypeId: backend.typeId,
+      backend,
+    };
+    const value = service({
+      list: () => ({ items: [{
+        id: agent.id, name: agent.name, backendTypeId: agent.backendTypeId,
+        backend, overrideCount: 0, sedesTools: null, revision: agent.revision,
+        createdAt: agent.createdAt, updatedAt: agent.updatedAt,
+      }] }),
+      optionsForAgentTool: async () => ({
+        kind: "targets", targets: [{ id: targetId, label: { text: "Target" }, backend }],
+      }),
+      createAgentForAgentTool: () => agent,
+    });
+    const registry = new AgentToolRegistry();
+    definitions(value).forEach((definition) => registry.register(definition));
+    const list = createSavedAgentListToolDefinition(value);
+    const options = createSavedAgentOptionsToolDefinition(value);
+    const create = createSavedAgentCreateToolDefinition(value);
+    const listOutput = await list.execute({}, context());
+    const optionsOutput = await options.execute({}, context());
+    const createOutput = await create.execute({
+      name: agent.name, authoringContext: { workspaceId, targetId }, backendOverrides: [],
+    }, context());
+
+    expect(registry.validatesOutput(list.id, list.schemaVersion, listOutput)).toBe(true);
+    expect(registry.validatesOutput(options.id, options.schemaVersion, optionsOutput)).toBe(true);
+    expect(registry.validatesOutput(create.id, create.schemaVersion, createOutput)).toBe(true);
+    expect(registry.validatesOutput(create.id, create.schemaVersion, {
+      ...createOutput, backend: { ...backend, brand: "unknown" },
+    })).toBe(false);
+  });
+
   it("registers six independently exposable contracts with truthful effects", () => {
     const registry = new AgentToolRegistry();
     definitions().forEach((definition) => registry.register(definition));

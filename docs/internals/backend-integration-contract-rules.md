@@ -2216,7 +2216,9 @@ A per-owner native-effect fence serializes Stop with first Send, queue-owned
 Send and Steer. Only the actual provider calls hold it: runtime acquisition,
 history hydration and the queue mailbox never block control admission. A Stop
 whose original deadline expires while waiting on a provider effect cannot
-dispatch later. Pi and Claude use their native session/query cancellation; Grok selects
+dispatch later. Its receipt stays prepared until the fence admits the driver
+call, so expiry before dispatch is proven nonapplication rather than an unknown
+native outcome. Pi and Claude use their native session/query cancellation; Grok selects
 one current prompt and requires its cancelled settlement, since writing an ACP
 notification is not acknowledgement. Codex selects its current native turn from
 control metadata and turn shells without hydrating item history, and sends one

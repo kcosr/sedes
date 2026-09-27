@@ -1988,8 +1988,13 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           }
         } else {
           if (!currentBudget()) return this.#interruptUnconfirmed(scope, operation.operationId);
-          this.input.operations.markInterruptStarted(scope, operation.operationId);
-          await withinBudget(lease.control.interrupt(input));
+          await withinBudget(lease.control.interrupt(input, () => {
+            if (!currentBudget()) {
+              throw new BackendError({ category: "unavailable", retryable: false, crossedSubmissionBoundary: false,
+                safeMessage: "The conversation Stop budget expired before dispatch." });
+            }
+            this.input.operations.markInterruptStarted(scope, operation.operationId);
+          }));
         }
         if (!currentBudget()) return this.#interruptUnconfirmed(scope, operation.operationId);
         const accepted = this.input.operations.acceptInterrupt(scope, operation.operationId);

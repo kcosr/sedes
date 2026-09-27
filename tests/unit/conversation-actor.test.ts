@@ -3616,12 +3616,15 @@ describe("ConversationActorManager", () => {
     const submitting = acquired.actor.submit({ applicationOperationId: "first", source: { kind: "user" }, mutationId: "first", reconciliationToken: "first",
       text: "hello", contextExcerpts: [], attachments: [], taskContexts: [] });
     await vi.waitFor(() => expect(handle.submit).toHaveBeenCalledOnce());
-    const stopping = control.control.interrupt({ applicationOperationId: "stop-first", deadlineAt: Date.now() + 30_000 });
+    const onDispatch = vi.fn(() => expect(handle.interrupt).not.toHaveBeenCalled());
+    const stopping = control.control.interrupt({ applicationOperationId: "stop-first", deadlineAt: Date.now() + 30_000 }, onDispatch);
     await Promise.resolve();
     expect(handle.interrupt).not.toHaveBeenCalled();
+    expect(onDispatch).not.toHaveBeenCalled();
     accept();
     await Promise.all([submitting, stopping]);
     expect(handle.interrupt).toHaveBeenCalledOnce();
+    expect(onDispatch).toHaveBeenCalledOnce();
     control.release(); acquired.release(); await manager.close();
   });
 
@@ -3643,11 +3646,13 @@ describe("ConversationActorManager", () => {
         text: "hello", contextExcerpts: [], attachments: [], taskContexts: [] });
       await vi.advanceTimersByTimeAsync(0);
       expect(handle.submit).toHaveBeenCalledOnce();
-      const stopping = control.control.interrupt({ applicationOperationId: "expired-stop", deadlineAt: Date.now() + 30_000 }).catch(error => error);
+      const onDispatch = vi.fn();
+      const stopping = control.control.interrupt({ applicationOperationId: "expired-stop", deadlineAt: Date.now() + 30_000 }, onDispatch).catch(error => error);
       await vi.advanceTimersByTimeAsync(30_000);
       accept(); await submitting;
       expect(await stopping).toMatchObject({ crossedSubmissionBoundary: false });
       expect(handle.interrupt).not.toHaveBeenCalled();
+      expect(onDispatch).not.toHaveBeenCalled();
       control.release(); acquired.release();
     } finally { accept?.(); await manager.close(); vi.useRealTimers(); }
   });

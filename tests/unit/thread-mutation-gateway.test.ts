@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { BackendError } from "../../src/server/backends/contracts.js";
+import type { AcquiredConversationControl } from "../../src/server/conversations/conversation-actor-manager.js";
 import type { PreparedInteractionResponse } from "../../src/server/conversations/interaction-broker.js";
 import {
   ThreadMutationGateway,
@@ -172,7 +173,7 @@ function fixture(input?: {
         | "reconciling";
       activeTurnId?: string;
     };
-    interrupt: ReturnType<typeof vi.fn<() => Promise<void>>>;
+    interrupt: ReturnType<typeof vi.fn<AcquiredConversationControl["control"]["interrupt"]>>;
     reconcileInterrupt: ReturnType<
       typeof vi.fn<
         () => Promise<{
@@ -196,7 +197,10 @@ function fixture(input?: {
       runState: input?.runState ?? "running",
       activeTurnId: input?.activeTurnId ?? "turn-1",
     },
-    interrupt: vi.fn(input?.interrupt ?? (async () => undefined)),
+    interrupt: vi.fn(async (_request, onDispatch) => {
+      onDispatch?.();
+      await input?.interrupt?.();
+    }),
     reconcileInterrupt: vi.fn(
       input?.reconcileInterrupt ??
         (async () => ({ outcome: "unknown" as const })),
@@ -1016,6 +1020,28 @@ describe("ThreadMutationGateway Stop receipts", () => {
       scope,
       "orphaned-prepared-steer",
     );
+  });
+
+  it("expires a Stop waiting for dispatch as proven unsent, without retaining an unknown receipt", async () => {
+    vi.useFakeTimers();
+    const fence = deferred<void>();
+    const subject = fixture({ now: Date.now });
+    subject.actor.interrupt.mockImplementationOnce(async () => { await fence.promise; });
+    try {
+      const pending = subject.gateway.mutate(scope, "thread-1", { kind: "interrupt", operationId: "waiting-stop" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(subject.actor.interrupt).toHaveBeenCalledOnce();
+      expect(subject.getRecord()?.state).toBe("prepared");
+      expect(subject.operations.markInterruptStarted).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await pending).toMatchObject({ status: "recovery_required", retryable: false,
+        diagnostic: expect.stringContaining("expired before it could be sent") });
+      expect(subject.getRecord()).toBeUndefined();
+      fence.resolve();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(subject.operations.acceptInterrupt).not.toHaveBeenCalled();
+      expect(subject.gateway.input.queue.onAuthoritativeSettled).toHaveBeenCalledWith(scope, "thread-1");
+    } finally { fence.resolve(); await subject.gateway.close(); vi.useRealTimers(); }
   });
 
   it("closes a stalled native Stop at its original deadline and ignores its late ACK", async () => {

@@ -13,13 +13,15 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BackendError,
   type ConversationBinding,
   type ConversationControl,
 } from "../../src/server/backends/contracts.js";
 import { GrokConversationBackendDriver } from "../../src/server/backends/grok/grok-conversation-driver.js";
+import { GrokSessionLifecycle } from "../../src/server/backends/grok/grok-session-lifecycle.js";
+import { AcpBindingError } from "../../src/server/provider-protocol/bindings/acp-v1/index.js";
 import {
   parseGrokConversationBindingDetail,
   serializeGrokConversationBindingDetail,
@@ -2005,6 +2007,30 @@ describe("normalized Grok conversation driver", () => {
       await fixtureState.close();
     }
   }, 30_000);
+
+  it.each(["acp_binding_protocol_violation", "acp_binding_capability_denied", "acp_binding_overloaded"] as const)(
+    "retains uncertain Stop evidence when a post-cancel continuation fails with %s", async code => {
+      const sessionId = "bbbbbbbb-3434-4343-8343-454545454545";
+      const fixtureState = await openDriver([{ ...session(sessionId, "Post-cancel failure"), promptDelayMs: 30_000 }]);
+      const handle = await fixtureState.driver.attach({ scope, workspace: fixtureState.workspace,
+        binding: conversationBinding(sessionId), opaqueBindingDetail: fixtureState.bindingDetail(sessionId) });
+      const interrupt = GrokSessionLifecycle.prototype.interruptPrompt;
+      // Let the real peer receive cancel and settle the prompt, then fail its
+      // caller-facing continuation. The error class is no proof of non-dispatch.
+      const failing = vi.spyOn(GrokSessionLifecycle.prototype, "interruptPrompt").mockImplementation(async function (this: GrokSessionLifecycle, ...arguments_) {
+        await interrupt.apply(this, arguments_);
+        throw new AcpBindingError(code);
+      });
+      try {
+        await handle.submit(submitInput());
+        const input = { applicationOperationId: "post-cancel-failure", deadlineAt: Date.now() + 30_000 };
+        await expect(handle.interrupt(input)).rejects.toMatchObject({ category: "submission_unknown", crossedSubmissionBoundary: true });
+        await expect(handle.reconcileInterrupt(input)).resolves.toEqual({ outcome: "unknown" });
+        await expect(handle.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+        expect((await readState(fixtureState.workspace.canonicalPath)).sessions[0].cancelCalls).toBe(1);
+      } finally { failing.mockRestore(); await handle.close().catch(() => undefined); await fixtureState.close(); }
+    },
+  );
 
   it("does not treat a cancel write as acknowledgement or resend an unknown operation", async () => {
     const sessionId = "45454545-3434-4343-8343-454545454545";

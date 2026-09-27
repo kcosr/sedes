@@ -6,6 +6,7 @@ import { compiledBackendModuleCatalog } from "../../src/server/backends/compiled
 import { BackendModuleCatalog } from "../../src/server/backends/module-catalog.js";
 import type { BackendModuleConfigurationInput, BackendModuleRuntimeContext } from "../../src/server/backends/module.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
+import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
 
 const databases: Database.Database[] = [];
 afterEach(() => { for (const database of databases.splice(0)) database.close(); });
@@ -116,14 +117,14 @@ describe("OpenCode M1 private module foundation", () => {
     const state = await runtime.administration!.inspect();
     expect(state).toMatchObject({ state: "active", blockers: ["unknown_state"] });
     expect(state.activity).toBeUndefined();
-    await expect(runtime.administration!.stop({ expectedRevision: state.revision, force: false })).rejects.toThrow();
+    await expect(runtime.administration!.stop({ expectedRevision: state.revision, force: false })).rejects.toMatchObject({ reason: "blocked" });
     expect(factory.instances[0]!.stop).not.toHaveBeenCalled();
     await runtime.administration!.stop({ expectedRevision: state.revision, force: true });
     expect(factory.instances[0]!.stop).toHaveBeenCalledOnce();
     expect(await runtime.administration!.inspect()).toMatchObject({ blockers: ["unsettled_outcome"] });
     await runtime.stopBeforeConversationCleanup!();
     expect(await runtime.administration!.inspect()).toMatchObject({ blockers: ["unsettled_outcome"] });
-    await expect(runtime.administration!.restart({ expectedRevision: state.revision, force: true })).rejects.toThrow();
+    await expect(runtime.administration!.restart({ expectedRevision: state.revision, force: true })).rejects.toMatchObject({ reason: "confirmation_stale" });
     const stopped = await runtime.administration!.inspect();
     await runtime.administration!.restart({ expectedRevision: stopped.revision, force: true });
     expect(await runtime.administration!.inspect()).toMatchObject({ state: "active", blockers: ["unknown_state"] });
@@ -144,6 +145,33 @@ describe("OpenCode M1 private module foundation", () => {
     await runtime.close();
     expect(factory.instances[0]!.close).toHaveBeenCalledOnce();
     expect(factory.instances[0]!.stop).not.toHaveBeenCalled();
+  });
+
+  it("reports an unverified partial store lease as a typed Restart rejection", async () => {
+    const factory = nativeFactory(); const fixture = context();
+    const runtime = new OpenCodeBackendModule(factory.create).prepare(configuration()).createRuntime(fixture.value);
+    await runtime.driverFactory.create(fixture.connection).health();
+    const owner = factory.instances[0]!;
+    owner.start.mockRejectedValueOnce(new OpenCodeRuntimeError("opencode_native_store_initialization_unproved"));
+    const state = await runtime.administration!.inspect();
+    await expect(runtime.administration!.restart({ expectedRevision: state.revision, force: true }))
+      .rejects.toMatchObject({ name: "BackendRuntimeControlRejectedError", reason: "cleanup_unproven" });
+    await runtime.close();
+  });
+
+  it("reports unproved owned cleanup as a typed administration rejection", async () => {
+    const factory = nativeFactory(); const fixture = context();
+    const runtime = new OpenCodeBackendModule(factory.create).prepare(configuration()).createRuntime(fixture.value);
+    await runtime.driverFactory.create(fixture.connection).health();
+    const owner = factory.instances[0]!;
+    for (const action of ["stop", "restart"] as const) {
+      owner.stop.mockRejectedValueOnce(new OpenCodeRuntimeError("opencode_owned_cleanup_unproved"));
+      const state = await runtime.administration!.inspect();
+      await expect(runtime.administration![action]({ expectedRevision: state.revision, force: true }))
+        .rejects.toMatchObject({ reason: "cleanup_unproven" });
+    }
+    expect(owner.start).toHaveBeenCalledOnce();
+    await runtime.close();
   });
 
   it("retains disabled configuration without namespace claims and rejects unknown protocol releases", () => {

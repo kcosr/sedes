@@ -52,10 +52,17 @@ describe("OpenCode v2 transport admission", () => {
     for (const version of ["1.0.0", "2.0.19", "v2.0.18", "2.0.18-beta"]) expect(() => admitOpenCodeRelease(version)).toThrow();
   });
   it("preserves native HOME/provider authentication while removing incompatible process inputs", () => {
-    const environment = { HOME: "/operator", XDG_CONFIG_HOME: "/operator/config", PROVIDER_API_KEY: "native-secret", OPENCODE_SIMULATE: "1", OPENCODE_CONFIG: "/wrong", OPENCODE_CONFIG_CONTENT: "secret-content", OPENCODE_CLIENT: "wrong", OPENCODE_MODELS_URL: "https://wrong", OPENCODE_SERVER_PASSWORD: "old", OPENCODE_PASSWORD: "old", OPENCODE_DISABLE_AUTOUPDATE: "0" };
+    const ambientSedesSecrets = {
+      SEDES_AGENT_TOOL_ENDPOINT: "outer-endpoint", SEDES_AGENT_TOOL_SOURCE_CAPABILITY: "outer-capability",
+      SEDES_AGENT_TOOL_CLIENT_TOKEN: "outer-token", SEDES_AGENT_TOOL_CLI_MODE: "outer-mode",
+      SEDES_OPENCODE_EXTERNAL_PASSWORD: "other-opencode-secret", SEDES_OPENCODE_PASSWORD_LOCAL: "another-secret",
+      SEDES_CODEX_REMOTE_TOKEN: "other-codex-secret", SEDES_CODEX_TOKEN_LOCAL: "another-token",
+    };
+    const environment = { ...ambientSedesSecrets, HOME: "/operator", XDG_CONFIG_HOME: "/operator/config", PROVIDER_API_KEY: "native-secret", OPENCODE_SIMULATE: "1", OPENCODE_CONFIG: "/wrong", OPENCODE_CONFIG_CONTENT: "secret-content", OPENCODE_CLIENT: "wrong", OPENCODE_MODELS_URL: "https://wrong", OPENCODE_SERVER_PASSWORD: "old", OPENCODE_PASSWORD: "old", OPENCODE_DISABLE_AUTOUPDATE: "0" };
     const launch = openCodeOwnedEnvironment({ environment, nativeStorePath: "/operator/data/opencode.db", configDirectory: "/operator/config/opencode", password, marker: "marker" });
     expect(launch.HOME).toBe(environment.HOME);
     expect(launch.PROVIDER_API_KEY).toBe("native-secret");
+    for (const name of Object.keys(ambientSedesSecrets)) expect(launch[name]).toBeUndefined();
     expect(launch.OPENCODE_DISABLE_AUTOUPDATE).toBe("1");
     expect(launch.OPENCODE_PASSWORD).toBe(password);
     expect(launch.OPENCODE_SIMULATE).toBeUndefined();

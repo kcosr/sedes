@@ -585,6 +585,7 @@ describe("execution configuration administration", () => {
       fireEvent.change(environment, { target: { value: id } });
       for (const name of ["Claude", "Codex", "Pi SDK"]) expect(within(provider).getByRole("option", { name })).toBeEnabled();
       expect(within(provider).getByRole("option", { name: "Grok" })).toHaveProperty("disabled", id !== localId);
+      expect(within(provider).getByRole("option", { name: "OpenCode v2 (unavailable)" })).toBeDisabled();
     }
     fireEvent.change(provider, { target: { value: "pi" } });
     expect(screen.getByText(/SDK and model connection run on Sedes/)).toBeVisible();

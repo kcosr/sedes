@@ -115,12 +115,25 @@ export async function createOpenCodeProcessCleanup(marker: string) {
     return false;
   };
   const scan = async () => {
-    const entries = (await readdir("/proc")).filter(entry => /^[1-9]\d*$/u.test(entry));
-    if (entries.length > MAX_PROCESS_ENTRIES) throw cleanupUnproven();
+    let uncertainty: OpenCodeCleanupError | undefined;
+    const uncertain = (error: unknown, stage: string, pid?: number) => {
+      uncertainty ??= error instanceof OpenCodeCleanupError ? error : cleanupUnproven(stage, pid);
+    };
+    let entries: string[] = [];
+    try {
+      entries = (await readdir("/proc")).filter(entry => /^[1-9]\d*$/u.test(entry));
+      if (entries.length > MAX_PROCESS_ENTRIES) {
+        uncertainty = cleanupUnproven("process_count");
+        entries = entries.slice(0, MAX_PROCESS_ENTRIES);
+      }
+    } catch (error) { uncertain(error, "process_list"); }
     const deadline = Date.now() + 5000;
     let bytesRead = 0;
     for (const entry of entries) {
-      if (Date.now() >= deadline || bytesRead > MAX_SCAN_BYTES) throw cleanupUnproven();
+      if (Date.now() >= deadline || bytesRead > MAX_SCAN_BYTES) {
+        uncertainty ??= cleanupUnproven("scan_budget");
+        break;
+      }
       const pid = Number(entry);
       if (pid === process.pid) continue;
       try {
@@ -158,16 +171,20 @@ export async function createOpenCodeProcessCleanup(marker: string) {
         const after = await ownedProcess(pid);
         if (after?.startTime === before.startTime) owned.set(ownedProcessKey(after), after);
       } catch (error) {
-        if (!disappeared(error)) throw error instanceof OpenCodeCleanupError ? error : cleanupUnproven("process_scan", pid);
+        // One inaccessible candidate cannot prevent cleanup of positively
+        // identified children elsewhere in this same bounded scan.
+        if (!disappeared(error)) uncertain(error, "process_scan", pid);
       }
     }
-    if (bytesRead > MAX_SCAN_BYTES) throw cleanupUnproven();
+    if (bytesRead > MAX_SCAN_BYTES) uncertainty ??= cleanupUnproven("scan_budget");
     // Remember identified descendants even if they later replace their env.
     for (const [key, previous] of owned) {
-      const current = await ownedProcess(previous.pid);
-      if (current?.startTime !== previous.startTime) owned.delete(key);
+      try {
+        const current = await ownedProcess(previous.pid);
+        if (current?.startTime !== previous.startTime) owned.delete(key);
+      } catch (error) { uncertain(error, "owned_identity", previous.pid); }
     }
-    return [...owned.values()];
+    return { targets: [...owned.values()], uncertainty };
   };
   const signal = async (target: OpenCodeOwnedProcess, value: NodeJS.Signals) => {
     // Revalidate start time immediately before signaling, never signal a bare
@@ -184,29 +201,32 @@ export async function createOpenCodeProcessCleanup(marker: string) {
     let emptyScans = 0;
     do {
       const remaining = await scan();
-      if (remaining.length === 0) {
+      if (remaining.targets.length === 0 && !remaining.uncertainty) {
         // A second scan covers a child forked while the prior process list
         // was being read, including children reparented when the root exits.
         if (++emptyScans === 2) return;
       } else {
         emptyScans = 0;
-        for (const target of remaining) {
+        for (const target of remaining.targets) {
           const key = ownedProcessKey(target);
           const terminated = terminatedAt.get(key);
-          if (terminated === undefined) {
-            await signal(target, "SIGTERM");
-            terminatedAt.set(key, Date.now());
-          } else if (Date.now() - terminated >= 5000 && !killed.has(key)) {
-            await signal(target, "SIGKILL");
-            killed.add(key);
-          }
+          try {
+            if (terminated === undefined) {
+              await signal(target, "SIGTERM");
+              terminatedAt.set(key, Date.now());
+            } else if (Date.now() - terminated >= 5000 && !killed.has(key)) {
+              await signal(target, "SIGKILL");
+              killed.add(key);
+            }
+          } catch { /* Retained target is retried and must pass extinction verification. */ }
         }
       }
       await delay(25);
     } while (Date.now() < deadline);
     // Keep the directory if repeated late forks prevent bounded extinction.
     // Each discovered process gets a full five seconds after its own SIGTERM.
-    if ((await scan()).length !== 0) throw cleanupUnproven();
+    const final = await scan();
+    if (final.uncertainty) throw final.uncertainty;
+    if (final.targets.length !== 0 || emptyScans < 2) throw cleanupUnproven();
   };
 }
-

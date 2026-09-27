@@ -28,6 +28,15 @@ as Sedes. Admission records PID, process start time, executable identity and
 canonical database identity. Subsequent identity changes revoke the connection;
 an endpoint alone never proves continuity. The configured database path is an
 operator declaration where the native API cannot prove which store it opened.
+An observed `OPENCODE_DB` must resolve to the declared store. Without that
+variable, an open database named `opencode.db` or `opencode-<channel>.db` in the
+native HOME/XDG data directory must have the declared store's inode. Conflicting
+evidence rejects admission conservatively. The server API omits its compiled
+channel; absent such an open file or explicit override, Sedes retains the
+operator declaration instead of guessing the default filename.
+An unlinked native descriptor still counts as conflicting evidence after a
+replacement file appears at the selected pathname. Literal filenames ending
+in Linux's ` (deleted)` suffix are distinguished using descriptor/file identity.
 Symlink and hardlink store aliases are rejected. Other operating systems and
 remote execution environments have no qualified identity/cleanup path here.
 
@@ -37,6 +46,9 @@ must select external mode for an existing owner. Unconfirmed cleanup retains the
 lease; Sedes does not steal it or launch a replacement over it.
 An abrupt Sedes crash can leave a stale lease that requires operator inspection
 and removal after confirming the prior owner and its work have stopped.
+Failure while first writing the lease record removes only the proved newly
+created directory and partial record. Unknown directory/file identity, changed
+ownership or unexpected remnants retain the fence for operator inspection.
 
 Owned shutdown first tries bounded native session interrupts, then closes stdin,
 then escalates through TERM/KILL and verifies descendants. Process identity and
@@ -46,6 +58,13 @@ containment; this is a same-account trust boundary, not a sandbox. Cleanup never
 deletes native history or credentials. A clean restart keeps the store and
 acquires a new runtime generation. Incomplete native interruption and unproved
 process cleanup are distinct outcomes.
+Cleanup signals positively identified children even when another process's
+ownership cannot be proved. A new same-account non-dumpable orphan can remain
+ambiguous and keep restart fenced after all identified children have stopped.
+Sedes reevaluates that uncertainty during bounded cleanup. Explicit Stop can
+retry cleanup using the retained owned-process handle after the ambiguity
+resolves; it never starts a replacement owner or steals a lease. A failed
+startup that yielded no owned-process handle still requires operator inspection.
 
 ## Configuration and authority
 
@@ -71,6 +90,9 @@ the default `${XDG_CONFIG_HOME:-$HOME/.config}/opencode`. It derives
 controls. The selected configuration directory replaces inherited
 `OPENCODE_CONFIG_DIR`. Both ownership modes reject simulation and incompatible
 config/client/model-URL profiles during admission.
+Owned launch also removes ambient `SEDES_AGENT_TOOL_*`,
+`SEDES_OPENCODE_*PASSWORD*` and `SEDES_CODEX_*TOKEN*` variables so native tools
+cannot inherit another Sedes thread's capabilities or another backend's secrets.
 
 Native project configuration, plugins, hooks, MCP registrations, provider
 credentials, custom models and saved permission grants remain operator authority.

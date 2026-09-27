@@ -638,7 +638,8 @@ describe("queue dispatch and existing conversation Stop control", () => {
       operations, completions: new SubmissionCompletionRepository(fixture.database), queue, queueGateway: nativeGateway,
       runtimes: { acquire: acquireProjection, acquireExistingControl: () => ({ control: {
         generation: "existing-native-owner", lifetime: new AbortController().signal,
-        interrupt: interrupted, reconcileInterrupt: async () => ({ outcome: "unknown" as const }),
+        interrupt: async (_input: unknown, onDispatch?: () => void) => { onDispatch?.(); await interrupted(); },
+        reconcileInterrupt: async () => ({ outcome: "unknown" as const }),
       }, release: releaseControl }) } as never,
       lifecycle: {} as never, forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("unexpected fork discard"); } },
       interactions: {} as never, presentation: {} as never,

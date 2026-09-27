@@ -48,7 +48,12 @@ export async function startOpenCodeOwnedProcess(input: {
     await cleanup();
     if (child && !exited) await waitBounded(exit, 3_000);
     if (child && !exited) throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved");
-  })();
+  })().catch(cause => {
+    // The same retained ownership evidence can be checked again after a
+    // transient procfs ambiguity resolves. Never create a replacement owner.
+    stopping = undefined;
+    throw cause;
+  });
   try {
     await probeOpenCodeRelease(executablePath, environment);
     child = spawn(executablePath, ["serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0"], {
