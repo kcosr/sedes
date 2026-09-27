@@ -52,6 +52,13 @@ import {
   projectClaudeTool,
   settleInterruptedClaudeTool,
 } from "./claude-tool-projector.js";
+import {
+  claudeReadResultImage,
+  claudeViewedImagePublicationKey,
+  type ClaudeReadResultImage,
+  type ClaudeViewedImageAssociations,
+  type ClaudeViewedImageCandidate,
+} from "./claude-viewed-images.js";
 
 const LATEST_SNAPSHOT_TURNS = 10;
 const MAXIMUM_CURSOR_BYTES = 512;
@@ -151,6 +158,8 @@ export interface ClaudeHistoryProjection {
   readonly terminalCheckpointUuidByBackendTurnId: ReadonlyMap<string, string>;
   readonly authenticatedForkContextBoundaryOperationIds: ReadonlySet<string>;
   readonly authenticatedTaskContextOperationIds: ReadonlySet<string>;
+  /** Completed image reads in the snapshot whose image is not yet published. */
+  readonly pendingViewedImages: readonly ClaudeViewedImageCandidate[];
   /** Private live-projection window coordinates within the supplied messages. */
   readonly window: {
     readonly sourceTurnCount: number;
@@ -164,12 +173,15 @@ export interface ClaudeHistoryProjection {
 export interface ClaudeHistoryPageSelection {
   readonly page: BackendHistoryPagePayload;
   readonly previousTurnIndex?: number;
+  /** Completed image reads on the page whose image is not yet published. */
+  readonly pendingViewedImages: readonly ClaudeViewedImageCandidate[];
 }
 
 export type ClaudeHistoryTurnLocation =
   | {
       readonly status: "found";
       readonly page: BackendHistoryPagePayload;
+      readonly pendingViewedImages: readonly ClaudeViewedImageCandidate[];
     }
   | { readonly status: "not_found" }
   | { readonly status: "search_limit_reached" };
@@ -202,6 +214,11 @@ export interface ClaudeHistoryAuthentication {
    * shows one notice that this work was not carried into the fork.
    */
   readonly forkOmittedTaskNotifications?: ReadonlySet<string>;
+  /**
+   * Retained images of completed image reads. Without it, every such read
+   * is reported pending and projects no image.
+   */
+  readonly viewedImages?: ClaudeViewedImageAssociations;
 }
 
 const UNFORKABLE_COMPACTED_TURN_REASON =
@@ -252,6 +269,7 @@ interface ProjectedTimeline {
   readonly terminalCheckpointUuidByBackendTurnId: ReadonlyMap<string, string>;
   readonly authenticatedForkContextBoundaryOperationIds: ReadonlySet<string>;
   readonly authenticatedTaskContextOperationIds: ReadonlySet<string>;
+  readonly pendingViewedImages: readonly ClaudeViewedImageCandidate[];
   readonly fingerprint: string;
   readonly nativeMessageStartIndexByBackendTurnId: ReadonlyMap<string, number>;
   readonly userMessageOrdinalByBackendTurnId: ReadonlyMap<string, number>;
@@ -417,6 +435,7 @@ export function projectClaudeLatestSnapshot(
       timeline.authenticatedForkContextBoundaryOperationIds,
     authenticatedTaskContextOperationIds:
       timeline.authenticatedTaskContextOperationIds,
+    pendingViewedImages: pendingViewedImagesIn(timeline, snapshot.itemsById),
     window: {
       sourceTurnCount:
         coordinates.turnOffset + timeline.orderedBackendTurnIds.length,
@@ -551,11 +570,13 @@ export function locateClaudeHistoryTurn(
   ) {
     const backendTurnId = timeline.orderedBackendTurnIds[index]!;
     if (!input.matchesBackendTurnId(backendTurnId)) continue;
+    const page = backendHistoryPageSchema.parse(
+      pickTimeline(timeline, [backendTurnId]),
+    );
     return {
       status: "found",
-      page: backendHistoryPageSchema.parse(
-        pickTimeline(timeline, [backendTurnId]),
-      ),
+      page,
+      pendingViewedImages: pendingViewedImagesIn(timeline, page.itemsById),
     };
   }
   return firstCandidateIndex > 0
@@ -571,10 +592,22 @@ function selectHistoryPage(
   const earliestByCount = Math.max(0, before - limit);
   const start = earliestStartWithinBytes(timeline, earliestByCount, before);
   const turnIds = timeline.orderedBackendTurnIds.slice(start, before);
+  const page = backendHistoryPageSchema.parse(pickTimeline(timeline, turnIds));
   return {
-    page: backendHistoryPageSchema.parse(pickTimeline(timeline, turnIds)),
+    page,
     ...(start > 0 ? { previousTurnIndex: start } : {}),
+    pendingViewedImages: pendingViewedImagesIn(timeline, page.itemsById),
   };
+}
+
+/** Pending image reads whose read is part of a returned window or page. */
+function pendingViewedImagesIn(
+  timeline: ProjectedTimeline,
+  itemsById: Readonly<Record<string, BackendItem>>,
+): readonly ClaudeViewedImageCandidate[] {
+  return timeline.pendingViewedImages.filter(
+    ({ viewedBackendItemId }) => itemsById[viewedBackendItemId] !== undefined,
+  );
 }
 
 function buildTimeline(
@@ -613,6 +646,7 @@ function buildTimeline(
   let userMessageOrdinal = userMessageOrdinalBase;
   let toolCalls = 0;
   let toolResults = 0;
+  const completedImageReads: CompletedImageRead[] = [];
   const nextAssistantBlockIndexByMessageId = new Map<string, number>();
   const responseGroupsByTurn = new Map<string, Map<string, AssistantResponseGroup>>();
   const lastResponseGroupByTurn = new Map<string, AssistantResponseGroup>();
@@ -896,7 +930,7 @@ function buildTimeline(
       for (const [blockIndex, block] of content.entries()) {
         if (block.type !== "tool_result") continue;
         toolResults += 1;
-        applyToolResult(current, itemsById, message, blockIndex, block);
+        applyToolResult(current, itemsById, message, blockIndex, block, completedImageReads);
       }
     } else {
       let responseGroups = responseGroupsByTurn.get(current.backendTurnId);
@@ -1076,6 +1110,14 @@ function buildTimeline(
     )
     .digest("base64url")
     .slice(0, 32);
+  // After the fingerprint: publishing an image never changes turn positions,
+  // so it must not invalidate a history cursor either.
+  const pendingViewedImages = applyViewedImages(
+    completedImageReads,
+    turnsById,
+    itemsById,
+    authentication?.viewedImages,
+  );
   return {
     orderedBackendTurnIds,
     turnsById,
@@ -1089,6 +1131,7 @@ function buildTimeline(
     terminalCheckpointUuidByBackendTurnId,
     authenticatedForkContextBoundaryOperationIds,
     authenticatedTaskContextOperationIds,
+    pendingViewedImages,
     fingerprint,
     nativeMessageStartIndexByBackendTurnId,
     userMessageOrdinalByBackendTurnId,
@@ -1164,6 +1207,65 @@ function applyTaskLifecycleReceipts(
       .sort((a, b) => itemsById[a]!.sourceOrder - itemsById[b]!.sourceOrder);
     turnsById[launch.backendTurnId] = { ...turn, orderedBackendItemIds };
   }
+}
+
+interface CompletedImageRead {
+  readonly viewedBackendItemId: string;
+  readonly image: ClaudeReadResultImage;
+}
+
+/**
+ * Show the image Claude received after each completed image read that has a
+ * retained association, in the odd slot after the read (Claude items use even
+ * slots). A read without one is reported pending; this never decodes or
+ * publishes. Transcript items take precedence at the per-turn item cap.
+ */
+function applyViewedImages(
+  reads: readonly CompletedImageRead[],
+  turnsById: Record<string, BackendTurn>,
+  itemsById: Record<string, BackendItem>,
+  associations: ClaudeViewedImageAssociations | undefined,
+): ClaudeViewedImageCandidate[] {
+  const pending: ClaudeViewedImageCandidate[] = [];
+  const reservedByTurn = new Map<string, number>();
+  for (const { viewedBackendItemId, image } of reads) {
+    const viewed = itemsById[viewedBackendItemId];
+    if (viewed?.semanticKind !== "viewed_image" || viewed.status !== "completed") continue;
+    const turn = turnsById[viewed.backendTurnId];
+    if (!turn) continue;
+    const reserved = reservedByTurn.get(turn.backendTurnId) ?? 0;
+    if (turn.orderedBackendItemIds.length + reserved >= MAXIMUM_BACKEND_ITEMS_PER_TURN) continue;
+    const identity = {
+      backendItemId: stableId("claude-item-image", viewedBackendItemId),
+      backendTurnId: turn.backendTurnId,
+      sourceOrder: viewed.sourceOrder + 1,
+    };
+    const publicationKey = claudeViewedImagePublicationKey(identity.backendItemId);
+    const descriptor = associations?.find(publicationKey);
+    if (!descriptor) {
+      reservedByTurn.set(turn.backendTurnId, reserved + 1);
+      pending.push({ viewedBackendItemId, identity, publicationKey, image });
+      continue;
+    }
+    itemsById[identity.backendItemId] = {
+      ...identity,
+      status: "completed",
+      semanticKind: "image",
+      origin: { kind: "viewed", capture: "provider_input" },
+      image: {
+        representation: "artifact",
+        artifactId: descriptor.artifactId,
+        mimeType: descriptor.mediaType,
+        byteSize: descriptor.byteSize,
+        sha256: descriptor.sha256,
+        ...(viewed.fileName ? { fileName: viewed.fileName } : {}),
+      },
+    };
+    const orderedBackendItemIds = [...turn.orderedBackendItemIds];
+    orderedBackendItemIds.splice(orderedBackendItemIds.indexOf(viewedBackendItemId) + 1, 0, identity.backendItemId);
+    turnsById[turn.backendTurnId] = { ...turn, orderedBackendItemIds };
+  }
+  return pending;
 }
 
 function applyTerminalReceipts(
@@ -1685,6 +1787,7 @@ function applyToolResult(
   message: ParsedSessionMessage,
   blockIndex: number,
   block: Extract<ParsedContentBlock, { type: "tool_result" }>,
+  completedImageReads: CompletedImageRead[],
 ): void {
   const existingId = turn.toolItemIdByNativeId.get(block.toolUseId);
   if (existingId) {
@@ -1704,6 +1807,10 @@ function applyToolResult(
       invalid();
     }
     turn.unresolvedToolIds.delete(block.toolUseId);
+    const image = existing.semanticKind === "viewed_image" && !block.isError
+      ? claudeReadResultImage(block.content)
+      : undefined;
+    if (image) completedImageReads.push({ viewedBackendItemId: existingId, image });
     if (isClaudeStoppedToolResult(block)) {
       turn.stoppedToolBatch.push({ backendItemId: existingId, unsettled: existing, content: block.content });
     }
