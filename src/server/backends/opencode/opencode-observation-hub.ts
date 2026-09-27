@@ -3,8 +3,9 @@ import { configurationFingerprint } from "../../config/configuration-fingerprint
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import type { OpenCodeHttpNativeAdapter, OpenCodeHttpObservation } from "./opencode-http-native-adapter.js";
 import { OPENCODE_NATIVE_EVENT_BUFFER_BYTES, OPENCODE_NATIVE_EVENT_BUFFER_RECORDS,
-  OPENCODE_OBSERVATION_WIRE_BYTES, type OpenCodeNativeEvent } from "./opencode-native-codecs.js";
-import { OpenCodeNativeObservationProof, OPENCODE_NATIVE_PROOF_BYTES } from "./opencode-native-observation-proof.js";
+  OPENCODE_OBSERVATION_WIRE_BYTES, openCodeNeedsFullEvidenceEvent, type OpenCodeNativeEvent } from "./opencode-native-codecs.js";
+import { OpenCodeNativeObservationProof, OPENCODE_NATIVE_PROOF_BYTES, OPENCODE_NATIVE_PROOF_RECORDS,
+  openCodeNativeFactFingerprint } from "./opencode-native-observation-proof.js";
 import type { OpenCodeNativeAuthority, OpenCodeObservationBoundary,
   OpenCodeObservationEnd, OpenCodeObservationRecord, OpenCodePortObservation } from "./opencode-native-port.js";
 
@@ -14,7 +15,7 @@ interface Scope {
   readonly authority: OpenCodeNativeAuthority; readonly journalId: string;
   readonly proof: OpenCodeNativeObservationProof; readonly records: OpenCodeObservationRecord[];
   readonly subscribers: Set<Subscriber>; evidence?: Subscriber;
-  sequence: number; acknowledged: number; releaseRequested: boolean; lossPending: boolean; continuity: string;
+  sequence: number; acknowledged: number; releaseRequested: boolean; lossPending: boolean; continuity: string; proofTouched: number;
 }
 interface Subscriber {
   readonly scope: Scope; readonly purpose: "evidence" | "presentation";
@@ -35,6 +36,8 @@ export class OpenCodeObservationHub {
   #revision = 0;
   #criticalBytes = 0;
   #criticalRecords = 0;
+  #factRecords = 0;
+  #proofClock = 0;
   #presentationBytes = 0;
   #exhausted = false;
   #notificationQueued = false;
@@ -42,6 +45,7 @@ export class OpenCodeObservationHub {
     readonly route?: (authority: OpenCodeNativeAuthority, event: OpenCodeNativeEvent) => boolean;
     readonly onRetentionChanged?: () => void;
     readonly maximumCriticalBytes?: number; readonly maximumCriticalRecords?: number;
+    readonly maximumProofBytes?: number; readonly maximumPresentationBytes?: number;
   } = {}) {
     adapter.client.lifetime.addEventListener("abort", () => this.close(), { once: true });
     if (adapter.client.lifetime.aborted) this.#lifetime.abort();
@@ -51,13 +55,13 @@ export class OpenCodeObservationHub {
     this.#assertOpen(); if (!authority.session) return;
     const key = configurationFingerprint(authority), existing = this.#scopes.get(key);
     if (existing) { existing.releaseRequested = false; return; }
-    if ([...this.#scopes.values()].reduce((sum, scope) => sum + scope.proof.bytes, 0) + 1_024 > OPENCODE_NATIVE_PROOF_BYTES) {
+    if (this.#scopes.size >= MAX_SCOPES) throw unavailable("opencode_native_scope_capacity");
+    if (!this.#reclaimProofSpace(1_024)) {
       throw unavailable("opencode_observation_retention_full");
     }
-    if (this.#scopes.size >= MAX_SCOPES) throw unavailable("opencode_native_scope_capacity");
     this.#scopes.set(key, { authority: structuredClone(authority), journalId: randomUUID(),
       proof: new OpenCodeNativeObservationProof(authority.session.nativeSessionID), records: [], subscribers: new Set(),
-      sequence: 0, acknowledged: 0, releaseRequested: false, lossPending: false, continuity: this.#continuity });
+      sequence: 0, acknowledged: 0, releaseRequested: false, lossPending: false, continuity: this.#continuity, proofTouched: ++this.#proofClock });
     this.#changed();
   }
   releaseScope(authority: OpenCodeNativeAuthority): void {
@@ -73,8 +77,9 @@ export class OpenCodeObservationHub {
     this.#assertOpen();
     const scope = this.#scopes.get(configurationFingerprint(authority));
     if (!scope || !authority.session) throw unavailable("opencode_request_authority_mismatch");
-    const others = [...this.#scopes.values()].reduce((sum, other) => sum + (scope === other ? 0 : other.proof.bytes), 0);
-    if (!scope.proof.prepareInput(inputId, OPENCODE_NATIVE_PROOF_BYTES - others)) throw unavailable("opencode_observation_retention_full");
+    this.#reclaimProofSpace(Buffer.byteLength(inputId) + 32);
+    const others = this.#proofBytes() - scope.proof.bytes;
+    if (!scope.proof.prepareInput(inputId, this.#maximumProofBytes - others)) throw unavailable("opencode_observation_retention_full");
     this.#changed();
   }
   /** Only a proven pre-native refusal may remove an unobserved dispatch pin. */
@@ -88,7 +93,7 @@ export class OpenCodeObservationHub {
       await this.#wait(signal);
     }
     this.#assertOpen(); signal?.throwIfAborted();
-    if (this.#exhausted || this.#criticalRecords >= this.#maximumRecords || this.#criticalBytes >= this.#maximumBytes) {
+    if (this.#exhausted || this.#criticalRecords >= this.#maximumRecords || this.#factRecords >= OPENCODE_NATIVE_PROOF_RECORDS || this.#criticalBytes >= this.#maximumBytes) {
       throw unavailable("opencode_observation_retention_full");
     }
   }
@@ -142,13 +147,16 @@ export class OpenCodeObservationHub {
     this.#changed();
     return {
       ready, ended, get failure() { return end?.error; },
-      drain: () => {
+      drain: (maximumBytes = OPENCODE_OBSERVATION_WIRE_BYTES) => {
+        if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 2) throw unavailable("opencode_request_authority_mismatch");
+        const budget = Math.min(maximumBytes, OPENCODE_OBSERVATION_WIRE_BYTES);
         check(); const source = input.purpose === "presentation" ? subscriber.queue : scope.records;
         const result: OpenCodeObservationRecord[] = []; let bytes = 2;
         for (const record of source) {
+          if (result.length >= OPENCODE_NATIVE_EVENT_BUFFER_RECORDS) break;
           if (input.purpose === "evidence" && record.sequence <= subscriber.delivered) continue;
           const size = Buffer.byteLength(JSON.stringify(record)) + 1;
-          if (bytes + size > OPENCODE_OBSERVATION_WIRE_BYTES) break;
+          if (bytes + size > budget) break;
           result.push(record); bytes += size; subscriber.delivered = record.sequence;
         }
         if (input.purpose === "presentation") {
@@ -172,11 +180,14 @@ export class OpenCodeObservationHub {
         if (cursor.sequence <= scope.acknowledged) return;
         while (scope.records[0] && scope.records[0].sequence <= cursor.sequence) {
           const record = scope.records.shift()!;
-          if (record.kind === "native") { this.#criticalRecords--; this.#criticalBytes -= record.decodedBytes; }
+          if (record.kind !== "native_break") {
+            if (record.kind === "native_fact") this.#factRecords--; else this.#criticalRecords--;
+            this.#criticalBytes -= record.decodedBytes;
+          }
           else scope.lossPending = false;
         }
         scope.acknowledged = cursor.sequence;
-        if (this.#criticalRecords < this.#maximumRecords && this.#criticalBytes < this.#maximumBytes) this.#exhausted = false;
+        if (this.#criticalRecords < this.#maximumRecords && this.#factRecords < OPENCODE_NATIVE_PROOF_RECORDS && this.#criticalBytes < this.#maximumBytes) this.#exhausted = false;
         this.#changed(); this.#collect(scope);
       },
       close: async () => finish({ reason: "closed" }),
@@ -201,6 +212,38 @@ export class OpenCodeObservationHub {
   }
   get #maximumBytes() { return this.options.maximumCriticalBytes ?? CRITICAL_BYTES; }
   get #maximumRecords() { return this.options.maximumCriticalRecords ?? OPENCODE_NATIVE_EVENT_BUFFER_RECORDS; }
+  get #maximumProofBytes() { return this.options.maximumProofBytes ?? OPENCODE_NATIVE_PROOF_BYTES; }
+  get #maximumPresentationBytes() { return this.options.maximumPresentationBytes ?? OPENCODE_NATIVE_EVENT_BUFFER_BYTES; }
+  #proofBytes() { return [...this.#scopes.values()].reduce((sum, scope) => sum + scope.proof.bytes, 0); }
+  #reclaimProofSpace(additionalBytes: number): boolean {
+    let needed = this.#proofBytes() + additionalBytes - this.#maximumProofBytes;
+    if (needed <= 0) return true;
+    let reclaimed = false;
+    // Only cached density proofs are reclaimable. Input, execution and unknown
+    // work markers retain their authority even when another scope needs space.
+    for (const scope of [...this.#scopes.values()].sort((a, b) => a.proofTouched - b.proofTouched)) {
+      const freed = scope.proof.reclaimCachedProofBytes(needed);
+      needed -= freed; reclaimed ||= freed > 0;
+      if (needed <= 0) break;
+    }
+    if (reclaimed) this.#changed();
+    return needed <= 0;
+  }
+  #makePresentationSpace(subscriber: Subscriber, bytes: number): boolean {
+    if (bytes > this.#maximumPresentationBytes || subscriber.queue.length >= OPENCODE_NATIVE_EVENT_BUFFER_RECORDS) {
+      subscriber.finish({ reason: "resnapshot_required", error: unavailable("opencode_event_overflow") }); return false;
+    }
+    while (this.#presentationBytes + bytes > this.#maximumPresentationBytes) {
+      let slowest: Subscriber | undefined;
+      for (const scope of this.#scopes.values()) for (const candidate of scope.subscribers) {
+        if (candidate.purpose === "presentation" && candidate.bytes > (slowest?.bytes ?? 0)) slowest = candidate;
+      }
+      if (!slowest) return false;
+      slowest.finish({ reason: "resnapshot_required", error: unavailable("opencode_event_overflow") });
+      if (subscriber.ended) return false;
+    }
+    return true;
+  }
   #assertOpen() { if (this.#lifetime.signal.aborted) throw unavailable("opencode_runtime_unavailable"); }
   #collect(scope: Scope): void {
     if (!scope.releaseRequested || scope.records.length || scope.subscribers.size || scope.proof.hasWork) return;
@@ -241,26 +284,35 @@ export class OpenCodeObservationHub {
       if (critical && scope.proof.isGap(event)) this.#break(scope, "disconnected");
       const record: OpenCodeObservationRecord = { kind: "native", event, journalId: scope.journalId,
         sequence: critical ? scope.sequence + 1 : scope.sequence, nativeContinuity: scope.continuity, decodedBytes: 0 };
-      const bytes = Buffer.byteLength(JSON.stringify(record)) + 1_024;
-      const captured = { ...record, decodedBytes: bytes };
+      const presentationBytes = Buffer.byteLength(JSON.stringify(record)) + 1_024;
+      const presentation = { ...record, decodedBytes: presentationBytes };
       if (critical) {
-        if (this.#criticalRecords >= this.#maximumRecords || this.#criticalBytes + bytes > this.#maximumBytes || bytes + 2 > OPENCODE_OBSERVATION_WIRE_BYTES) {
+        const compact = "durable" in event && event.durable && !openCodeNeedsFullEvidenceEvent(event.type) &&
+          !/^(permission|form|shell)\./u.test(event.type);
+        const evidence: OpenCodeObservationRecord = compact ? { kind: "native_fact", sessionID: event.durable!.aggregateID,
+          journalId: record.journalId, sequence: record.sequence, nativeContinuity: record.nativeContinuity, decodedBytes: 0,
+          fact: { nativeSequence: event.durable!.seq, fingerprint: openCodeNativeFactFingerprint(event), type: event.type,
+            inputId: "inboxID" in event.data ? event.data.inboxID : null, boundaryId: null } } : record;
+        const bytes = Buffer.byteLength(JSON.stringify(evidence)) + 1_024;
+        const captured = { ...evidence, decodedBytes: bytes };
+        if ((compact ? this.#factRecords >= OPENCODE_NATIVE_PROOF_RECORDS : this.#criticalRecords >= this.#maximumRecords) ||
+            this.#criticalBytes + bytes > this.#maximumBytes || bytes + 2 > OPENCODE_OBSERVATION_WIRE_BYTES) {
           this.#exhausted = true; this.#break(scope, "overflow"); continue;
         }
         try { scope.proof.accept(event); }
         catch { this.#break(scope, "malformed"); continue; }
-        scope.sequence++; scope.records.push(captured); this.#criticalBytes += bytes; this.#criticalRecords++;
-        const others = [...this.#scopes.values()].reduce((sum, other) => sum + (other === scope ? 0 : other.proof.bytes), 0);
-        if (!scope.proof.trim(Math.max(0, OPENCODE_NATIVE_PROOF_BYTES - others))) {
+        scope.sequence++; scope.records.push(captured); this.#criticalBytes += bytes;
+        if (compact) this.#factRecords++; else this.#criticalRecords++;
+        scope.proofTouched = ++this.#proofClock; this.#reclaimProofSpace(0);
+        const others = this.#proofBytes() - scope.proof.bytes;
+        if (!scope.proof.trim(Math.max(0, this.#maximumProofBytes - others))) {
           this.#exhausted = true; this.#break(scope, "overflow");
         }
       }
       for (const sub of [...scope.subscribers]) {
         if (sub.purpose === "evidence") { if (critical) sub.wake(); continue; }
-        if (sub.queue.length >= OPENCODE_NATIVE_EVENT_BUFFER_RECORDS || this.#presentationBytes + bytes > OPENCODE_NATIVE_EVENT_BUFFER_BYTES) {
-          sub.finish({ reason: "resnapshot_required", error: unavailable("opencode_event_overflow") }); continue;
-        }
-        sub.queue.push(captured); sub.bytes += bytes; this.#presentationBytes += bytes; sub.wake();
+        if (sub.ended || !this.#makePresentationSpace(sub, presentationBytes)) continue;
+        sub.queue.push(presentation); sub.bytes += presentationBytes; this.#presentationBytes += presentationBytes; sub.wake();
       }
     }
     void nativeBytes; this.#changed();

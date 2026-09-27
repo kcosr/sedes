@@ -179,8 +179,10 @@ describe("OpenCode SSE-first observation", () => {
   it("fails bounded event accumulation without presenting the queued prefix as synchronized", async () => {
     const { fixture, api } = setup(); const observation = observe(api); await observation.ready;
     for (let index = 0; index < 4_097; index += 1) fixture.send(renameEvent(index + 1));
-    await expect(observation.ended).resolves.toMatchObject({ reason: "resnapshot_required" });
-    expect(() => observation.drain()).toThrow("opencode_observation_continuity_lost");
+    // Compact evidence no longer fills the host's critical-record budget.
+    // This reader's own presentation queue is the bound that expires first.
+    await expect(observation.ended).resolves.toMatchObject({ reason: "overflow" });
+    expect(() => observation.drain()).toThrow("opencode_event_overflow");
   });
   it("bounds total decoded event bytes independently of the record count", async () => {
     const { fixture, api } = setup(); const observation = observe(api); await observation.ready;

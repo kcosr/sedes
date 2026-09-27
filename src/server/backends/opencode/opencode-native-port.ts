@@ -115,6 +115,7 @@ interface OpenCodeObservationPosition {
 }
 export type OpenCodeObservationRecord = OpenCodeObservationPosition & (
   | { readonly kind: "native"; readonly event: OpenCodeNativeEvent }
+  | { readonly kind: "native_fact"; readonly sessionID: string; readonly fact: OpenCodeNativeProof }
   | { readonly kind: "native_break"; readonly reason: "disconnected" | "malformed" | "overflow" | "owner_lost" });
 export interface OpenCodeObservationBoundary {
   readonly journalId: string; readonly throughSequence: number; readonly retainedAfterSequence: number;
@@ -130,7 +131,7 @@ export interface OpenCodePortObservation {
   readonly ready: Promise<OpenCodeObservationBoundary>;
   readonly ended: Promise<OpenCodeObservationEnd>;
   readonly failure: OpenCodeRuntimeError | undefined;
-  drain(): OpenCodeObservationRecord[];
+  drain(maximumBytes?: number): OpenCodeObservationRecord[];
   wait(signal?: AbortSignal): Promise<void>;
   acknowledge(cursor: OpenCodeObservationCursor): Promise<void>;
   close(): Promise<void>;

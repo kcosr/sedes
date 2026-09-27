@@ -308,6 +308,11 @@ export const openCodeObservationCursorSchema = z.strictObject({ journalId: ident
 const nativeProofSchema = z.strictObject({ nativeSequence: observationSequence,
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), type: identityPart,
   inputId: identityPart.nullable(), boundaryId: identityPart.nullable() });
+const fullEvidenceTypes = new Set(["session.inbox.enqueued", "session.inbox.delivered", "session.inbox.cancelled",
+  "session.step.started", "session.revert.committed", "session.revert.staged", "session.deleted",
+  "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"]);
+/** The remaining durable payloads are presentation/history; evidence needs their exact density facts only. */
+export function openCodeNeedsFullEvidenceEvent(type: string): boolean { return fullEvidenceTypes.has(type); }
 export const openCodeObservationBoundarySchema = z.strictObject({ journalId: identityPart,
   throughSequence: observationSequence, retainedAfterSequence: observationSequence,
   nativeConnected: z.boolean(), nativeContinuity: identityPart,
@@ -321,6 +326,8 @@ const observationPosition = { journalId: identityPart, sequence: observationSequ
   decodedBytes: z.number().int().nonnegative().max(OPENCODE_OBSERVATION_WIRE_BYTES) };
 export const openCodeObservationRecordSchema = z.discriminatedUnion("kind", [
   z.strictObject({ ...observationPosition, kind: z.literal("native"), event: z.unknown().transform(parseOpenCodeNativeEvent) }),
+  z.strictObject({ ...observationPosition, kind: z.literal("native_fact"), sessionID: sessionIdSchema,
+    fact: nativeProofSchema.refine(fact => !openCodeNeedsFullEvidenceEvent(fact.type)) }),
   z.strictObject({ ...observationPosition, kind: z.literal("native_break"), reason: z.enum(["disconnected", "malformed", "overflow", "owner_lost"]) }),
 ]);
 export function parseOpenCodeObservationBoundary(value: unknown): OpenCodeObservationBoundary {

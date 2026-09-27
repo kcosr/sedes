@@ -12,7 +12,7 @@ import { OpenCodeNativeApi, OpenCodeNativeProtocolError, openCodeNativeParser, t
 import { readOpenCodeNativeLog, type OpenCodeNativeDurableEvent } from "./opencode-native-log.js";
 import { OpenCodeNativeMutations, type OpenCodeNativePromptAdmission } from "./opencode-native-mutations.js";
 import type { OpenCodeNativePort, OpenCodePortObservation, OpenCodeObservationBoundary,
-  } from "./opencode-native-port.js";
+  OpenCodeNativeProof } from "./opencode-native-port.js";
 import { OpenCodeObservationCursorRepository, type OpenCodeObservationCheckpoint } from "./opencode-observation-cursor-repository.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
@@ -359,6 +359,20 @@ export class OpenCodeInputObserver {
     if (!this.#boundaries.has(id)) this.#setMap(this.#boundaries, id, seq);
     if (this.#boundaries.size > MAX_EVENT_PROOFS) this.#deleteMap(this.#boundaries, this.#boundaries.keys().next().value!);
   }
+  /** Compact events retain their original fingerprint and sequence, never a fabricated native payload. */
+  #fact(sessionID: string, fact: OpenCodeNativeProof): void {
+    if (sessionID !== this.#sessionID) return;
+    this.#assertAuthority();
+    const seq = fact.nativeSequence;
+    if (this.#liveFrontier >= 0 && seq !== this.#liveFrontier + 1) this.#changeInputAuthority();
+    if (seq <= this.#liveFrontier) throw new OpenCodeNativeProtocolError();
+    this.#liveFrontier = seq;
+    const prior = this.#events.get(seq);
+    if (prior && prior.fingerprint !== fact.fingerprint) throw new OpenCodeNativeProtocolError();
+    this.#setMap(this.#events, seq, { fingerprint: fact.fingerprint, type: fact.type,
+      ...(fact.inputId === null ? {} : { inputId: fact.inputId }), ...(fact.boundaryId === null ? {} : { boundary: fact.boundaryId }) });
+    if (this.#events.size > MAX_EVENT_PROOFS) this.#deleteMap(this.#events, this.#events.keys().next().value!);
+  }
   #proveRevert(boundary: string, revertSequence: number, fingerprint: string): void {
     const boundarySequence = this.#boundaries.get(boundary);
     if (boundarySequence === undefined) return;
@@ -480,12 +494,15 @@ export class OpenCodeInputObserver {
         this.#commitCursor(checkpoint, next, () => {
           if (record.kind === "native_break") {
             this.#markContinuityLost(); this.#trackerId = record.nativeContinuity;
-          } else this.#event(record.event, true);
+          } else if (record.kind === "native_fact") this.#fact(record.sessionID, record.fact);
+          else this.#event(record.event, true);
         });
         checkpoint = next;
-        await observation.acknowledge({ journalId: checkpoint.journalId, sequence: checkpoint.sequence });
         baseline();
-        if (caughtUp && (record.kind === "native_break" && record.sequence > boundary.throughSequence || !boundary.nativeConnected)) return;
+        if (caughtUp && (record.kind === "native_break" && record.sequence > boundary.throughSequence || !boundary.nativeConnected)) {
+          await observation.acknowledge({ journalId: checkpoint.journalId, sequence: checkpoint.sequence });
+          return;
+        }
       }
       // Retrying a lost ACK is safe: the durable cursor is the release fence.
       await observation.acknowledge({ journalId: checkpoint.journalId, sequence: checkpoint.sequence });

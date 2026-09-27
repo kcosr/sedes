@@ -5,6 +5,7 @@ import { OpenCodeObservationHub } from "../../src/server/backends/opencode/openc
 import { parseOpenCodeObservationBoundary, parseOpenCodeObservationRecords } from "../../src/server/backends/opencode/opencode-native-codecs.js";
 import type { OpenCodeNativeAuthority, OpenCodePortObservation } from "../../src/server/backends/opencode/opencode-native-port.js";
 import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
+import { openCodeNativeFactFingerprint } from "../../src/server/backends/opencode/opencode-native-observation-proof.js";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const close of cleanups.splice(0)) close(); });
@@ -24,6 +25,68 @@ function setup(options: ConstructorParameters<typeof OpenCodeObservationHub>[1] 
 async function drain(observation: OpenCodePortObservation) { await observation.wait(); return observation.drain(); }
 
 describe("resident OpenCode native observation journal", () => {
+  it("retains detached tool output as exact compact facts while presentation keeps the full native payload", async () => {
+    const { wire, hub } = setup({ maximumCriticalBytes: 32_768, maximumCriticalRecords: 2 });
+    const first = hub.subscribe(authority(), { purpose: "evidence" }); const ready = await first.ready; await first.close();
+    const presentation = hub.subscribe(authority(), { purpose: "presentation" }); await presentation.ready;
+    const outputs = Array.from({ length: 6 }, (_, index) => ({ id: `evt_tool_${index}`, created: 1, type: "session.tool.success",
+      durable: { aggregateID: "ses_fixture", seq: index + 2, version: 2 }, data: { sessionID: "ses_fixture", assistantMessageID: "msg_answer",
+        id: `tool_${index}`, executed: true, content: [{ type: "text", text: "result".repeat(90_000) }] } }));
+    wire.send(event(1)); for (const output of outputs) wire.send(output);
+    wire.send({ ...event(8), type: "session.execution.succeeded", data: { sessionID: "ses_fixture" } });
+    await vi.waitFor(() => expect(hub.retentionSnapshot().evidenceRecords).toBe(8));
+    expect(hub.retentionSnapshot()).toMatchObject({ retentionExhausted: false, currentInputScopes: 0 });
+    expect(hub.retentionSnapshot().evidenceBytes).toBeLessThan(32_768);
+    const replay = hub.subscribe(authority(), { purpose: "evidence", after: { journalId: ready.journalId, sequence: 0 } });
+    await replay.ready; const records = parseOpenCodeObservationRecords(await drain(replay));
+    expect(records.map(record => record.kind)).toEqual(["native", ...outputs.map(() => "native_fact"), "native"]);
+    expect(records[1]).toMatchObject({ sessionID: "ses_fixture", fact: { nativeSequence: 2, type: "session.tool.success",
+      fingerprint: openCodeNativeFactFingerprint(outputs[0]) } });
+    expect(JSON.stringify(records)).not.toContain("resultresult");
+    const displayed = await drain(presentation);
+    expect(displayed.find(record => record.kind === "native" && record.event.type === "session.tool.success"))
+      .toMatchObject({ event: outputs[0] });
+    await replay.close(); await presentation.close();
+  });
+
+  it("reclaims another scope's cached facts to admit a new scope and input without discarding pending work", async () => {
+    const { wire, hub } = setup({ maximumProofBytes: 4_096 }); await hub.ensureListening();
+    wire.send(event(1)); for (let seq = 2; seq <= 30; seq++) wire.send(event(seq, "session.renamed"));
+    await vi.waitFor(() => expect(hub.retentionSnapshot().evidenceRecords).toBe(30));
+    const old = hub.subscribe(authority(), { purpose: "evidence" }); const before = await old.ready;
+    expect(before.proof.currentInputId).toBe("msg_1"); expect(hub.retentionSnapshot().proofBytes).toBeGreaterThan(3_500);
+    await drain(old); await old.acknowledge({ journalId: before.journalId, sequence: 30 }); await old.close();
+    const fresh = authority("ses_fresh"); expect(() => hub.admitScope(fresh)).not.toThrow();
+    expect(() => hub.beginInput(fresh, "msg_pending")).not.toThrow();
+    hub.releaseScope(fresh); expect(hub.hasRetainedAuthority(fresh)).toBe(true);
+    const retained = hub.subscribe(authority(), { purpose: "evidence" }); const after = await retained.ready;
+    expect(after.proof.currentInputId).toBe("msg_1");
+    expect(after.proof.proofs.length).toBeLessThan(before.proof.proofs.length);
+    expect(hub.retentionSnapshot().proofBytes).toBeLessThanOrEqual(4_096);
+    expect(hub.retentionSnapshot().retentionExhausted).toBe(false); await retained.close();
+  });
+
+  it("resnapshots the slow reader retaining bytes instead of starving a different active scope", async () => {
+    const { wire, hub } = setup({ maximumPresentationBytes: 10_000 }); const other = authority("ses_other"); hub.admitScope(other);
+    const slow = hub.subscribe(authority(), { purpose: "presentation" }), active = hub.subscribe(other, { purpose: "presentation" });
+    await Promise.all([slow.ready, active.ready]);
+    const delta = (sessionID: string, length: number) => ({ id: `evt_${sessionID}`, type: "session.text.delta", created: 1,
+      data: { sessionID, assistantMessageID: "msg_answer", ordinal: 0, delta: "x".repeat(length) } });
+    wire.send(delta("ses_fixture", 7_000)); await slow.wait();
+    wire.send(delta("ses_other", 2_500));
+    expect((await drain(active))[0]).toMatchObject({ kind: "native", event: delta("ses_other", 2_500) });
+    expect(await slow.ended).toMatchObject({ reason: "resnapshot_required" }); expect(active.failure).toBeUndefined();
+    wire.send(delta("ses_other", 2_500)); expect(await drain(active)).toHaveLength(1);
+    expect(active.failure).toBeUndefined(); await active.close();
+  });
+
+  it("leaves undrained evidence in place when a multiplexed poll has insufficient byte headroom", async () => {
+    const { wire, hub } = setup(); const observation = hub.subscribe(authority(), { purpose: "evidence" }); const ready = await observation.ready;
+    wire.send(event(1)); await observation.wait(); expect(observation.drain(2)).toEqual([]);
+    await expect(observation.acknowledge({ journalId: ready.journalId, sequence: 1 })).rejects.toThrow("opencode_request_authority_mismatch");
+    const records = observation.drain(); expect(records).toHaveLength(1);
+    await observation.acknowledge({ journalId: ready.journalId, sequence: 1 }); await observation.close();
+  });
   it("keeps a single native subscription and replay/current-input proof across subscriber detach and ACK", async () => {
     const { wire, hub } = setup();
     const first = hub.subscribe(authority(), { purpose: "evidence" }); const ready = await first.ready;
@@ -108,6 +171,7 @@ describe("resident OpenCode native observation journal", () => {
     await expect(presentation.acknowledge({ journalId: ready.journalId, sequence: 1 })).rejects.toThrow("opencode_request_authority_mismatch");
     await presentation.close(); expect(hub.retentionSnapshot().evidenceRecords).toBe(1);
     const proof = hub.subscribe(authority(), { purpose: "evidence" }); await proof.ready;
-    expect((await drain(proof))[0]).toMatchObject({ event: event(1, "session.renamed") }); await proof.close();
+    expect((await drain(proof))[0]).toMatchObject({ kind: "native_fact", fact: { nativeSequence: 1, type: "session.renamed",
+      fingerprint: openCodeNativeFactFingerprint(event(1, "session.renamed")) } }); await proof.close();
   });
 });

@@ -73,6 +73,31 @@ async function consumed(f: ReturnType<typeof fixture>, operationId = "operation"
 }
 
 describe("OpenCode independent private input observation", () => {
+  it("ACKs a detached backlog once per committed batch instead of once per record", async () => {
+    const f = fixture();
+    const acknowledge = vi.fn();
+    const observer = new OpenCodeInputObserver(f.context, f.attach, f.runtime, {
+      ...f.lease, client: { ...f.lease.client, observe: options => {
+        const observation = f.lease.client.observe(options);
+        return { ...observation, acknowledge: async cursor => {
+          acknowledge(cursor);
+          await new Promise(resolve => setTimeout(resolve, 10));
+          await observation.acknowledge(cursor);
+        } };
+      } },
+    }, f.lifetime.signal);
+    cleanups.push(async () => observer.close());
+    // Wait for native SSE to connect, then accumulate evidence with main absent.
+    await f.observer.start(); f.observer.close();
+    for (let sequence = 1; sequence <= 500; sequence++) f.wire.send(renamed(sequence));
+    await vi.waitFor(() => expect(f.host.retentionSnapshot().observation.pendingEvidenceCount).toBe(500));
+    await observer.start();
+    await vi.waitFor(() => expect(f.host.retentionSnapshot().observation.pendingEvidenceCount).toBe(0));
+    expect(acknowledge).toHaveBeenCalledOnce();
+    expect(acknowledge).toHaveBeenCalledWith(expect.objectContaining({ sequence: 500 }));
+    expect(f.database.prepare("SELECT sequence FROM opencode_observation_cursors").get()).toEqual({ sequence: 500 });
+  });
+
   it("commits evidence and cursor together and never ACKs or notifies on SQL rollback", async () => {
     const f = fixture(); await f.observer.start(); f.reserve();
     f.wire.send(enqueue(1)); await vi.waitFor(() => expect(f.row().enqueueSequence).toBe(1));
@@ -228,6 +253,16 @@ describe("OpenCode independent private input observation", () => {
     f.wire.send(delivered(0, "msg_boundary")); f.wire.send(renamed(1)); f.wire.send(enqueue(2)); f.wire.send(renamed(3)); f.wire.send(reverted(4));
     await vi.waitFor(() => expect(f.row().withdrawalKind).toBe("reverted"));
     expect(await f.observer.reconcile("operation", "submit")).toMatchObject({ status: "not_accepted", retryable: false });
+  });
+
+  it("preserves exact revert density through compact tool-output evidence without retaining its payload", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    const output = { ...event(2, "session.tool.success", { assistantMessageID: "msg_answer", id: "tool_result", executed: true,
+      content: [{ type: "text", text: "large output".repeat(100_000) }] }), durable: { aggregateID: "ses_fixture", seq: 2, version: 2 } };
+    f.wire.send(delivered(0, "msg_boundary")); f.wire.send(enqueue(1)); f.wire.send(output); f.wire.send(reverted(3));
+    await vi.waitFor(() => expect(f.row().withdrawalKind).toBe("reverted"));
+    expect(await f.observer.reconcile("operation", "submit")).toMatchObject({ status: "not_accepted", retryable: false });
+    expect(f.row().consumedFingerprint).toBeNull();
   });
 
   it.each(["gap", "later", "reuse"])("declines revert erasure with %s evidence", async mode => {
