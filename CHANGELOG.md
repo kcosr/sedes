@@ -5,7 +5,7 @@
 ### Breaking Changes
 
 - Browser and packaged clients must use client protocol 127, which adds
-  confirmed live background-work counts to sidebar thread summaries.
+  confirmed live background-work counts to sidebar thread summaries. (#16)
 
 - Codex persistent runtimes require Codex runtime protocol 2 so tool-policy
   refreshes cannot reuse an older sidecar’s cached session configuration.
@@ -65,7 +65,7 @@
   without changing Send, Steer, Queue, or Stop behavior. Claude supplies this
   live inventory today; stale or unavailable activity is not shown as live.
   Unacknowledged completion dots now also take priority over draft, snoozed,
-  automation, settled, and disconnected glyphs until acknowledged.
+  automation, settled, and disconnected glyphs until acknowledged. (#16)
 
 - Show a collapsed **Viewed image** row when Claude or Pi opens an image file
   with its built-in read tool: PNG, JPEG, GIF, or WebP, and BMP on Pi. Expand
