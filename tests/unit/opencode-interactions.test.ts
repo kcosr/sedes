@@ -41,7 +41,8 @@ function fixture() {
     return new Response(null, { status: 204 });
   } });
   const native = createOpenCodeConversationFixture({ native: { client, sessionID: wire.sessionID, directory: wire.directory } });
-  const lease = native.runtime.acquire(openCodeRuntimeTarget(native.target)); const lifetime = new AbortController(); const events = vi.fn();
+  const acquired = native.runtime.acquire(openCodeRuntimeTarget(native.target));
+  const lease = { ...acquired, client: { ...acquired.client } }; const lifetime = new AbortController(); const events = vi.fn();
   const controllers: OpenCodeInteractions[] = [];
   const create = (generation = "runtime-binding-generation") => {
     const controller = new OpenCodeInteractions(native.context, native.target, native.runtime, lease, lifetime.signal, generation, events);
@@ -63,6 +64,40 @@ function fixture() {
 }
 
 describe("OpenCode exact interaction controller", () => {
+  it.each(["replay", "reconcile"] as const)("retries a lost terminal interaction ACK on %s without answering twice", async mode => {
+    const f = fixture(); f.permissions.set("per_owned", permission()); await f.controller.refresh();
+    const input = f.response("permission");
+    vi.spyOn(f.lease.client, "acknowledgeOperation").mockRejectedValueOnce(new Error("ACK response lost"));
+    await f.controller.respond(input);
+    expect(f.receipt()?.disposition).toBe("accepted"); expect(f.host.snapshot().operations).toHaveLength(1);
+    if (mode === "replay") await f.controller.respond(input);
+    else await expect(f.controller.reconcileInteractionResponse(input)).resolves.toEqual({ outcome: "accepted" });
+    expect(f.host.snapshot().operations).toEqual([]); expect(f.effects()).toHaveLength(1);
+  });
+  it("reclaims failed replies beyond the control capacity and still accepts a fresh reply", async () => {
+    const f = fixture(); f.lose();
+    for (let index = 0; index < 20; index++) {
+      const id = `per_failure_${index}`; f.permissions.set(id, permission(id)); await f.controller.refresh();
+      await expect(f.controller.respond(f.response("permission", `failed-response-${index}`))).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+      expect(f.receipt(`failed-response-${index}`)?.disposition).toBe("unknown");
+    }
+    expect(f.host.snapshot().operations).toEqual([]);
+    f.lose(false); f.permissions.set("per_final", permission("per_final")); await f.controller.refresh();
+    await f.controller.respond(f.response("permission", "final-response"));
+    expect(f.effects()).toHaveLength(21); expect(f.host.snapshot().operations).toEqual([]);
+  });
+
+  it("replays a prepared interaction older than sixty seconds", async () => {
+    const f = fixture(); f.forms.set("frm_owned", form()); await f.controller.refresh();
+    const reserve = f.repository.reserveOperation.bind(f.repository);
+    vi.spyOn(f.repository, "reserveOperation").mockImplementation((scope, input, now) => reserve(scope, input, now - 120_000));
+    vi.spyOn(f.repository, "markDispatched").mockReturnValueOnce(false);
+    const input = f.response("form", "old-prepared-response");
+    await expect(f.controller.respond(input)).rejects.toThrow();
+    expect(f.receipt(input.applicationOperationId)?.disposition).toBe("prepared");
+    await f.controller.respond(input);
+    expect(f.receipt(input.applicationOperationId)?.disposition).toBe("accepted"); expect(f.effects()).toHaveLength(1);
+  });
   it("maps pending gates with stable identity and openedAt, then resolves external settlements without receipts", async () => {
     const f = fixture(); f.permissions.set("per_owned", permission()); f.forms.set("frm_owned", form());
     await f.controller.refresh(); const before = f.controller.snapshotInteractions(); await f.controller.refresh();

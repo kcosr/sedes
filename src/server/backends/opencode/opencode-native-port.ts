@@ -71,10 +71,12 @@ export type OpenCodeMutationIdentity = Readonly<{
   operationKind: "create" | "submit" | "steer" | "action" | "interaction" | "interrupt";
   step: string;
 }> | Readonly<{ origin: "host"; operationId: string; step: string }>;
+export type OpenCodeApplicationOperationIdentity = Pick<Extract<OpenCodeMutationIdentity, { origin: "application" }>,
+  "applicationOperationId" | "operationKind">;
 export interface OpenCodeMutationControl {
   readonly identity: OpenCodeMutationIdentity;
-  /** Original admission deadline; repetition never extends it. */
-  readonly deadlineAt: number;
+  /** Original application deadline, or null when the application has none. */
+  readonly deadlineAt: number | null;
 }
 
 export type OpenCodeNativeFailure =
@@ -127,7 +129,12 @@ export interface OpenCodeNativePort {
   mutate<K extends OpenCodeMutationMethod>(method: K, input: OpenCodeMutationInput<K>, control: OpenCodeMutationControl,
     options?: { readonly signal?: AbortSignal }): Promise<OpenCodeMutationOutput<K>>;
   outcome<K extends OpenCodeMutationMethod>(method: K, identity: OpenCodeMutationIdentity): Promise<OpenCodeMutationOutcome<OpenCodeMutationOutput<K>>>;
+  /** After a durable terminal application receipt. Pending native work remains
+   * retained until settlement, then the host applies this release intent. */
   acknowledgeMutation(method: OpenCodeMutationMethod, identity: OpenCodeMutationIdentity): Promise<void>;
+  /** Release all currently retained substeps after the exact main operation's
+   * durable disposition. Includes dynamic Stop withdrawal identities. */
+  acknowledgeOperation(identity: OpenCodeApplicationOperationIdentity): Promise<void>;
   observe(input?: { readonly after?: { readonly continuity: string; readonly sequence: number }; readonly signal?: AbortSignal }): OpenCodePortObservation;
 }
 

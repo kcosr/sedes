@@ -41,6 +41,7 @@ export function createOpenCodeNativePortFixture(client: OpenCodeHttpClient,
     },
     outcome: async (method, identity) => transfer(await direct.outcome(method, transfer(identity))),
     acknowledgeMutation: (method, identity) => direct.acknowledgeMutation(method, transfer(identity)),
+    acknowledgeOperation: identity => direct.acknowledgeOperation(transfer(identity)),
     observe: input => {
       const observation = direct.observe(input);
       return { ...observation, ready: observation.ready.then(transfer), drain: () => observation.drain().map(transfer),

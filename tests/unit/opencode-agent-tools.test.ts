@@ -3,6 +3,7 @@ import { OpenCodeHostAgentTools } from "../../src/server/backends/opencode/openc
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenCodeAgentTools } from "../../src/server/backends/opencode/opencode-agent-tools.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
+import { OpenCodeNativeMutationDeliveryError } from "../../src/server/backends/opencode/opencode-native-codecs.js";
 import { OpenCodeMcpIngress, type OpenCodeMcpChannel } from "../../src/server/backends/opencode/opencode-mcp-ingress.js";
 import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 import { createOpenCodeConversationFixture } from "../support/opencode-conversation-fixture.js";
@@ -28,7 +29,7 @@ function deferred() {
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
-function fixture(options: { inventory?: unknown; beforeInventory?: () => Promise<void>; dropAck?: boolean; cli?: boolean; retentionMilliseconds?: number } = {}) {
+function fixture(options: { inventory?: unknown; beforeInventory?: () => Promise<void>; dropAck?: boolean; cli?: boolean; unavailableCli?: boolean; retentionMilliseconds?: number } = {}) {
   const wire = createOpenCodeApiFixture();
   const registrations: { name: string; config: { command: string[]; environment: Record<string, string>; codemode: boolean; protocol: string } }[] = [];
   const mutations: string[] = [];
@@ -59,7 +60,7 @@ function fixture(options: { inventory?: unknown; beforeInventory?: () => Promise
     invoke: vi.fn<BackendAgentToolFacade["invoke"]>(async () => { throw new Error("unexpected invocation"); }) as
       ReturnType<typeof vi.fn<BackendAgentToolFacade["invoke"]>> & BackendAgentToolFacade["invoke"] };
   const tools = new OpenCodeAgentTools({ facade, sourceCapabilities: { issue: (source, _transport, presentation) => `${source.sourceThreadId}:${presentation}` }, sourceCapabilityTransport: "management_http" });
-  const hostTools = new OpenCodeHostAgentTools({ adapter: f.adapter, cli: { endpoint: "http://127.0.0.1:4784", executableDirectory: "/bundled/bin" }, assertCurrent: signal => f.runtime.assertCurrent(signal), invoke: (capability, request, signal) => tools.callHostTool(capability, request, signal) });
+  const hostTools = new OpenCodeHostAgentTools({ adapter: f.adapter, ...(options.unavailableCli ? {} : { cli: { endpoint: "http://127.0.0.1:4784", executableDirectory: "/bundled/bin" } }), assertCurrent: signal => f.runtime.assertCurrent(signal), invoke: (capability, request, signal) => tools.callHostTool(capability, request, signal) });
   f.setHostTools(hostTools);
   cleanups.push(() => f.dispose()); cleanups.push(() => tools.close());
   const context = Object.assign(f.context, { tools });
@@ -77,6 +78,46 @@ async function connect(environment: Record<string, string>) {
     body: JSON.stringify({ operation: "list", sessionID }) }) };
 }
 describe("OpenCode MCP runtime admission", () => {
+  it("reclaims repeated refused host registrations and preserves the native write boundary", async () => {
+    const f = fixture({ unavailableCli: true });
+    const ensure = f.hostTools.ensureRegistration.bind(f.hostTools);
+    const failures: unknown[] = [];
+    vi.spyOn(f.hostTools, "ensureRegistration").mockImplementation(async (...input) => {
+      try { await ensure(...input); } catch (error) { failures.push(error); throw error; }
+    });
+    for (let attempt = 0; attempt < 140; attempt++) await f.admit();
+    expect(failures).toHaveLength(140);
+    expect(failures.every(error => (error as { delivery?: string }).delivery === "not_sent")).toBe(true);
+    expect(f.host.snapshot().operations).toEqual([]);
+    expect(f.mutations).toEqual([]);
+    expect(f.tools.diagnostic(f.target.binding.applicationThreadId)).toContain("unavailable");
+  });
+
+  it("does not acknowledge cached registration controls again after their receipt is released", async () => {
+    const f = fixture(); const acquire = vi.mocked(f.runtime.acquire).getMockImplementation()!; let acknowledgments = 0;
+    vi.mocked(f.runtime.acquire).mockImplementation(target => {
+      const lease = acquire(target);
+      return { ...lease, client: { ...lease.client, acknowledgeMutation: async (method, identity) => {
+        if (++acknowledgments > 1) throw new Error("tombstone already evicted");
+        await lease.client.acknowledgeMutation(method, identity);
+      } } };
+    });
+    await f.admit(); await f.admit(); await f.admit();
+    expect(acknowledgments).toBe(1); expect(f.mutations).toEqual(["PUT"]);
+    expect(f.tools.diagnostic(f.target.binding.applicationThreadId)).toBeUndefined();
+  });
+
+  it("gets fresh registration authority after refusal before the host registration hook", async () => {
+    const f = fixture();
+    vi.spyOn(f.hostHooks, "ensureMcpRegistration").mockRejectedValueOnce(
+      new OpenCodeNativeMutationDeliveryError("not_sent", "opencode_agent_tools_unavailable"));
+    await f.admit();
+    expect(f.tools.diagnostic(f.target.binding.applicationThreadId)).toContain("unavailable");
+    expect(f.mutations).toEqual([]); expect(f.host.snapshot().operations).toEqual([]);
+    await f.admit();
+    expect(f.tools.diagnostic(f.target.binding.applicationThreadId)).toBeUndefined();
+    expect(f.mutations).toEqual(["PUT"]); expect(f.host.snapshot().operations).toEqual([]);
+  });
   it.each(["access decision", "approved execution"] as const)("blocks automatic eviction during a bridge %s and returns typed cancellation on explicit close without replay", async phase => {
     const f = fixture({ retentionMilliseconds: 0 });
     const { scope, binding, workspace } = f.target;
@@ -145,15 +186,15 @@ describe("OpenCode MCP runtime admission", () => {
     expect(response.result.isError).toBe(true);
     expect(JSON.parse(response.result.content[0].text)).toMatchObject({ error: { code: "cancelled", retryable: false } });
     expect(findOpenCodeInputObserver(f.port, f.target)).toBeUndefined();
-    expect(f.runtime.snapshot().references).toBe(0);
+    expect(f.runtime.snapshot().references).toBe(1);
     expect(f.facade.invoke).toHaveBeenCalledOnce(); expect(decision).toHaveBeenCalledOnce();
     expect(readThreadStatus).toHaveBeenCalledTimes(phase === "approved execution" ? 1 : 0);
     expect(f.wire.requests.filter(request => request.pathname.endsWith("/prompt") || request.pathname.endsWith("/interrupt"))).toEqual([]);
     expect(handle.retirementBlocked).toBe(false);
   });
-  it("retains routing after the last handle closes without retaining a lease or native event subscription", async () => {
+  it("retains one routing scope after the last handle closes without retaining a native event subscription", async () => {
     const f = fixture(); await f.admit();
-    expect(f.runtime.snapshot().references).toBe(0);
+    expect(f.runtime.snapshot().references).toBe(1);
     expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(0);
     const channel = await connect(f.registrations[0]!.config.environment);
     const first = await f.driver.attach(f.target), second = await f.driver.attach(f.target);
@@ -161,16 +202,16 @@ describe("OpenCode MCP runtime admission", () => {
     await first.establishProjection({ signal: new AbortController().signal });
     await second.establishProjection({ signal: new AbortController().signal });
     const observer = findOpenCodeInputObserver(f.port, f.target);
-    expect(observer).toBeDefined(); expect(f.runtime.snapshot().references).toBe(2);
+    expect(observer).toBeDefined(); expect(f.runtime.snapshot().references).toBe(3);
     expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(3);
     await first.close();
     expect(findOpenCodeInputObserver(f.port, f.target)).toBe(observer);
     await second.close();
     expect(findOpenCodeInputObserver(f.port, f.target)).toBeUndefined();
-    expect(f.runtime.snapshot().references).toBe(0);
+    expect(f.runtime.snapshot().references).toBe(1);
     const response = await channel.call(f.wire.sessionID);
     expect(response.status).toBe(200); await response.body?.cancel();
-    expect(f.runtime.snapshot().references).toBe(0);
+    expect(f.runtime.snapshot().references).toBe(1);
     expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(3);
     expect(f.registrations).toHaveLength(1);
   });

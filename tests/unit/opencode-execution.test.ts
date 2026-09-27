@@ -109,6 +109,88 @@ function withImages(input: SubmitTurnInput, count: number, imageBytes: number) {
 }
 
 describe("OpenCode execution settings and explicit actions", () => {
+  it("reclaims repeated unconfirmed actions instead of exhausting the ordinary journal lane", async () => {
+    const f = fixture({ native: modelB }); f.state.modelUpdate = false;
+    for (let index = 0; index < 132; index++) {
+      await expect(f.actions.perform(f.action(`failed-model-${index}`))).rejects.toMatchObject({ category: "submission_unknown" });
+    }
+    expect(f.host.snapshot().operations).toEqual([]);
+    f.state.modelUpdate = true;
+    await expect(f.actions.perform(f.action("working-model"))).resolves.toEqual({ accepted: true });
+    expect(f.posts("/model")).toHaveLength(133);
+  });
+
+  it("replays an untouched prepared input older than sixty seconds without a synthetic deadline", async () => {
+    const f = fixture(); const reserve = f.repository.reserveOperation.bind(f.repository);
+    vi.spyOn(f.repository, "reserveOperation").mockImplementation((scope, input, now) => reserve(scope, input, now - 120_000));
+    vi.spyOn(f.repository, "markDispatched").mockReturnValueOnce(false);
+    const input = f.submit("old-prepared-input");
+    await expect(f.delivery.submit(input)).rejects.toMatchObject({ category: "submission_unknown" });
+    expect(f.repository.requireOperation(scope, threadID, input.applicationOperationId, "submit").disposition).toBe("prepared");
+    expect(f.posts("/prompt")).toHaveLength(0);
+    await expect(f.delivery.submit(input)).resolves.toMatchObject({ accepted: true });
+    expect(f.posts("/prompt")).toHaveLength(1);
+  });
+
+  it("finishes failed preparation as not applied, keeps applied settings, and allows a fresh Send", async () => {
+    const f = fixture({ native: modelB });
+    vi.spyOn(f.context.executionEnvironment, "prepare").mockRejectedValueOnce(new Error("preparation unavailable"));
+    const input = f.submit("failed-preparation");
+    await expect(f.delivery.submit(input)).rejects.toThrow();
+    expect(f.repository.requireOperation(scope, threadID, input.applicationOperationId, "submit").disposition).toBe("not_applied");
+    expect(f.wire.session.model).toEqual(modelA); expect(f.posts("/model")).toHaveLength(1);
+    expect(f.posts("/prompt")).toHaveLength(0); expect(f.host.snapshot().operations).toEqual([]);
+    await expect(f.delivery.submit(input)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    await expect(f.delivery.submit(f.submit("fresh-after-preparation"))).resolves.toMatchObject({ accepted: true });
+    expect(f.posts("/model")).toHaveLength(1); expect(f.posts("/prompt")).toHaveLength(1);
+  });
+
+  it("does not let a conflicting retry terminate a concurrently preparing legitimate input", async () => {
+    const f = fixture(); const prepare = f.settings.prepare.bind(f.settings);
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    vi.spyOn(f.settings, "prepare").mockImplementationOnce(async (...input) => { entered(); await held; return prepare(...input); });
+    const input = f.submit("matching-preparation");
+    const legitimate = f.delivery.submit(input);
+    await started;
+    await expect(f.delivery.submit({ ...input, text: "conflicting text" })).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(f.repository.requireOperation(scope, threadID, input.applicationOperationId, "submit").disposition).toBe("prepared");
+    release(); await expect(legitimate).resolves.toMatchObject({ accepted: true });
+    expect(f.posts("/prompt")).toHaveLength(1);
+  });
+
+  it("does not terminate another matching caller when the first preparation fails", async () => {
+    const f = fixture(); const prepare = f.settings.prepare.bind(f.settings);
+    let fail!: () => void, succeed!: () => void; let count = 0;
+    const first = new Promise<void>(resolve => { fail = resolve; }), second = new Promise<void>(resolve => { succeed = resolve; });
+    vi.spyOn(f.settings, "prepare").mockImplementation(async (...input) => {
+      if (++count === 1) { await first; throw new Error("first preparation failed"); }
+      await second; return prepare(...input);
+    });
+    const input = f.submit("parallel-preparation");
+    const failing = f.delivery.submit(input).catch(error => error);
+    await vi.waitFor(() => expect(count).toBe(1));
+    const succeeding = f.delivery.submit(input);
+    await vi.waitFor(() => expect(count).toBe(2));
+    fail(); expect(await failing).toBeInstanceOf(Error);
+    expect(f.repository.requireOperation(scope, threadID, input.applicationOperationId, "submit").disposition).toBe("prepared");
+    succeed(); await expect(succeeding).resolves.toMatchObject({ accepted: true });
+    expect(f.posts("/prompt")).toHaveLength(1);
+  });
+
+  it("records deferred prompt release when independent consumption proof arrives before its response", async () => {
+    const f = fixture(); let release!: () => void;
+    f.state.postGate = new Promise<void>(resolve => { release = resolve; });
+    const input = f.submit("consume-before-response");
+    const sending = f.delivery.submit(input);
+    await vi.waitFor(() => expect(f.posts("/prompt")).toHaveLength(1));
+    await expect(f.observer.reconcile(input.applicationOperationId, "submit")).resolves.toEqual({ status: "accepted" });
+    expect(f.repository.requireOperation(scope, threadID, input.applicationOperationId, "submit").disposition).toBe("accepted");
+    expect(f.host.snapshot().operations).toEqual([expect.objectContaining({ method: "prompt", status: "pending" })]);
+    release(); await expect(sending).resolves.toMatchObject({ accepted: true });
+    expect(f.host.snapshot().operations).toEqual([]); expect(f.posts("/prompt")).toHaveLength(1);
+  });
   it("rejects an excessive combined image payload before reading bytes, reserving a send or posting", async () => {
     const f = fixture(); f.state.models[0]!.capabilities.input.push("image");
     const attachments = Array.from({ length: 2 }, (_, index) => ({ id: randomUUID(), kind: "image" as const,
@@ -214,10 +296,10 @@ describe("OpenCode execution settings and explicit actions", () => {
     const action: RegisteredBackendActionInput = actionKind === "set_model" ? f.action()
       : { action: "set_thinking_level", applicationOperationId: "effort-operation", level: "default" };
     const states: (string | undefined)[] = [];
-    const acknowledge = f.settings.client.acknowledgeMutation.bind(f.settings.client);
-    vi.spyOn(f.settings.client, "acknowledgeMutation").mockImplementation(async (method, identity) => {
+    const acknowledge = f.settings.client.acknowledgeOperation.bind(f.settings.client);
+    vi.spyOn(f.settings.client, "acknowledgeOperation").mockImplementation(async identity => {
       states.push(f.repository.readOperation(scope, threadID, action.applicationOperationId, "action")?.disposition);
-      await acknowledge(method, identity);
+      await acknowledge(identity);
     });
     await expect(f.actions.perform(action)).resolves.toEqual({ accepted: true });
     expect(states).toEqual(["accepted"]);
@@ -225,7 +307,7 @@ describe("OpenCode execution settings and explicit actions", () => {
 
   it("retains exact model evidence when the durable action commit fails and never repeats the effect", async () => {
     const f = fixture({ native: modelB }), action = f.action();
-    const acknowledge = vi.spyOn(f.settings.client, "acknowledgeMutation");
+    const acknowledge = vi.spyOn(f.settings.client, "acknowledgeOperation");
     vi.spyOn(f.repository, "recordOutcome").mockReturnValue(false);
     await expect(f.actions.perform(action)).rejects.toMatchObject({ category: "submission_unknown" });
     const receipt = f.repository.requireOperation(scope, threadID, action.applicationOperationId, "action");
@@ -240,13 +322,13 @@ describe("OpenCode execution settings and explicit actions", () => {
 
   it("retains preparation-model evidence until durable prompt admission and never reapplies an exact retry", async () => {
     const f = fixture({ native: modelB }), input = f.submit("prepared-model");
-    const states: { method: string; disposition?: string; payload: string | null }[] = [];
-    const acknowledge = f.settings.client.acknowledgeMutation.bind(f.settings.client);
-    vi.spyOn(f.settings.client, "acknowledgeMutation").mockImplementation(async (method, identity) => {
+    const states: { operationKind: string; disposition?: string; payload: string | null }[] = [];
+    const acknowledge = f.settings.client.acknowledgeOperation.bind(f.settings.client);
+    vi.spyOn(f.settings.client, "acknowledgeOperation").mockImplementation(async identity => {
       const receipt = f.repository.readOperation(scope, threadID, input.applicationOperationId, "submit");
       const payload = receipt ? f.evidence.get(scope, threadID, input.applicationOperationId, "submit").preparedPayloadFingerprint : null;
-      states.push({ method, disposition: receipt?.disposition, payload });
-      await acknowledge(method, identity);
+      states.push({ operationKind: identity.operationKind, disposition: receipt?.disposition, payload });
+      await acknowledge(identity);
     });
     const { snapshot } = await f.settings.prepare(input.applicationOperationId, "submit");
     expect(states).toEqual([]);
@@ -261,10 +343,20 @@ describe("OpenCode execution settings and explicit actions", () => {
     expect(f.posts("/model")).toHaveLength(1); expect(states).toEqual([]);
     f.wire.session.model = modelA;
     await expect(f.delivery.submit(input)).resolves.toMatchObject({ accepted: true });
-    expect(states.filter(state => state.method === "setModel")).toEqual([
-      { method: "setModel", disposition: "accepted", payload: expect.any(String) },
+    expect(states).toEqual([
+      { operationKind: "submit", disposition: "accepted", payload: expect.any(String) },
     ]);
     expect(f.posts("/model")).toHaveLength(1);
+  });
+
+  it.each(["replay", "reconcile"] as const)("retries a lost terminal action ACK on %s without repeating its effect", async mode => {
+    const f = fixture(), input = f.action("lost-terminal-action-ack");
+    vi.spyOn(f.settings.client, "acknowledgeOperation").mockRejectedValueOnce(new Error("ACK response lost"));
+    await expect(f.actions.perform(input)).resolves.toEqual({ accepted: true });
+    expect(f.host.snapshot().operations).toHaveLength(1);
+    if (mode === "replay") await expect(f.actions.perform(input)).resolves.toEqual({ accepted: true });
+    else await expect(f.actions.reconcile(input)).resolves.toEqual({ outcome: "accepted" });
+    expect(f.host.snapshot().operations).toEqual([]); expect(f.posts("/model")).toHaveLength(1);
   });
 
   it.each(["no-change", "lost-ack"] as const)("reconciles a %s model action through exact GET with no replay", async failure => {
@@ -389,7 +481,7 @@ describe("OpenCode settings observation fencing", () => {
     vi.spyOn(f.context.catalog, "read").mockImplementation(async input => {
       const number = ++reads; const result = await read(input);
       if (number === 2) {
-        expect(f.posts("/model")).toHaveLength(1);
+        expect(f.posts("/model")).toHaveLength(0);
         f.wire.send({ id: "evt_submit_model_selected", created: 1, type: "session.model.selected",
           data: { sessionID: f.wire.sessionID, model: modelA }, durable: { aggregateID: f.wire.sessionID, seq: 1, version: 1 } });
         await vi.waitFor(() => expect(reads).toBeGreaterThanOrEqual(3));
@@ -451,7 +543,7 @@ describe("OpenCode settings observation fencing", () => {
     });
     await expect(handle.submit(f.submit("close-before-dispatch"))).rejects.toMatchObject({ crossedSubmissionBoundary: false });
     expect(tracked).toBe(2); expect(f.posts("/prompt")).toHaveLength(0);
-    expect(f.repository.readOperation(scope, threadID, "close-before-dispatch", "submit")?.disposition).toBe("prepared");
+    expect(f.repository.readOperation(scope, threadID, "close-before-dispatch", "submit")?.disposition).toBe("not_applied");
     expect(f.client.lifetime.aborted).toBe(false);
   });
 
@@ -583,7 +675,6 @@ describe("OpenCode exact input delivery", () => {
     const held = new Promise<void>(resolve => { release = resolve; });
     const atFinalRead = new Promise<void>(resolve => { entered = resolve; });
     vi.spyOn(f.settings, "prepare").mockImplementation(originalPrepare)
-      .mockImplementationOnce(originalPrepare)
       .mockImplementationOnce(async () => { entered(); await held; throw new Error("stale final catalog read failed"); });
     const first = f.delivery.submit(f.submit()).catch(error => error);
     await atFinalRead;

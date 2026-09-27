@@ -15,17 +15,25 @@ includes these closed-enum additions and terminal Stop diagnostics.
 Conversation, catalog and tool consumers use the provider-private
 `OpenCodeNativePort`. Its closed read/mutation catalog carries validated JSON
 data, exact workspace/session authority, immutable operation/sub-operation
-identity and the original deadline. `OpenCodeNativeHost` dispatches those
+identity and the original application deadline, when one exists. `OpenCodeNativeHost` dispatches those
 operations through one host-local HTTP adapter. Native clients, callbacks and
 resolved environment secrets do not cross that boundary. Directory discovery
 can read session metadata; history, interactions and session effects require a
 bound session port.
 
 The host retains bounded mutation outcomes until acknowledgment after the
-application receipt commits. Cancellation ends a caller's wait without
+application's terminal receipt commits, including refusal and unknown outcomes.
+Application acknowledgment covers all retained sub-operations, including dynamic
+Stop withdrawals, and terminal replay retries a lost acknowledgment.
+An acknowledgment for still-pending native work records release intent; the
+owner keeps responsibility and evidence until that work settles. Cancellation ends a caller's wait without
 repeating or retracting an admitted write. Reusing an operation identity with
 different input or a later deadline is rejected. Control operations reserve
-their own queue and retention capacity. Owner retirement fences existing ports
+their own queue and retention capacity, with small reservations for fixed-size
+control responses. Ordinary operations do not acquire an artificial deadline
+from receipt age; Stop preserves its explicit original deadline. Unused scopes
+are reclaimed after leases, observations, and retained mutations release them.
+Owner retirement fences existing ports
 before native cleanup; a retry after owner loss remains unknown. These
 in-process contracts do not yet advertise remote execution or retained event
 replay. Pi, Codex, Claude and Grok retain their existing backend contracts.
@@ -395,7 +403,8 @@ generated CLI values last. PATH uses that same applied baseline, with the
 helper directory prepended for CLI. Values are not stored in operation receipts
 or environment fingerprints. Session release ends the caller's preparation and
 prevents its subsequent prompt. An already admitted host mutation may finish
-within its original deadline; closing the native owner cancels it.
+within native request bounds and any original application deadline; closing
+the native owner cancels it.
 Compaction calls this preparation before its final native settings/control
 checks and dispatch. Replaying an already admitted compaction does not rotate
 secrets or send another request.

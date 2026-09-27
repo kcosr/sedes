@@ -2,6 +2,7 @@ import { openCodeRuntimeTarget } from "../../src/server/backends/opencode/openco
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionInboxUser, SessionMessageInfo } from "@opencode/client";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
+import { openCodeOperationControl } from "../../src/server/backends/opencode/opencode-operation-control.js";
 import { acquireOpenCodeInputObserver, findOpenCodeInputObserver, OpenCodeInputObserver } from "../../src/server/backends/opencode/opencode-input-observer.js";
 import { OpenCodeInputEvidenceRepository, openCodePreparedPayloadFingerprint, type OpenCodeInputKind } from "../../src/server/backends/opencode/opencode-input-evidence.js";
 import { createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
@@ -72,6 +73,20 @@ async function consumed(f: ReturnType<typeof fixture>, operationId = "operation"
 }
 
 describe("OpenCode independent private input observation", () => {
+  it("releases retained prompt evidence on exact cancellation without an enqueue event", async () => {
+    const f = fixture(); await f.observer.start(); const row = f.reserve();
+    f.wire.setResponse(`/api/session/${f.wire.sessionID}/prompt`, 200, { data: admission() });
+    await f.lease.client.mutate("prompt", { sessionID: f.wire.sessionID, id: "msg_owned", text: "prepared text", delivery: "queue", resume: true },
+      openCodeOperationControl(row.receipt, "prompt"));
+    expect(f.host.snapshot().operations).toHaveLength(1);
+    expect(f.row().receipt.disposition).toBe("dispatched");
+    f.wire.send(cancelled(1));
+    await vi.waitFor(() => expect(f.row().withdrawalKind).toBe("cancelled"));
+    expect(f.row()).toMatchObject({ receipt: { disposition: "accepted" }, enqueueSequence: null, consumedFingerprint: null });
+    await vi.waitFor(() => expect(f.host.snapshot().operations).toEqual([]));
+    expect(await f.observer.reconcile("operation", "submit")).toMatchObject({ status: "not_accepted", retryable: false });
+    expect(f.observed).not.toHaveBeenCalled();
+  });
   it("persists exact delivered proof and notifies before history or model completion", async () => {
     const f = fixture(); await f.observer.start(); f.reserve();
     const held = f.wire.hold(`/api/session/${f.wire.sessionID}/message`);

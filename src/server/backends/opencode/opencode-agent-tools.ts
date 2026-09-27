@@ -8,10 +8,12 @@ import type { OpenCodeNativePort } from "./opencode-native-port.js";
 import { OpenCodeNativeApi } from "./opencode-native-api.js";
 import type { OpenCodeMcpRequest } from "../../../internal/opencode-mcp/contracts.js";
 import type { OpenCodeHostToolAdmissionResult } from "./opencode-host-agent-tools.js";
+import { acknowledgeOpenCodeMutation } from "./opencode-operation-control.js";
 
 interface Admission { readonly context: OpenCodeDriverContext; readonly input: AttachConversationInput;
   readonly runtime: OpenCodeConversationRuntime; readonly client: OpenCodeNativePort; readonly generation: string;
   readonly owner: AbortController; readonly sourceCapability: string;
+  readonly releaseLease: () => void;
   readonly source: TrustedAgentToolSource; readonly onOwnerLost: () => void;
   host?: OpenCodeHostToolAdmissionResult; diagnostic?: string; }
 
@@ -53,11 +55,11 @@ export class OpenCodeAgentTools {
         if (this.#closed || session.parentID || session.fork || session.location.directory !== input.workspace.canonicalPath) return;
         const onOwnerLost = () => { if (this.#sessions.get(source.sourceThreadId) === admission) this.release(source.sourceThreadId); };
         admission = { context, input, runtime, client: lease.client, generation: lease.generation, owner, source, onOwnerLost,
-          sourceCapability: this.options.sourceCapabilities.issue(source, this.options.sourceCapabilityTransport, "mcp") };
+          releaseLease: lease.release, sourceCapability: this.options.sourceCapabilities.issue(source, this.options.sourceCapabilityTransport, "mcp") };
         this.#sessions.set(source.sourceThreadId, admission);
         lease.client.lifetime.addEventListener("abort", onOwnerLost, { once: true });
       } catch { owner.abort(); return; }
-      finally { lease.release(); }
+      finally { if (!admission) lease.release(); }
     }
     const policy = this.options.facade.readPolicy(source);
     if (!policy.enabled) return;
@@ -71,12 +73,23 @@ export class OpenCodeAgentTools {
       admission.host = await runtime.admitToolSession(openCodeRuntimeTarget(input), {
         sourceCapability: admission.sourceCapability, catalog, ...(cli ? { cli } : {}),
       }, signal);
-      if (policy.presentation.surface === "native" && (JSON.stringify(previousHost?.registrationControl) !== JSON.stringify(admission.host.registrationControl) || admission.diagnostic)) await admission.client.mutate("ensureMcpRegistration", {
-        directory: input.workspace.canonicalPath, registrationAdmissionId: admission.host.registrationAdmissionId,
-      }, admission.host.registrationControl, { signal });
-      if (policy.presentation.surface === "native") await admission.client.acknowledgeMutation("ensureMcpRegistration", admission.host.registrationControl.identity);
+      if (policy.presentation.surface === "native" && JSON.stringify(previousHost?.registrationControl) !== JSON.stringify(admission.host.registrationControl)) {
+        try { await admission.client.mutate("ensureMcpRegistration", {
+          directory: input.workspace.canonicalPath, registrationAdmissionId: admission.host.registrationAdmissionId,
+        }, admission.host.registrationControl, { signal }); }
+        finally {
+          // Registration has host-owned retry/lifetime proof. Release this
+          // attempt on either outcome, and never ACK a cached nondispatch.
+          await acknowledgeOpenCodeMutation(admission.client, "ensureMcpRegistration", admission.host.registrationControl);
+        }
+      }
       admission.diagnostic = undefined;
-    } catch { admission.diagnostic = "Sedes OpenCode tools are unavailable. Conversation controls remain available; retry tool admission on a later message."; }
+    } catch {
+      // A retry receives a fresh host operation identity even when refusal
+      // happened before the registration hook could mark its location failed.
+      runtime.releaseToolSession(openCodeRuntimeTarget(input)); admission.host = undefined;
+      admission.diagnostic = "Sedes OpenCode tools are unavailable. Conversation controls remain available; retry tool admission on a later message.";
+    }
   }
   release(threadId: string): void {
     this.#admissionOwners.get(threadId)?.abort(); this.#admissionOwners.delete(threadId); this.#admitting.delete(threadId);
@@ -86,6 +99,7 @@ export class OpenCodeAgentTools {
     const entry = this.#sessions.get(threadId); if (!entry) return;
     this.#sessions.delete(threadId); entry.client.lifetime.removeEventListener("abort", entry.onOwnerLost); entry.owner.abort();
     entry.runtime.releaseToolSession(openCodeRuntimeTarget(entry.input));
+    entry.releaseLease();
   }
   diagnostic(threadId: string): string | undefined { return this.#sessions.get(threadId)?.diagnostic; }
   cliAdmission(threadId: string): string | null { return this.#sessions.get(threadId)?.host?.cliAdmissionId ?? null; }

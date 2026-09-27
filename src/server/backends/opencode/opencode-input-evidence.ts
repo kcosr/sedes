@@ -131,10 +131,13 @@ export class OpenCodeInputEvidenceRepository {
 
   withdraw(scope: RequestScope, threadId: string, operationId: string, kind: OpenCodeInputKind,
     withdrawal: "cancelled" | "reverted", proof: string): OpenCodeInputEvidence {
-    this.#dispatched(scope, threadId, operationId, kind); digest(proof);
+    const current = this.#dispatched(scope, threadId, operationId, kind); digest(proof);
     this.operations.database.prepare(`UPDATE opencode_input_evidence SET withdrawn_fingerprint=coalesce(withdrawn_fingerprint,?),
       withdrawal_kind=coalesce(withdrawal_kind,?),updated_at=? WHERE tenant_id=? AND owner_principal_id=? AND application_operation_id=? AND operation_kind=?`)
       .run(proof, withdrawal, Date.now(), scope.tenantId, scope.principalId, operationId, kind);
+    // Exact withdrawal proves admission, even if its enqueue event was missed;
+    // it never establishes consumption or acceptance of a submitted turn.
+    this.#acceptAdmission(scope, threadId, current.receipt);
     // Consumption proof is irreversible, including after native revert erases history.
     return this.get(scope, threadId, operationId, kind);
   }

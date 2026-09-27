@@ -5,6 +5,8 @@ import { expect, it, vi } from "vitest";
 import { OpenCodeRuntime } from "../../src/server/backends/opencode/opencode-runtime.js";
 import { OpenCodeNativeMutations } from "../../src/server/backends/opencode/opencode-native-mutations.js";
 import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-native-api.js";
+import { OpenCodeHttpNativeAdapter } from "../../src/server/backends/opencode/opencode-http-native-adapter.js";
+import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
 import * as ownedProcesses from "../../src/server/backends/opencode/opencode-owned-process.js";
 import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
 import type { EnvironmentVariableOverrides } from "../../src/shared/protocol/environment-variables.js";
@@ -50,11 +52,37 @@ it.runIf(RUN_REAL_OPENCODE)("installs complete isolated shell maps with cleanup 
     lease.release(); lease = runtime.acquire(target("ses_environment_a"));
     const secretPath = path.join(root, "thread-secret");
     await writeFile(secretPath, "scoped-secret-canary", { mode: 0o600 });
-    const admission = await runtime.admitToolSession(target("ses_environment_a"), {
-      sourceCapability: "fixture-native-source", catalog: [], cli: { sourceCapability: "exact-thread-canary", mode: "progressive" },
-    });
+    const toolInput = { sourceCapability: "fixture-native-source", catalog: [],
+      cli: { sourceCapability: "exact-thread-canary", mode: "progressive" as const } };
+    let admission = await runtime.admitToolSession(target("ses_environment_a"), toolInput);
+    expect(await runtime.admitToolSession(target("ses_environment_a"), toolInput)).toEqual(admission);
+    lease.release(); expect(lease.client.lifetime.aborted).toBe(false);
+    runtime.releaseToolSession(target("ses_environment_a")); expect(lease.client.lifetime.aborted).toBe(true);
+    lease = runtime.acquire(target("ses_environment_a"));
+    admission = await runtime.admitToolSession(target("ses_environment_a"), toolInput);
     const definitions: EnvironmentVariableOverrides = { REMOVE_ME: { kind: "unset" }, EMPTY: { kind: "literal", value: "" },
       TOKEN: { kind: "secret", source: { kind: "protected_file", path: secretPath } } };
+    const nativeWrite = OpenCodeHttpNativeAdapter.prototype.setEnvironmentVariables;
+    const writing = vi.spyOn(OpenCodeHttpNativeAdapter.prototype, "setEnvironmentVariables");
+    try {
+      const missing: EnvironmentVariableOverrides = { TOKEN: { kind: "secret", source: { kind: "protected_file", path: path.join(root, "missing-secret") } } };
+      await expect(lease.client.mutate("installSessionEnvironment", { sessionID: "ses_environment_a", definitions: missing,
+        definitionFingerprint: configurationFingerprint(missing), cliAdmissionId: null }, openCodeTestMutationControl("missing-secret")))
+        .rejects.toMatchObject({ delivery: "not_sent", code: "opencode_environment_resolution_failed" });
+      await expect(lease.client.mutate("installSessionEnvironment", { sessionID: "ses_environment_a", definitions,
+        definitionFingerprint: configurationFingerprint(definitions), cliAdmissionId: "stale-admission" }, openCodeTestMutationControl("stale-cli")))
+        .rejects.toMatchObject({ delivery: "not_sent" });
+      expect(writing).not.toHaveBeenCalled();
+      writing.mockImplementationOnce(async function (this: OpenCodeHttpNativeAdapter, input, signal) {
+        await nativeWrite.call(this, input, signal);
+        throw new OpenCodeRuntimeError("opencode_request_failed");
+      });
+      await expect(lease.client.mutate("installSessionEnvironment", { sessionID: "ses_environment_a", definitions,
+        definitionFingerprint: configurationFingerprint(definitions), cliAdmissionId: admission.cliAdmissionId }, openCodeTestMutationControl("write-response-lost")))
+        .rejects.toMatchObject({ delivery: "sent_outcome_unknown", code: "opencode_request_failed" });
+      expect(writing).toHaveBeenCalledOnce();
+      expect(await read("ses_environment_a", "unknown-write.json")).toMatchObject({ TOKEN: "scoped-secret-canary" });
+    } finally { writing.mockRestore(); }
     await lease.client.mutate("installSessionEnvironment", { sessionID: "ses_environment_a", definitions,
       definitionFingerprint: configurationFingerprint(definitions), cliAdmissionId: admission.cliAdmissionId }, openCodeTestMutationControl("install"));
     const first = await read("ses_environment_a", "a.json");

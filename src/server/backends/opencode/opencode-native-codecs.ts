@@ -25,7 +25,7 @@ import { OpenCodeRuntimeError } from "./opencode-release.js";
 import { z } from "zod";
 import { environmentVariableOverridesSchema } from "../../../shared/protocol/environment-variables.js";
 import type { OpenCodeNativeFailure, OpenCodeReadMethod, OpenCodeReadInput, OpenCodeReadOutput,
-  OpenCodeMutationMethod, OpenCodeMutationInput, OpenCodeMutationOutput, OpenCodeMutationControl } from "./opencode-native-port.js";
+  OpenCodeMutationMethod, OpenCodeMutationInput, OpenCodeMutationOutput, OpenCodeMutationControl, OpenCodeApplicationOperationIdentity } from "./opencode-native-port.js";
 
 // These encoded native DTOs never cross the provider-private boundary.
 export type OpenCodeNativeMessage = SessionMessageInfo;
@@ -299,11 +299,16 @@ export const openCodeNativeAuthoritySchema = z.strictObject({ tenantId: identity
   executionEnvironmentId: identityPart, backendInstanceId: identityPart, runtimeId: identityPart, nativeGeneration: identityPart,
   directory: directorySchema, session: z.strictObject({ applicationThreadId: identityPart, nativeSessionID: sessionIdSchema,
     bindingFingerprint: identityPart }).optional() });
+export const openCodeApplicationOperationIdentitySchema = z.strictObject({ applicationOperationId: identityPart,
+  operationKind: z.enum(["create", "submit", "steer", "action", "interaction", "interrupt"]) });
+export function parseOpenCodeApplicationOperationIdentity(value: unknown): OpenCodeApplicationOperationIdentity {
+  try { return openCodeApplicationOperationIdentitySchema.parse(snapshotBoundedJson(value, requestLimits)); }
+  catch { throw new OpenCodeNativeMutationInputError(); }
+}
 export const openCodeMutationControlSchema = z.strictObject({ identity: z.discriminatedUnion("origin", [
-  z.strictObject({ origin: z.literal("application"), applicationOperationId: identityPart,
-    operationKind: z.enum(["create", "submit", "steer", "action", "interaction", "interrupt"]), step: identityPart }),
+  openCodeApplicationOperationIdentitySchema.extend({ origin: z.literal("application"), step: identityPart }),
   z.strictObject({ origin: z.literal("host"), operationId: identityPart, step: identityPart }),
-]), deadlineAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) });
+]), deadlineAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable() });
 export function parseOpenCodeMutationControl(value: unknown): OpenCodeMutationControl {
   try { return openCodeMutationControlSchema.parse(snapshotBoundedJson(value, requestLimits)); }
   catch { throw new OpenCodeNativeMutationInputError(); }
@@ -422,6 +427,7 @@ const nativeFailureCodes = [
   "opencode_mutation_acknowledged", "opencode_mutation_admission_closed", "opencode_mutation_deadline_expired",
   "opencode_mutation_retention_full", "opencode_mutation_outcome_unknown", "opencode_mutation_pending", "opencode_mutation_owner_closed",
   "opencode_mutation_wait_cancelled",
+  "opencode_environment_topology_unsupported", "opencode_environment_resolution_failed", "opencode_agent_tools_unavailable",
 ] as const;
 const failureCodeSchema = z.enum(nativeFailureCodes);
 export const openCodeNativeFailureSchema = z.discriminatedUnion("kind", [

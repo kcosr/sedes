@@ -30,6 +30,13 @@ function fixture() {
 }
 
 describe("OpenCode durable private input and mutation evidence", () => {
+  it.each(["cancelled", "reverted"] as const)("records %s admission without inventing enqueue or consumption proof", kind => {
+    const f = fixture(); f.begin(); f.dispatch();
+    expect(f.evidence.withdraw(scope, threadID, "operation", "submit", kind, "a".repeat(64))).toMatchObject({
+      receipt: { disposition: "accepted" }, withdrawalKind: kind, withdrawnFingerprint: "a".repeat(64),
+      preparedPayloadFingerprint: null, enqueueSequence: null, consumedFingerprint: null,
+    });
+  });
   it("tracks native prepared payload separately from immutable original request and consumption", () => {
     const f = fixture(); const prepared = f.begin(); f.dispatch();
     const native = openCodePreparedPayloadFingerprint({ text: "Native hook transformed input", metadata: { prepared: true } });

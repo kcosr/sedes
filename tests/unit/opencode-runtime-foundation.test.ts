@@ -8,6 +8,8 @@ import { admitOpenCodeNativeProfile, admitOpenCodeRelease, openCodeOwnedEnvironm
 import { canonicalOpenCodeStore } from "../../src/server/backends/opencode/opencode-native-identity.js";
 import { createOpenCodeNativeStoreLifecycle } from "../../src/server/backends/opencode/opencode-native-store.js";
 import { OpenCodeRuntime } from "../../src/server/backends/opencode/opencode-runtime.js";
+import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
+import { openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
 
 const roots: string[] = [];
 const servers: Server[] = [];
@@ -160,8 +162,24 @@ describe.skipIf(process.platform !== "linux")("OpenCode native store and externa
       connection: { ownership: "external", channel: { type: "http", url: fixture.endpoint } },
     });
     await runtime.start(); const first = runtime.acquire({ directory: root }); const second = runtime.acquire({ directory: root });
-    first.release(); second.release();
+    first.release(); expect(second.client.lifetime.aborted).toBe(false);
+    second.release(); expect(first.client.lifetime.aborted).toBe(true);
     expect(runtime.snapshot()).toMatchObject({ state: "ready", references: 0 });
+    const bound = runtime.acquire({ directory: root, session: {
+      applicationThreadId: "thread", nativeSessionID: "ses_fixture", bindingFingerprint: "binding",
+    } });
+    const control = openCodeTestMutationControl("external-environment");
+    await expect(bound.client.mutate("installSessionEnvironment", { sessionID: "ses_fixture", definitions: {},
+      definitionFingerprint: configurationFingerprint({}), cliAdmissionId: null }, control))
+      .rejects.toMatchObject({ delivery: "not_sent", code: "opencode_environment_topology_unsupported" });
+    await bound.client.acknowledgeMutation("installSessionEnvironment", control.identity); bound.release();
+    const withoutTools = runtime.acquire({ directory: root, session: {
+      applicationThreadId: "thread", nativeSessionID: "ses_fixture", bindingFingerprint: "binding",
+    } });
+    const register = openCodeTestMutationControl("unavailable-tools");
+    await expect(withoutTools.client.mutate("ensureMcpRegistration", { directory: root, registrationAdmissionId: "missing-admission" }, register))
+      .rejects.toMatchObject({ delivery: "not_sent", code: "opencode_agent_tools_unavailable" });
+    await withoutTools.client.acknowledgeMutation("ensureMcpRegistration", register.identity); withoutTools.release();
     await expect(runtime.stop()).rejects.toThrow("opencode_external_stop_forbidden");
     await rename(store, `${store}.old`); await writeFile(store, "replacement");
     await expect(runtime.assertCurrent()).rejects.toThrow("opencode_runtime_identity_changed");

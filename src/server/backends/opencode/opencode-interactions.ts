@@ -1,4 +1,4 @@
-import { acknowledgeOpenCodeMutation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
+import { acknowledgeOpenCodeTerminalOperation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
 import type { FormDetail, FormInfo, PermissionRequest } from "@opencode/client";
 import { z } from "zod";
 import { interactionResponseInputSchema, type BackendConversationEvent, type DriverInteraction } from "../../../shared/protocol/backend.js";
@@ -139,6 +139,7 @@ export class OpenCodeInteractions {
     const previous = this.#receipt(response.applicationOperationId);
     if (previous) {
       if (previous.requestFingerprint !== fingerprint) throw invalid("The interaction response differs from its reserved operation.");
+      await this.#acknowledgeResponse(response.applicationOperationId);
       if (previous.disposition === "accepted") return;
       if (previous.disposition === "not_applied") throw invalid("This interaction response was not applied.");
       if (previous.disposition !== "prepared") {
@@ -174,7 +175,12 @@ export class OpenCodeInteractions {
     this.#assertOpen(); const response = this.#parseResponse(input); const receipt = this.#receipt(response.applicationOperationId);
     if (!receipt) return { outcome: "not_applied" };
     if (receipt.requestFingerprint !== openCodeOperationFingerprint(response)) throw invalid("The interaction response differs from its reserved operation.");
+    await this.#acknowledgeResponse(response.applicationOperationId);
     return this.#reconcile(receipt, this.#intent(response.applicationOperationId));
+  }
+
+  async #acknowledgeResponse(operationId: string): Promise<void> {
+    await acknowledgeOpenCodeTerminalOperation(this.lease.client, () => this.#receipt(operationId));
   }
 
   close(): void {
@@ -201,7 +207,7 @@ export class OpenCodeInteractions {
     const existing = this.#receipt(operationId);
     // A refreshed gate is not authorization to retry a previously dispatched
     // cancellation, even if its response was lost or native state still says pending.
-    if (existing && existing.disposition !== "prepared") return;
+    if (existing && existing.disposition !== "prepared") { void this.#acknowledgeResponse(operationId); return; }
     const nativeResponse = { kind: "form_cancel" as const, input: result.cancel };
     const intent: Intent = { version: 1, source: "form", nativeId: request.id, requestFingerprint: result.requestFingerprint,
       generation: this.generation, interactionId: `oci_cleanup_${openCodeOperationFingerprint(result.cancel)}`,
@@ -273,8 +279,6 @@ export class OpenCodeInteractions {
           else await this.#native.cancelForm(intent.nativeResponse.input, openCodeOperationControl(receipt, "cancelForm"), this.#signal);
           await this.#assertCurrent();
           this.#outcome(operationId, "accepted", openCodeOperationFingerprint({ kind: "native_response_ack", intent }));
-          const method = intent.nativeResponse.kind === "permission_reply" ? "replyPermission" : intent.nativeResponse.kind === "form_reply" ? "replyForm" : "cancelForm";
-          await acknowledgeOpenCodeMutation(this.lease.client, method, openCodeOperationControl(receipt, method));
           this.#resolveGate(intent.interactionId);
           // Reject may settle several permission requests. Refresh presentation
           // without forging response receipts for those external settlements.
@@ -295,7 +299,10 @@ export class OpenCodeInteractions {
       }
     })();
     this.#operations.set(operationId, { fingerprint, promise: dispatching });
-    try { await dispatching; } finally { if (this.#operations.get(operationId)?.promise === dispatching) this.#operations.delete(operationId); }
+    try { await dispatching; } finally {
+      await this.#acknowledgeResponse(operationId);
+      if (this.#operations.get(operationId)?.promise === dispatching) this.#operations.delete(operationId);
+    }
   }
 
   async #reconcile(receipt: Readonly<OpenCodeOperationReceipt>, intent: Intent): Promise<BackendMutationReconciliation> {
@@ -310,6 +317,7 @@ export class OpenCodeInteractions {
         response.kind === "form_reply" && state.status === "answered" && openCodeOperationFingerprint(state.answer) === openCodeOperationFingerprint(response.input.answer);
       if (!accepted) return { outcome: "unknown" };
       this.#outcome(receipt.applicationOperationId, "accepted", openCodeOperationFingerprint({ kind: "exact_form_terminal", intent, state }));
+      await this.#acknowledgeResponse(receipt.applicationOperationId);
       this.#resolveGate(intent.interactionId); return { outcome: "accepted" };
     } catch { return { outcome: "unknown" }; }
   }

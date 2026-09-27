@@ -58,9 +58,9 @@ describe("OpenCode owner mutation journal", () => {
       .rejects.toMatchObject({ delivery: "not_sent" });
     await expect(journal.mutate(authority, "renameSession", { sessionID: "ses_test", title: "title" }, request, dispatch))
       .rejects.toMatchObject({ delivery: "not_sent" });
-    await expect(journal.mutate(authority, "setModel", model, { ...request, deadlineAt: request.deadlineAt + 1 }, dispatch))
+    await expect(journal.mutate(authority, "setModel", model, { ...request, deadlineAt: request.deadlineAt! + 1 }, dispatch))
       .rejects.toMatchObject({ delivery: "not_sent" });
-    await journal.mutate(authority, "renameSession", { sessionID: "ses_test", title: "title" }, control("operation", "title", request.deadlineAt), dispatch);
+    await journal.mutate(authority, "renameSession", { sessionID: "ses_test", title: "title" }, control("operation", "title", request.deadlineAt!), dispatch);
     expect(dispatch).toHaveBeenCalledTimes(2);
   });
 
@@ -93,22 +93,132 @@ describe("OpenCode owner mutation journal", () => {
     done.resolve(success); await ordinary;
   });
 
-  it("never acknowledges pending work or evicts unacknowledged proof to make room", async () => {
+  it("retains pending proof after a terminal receipt ACK, releasing only after native settlement", async () => {
     const journal = new OpenCodeMutationJournal({ maximumOperations: 1 });
     const done = deferred<typeof success>();
     const request = control();
     const active = journal.mutate(authority, "setModel", model, request, async () => done.promise);
-    expect(() => journal.acknowledge(authority, "setModel", request.identity)).toThrow();
+    journal.acknowledge(authority, "setModel", request.identity);
+    expect(journal.hasRetainedAuthority(authority)).toBe(true);
+    expect(journal.outcome(authority, "setModel", request.identity)).toEqual({ status: "pending" });
     await expect(journal.mutate(authority, "setModel", model, control("second"), async () => success))
       .rejects.toMatchObject({ delivery: "not_sent" });
     done.resolve(success); await active;
-    expect(journal.snapshot().operations).toHaveLength(1);
+    expect(journal.snapshot().operations).toHaveLength(0);
+    expect(journal.hasRetainedAuthority(authority)).toBe(false);
     journal.acknowledge(authority, "setModel", request.identity);
     const dispatch = vi.fn(async () => success);
     await expect(journal.mutate(authority, "setModel", model, request, dispatch)).rejects.toMatchObject({ delivery: "sent_outcome_unknown" });
     expect(dispatch).not.toHaveBeenCalled();
     await journal.mutate(authority, "setModel", model, control("second"), dispatch);
     expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("never evicts settled unacknowledged evidence to admit later work", async () => {
+    const journal = new OpenCodeMutationJournal({ maximumOperations: 1 });
+    const request = control();
+    await journal.mutate(authority, "setModel", model, request, async () => success);
+    await expect(journal.mutate(authority, "setModel", model, control("later"), async () => success))
+      .rejects.toMatchObject({ delivery: "not_sent" });
+    expect(journal.outcome(authority, "setModel", request.identity)).toEqual({ status: "completed", result: success });
+  });
+
+  it("does not invent a deadline for prepared application operations", async () => {
+    vi.useFakeTimers();
+    const journal = new OpenCodeMutationJournal({ concurrency: 1 });
+    const pending = deferred<typeof success>();
+    const first = journal.mutate(authority, "setModel", model, { ...control("first"), deadlineAt: null }, async () => pending.promise);
+    const dispatch = vi.fn(async (_input: typeof model, signal: AbortSignal) => {
+      expect(signal.aborted).toBe(false);
+      return success;
+    });
+    const request = { ...control("later"), deadlineAt: null };
+    const later = journal.mutate(authority, "setModel", model, request, dispatch);
+    await vi.advanceTimersByTimeAsync(120_000);
+    pending.resolve(success); await first; await later;
+    await journal.mutate(authority, "setModel", model, request, dispatch);
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("reclaims repeated terminal failures and notifies scope release only after settlement", async () => {
+    const onReleased = vi.fn();
+    const journal = new OpenCodeMutationJournal({ maximumOperations: 1, maximumControlOperations: 1, onReleased });
+    for (let i = 0; i < 24; i++) {
+      const request = control(`failed-${i}`);
+      await expect(journal.mutate(authority, "cancelInput", { sessionID: "ses_test", inboxID: "msg_pending" }, request,
+        async () => { throw new Error("native failure"); })).rejects.toMatchObject({ delivery: "sent_outcome_unknown" });
+      journal.acknowledge(authority, "cancelInput", request.identity);
+    }
+    expect(onReleased).toHaveBeenCalledTimes(24);
+    expect(journal.snapshot().operations).toHaveLength(0);
+    const done = deferred<{ interrupted: boolean }>();
+    const request = control("stop");
+    const stop = journal.mutate(authority, "interruptSession", { sessionID: "ses_test" }, request, async () => done.promise);
+    journal.acknowledge(authority, "interruptSession", request.identity);
+    expect(onReleased).toHaveBeenCalledTimes(24);
+    done.resolve({ interrupted: true }); await stop;
+    expect(onReleased).toHaveBeenCalledTimes(25);
+  });
+
+  it("retries operation ACK for dynamic withdrawal steps without releasing foreign or pending work early", async () => {
+    const journal = new OpenCodeMutationJournal();
+    const first = control("stop", "interrupt");
+    const second = control("stop", "withdraw-input:msg_one");
+    const third = control("stop", "withdraw-compaction:msg_two");
+    const foreign = { ...authority, principalId: "other" };
+    await journal.mutate(authority, "interruptSession", { sessionID: "ses_test" }, first, async () => ({ interrupted: true }));
+    // Simulate a lost ACK for the first completed substep.
+    await journal.mutate(authority, "cancelInput", { sessionID: "ses_test", inboxID: "msg_one" }, second, async () => success);
+    const done = deferred<typeof success>();
+    const pending = journal.mutate(authority, "cancelInput", { sessionID: "ses_test", inboxID: "msg_two" }, third, async () => done.promise);
+    await journal.mutate(foreign, "setModel", model, first, async () => success);
+    await journal.mutate(authority, "setModel", model, control("other-operation"), async () => success);
+    journal.acknowledgeOperation(authority, { applicationOperationId: "stop", operationKind: "submit" });
+    expect(journal.snapshot().operations).toHaveLength(3);
+    expect(journal.outcome(authority, "cancelInput", third.identity)).toEqual({ status: "pending" });
+    done.resolve(success); await pending;
+    expect(journal.snapshot().operations).toHaveLength(2);
+    expect(journal.outcome(foreign, "setModel", first.identity)).toEqual({ status: "completed", result: success });
+    journal.acknowledgeOperation(authority, { applicationOperationId: "stop", operationKind: "submit" });
+    // Stop may intentionally add another cancellation after native interrupt
+    // acceptance. An ACK releases evidence, never grants or revokes new steps.
+    const later = control("stop", "withdraw-input:msg_later");
+    await journal.mutate(authority, "cancelInput", { sessionID: "ses_test", inboxID: "msg_later" }, later, async () => success);
+    journal.acknowledgeOperation(authority, { applicationOperationId: "stop", operationKind: "submit" });
+    expect(journal.snapshot().operations).toHaveLength(2);
+  });
+
+  it("admits all sixteen control operations while bulk ordinary retention is saturated", async () => {
+    const journal = new OpenCodeMutationJournal({ maximumBytes: 34 * 1_024 * 1_024 });
+    const bulk = deferred<never>();
+    const input = { sessionID: "ses_test", id: "msg_bulk", text: "input", delivery: "queue", resume: true } as const;
+    const ordinary = journal.mutate(authority, "prompt", input, control("ordinary"), async () => bulk.promise);
+    const ordinaryFailure = expect(ordinary).rejects.toMatchObject({ delivery: "sent_outcome_unknown" });
+    await expect(journal.mutate(authority, "prompt", input, control("second"), async () => bulk.promise))
+      .rejects.toMatchObject({ delivery: "not_sent" });
+    const done = deferred<{ interrupted: boolean }>();
+    const controls = Array.from({ length: 16 }, (_, i) => journal.mutate(authority, "interruptSession",
+      { sessionID: "ses_test" }, control(`stop-${i}`), async () => done.promise));
+    expect(journal.snapshot().operations).toHaveLength(17);
+    await expect(journal.mutate(authority, "interruptSession", { sessionID: "ses_test" }, control("overflow"), async () => done.promise))
+      .rejects.toMatchObject({ delivery: "not_sent" });
+    done.resolve({ interrupted: true }); await Promise.all(controls);
+    bulk.reject(new Error("test native completion")); await ordinaryFailure;
+  });
+
+  it("does not revoke queued ordinary reservations when control work uses its extra reserve", async () => {
+    const journal = new OpenCodeMutationJournal({ maximumBytes: 15_000, concurrency: 1 });
+    const firstDone = deferred<typeof success>();
+    const first = journal.mutate(authority, "setModel", model, control("ordinary-first"), async () => firstDone.promise);
+    const nextDispatch = vi.fn(async () => success);
+    const next = journal.mutate(authority, "setModel", model, control("ordinary-next"), nextDispatch);
+    const stopDone = deferred<{ interrupted: boolean }>();
+    const stops = Array.from({ length: 3 }, (_, i) => journal.mutate(authority, "interruptSession",
+      { sessionID: "ses_test" }, control(`stop-reserve-${i}`), async () => stopDone.promise));
+    expect(journal.snapshot().retainedBytes).toBeGreaterThan(15_000);
+    firstDone.resolve(success); await first; await expect(next).resolves.toEqual(success);
+    expect(nextDispatch).toHaveBeenCalledOnce();
+    stopDone.resolve({ interrupted: true }); await Promise.all(stops);
   });
 
   it("keeps scope, runtime and session binding out of another caller's outcome authority", async () => {
@@ -124,7 +234,7 @@ describe("OpenCode owner mutation journal", () => {
   });
 
   it("reserves response capacity before dispatch and leaves independent space for Stop", async () => {
-    const journal = new OpenCodeMutationJournal({ maximumBytes: 40 * 1_024 * 1_024 });
+    const journal = new OpenCodeMutationJournal({ maximumBytes: 10_000 });
     const done = deferred<typeof success>();
     const first = journal.mutate(authority, "setModel", model, control("first"), async () => done.promise);
     const second = vi.fn(async () => success);
@@ -161,6 +271,19 @@ describe("OpenCode owner mutation journal", () => {
       .rejects.toMatchObject({ delivery: "sent_outcome_unknown" });
     expect(JSON.stringify(journal.snapshot())).not.toContain("PRIVATE_NATIVE_SECRET");
     expect(JSON.stringify(journal.outcome(authority, "setModel", request.identity))).not.toContain("PRIVATE_NATIVE_SECRET");
+  });
+
+  it("does not expose mutable receipt authority through administration snapshots", async () => {
+    const journal = new OpenCodeMutationJournal();
+    const request = control();
+    await journal.mutate(authority, "setModel", model, request, async () => success);
+    const snapshot = journal.snapshot();
+    Object.assign(snapshot.operations[0]!.authority.session!, { bindingFingerprint: "changed" });
+    Object.assign(snapshot.operations[0]!.identity, { step: "changed" });
+    expect(journal.outcome(authority, "setModel", request.identity)).toEqual({ status: "completed", result: success });
+    journal.acknowledge(authority, "setModel", request.identity);
+    expect(journal.hasRetainedAuthority(authority)).toBe(false);
+    expect(journal.snapshot().operations).toHaveLength(0);
   });
 });
 

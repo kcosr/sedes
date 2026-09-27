@@ -36,6 +36,23 @@ function textOf(events: SequencedBackendEvent[], kind: "assistant_message" | "re
 }
 
 describe("OpenCode conversation authority and finite discovery", () => {
+  it.each(["replay", "reconcile"] as const)("retries a lost terminal Stop ACK on %s without interrupting again", async mode => {
+    const current = setup(); const acquire = vi.mocked(current.runtime.acquire).getMockImplementation()!;
+    let lose = true;
+    vi.mocked(current.runtime.acquire).mockImplementation(target => {
+      const lease = acquire(target);
+      return { ...lease, client: { ...lease.client, acknowledgeOperation: async identity => {
+        if (lose && identity.operationKind === "interrupt") { lose = false; throw new Error("ACK response lost"); }
+        await lease.client.acknowledgeOperation(identity);
+      } } };
+    });
+    const handle = await current.driver.attach(current.target); cleanup.push(() => handle.close());
+    const input = { applicationOperationId: "lost-terminal-stop-ack", deadlineAt: Date.now() + 30_000 };
+    await handle.interrupt(input); expect(current.host.snapshot().operations).toHaveLength(1);
+    if (mode === "replay") await handle.interrupt(input);
+    else await expect(handle.reconcileInterrupt(input)).resolves.toEqual({ outcome: "accepted" });
+    expect(current.host.snapshot().operations).toEqual([]); expect(current.interrupts()).toHaveLength(1);
+  });
   it("publishes an actionable unavailable CLI diagnostic without replacing ordinary conversation controls", async () => {
     const current = await attached();
     vi.spyOn(current.context.executionEnvironment, "diagnostic").mockReturnValue("Sedes CLI tools are unavailable; messages remain available.");
@@ -74,6 +91,31 @@ describe("OpenCode conversation authority and finite discovery", () => {
     await expect(replacement.interrupt(operation)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
     expect(current.interrupts()).toHaveLength(1);
     await replacement.interrupt({ applicationOperationId: "fresh-stop", deadlineAt: Date.now() + 30_000 });
+    expect(current.interrupts()).toHaveLength(2);
+  });
+  it("reclaims failed Stops beyond the control lane capacity and keeps a fresh Stop deliverable", async () => {
+    const current = await attached(); const route = `/api/session/${current.wire.sessionID}/interrupt`;
+    current.wire.setResponse(route, 500, { error: "native response failed" });
+    for (let index = 0; index < 20; index++) {
+      const operation = { applicationOperationId: `failed-stop-${index}`, deadlineAt: Date.now() + 1_000 };
+      await expect(current.handle.interrupt(operation)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+      expect(await current.handle.reconcileInterrupt(operation)).toEqual({ outcome: "unknown" });
+    }
+    expect(current.host.snapshot().operations).toEqual([]);
+    current.wire.clearResponse(route);
+    await current.handle.interrupt({ applicationOperationId: "working-stop", deadlineAt: Date.now() + 1_000 });
+    expect(current.interrupts()).toHaveLength(21); expect(current.host.snapshot().operations).toEqual([]);
+  });
+  it("defers timed-out Stop receipt release until its native effect settles", async () => {
+    const current = await attached(); const held = current.wire.hold(`/api/session/${current.wire.sessionID}/interrupt`);
+    const operation = { applicationOperationId: "pending-stop", deadlineAt: Date.now() + 100 };
+    const pending = current.handle.interrupt(operation).catch(error => error);
+    await held.entered;
+    expect(await pending).toMatchObject({ crossedSubmissionBoundary: true });
+    expect(await current.handle.reconcileInterrupt(operation)).toEqual({ outcome: "unknown" });
+    held.release();
+    await vi.waitFor(() => expect(current.host.snapshot().operations).toEqual([]));
+    await current.handle.interrupt({ applicationOperationId: "stop-after-timeout", deadlineAt: Date.now() + 1_000 });
     expect(current.interrupts()).toHaveLength(2);
   });
   it("refuses an expired Stop before native mutation and records positive nonapplication", async () => {

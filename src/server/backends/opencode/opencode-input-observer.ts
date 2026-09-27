@@ -1,4 +1,4 @@
-import { acknowledgeOpenCodeMutation, openCodeOperationControl } from "./opencode-operation-control.js";
+import { acknowledgeOpenCodeTerminalOperation, openCodeOperationControl } from "./opencode-operation-control.js";
 import { BackendAgentToolRequestError, type BackendAgentToolAccessDecisionAuthority } from "../../agent-tools/adapters/backend-facade.js";
 import { randomUUID } from "node:crypto";
 import { SessionInbox } from "@opencode/schema/session-inbox";
@@ -134,7 +134,7 @@ export class OpenCodeInputObserver {
     if (!this.#tracked.has(key) && this.#tracked.size >= MAX_INPUTS) throw new OpenCodeNativeProtocolError();
     const tracked = { operationId: receipt.applicationOperationId, kind: receipt.operationKind, inputId: current.receipt.nativeInputId };
     this.#tracked.set(key, tracked); this.#byInput.set(tracked.inputId, tracked);
-    this.#notify(current);
+    this.#acknowledgeTerminal(current); this.#notify(current);
     this.#scheduleRefresh(0);
   }
 
@@ -167,6 +167,11 @@ export class OpenCodeInputObserver {
       if (this.#connected && currentRead === read && read.trackerId === this.#trackerId && !evidence.payloadConflict &&
           read.admissionRevision === (this.#admissionRevisions.get(operationKey(operationId, kind)) ?? 0)) {
         this.#repository.recordTerminalLoss(this.context.scope, this.#threadID, operationId, kind);
+        const receipt = this.#evidence(tracked).receipt;
+        if (receipt.disposition === "dispatched") this.context.repository.recordOutcome(this.context.scope, this.#threadID, operationId, kind, {
+          expected: "dispatched", disposition: "unknown", nativeEvidenceFingerprint: null, now: Date.now(),
+        });
+        this.#proofChanged(this.#evidence(tracked));
         return lost();
       }
     }
@@ -210,8 +215,9 @@ export class OpenCodeInputObserver {
       this.#admit(tracked, item);
       const admitted = this.#evidence(tracked); if (admitted.payloadConflict || admitted.consumedFingerprint) continue;
       await this.#assertCurrent(budget); check();
-      await this.#mutations.cancelInput({ sessionID: this.#sessionID, inboxID: item.id }, openCodeOperationControl({ applicationOperationId, operationKind: "interrupt", deadlineAt, createdAt: 0 }, `withdraw-input:${item.id}`), budget);
-      await acknowledgeOpenCodeMutation(this.lease.client, "cancelInput", openCodeOperationControl({ applicationOperationId, operationKind: "interrupt", deadlineAt, createdAt: 0 }, `withdraw-input:${item.id}`));
+      try { await this.#mutations.cancelInput({ sessionID: this.#sessionID, inboxID: item.id }, openCodeOperationControl({ applicationOperationId, operationKind: "interrupt", deadlineAt, createdAt: 0 }, `withdraw-input:${item.id}`), budget); }
+      finally { await acknowledgeOpenCodeTerminalOperation(this.lease.client,
+        () => this.context.repository.readOperation(this.context.scope, this.#threadID, applicationOperationId, "interrupt")); }
       // A raced delivery or a no-op cancellation remains unresolved until proof.
       void this.#refresh(tracked).catch(() => undefined);
     }
@@ -278,7 +284,11 @@ export class OpenCodeInputObserver {
     this.#notified.add(key);
     safelyNotify(() => this.attach.onSubmissionObserved?.({ backendCorrelation: evidence.receipt.applicationOperationId }));
   }
+  #acknowledgeTerminal(evidence: OpenCodeInputEvidence): void {
+    void acknowledgeOpenCodeTerminalOperation(this.lease.client, () => evidence.receipt);
+  }
   #proofChanged(evidence: OpenCodeInputEvidence): void {
+    this.#acknowledgeTerminal(evidence);
     if (evidence.payloadConflict && evidence.receipt.nativeInputId === this.#currentInput) this.#changeInputAuthority();
     this.#notify(evidence); this.#wake();
     safelyNotify(() => this.options.onProofChanged?.());

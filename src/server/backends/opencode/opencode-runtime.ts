@@ -14,6 +14,7 @@ import { OpenCodeHostAgentTools, type OpenCodeHostToolAdmission, type OpenCodeHo
   type OpenCodeHostToolInvoker, type OpenCodeHostToolTarget } from "./opencode-host-agent-tools.js";
 import type { AgentToolCliAvailability } from "../module.js";
 import { configurationFingerprint } from "../../config/configuration-fingerprint.js";
+import { OpenCodeNativeMutationDeliveryError } from "./opencode-native-codecs.js";
 
 export interface OpenCodeRuntimeAuthority {
   readonly tenantId: string;
@@ -72,6 +73,8 @@ export class OpenCodeRuntime {
   #adapter?: OpenCodeHttpNativeAdapter;
   #host?: OpenCodeNativeHost;
   #tools?: OpenCodeHostAgentTools;
+  readonly #toolScopes = new Map<string, { readonly target: OpenCodeHostToolTarget;
+    readonly host: OpenCodeNativeHost; readonly port: OpenCodeNativePort }>();
   readonly #runtimeId = randomUUID();
   #owned?: OpenCodeOwnedProcess;
   #lease?: OpenCodeNativeStoreLease;
@@ -102,33 +105,58 @@ export class OpenCodeRuntime {
   async admitToolSession(target: OpenCodeHostToolTarget, admission: OpenCodeHostToolAdmission,
     signal?: AbortSignal): Promise<OpenCodeHostToolAdmissionResult> {
     if (!this.#host || !this.#tools) throw new OpenCodeRuntimeError("opencode_runtime_unavailable");
-    this.#host.acquire(target); // Same workspace/session authority as native effects.
-    await this.assertCurrent(signal);
-    return this.#tools.admit(target, admission, signal);
+    const host = this.#host, tools = this.#tools, port = host.acquire(target);
+    let retained = false, admitted = false;
+    try {
+      await this.assertCurrent(signal);
+      const result = await tools.admit(target, admission, signal);
+      admitted = true;
+      signal?.throwIfAborted();
+      if (this.#host !== host || port.lifetime.aborted) throw new OpenCodeRuntimeError("opencode_runtime_unavailable");
+      const key = target.session.applicationThreadId, previous = this.#toolScopes.get(key);
+      this.#toolScopes.set(key, { target: structuredClone(target), host, port }); retained = true;
+      previous?.host.release(previous.port);
+      return result;
+    } finally {
+      if (!retained) { if (admitted) tools.release(target); host.release(port); }
+    }
   }
 
-  releaseToolSession(target: OpenCodeHostToolTarget): void { this.#tools?.release(target); }
+  releaseToolSession(target: OpenCodeHostToolTarget): void {
+    this.#tools?.release(target);
+    const key = target.session.applicationThreadId, scope = this.#toolScopes.get(key);
+    if (!scope || configurationFingerprint(scope.target) !== configurationFingerprint(target)) return;
+    this.#toolScopes.delete(key); scope.host.release(scope.port);
+  }
 
   /** Full-map replacement is resolved and composed only on the execution host. */
   async #installSessionEnvironment(authority: OpenCodeNativeAuthority,
     input: OpenCodeMutationInput<"installSessionEnvironment">, signal: AbortSignal): Promise<void> {
-    if (this.#input.connection.ownership !== "owned" || !this.#owned || !this.#adapter ||
-        this.#state !== "ready" || this.#generation !== authority.nativeGeneration ||
-        authority.session?.nativeSessionID !== input.sessionID) throw new OpenCodeRuntimeError("opencode_environment_topology_unsupported");
-    if (configurationFingerprint(input.definitions) !== input.definitionFingerprint) throw new OpenCodeRuntimeError("opencode_request_authority_mismatch");
-    const owner = this.#owned, adapter = this.#adapter;
-    const session = await adapter.read("getSession", { sessionID: input.sessionID }, signal);
-    if (session.parentID || session.fork || session.location.directory !== authority.directory) throw new OpenCodeRuntimeError("opencode_environment_topology_unsupported");
-    const overrides = await resolveEnvironmentVariables(input.definitions, this.#input.environment);
-    signal.throwIfAborted();
-    const cli = input.cliAdmissionId === null ? undefined : this.#tools?.cliEnvironment(
-      { directory: authority.directory, session: authority.session }, input.cliAdmissionId);
-    if (input.cliAdmissionId !== null && !cli) throw new OpenCodeRuntimeError("opencode_request_authority_mismatch");
-    const merged = mergeResolvedEnvironment(mergeResolvedEnvironment(owner.shellEnvironment, overrides), cli?.generated ?? {});
-    const variables = !cli ? merged : { ...merged,
-      PATH: merged.PATH ? `${cli.executableDirectory}${path.delimiter}${merged.PATH}` : cli.executableDirectory };
-    await this.assertCurrent(signal);
-    if (owner !== this.#owned || adapter !== this.#adapter || this.#generation !== authority.nativeGeneration) throw new OpenCodeRuntimeError("opencode_runtime_identity_changed");
+    let adapter: OpenCodeHttpNativeAdapter, variables: Readonly<Record<string, string>>;
+    try {
+      if (this.#input.connection.ownership !== "owned" || !this.#owned || !this.#adapter ||
+          this.#state !== "ready" || this.#generation !== authority.nativeGeneration ||
+          authority.session?.nativeSessionID !== input.sessionID) throw new OpenCodeRuntimeError("opencode_environment_topology_unsupported");
+      if (configurationFingerprint(input.definitions) !== input.definitionFingerprint) throw new OpenCodeRuntimeError("opencode_request_authority_mismatch");
+      const owner = this.#owned; adapter = this.#adapter;
+      const session = await adapter.read("getSession", { sessionID: input.sessionID }, signal);
+      if (session.parentID || session.fork || session.location.directory !== authority.directory) throw new OpenCodeRuntimeError("opencode_environment_topology_unsupported");
+      const overrides = await resolveEnvironmentVariables(input.definitions, this.#input.environment);
+      signal.throwIfAborted();
+      const cli = input.cliAdmissionId === null ? undefined : this.#tools?.cliEnvironment(
+        { directory: authority.directory, session: authority.session }, input.cliAdmissionId);
+      if (input.cliAdmissionId !== null && !cli) throw new OpenCodeRuntimeError("opencode_request_authority_mismatch");
+      const merged = mergeResolvedEnvironment(mergeResolvedEnvironment(owner.shellEnvironment, overrides), cli?.generated ?? {});
+      variables = !cli ? merged : { ...merged,
+        PATH: merged.PATH ? `${cli.executableDirectory}${path.delimiter}${merged.PATH}` : cli.executableDirectory };
+      await this.assertCurrent(signal);
+      if (owner !== this.#owned || adapter !== this.#adapter || this.#generation !== authority.nativeGeneration) throw new OpenCodeRuntimeError("opencode_runtime_identity_changed");
+    } catch (error) {
+      // No native environment write has been attempted. Keep secret lookup and
+      // topology/admission failures distinguishable from uncertain native PUTs.
+      throw new OpenCodeNativeMutationDeliveryError("not_sent", error instanceof OpenCodeRuntimeError
+        ? error.code : "opencode_environment_resolution_failed");
+    }
     await adapter.setEnvironmentVariables({ sessionID: input.sessionID, variables }, signal);
     await this.assertCurrent(signal);
   }
@@ -186,7 +214,7 @@ export class OpenCodeRuntime {
         assertCurrent: signal => this.assertCurrent(signal),
         installSessionEnvironment: (authority, input, signal) => this.#installSessionEnvironment(authority, input, signal),
         ensureMcpRegistration: async (authority, input, signal) => {
-          if (!this.#tools || !authority.session) throw new OpenCodeRuntimeError("opencode_request_authority_mismatch");
+          if (!this.#tools || !authority.session) throw new OpenCodeNativeMutationDeliveryError("not_sent", "opencode_agent_tools_unavailable");
           await this.#tools.ensureRegistration({ directory: authority.directory, session: authority.session }, input.registrationAdmissionId, signal);
         },
       }, this.#client.lifetime);
@@ -226,11 +254,11 @@ export class OpenCodeRuntime {
 
   acquire(target: OpenCodeRuntimeTarget): OpenCodeRuntimeLease {
     if (this.#stopping || this.#state !== "ready" || !this.#host || !this.#identity || !this.#generation) throw new OpenCodeRuntimeError("opencode_runtime_unavailable");
-    const client = this.#host.acquire(target);
+    const host = this.#host, client = host.acquire(target);
     this.#references += 1;
     let released = false;
     return Object.freeze({ client, identity: this.#identity, generation: this.#generation,
-      release: () => { if (!released) { released = true; this.#references -= 1; } } });
+      release: () => { if (!released) { released = true; this.#references -= 1; host.release(client); } } });
   }
 
   async assertCurrent(signal?: AbortSignal): Promise<void> {
@@ -276,6 +304,8 @@ export class OpenCodeRuntime {
     if (this.#state === "cleanup_unproved" && !this.#owned) throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved");
     this.#host?.close();
     await this.#tools?.close();
+    for (const scope of this.#toolScopes.values()) scope.host.release(scope.port);
+    this.#toolScopes.clear();
     let nativeInterrupts: OpenCodeRuntimeStopResult["nativeInterrupts"] = this.#owned ? "incomplete" : "not_owned";
     if (this.#owned && this.#client && this.#state === "ready") {
       const deadline = AbortSignal.timeout(5_000);

@@ -28,6 +28,7 @@ import { OPENCODE_MCP_WATCHDOG_MS } from "../../../internal/opencode-mcp/contrac
 import { OpenCodeHttpNativeAdapter } from "./opencode-http-native-adapter.js";
 import { OpenCodeMcpIngress, type OpenCodeMcpChannel } from "./opencode-mcp-ingress.js";
 import { BackendAgentToolRequestError } from "../../agent-tools/adapters/backend-facade.js";
+import { OpenCodeNativeMutationDeliveryError } from "./opencode-native-codecs.js";
 
 const admissionSchema = z.strictObject({ sourceCapability: z.string().min(1).max(16_384),
   catalog: z.array(agentToolCatalogSummarySchema).max(256),
@@ -85,9 +86,12 @@ export class OpenCodeHostAgentTools {
   }
 
   async ensureRegistration(target: OpenCodeHostToolTarget, registrationAdmissionId: string, signal?: AbortSignal): Promise<void> {
-    const entry = this.#require(target);
+    let entry: HostSession;
     const location = this.#locations.get(target.directory);
-    if (!location || registrationAdmissionId !== location.admissionId || entry.result.registrationAdmissionId !== registrationAdmissionId) throw denied();
+    try {
+      entry = this.#require(target);
+      if (!location || registrationAdmissionId !== location.admissionId || entry.result.registrationAdmissionId !== registrationAdmissionId) throw denied();
+    } catch { throw new OpenCodeNativeMutationDeliveryError("not_sent", "opencode_agent_tools_unavailable"); }
     if (location.task) return location.task;
     const task = this.#register(entry, location, signal).catch(error => { location.failed = true; throw error; }).finally(() => { if (location.task === task) location.task = undefined; });
     location.task = task; return task;
@@ -137,34 +141,41 @@ export class OpenCodeHostAgentTools {
     return this.options.invoke(entry.admission.sourceCapability, request, AbortSignal.any([signal, entry.owner.signal]));
   }
   async #register(entry: HostSession, location: HostLocation, signal?: AbortSignal): Promise<void> {
-    this.#require(entry.target);
-    if (location.registration && !location.registration.channel.revoked) {
-      try { await location.registration.ready; } catch (error) { if (!location.registration.channel.connected) throw error; }
-      return;
+    let nativeWritePossible = location.registration !== undefined;
+    try {
+      this.#require(entry.target);
+      if (location.registration && !location.registration.channel.revoked) {
+        try { await location.registration.ready; } catch (error) { if (!location.registration.channel.connected) throw error; }
+        return;
+      }
+      if (location.registration) {
+        location.retryAfter = Math.max(location.retryAfter, location.registration.channel.revokedAt! + OPENCODE_MCP_WATCHDOG_MS);
+        location.registration = undefined;
+        // A revoked registration is never overwritten; later admission gets a fresh native name.
+        location.name = registrationName();
+      }
+      if (Date.now() < location.retryAfter || location.admissionCount >= 8 || this.#admissions >= 64) throw denied();
+      const cli = this.options.cli, client = this.options.adapter.client, directory = entry.target.directory;
+      if (!cli || !path.posix.isAbsolute(cli.executableDirectory)) throw denied();
+      const adapter = this.options.adapter;
+      const inventory = await adapter.listMcp(directory, signal);
+      if (inventory.location.directory !== directory || inventory.data.some(item => item.name === location.name)) throw denied();
+      await this.#assertTarget(entry.target, signal); this.#require(entry.target);
+      const channel = await this.#ingress.admit({ catalog: entry.admission.catalog,
+        invoke: (request, signal) => this.#call(directory, request, signal) });
+      try { await this.#assertTarget(entry.target, signal); this.#require(entry.target); }
+      catch (error) { channel.revoke(); throw error; }
+      location.admissionCount++; this.#admissions++;
+      nativeWritePossible = true;
+      const ready = adapter.addMcp({ name: location.name, directory,
+        command: [path.posix.join(cli.executableDirectory, "sedes"), "opencode-mcp"], environment: { ...channel.environment } }, signal);
+      location.registration = { channel, ready };
+      client.lifetime.addEventListener("abort", () => channel.revoke(), { once: true });
+      await ready;
+    } catch (error) {
+      if (!nativeWritePossible) throw new OpenCodeNativeMutationDeliveryError("not_sent", "opencode_agent_tools_unavailable");
+      throw error;
     }
-    if (location.registration) {
-      location.retryAfter = Math.max(location.retryAfter, location.registration.channel.revokedAt! + OPENCODE_MCP_WATCHDOG_MS);
-      location.registration = undefined;
-      // A revoked registration is never overwritten; later admission gets a fresh native name.
-      location.name = registrationName();
-    }
-    if (Date.now() < location.retryAfter || location.admissionCount >= 8 || this.#admissions >= 64) throw denied();
-    const cli = this.options.cli, client = this.options.adapter.client, directory = entry.target.directory;
-    if (!cli || !path.posix.isAbsolute(cli.executableDirectory)) throw denied();
-    const adapter = this.options.adapter;
-    const inventory = await adapter.listMcp(directory, signal);
-    if (inventory.location.directory !== directory || inventory.data.some(item => item.name === location.name)) throw denied();
-    await this.#assertTarget(entry.target, signal); this.#require(entry.target);
-    const channel = await this.#ingress.admit({ catalog: entry.admission.catalog,
-      invoke: (request, signal) => this.#call(directory, request, signal) });
-    try { await this.#assertTarget(entry.target, signal); this.#require(entry.target); }
-    catch (error) { channel.revoke(); throw error; }
-    location.admissionCount++; this.#admissions++;
-    const ready = adapter.addMcp({ name: location.name, directory,
-      command: [path.posix.join(cli.executableDirectory, "sedes"), "opencode-mcp"], environment: { ...channel.environment } }, signal);
-    location.registration = { channel, ready };
-    client.lifetime.addEventListener("abort", () => channel.revoke(), { once: true });
-    await ready;
   }
 }
 function sameTarget(a: OpenCodeHostToolTarget, b: OpenCodeHostToolTarget): boolean {

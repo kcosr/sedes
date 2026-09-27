@@ -4,7 +4,7 @@ import { OpenCodeNativeApi, type OpenCodeNativeEvent } from "../../src/server/ba
 import { OpenCodeNativeLogError, OpenCodeNativeMutationDeliveryError, OpenCodeNativeMutationInputError,
   OpenCodeNativeProtocolError, OpenCodeNativeReadLimitError, OPENCODE_NATIVE_RESULT_BYTES,
   encodeOpenCodeNativeFailure, decodeOpenCodeNativeFailure, parseOpenCodeReadOutput,
-  parseOpenCodeMutationOutput } from "../../src/server/backends/opencode/opencode-native-codecs.js";
+  parseOpenCodeMutationOutput, parseOpenCodeMutationControl } from "../../src/server/backends/opencode/opencode-native-codecs.js";
 import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 import { createOpenCodeNativePortFixture, openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
 
@@ -37,7 +37,7 @@ describe.each([false, true])("OpenCode native port (JSON framed=%s)", framed => 
   it("rejects changed identity input, foreign scope and accessors before native dispatch", async () => {
     const { fixture, port } = setup(framed), control = openCodeTestMutationControl("interrupt");
     await port.mutate("interruptSession", { sessionID: fixture.sessionID }, control);
-    await expect(port.mutate("interruptSession", { sessionID: fixture.sessionID }, { ...control, deadlineAt: control.deadlineAt + 1 })).rejects.toMatchObject({ delivery: "not_sent", code: "opencode_mutation_identity_conflict" });
+    await expect(port.mutate("interruptSession", { sessionID: fixture.sessionID }, { ...control, deadlineAt: control.deadlineAt! + 1 })).rejects.toMatchObject({ delivery: "not_sent", code: "opencode_mutation_identity_conflict" });
     await expect(port.read("getSession", { sessionID: "ses_other" })).rejects.toMatchObject({ code: "opencode_request_authority_mismatch" });
     await expect(port.mutate("interruptSession", { sessionID: "ses_other" }, openCodeTestMutationControl("foreign")))
       .rejects.toMatchObject({ delivery: "not_sent", code: "opencode_request_authority_mismatch" });
@@ -48,6 +48,21 @@ describe.each([false, true])("OpenCode native port (JSON framed=%s)", framed => 
     await expect(port.mutate("interruptSession", input as never, control)).rejects.toBeInstanceOf(OpenCodeNativeMutationInputError);
     expect(getter).not.toHaveBeenCalled();
     expect(fixture.requests).toHaveLength(1);
+  });
+
+  it("acknowledges all exact application substeps without replaying native effects", async () => {
+    const { fixture, port } = setup(framed), control = openCodeTestMutationControl("interrupt");
+    if (control.identity.origin !== "application") throw new Error("application fixture required");
+    const operation = { applicationOperationId: control.identity.applicationOperationId, operationKind: control.identity.operationKind };
+    const later = { ...control, identity: { ...control.identity, step: "later-control" } };
+    await port.mutate("interruptSession", { sessionID: fixture.sessionID }, control);
+    await port.mutate("interruptSession", { sessionID: fixture.sessionID }, later);
+    await expect(port.acknowledgeOperation({ ...operation, step: "unexpected" } as never)).rejects.toThrow();
+    await port.acknowledgeOperation(operation);
+    await port.acknowledgeOperation(operation);
+    for (const attempt of [control, later]) await expect(port.mutate("interruptSession", { sessionID: fixture.sessionID }, attempt))
+      .rejects.toMatchObject({ delivery: "sent_outcome_unknown", code: "opencode_mutation_acknowledged" });
+    expect(fixture.requests).toHaveLength(2);
   });
 
   it("keeps interrupt dispatch independent of a stalled native history read", async () => {
@@ -124,6 +139,9 @@ it("round-trips classified failures without exception text or credential materia
 });
 
 it("uses explicit JSON-safe empty values and validates result scope and aggregate bounds", () => {
+  const control = openCodeTestMutationControl();
+  expect(parseOpenCodeMutationControl({ ...control, deadlineAt: null }).deadlineAt).toBeNull();
+  expect(() => parseOpenCodeMutationControl({ identity: control.identity })).toThrow();
   expect(parseOpenCodeReadOutput("getDefaultModel", { directory: "/workspace" }, null)).toBeNull();
   expect(parseOpenCodeMutationOutput("cancelInput", { sessionID: "ses_fixture", inboxID: "msg_fixture" }, { ok: true })).toEqual({ ok: true });
   expect(() => parseOpenCodeMutationOutput("cancelInput", { sessionID: "ses_fixture", inboxID: "msg_fixture" }, {})).toThrow(OpenCodeNativeProtocolError);

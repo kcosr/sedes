@@ -1,4 +1,5 @@
-import { acknowledgeOpenCodeMutation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
+import { acknowledgeOpenCodeTerminalOperation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
+import type { OpenCodeNativePort } from "./opencode-native-port.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { BackendError, type CreateConversationInput, type CreateConversationResult } from "../contracts.js";
@@ -24,6 +25,7 @@ const CREATE_MARKER = "sedes_create";
 export async function createOpenCodeConversation(context: OpenCodeDriverContext, input: CreateConversationInput): Promise<CreateConversationResult> {
   let crossed = false;
   let receipt: Readonly<OpenCodeOperationReceipt> | undefined;
+  let mutationPort: OpenCodeNativePort | undefined;
   try {
     assertOpenCodeWorkspace(context, input);
     context.executionEnvironment.assertDefinitionSupport(input.scope, input.applicationThreadId);
@@ -47,8 +49,19 @@ export async function createOpenCodeConversation(context: OpenCodeDriverContext,
       opaqueBindingDetail: serializeOpenCodeBindingDetail({ version: 1, tenantId: input.scope.tenantId, principalId: input.scope.principalId,
         backendInstanceId: context.instance.id, connectionProfileId: context.connection.id, executionEnvironmentId: context.connection.executionEnvironmentId,
         canonicalWorkspacePath: input.workspace.canonicalPath, nativeNamespaceKey: context.nativeNamespaceKey, sessionId: id }) };
-    if (receipt.disposition === "accepted") return result;
-    if (receipt.disposition === "not_applied") throw rejected();
+    if (receipt.disposition === "accepted" || receipt.disposition === "not_applied") {
+      // Retry a lost ACK against an already-ready owner without starting one.
+      try {
+        const runtime = await context.runtime();
+        if (runtime.nativeNamespaceKey === context.nativeNamespaceKey && runtime.snapshot().state === "ready") {
+          const lease = runtime.acquire({ directory: input.workspace.canonicalPath });
+          try { await acknowledgeOpenCodeTerminalOperation(lease.client, () => receipt); }
+          finally { lease.release(); }
+        }
+      } catch { /* A retained durable result does not depend on ACK delivery. */ }
+      if (receipt.disposition === "accepted") return result;
+      throw rejected();
+    }
     const budget = AbortSignal.timeout(30_000);
     // Reconciliation is read-only; a changed catalog cannot erase an existing effect.
     if (receipt.disposition === "prepared") {
@@ -60,6 +73,7 @@ export async function createOpenCodeConversation(context: OpenCodeDriverContext,
     if (runtime.nativeNamespaceKey !== context.nativeNamespaceKey) throw rejected();
     await waitOpenCode(runtime.start(), budget);
     const lease = runtime.acquire({ directory: input.workspace.canonicalPath });
+    mutationPort = lease.client;
     try {
       const api = new OpenCodeNativeApi(lease.client);
       const native = new OpenCodeNativeMutations(lease.client);
@@ -76,7 +90,6 @@ export async function createOpenCodeConversation(context: OpenCodeDriverContext,
         } else if (current.disposition !== "dispatched" && current.disposition !== "unknown") throw unknown();
         else if (!context.repository.recordOutcome(input.scope, request.applicationThreadId, request.applicationOperationId, "create",
           { expected: current.disposition, disposition: "accepted", nativeEvidenceFingerprint: evidence, now: Date.now() })) throw unknown();
-        await acknowledgeOpenCodeMutation(lease.client, "createSession", openCodeOperationControl(current, "create-session"));
         return result;
       };
       if (receipt.disposition !== "prepared") return await prove(await api.getSession(id, signal));
@@ -123,6 +136,9 @@ export async function createOpenCodeConversation(context: OpenCodeDriverContext,
     }
     if (error instanceof DomainError || error instanceof z.ZodError || openCodeMutationWasNotSent(error)) throw rejected();
     throw mapOpenCodeConversationError(error);
+  } finally {
+    if (mutationPort) await acknowledgeOpenCodeTerminalOperation(mutationPort,
+      () => context.repository.readOperation(input.scope, input.applicationThreadId, input.applicationOperationId, "create"));
   }
 }
 

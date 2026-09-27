@@ -1,4 +1,4 @@
-import { acknowledgeOpenCodeMutation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
+import { acknowledgeOpenCodeTerminalOperation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import { randomUUID } from "node:crypto";
 import type { BackendCapabilityDocument, BackendConversationEvent, SequencedBackendEvent } from "../../../shared/protocol/backend.js";
@@ -263,6 +263,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     const previous = repository.readOperation(scope, threadId, input.applicationOperationId, "interrupt");
     if (previous) {
       if (previous.requestFingerprint !== fingerprint) throw openCodeUnsupported();
+      await acknowledgeOpenCodeTerminalOperation(this.lease.client, () => previous);
       if (previous.disposition === "accepted") return;
       throw this.#stopUnconfirmed(previous.disposition !== "not_applied");
     }
@@ -291,9 +292,8 @@ export class OpenCodeConversationHandle implements ConversationHandle {
         const acknowledgement = await budget.wait(this.#api.interruptSession(this.binding.backendConversationId, openCodeOperationControl({ ...input, operationKind: "interrupt", createdAt: 0 }, "interrupt"), budget.signal));
         await budget.wait(this.runtime.assertCurrent(budget.signal));
         budget.remainingMilliseconds();
-        repository.recordOutcome(scope, threadId, input.applicationOperationId, "interrupt", { expected: "dispatched",
-          disposition: "accepted", nativeEvidenceFingerprint: openCodeOperationFingerprint(acknowledgement), now: Date.now() });
-        await acknowledgeOpenCodeMutation(this.lease.client, "interruptSession", openCodeOperationControl({ ...input, operationKind: "interrupt", createdAt: 0 }, "interrupt"));
+        if (!repository.recordOutcome(scope, threadId, input.applicationOperationId, "interrupt", { expected: "dispatched",
+          disposition: "accepted", nativeEvidenceFingerprint: openCodeOperationFingerprint(acknowledgement), now: Date.now() })) throw this.#stopUnconfirmed(true);
         // Interrupt leaves native inbox entries intact. Cleanup is bounded by
         // this same Stop deadline, including an acknowledged idle no-op.
         await Promise.allSettled([
@@ -310,8 +310,15 @@ export class OpenCodeConversationHandle implements ConversationHandle {
         repository.recordOutcome(scope, threadId, input.applicationOperationId, "interrupt", {
           expected: current.disposition === "prepared" ? "prepared" : "dispatched", disposition: "not_applied", nativeEvidenceFingerprint: null, now: Date.now(),
         });
+      } else if (current.disposition === "dispatched") {
+        repository.recordOutcome(scope, threadId, input.applicationOperationId, "interrupt", {
+          expected: "dispatched", disposition: "unknown", nativeEvidenceFingerprint: null, now: Date.now(),
+        });
       }
       throw dispatched && !refused ? this.#stopUnconfirmed(true) : mapOpenCodeConversationError(error);
+    } finally {
+      await acknowledgeOpenCodeTerminalOperation(this.lease.client,
+        () => repository.readOperation(scope, threadId, input.applicationOperationId, "interrupt"));
     }
   }
   async reconcileInterrupt(input: InterruptConversationInput): Promise<import("../contracts.js").BackendMutationReconciliation> {
@@ -319,6 +326,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     const receipt = this.context.repository.readOperation(this.input.scope, this.binding.applicationThreadId, input.applicationOperationId, "interrupt");
     if (!receipt) return { outcome: "unknown" };
     if (receipt.requestFingerprint !== openCodeOperationFingerprint({ operationId: input.applicationOperationId, deadlineAt: input.deadlineAt, binding: this.binding })) throw openCodeUnsupported();
+    await acknowledgeOpenCodeTerminalOperation(this.lease.client, () => receipt);
     return { outcome: receipt.disposition === "accepted" ? "accepted" : receipt.disposition === "not_applied" ? "not_applied" : "unknown" };
   }
   #stopUnconfirmed(crossed: boolean): BackendError {

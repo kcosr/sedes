@@ -68,6 +68,15 @@ function fixture() {
 }
 
 describe("OpenCode reserved native conversation creation", () => {
+  it("replays a prepared creation older than sixty seconds", async () => {
+    const current = fixture(), reserve = current.repository.reserveOperation.bind(current.repository);
+    vi.spyOn(current.repository, "reserveOperation").mockImplementation((scope, input, now) => reserve(scope, input, now - 120_000));
+    current.getRuntime.mockRejectedValueOnce(new Error("owner not ready"));
+    await expect(current.driver.create(current.input)).rejects.toThrow();
+    expect(current.receipt()?.disposition).toBe("prepared");
+    await expect(current.driver.create(current.input)).resolves.toMatchObject({ backendConversationId: "ses_reserved" });
+    expect(current.calls.filter(call => call.method === "POST")).toHaveLength(1);
+  });
   it("reserves a bounded native ID and enables the required factory path", () => {
     const current = fixture(); const factory = new OpenCodeBackendDriverFactory({ ...current.creationContext, connections: [current.context.connection] });
     expect(factory.supportsConversationCreation).toBe(true);

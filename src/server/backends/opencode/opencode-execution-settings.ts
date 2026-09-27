@@ -52,6 +52,23 @@ export class OpenCodeExecutionSettings {
   async prepare(operationId: string, kind: "submit" | "steer", signal?: AbortSignal): Promise<{
     readonly snapshot: OpenCodeOperationSettingsSnapshot; readonly catalog: OpenCodeModelCatalogRead;
   }> {
+    const { read, desired, snapshot } = await this.#capture(operationId, kind, signal);
+    if (!sameOpenCodeSelection(read.observed.resolvedSelection, desired)) {
+      if (kind === "steer") throw unavailable("The desired and active OpenCode settings differ. Steering cannot change the active model.");
+      await this.apply(desired, read, openCodeOperationControl(snapshot, "prepare-model"), signal);
+    }
+    return { snapshot, catalog: read.catalog };
+  }
+
+  /** Freeze request identity without issuing writes before an input receipt exists. */
+  async capture(operationId: string, kind: "submit" | "steer", signal?: AbortSignal): Promise<{
+    readonly snapshot: OpenCodeOperationSettingsSnapshot; readonly catalog: OpenCodeModelCatalogRead;
+  }> {
+    const { read, snapshot } = await this.#capture(operationId, kind, signal);
+    return { snapshot, catalog: read.catalog };
+  }
+
+  async #capture(operationId: string, kind: "submit" | "steer", signal?: AbortSignal) {
     const read = await this.observe(signal);
     if (!read.settings.desired) throw unavailable("Choose supported OpenCode settings before sending input.");
     const desired = resolveOpenCodeSelection({ connection: this.context.connection, catalog: read.catalog.catalog,
@@ -63,11 +80,7 @@ export class OpenCodeExecutionSettings {
       operationKind: kind, expectedRevision: read.settings.revision, now: Date.now(),
     });
     if (!sameOpenCodeSelection(snapshot.selection, desired)) throw changed();
-    if (!sameOpenCodeSelection(read.observed.resolvedSelection, desired)) {
-      if (kind === "steer") throw unavailable("The desired and active OpenCode settings differ. Steering cannot change the active model.");
-      await this.apply(desired, read, openCodeOperationControl(snapshot, "prepare-model"), signal);
-    }
-    return { snapshot, catalog: read.catalog };
+    return { read, desired, snapshot };
   }
 
   /** Explicit settings actions may repair custom native state; ordinary work may not. */

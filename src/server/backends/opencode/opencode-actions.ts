@@ -1,4 +1,4 @@
-import { acknowledgeOpenCodeMutation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
+import { acknowledgeOpenCodeTerminalOperation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
 import { z } from "zod";
 import { BackendError, type AttachConversationInput, type BackendActionResult, type BackendMutationReconciliation,
   type RegisteredBackendActionInput } from "../contracts.js";
@@ -30,6 +30,12 @@ export class OpenCodeActions {
     this.#api = new OpenCodeNativeApi(settings.client); this.#native = new OpenCodeNativeMutations(settings.client);
   }
   async perform(input: RegisteredBackendActionInput): Promise<BackendActionResult> {
+    try { return await this.#perform(input); }
+    finally {
+      await acknowledgeOpenCodeTerminalOperation(this.settings.client, () => this.#receipt(input));
+    }
+  }
+  async #perform(input: RegisteredBackendActionInput): Promise<BackendActionResult> {
     requireOpenCodeBinding(this.context, this.input);
     const previous = this.#receipt(input);
     if (previous) {
@@ -114,11 +120,6 @@ export class OpenCodeActions {
         await this.settings.assertCurrent();
       } else await this.settings.apply(payload.selection, read, control("action-model"), undefined, dispatch);
       this.#accept(input.applicationOperationId, payload);
-      const method = payload.kind === "rename" ? "renameSession" : payload.kind === "compact" ? "compact" : "setModel";
-      await acknowledgeOpenCodeMutation(this.settings.client, method, control(payload.kind === "model" ? "action-model" : payload.kind));
-      if (payload.kind === "compact") for (const [method, step] of [["setPermissions", "prepare-permissions"], ["installSessionEnvironment", "install-environment"]] as const) {
-        await acknowledgeOpenCodeMutation(this.settings.client, method, control(step));
-      }
       return { accepted: true };
     } catch (cause) {
       const current = this.#receipt(input);
@@ -129,13 +130,19 @@ export class OpenCodeActions {
         this.context.repository.recordOutcome(scope, binding.applicationThreadId, input.applicationOperationId, "action", {
           expected: current.disposition, disposition: "not_applied", nativeEvidenceFingerprint: null, now: Date.now(),
         });
-      } else if (current && current.disposition !== "not_applied") throw uncertain(cause);
+      } else if (current && current.disposition !== "not_applied") {
+        if (current.disposition === "dispatched") this.context.repository.recordOutcome(scope, binding.applicationThreadId, input.applicationOperationId, "action", {
+          expected: "dispatched", disposition: "unknown", nativeEvidenceFingerprint: null, now: Date.now(),
+        });
+        throw uncertain(cause);
+      }
       throw openCodeMutationWasNotSent(cause) ? notApplied() : mapOpenCodeConversationError(cause);
     }
   }
   async reconcile(input: RegisteredBackendActionInput): Promise<BackendMutationReconciliation> {
     requireOpenCodeBinding(this.context, this.input);
     const receipt = this.#receipt(input);
+    await acknowledgeOpenCodeTerminalOperation(this.settings.client, () => receipt);
     if (!receipt || receipt.disposition === "prepared" || receipt.disposition === "not_applied") return { outcome: "not_applied" };
     if (receipt.disposition === "accepted") return { outcome: "accepted" };
     const payload = this.#payload(input.applicationOperationId);
@@ -150,6 +157,7 @@ export class OpenCodeActions {
       if (!matches) return { outcome: "unknown" };
       await this.settings.assertCurrent();
       this.#accept(input.applicationOperationId, payload);
+      await acknowledgeOpenCodeTerminalOperation(this.settings.client, () => this.#receipt(input));
       return { outcome: "accepted" };
     } catch { return { outcome: "unknown" }; }
   }
@@ -177,8 +185,9 @@ export class OpenCodeActions {
       if (payload.kind !== "compact" || payload.id !== item.id || payload.delivery !== item.delivery) continue;
       await this.settings.assertCurrent(budget); budget.throwIfAborted();
       if (Date.now() >= deadlineAt) throw new DOMException("Stop deadline expired", "TimeoutError");
-      await this.#native.cancelInput({ sessionID: item.sessionID, inboxID: item.id }, openCodeOperationControl({ applicationOperationId, operationKind: "interrupt", deadlineAt, createdAt: 0 }, `withdraw-compaction:${item.id}`), budget);
-      await acknowledgeOpenCodeMutation(this.settings.client, "cancelInput", openCodeOperationControl({ applicationOperationId, operationKind: "interrupt", deadlineAt, createdAt: 0 }, `withdraw-compaction:${item.id}`));
+      try { await this.#native.cancelInput({ sessionID: item.sessionID, inboxID: item.id }, openCodeOperationControl({ applicationOperationId, operationKind: "interrupt", deadlineAt, createdAt: 0 }, `withdraw-compaction:${item.id}`), budget); }
+      finally { await acknowledgeOpenCodeTerminalOperation(this.settings.client,
+        () => this.context.repository.readOperation(this.input.scope, this.input.binding.applicationThreadId, applicationOperationId, "interrupt")); }
       // A 204 is not cancellation proof. The immutable receipt still records
       // admission, and native history remains authority for execution outcome.
     }
