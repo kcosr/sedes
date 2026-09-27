@@ -188,7 +188,8 @@
   color: var(--info);
 }
 
-.flat-row-glyph[data-glyph="unseen"] {
+.flat-row-glyph[data-glyph="unseen"],
+.thread-peek-row-icon[data-glyph="unseen"] {
   color: var(--info);
 }
 
@@ -213,6 +214,21 @@
   --comet-spinner-thickness: 2.2px;
   --comet-spinner-speed: 1s;
   display: block;
+}
+
+/* Background work is quieter than the main turn; both rings share the
+   global reduced-motion guard and preserve the same partial-ring geometry. */
+.flat-row-background-spin {
+  --comet-spinner-speed: 1.8s;
+  color: var(--muted-foreground-2);
+}
+
+.flat-row-background-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--muted-foreground-2);
 }
 
 .flat-row-title {

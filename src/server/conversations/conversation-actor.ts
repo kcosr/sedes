@@ -332,6 +332,11 @@ export class ConversationActor {
     return this.#handleReplacementRequired;
   }
 
+  /** Retained timeline data is not a current liveness observation after failed recovery. */
+  get projectionRecoveryRequired(): boolean {
+    return this.#projectionRecoveryRequired;
+  }
+
   subscribe(listener: ConversationActorListener): Unsubscribe {
     if (!this.#started || this.#closing || this.#closed) {
       throw new Error("conversation_actor_subscription_unavailable");
@@ -1574,6 +1579,8 @@ export class ConversationActor {
 
   #failProjectionRecovery(failure: unknown): never {
     if (!this.#projectionRecoveryRequired) {
+      // Observers of the failure notice must already see the stale boundary.
+      this.#projectionRecoveryRequired = true;
       this.#projectionRecoveryFailureSequence += 1;
       this.#publish({
         type: "backend_event",
@@ -1591,7 +1598,6 @@ export class ConversationActor {
         },
       });
     }
-    this.#projectionRecoveryRequired = true;
     throw failure;
   }
 

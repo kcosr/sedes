@@ -31,6 +31,29 @@ Large groups initially show a bounded recent set, with an expander for older
 rows. An active search shows all matches, and the selected thread remains
 visible.
 
+## Thread activity indicators
+
+Each thread row shows one leading activity indicator. Failures and requests
+for your input or approval take priority. After those, the order is:
+
+1. A blue spinner while the main turn is active.
+2. A blue dot when a turn finished while you were away and you have not
+   acknowledged its completion. The title keeps its slightly heavier weight.
+3. A slower grey spinner while subagents are still working.
+4. A solid grey dot while background commands or other background tasks remain.
+5. The ordinary draft, schedule, inventory, or idle presentation.
+
+Opening the thread acknowledges completion. If background work remains, its
+indicator then appears. Hover the indicator for separate subagent and command
+counts; the thread preview uses the same priority. Reduced-motion preferences
+keep the subagent ring static. Background work alone does not emphasize the
+title or change the thread's input controls.
+
+These observations are supplied by the backend, currently Claude. Sedes hides
+background indicators when their live state is unknown, the runtime is unloaded,
+or the application is reconnecting; absence is not proof that external work
+has stopped.
+
 ## Manage projects
 
 Open **Settings → Projects** to list remembered directories,

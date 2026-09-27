@@ -1240,3 +1240,65 @@ describe("environment name filtering", () => {
     expect(screen.queryByTestId("flat-row-environment")).toBeNull();
   });
 });
+
+describe("background work glyph priority", () => {
+  const backgroundWork = { agents: 2, commands: 1, other: 1 };
+
+  it.each(["failed", "waiting_for_input", "waiting_for_approval", "running", "starting", "stopping", "reconciling"] as const)(
+    "preserves %s ahead of unseen completion and background work",
+    (runState) => {
+      const expected = runState === "failed" ? "failed" : runState.startsWith("waiting") ? "waiting" : "running";
+      expect(flatRowGlyphKind(makeThread({ runState, backgroundWork, attention: attention({ unseenCompletion: true }) }))).toBe(expected);
+    },
+  );
+
+  it.each(["compact", "card"] as const)("reveals agents, then commands, then the normal glyph after acknowledgement in %s rows", (density) => {
+    const thread = makeThread({ backgroundWork, attention: attention({ unseenCompletion: true }) });
+    const view = render(<FlatThreadRow thread={thread} density={density} showBackendBrand={false} />);
+    expect(screen.getByRole("img", { name: "Finished while you were away · 2 subagents, 1 command, 1 other task still running" })).toHaveAttribute("data-glyph", "unseen");
+    expect(view.container.querySelector(".comet-spinner")).toBeNull();
+    expect(view.container.querySelector(".flat-row")).toHaveClass("flat-row-unseen");
+
+    const acknowledged = { ...thread, attention: attention({ unseenCompletion: false }) };
+    view.rerender(<FlatThreadRow thread={acknowledged} density={density} showBackendBrand={false} />);
+    expect(screen.getByRole("img", { name: "Background work · 2 subagents, 1 command, 1 other task" })).toHaveAttribute("data-glyph", "background-agents");
+    expect(view.container.querySelectorAll(".comet-spinner")).toHaveLength(1);
+    expect(view.container.querySelector(".comet-spinner")).toHaveClass("flat-row-background-spin");
+    expect(view.container.querySelector(".flat-row-unseen-dot")).toBeNull();
+    expect(view.container.querySelector(".flat-row")).not.toHaveClass("flat-row-unseen");
+
+    view.rerender(<FlatThreadRow thread={{ ...acknowledged, backgroundWork: { agents: 0, commands: 1, other: 0 } }} density={density} showBackendBrand={false} />);
+    expect(screen.getByRole("img", { name: "Background command running" })).toHaveAttribute("data-glyph", "background-commands");
+    expect(view.container.querySelector(".flat-row-background-dot")).not.toBeNull();
+    expect(view.container.querySelector(".comet-spinner")).toBeNull();
+
+    view.rerender(<FlatThreadRow thread={makeThread()} density={density} showBackendBrand={false} />);
+    expect(view.container.querySelector(".flat-row-glyph")).toBeEmptyDOMElement();
+  });
+
+  it.each([
+    { backingState: "unbound" as const },
+    { inventoryState: "snoozed" as const },
+    { inventoryState: "settled" as const },
+    { automation: makeAutomation() },
+  ])("puts completion and background work ahead of quiet inventory glyphs: %j", (quiet) => {
+    expect(flatRowGlyphKind(makeThread({ ...quiet, backgroundWork, attention: attention({ unseenCompletion: true }) }))).toBe("unseen");
+    expect(flatRowGlyphKind(makeThread({ ...quiet, backgroundWork }))).toBe("background-agents");
+    expect(flatRowGlyphKind(makeThread({ ...quiet, backgroundWork: { agents: 0, commands: 1, other: 0 } }))).toBe("background-commands");
+  });
+
+  it("does not claim agents for other work or claim activity from empty counts", () => {
+    const view = render(<FlatThreadRow thread={makeThread({ backgroundWork: { agents: 0, commands: 0, other: 2 } })} density="compact" showBackendBrand={false} />);
+    expect(screen.getByRole("img", { name: "Background work · 2 other tasks" })).toHaveAttribute("data-glyph", "background-commands");
+    expect(view.container.querySelector(".comet-spinner")).toBeNull();
+    expect(flatRowGlyphKind(makeThread({ backgroundWork: { agents: 0, commands: 0, other: 0 } }))).toBe("idle");
+  });
+
+  it("suppresses stale activity without suppressing unseen completion", () => {
+    expect(flatRowGlyphKind(makeThread({ backgroundWork, runState: "disconnected" }))).toBe("disconnected");
+    const view = render(<FlatThreadRow thread={makeThread({ backgroundWork, attention: attention({ unseenCompletion: true }) })} density="compact" showBackendBrand={false} backgroundWorkCurrent={false} />);
+    expect(screen.getByRole("img", { name: "Finished while you were away" })).toHaveAttribute("data-glyph", "unseen");
+    view.rerender(<FlatThreadRow thread={makeThread({ backgroundWork })} density="compact" showBackendBrand={false} backgroundWorkCurrent={false} />);
+    expect(view.container.querySelector(".flat-row-glyph")).toBeEmptyDOMElement();
+  });
+});

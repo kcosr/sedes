@@ -29,6 +29,7 @@ import {
   normalizedThreadAttentionSchema,
   normalizedThreadAgentToolPolicySchema,
   normalizedApplicationSessionSchema,
+  normalizedApplicationEventSchema,
   normalizedThreadSnapshotSchema,
   MAXIMUM_BACKEND_ITEMS_PER_TURN,
   MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES,
@@ -2326,4 +2327,48 @@ describe("normalized conversation protocol", () => {
       }).success,
     ).toBe(false);
   });
+});
+
+
+describe("application sidebar background-work wire contract", () => {
+  const counts = { active: 1, snoozed: 0, settled: 0, archived: 0 };
+  const backgroundWork = { agents: 2, commands: 1, other: 0 };
+  const backend = { label: { text: "Claude" }, brand: "claude" };
+  const thread = {
+    id: "thread-1", workspaceId: "workspace-1", targetId: "target-1",
+    title: { text: "Thread" }, backend,
+    backingState: "bound", inventoryState: "active", inventoryRevision: 0,
+    threadRevision: 0, runState: "idle", queuedInputCount: 0, available: true,
+    lastActivityAt: "2026-08-04T00:00:00.000Z", stateChangedAt: "2026-08-04T00:00:00.000Z",
+    automation: null, pinned: false, pinRevision: 0,
+    preferredWorktree: null, preferredWorktreeRevision: 0, bookmarkRevision: 0,
+    turnBookmarkCount: 0, groupId: null, groupAssignmentRevision: 0,
+    stashedPromptCount: 0, pendingQuestionCount: 0,
+    terminalSummary: { runningCount: 0, retainedCount: 0 },
+    attention: { wake: false, automationContext: null, unseenCompletion: true, queueFailure: false },
+    backgroundWork,
+  };
+  const snapshot = {
+    environments: [{ id: "environment-1", kind: "local", label: { text: "Local" }, available: true, directoryBrowsing: "available" }],
+    workspaces: [{ id: "workspace-1", environmentId: "environment-1", label: { text: "Workspace" }, displayPath: { text: "/workspace" }, available: true }],
+    executionTargets: [{ id: "target-1", environmentId: "environment-1", label: { text: "Claude" }, backend, available: true, workspaceExecution: { kind: "direct_only" } }],
+    threads: [thread], groups: [], forkOrigins: [], lineagePlacements: [], lineageFamilies: [],
+    advisories: [], defaultNewThreadTargetId: "target-1", counts, tasks: [],
+  };
+  it("carries the same counts through snapshot and thread-upsert events without changing run state", () => {
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(127);
+    expect(normalizedApplicationEventSchema.parse({ type: "snapshot", generation: "generation-1", snapshot }))
+      .toMatchObject({ snapshot: { threads: [{ runState: "idle", backgroundWork }] } });
+    expect(normalizedApplicationEventSchema.parse({ type: "thread_upsert", generation: "generation-1", thread, counts }))
+      .toMatchObject({ thread: { runState: "idle", backgroundWork } });
+    const { backgroundWork: _omitted, ...quiet } = thread;
+    expect(normalizedApplicationEventSchema.safeParse({ type: "thread_upsert", generation: "generation-1", thread: quiet, counts }).success).toBe(true);
+  });
+  it.each([{ agents: -1 }, { commands: 0.1 }, { other: 1_000_001 }, { taskId: "native" }, { state: "unknown" }])(
+    "rejects malformed or provider-private counts in both event shapes %j", (invalid) => {
+      const invalidThread = { ...thread, backgroundWork: { ...backgroundWork, ...invalid } };
+      expect(normalizedApplicationEventSchema.safeParse({ type: "snapshot", generation: "generation-1", snapshot: { ...snapshot, threads: [invalidThread] } }).success).toBe(false);
+      expect(normalizedApplicationEventSchema.safeParse({ type: "thread_upsert", generation: "generation-1", thread: invalidThread, counts }).success).toBe(false);
+    },
+  );
 });

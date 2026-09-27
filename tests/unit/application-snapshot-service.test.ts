@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApplicationThreadDurableSummary } from "../../src/server/application/application-snapshot-service.js";
-import { ApplicationSnapshotService } from "../../src/server/application/application-snapshot-service.js";
+import { ScopedApplicationEventHubs } from "../../src/server/events/application-event-hub.js";
+import type { NormalizedApplicationThreadSummary } from "../../src/shared/protocol/application.js";
+import { ApplicationSnapshotService, ApplicationSnapshotPublicationBoundary } from "../../src/server/application/application-snapshot-service.js";
 import type { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 
@@ -394,4 +396,69 @@ describe("ApplicationSnapshotService", () => {
     expect(snapshot.tasks[0]?.associatedWorkspaceId).toBe(initialWorkspaceId);
     expect(listAssociated).toHaveBeenCalledTimes(1);
   });
+});
+
+
+it("keeps scoped background counts equivalent in full snapshots and incremental upserts", async () => {
+  const durable = thread("background-thread", "workspace-local", "2026-08-04T00:00:00.000Z");
+  durable.backend = { label: { text: "Claude" }, brand: "claude" };
+  let loaded: { runState: "idle"; backgroundWork?: NormalizedApplicationThreadSummary["backgroundWork"] } | undefined;
+  const assertScope = (requested: RequestScope) => expect(requested).toEqual(scope);
+  const inventory = {
+    listEnvironments: () => [{ id: "environment-local", kind: "local", label: "Local", availability: "available", diagnosticCode: null }],
+    listWorkspaces: () => [{ id: "workspace-local", environmentId: "environment-local", canonicalPath: "/workspace", displayName: "Workspace", availability: "available" }],
+    countThreadsByInventoryState: () => ({ active: 1, snoozed: 0, settled: 0, archived: 0 }),
+    isWorkspaceRemoved: () => false,
+  } as unknown as InventoryRepository;
+  const service = new ApplicationSnapshotService(inventory, {
+    forkSelectionSaturated: () => false,
+    structure: () => ({ environmentId: "environment-local", isFork: false, isForkSource: false }),
+    list: (requested) => { assertScope(requested); return [durable]; },
+    listByIds: (requested, ids) => { assertScope(requested); return ids.includes(durable.id) ? [durable] : []; },
+  }, {
+    captureLoadedState: async (requested, id) => { assertScope(requested); expect(id).toBe(durable.id); return loaded; },
+  }, {
+    read: async () => ({ executionTargets: [{ id: "target-local", environmentId: "environment-local", label: { text: "Local" }, backend: { label: { text: "Claude" }, brand: "claude" as const }, workspaceExecution: { kind: "direct_only" as const }, available: true }], defaultTargetId: "target-local" }),
+    requireSelectable: async () => undefined,
+  }, {
+    list: () => ({ forkOrigins: [], lineagePlacements: [], lineageFamilies: [] }),
+  }, {
+    listAssociated: () => [], listAssociatedByThread: () => [], findAssociated: () => undefined,
+  }, { list: () => [] }, () => "available", { summariesByThread: () => new Map() });
+  const boundary = new ApplicationSnapshotPublicationBoundary(service, new ScopedApplicationEventHubs());
+  const hub = boundary.hub(scope);
+  const updates: NormalizedApplicationThreadSummary[] = [];
+  hub.subscribe(({ event }) => { if (event.type === "thread_upsert") updates.push(event.thread); });
+  try {
+    await boundary.checkpoint(scope, hub);
+    for (const counts of [{ agents: 2, commands: 1, other: 0 }, { agents: 0, commands: 2, other: 1 }, undefined]) {
+      loaded = { runState: "idle", ...(counts ? { backgroundWork: counts } : {}) };
+      await boundary.publishThreadChange(scope, durable.id);
+      await boundary.flush();
+      const captured = (await service.capture(scope)).threads[0];
+      expect(updates.at(-1)).toEqual(captured);
+      expect(captured?.backgroundWork).toEqual(counts);
+      expect(captured?.runState).toBe("idle");
+      expect(hub.currentCheckpoint()?.event.snapshot.threads[0]).toEqual(captured);
+    }
+    loaded = { runState: "idle", backgroundWork: { agents: 1, commands: 1, other: 0 } };
+    for (const backingState of ["bound", "unbound", "creating", "creation_unknown"] as const) {
+      durable.backingState = backingState;
+      durable.available = backingState !== "bound";
+      await boundary.publishThreadChange(scope, durable.id);
+      await boundary.flush();
+      const captured = (await service.capture(scope)).threads[0];
+      expect(updates.at(-1)).toEqual(captured);
+      expect(captured?.backgroundWork).toBeUndefined();
+    }
+    durable.backingState = "bound";
+    durable.available = true;
+    loaded = undefined;
+    await boundary.publishThreadChange(scope, durable.id);
+    await boundary.flush();
+    expect(updates.at(-1)?.backgroundWork).toBeUndefined();
+    expect(updates.at(-1)).toEqual((await service.capture(scope)).threads[0]);
+  } finally {
+    await boundary.close();
+  }
 });

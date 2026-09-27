@@ -3992,3 +3992,56 @@ describe("InventorySidebar view modes", () => {
     }
   });
 });
+
+describe("sidebar background work authority", () => {
+  it.each(["project", "time", "state", "none"] as const)("clears stale background glyphs and restores current counts in %s view", (groupBy) => {
+    seedViewPreferences({ groupBy });
+    const threads = [
+      makeThread("agents", "Agent work", { backgroundWork: { agents: 1, commands: 0, other: 0 } }),
+      makeThread("commands", "Command work", { backgroundWork: { agents: 0, commands: 1, other: 0 } }),
+    ];
+    const view = renderSidebar(threads);
+    const current = makeState(threads);
+    expect(view.container.querySelectorAll('[data-glyph="background-agents"]')).toHaveLength(1);
+    expect(view.container.querySelectorAll('[data-glyph="background-commands"]')).toHaveLength(1);
+
+    view.rerenderSidebar({ ...current, connection: "reconnecting" });
+    expect(view.container.querySelector('[data-glyph^="background-"]')).toBeNull();
+    view.rerenderSidebar({ ...current, authoritative: false });
+    expect(view.container.querySelector('[data-glyph^="background-"]')).toBeNull();
+    view.rerenderSidebar(current);
+    expect(view.container.querySelectorAll('[data-glyph="background-agents"]')).toHaveLength(1);
+    expect(view.container.querySelectorAll('[data-glyph="background-commands"]')).toHaveLength(1);
+
+    const completed = threads.map((thread) => ({
+      ...thread,
+      attention: { ...thread.attention, unseenCompletion: true },
+    }));
+    view.rerenderSidebar(makeState(completed));
+    expect(view.container.querySelector('[data-glyph^="background-"]')).toBeNull();
+    expect(screen.getByRole("img", { name: "Finished while you were away · 1 subagent still running" })).toBeVisible();
+    expect(screen.getByRole("img", { name: "Finished while you were away · 1 command still running" })).toBeVisible();
+    view.rerenderSidebar({ ...makeState(completed), authoritative: false });
+    expect(screen.getAllByRole("img", { name: "Finished while you were away" })).toHaveLength(2);
+    view.rerenderSidebar(current);
+    expect(view.container.querySelectorAll('[data-glyph="background-agents"]')).toHaveLength(1);
+    expect(view.container.querySelectorAll('[data-glyph="background-commands"]')).toHaveLength(1);
+  });
+
+  it("clears a visible peek's stale counts when application authority is lost", async () => {
+    vi.useFakeTimers();
+    try {
+      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
+      const threads = [makeThread("agents", "Agent work", { backgroundWork: { agents: 1, commands: 0, other: 0 } })];
+      const view = renderSidebar(threads);
+      fireEvent.pointerEnter(view.container.querySelector('[data-thread-id="agents"]')!, { pointerType: "mouse" });
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      expect(screen.getByTestId("thread-peek")).toHaveTextContent("Waiting for subagent");
+      view.rerenderSidebar({ ...makeState(threads), authoritative: false });
+      expect(screen.getByTestId("thread-peek")).toHaveTextContent("Idle");
+      expect(screen.getByTestId("thread-peek")).not.toHaveTextContent("Waiting for subagent");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

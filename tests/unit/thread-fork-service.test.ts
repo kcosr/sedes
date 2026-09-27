@@ -26,6 +26,7 @@ import { PrincipalAgentToolClientRepository } from "../../src/server/db/reposito
 import { createPrincipalAgentToolClientEligibility } from "../../src/server/conversations/thread-agent-tool-policy-dependencies.js";
 import { DatabaseApplicationThreadSummaryReader } from "../../src/server/application/database-application-summary-reader.js";
 import { DatabaseThreadApplicationRecoveryReader } from "../../src/server/conversations/database-conversation-adapters.js";
+import type { ThreadRuntimeCoordinator } from "../../src/server/events/thread-runtime-coordinator.js";
 import { ThreadForkService } from "../../src/server/conversations/thread-fork-service.js";
 import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
 import { codexBackendTurnId } from "../../src/server/backends/codex/codex-history-projector.js";
@@ -352,9 +353,8 @@ function fixture(withEnvironmentVariables = false) {
   service.bindApplicationSnapshots({
     publishAuthoritativeReplacement,
   } as never);
-  service.bindDescendantRunStates({
-    captureLoadedState: async () => undefined,
-  });
+  const captureLoadedState = vi.fn<ThreadRuntimeCoordinator["captureLoadedState"]>(async () => undefined);
+  service.bindDescendantRunStates({ captureLoadedState });
   const manual = (mutationId = "manual-fork") => ({
     scope,
     sourceThreadId: source.id,
@@ -462,6 +462,7 @@ function fixture(withEnvironmentVariables = false) {
     persistence,
     deliveryInputSnapshots,
     collectOutputArtifactGarbage,
+    captureLoadedState,
     publishAuthoritativeReplacement,
     setBranching(value: Branching) {
       currentBranching = value;
@@ -2078,6 +2079,31 @@ describe("ThreadForkService", () => {
           mutationId: "foreign-placement",
         }),
       ).rejects.toMatchObject({ code: "not_found" });
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("omits volatile background work from cacheable descendant pages without attaching a provider", async () => {
+    const current = fixture();
+    try {
+      const created = await current.service.forkManual(current.manual("background-page-child"));
+      current.captureLoadedState.mockResolvedValue({
+        runState: "idle",
+        backgroundWork: { agents: 2, commands: 1, other: 0 },
+      });
+      const priorAcquisitions = current.actors.acquire.mock.calls.length;
+      const page = await current.service.listDescendants({
+        scope: current.scope,
+        sourceThreadId: current.source.id,
+        pageSize: 10,
+      });
+      expect(page.descendants).toHaveLength(1);
+      expect(page.descendants[0]?.thread.id).toBe(created.childThreadId);
+      expect(page.descendants[0]?.thread.runState).toBe("idle");
+      expect(page.descendants[0]?.thread).not.toHaveProperty("backgroundWork");
+      expect(current.captureLoadedState).toHaveBeenCalledWith(current.scope, created.childThreadId);
+      expect(current.actors.acquire).toHaveBeenCalledTimes(priorAcquisitions);
     } finally {
       current.database.close();
     }

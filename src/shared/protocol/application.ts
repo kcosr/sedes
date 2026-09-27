@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { backgroundActivitySchema } from "./background-activity.js";
 import {
   backendBrandSchema,
   executionWorkspaceNetworkProfileSchema,
@@ -180,6 +181,10 @@ export const normalizedApplicationThreadSummarySchema = z.strictObject({
   ...normalizedThreadSummarySchema.shape,
   /** Opaque copy-only ID from the durable binding; absent before binding. */
   backendSessionId: z.string().min(1).max(128).optional(),
+  /** Confirmed live work from the currently loaded runtime; never persisted. */
+  backgroundWork: backgroundActivitySchema
+    .pick({ agents: true, commands: true, other: true })
+    .optional(),
   terminalSummary: z.strictObject({
     runningCount: safeInventoryCountSchema,
     retainedCount: safeInventoryCountSchema,
@@ -746,7 +751,7 @@ export type ApplicationEventEnvelope = z.infer<
   typeof applicationEventEnvelopeSchema
 >;
 
-export const SEDES_CLIENT_PROTOCOL_VERSION = 126 as const;
+export const SEDES_CLIENT_PROTOCOL_VERSION = 127 as const;
 
 export const normalizedApplicationSessionSchema = z.strictObject({
   clientProtocolVersion: z.literal(SEDES_CLIENT_PROTOCOL_VERSION),

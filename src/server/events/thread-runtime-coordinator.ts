@@ -13,6 +13,7 @@ import type {
   ConversationActor,
   ConversationActorSnapshotState,
 } from "../conversations/conversation-actor.js";
+import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import type { ThreadRunState } from "../../shared/protocol/conversation.js";
 import type {
   NormalizedThreadEvent,
@@ -136,6 +137,8 @@ interface RuntimeEntry {
 }
 
 interface EstablishedRuntime {
+  readonly scope: RequestScope;
+  readonly applicationThreadId: string;
   readonly actor: ConversationActor;
   readonly executionEnvironmentId: string;
   readonly actorRelease: () => void;
@@ -897,7 +900,10 @@ export class ThreadRuntimeCoordinator {
   async captureLoadedState(
     scope: RequestScope,
     applicationThreadId: string,
-  ): Promise<{ readonly runState: ThreadRunState } | undefined> {
+  ): Promise<{
+    readonly runState: ThreadRunState;
+    readonly backgroundWork?: NormalizedApplicationThreadSummary["backgroundWork"];
+  } | undefined> {
     const key = scopedKey(scope, applicationThreadId);
     const entry = this.#entries.get(key);
     if (!entry || entry.eviction) return undefined;
@@ -911,8 +917,28 @@ export class ThreadRuntimeCoordinator {
       // still establishing remotely is not loaded yet; its ready transition
       // will publish the accurate run state later.
       const runtime = entry.runtime;
-      if (!runtime) return undefined;
-      return { runState: runtime.actor.timeline.runState };
+      if (!runtime || runtime.actor.closed || this.#detached.has(runtime)) {
+        return undefined;
+      }
+      const { runState, backgroundActivity } = runtime.actor.timeline;
+      const backgroundWork =
+        entry.applicationOverlayReady &&
+        !runtime.actor.replacementRequired &&
+        !runtime.actor.projectionRecoveryRequired &&
+        runState !== "disconnected" &&
+        runState !== "reconciling" &&
+        backgroundActivity?.state === "known" &&
+        backgroundActivity.agents +
+          backgroundActivity.commands +
+          backgroundActivity.other >
+          0
+          ? {
+              agents: backgroundActivity.agents,
+              commands: backgroundActivity.commands,
+              other: backgroundActivity.other,
+            }
+          : undefined;
+      return { runState, ...(backgroundWork ? { backgroundWork } : {}) };
     } finally {
       this.#release(key, entry);
     }
@@ -1175,7 +1201,11 @@ export class ThreadRuntimeCoordinator {
         bridge,
       );
       const summarySubscription = hub.subscribeInternal(({ event }) => {
-        if (event.type === "snapshot" || event.type === "run_state") {
+        if (
+          event.type === "snapshot" ||
+          event.type === "run_state" ||
+          event.type === "background_activity_changed"
+        ) {
           this.#runtimeStateChanged(scopedKey(scope, applicationThreadId), hub);
         }
         // A replacement snapshot can carry the settled state instead of a
@@ -1205,7 +1235,10 @@ export class ThreadRuntimeCoordinator {
           event.type === "run_state" ||
           event.type === "queue_changed" ||
           event.type === "thread_changed" ||
-          event.type === "attention_changed"
+          event.type === "attention_changed" ||
+          event.type === "background_activity_changed" ||
+          // Projection-recovery failure reports its stale boundary via a notice.
+          event.type === "notice"
         ) {
           try {
             const publication = this.#onThreadChanged?.(
@@ -1233,6 +1266,8 @@ export class ThreadRuntimeCoordinator {
       bridgeReady = true;
       interaction.publishPending();
       runtime = {
+        scope,
+        applicationThreadId,
         actor: acquired.actor,
         executionEnvironmentId: target.binding.executionEnvironmentId,
         actorRelease: acquired.release,
@@ -1558,6 +1593,22 @@ export class ThreadRuntimeCoordinator {
   async #dispose(runtime: EstablishedRuntime): Promise<void> {
     if (this.#detached.has(runtime)) return;
     this.#detached.add(runtime);
+    // Publish after fencing reads, before asynchronous teardown. A late old
+    // generation's cleanup cannot clear a replacement runtime's summary.
+    const entry = this.#entries.get(
+      scopedKey(runtime.scope, runtime.applicationThreadId),
+    );
+    if (!this.#closed && entry?.runtime === runtime) {
+      try {
+        const publication = this.#onThreadChanged?.(
+          runtime.scope,
+          runtime.applicationThreadId,
+        );
+        if (publication) void publication.catch(() => undefined);
+      } catch {
+        // Application bootstrap remains authoritative if the observer fails.
+      }
+    }
     const failures: unknown[] = [];
     try {
       runtime.unsubscribeActorClosed();
