@@ -2828,11 +2828,13 @@ class PiConversationHandle implements ConversationHandle {
       .slice(-viewedImagePagePublicationBudget)
       .reverse()) {
       input.signal?.throwIfAborted();
+      this.#assertOpen();
       await this.#publishViewedImage(this.#viewedImageKey(candidate), () =>
         this.#persistedViewedImagePart(candidate),
       );
     }
     input.signal?.throwIfAborted();
+    this.#assertOpen();
     return selectPiHistoryPage(
       this.#fillViewedImages(projected, pageTurnIds).snapshot,
       this.#session.sessionId,
@@ -3965,6 +3967,14 @@ class PiConversationHandle implements ConversationHandle {
       captureFailure(cause);
     }
     try {
+      // No publication starts after close. Wait for those already started,
+      // which deliver nothing now, before the session and scope are released.
+      await this.#viewedImageBackfill;
+      await Promise.all(this.#viewedImagePublications.values());
+    } catch (cause) {
+      captureFailure(cause);
+    }
+    try {
       this.#projection.close();
     } catch (cause) {
       captureFailure(cause);
@@ -4751,7 +4761,7 @@ class PiConversationHandle implements ConversationHandle {
       .slice(-viewedImageSeedPublicationBudget)
       .reverse()) {
       this.#viewedImageBackfill = this.#viewedImageBackfill.then(async () => {
-        if (this.#closed || !this.#viewedImageTargets.has(key)) return;
+        if (!this.#viewedImageTargets.has(key)) return;
         await this.#publishViewedImage(key, () =>
           this.#persistedViewedImagePart(candidate),
         );
@@ -4782,7 +4792,8 @@ class PiConversationHandle implements ConversationHandle {
 
   /**
    * Publishes one child image, at most once at a time per key, then adds it
-   * to whichever generation currently targets that key. It never rejects.
+   * to whichever generation currently targets that key. It never rejects,
+   * and nothing new starts once the handle is closed.
    */
   #publishViewedImage(
     key: string,
@@ -4790,7 +4801,9 @@ class PiConversationHandle implements ConversationHandle {
   ): Promise<OutputImageArtifactDescriptor | undefined> {
     const active = this.#viewedImagePublications.get(key);
     if (active) return active;
-    if (this.#failedViewedImageKeys.has(key)) return Promise.resolve(undefined);
+    if (this.#closed || this.#failedViewedImageKeys.has(key)) {
+      return Promise.resolve(undefined);
+    }
     const scope = {
       tenantId: this.binding.tenantId,
       principalId: this.binding.ownerPrincipalId,

@@ -967,6 +967,76 @@ describe("Pi viewed-image publication failures", () => {
   });
 });
 
+/** Publishes a persisted read's child up front, as an earlier attachment did. */
+async function prepublish(
+  publisher: OutputArtifactPublisher,
+  sessionId: string,
+  coordinates: { readonly assistantEntryId: string; readonly toolCallId: string },
+) {
+  await publisher.publishImage({
+    scope,
+    threadId: "thread",
+    publicationKey: piViewedImagePublicationKey({ sessionId, ...coordinates, imageIndex: 1 }),
+    mediaType: "image/png",
+    bytes: Buffer.from(pixel, "base64"),
+  });
+}
+
+describe("Pi viewed-image publication and close", () => {
+  it("waits for a started publication, starts no other, and delivers nothing after close", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const driver = driverWith(fixture, recorder.publisher);
+    const conversation = await created(driver, fixture);
+    const manager = await persisted(fixture, conversation.backendConversationId);
+    for (let index = 0; index < 3; index += 1) {
+      appendImageReadTurn(manager, conversation.backendConversationId, index);
+    }
+    recorder.hold();
+    const handle = await driver.attach(conversation.attach);
+    const received: string[] = [];
+    handle.subscribe((event) => received.push(event.type));
+    await vi.waitFor(() => expect(recorder.published).toHaveLength(1));
+
+    let closed = false;
+    const closing = handle.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(closed).toBe(false);
+    recorder.release();
+    await closing;
+    expect(recorder.published).toHaveLength(1);
+    expect(received).toEqual([]);
+  });
+
+  it("stops publishing an older page when the handle closes", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const driver = driverWith(fixture, recorder.publisher);
+    const conversation = await created(driver, fixture);
+    const manager = await persisted(fixture, conversation.backendConversationId);
+    for (let index = 0; index < 13; index += 1) {
+      const coordinates = appendImageReadTurn(manager, conversation.backendConversationId, index);
+      if (index >= 3) {
+        await prepublish(recorder.publisher, conversation.backendConversationId, coordinates);
+      }
+    }
+    const prepublished = recorder.published.length;
+    const handle = await driver.attach(conversation.attach);
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    expect(established.history.previousCursor).toBeDefined();
+    recorder.hold();
+    const page = handle.history({ cursor: established.history.previousCursor!, limit: 20 });
+    await vi.waitFor(() => expect(recorder.published).toHaveLength(prepublished + 1));
+    const closing = handle.close();
+    recorder.release();
+    await expect(page).rejects.toMatchObject({ backendCode: "pi_handle_closed" });
+    await closing;
+    expect(recorder.published).toHaveLength(prepublished + 1);
+  });
+});
+
 describe("Pi viewed images near the per-turn item bound", () => {
   it("opens, reads and pages a turn whose children exceed Pi's item bound", async () => {
     const fixture = await workspace();
