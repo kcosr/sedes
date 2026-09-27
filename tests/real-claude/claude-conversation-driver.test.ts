@@ -1,4 +1,5 @@
 import { type UsageObservation } from "../../src/server/usage/contracts.js";
+import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
 import { claudeResultUserMessageIds } from "../../src/server/backends/claude/claude-result-lifecycle.js";
 import { claudeSteerOperationsMigration } from "../../src/server/db/migrations/102-claude-steer-operations.js";
@@ -313,6 +314,7 @@ describe.sequential("real Claude subscription driver", () => {
       agentToolSourceCapabilities,
       agentTools,
       attachmentProvenanceKey: new Uint8Array(32).fill(0x43),
+      outputArtifacts: createInMemoryOutputArtifactPublisher(),
     });
     let firstHandle:
       | Awaited<ReturnType<ClaudeConversationBackendDriver["attach"]>>

@@ -4034,6 +4034,7 @@ async function main(): Promise<void> {
     permissionPolicy: claudePermissionPolicy,
     modelPolicy: claudeModelPolicy,
     attachmentProvenanceKey: new Uint8Array(32).fill(0x42),
+    outputArtifacts,
     connections: [claudeConnection],
     agentToolCli: {
       availability: "unavailable",

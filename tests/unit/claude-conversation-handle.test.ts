@@ -48,6 +48,10 @@ import { renderTaskContextsForModel } from "../../src/server/conversations/deliv
 import { claudeSkillId } from "../../src/server/backends/claude/claude-skills.js";
 import { parseClaudeTranscript, resolveClaudeSessionMessages } from "../../src/server/backends/claude/claude-native-transcript.js";
 import { ClaudeTranscriptFixture } from "../helpers/claude-native-transcript-fixture.js";
+import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
+import { ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
+import { inspectSupportedRasterImage } from "../../src/server/images/raster-image-inspector.js";
+import type { OutputArtifactPublisher, PublishOutputImageInput } from "../../src/server/output-artifacts/contracts.js";
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const OPERATION_ID = "22222222-2222-4222-8222-222222222222";
@@ -420,6 +424,7 @@ function createHandle(
       axis: "model" | "effort" | "permission",
     ) => void;
     readonly onError?: (error: unknown) => void;
+    readonly outputArtifacts?: import("../../src/server/output-artifacts/contracts.js").OutputArtifactPublisher;
   } = {},
 ) {
   const settings = options.settings ?? repository();
@@ -456,6 +461,7 @@ function createHandle(
       ),
       queryGeneration: 1,
       attachmentProvenanceKey: new Uint8Array(32).fill(0x42),
+      outputArtifacts: options.outputArtifacts ?? createInMemoryOutputArtifactPublisher(),
       settings,
       forkBoundaryAuthentication: {
         installationKey: new Uint8Array(32).fill(7),
@@ -5917,3 +5923,325 @@ describe("Claude compaction, lost processes, and bounded Stop", () => {
 });
 
 const STOP_BOUND = 30_000;
+
+describe("Claude image reads and meta rows", () => {
+  const PROMPT_ID = "b1000000-0000-4000-8000-000000000001";
+  const RESIZE_NOTE = "[Image: original 1440x2400, displayed at 1200x2000. Multiply coordinates by 1.20 to map to original image.]";
+  const submitInput = (text: string) => ({
+    applicationOperationId: PROMPT_ID, mutationId: "mutation-image-read", source: { kind: "user" as const },
+    reconciliationToken: "reconcile-image-read", text, contextExcerpts: [], attachments: [], taskContexts: [],
+  });
+  /** The identity-bearing shape the application compares across live and reload. */
+  const identities = (value: Awaited<ReturnType<typeof projectionSnapshot>>) => value.orderedBackendTurnIds.map(id => ({
+    id, status: value.turnsById[id]!.status,
+    items: value.turnsById[id]!.orderedBackendItemIds.map(itemId => {
+      const { backendItemId, backendTurnId, sourceOrder, semanticKind } = value.itemsById[itemId]!;
+      return { backendItemId, backendTurnId, sourceOrder, semanticKind };
+    }),
+  }));
+  const kinds = (value: Awaited<ReturnType<typeof projectionSnapshot>>, turnId: string) =>
+    value.turnsById[turnId]!.orderedBackendItemIds.map(id => value.itemsById[id]!.semanticKind);
+  /** Provider history for a transcript, read the way Sedes reads it. */
+  const history = async (transcript: ClaudeTranscriptFixture) =>
+    (await resolveClaudeSessionMessages(await parseClaudeTranscript(
+      Buffer.from(transcript.jsonl().replaceAll(transcript.sessionId, SESSION_ID)))))
+      .map(message => ({ ...message, parent_agent_id: null }));
+  /** A transcript row as Claude streams it live; meta rows arrive synthetic. */
+  const live = (transcript: ClaudeTranscriptFixture, uuid: string) => {
+    const row = transcript.rows.find(candidate => candidate.uuid === uuid)!;
+    return { type: row.type, uuid, session_id: SESSION_ID, parent_tool_use_id: null, message: row.message,
+      ...(row.isMeta === true ? { isSynthetic: true } : {}) } as unknown as SDKMessage;
+  };
+  const messageId = (transcript: ClaudeTranscriptFixture, uuid: string) =>
+    String((transcript.rows.find(candidate => candidate.uuid === uuid)!.message as { id: string }).id);
+
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0, 0, 0, 2, 0, 0, 0, 3]);
+  const GIF = Buffer.from("GIF89a\x04\x00\x05\x00", "latin1");
+  /**
+   * The shared publisher's contract over process memory: it validates the
+   * declared media type against the bytes and records every call.
+   */
+  function recordingPublisher() {
+    const retained = createInMemoryOutputArtifactPublisher();
+    const published: PublishOutputImageInput[] = [];
+    const lookups: string[] = [];
+    const publisher: OutputArtifactPublisher = {
+      findImage: (scope, threadId, key) => {
+        lookups.push(key);
+        return retained.findImage(scope, threadId, key);
+      },
+      publishImage: async (input) => {
+        published.push(input);
+        if (inspectSupportedRasterImage(input.bytes)?.mediaType !== input.mediaType) {
+          throw new Error("output_image_invalid");
+        }
+        return await retained.publishImage(input);
+      },
+    };
+    return { publisher, published, lookups };
+  }
+  const readCall = (transcript: ClaudeTranscriptFixture, filePaths: readonly string[], messageIdentity?: string) =>
+    transcript.reply(filePaths.map((filePath, index) => ({ type: "tool_use", id: `toolu-${index}-${filePath.split("/").at(-1)}`,
+      name: "Read", input: { file_path: filePath } })), { stopReason: "tool_use", ...(messageIdentity ? { messageId: messageIdentity } : {}) });
+  const toolUseId = (transcript: ClaudeTranscriptFixture, uuid: string) =>
+    ((transcript.rows.find(candidate => candidate.uuid === uuid)!.message as { content: { id: string }[] }).content[0]!).id;
+  const viewedAndImages = (value: Awaited<ReturnType<typeof projectionSnapshot>>, turnId: string) =>
+    value.turnsById[turnId]!.orderedBackendItemIds.map(id => value.itemsById[id]!).flatMap(item =>
+      item.semanticKind === "viewed_image" ? [["viewed_image", item.status, item.fileName?.text, item.sourceOrder]]
+        : item.semanticKind === "image" && item.image.representation === "artifact"
+          ? [["image", item.origin, item.image.fileName?.text, item.sourceOrder, item.image.mimeType, item.image.byteSize]]
+          : []);
+
+  /** A local turn this attachment submitted, which Claude has started. */
+  async function startedTurn(options: Parameters<typeof createHandle>[2] = {}) {
+    const provider = fixture();
+    const created = createHandle(provider, vi.fn(), options);
+    const established = await created.handle.establishProjection({ signal: new AbortController().signal });
+    const events: import("../../src/shared/protocol/backend.js").SequencedBackendEvent[] = [];
+    // The shared projector applies every event; it must never need a resnapshot.
+    const application = {
+      projector: new ConversationProjector({ backendInstanceId: BINDING.backendInstanceId, bindingIdentity: BINDING.applicationThreadId }),
+      rejected: [] as unknown[],
+    };
+    application.projector.replace(established.snapshot, established.handleSequence);
+    established.subscribeFromNext(event => {
+      events.push(event);
+      const applied = application.projector.apply(event);
+      if (applied.kind === "resnapshot_required") application.rejected.push([event.event.type, applied.reason]);
+    });
+    const submitted = created.handle.submit(submitInput("Look at the screenshot"));
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.lifecycle(PROMPT_ID, "started"));
+    await submitted;
+    const turnId = (await projectionSnapshot(created.handle)).activeBackendTurnId!;
+    return { ...created, provider, events, application, turnId };
+  }
+
+  it("omits a synthetic meta row live, as provider history does, instead of opening a turn", async () => {
+    const transcript = new ClaudeTranscriptFixture();
+    transcript.prompt("Look at the screenshot", { uuid: PROMPT_ID });
+    const [call] = transcript.reply([{ type: "tool_use", id: "toolu-notes", name: "Read",
+      input: { file_path: "/workspace/notes.txt" } }], { stopReason: "tool_use" });
+    const resultRow = transcript.toolResult("toolu-notes", call!, "notes");
+    const note = transcript.companion(RESIZE_NOTE);
+    const answer = transcript.answer("The notes are short.");
+    const reloadedMessages = await history(transcript);
+    expect(reloadedMessages.some(message => message.uuid === note)).toBe(false);
+
+    const { handle, settings, provider, events, application, turnId } = await startedTurn();
+    provider.messages.push(live(transcript, call!));
+    provider.messages.push(live(transcript, resultRow));
+    provider.messages.push(live(transcript, note));
+    provider.messages.push(nativeFrames.start(messageId(transcript, answer)));
+    provider.messages.push(live(transcript, answer));
+    provider.messages.push(nativeFrames.result([PROMPT_ID]));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    const liveSnapshot = await projectionSnapshot(handle);
+    expect(liveSnapshot.orderedBackendTurnIds).toEqual([turnId]);
+    expect(kinds(liveSnapshot, turnId)).toEqual(["user_message", "file_read", "assistant_message"]);
+    expect(JSON.stringify(liveSnapshot)).not.toContain("displayed at");
+    expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
+    expect(application.rejected).toEqual([]);
+    await handle.close();
+
+    const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: reloadedMessages, resumeSession: true }).handle;
+    expect(identities(await projectionSnapshot(reloaded))).toEqual(identities(liveSnapshot));
+    await reloaded.close();
+  });
+
+  it("shows a read's image with its completion in one delta, as reload does, without re-publishing", async () => {
+    const transcript = new ClaudeTranscriptFixture();
+    transcript.prompt("Look at the screenshot", { uuid: PROMPT_ID });
+    const [call] = readCall(transcript, ["/home/someone/project/shots/Settings.PNG"]);
+    const resultRow = transcript.imageResult(toolUseId(transcript, call!), call!, { data: PNG.toString("base64"), mediaType: "image/png" });
+    const note = transcript.companion(RESIZE_NOTE);
+    const answer = transcript.answer("The settings page is shown.");
+    const { publisher, published, lookups } = recordingPublisher();
+
+    const { handle, settings, provider, events, application, turnId } = await startedTurn({ outputArtifacts: publisher });
+    provider.messages.push(live(transcript, call!));
+    await vi.waitFor(async () => expect(viewedAndImages(await projectionSnapshot(handle), turnId))
+      .toEqual([["viewed_image", "streaming", "Settings.PNG", 2]]));
+    provider.messages.push(live(transcript, resultRow));
+    provider.messages.push(live(transcript, note));
+    provider.messages.push(nativeFrames.start(messageId(transcript, answer)));
+    provider.messages.push(live(transcript, answer));
+    provider.messages.push(nativeFrames.result([PROMPT_ID]));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    const liveSnapshot = await projectionSnapshot(handle);
+    expect(kinds(liveSnapshot, turnId)).toEqual(["user_message", "viewed_image", "image", "assistant_message"]);
+    expect(viewedAndImages(liveSnapshot, turnId)).toEqual([
+      ["viewed_image", "completed", "Settings.PNG", 2],
+      ["image", { kind: "viewed", capture: "provider_input" }, "Settings.PNG", 3, "image/png", PNG.byteLength],
+    ]);
+    // The read settles and its image appears in one delta, before the turn
+    // update and the usage report that end it.
+    const delta = events.map(({ event }) => "item" in event && event.item ? `${event.type}:${event.item.semanticKind}` : event.type);
+    const settled = delta.indexOf("item_completed:viewed_image");
+    expect(delta.slice(settled, settled + 4)).toEqual(["item_completed:viewed_image", "item_completed:image", "turn_updated",
+      "usage_changed"]);
+    expect(delta.filter(type => type.endsWith(":viewed_image"))).toEqual(["item_started:viewed_image", "item_completed:viewed_image"]);
+    expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
+    expect(application.rejected).toEqual([]);
+    const applicationTurn = application.projector.timeline().turnsById[Object.keys(application.projector.timeline().turnsById).at(-1)!]!;
+    expect(applicationTurn.orderedItemIds.map(id => application.projector.timeline().itemsById[id]!.kind))
+      .toEqual(["user_message", "viewed_image", "image", "assistant_message"]);
+    expect(JSON.stringify(liveSnapshot)).not.toContain("/home/someone");
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({ threadId: BINDING.applicationThreadId, mediaType: "image/png",
+      scope: { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId } });
+    expect(Buffer.from(published[0]!.bytes)).toEqual(PNG);
+    // Later messages and reads reproject from the handle's cache.
+    const lookupsAfterLive = lookups.length;
+    await handle.history({ limit: 10 });
+    await projectionSnapshot(handle);
+    expect(published).toHaveLength(1);
+    expect(lookups).toHaveLength(lookupsAfterLive);
+    await handle.close();
+
+    // Reload trusts the retained association: nothing is decoded or published.
+    const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: await history(transcript),
+      resumeSession: true, outputArtifacts: publisher }).handle;
+    const reloadedSnapshot = await projectionSnapshot(reloaded);
+    expect(identities(reloadedSnapshot)).toEqual(identities(liveSnapshot));
+    expect(reloadedSnapshot.itemsById).toEqual(liveSnapshot.itemsById);
+    expect(published).toHaveLength(1);
+    await reloaded.close();
+  });
+
+  it("pairs parallel reads in one message with their own images live and on reload", async () => {
+    const transcript = new ClaudeTranscriptFixture();
+    transcript.prompt("Look at the screenshot", { uuid: PROMPT_ID });
+    const [first, second] = readCall(transcript, ["/workspace/before.png", "/workspace/after.gif"], "msg_parallel_reads");
+    // Claude Code writes the second call's result first, then the first's.
+    const secondResult = transcript.imageResult(toolUseId(transcript, second!), second!, { data: GIF.toString("base64"), mediaType: "image/gif" });
+    const firstResult = transcript.imageResult(toolUseId(transcript, first!), first!, { data: PNG.toString("base64"), mediaType: "image/png" });
+    const answer = transcript.from(firstResult).answer("The layout changed.");
+    const { publisher, published } = recordingPublisher();
+
+    const { handle, settings, provider, events, application, turnId } = await startedTurn({ outputArtifacts: publisher });
+    for (const uuid of [first!, second!, secondResult, firstResult]) provider.messages.push(live(transcript, uuid));
+    provider.messages.push(nativeFrames.start(messageId(transcript, answer)));
+    provider.messages.push(live(transcript, answer));
+    provider.messages.push(nativeFrames.result([PROMPT_ID]));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    const liveSnapshot = await projectionSnapshot(handle);
+    expect(viewedAndImages(liveSnapshot, turnId)).toEqual([
+      ["viewed_image", "completed", "before.png", 2],
+      ["image", { kind: "viewed", capture: "provider_input" }, "before.png", 3, "image/png", PNG.byteLength],
+      ["viewed_image", "completed", "after.gif", 4],
+      ["image", { kind: "viewed", capture: "provider_input" }, "after.gif", 5, "image/gif", GIF.byteLength],
+    ]);
+    expect(published.map(({ mediaType }) => mediaType)).toEqual(["image/gif", "image/png"]);
+    expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
+    expect(application.rejected).toEqual([]);
+    const timeline = application.projector.timeline();
+    const applicationTurn = timeline.turnsById[timeline.orderedTurnIds.at(-1)!]!;
+    expect(applicationTurn.orderedItemIds.map(id => timeline.itemsById[id]!).map(item =>
+      item.kind === "viewed_image" ? `viewed:${item.fileName?.text}` : item.kind === "image" && item.image.representation === "artifact"
+        ? `image:${item.image.fileName?.text}` : item.kind)).toEqual([
+      "user_message", "viewed:before.png", "image:before.png", "viewed:after.gif", "image:after.gif", "assistant_message"]);
+    await handle.close();
+
+    const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: await history(transcript),
+      resumeSession: true, outputArtifacts: publisher }).handle;
+    const reloadedSnapshot = await projectionSnapshot(reloaded);
+    expect(identities(reloadedSnapshot)).toEqual(identities(liveSnapshot));
+    expect(reloadedSnapshot.itemsById).toEqual(liveSnapshot.itemsById);
+    await reloaded.close();
+  });
+
+  it("settles failed, text, and unstorable reads without an image and retries none of them", async () => {
+    const transcript = new ClaudeTranscriptFixture();
+    transcript.prompt("Look at the screenshot", { uuid: PROMPT_ID });
+    const [missing] = readCall(transcript, ["/home/someone/private/missing.png"]);
+    const missingResult = transcript.from(missing!).toolResult(toolUseId(transcript, missing!), missing!, "placeholder");
+    // Claude Code's error text names the absolute path.
+    const missingRow = transcript.rows.find(row => row.uuid === missingResult)!;
+    (missingRow.message as { content: Record<string, unknown>[] }).content[0] = { type: "tool_result",
+      tool_use_id: toolUseId(transcript, missing!), is_error: true,
+      content: "File does not exist. Note: your current working directory is /home/someone/private." };
+    const [texted] = readCall(transcript, ["/workspace/diagram.webp"]);
+    const textResult = transcript.toolResult(toolUseId(transcript, texted!), texted!, "The image could not be sent.");
+    const [invalid] = readCall(transcript, ["/workspace/corrupt.jpg"]);
+    const invalidResult = transcript.imageResult(toolUseId(transcript, invalid!), invalid!,
+      { data: Buffer.from("not an image").toString("base64"), mediaType: "image/jpeg" });
+    const answer = transcript.answer("Only failures.");
+    const { publisher, published } = recordingPublisher();
+
+    const { handle, provider, events, application, turnId } = await startedTurn({ outputArtifacts: publisher });
+    for (const uuid of [missing!, missingResult, texted!, textResult, invalid!, invalidResult]) {
+      provider.messages.push(live(transcript, uuid));
+    }
+    provider.messages.push(nativeFrames.start(messageId(transcript, answer)));
+    provider.messages.push(live(transcript, answer));
+    provider.messages.push(nativeFrames.result([PROMPT_ID]));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    const liveSnapshot = await projectionSnapshot(handle);
+    expect(viewedAndImages(liveSnapshot, turnId)).toEqual([
+      ["viewed_image", "failed", "missing.png", 2],
+      ["viewed_image", "completed", "diagram.webp", 4],
+      ["viewed_image", "completed", "corrupt.jpg", 6],
+    ]);
+    const failed = Object.values(liveSnapshot.itemsById).find(item => item.status === "failed")!;
+    expect(failed.error).toEqual({ category: "unavailable", message: { text: "Claude could not read this image." },
+      code: "claude_image_read_failed" });
+    expect(JSON.stringify(liveSnapshot)).not.toContain("/home/someone");
+    // The invalid image was offered once; later messages and reads do not retry it.
+    expect(published).toHaveLength(1);
+    await handle.history({ limit: 10 });
+    expect(published).toHaveLength(1);
+    expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
+    expect(application.rejected).toEqual([]);
+    await handle.close();
+  });
+
+  it("publishes the reads in the first snapshot, a history page, and a located turn when first opened", async () => {
+    const transcript = new ClaudeTranscriptFixture();
+    const turn = (index: number, fileName: string) => {
+      const [call] = readCall(transcript, [`/workspace/${fileName}`]);
+      transcript.imageResult(toolUseId(transcript, call!), call!, { data: PNG.toString("base64"), mediaType: "image/png" });
+      transcript.answer(`Seen ${index}.`);
+    };
+    transcript.prompt("First look");
+    turn(0, "oldest.png");
+    for (let index = 1; index <= 11; index += 1) {
+      transcript.prompt(`Look ${index}`);
+      transcript.answer(`Answer ${index}.`);
+    }
+    transcript.prompt("Latest look");
+    turn(12, "latest.png");
+    const { publisher, published } = recordingPublisher();
+    const { handle } = createHandle(fixture(), vi.fn(), { initialMessages: await history(transcript), resumeSession: true,
+      outputArtifacts: publisher });
+    const initial = await projectionSnapshot(handle);
+    const latestTurn = initial.orderedBackendTurnIds.at(-1)!;
+    expect(viewedAndImages(initial, latestTurn).map(([kind, , fileName]) => [kind, fileName]))
+      .toEqual([["viewed_image", "latest.png"], ["image", "latest.png"]]);
+    expect(published).toHaveLength(1);
+
+    const oldest = await handle.history({ limit: 1, cursor: (await handle.establishProjection({
+      signal: new AbortController().signal })).history.previousCursor! });
+    expect(published).toHaveLength(1);
+    const all = await handle.history({ limit: 20 });
+    const oldestTurn = all.orderedBackendTurnIds[0]!;
+    expect(Object.values(all.itemsById).filter(item => item.semanticKind === "image")).toHaveLength(2);
+    expect(published).toHaveLength(2);
+    expect(oldest.orderedBackendTurnIds).not.toContain(oldestTurn);
+    await handle.close();
+
+    const { publisher: freshPublisher, published: freshPublished } = recordingPublisher();
+    const reopened = createHandle(fixture(), vi.fn(), { initialMessages: await history(transcript), resumeSession: true,
+      outputArtifacts: freshPublisher }).handle;
+    await projectionSnapshot(reopened);
+    const located = await reopened.locateTurn({ maximumTurnCandidates: 20,
+      matchesBackendTurnId: (candidate) => candidate === oldestTurn });
+    if (located.status !== "found") throw new Error("expected located turn");
+    expect(Object.keys(located)).toEqual(["status", "page"]);
+    expect(Object.values(located.page.itemsById).filter(item => item.semanticKind === "image")).toHaveLength(1);
+    expect(freshPublished).toHaveLength(2);
+    await reopened.close();
+  });
+});

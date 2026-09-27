@@ -297,6 +297,8 @@ The Claude backend can:
 - use positively classified nonterminal skills;
 - deliver ordinary text, immutable context excerpts, structured Task
   references, staged files, and native PNG, JPEG, GIF, and WebP image input;
+- show the image Claude received when it reads a PNG, JPEG, GIF, or WebP file
+  with its built-in Read tool;
 - use Tasks, Saved Agents, and eligible automations;
 - expose eligible Sedes agent tools in Progressive or Individual mode through
   the generated local CLI or admitted SSH/outbound sidecar CLI relay;
@@ -308,6 +310,16 @@ Ordinary staged files are provided to Claude as authenticated paths, not
 inlined contents; ask Claude to read the staged path. Recognized images use a
 separate validated SDK image-block path and remain available as staged read-only
 files. Native image input does not imply provider-output image artifacts.
+
+When Claude's built-in Read tool opens a `.png`, `.jpg`, `.jpeg`, `.gif`, or
+`.webp` file (in any letter case), the thread shows a viewed-image row named
+after the file instead of a file-read card. It expands to the exact image
+Claude received, which may be a resized copy of the file. Sedes stores that
+image with the thread, so it stays available after the file changes or
+disappears, and a fork or import stores its own copy. A read that failed shows
+as failed without Claude's error text. A read Claude answered with text, or
+whose image Sedes cannot validate or store, shows no image. Images from MCP or
+other tools, and reads inside subagents, are not shown.
 
 Steer sends input at Claude’s next native opportunity, including during active
 work, using conversation-scoped delivery. It may join the current turn

@@ -24,6 +24,7 @@ import type {
 } from "./claude-runtime-installation-advisories.js";
 
 import type { UsageSink } from "../../usage/contracts.js";
+import type { OutputArtifactPublisher } from "../../output-artifacts/contracts.js";
 
 export class ClaudeBackendDriverFactory implements BackendDriverFactory {
   readonly scope: RequestScope;
@@ -42,6 +43,7 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
   readonly #permissionPolicy: ClaudePermissionPolicy;
   readonly #modelPolicy: CompiledBackendModelPolicy;
   readonly #attachmentProvenanceKey: Uint8Array;
+  readonly #outputArtifacts: OutputArtifactPublisher;
   readonly #connections: ReadonlyMap<string, AgentConnectionProfile>;
   readonly #agentToolCli: AgentToolCliAvailability;
   readonly #agentToolSourceCapabilities: AgentToolSourceCapabilityIssuer;
@@ -71,6 +73,7 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
     readonly permissionPolicy: ClaudePermissionPolicy;
     readonly modelPolicy: CompiledBackendModelPolicy;
     readonly attachmentProvenanceKey: Uint8Array;
+    readonly outputArtifacts: OutputArtifactPublisher;
     readonly connections: readonly AgentConnectionProfile[];
     readonly agentToolCli: AgentToolCliAvailability;
     readonly agentToolSourceCapabilities: AgentToolSourceCapabilityIssuer;
@@ -96,6 +99,7 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
     this.#attachmentProvenanceKey = new Uint8Array(
       input.attachmentProvenanceKey,
     );
+    this.#outputArtifacts = input.outputArtifacts;
     this.#agentToolCli = input.agentToolCli;
     this.#agentToolSourceCapabilities = input.agentToolSourceCapabilities;
     this.#agentTools = input.agentTools;
@@ -148,6 +152,7 @@ export class ClaudeBackendDriverFactory implements BackendDriverFactory {
         permissionPolicy: this.#permissionPolicy,
         modelPolicy: this.#modelPolicy,
         attachmentProvenanceKey: this.#attachmentProvenanceKey,
+        outputArtifacts: this.#outputArtifacts,
         agentToolCli: this.#agentToolCli,
         agentToolSourceCapabilities: this.#agentToolSourceCapabilities,
         agentTools: this.#agentTools,

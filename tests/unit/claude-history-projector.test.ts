@@ -11,12 +11,16 @@ import {
   nextClaudeUserMessageOrdinal,
   projectClaudeHistory,
   projectClaudeHistoryPage,
+  projectClaudeHistoryPageAtIndex,
   projectClaudeLatestSnapshot,
   type ClaudeTerminalReceiptOverride,
 } from "../../src/server/backends/claude/claude-history-projector.js";
 import { claudeForkContextBoundaryText } from "../../src/server/backends/claude/claude-fork-context-boundary.js";
 import { USER_FORK_CONTEXT_BOUNDARY } from "../../src/server/backends/fork-context-boundary.js";
 import { claudeAttachmentEnvelope } from "../../src/server/backends/claude/claude-attachment-manifest.js";
+import { claudeViewedImagePublicationKey } from "../../src/server/backends/claude/claude-viewed-images.js";
+import type { OutputImageArtifactDescriptor } from "../../src/server/output-artifacts/contracts.js";
+import { MAXIMUM_BACKEND_ITEMS_PER_TURN, type BackendConversationSnapshot } from "../../src/shared/protocol/backend.js";
 import {
   MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES,
   MAXIMUM_MESSAGE_ITEM_BYTES,
@@ -2347,5 +2351,231 @@ describe("Claude internal task notification history", () => {
   it("preserves task-origin prompts that are not a complete notification envelope", () => {
     const projection = projectClaudeHistory([{ ...notification, message: { role: "user", content: "Please inspect this <task-notification> example" } }]);
     expect(Object.values(projection.snapshot.itemsById).filter(item => item.semanticKind === "user_message")).toHaveLength(1);
+  });
+});
+
+describe("Claude image reads", () => {
+  // Claude Code 2.1.283's persisted Read result for an image: one base64 block.
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1])
+    .toString("base64");
+  const imageContent = (data = png, mediaType = "image/png") =>
+    [{ type: "image", source: { type: "base64", data, media_type: mediaType } }];
+  const prompt = user(uuid(1), "Look at the screenshots");
+  const read = (index: number, messageId: string, id: string, filePath: string) => ({
+    ...assistant(uuid(index), [{ type: "tool_use", id, name: "Read", input: { file_path: filePath } }]),
+    message: { role: "assistant", id: messageId, content: [{ type: "tool_use", id, name: "Read", input: { file_path: filePath } }],
+      stop_reason: "tool_use" },
+  });
+  const result = (index: number, id: string, content: unknown, isError = false) =>
+    user(uuid(index), [{ type: "tool_result", tool_use_id: id, content, ...(isError ? { is_error: true } : {}) }]);
+  const answer = (index: number) => ({
+    ...assistant(uuid(index), [{ type: "text", text: "Both screenshots show the settings page." }]),
+    message: { role: "assistant", id: `msg-answer-${index}`, content: [{ type: "text", text: "Both screenshots show the settings page." }],
+      stop_reason: "end_turn" },
+  });
+  const descriptor = (index: number): OutputImageArtifactDescriptor => ({
+    artifactId: `aaaaaaaa-aaaa-4aaa-8aaa-${String(index).padStart(12, "0")}`,
+    mediaType: "image/png", byteSize: 24, sha256: String(index).repeat(64).slice(0, 64),
+  });
+  /** A retained-association lookup that records every key it was asked for. */
+  const retained = (entries: ReadonlyMap<string, OutputImageArtifactDescriptor> = new Map()) => {
+    const asked: string[] = [];
+    return { asked, viewedImages: { find: (key: string) => { asked.push(key); return entries.get(key); } } };
+  };
+  const ordered = (snapshot: BackendConversationSnapshot) => {
+    const turn = snapshot.turnsById[snapshot.orderedBackendTurnIds[0]!]!;
+    return turn.orderedBackendItemIds.map(id => snapshot.itemsById[id]!);
+  };
+
+  it("projects an image read as a streaming view that keeps its identity through completion", () => {
+    const running = projectClaudeHistory([prompt, read(2, "msg-1", "toolu-1", "/workspace/shots/Settings.PNG")]).snapshot;
+    const [, streaming] = ordered(running);
+    expect(streaming).toEqual({
+      backendItemId: expect.any(String), backendTurnId: running.orderedBackendTurnIds[0], sourceOrder: 2,
+      status: "streaming", semanticKind: "viewed_image", fileName: { text: "Settings.PNG" },
+    });
+    const completed = projectClaudeHistory([prompt, read(2, "msg-1", "toolu-1", "/workspace/shots/Settings.PNG"),
+      result(3, "toolu-1", "The file was read.")]);
+    const [, view] = ordered(completed.snapshot);
+    expect(view).toEqual({ ...streaming, status: "completed" });
+    expect(completed.nativeToolUseIds).toEqual(new Set(["toolu-1"]));
+    expect(completed.usage?.counters).toMatchObject({ toolCalls: 1, toolResults: 1 });
+    // A text result is not an image: completed, with nothing to publish.
+    expect(completed.pendingViewedImages).toEqual([]);
+    expect(JSON.stringify(completed.snapshot)).not.toContain("/workspace");
+  });
+
+  it.each(["a.png", "a.jpg", "a.JPEG", "a.Gif", "a.webp"])("recognizes %s as Claude Code does", (name) => {
+    const [, view] = ordered(projectClaudeHistory([prompt, read(2, "msg-1", "toolu-1", `/workspace/${name}`)]).snapshot);
+    expect(view).toMatchObject({ semanticKind: "viewed_image", fileName: { text: name } });
+  });
+
+  it.each(["/workspace/notes.txt", "/workspace/diagram.svg", "/workspace/report.pdf", "/workspace/.png", "/workspace/png"])(
+    "keeps %s a file read", (filePath) => {
+      const [, item] = ordered(projectClaudeHistory([prompt, read(2, "msg-1", "toolu-1", filePath)]).snapshot);
+      expect(item).toMatchObject({ semanticKind: "file_read", path: { text: filePath } });
+    });
+
+  it("reports an unpublished image as pending and shows a retained one after its read", () => {
+    const messages = [prompt, read(2, "msg-1", "toolu-1", "/workspace/shot.png"), result(3, "toolu-1", imageContent()), answer(4)];
+    const unpublished = retained();
+    const before = projectClaudeHistory(messages, [], { ...historyAuthentication, viewedImages: unpublished.viewedImages });
+    const [, view] = ordered(before.snapshot);
+    expect(ordered(before.snapshot).map(item => item.semanticKind)).toEqual(["user_message", "viewed_image", "assistant_message"]);
+    expect(before.pendingViewedImages).toEqual([{
+      viewedBackendItemId: view!.backendItemId,
+      identity: { backendItemId: expect.stringMatching(/^claude-item-image:/u), backendTurnId: view!.backendTurnId, sourceOrder: 3 },
+      publicationKey: expect.any(String),
+      image: { mediaType: "image/png", data: png },
+    }]);
+    const [pending] = before.pendingViewedImages;
+    expect(pending!.publicationKey).toBe(claudeViewedImagePublicationKey(pending!.identity.backendItemId));
+    expect(unpublished.asked).toEqual([pending!.publicationKey]);
+
+    const published = retained(new Map([[pending!.publicationKey, descriptor(1)]]));
+    const after = projectClaudeHistory(messages, [], { ...historyAuthentication, viewedImages: published.viewedImages });
+    expect(after.pendingViewedImages).toEqual([]);
+    expect(ordered(after.snapshot)).toEqual([
+      expect.objectContaining({ semanticKind: "user_message" }),
+      { ...view, status: "completed" },
+      { ...pending!.identity, status: "completed", semanticKind: "image", origin: { kind: "viewed", capture: "provider_input" },
+        image: { representation: "artifact", artifactId: descriptor(1).artifactId, mimeType: "image/png", byteSize: 24,
+          sha256: descriptor(1).sha256, fileName: { text: "shot.png" } } },
+      expect.objectContaining({ semanticKind: "assistant_message", sourceOrder: 4 }),
+    ]);
+    expect(after.snapshot.turnsById[after.snapshot.orderedBackendTurnIds[0]!]).toMatchObject({ status: "completed" });
+    // Publication adds an item but moves no turn, so page cursors stay valid.
+    const page = projectClaudeHistoryPage([...messages, user(uuid(5), "Next"), answer(6)], { limit: 1 });
+    expect(projectClaudeHistoryPage([...messages, user(uuid(5), "Next"), answer(6)], {
+      limit: 1, cursor: page.previousCursor!, authentication: { ...historyAuthentication, viewedImages: published.viewedImages },
+    }).itemsById[pending!.identity.backendItemId]).toBeDefined();
+  });
+
+  it("pairs parallel reads in one message with their own images, whatever order the results arrive", () => {
+    const first = { type: "tool_use", id: "toolu-a", name: "Read", input: { file_path: "/workspace/a.png" } };
+    const second = { type: "tool_use", id: "toolu-b", name: "Read", input: { file_path: "/workspace/b.gif" } };
+    const row = (index: number, block: unknown) => ({ ...assistant(uuid(index), [block]),
+      message: { role: "assistant", id: "msg-parallel", content: [block], stop_reason: "tool_use" } });
+    const gif = Buffer.from("GIF89a\x01\x00\x01\x00", "latin1").toString("base64");
+    // Claude Code writes the results in completion order; history relinks them.
+    const live = [prompt, row(2, first), row(3, second), result(4, "toolu-b", imageContent(gif, "image/gif")),
+      result(5, "toolu-a", imageContent()), answer(6)];
+    const reordered = [prompt, row(2, first), result(5, "toolu-a", imageContent()), row(3, second),
+      result(4, "toolu-b", imageContent(gif, "image/gif")), answer(6)];
+    const unpublished = projectClaudeHistory(live);
+    const fileNameOf = (viewedBackendItemId: string) => {
+      const view = unpublished.snapshot.itemsById[viewedBackendItemId]!;
+      return view.semanticKind === "viewed_image" ? view.fileName?.text : undefined;
+    };
+    const keyByFile = new Map(unpublished.pendingViewedImages.map(candidate =>
+      [fileNameOf(candidate.viewedBackendItemId), candidate] as const));
+    expect(keyByFile.get("a.png")!.image).toEqual({ mediaType: "image/png", data: png });
+    expect(keyByFile.get("b.gif")!.image).toEqual({ mediaType: "image/gif", data: gif });
+    const associations = new Map([[keyByFile.get("a.png")!.publicationKey, descriptor(1)],
+      [keyByFile.get("b.gif")!.publicationKey, { ...descriptor(2), mediaType: "image/gif" as const, byteSize: 10 }]]);
+    const views: unknown[] = [];
+    for (const messages of [live, reordered]) {
+      const items = ordered(projectClaudeHistory(messages, [], { ...historyAuthentication,
+        viewedImages: retained(associations).viewedImages }).snapshot);
+      expect(items.map(item => [item.semanticKind, item.sourceOrder,
+        item.semanticKind === "viewed_image" ? item.fileName?.text : undefined,
+        item.semanticKind === "image" && item.image.representation === "artifact"
+          ? [item.image.fileName?.text, item.image.artifactId, item.image.mimeType] : undefined])).toEqual([
+        ["user_message", 0, undefined, undefined],
+        ["viewed_image", 2, "a.png", undefined],
+        ["image", 3, undefined, ["a.png", descriptor(1).artifactId, "image/png"]],
+        ["viewed_image", 4, "b.gif", undefined],
+        ["image", 5, undefined, ["b.gif", descriptor(2).artifactId, "image/gif"]],
+        ["assistant_message", 6, undefined, undefined],
+      ]);
+      expect(items[2]!.backendItemId).toBe(keyByFile.get("a.png")!.identity.backendItemId);
+      expect(items[4]!.backendItemId).toBe(keyByFile.get("b.gif")!.identity.backendItemId);
+      views.push(items);
+    }
+    expect(views[1]).toEqual(views[0]);
+  });
+
+  it("fails a read Claude could not perform without its path-bearing error, and publishes nothing", () => {
+    const error = "File does not exist. Note: your current working directory is /home/someone/private-project.";
+    const projection = projectClaudeHistory([prompt, read(2, "msg-1", "toolu-1", "/home/someone/private-project/missing.png"),
+      result(3, "toolu-1", error, true)]);
+    const [, view] = ordered(projection.snapshot);
+    expect(view).toMatchObject({ semanticKind: "viewed_image", status: "failed", fileName: { text: "missing.png" },
+      error: { category: "unavailable", message: { text: "Claude could not read this image." }, code: "claude_image_read_failed" } });
+    expect(JSON.stringify(projection.snapshot)).not.toContain("private-project");
+    expect(projection.pendingViewedImages).toEqual([]);
+  });
+
+  it.each([
+    ["an undeclared media type", imageContent(png, "image/bmp")],
+    ["a URL source", [{ type: "image", source: { type: "url", url: "https://example.com/a.png" } }]],
+    ["two images", [...imageContent(), ...imageContent()]],
+    ["an image beyond the output ceiling", imageContent("A".repeat(Math.ceil((16 * 1_024 * 1_024) / 3) * 4 + 4))],
+  ])("completes a read whose result carries %s with no image to publish", (_label, content) => {
+    const projection = projectClaudeHistory([prompt, read(2, "msg-1", "toolu-1", "/workspace/shot.png"), result(3, "toolu-1", content)]);
+    expect(ordered(projection.snapshot).map(item => [item.semanticKind, item.status]))
+      .toEqual([["user_message", "completed"], ["viewed_image", "completed"]]);
+    expect(projection.pendingViewedImages).toEqual([]);
+  });
+
+  it("interrupts a read Stop stopped and ends an unfinished one with its turn", () => {
+    const stopped = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.";
+    const timestamp = "2026-09-26T10:00:05.000Z";
+    const marker = { ...user(uuid(4), [{ type: "text", text: "[Request interrupted by user for tool use]" }]), timestamp };
+    const [, interrupted] = ordered(projectClaudeHistory([prompt, read(2, "msg-1", "toolu-1", "/workspace/shot.png"),
+      result(3, "toolu-1", stopped, true), marker]).snapshot);
+    expect(interrupted).toEqual({ backendItemId: expect.any(String), backendTurnId: expect.any(String), sourceOrder: 2,
+      semanticKind: "viewed_image", status: "interrupted", completedAt: timestamp, fileName: { text: "shot.png" } });
+    const lost = projectClaudeHistory([prompt, read(2, "msg-1", "toolu-1", "/workspace/shot.png")]);
+    const [receiptTurn] = lost.snapshot.orderedBackendTurnIds;
+    const [, settled] = ordered(projectClaudeHistory([prompt, read(2, "msg-1", "toolu-1", "/workspace/shot.png")], [{
+      backendTurnId: receiptTurn!, status: "interrupted", providerTerminalReason: "process_lost", providerResultUuid: null,
+      terminalAt: Date.parse(timestamp) }]).snapshot);
+    expect(settled).toMatchObject({ semanticKind: "viewed_image", status: "interrupted", completedAt: timestamp });
+  });
+
+  it("gives a fork or import its own image identities and keys", () => {
+    const messages = [prompt, read(2, "msg-1", "toolu-1", "/workspace/shot.png"), result(3, "toolu-1", imageContent())];
+    const source = projectClaudeHistory(messages).pendingViewedImages;
+    const copied = projectClaudeHistory(messages.map(message => ({ ...message, session_id: uuid(901) }))).pendingViewedImages;
+    expect(source).toHaveLength(1);
+    expect(copied).toHaveLength(1);
+    expect(copied[0]!.identity.backendItemId).not.toBe(source[0]!.identity.backendItemId);
+    expect(copied[0]!.publicationKey).not.toBe(source[0]!.publicationKey);
+    expect(copied[0]!.image).toEqual(source[0]!.image);
+  });
+
+  it("limits pending reads to the returned window, page, or located turn", () => {
+    const turn = (base: number, name: string) => [user(uuid(base), `Look at ${name}`), read(base + 1, `msg-${base}`, `toolu-${base}`, `/workspace/${name}`),
+      result(base + 2, `toolu-${base}`, imageContent()), answer(base + 3)];
+    const messages = [...turn(10, "old.png"), ...Array.from({ length: 10 }, (_, index) => [user(uuid(100 + index * 2), "More"),
+      answer(101 + index * 2)]).flat(), ...turn(200, "new.png")];
+    const turnIds = projectClaudeHistory(messages).usageTurns.map(({ backendTurnId }) => backendTurnId);
+    const [oldTurn, newTurn] = [turnIds[0]!, turnIds.at(-1)!];
+    const latest = projectClaudeLatestSnapshot(messages, [], historyAuthentication);
+    expect(latest.snapshot.orderedBackendTurnIds).not.toContain(oldTurn);
+    expect(latest.pendingViewedImages.map(({ identity }) => identity.backendTurnId)).toEqual([newTurn]);
+    const page = projectClaudeHistoryPageAtIndex(messages, { before: 1, limit: 1, authentication: historyAuthentication });
+    expect(page.page.orderedBackendTurnIds).toEqual([oldTurn]);
+    expect(page.pendingViewedImages.map(({ identity }) => identity.backendTurnId)).toEqual([oldTurn]);
+    const located = locateClaudeHistoryTurn(messages, { matchesBackendTurnId: id => id === oldTurn, maximumTurnCandidates: 20 });
+    if (located.status !== "found") throw new Error("expected located turn");
+    expect(located.pendingViewedImages.map(({ identity }) => identity.backendTurnId)).toEqual([oldTurn]);
+  });
+
+  it("keeps transcript items ahead of an image at the per-turn item cap", () => {
+    const texts = (count: number) => Array.from({ length: Math.ceil(count / 2_000) }, (_, row) =>
+      assistant(uuid(10_000 + row), Array.from({ length: Math.min(2_000, count - row * 2_000) }, () => ({ type: "text", text: "x" }))));
+    const project = (textCount: number) => {
+      const messages = [prompt, ...texts(textCount), read(3, "msg-1", "toolu-1", "/workspace/shot.png"), result(4, "toolu-1", imageContent())];
+      const pending = projectClaudeHistory(messages).pendingViewedImages;
+      const associated = projectClaudeHistory(messages, [], { ...historyAuthentication, viewedImages: retained(
+        new Map(pending.map(({ publicationKey }) => [publicationKey, descriptor(1)]))).viewedImages });
+      const turn = associated.usageTurns[0]!;
+      return { pending: pending.length, items: turn.orderedBackendItemIds.length };
+    };
+    // A user message, the texts, and the read.
+    expect(project(MAXIMUM_BACKEND_ITEMS_PER_TURN - 3)).toEqual({ pending: 1, items: MAXIMUM_BACKEND_ITEMS_PER_TURN });
+    expect(project(MAXIMUM_BACKEND_ITEMS_PER_TURN - 2)).toEqual({ pending: 0, items: MAXIMUM_BACKEND_ITEMS_PER_TURN });
   });
 });
