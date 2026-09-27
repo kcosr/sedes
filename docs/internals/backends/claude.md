@@ -583,21 +583,48 @@ session, so it gets new keys and publishes its own copy from its copied
 transcript. The bytes are in-band: no Files read and no viewed-image capture
 service is involved.
 
-The synchronous projector never decodes. It asks the handle's publication
-record for a retained association and trusts one it finds. A completed image
-read without one is reported pending, limited to the snapshot window, page,
-or located turn being returned. Async callers publish those through
-`publishImage` after a strict base64 decode, then project again. The callers
-are the first snapshot, `history()`, `locateTurn()`, and `read()`. Live, a user
-row carrying an image result is first projected on a copy of the window. The
-image it completes is published before the real projection sees the row, so
-the settled read and its image leave in one delta with no resnapshot. After
-every message, the window also publishes any image a retraction or relinked
-compaction brought into view. Each handle remembers verified and failed keys,
-so reprojection neither re-decodes nor retries a failure on every message; a
-reopened handle retries. At the per-turn item cap, transcript items keep
-precedence and an image is left out. Publication never changes a history
-cursor, because the projection fingerprint excludes images.
+Images are added only after a snapshot window, page, or located turn is
+selected, and only directly after their own read, so trimming an oversized
+turn can never keep an image without its read. Selection counts a fixed
+2 KiB for each completed image read, published or not. A window therefore
+never moves, and a page never passes the transfer limit, when an image is
+published. Publication never changes a history cursor, because the
+projection fingerprint excludes images. An image read takes a turn slot when
+its result arrives, if the turn still has room, and keeps it: later
+transcript items count the slot, so a shown image never gives way, and a
+turn that fills fails as `history_too_large` as a turn without images does.
+A read whose result finds the turn full completes without its image.
+
+The synchronous projector never decodes. For the selected reads only, it
+asks the handle's publication record for a retained association and trusts
+one it finds; a read without one is reported pending. Async callers publish
+those through `publishImage` after a strict base64 decode, then project
+again:
+
+- The first snapshot, `history()`, `locateTurn()`, and `read()` wait for at
+  most their four newest pending images for at most two seconds, as a Codex
+  page capture does. The rest, including one still running at the deadline,
+  publish in the background two at a time. In the live window they appear
+  as ordinary item updates; elsewhere they appear on the next fetch. A
+  driver read keeps its remaining images publishing until the driver
+  closes.
+- Live, a result for a built-in image read (and no other tool result) is
+  first projected on a copy of the window. The images of the reads it
+  completes publish within the same budget before the real projection sees
+  the row, so the settled read and its image leave in one delta with no
+  resnapshot.
+- After every message, pending images a retraction or relinked compaction
+  brought into the window publish in the background.
+- If history drops a located turn while its images publish, `locateTurn()`
+  answers `not_found`.
+
+Each handle keeps a publication record. It remembers verified keys, bounded
+and least recently used first, so reprojection does not look them up again,
+and it does not look up a key it is publishing. It remembers failed keys
+against publish retries only: a lookup still finds an image another handle
+or read published, and a reopened handle retries. Closing the handle, or
+invalidating its projection, stops publication between images and ends
+every wait; a store already running completes unobserved.
 
 Only built-in `Read` images are shown. MCP and other tool images, subagent
 sidechain reads, and assistant image blocks are not. A read of a staged
