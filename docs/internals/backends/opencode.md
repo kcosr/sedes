@@ -53,12 +53,16 @@ native inventory reads reconcile known pending and work markers against their
 exact owning session and location; inbox reads precede activity so a promoted
 input remains retained while running. Read cuts are identity-, continuity- and
 lifecycle-fenced and change no application receipts or approval authority.
-Settlement events invalidate all in-flight reads before host routing, including
-gap-born children and shells whose start was missed,
+Settlement IDs are captured before host routing in a bounded map and invalidate
+matching in-flight positive inventory, including gap-born children and shells
+whose start was missed,
 so stale inventory cannot resurrect completed work. Failed reads retry separately
 for each owner with exponential delay from one second to two minutes, stopping
 after ten failures. Only a new native break/reconnect starts a fresh bounded
-cycle. Backend inspection and automatic service polling do not reset it. Other owners continue reconciling independently.
+cycle. Backend inspection and automatic service polling do not reset it.
+Inventory fence races retry without spending the read-failure budget; unrelated
+session settlements do not fence a scope. Settlement-map overflow retries
+conservatively without resurrecting work. Other owners continue reconciling independently.
 Unobserved dispatch pins, exhausted retries and collapsed unknown inventories
 remain conservative; failed reads never prove retirement. An operation
 acknowledgment alone never proves that native work ended.
