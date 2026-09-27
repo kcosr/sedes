@@ -270,12 +270,16 @@ fit-to-window, 25–400% zoom, pinch, Control/Command-scroll, keyboard controls,
 drag, scroll, and touch pan.
 
 Supported provider-generated images appear as their own transcript items and
-are loaded on demand. When Codex views a local image, a collapsed **Viewed
-image** row names the file; if Files can read it, expand the row to see the
-file as Sedes read it, even if the file later changes or disappears. In the
-packaged Android client, long-press an inline or expanded image to **Save
-image** or **Copy image**. Desktop browsers retain their normal image context
-menu.
+are loaded on demand. When an agent views a local image, a collapsed **Viewed
+image** row names the file; expand it to see the image. Codex rows show the
+file as Sedes read it, when Files can read it. Claude and Pi rows show the
+exact image their built-in read tool gave the model, which may be a resized or
+converted copy, and read **Working…** until the read finishes; a failed read
+expands to a short error without the path. Sedes keeps the image with the
+thread, so it stays even if the file later changes or disappears. Grok image
+reads remain tool cards. In the packaged Android client, long-press an inline
+or expanded image to **Save image** or **Copy image**. Desktop browsers retain
+their normal image context menu.
 
 ## Treat file content as sensitive
 

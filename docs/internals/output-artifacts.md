@@ -9,10 +9,11 @@ normalized tool-result card.
 The current durable output-artifact implementation is deliberately narrow. It
 supports completed Codex `imageGeneration` items whose reviewed native result
 contains an in-band PNG, snapshots of files named by completed Codex
-`imageView` items, and exact completed Grok `ImageGen` or `ImageEdit` tool
-results whose JPEG is available inside the owned local Grok session directory.
-It does not add image-generation controls or make other provider-generated or
-generic tool-result images durable.
+`imageView` items, exact completed Grok `ImageGen` or `ImageEdit` tool
+results whose JPEG is available inside the owned local Grok session directory,
+and the in-band image that a Claude or Pi built-in read of an image file
+returned to the model. It does not add image-generation controls or make other
+provider-generated or generic tool-result images durable.
 
 For the surrounding ownership model, see [Architecture](architecture.md). For
 the contributor requirements that apply when extending this contract, see the
@@ -24,6 +25,7 @@ the contributor requirements that apply when extending this contract, see the
 - [Ownership and access](#ownership-and-access)
 - [Codex byte authority](#codex-byte-authority-and-topology)
 - [Codex viewed-image capture](#codex-viewed-image-capture)
+- [Claude and Pi viewed images](#claude-and-pi-viewed-images)
 - [Grok byte authority](#grok-byte-authority-and-topology)
 - [Cross-backend disposition](#cross-backend-disposition)
 - [Related documentation](#related-documentation)
@@ -45,12 +47,31 @@ bounded unavailable representation or the backend's truthful non-image
 fallback rather than a fabricated artifact. Full and summary snapshots,
 history pages, and SSE carry the same descriptor-only representation.
 
+Every image item, retained or unavailable, also declares its `origin`:
+
+- `{ kind: "generated" }` for provider-generated output: Codex
+  `imageGeneration` and Grok `ImageGen` or `ImageEdit`;
+- `{ kind: "viewed", capture: "provider_input" }` for the exact in-band bytes
+  the model received, after the provider's own resizing or conversion: Claude
+  and Pi reads; or
+- `{ kind: "viewed", capture: "file_snapshot" }` for the file as Sedes read it
+  later: Codex `imageView`.
+
+The browser pairs a `viewed_image` row with the image that directly follows it
+only when that image's origin kind is `viewed`, so a generated image is never
+disclosed by a view. Client protocol 126 requires the field.
+
+A `viewed_image` row is `streaming` while a provider read runs (labeled
+**Working…**), then `completed`, `failed`, or `interrupted`. A failed row
+discloses its error message, which is always Sedes-written and path-free.
+Codex projects only completed views, so its rows are always `completed`.
+
 The normalized backend capability document reports
 `providerOutputArtifacts.nativeImage: true` for the reviewed Codex and local
-owned-Grok paths. Pi and Claude report `false`; input-image or bounded
-tool-result-image behavior does not imply this durable output capability. The
-flag is not evidence of Files availability or native-executor attribution for
-viewed-image capture.
+owned-Grok paths. Pi and Claude report `false`: the flag describes
+provider-generated output only, and input-image, bounded tool-result-image,
+and viewed-image behavior do not set it. It is also not evidence of Files
+availability or native-executor attribution for viewed-image capture.
 
 The content route supports both methods:
 
@@ -150,12 +171,13 @@ path's final component as `fileName`, bounded to 255 bytes with control and
 bidirectional formatting characters removed; the directory stays
 server-private. The browser shows the pair as one activity-style row, collapsed
 by default, that discloses the image; before capture, or when capture fails,
-the row has nothing to disclose. The image is a snapshot of the file when Sedes
-read it, not proof of the bytes or pixels supplied to the model: the file can
-change after Codex reads it, Codex may prepare or resize the image, and a first
-capture during a later history read can come much later. A denied, invalid, or
-unavailable capture leaves only the `viewed_image` row; failure diagnostics
-stay out of the transcript. Adapter ordering and delivery are described in
+the row has nothing to disclose. The image, with capture `file_snapshot`, is a
+snapshot of the file when Sedes read it, not proof of the bytes or pixels
+supplied to the model: the file can change after Codex reads it, Codex may
+prepare or resize the image, and a first capture during a later history read
+can come much later. A denied, invalid, or unavailable capture leaves only the
+`viewed_image` row; failure diagnostics stay out of the transcript. Adapter
+ordering and delivery are described in
 [Codex internals](backends/codex.md#viewed-image-capture).
 
 The publication key is `codex-viewed-image:` plus the adapter's hashed item
@@ -204,6 +226,68 @@ not identify the executor, so a same-named file on the configured host cannot
 be distinguished from the one Codex viewed. Codex-native additional executor
 environments are unsupported for this feature.
 
+## Claude and Pi viewed images
+
+Claude and Pi return the image their built-in read tool opened inside the tool
+result, as the exact bytes the model received after the provider's own
+resizing or conversion. Sedes decodes those in-band bytes strictly and
+publishes them through `OutputArtifactService` under a publication key derived
+from native coordinates. No Files read, path admission, or
+`ViewedImageCaptureService` is involved, and the path stays in the backend.
+
+Recognition uses the requested path's extension, compared case-insensitively,
+not the file's content:
+
+- Claude: a built-in `Read` of `png`, `jpg`, `jpeg`, `gif`, or `webp`, which
+  is Claude Code's own list for answering a read with the image.
+- Pi: a built-in `read` of those extensions or `bmp`, in local, SSH, or
+  isolated sessions. Pi holds the live item of every built-in read until its
+  arguments are complete (`toolcall_end`), because an emitted item cannot
+  change kind.
+
+The read projects as a `viewed_image` instead of a file-read card, carrying
+only the path's final component as `fileName`, and stays `streaming` while it
+runs. Its result settles it:
+
+- A successful result with a usable image completes the row and adds an image
+  item with capture `provider_input` and the same `fileName` at the read's
+  source order plus one. Claude requires exactly one base64 image block; Pi
+  uses the first image part. The media type follows the bytes and may differ
+  from the extension.
+- An error fails the row with category `unavailable` and a Sedes-written
+  message: `claude_image_read_failed` ("Claude could not read this image.") or
+  `pi_viewed_image_read_failed` ("Pi could not read this image."). Provider
+  error text can name absolute paths and is never copied.
+- A text-only result, or bytes that are not a supported image within 16 MiB,
+  complete the row with no image. Pi also adds none when its non-vision-model
+  note shows the model did not see the image. Pi's `blockImages` setting
+  leaves no mark on the stored result and cannot be detected.
+
+Claude's key is `claude-viewed-image:` plus the image item ID, which hashes the
+read's item identity. Pi's is `pi-viewed-image:` plus the SHA-256 of
+`[sessionId, assistantEntryId, toolCallId, imageIndex]`. Live observation,
+history, paging, and reattachment resolve one artifact. A fork or import is
+another Sedes thread and publishes its own copy; a fork's new native session
+also gives it new keys. Associations use the same scoped storage, thread
+deletion, and backup rules as other artifacts.
+
+History projection stays synchronous and never decodes; it looks up retained
+associations and lists the missing ones. For Claude, opening the thread, a
+live result, `history()`, `locateTurn()`, and `read()` publish those for the
+window or page being returned and reproject. A live image is published before
+its delta, so the row and image arrive together, and each handle remembers up
+to 4096 verified and 4096 failed keys. For Pi, only the conversation handle
+publishes: a late live child is delivered as `item_completed` only, each
+projection seed backfills at most 32 missing children in the background,
+`history()` publishes at most 16 per page, and `read()` and `locateTurn()`
+only look images up. Details are in [Claude
+internals](backends/claude.md#semantic-projection-and-terminal-receipts) and
+[Pi internals](backends/pi.md#viewed-images).
+
+Only built-in reads are shown. Images from MCP servers, extensions, and other
+tools, Claude subagent reads, and Claude assistant image blocks are out of
+scope. A read of a staged composer attachment is shown like any other read.
+
 ## Grok byte authority and topology
 
 The reviewed local Grok Build profile emits exact completed `ImageGen` and
@@ -235,8 +319,8 @@ Any native output shape other than the exact completed `ImageGen` or
 | --- | --- |
 | Codex | **Supported:** completed native `imageGeneration` with a valid in-band PNG, and snapshots of completed `imageView` paths readable through the thread's execution-environment Files provider. |
 | Grok | **Supported for owned-local sessions:** exact completed `ImageGen` or `ImageEdit` with a valid JPEG at the scoped session path. |
-| Pi | **Intentionally unsupported.** |
-| Claude | **Intentionally unsupported.** |
+| Claude | **Viewed images only:** the single in-band image block returned by a completed built-in `Read` of a PNG, JPEG, GIF, or WebP path, as Claude received it. |
+| Pi | **Viewed images only:** the first in-band image part returned by a completed built-in `read` of a PNG, JPEG, GIF, WebP, or BMP path, as Pi sent it to the model. |
 
 The boundaries outside that table remain important:
 
@@ -245,11 +329,15 @@ The boundaries outside that table remain important:
   additional executor environments is unsupported.
 - Grok remote or SSH path capture, unreviewed tool output, image-generation
   controls, and a separate download flow are unsupported. Generic ACP image
-  result parsing does not create an artifact implicitly.
-- Pi tool-result image blocks remain metadata-only entries; the current tool
-  card does not render their pixels.
-- Claude assistant image blocks remain an omitted notice, and its tool-result
-  image blocks remain metadata-only entries.
+  result parsing does not create an artifact implicitly. Grok image reads are
+  intentionally not translated into viewed images; they stay tool cards.
+- Pi images from non-read tools, MCP servers, and extensions remain
+  metadata-only tool-result entries; the current tool card does not render
+  their pixels.
+- Claude assistant image blocks remain an omitted notice. Tool-result image
+  blocks from MCP and other non-read tools remain metadata-only entries, and
+  subagent reads show no viewed image.
+- Claude and Pi have no provider-generated image path.
 
 Input image support is independent. Pi, Codex, and Grok may accept normalized
 composer images under their own model- and topology-sensitive input
@@ -267,5 +355,6 @@ about its output contract.
   absolute-path admission and bounded read used by viewed-image capture
 - [Backend integration contract rules](backend-integration-contract-rules.md#provider-output-artifacts)
   — requirements for extending output support
-- [Codex internals](backends/codex.md) and [Grok internals](backends/grok.md) —
+- [Codex internals](backends/codex.md), [Claude internals](backends/claude.md),
+  [Pi internals](backends/pi.md), and [Grok internals](backends/grok.md) —
   provider-specific lifecycle and topology
