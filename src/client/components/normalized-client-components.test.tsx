@@ -214,11 +214,11 @@ describe("normalized application components", () => {
     );
 
     expect(
-      screen.queryByRole("img", { name: "Finished while you were away" }),
-    ).toBeNull();
+      screen.getByRole("img", { name: "Finished while you were away" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByTestId("thread-row-link").querySelector(".lucide-check"),
-    ).not.toBeNull();
+    ).toBeNull();
   });
 
   // The run glyph replaced a text pill; `title` alone is not announced on a

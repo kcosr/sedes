@@ -909,6 +909,9 @@ export class ThreadForkService {
               thread.id,
               {
                 ...thread,
+                // Descendant pages can remain cached without live application
+                // inventory membership. Only inventory-owned rows may claim
+                // current background work; do not retain volatile counts here.
                 terminalSummary: terminalSummaries.get(thread.id) ?? {
                   runningCount: 0,
                   retainedCount: 0,

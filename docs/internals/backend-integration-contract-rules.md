@@ -1746,6 +1746,9 @@ including runtime establishment and retirement, and fence obsolete generations.
 The browser must also suppress retained counts while its application stream is
 not current. Absence of sidebar counts is not evidence authorizing retirement;
 the existing conservative background-activity eviction checks remain authoritative.
+REST-only descendant pages do not contribute volatile counts: those cached rows
+are outside the bounded application's live inventory. Once a thread is in that
+inventory, its authoritative application summary supplies the observation.
 
 Sidebar and peek presentation preserve failure and interaction priority, then
 main-turn activity, unseen completion, active subagents, and remaining commands
