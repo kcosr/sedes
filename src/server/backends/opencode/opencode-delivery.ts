@@ -78,7 +78,7 @@ export class OpenCodeDelivery {
     if (existing && existing.requestFingerprint !== requestFingerprint) throw invalid("The OpenCode input differs from its original request.");
     attempt.admitted = true;
     if (existing && existing.disposition !== "prepared") {
-      if (existing.disposition === "not_applied") throw invalid("The original OpenCode input was not dispatched.");
+      if (existing.disposition === "not_applied") throw notApplied();
       return this.observer.reconcile(operationId, kind);
     }
     const skill = input.selectedSkillId ? await this.context.skills.resolve({ connection: this.context.connection,
@@ -124,8 +124,8 @@ export class OpenCodeDelivery {
       });
       throw uncertain();
     }
-    // Only native preparation can retain mutation receipts that require a terminal
-    // release. Read-only admission failures keep this immutable input retryable.
+    // This phase still contains reads. Only positive retained mutation evidence
+    // can later authorize terminating its immutable preparation identities.
     attempt.preparing = true;
     // A prepared replay rechecks the latest desired/current selection before work.
     await this.settings.prepare(operationId, kind);
@@ -167,9 +167,21 @@ export class OpenCodeDelivery {
     const preparing = preparingInputs.get(key) ?? { active: 0, failedPreparation: false };
     preparingInputs.set(key, preparing); preparing.active++;
     const attempt = { admitted: false, preparing: false };
-    try { return await this.#send(input, kind, attempt); }
+    let outcome: SubmissionReconciliation | undefined;
+    let failed = false, failure: unknown;
+    try { outcome = await this.#send(input, kind, attempt); }
     catch (error) {
-      if (attempt.preparing) preparing.failedPreparation = true;
+      failed = true; failure = error;
+      const prepared = this.context.repository.readOperation(this.input.scope, this.input.binding.applicationThreadId, input.applicationOperationId, kind);
+      if (attempt.preparing && prepared?.disposition === "prepared") {
+        const steps = [["setModel", "prepare-model"], ["setPermissions", "prepare-permissions"],
+          ["installSessionEnvironment", "install-environment"]] as const;
+        const retained = await Promise.allSettled(steps.map(([method, step]) =>
+          this.settings.client.outcome(method, openCodeOperationControl(prepared, step).identity)));
+        // A missing/unknown journal result proves no negative. Keep the operation
+        // prepared unless a retained pending/completed/failed step proves admission.
+        if (retained.some(result => result.status === "fulfilled")) preparing.failedPreparation = true;
+      }
       // Another caller may dispatch the same prepared operation during one of
       // our reads. Its durable boundary wins over this caller's local error.
       const receipt = this.context.repository.readOperation(this.input.scope, this.input.binding.applicationThreadId, input.applicationOperationId, kind);
@@ -179,14 +191,6 @@ export class OpenCodeDelivery {
           nativeEvidenceFingerprint: null, now: Date.now(),
         });
       }
-      if (receipt && receipt.disposition !== "prepared" && receipt.disposition !== "not_applied") throw uncertain(error);
-      if (attempt.admitted && receipt?.disposition === "prepared" && preparing.failedPreparation) {
-        // This operation is terminal when its final concurrent caller leaves.
-        // Queue must offer an explicit new Send, never automatically retry its
-        // now-released native preparation identities.
-        throw invalid("The OpenCode input could not be prepared. Retry it as a new Send.");
-      }
-      throw error;
     } finally {
       if (--preparing.active === 0) {
         preparingInputs.delete(key);
@@ -202,10 +206,26 @@ export class OpenCodeDelivery {
       await acknowledgeOpenCodeTerminalOperation(this.settings.client,
         () => this.context.repository.readOperation(this.input.scope, this.input.binding.applicationThreadId, input.applicationOperationId, kind));
     }
+    // Classification follows the durable transition and the final caller count.
+    // A concurrent matching caller may still send this operation, so never invite
+    // a new Send until its original receipt actually proves not applied.
+    const receipt = this.context.repository.readOperation(this.input.scope,
+      this.input.binding.applicationThreadId, input.applicationOperationId, kind);
+    if (attempt.admitted && receipt?.disposition === "not_applied") throw notApplied();
+    if (failed) {
+      if (receipt && (receipt.disposition !== "prepared" && receipt.disposition !== "not_applied" ||
+          attempt.admitted && preparing.active > 0)) throw uncertain(failure);
+      throw failure;
+    }
+    return outcome!;
   }
 }
 
 function invalid(message: string) { return openCodeConversationError("opencode_input_invalid", message, "invalid_state"); }
+function notApplied(): BackendError {
+  return new BackendError({ category: "rejected", crossedSubmissionBoundary: false, retryable: false,
+    backendCode: "opencode_input_not_applied", safeMessage: "The OpenCode input was not sent. Retry it as a new Send." });
+}
 function uncertain(cause?: unknown): BackendError {
   return new BackendError({ category: "submission_unknown", crossedSubmissionBoundary: true, retryable: false,
     backendCode: "opencode_input_unconfirmed", safeMessage: "OpenCode input consumption is not yet confirmed. Nothing was resent." },

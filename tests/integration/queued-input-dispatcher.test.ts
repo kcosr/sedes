@@ -47,6 +47,7 @@ import type { RequestScope } from "../../src/server/identity/identity-provider.j
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
 import { normalizedThreadEventSchema } from "../../src/shared/protocol/conversation.js";
 import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
+import { createOpenCodeExecutionFixture, modelB } from "../support/opencode-execution-fixture.js";
 
 const configuration = parseResolvedBackendConfiguration({
   schemaVersion: 10,
@@ -368,7 +369,8 @@ function enqueueUserWithAttachment(
   });
 }
 
-type SubmitBehavior = SubmitTurnResult | Error | Promise<SubmitTurnResult>;
+type SubmitBehavior = SubmitTurnResult | Error | Promise<SubmitTurnResult> |
+  ((input: Parameters<QueuedInputConversation["submit"]>[0]) => Promise<SubmitTurnResult>);
 type SteerBehavior = SteerTurnResult | Error | Promise<SteerTurnResult>;
 
 class FakeGateway implements QueuedInputConversationGateway {
@@ -442,6 +444,7 @@ class FakeGateway implements QueuedInputConversationGateway {
           reconciliationToken: input.reconciliationToken,
           completionCorrelation: input.applicationOperationId,
         };
+        if (typeof behavior === "function") return behavior(input);
         if (behavior instanceof Error) throw behavior;
         return await behavior;
       },
@@ -615,6 +618,31 @@ function readyCallback(
   });
   return callbacks;
 }
+
+describe("OpenCode failed preparation through Queue", () => {
+  it("fails an admitted preparation immediately with new-Send guidance and no same-ID backoff", async () => {
+    const fixture = createFixture(), native = createOpenCodeExecutionFixture({ native: modelB });
+    const repository = new QueuedInputRepository(fixture.database), gateway = new FakeGateway(), scheduler = new ManualScheduler();
+    const [threadId] = fixture.threadIds;
+    const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 700 }, scheduler });
+    const failedPreparation = vi.spyOn(native.context.executionEnvironment, "prepare").mockRejectedValueOnce(new Error("fixture environment read failed"));
+    try {
+      enqueueUser(fixture, repository, threadId, "opencode-preparation-failed", 500);
+      gateway.submitBehaviors.push(input => native.delivery.submit(input));
+      await dispatcher.recover(fixture.scope);
+      expect(repository.get(fixture.scope, threadId, "opencode-preparation-failed")).toMatchObject({
+        state: "failed", retryCount: 0, invalidStateRequeues: 0, diagnostic: expect.stringContaining("new Send"),
+      });
+      expect(scheduler.scheduled).toEqual([]); expect(gateway.submitted).toHaveLength(1);
+      expect(native.posts("/model")).toHaveLength(1); expect(native.posts("/prompt")).toHaveLength(0);
+      expect(native.host.snapshot().operations).toEqual([]);
+      await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+      expect(gateway.submitted).toHaveLength(1); expect(scheduler.scheduled).toEqual([]);
+    } finally {
+      failedPreparation.mockRestore(); await dispatcher.close(); fixture.database.close(); await native.dispose();
+    }
+  });
+});
 
 describe("queue dispatch and existing conversation Stop control", () => {
   it("accepts Stop while real queue recovery holds the conversation hydration gate", async () => {
