@@ -8,6 +8,7 @@ import type {
   SafeItemError,
 } from "../../../shared/protocol/payload.js";
 import { inspectSupportedRasterImage } from "../../images/raster-image-inspector.js";
+import { maximumBase64Characters } from "../../../shared/output-artifact-limits.js";
 import {
   MAXIMUM_OUTPUT_IMAGE_BYTES,
   OUTPUT_IMAGE_MEDIA_TYPES,
@@ -165,7 +166,7 @@ export function piViewedImageResultPart(
 }
 
 const base64Pattern = /^[A-Za-z0-9+/]+={0,2}$/u;
-const maximumBase64Length = Math.ceil(MAXIMUM_OUTPUT_IMAGE_BYTES / 3) * 4;
+const maximumBase64Length = maximumBase64Characters(MAXIMUM_OUTPUT_IMAGE_BYTES);
 
 /** Strictly decodes an in-band image; anything unexpected yields no child. */
 export function decodePiViewedImage(
