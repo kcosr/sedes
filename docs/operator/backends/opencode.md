@@ -197,3 +197,8 @@ For implementation evidence and authority boundaries, see
 [OpenCode internals](../../internals/backends/opencode.md). The isolated
 [`test:real-opencode` suite](../../developer/development.md) uses a disposable
 stock v2 daemon and loopback model fixtures, without paid model requests.
+The separate opt-in `test:live-opencode` gate qualifies one explicitly selected
+OpenAI-compatible provider/model with a disposable read-only canary. It requires
+authorization and an explicit credential environment reference; it never runs
+as part of the local suite. See the [live-provider instructions](../../developer/development.md#live-provider-suites)
+for isolation, limits, and the remaining retry/billing uncertainty.

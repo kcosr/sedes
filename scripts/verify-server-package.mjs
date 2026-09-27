@@ -65,6 +65,7 @@ export function createRuntimeDependencyProbe(entrypoints) {
   for (const entry of entrypoints) {
     const commonjs = entry.kind === 'require' || entry.kind === 'resolve_require';
     const resolved = realpathSync(commonjs ? requirePackage.resolve(entry.specifier) : fileURLToPath(import.meta.resolve(entry.specifier)));
+    assert.ok(resolved.startsWith(packageModules), 'Dependency resolves outside package: ' + entry.specifier);
     const owner = realpathSync(path.join(packageModules, entry.package)) + path.sep;
     assert.ok(owner.startsWith(packageModules) && resolved.startsWith(owner), 'Dependency resolves outside package: ' + entry.specifier);
     if (entry.kind === 'require') requirePackage(entry.specifier);

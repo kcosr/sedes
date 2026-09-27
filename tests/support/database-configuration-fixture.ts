@@ -21,6 +21,7 @@ export function initializeDatabaseConfigurationFixture(database: Database.Databa
     codex_app_server: catalog.protocolReleaseForBackendKind("codex_app_server"),
     claude_agent_sdk: catalog.protocolReleaseForBackendKind("claude_agent_sdk"),
     grok_build: catalog.protocolReleaseForBackendKind("grok_build"),
+    opencode: catalog.protocolReleaseForBackendKind("opencode"),
   }, now);
   const snapshot = repository.initialize(scope, document, {
     sourceFingerprint: configurationFingerprint(document), sourceLabel: options.sourceLabel,

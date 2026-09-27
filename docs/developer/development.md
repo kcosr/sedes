@@ -250,9 +250,54 @@ release-artifact contract.
 ## Live-provider suites
 
 Do not run commands matching `test:real-pi*`, `test:real-codex*`,
-`test:real-claude*`, or `test:real-grok*` by default.
+`test:real-claude*`, `test:real-grok*`, or `test:live-opencode` by default.
 They consume live provider capacity or exercise authenticated external state
 and require explicit user authorization for the relevant backend change.
+
+OpenCode's authenticated gate is separate from both `npm test` and the entirely
+local `test:real-opencode` suite. After authorization, select an exact reviewed
+OpenAI-compatible provider endpoint/model and the name of an existing credential
+environment variable. The command below contains no credential value:
+
+```sh
+SEDES_RUN_LIVE_OPENCODE=1 \
+  SEDES_REAL_OPENCODE_EXECUTABLE=/absolute/path/to/opencode2 \
+  SEDES_LIVE_OPENCODE_PROVIDER_ID=reviewed-provider \
+  SEDES_LIVE_OPENCODE_MODEL_ID=exact-model-id \
+  SEDES_LIVE_OPENCODE_BASE_URL=https://provider.example/v1 \
+  SEDES_LIVE_OPENCODE_API_KEY_ENV=MY_PROVIDER_API_KEY \
+  env -u NODE_ENV npm run test:live-opencode
+```
+
+The endpoint must use HTTPS without embedded credentials, query or fragment.
+Set `SEDES_LIVE_OPENCODE_TOKEN_FIELD` to `max_completion_tokens` if that endpoint
+requires it; the default is `max_tokens`. The gate places a 256-token limit in
+the actual request body, with a 16 KiB observed text limit, two logical model
+steps, a 45-second total runner deadline including setup, and native 20-second
+request/10-second chunk timeouts. A synchronous check refuses to submit if
+setup exhausted that deadline. The test harness reserves additional time for
+bounded native startup settlement and independent cleanup after cancellation.
+Stock 2.0.18 has internal transient retries which cannot be
+disabled through configuration; the first observed retry fails the gate and
+requests Stop. These are exposure limits, **not a guaranteed monetary cap**:
+interrupted or retried remote requests can still be billed, and endpoint token
+limit behavior remains provider-specific.
+
+The gate starts an isolated Sedes-owned stock daemon, configuration, HOME/XDG
+directories, native store and session. Only the explicitly referenced credential
+is copied into its process environment; the operator's native account/configuration
+is not used. This has the ordinary same-account process-environment trust boundary.
+Native permissions deny everything except reading one disposable canary file.
+Automatic title/compaction work is suppressed. The gate submits once, reconciles
+that same operation if necessary, and requires exact consumed-input evidence,
+successful canary read, matching completed turn, and stable history after reattach.
+It attempts runtime shutdown even if handle/observation cleanup fails, closes
+SQLite independently, and retains native state if process cleanup is unproved.
+
+`tests/real-opencode/live-gate-rehearsal.test.ts` exercises this same runner with
+a loopback model: it checks wire token limits, the allowed read, and a denied
+read outside the canary path without external inference. This rehearsal does
+not qualify a real provider or its billing behavior.
 
 When a backend-specific change affects protocol handling, streaming, history,
 lifecycle, tools, interactions, or provider integration, ask whether to run the

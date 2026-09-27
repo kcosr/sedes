@@ -32,14 +32,14 @@ const connectionID = "opencode-connection";
 const environmentID = "a3bc9398-a451-4305-a543-5e230254242d";
 export const threadID = "78cbf267-a526-43b0-8262-8ec2c23dce4c";
 const workspaceID = "ba11a564-8ef6-4d99-8bc1-680a05a87f00";
-const namespace = "fixture-native-store";
 
 export function createOpenCodeConversationFixture(input: {
   messages?: SessionMessageInfo[];
   retentionMilliseconds?: number;
   /** Isolated stock-native HTTP transport; fixture disposal also closes this client. */
-  native?: { client: OpenCodeHttpClient; sessionID: string; directory: string };
+  native?: { client: OpenCodeHttpClient; sessionID: string; directory: string; runtime?: OpenCodeConversationRuntime };
 } = {}) {
+  const namespace = input.native?.runtime?.nativeNamespaceKey ?? "fixture-native-store";
   const wire = createOpenCodeApiFixture({ messages: input.messages });
   const client = input.native?.client ?? new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture-only-canary", fetch: wire.fetch });
   const sessionID = input.native?.sessionID ?? wire.sessionID;
@@ -79,7 +79,7 @@ export function createOpenCodeConversationFixture(input: {
     store: { device: "1", inode: "3" }, storeObservation: "open_file" };
   // The runtime-owner seam isolates OS admission already qualified natively in
   // M1; real driver, handle, HTTP client/parser, SQL binding and actor remain.
-  const runtime: OpenCodeConversationRuntime = {
+  const runtime: OpenCodeConversationRuntime = input.native?.runtime ?? {
     nativeNamespaceKey: namespace,
     start: vi.fn(async () => { if (client.lifetime.aborted) throw new OpenCodeRuntimeError("opencode_runtime_identity_changed"); }),
     health: async () => ({ available: !client.lifetime.aborted, checkedAt: new Date().toISOString() }),

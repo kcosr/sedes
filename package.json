@@ -78,6 +78,7 @@
     "test:real-claude": "vitest run --config vitest.real-claude.config.ts",
     "test:real-grok": "vitest run --config vitest.real-grok.config.ts",
     "test:real-opencode": "vitest run --config vitest.real-opencode.config.ts",
+    "test:live-opencode": "vitest run --config vitest.live-opencode.config.ts",
     "pretest:real-codex-agent-tools": "npm run build",
     "test:real-codex-agent-tools": "vitest run --config vitest.real-codex-agent-tools.config.ts",
     "test:real-codex-ssh-uds": "vitest run tests/integration/codex-ssh-uds-live.test.ts",

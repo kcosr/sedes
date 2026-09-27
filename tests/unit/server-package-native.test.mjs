@@ -147,6 +147,9 @@ describe('server package native targets', () => {
     await put(root, 'node_modules/ancestor-only/index.js', 'module.exports = {};');
     const release = path.join(root, 'releases/example');
     await put(release, 'package.json', JSON.stringify({ dependencies: { 'ancestor-only': '1.0.0' } }));
+    await put(release, 'runtime-entrypoints.json', JSON.stringify({ version: 1, entrypoints: [
+      { package: 'ancestor-only', specifier: 'ancestor-only', kind: 'require' },
+    ] }));
     await expect(verifyRuntime(release)).rejects.toThrow('Dependency resolves outside package: ancestor-only');
   });
 });

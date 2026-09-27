@@ -1450,8 +1450,11 @@ describe("LocalEnvironmentChannelProvider", () => {
     privateUnixChannels.push(channel);
     if (change === "target-removed") unlinkSync(fixture.socketPath);
     else {
-      unlinkSync(alias);
-      symlinkSync(change === "retarget" ? replacement.socketPath : fixture.socketPath, alias);
+      // Create while the original inode is still allocated: unlink/recreate can
+      // reuse both its inode and coarse ctime, especially for the same target.
+      const replacementAlias = path.join(aliasParent, "replacement.sock");
+      await symlink(change === "retarget" ? replacement.socketPath : fixture.socketPath, replacementAlias);
+      await rename(replacementAlias, alias);
     }
     await expect(channel.revalidateIdentity()).rejects.toThrow("environment_private_unix_stream_identity_replaced");
     await expect(channel.closed).resolves.toEqual({reason: "client_closed"});

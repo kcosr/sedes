@@ -17,6 +17,10 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
     lastRole?: string;
     lastText?: string;
     toolNames: string[];
+    toolResults: string[];
+    toolChoice?: string;
+    maxTokens?: number;
+    maxCompletionTokens?: number;
     images: { mime: string; sha256: string }[];
   }> = [];
   let nextHold: StreamHold | undefined;
@@ -107,6 +111,11 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
       lastRole,
       lastText: lastText?.slice(0, 1024),
       toolNames, images,
+      toolChoice: "tool_choice" in input && typeof input.tool_choice === "string" ? input.tool_choice : undefined,
+      toolResults: messages.flatMap(message => typeof message === "object" && message !== null && message.role === "tool"
+        && typeof message.content === "string" ? [message.content.slice(0, 1024)] : []),
+      maxTokens: "max_tokens" in input && typeof input.max_tokens === "number" ? input.max_tokens : undefined,
+      maxCompletionTokens: "max_completion_tokens" in input && typeof input.max_completion_tokens === "number" ? input.max_completion_tokens : undefined,
     });
     const id = `chatcmpl-fixture-${requestCount}`;
     const usage = { prompt_tokens: 20, completion_tokens: 4, total_tokens: 24 };
