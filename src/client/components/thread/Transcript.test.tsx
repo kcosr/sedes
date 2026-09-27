@@ -4388,4 +4388,66 @@ describe("Transcript viewed images", () => {
     expect(images).toHaveLength(2);
     expect(rows[0]).toContainElement(images[0] as HTMLElement);
   });
+
+  it("keeps a failed view its own row between activity groups and discloses its error", () => {
+    const snapshot = makeSnapshot(["turn-1"], false);
+    snapshot.turnsById["turn-1"] = {
+      ...snapshot.turnsById["turn-1"]!,
+      orderedItemIds: ["command-1", "viewed-1", "command-2"],
+    };
+    const command = (id: string) => ({
+      id,
+      turnId: "turn-1",
+      kind: "command" as const,
+      status: "completed" as const,
+      revision: 1,
+      phase: "completed" as const,
+      command: { text: `echo ${id}` },
+    });
+    snapshot.itemsById = {
+      "command-1": command("command-1"),
+      "viewed-1": {
+        id: "viewed-1",
+        turnId: "turn-1",
+        kind: "viewed_image",
+        status: "failed",
+        revision: 2,
+        fileName: { text: "missing.png" },
+        error: {
+          category: "not_found",
+          message: { text: "File does not exist." },
+        },
+      },
+      "command-2": command("command-2"),
+    };
+    const { container } = render(
+      <Transcript
+        store={new FakeTranscriptStore(snapshot) as unknown as ThreadClientStore}
+      />,
+    );
+
+    const groups = screen.getAllByTestId("activity-group");
+    expect(groups).toHaveLength(2);
+    for (const group of groups) {
+      expect(group).toHaveAttribute("data-activity-member-count", "1");
+    }
+    const row = screen.getByTestId("viewed-image-group");
+    expect(
+      groups[0]!.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      row.compareDocumentPosition(groups[1]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(row).toHaveAttribute("data-viewed-image-status", "failed");
+
+    const disclosure = within(row).getByRole("button", {
+      name: "Viewed image · missing.png · Failed",
+    });
+    expect(disclosure).toHaveAccessibleDescription("File does not exist.");
+    expect(container.querySelector(".op-error")).toBeNull();
+    fireEvent.click(disclosure);
+    expect(within(row).getByText("File does not exist.", { selector: ".op-error" }))
+      .toBeVisible();
+    expect(container.querySelector('[data-item-kind="image"]')).toBeNull();
+  });
 });

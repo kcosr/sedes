@@ -8096,6 +8096,12 @@ button.activity-group-summary:hover {
   overflow-wrap: anywhere;
 }
 
+/* A failed read's diagnostic, aligned under the row label. */
+.viewed-image-group .op-error {
+  margin: 2px 0 6px;
+  overflow-wrap: anywhere;
+}
+
 .activity-group-disclosure {
   display: grid;
   /* An implicit `auto` track adopts long command/search min-content widths

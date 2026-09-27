@@ -1,11 +1,13 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
-import { Maximize2 } from "lucide-react";
+import { ChevronRight, Maximize2 } from "lucide-react";
 import type {
   CollaborationItem,
   CompactionItem,
@@ -71,18 +73,89 @@ export const collaborationRenderer: ConversationItemRenderer<CollaborationItem> 
   };
 
 export function viewedImageLabel(item: ViewedImageItem): string {
-  return item.fileName ? `Viewed image · ${item.fileName.text}` : "Viewed image";
+  const parts = ["Viewed image"];
+  if (item.fileName) parts.push(item.fileName.text);
+  if (item.status === "streaming") parts.push("Working…");
+  else if (item.status === "failed") parts.push("Failed");
+  else if (item.status === "interrupted") parts.push("Interrupted");
+  return parts.join(" · ");
 }
 
-// Transcript pairs this row with its captured image; alone it stays static.
+export function viewedImageStatus(
+  item: ViewedImageItem,
+): "working" | "completed" | "failed" | "interrupted" {
+  return item.status === "streaming" ? "working" : item.status;
+}
+
+/**
+ * A viewed image shares the activity row presentation. The row discloses its
+ * captured image, when one is supplied, and a failed read's error; otherwise
+ * it stays static with the chevron's space reserved so the label does not
+ * move when the row becomes expandable.
+ */
+export function ViewedImageDisclosure({
+  item,
+  image,
+}: {
+  readonly item: ViewedImageItem;
+  readonly image?: ReactNode;
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const detailsId = useId();
+  const errorId = useId();
+  const label = viewedImageLabel(item);
+  const error = item.status === "failed" ? item.error : undefined;
+  if (image === undefined && error === undefined) {
+    return (
+      <div className="activity-group-summary activity-group-summary-static viewed-image-summary">
+        <span aria-hidden="true" className="viewed-image-chevron-space" />
+        <span className="viewed-image-label">{label}</span>
+      </div>
+    );
+  }
+  return (
+    <>
+      <button
+        aria-controls={detailsId}
+        aria-describedby={error ? errorId : undefined}
+        aria-expanded={open}
+        className="activity-group-summary"
+        onClick={() => setOpen((value) => !value)}
+        type="button"
+      >
+        <ChevronRight
+          aria-hidden="true"
+          className="activity-group-chevron"
+          size={12}
+          strokeWidth={1.8}
+        />
+        <span className="viewed-image-label">{label}</span>
+      </button>
+      {error ? (
+        <span hidden id={errorId}>{error.message.text}</span>
+      ) : null}
+      {open ? (
+        <div className="activity-group-disclosure" id={detailsId}>
+          {error ? <p className="op-error">{error.message.text}</p> : null}
+          {image}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+// Transcript pairs this row with its captured image; alone it discloses at
+// most a failed read's error.
 export const viewedImageRenderer: ConversationItemRenderer<ViewedImageItem> = {
   kind: "viewed_image",
   render(item) {
     return (
-      <div className="activity-group-summary activity-group-summary-static viewed-image-summary">
-        <span aria-hidden="true" className="viewed-image-chevron-space" />
-        <span className="viewed-image-label">{viewedImageLabel(item)}</span>
-      </div>
+      <section
+        className="activity-group viewed-image-group"
+        data-viewed-image-status={viewedImageStatus(item)}
+      >
+        <ViewedImageDisclosure item={item} />
+      </section>
     );
   },
 };
