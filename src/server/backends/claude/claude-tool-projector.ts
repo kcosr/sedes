@@ -208,7 +208,7 @@ export function completeClaudeTool(
         ? { ...existing, status, error: {
           category: "unavailable" as const,
           message: boundDisplayText("Claude could not read this image."),
-          code: "claude_image_read_failed",
+          code: "claude_viewed_image_read_failed",
         } }
         : { ...existing, status };
     case "collaboration":

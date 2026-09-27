@@ -562,7 +562,7 @@ runs, and is registered and counted like any tool call. Its result is never
 copied onto it:
 
 - An `is_error` result fails it with a Sedes-written error
-  (`claude_image_read_failed`, "Claude could not read this image."), because
+  (`claude_viewed_image_read_failed`, "Claude could not read this image."), because
   Claude's error text names absolute paths.
 - A Stop result settles it as other tools do, without that error. A read
   still without a result when its turn ends is `interrupted`, even when the

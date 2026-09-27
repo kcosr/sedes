@@ -2501,7 +2501,7 @@ describe("Claude image reads", () => {
       result(3, "toolu-1", error, true)]);
     const [, view] = ordered(projection.snapshot);
     expect(view).toMatchObject({ semanticKind: "viewed_image", status: "failed", fileName: { text: "missing.png" },
-      error: { category: "unavailable", message: { text: "Claude could not read this image." }, code: "claude_image_read_failed" } });
+      error: { category: "unavailable", message: { text: "Claude could not read this image." }, code: "claude_viewed_image_read_failed" } });
     expect(JSON.stringify(projection.snapshot)).not.toContain("private-project");
     expect(projection.pendingViewedImages).toEqual([]);
   });
