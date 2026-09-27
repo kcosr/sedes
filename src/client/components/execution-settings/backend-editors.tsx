@@ -120,6 +120,9 @@ export function allowedEnvironments(backend: BackendDefinition, environments: re
 export function backendStopEffect(backend: BackendDefinition, runtime?: ConfigurationRuntimeState): "service" | "attachment" | "unknown" {
   const effect = backendEditors[backend.kind].stopEffect;
   if (!effect) return "service";
+  // Positive retirement leaves no retained owner to describe. The saved
+  // connection mode determines the next Start/Connect, not what was stopped.
+  if (runtime?.connectionState === "stopped") return effect(backend);
   return backend.enabled && runtime?.connectionState === "connected" && runtime.applyState === "applied" &&
     runtime.effectiveRevision === runtime.desiredRevision ? effect(backend) : "unknown";
 }

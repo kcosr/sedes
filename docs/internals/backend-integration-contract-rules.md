@@ -888,7 +888,9 @@ changes, and for every lifecycle preview, it opens those threads one at a time
 within the shared conversation-runtime budget only while an admitted backend
 module exists and both the backend and its environment have automatic connection
 preferences. Recheck that same module and admission before queued discovery and
-each thread acquisition. Existing-only inspection during
+each thread acquisition. Deduplicate passes by module lifetime, so an unfinished
+pass from a retired module cannot suppress its replacement or clear the
+replacement's in-flight marker. Existing-only inspection during
 explicit Disconnect remains read-only and must not create thread actors or
 invalidate its own lifecycle confirmation. Their output is then applied and
 acknowledged instead of overflowing the owner's retention bound. A pass cut
@@ -896,8 +898,9 @@ short at the budget retries at the next inspection. Inspection uses the
 existing recovery attachment and never launches a provider. The inspection
 may also report bounded `activity` counts (running turns, background work,
 pending interactions, and conversations with unacknowledged output) that
-interruption previews show; absent counts are not zero. Claude's and OpenCode's
-persistent hosts report both. Codex's runtime-wide attachment already records and
+interruption previews show; absent counts are not zero. Claude's persistent host
+reports both. OpenCode reports retained thread IDs and conservative blockers;
+its absent aggregate activity counts remain unknown. Codex's runtime-wide attachment already records and
 acknowledges retained outcomes without a thread handle, and Pi, Grok, and
 local Claude workers end with main, so they report neither.
 

@@ -30,6 +30,7 @@ describe.skipIf(!RUN_REAL_OPENCODE || process.platform !== "linux")("stock OpenC
       await fixture.waitFor(async () => fixture.model.requests.some(request => request.lastText?.includes(`first-${topology}-${ownership}`)));
       await fixture.waitFor(async () => JSON.stringify((await fixture.thread(threadId)).itemsById).includes("Fixture response"));
       await fixture.waitFor(async () => (await fixture.thread(threadId)).runState === "idle");
+      await assertBackendApplied(fixture);
       const first = await fixture.thread(threadId);
       const option = first.capabilities.settings.find(item => item.id === "model")?.options.find(item => item.available && item.label.text.includes("second-model"));
       expect(option).toBeDefined();
@@ -46,6 +47,7 @@ describe.skipIf(!RUN_REAL_OPENCODE || process.platform !== "linux")("stock OpenC
         expect(JSON.stringify((await fixture.thread(threadId)).itemsById)).toContain(`first-${topology}-${ownership}`);
       }
       await qualifyTools(fixture, threadId);
+      await assertBackendApplied(fixture);
       if (topology === "outbound") {
         await fixture.closeStreams();
         await fixture.lifecycle("disconnect", "environment");
@@ -107,6 +109,15 @@ describe.skipIf(!RUN_REAL_OPENCODE || process.platform !== "linux")("stock OpenC
     } finally { await held?.release(); }
   }, 90_000);
 });
+
+async function assertBackendApplied(fixture: OpenCodeProductionFixture) {
+  await fixture.waitFor(async () => (await fixture.configuration()).runtimes.some(runtime =>
+    runtime.resourceKind === "backend" && runtime.resourceId === fixture.backendId &&
+    runtime.connectionState === "connected" && runtime.applyState === "applied"));
+  const runtime = (await fixture.configuration()).runtimes.find(item => item.resourceKind === "backend" && item.resourceId === fixture.backendId)!;
+  expect(runtime).toMatchObject({ connectionState: "connected", applyState: "applied", lastError: null,
+    effectiveRevision: runtime.desiredRevision, startupEnvironmentPending: false });
+}
 
 async function qualifyRetainedCarrier(fixture: OpenCodeProductionFixture, threadId: string,
   topology: OpenCodeProductionTopology, ownership: OpenCodeProductionOwnership, pid: number) {

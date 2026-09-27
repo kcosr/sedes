@@ -1966,7 +1966,10 @@ export async function startProductionApplication(
     // service-owned runtime is attached when an observation reports it, so
     // its output is applied and acknowledged instead of accumulating. A pass
     // cut short at the runtime budget retries at the next observation.
-    const retainedAttachments = new Set<string>();
+    // Replacement modules get their own pass even while an older module's
+    // in-flight acquisition is still settling. Its finalizer cannot clear the
+    // replacement's admission marker.
+    const retainedAttachments = new WeakSet<BackendModuleRuntime>();
     const attachRetainedWork = (backendId: string): void => {
       const threadIds = observedBackends.get(backendId)?.retainedThreadIds ?? [];
       // Existing-only inspection also runs while Settings has detached the
@@ -1979,9 +1982,9 @@ export async function startProductionApplication(
         environmentId !== undefined && profiles.some(profile => profile.backendInstanceId === backendId && profile.executionEnvironmentId === environmentId) &&
         configurationRepository.runtime(scope, "backend", backendId).preference === "automatic" &&
         configurationRepository.runtime(scope, "environment", environmentId).preference === "automatic";
-      if (threadIds.length === 0 || retainedAttachments.has(backendId) || !runtimes || !isAdmitted()) return;
+      if (!module || threadIds.length === 0 || retainedAttachments.has(module) || !runtimes || !isAdmitted()) return;
       const coordinator = runtimes;
-      retainedAttachments.add(backendId);
+      retainedAttachments.add(module);
       const admitted = discoveryOperations.admit(async signal => {
         if (!isAdmitted()) return;
         const detached = new AbortController();
@@ -1995,11 +1998,11 @@ export async function startProductionApplication(
             return coordinator.acquire(scope, threadId);
           },
           report: (context, error) => reportBackgroundError(`Backend ${backendId}: ${context}`)(error) });
-        if (!result.complete && isAdmitted()) remoteBackendObservations.delete(module!);
+        if (!result.complete && isAdmitted()) remoteBackendObservations.delete(module);
       });
-      if (!admitted) { retainedAttachments.delete(backendId); return; }
+      if (!admitted) { retainedAttachments.delete(module); return; }
       void admitted.catch(reportBackgroundError(`Backend ${backendId} retained work attachment`))
-        .finally(() => retainedAttachments.delete(backendId));
+        .finally(() => retainedAttachments.delete(module));
     };
     const captureAdministrativeResource = async (record: ConfigurationRuntimeState, refresh: boolean, refreshProvider = true) => {
       const current = configurationRepository.get(scope);
@@ -2071,7 +2074,10 @@ export async function startProductionApplication(
           return configurationFingerprint(observed ? { incarnation: observed.serviceIncarnation, epoch: observed.controllerEpoch, attached: observed.attached } : null);
         };
         const cached = owned && remote ? remoteBackendObservations.get(owned) : undefined;
-        if (refresh || (owned && remote && cached?.serviceIdentity !== serviceIdentity())) {
+        // Local administration reads the current owned runtime without opening
+        // it. Keep lazy startup transitions visible without requiring an impact
+        // preview; remote inspection remains cached by service identity.
+        if (refresh || (!remote && owned?.administration) || (owned && remote && cached?.serviceIdentity !== serviceIdentity())) {
           const observation = { serviceIdentity: serviceIdentity(), pending: Promise.resolve() };
           // Module preparation knows desired startup settings, not those of a
           // retained remote process. Recover its applied fingerprint once per

@@ -205,6 +205,8 @@ export function RuntimeControls({ controls, revision, resourceKind, resourceId, 
   const canStopUnknown = Boolean(unsettledMutationId) && outcomeUnknown && runtime?.supportedActions.includes("stop");
   const retiresAttachment = impact?.action === "stop" && stopEffect === "attachment";
   const unknownStopEffect = impact?.action === "stop" && stopEffect === "unknown";
+  const unreachableStop = impact?.action === "stop" && runtime?.connectionState === "unreachable";
+  const recoveryStop = impact?.action === "stop" && runtime?.connectionState === "recovery_required";
   return <section aria-label={`${label} runtime`} aria-busy={busy || undefined} className="execution-settings-section">
     <div className="execution-settings-status" data-tone={presentation.tone}>
       <div className="execution-settings-status-headline">
@@ -236,15 +238,20 @@ export function RuntimeControls({ controls, revision, resourceKind, resourceId, 
     </div>
     {impact ? <div ref={confirmationRef} tabIndex={-1} className="execution-settings-confirmation" data-tone="attention" role="group" aria-label="Confirm runtime interruption">
       <strong>{actionLabels[impact.action]} {label}?</strong>
-      <p>{impact.activeResources} affected resource{impact.activeResources === 1 ? "" : "s"}. {retiresAttachment
+      <p>{impact.activeResources} affected resource{impact.activeResources === 1 ? "" : "s"}. {unreachableStop
+        ? "Stop records that Sedes should not start this runtime automatically. Shutdown or attachment retirement is unconfirmed while the host is unreachable."
+        : recoveryStop ? "Stop checks ownership before ending Sedes-owned execution or retiring an external attachment. Shutdown is unconfirmed until ownership can be verified."
+        : retiresAttachment
         ? "Sedes retires its connection and retained recovery state. The external server and its running work continue."
         : unknownStopEffect ? "Stop ends Sedes-owned execution or retires Sedes's attachment to an external server. External servers are left running."
         : "Running work will be interrupted; interrupted work is not restarted automatically."}</p>
-      <p>{retiresAttachment
+      <p>{unreachableStop
+        ? "Work on the host may still be running. Reconnect and inspect its status before deciding whether to stop it again."
+        : retiresAttachment
         ? "Pending Sedes results may remain unknown, and retained output may be lost. Connect again to establish a new Sedes attachment."
         : "Some retained work may have an unknown outcome. Unrecovered output or results may be lost when its runtime stops; completed external changes are not undone."}</p>
       {impact.interruptions.length ? <ul>{impact.interruptions.map((interruption, index) => <li key={index}>{interruption}</li>)}</ul> : null}
-      {!retiresAttachment && !unknownStopEffect && confirmationNotes[impact.action] ? <p>{confirmationNotes[impact.action]}</p> : null}
+      {!unreachableStop && !recoveryStop && !retiresAttachment && !unknownStopEffect && confirmationNotes[impact.action] ? <p>{confirmationNotes[impact.action]}</p> : null}
       <p className="execution-settings-muted">This preview expires in about two minutes.</p>
       <div className="execution-settings-actions"><Button type="button" variant="destructive" size="sm" disabled={busy || disabled}
         onClick={() => void execute(impact.action, impact)}>Confirm {actionLabels[impact.action].toLowerCase()}</Button>

@@ -89,7 +89,11 @@ generation, ownership and state, so streaming text cannot continually invalidate
 a confirmed Stop. At the environment service boundary, stock OpenCode remains
 conservatively unknown for automatic retirement; forced confirmation is stable
 for the exact native owner while detailed inspection and abandonment evidence
-continue to report retained activity.
+continue to report retained activity. Backend inspection reports a ready resident
+as active even between turns, allowing its unchanged configuration to be applied.
+The `active_work` blocker still requires positively observed work; the separate
+`unknown_state` blocker remains until explicit retirement because stock OpenCode
+cannot prove its complete background inventory is idle.
 
 Settings admits local, SSH and Linux outbound placement independently of
 owned/external mode. Native configuration and secret references are resolved
@@ -108,11 +112,11 @@ executable as an alternative.
 
 | Mode | Connection | Lifetime |
 | --- | --- | --- |
-| Owned | `serve --stdio --hostname 127.0.0.1 --port 0`; stdout announces the HTTP endpoint, and stdin controls process lifetime. Application traffic uses authenticated HTTP and SSE. | Conversation references can reach zero while the daemon and its background work remain alive. Explicit backend Stop, Restart and main shutdown retire the owned process. |
-| External | Authenticated HTTP to an explicit loopback IP literal and port. DNS, remote endpoints, URL credentials, redirects, query strings and endpoint paths are rejected. | Disconnect closes Sedes subscriptions and releases its lease. It sends no native interruption and leaves the external daemon and background work running. |
+| Owned | `serve --stdio --hostname 127.0.0.1 --port 0`; stdout announces the HTTP endpoint, and stdin controls process lifetime. Application traffic uses authenticated HTTP and SSE. | Conversation references can reach zero while the daemon and its background work remain alive. Backend Stop/Restart retire the owned process. Main shutdown ends a local owner; a persistent sidecar owner outlives main. |
+| External | Authenticated HTTP to an explicit loopback IP literal and port on the execution host. DNS, direct remote native endpoints, URL credentials, redirects, query strings and endpoint paths are rejected. | Retiring the host attachment closes its subscriptions and lease without interrupting the external daemon. Remote Disconnect releases only main's attachment; the sidecar attachment remains resident. |
 
-Both modes require a local Linux execution environment and the same OS account
-as Sedes. Admission records PID, process start time, executable identity and
+Both modes require a Linux execution host and the same OS account as the Sedes
+runtime on that host (main for Local, the sidecar for SSH/outbound). Admission records PID, process start time, executable identity and
 canonical database identity. Subsequent identity changes revoke the connection;
 an endpoint alone never proves continuity. The configured database path is an
 operator declaration where the native API cannot prove which store it opened.

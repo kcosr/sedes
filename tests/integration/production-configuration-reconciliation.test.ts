@@ -19,6 +19,8 @@ import type { SidecarServiceStatus } from "../../src/internal/sidecar-protocol/s
 import { compiledBackendModuleCatalog } from "../../src/server/backends/compiled-module-catalog.js";
 import { BackendRuntimeControlRejectedError } from "../../src/server/backends/runtime-control.js";
 import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
+import * as retainedWork from "../../src/server/runtime/retained-provider-work.js";
+import type { BackendModuleRuntime } from "../../src/server/backends/module.js";
 
 let application: RunningApplication | undefined;
 let directory: string | undefined;
@@ -76,6 +78,58 @@ async function fixture() {
 }
 
 describe("production configuration reconciliation", () => {
+  it("attaches a replacement module's retained work before the old pass settles", async () => {
+    const modules: BackendModuleRuntime[] = [];
+    const installAdministration = (runtime: BackendModuleRuntime) => {
+      const incarnation = `retained-module-${modules.indexOf(runtime)}`;
+      Object.defineProperty(runtime, "administration", { value: {
+        inspect: async () => ({ state: "idle", incarnation, revision: incarnation, blockers: [], retainedThreadIds: ["retained-thread"] }),
+        stop: async () => undefined, restart: async () => undefined,
+      } });
+    };
+    let installOnCreate = false;
+    const prepare = compiledBackendModuleCatalog.prepare.bind(compiledBackendModuleCatalog);
+    vi.spyOn(compiledBackendModuleCatalog, "prepare").mockImplementation(input => prepare(input).map(prepared => {
+      if (prepared.backendInstanceId !== "idle-pi") return prepared;
+      const create = prepared.createRuntime.bind(prepared);
+      prepared.createRuntime = context => {
+        const runtime = create(context); modules.push(runtime);
+        if (installOnCreate) installAdministration(runtime);
+        return runtime;
+      };
+      return prepared;
+    }));
+    const releases: (() => void)[] = [];
+    const attach = vi.spyOn(retainedWork, "attachRetainedThreads").mockImplementation(() => new Promise(resolve => {
+      releases.push(() => resolve({ complete: false, attachedThreadIds: [] }));
+    }));
+    try {
+      const { service, scope } = await fixture();
+      installOnCreate = true; installAdministration(modules[0]!);
+      const impact = async (action: "start" | "stop") => service.impact(scope, {
+        resourceKind: "backend", resourceId: "idle-pi", action, expectedRevision: (await service.get(scope)).revision,
+      });
+      const apply = async (action: "start" | "stop") => {
+        const preview = await impact(action);
+        return service.lifecycle(scope, { mutationId: randomUUID(), resourceKind: "backend", resourceId: "idle-pi", action,
+          expectedRevision: (await service.get(scope)).revision, expectedIncarnation: preview.incarnation, impactToken: preview.token });
+      };
+      expect((await apply("stop")).state).toBe("applied");
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledTimes(1));
+      expect((await apply("start")).state).toBe("applied");
+      expect(modules).toHaveLength(2);
+      await impact("stop");
+      // The replacement can attach without waiting for old hydration.
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledTimes(2));
+      releases[0]!();
+      // Let the old admission/finalizer finish, then inspect the replacement
+      // again while its own pass is still held. No duplicate is admitted.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      await impact("stop");
+      expect(attach).toHaveBeenCalledTimes(2);
+    } finally { for (const release of releases) release(); }
+  });
+
   it.each([false, true])("recovers retained startup settings after main restarts (transient inspection failure: %s)", async failFirstInspection => {
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID();

@@ -168,6 +168,32 @@ describe("resident OpenCode runtime registry", () => {
     const next = f.services.attach(serviceConfiguration); expect(await f.hosts.lookup(configuration, next)).toBe(f.owners[0]);
   });
 
+  it.each(["owned", "external"] as const)("reports a ready idle %s resident without inventing active work or allowing automatic retirement", async ownership => {
+    const f = fixture();
+    const selected: OpenCodeRuntimeConfiguration = ownership === "owned" ? configuration : { ...configuration,
+      connection: { ownership: "external", channel: { type: "http", url: "http://127.0.0.1:4096", authentication: {
+        type: "basic", username: "opencode", secret: { source: "environment", variable: "SEDES_OPENCODE_PASSWORD" } } } } };
+    const runtime = await f.hosts.ensure(selected, f.epoch), owner = f.owners[0]!;
+    owner.active = 0; owner.interactions = 0;
+    const idle = await f.hosts.inspect(runtime.runtimeId);
+    expect(idle).toMatchObject({ state: "active", blockers: ["unknown_state"], retainedThreadIds: [] });
+    expect(owner.host.retentionSnapshot()).toMatchObject({ activeWorkCount: 0, pendingInteractionCount: 0, retainedMutationCount: 0 });
+    const service = f.services.status();
+    expect(service.resources[0]).toMatchObject({ state: "unknown", blockers: ["unknown_state"] });
+    await expect(f.hosts.stop(runtime.runtimeId, idle.revision, false)).rejects.toThrow("restart_blocked");
+    await expect(f.serviceStop(false)).rejects.toThrow("cleanup_unproven");
+    expect(f.controls.signals).not.toHaveBeenCalled();
+    expect(owner.frozen).toBe(false);
+
+    owner.active = 1;
+    expect(await f.hosts.inspect(runtime.runtimeId)).toMatchObject({ state: "active", blockers: ["unknown_state", "active_work"] });
+    expect(f.services.status().resourcesFingerprint).toBe(service.resourcesFingerprint);
+    owner.active = null;
+    expect(await f.hosts.inspect(runtime.runtimeId)).toMatchObject({ state: "active", blockers: ["unknown_state"] });
+    owner.state = "cleanup_unproved";
+    expect(await f.hosts.inspect(runtime.runtimeId)).toMatchObject({ state: "unknown", blockers: ["unknown_state", "cleanup_unproven"] });
+  });
+
   it("requires current confirmation and explicit force for unknown background inventory", async () => {
     const f = fixture(), runtime = await f.hosts.ensure(configuration, f.epoch);
     const inspected = await f.hosts.inspect(runtime.runtimeId); expect(inspected.blockers).toContain("unknown_state");

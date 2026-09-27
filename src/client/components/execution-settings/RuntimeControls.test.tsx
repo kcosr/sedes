@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigurationLifecycleImpact, ConfigurationLifecycleRequest, ConfigurationLifecycleResult, ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
 import { ApiError } from "../../api/ApiClient.js";
 import { RuntimeControls } from "./RuntimeControls.js";
+import { backendEditors, backendStopEffect } from "./backend-editors.js";
 import type { ConfigurationControls } from "./useConfiguration.js";
 
 const runtime: ConfigurationRuntimeState = {
@@ -70,6 +71,33 @@ describe("runtime administration controls", () => {
     await user.click(screen.getByRole("button", { name: "Confirm stop" }));
     expect(api.configurationLifecycle).toHaveBeenCalledWith(expect.objectContaining({ action: "stop", impactToken: impact.token }));
   });
+
+  it.each((["codex_app_server", "opencode"] as const).flatMap(kind => (["unreachable", "recovery_required"] as const).map(connectionState => ({ kind, connectionState }))))(
+    "keeps $kind $connectionState Stop confirmation unconfirmed", async ({ kind, connectionState }) => {
+      const backend = backendEditors[kind].createBackend("backend");
+      const state: ConfigurationRuntimeState = { ...runtime, resourceKind: "backend", resourceId: backend.id,
+        connectionState, applyState: "unavailable", upgradeState: "current", supportedActions: ["connect", "disconnect", "stop"] };
+      const api = controls(), user = userEvent.setup();
+      api.configurationLifecycleImpact.mockResolvedValue({ ...impact, resourceKind: "backend", resourceId: backend.id,
+        action: "stop", interruptions: [], expiresAt: new Date(Date.now() + 120_000).toISOString() });
+      render(<RuntimeControls controls={api} revision={7} resourceKind="backend" resourceId={backend.id} label="Build host"
+        runtime={state} stopEffect={backendStopEffect(backend, state)} disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
+      await user.click(moreActions());
+      await user.click(await screen.findByRole("menuitem", { name: "Stop" }));
+      const dialog = within(await screen.findByRole("group", { name: "Confirm runtime interruption" }));
+      expect(dialog.queryByText(/Running work will be interrupted|Stop ends|The service stops/)).toBeNull();
+      if (connectionState === "unreachable") {
+        expect(dialog.getByText(/Stop records that Sedes should not start this runtime automatically/)).toBeVisible();
+        expect(dialog.getByText(/Shutdown or attachment retirement is unconfirmed/)).toBeVisible();
+        expect(dialog.getByText(/Work on the host may still be running/)).toBeVisible();
+      } else {
+        expect(dialog.getByText(/Stop checks ownership/)).toBeVisible();
+        expect(dialog.getByText(/Shutdown is unconfirmed until ownership can be verified/)).toBeVisible();
+      }
+      expect(api.configurationLifecycle).not.toHaveBeenCalled();
+      await user.click(dialog.getByRole("button", { name: "Confirm stop" }));
+      expect(api.configurationLifecycle).toHaveBeenCalledWith(expect.objectContaining({ action: "stop", impactToken: impact.token }));
+    });
 
   it.each(["pending", "unknown"] as const)("restores a %s command after Settings remounts without replaying it", async state => {
     const api = controls();

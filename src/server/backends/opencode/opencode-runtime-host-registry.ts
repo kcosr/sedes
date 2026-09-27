@@ -160,11 +160,12 @@ export class OpenCodeRuntimeHostRegistry {
   #snapshot(resident: Resident) {
     resident.host ??= resident.runtime.nativeHost;
     const native = resident.runtime.snapshot(), retained = resident.host?.retentionSnapshot();
-    // Stock v2 cannot enumerate every background process. Empty foreground
-    // inventory is never a complete idle/cleanup proof for a resident owner.
-    const state = (retained?.activeWorkCount ?? 0) > 0 ? "active" as const : "unknown" as const;
+    // A ready native owner proves an active resident runtime, including between
+    // turns. Its incomplete background inventory still blocks automatic cleanup;
+    // neither presence nor an empty foreground read proves complete idleness.
+    const state = native.state === "ready" ? "active" as const : "unknown" as const;
     const blockers: SidecarUpgradeBlocker[] = ["unknown_state"];
-    if (state === "active") blockers.push("active_work");
+    if ((retained?.activeWorkCount ?? 0) > 0) blockers.push("active_work");
     if ((retained?.pendingInteractionCount ?? 0) > 0) blockers.push("pending_interaction");
     if ((retained?.retainedMutationCount ?? 0) > 0 || (retained?.observation.pendingEvidenceCount ?? 0) > 0) blockers.push("unsettled_outcome");
     if (native.state === "cleanup_unproved") blockers.push("cleanup_unproven");

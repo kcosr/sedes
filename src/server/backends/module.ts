@@ -149,6 +149,7 @@ export interface BackendRuntimeInspection {
 }
 
 export interface BackendRuntimeAdministration {
+  /** Read existing runtime state; inspection must not launch provider work. */
   inspect(): Promise<BackendRuntimeInspection>;
   stop(input: { readonly expectedRevision: string; readonly force: boolean }): Promise<void>;
   restart(input: { readonly expectedRevision: string; readonly force: boolean }): Promise<void>;
