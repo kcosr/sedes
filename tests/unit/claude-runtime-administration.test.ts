@@ -1,3 +1,4 @@
+import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import { randomUUID } from "node:crypto";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, expect, it, vi } from "vitest";
@@ -9,7 +10,7 @@ import { ClaudePersistentRuntimeRegistry } from "../../src/server/backends/claud
 import { claudePersistentAttachmentSchema } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, registerClaudePersistentRuntimeHost } from "../../src/server/backends/claude/runtime/claude-sidecar-runtime.js";
 import { recoverClaudeRuntimeAdministration } from "../../src/server/backends/claude/runtime/claude-runtime-administration.js";
-import { createClaudeFramedCarrier, createFakePersistentClaudeRuntime } from "../helpers/persistent-claude-fixture.js";
+import { createFakePersistentClaudeRuntime } from "../helpers/persistent-claude-fixture.js";
 
 const scope = { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "claude" };
 const configuration = { ...scope, executablePath: "/bin/claude", configDirectory: "/config", initializationTimeoutMs: 1000 };
@@ -23,7 +24,7 @@ async function fixture() {
   const artifact = vi.fn(async () => { throw new Error("recovery_must_not_load_artifact"); });
   const hosts = new ClaudePersistentRuntimeRegistry({ scope, executionEnvironmentId: scope.executionEnvironmentId,
     environmentChannel: {} as ExecutionEnvironmentChannelProvider, environment: {}, services, artifact, createRuntime });
-  const carrier = await createClaudeFramedCarrier();
+  const carrier = await createSidecarFramedCarrier();
   const controllerEpoch = services.attach(serviceConfiguration);
   const detach = registerClaudePersistentRuntimeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, controllerEpoch, onDetach: () => services.detach(controllerEpoch) });
   await carrier.start();
@@ -334,7 +335,7 @@ it("rejects a closed framed recovery channel instead of authorizing provider abs
 
 it("rejects a recovery channel before its framed hello completes", async () => {
   const f = await fixture();
-  const carrier = await createClaudeFramedCarrier();
+  const carrier = await createSidecarFramedCarrier();
   cleanup.push(async () => await carrier.close());
   carrier.mainPeer.start(); carrier.hostPeer.start();
   vi.mocked(f.context.sidecarRuntime.acquireRecovery).mockResolvedValue({

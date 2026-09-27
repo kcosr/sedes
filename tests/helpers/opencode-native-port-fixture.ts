@@ -3,7 +3,8 @@ import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-
 import { OpenCodeHttpNativeAdapter } from "../../src/server/backends/opencode/opencode-http-native-adapter.js";
 import { OpenCodeNativeHost } from "../../src/server/backends/opencode/opencode-native-host.js";
 import { decodeOpenCodeNativeFailure, encodeOpenCodeNativeFailure, parseOpenCodeMutationControl,
-  parseOpenCodeMutationInput, parseOpenCodeMutationOutput, parseOpenCodeReadInput, parseOpenCodeReadOutput } from "../../src/server/backends/opencode/opencode-native-codecs.js";
+  parseOpenCodeMutationInput, parseOpenCodeMutationOutput, parseOpenCodeReadInput, parseOpenCodeReadOutput,
+  parseOpenCodeObservationBoundary, parseOpenCodeObservationRecords } from "../../src/server/backends/opencode/opencode-native-codecs.js";
 import type { OpenCodeMutationControl, OpenCodeNativePort, OpenCodeMutationMethod, OpenCodeMutationInput,
   OpenCodeReadMethod, OpenCodeReadInput } from "../../src/server/backends/opencode/opencode-native-port.js";
 
@@ -44,7 +45,9 @@ export function createOpenCodeNativePortFixture(client: OpenCodeHttpClient,
     acknowledgeOperation: identity => direct.acknowledgeOperation(transfer(identity)),
     observe: input => {
       const observation = direct.observe(input);
-      return { ...observation, ready: observation.ready.then(transfer), drain: () => observation.drain().map(transfer),
+      return { ...observation, ready: observation.ready.then(value => parseOpenCodeObservationBoundary(transfer(value))),
+        drain: () => [...parseOpenCodeObservationRecords(transfer(observation.drain()))],
+        acknowledge: cursor => observation.acknowledge(transfer(cursor)),
         get failure() { return observation.failure; } };
     },
   };

@@ -65,14 +65,18 @@ function ownedProcessKey(process: OpenCodeOwnedProcess): string {
   return `${process.pid}:${process.startTime}`;
 }
 
-export async function createOpenCodeProcessCleanup(marker: string) {
+async function createProcessInspector(marker: string, recovery?: {
+  readonly ownerStartTime: string;
+  readonly assertTarget: () => Promise<void>;
+}) {
+  if (!/^[a-f0-9]{64}$/u.test(marker) || recovery && !/^[0-9]+$/u.test(recovery.ownerStartTime)) throw cleanupUnproven("marker_identity");
   const owned = new Map<string, OpenCodeOwnedProcess>();
   const expected = Buffer.from(`${PROCESS_MARKER_NAME}=${marker}\0`);
   // Capture before the first owned runtime process is spawned. Existing processes
   // cannot have inherited this new marker; some same-account services make
   // their environments unreadable. PID + start time keeps reuse distinguishable.
   const preexisting = new Set<string>();
-  const initialEntries = (await readdir("/proc")).filter(entry => /^[1-9]\d*$/u.test(entry));
+  const initialEntries = recovery ? [] : (await readdir("/proc")).filter(entry => /^[1-9]\d*$/u.test(entry));
   if (initialEntries.length > MAX_PROCESS_ENTRIES) throw cleanupUnproven();
   const initialDeadline = Date.now() + 5000;
   for (const entry of initialEntries) {
@@ -81,7 +85,7 @@ export async function createOpenCodeProcessCleanup(marker: string) {
     if (identity) preexisting.add(ownedProcessKey(identity));
   }
   const launchAncestors = new Set<string>();
-  let ancestorPid = process.pid;
+  let ancestorPid = recovery ? 0 : process.pid;
   while (ancestorPid !== 0) {
     if (launchAncestors.size >= 128) throw cleanupUnproven("launch_ancestry");
     const ancestor = await ownedProcess(ancestorPid);
@@ -90,6 +94,7 @@ export async function createOpenCodeProcessCleanup(marker: string) {
     ancestorPid = ancestor.parentPid;
   }
   const unrelatedAncestry = async (candidate: OpenCodeOwnedProcess): Promise<boolean> => {
+    if (recovery) return false;
     const chain: OpenCodeOwnedProcess[] = [];
     let current: OpenCodeOwnedProcess | undefined = candidate;
     while (current && chain.length < 128) {
@@ -115,6 +120,7 @@ export async function createOpenCodeProcessCleanup(marker: string) {
     return false;
   };
   const scan = async () => {
+    await recovery?.assertTarget();
     let uncertainty: OpenCodeCleanupError | undefined;
     const uncertain = (error: unknown, stage: string, pid?: number) => {
       uncertainty ??= error instanceof OpenCodeCleanupError ? error : cleanupUnproven(stage, pid);
@@ -141,6 +147,10 @@ export async function createOpenCodeProcessCleanup(marker: string) {
         if ((await stat(`/proc/${pid}`)).uid !== process.getuid!()) continue;
         const before = await ownedProcess(pid);
         if (!before || preexisting.has(ownedProcessKey(before))) continue;
+        // Recovery cannot take a new-process baseline: the old marked children
+        // already exist. Only a comparable start strictly before their owner's
+        // lifetime proves a process could not have inherited this marker.
+        if (recovery && BigInt(before.startTime) < BigInt(recovery.ownerStartTime)) continue;
         if (owned.has(ownedProcessKey(before))) continue;
         const environment = await boundedProcessFile(`/proc/${pid}/environ`, MAX_PROCESS_ENVIRONMENT_BYTES).catch(async (error: unknown) => {
           // Linux can deny environ reads while a process exits, after the
@@ -189,12 +199,13 @@ export async function createOpenCodeProcessCleanup(marker: string) {
   const signal = async (target: OpenCodeOwnedProcess, value: NodeJS.Signals) => {
     // Revalidate start time immediately before signaling, never signal a bare
     // reused PID or group after its original process has exited.
+    await recovery?.assertTarget();
     const current = await ownedProcess(target.pid);
     if (current?.startTime !== target.startTime) return;
     try { process.kill(target.pid, value); }
     catch (error) { if (!disappeared(error)) throw cleanupUnproven(); }
   };
-  return async () => {
+  const stop = async () => {
     const deadline = Date.now() + 15_000;
     const terminatedAt = new Map<string, number>();
     const killed = new Set<string>();
@@ -229,4 +240,23 @@ export async function createOpenCodeProcessCleanup(marker: string) {
     if (final.uncertainty) throw final.uncertainty;
     if (final.targets.length !== 0 || emptyScans < 2) throw cleanupUnproven();
   };
+  const inspect = async () => {
+    for (let index = 0; index < 2; index++) {
+      const remaining = await scan();
+      if (remaining.uncertainty) throw remaining.uncertainty;
+      if (remaining.targets.length) throw cleanupUnproven("marked_descendants_alive");
+      if (index === 0) await delay(25);
+    }
+  };
+  return { stop, inspect };
+}
+
+export async function createOpenCodeProcessCleanup(marker: string): Promise<() => Promise<void>> {
+  return (await createProcessInspector(marker)).stop;
+}
+
+/** Recovery uses the persisted authority, never a replacement host's process
+ * snapshot. Inspection sends no signals; explicit stop revalidates each PID. */
+export function createOpenCodeProcessRecovery(marker: string, ownerStartTime: string, assertTarget: () => Promise<void>) {
+  return createProcessInspector(marker, { ownerStartTime, assertTarget });
 }

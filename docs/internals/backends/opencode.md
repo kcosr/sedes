@@ -32,11 +32,35 @@ different input or a later deadline is rejected. Control operations reserve
 their own queue and retention capacity, with small reservations for fixed-size
 control responses. Ordinary operations do not acquire an artificial deadline
 from receipt age; Stop preserves its explicit original deadline. Unused scopes
-are reclaimed after leases, observations, and retained mutations release them.
+are reclaimed after leases, observations, retained mutations, and native work
+evidence release them. Prompt and compaction dispatch pin the scope before the
+HTTP response can race the first native event.
 Owner retirement fences existing ports
-before native cleanup; a retry after owner loss remains unknown. These
-in-process contracts do not yet advertise remote execution or retained event
-replay. Pi, Codex, Claude and Grok retain their existing backend contracts.
+before native cleanup; a retry after owner loss remains unknown.
+
+The execution host owns one resident native SSE subscription. Each admitted
+thread has a bounded evidence journal, dense sequence, continuity token and
+compact native proof baseline. Main commits receipt evidence and its observation
+cursor in one transaction before acknowledging the host. Carrier loss does not
+end native observation; native SSE loss explicitly invalidates continuity.
+Presentation subscribers have separate bounded queues and cannot acknowledge
+operation evidence. Retention exhaustion prevents new ordinary work while
+preserving the independent control path.
+
+The persistent sidecar advertises the private `opencode_runtime` capability on
+Linux. Its registry owns the same runtime/host used locally; SSH and outbound
+carriers share typed operations and the bounded runtime body channel. Carrier
+detach releases ports and subscribers, preserving the native owner and evidence.
+Existing-only recovery can reopen exact retained thread authority after a
+configuration change, but cannot create scopes or submit new work. Backend
+administration can inspect and explicitly retire the original owner even after
+desired native paths change. Scope acquisition, evidence recovery and controls
+have a separate lane from ordinary history/body requests.
+
+Remote product admission remains disabled pending tool relay and full remote
+qualification. The host implementation is exercised through test composition;
+it is not yet a Settings-supported topology. Pi, Codex, Claude and Grok retain
+their existing backend contracts.
 
 ## Native ownership
 
@@ -73,8 +97,12 @@ The adjacent, private store lease excludes another Sedes runtime using the same
 store. It does not lock out independent native OpenCode processes. The operator
 must select external mode for an existing owner. Unconfirmed cleanup retains the
 lease; Sedes does not steal it or launch a replacement over it.
-An abrupt Sedes crash can leave a stale lease that requires operator inspection
-and removal after confirming the prior owner and its work have stopped.
+The versioned lease records the hosting incarnation, ownership kind, exact
+owner-process identity and the owned descendant marker. A dead external owner
+can release only its proved exact lease. A dead owned owner requires proof that
+its marked descendants are gone; uncertain or malformed records retain the
+fence. Explicit host recovery reinspects the exact record and process identities
+before signaling positively identified descendants or releasing the lease.
 Failure while first writing the lease record removes only the proved newly
 created directory and partial record. Unknown directory/file identity, changed
 ownership or unexpected remnants retain the fence for operator inspection.
@@ -93,7 +121,8 @@ ambiguous and keep restart fenced after all identified children have stopped.
 Sedes reevaluates that uncertainty during bounded cleanup. Explicit Stop can
 retry cleanup using the retained owned-process handle after the ambiguity
 resolves; it never starts a replacement owner or steals a lease. A failed
-startup that yielded no owned-process handle still requires operator inspection.
+startup retains a retryable cleanup callback when the launcher can still prove
+its owned descendants; otherwise operator inspection remains required.
 
 ## Configuration and authority
 

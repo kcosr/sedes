@@ -4,7 +4,7 @@ import { z } from "zod";
 import { OpenCodeHttpClient } from "./opencode-http-client.js";
 import { boundedOpenCodeProcessFile, canonicalOpenCodeStore, readOpenCodeNativeIdentity, sameOpenCodeNativeIdentity, type OpenCodeNativeIdentity } from "./opencode-native-identity.js";
 import { createOpenCodeNativeStoreLifecycle, openCodeNativeStoreNamespaceKey, type OpenCodeNativeStoreLease } from "./opencode-native-store.js";
-import { startOpenCodeOwnedProcess, type OpenCodeOwnedProcess } from "./opencode-owned-process.js";
+import { startOpenCodeOwnedProcess, OpenCodeOwnedCleanupUnprovedError, type OpenCodeOwnedProcess } from "./opencode-owned-process.js";
 import { admitOpenCodeNativeProfile, OpenCodeRuntimeError } from "./opencode-release.js";
 import { mergeResolvedEnvironment, resolveEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { OpenCodeHttpNativeAdapter } from "./opencode-http-native-adapter.js";
@@ -26,6 +26,9 @@ export type OpenCodeRuntimeConnection =
   | { readonly ownership: "owned"; readonly channel: { readonly type: "process_stdio"; readonly executablePath: string; readonly workingDirectory: string } }
   | { readonly ownership: "external"; readonly channel: { readonly type: "http"; readonly url: string } };
 export interface OpenCodeRuntimeInput {
+  readonly hostIncarnation: string;
+  /** Host admission is checked synchronously immediately before every launch. */
+  readonly assertLaunchAdmission?: () => void;
   readonly authority: OpenCodeRuntimeAuthority;
   readonly nativeStorePath: string;
   readonly configDirectory?: string;
@@ -77,12 +80,14 @@ export class OpenCodeRuntime {
     readonly host: OpenCodeNativeHost; readonly port: OpenCodeNativePort }>();
   readonly #runtimeId = randomUUID();
   #owned?: OpenCodeOwnedProcess;
+  #retryLaunchCleanup?: () => Promise<void>;
   #lease?: OpenCodeNativeStoreLease;
   #references = 0;
   #starting?: Promise<void>;
   #stopping?: Promise<OpenCodeRuntimeStopResult>;
 
   constructor(input: OpenCodeRuntimeInput) {
+    if (!input.hostIncarnation || input.hostIncarnation.length > 256) throw new OpenCodeRuntimeError("opencode_runtime_authority_invalid");
     if (Object.values(input.authority).some(value => typeof value !== "string" || !value || value.length > 256)) throw new OpenCodeRuntimeError("opencode_runtime_authority_invalid");
     this.#input = { ...input, authority: { ...input.authority }, environment: { ...input.environment },
       connection: input.connection.ownership === "owned"
@@ -90,6 +95,9 @@ export class OpenCodeRuntime {
         : { ownership: "external", channel: { ...input.connection.channel } } };
     this.nativeNamespaceKey = openCodeRuntimeNamespaceKey(input.authority.executionEnvironmentId, input.nativeStorePath);
   }
+
+  get runtimeId(): string { return this.#runtimeId; }
+  get nativeHost(): OpenCodeNativeHost | undefined { return this.#host; }
 
   snapshot(): OpenCodeRuntimeSnapshot {
     return Object.freeze({ state: this.#state, ownership: this.#input.connection.ownership,
@@ -179,7 +187,8 @@ export class OpenCodeRuntime {
         if (this.#input.storeLease.canonicalStorePath !== store || this.#input.storeLease.namespaceKey !== openCodeNativeStoreNamespaceKey(store)) throw new OpenCodeRuntimeError("opencode_native_store_lease_mismatch");
         this.#lease = this.#input.storeLease;
       } else {
-        this.#lease = await createOpenCodeNativeStoreLifecycle({ canonicalStorePath: store, label: "OpenCode native store" }).acquire();
+        this.#lease = await createOpenCodeNativeStoreLifecycle({ canonicalStorePath: store, label: "OpenCode native store",
+          ownership: this.#input.connection.ownership, hostIncarnation: this.#input.hostIncarnation }).acquire();
       }
       let endpoint: string;
       let password: string | undefined;
@@ -188,13 +197,16 @@ export class OpenCodeRuntime {
         const home = this.#input.environment.HOME;
         if (!home || !path.isAbsolute(home)) throw new OpenCodeRuntimeError("opencode_native_home_required");
         const configDirectory = this.#input.configDirectory ?? path.join(this.#input.environment.XDG_CONFIG_HOME ?? path.join(home, ".config"), "opencode");
+        if (!this.#lease.processMarker) throw new OpenCodeRuntimeError("opencode_native_store_lease_mismatch");
         this.#owned = await startOpenCodeOwnedProcess({ ...connection.channel,
-          nativeStorePath: store, configDirectory, environment: this.#input.environment });
+          nativeStorePath: store, configDirectory, environment: this.#input.environment,
+          processMarker: this.#lease.processMarker, assertLaunchAdmission: this.#input.assertLaunchAdmission });
         endpoint = this.#owned.endpoint;
       } else {
         endpoint = connection.channel.url;
         password = await this.#input.externalPassword?.() ?? "";
       }
+      if (!this.#owned) this.#input.assertLaunchAdmission?.();
       this.#client = this.#owned?.client ?? new OpenCodeHttpClient({ endpoint, password: password ?? "" });
       await this.#client.requireAuthentication();
       const info = await this.#client.info();
@@ -229,6 +241,7 @@ export class OpenCodeRuntime {
       // A launcher cleanup failure may occur before it can return an owner.
       if (cause instanceof OpenCodeRuntimeError && cause.code === "opencode_owned_cleanup_unproved") {
         this.#state = "cleanup_unproved";
+        if (cause instanceof OpenCodeOwnedCleanupUnprovedError) this.#retryLaunchCleanup = cause.retryCleanup;
         throw cause;
       }
       try { await this.#owned?.stop(); await this.#releaseStore(); }
@@ -301,7 +314,12 @@ export class OpenCodeRuntime {
 
   async #close(): Promise<OpenCodeRuntimeStopResult> {
     await this.#starting?.catch(() => undefined);
-    if (this.#state === "cleanup_unproved" && !this.#owned) throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved");
+    if (this.#state === "cleanup_unproved" && !this.#owned) {
+      if (!this.#retryLaunchCleanup) throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved");
+      try { await this.#retryLaunchCleanup(); }
+      catch { throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved"); }
+      this.#retryLaunchCleanup = undefined;
+    }
     this.#host?.close();
     await this.#tools?.close();
     for (const scope of this.#toolScopes.values()) scope.host.release(scope.port);

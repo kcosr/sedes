@@ -171,8 +171,8 @@ export class OpenCodeMutationJournal {
     this.#onReleased?.(entry.authority);
   }
 
-  freeze(): void { this.#frozen = true; this.#revision++; }
-  restore(): void { if (!this.#closed) { this.#frozen = false; this.#revision++; } }
+  freeze(): void { this.#frozen = true; }
+  restore(): void { if (!this.#closed) this.#frozen = false; }
   /** Explicit confirmed abandonment never rewrites unknown effects as refusal. */
   close(): void {
     this.#closed = true; this.#frozen = true;

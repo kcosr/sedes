@@ -40,13 +40,13 @@ export class OpenCodeNativeApi {
   interruptSession(sessionID: string, control: OpenCodeMutationControl, signal?: AbortSignal): Promise<{ interrupted: boolean }> {
     return this.client.mutate("interruptSession", { sessionID }, control, { signal });
   }
-  observe(input: { readonly signal?: AbortSignal; readonly after?: { readonly continuity: string; readonly sequence: number };
-    readonly include?: (event: OpenCodeNativeEvent, record: OpenCodeObservationRecord) => boolean } = {}): OpenCodeNativeObservation {
+  observe(input: { readonly signal?: AbortSignal;
+    readonly include?: (event: OpenCodeNativeEvent, record: OpenCodeNativeObservedEvent) => boolean } = {}): OpenCodeNativeObservation {
     return new OpenCodeNativeObservation(this.client, input);
   }
 }
 
-export type OpenCodeNativeObservedEvent = OpenCodeObservationRecord;
+export type OpenCodeNativeObservedEvent = Extract<OpenCodeObservationRecord, { kind: "native" }>;
 export type OpenCodeNativeObservationEnd = OpenCodeObservationEnd;
 
 /** Eager presentation filter. Callbacks stay in this process, never in wire requests. */
@@ -61,9 +61,9 @@ export class OpenCodeNativeObservation {
   #end?: OpenCodeNativeObservationEnd;
   #queuedBytes = 0;
   #endedResolve!: (end: OpenCodeNativeObservationEnd) => void;
-  constructor(client: OpenCodeNativePort, input: { readonly signal?: AbortSignal; readonly after?: { readonly continuity: string; readonly sequence: number };
-    readonly include?: (event: OpenCodeNativeEvent, record: OpenCodeObservationRecord) => boolean }) {
-    this.#source = client.observe({ signal: input.signal, ...(input.after ? { after: input.after } : {}) });
+  constructor(client: OpenCodeNativePort, input: { readonly signal?: AbortSignal;
+    readonly include?: (event: OpenCodeNativeEvent, record: OpenCodeNativeObservedEvent) => boolean }) {
+    this.#source = client.observe({ purpose: "presentation", signal: input.signal });
     this.ready = this.#source.ready.then(boundary => { this.#boundary = boundary; });
     void this.ready.catch(() => undefined);
     this.ended = new Promise(resolve => { this.#endedResolve = resolve; });
@@ -77,6 +77,7 @@ export class OpenCodeNativeObservation {
           await source.wait(input.signal);
           for (const record of source.drain()) {
             if (this.#end) break;
+            if (record.kind !== "native") throw new OpenCodeRuntimeError("opencode_observation_continuity_lost");
             if (input.include && !input.include(record.event, record)) continue;
             if (this.#queue.length >= OPENCODE_NATIVE_EVENT_BUFFER_RECORDS ||
                 this.#queuedBytes + record.decodedBytes > OPENCODE_NATIVE_EVENT_BUFFER_BYTES) {
@@ -112,7 +113,6 @@ export class OpenCodeNativeObservation {
     if (signal?.aborted) throw new OpenCodeRuntimeError("opencode_event_aborted");
     if (this.#end) throw this.#end.error ?? new OpenCodeRuntimeError("opencode_event_closed");
   }
-  acknowledge(sequence: number): Promise<void> { return this.#source.acknowledge(sequence); }
   async close(): Promise<void> { await this.#source.close(); await this.#pump; }
   #wake(): void { for (const wake of this.#waiters) wake(); }
   #finish(end: OpenCodeNativeObservationEnd): void {

@@ -23,7 +23,7 @@ describe("OpenCode read error classification", () => {
     await expect(current.driver.discover({ scope, workspace: { ...current.target.workspace, canonicalPath }, limit: 10,
       signal: new AbortController().signal })).rejects.toMatchObject({ category: "permission_denied", crossedSubmissionBoundary: false });
     expect(current.runtime.start).not.toHaveBeenCalled();
-    expect(current.wire.requests).toEqual([]);
+    expect(current.wire.requests.map(request => request.pathname)).toEqual(["/api/event"]);
   });
   it.each(["attach", "discover", "read"] as const)("normalizes transient %s transport failure and releases its lease", async operation => {
     const current = fixture();
@@ -95,7 +95,7 @@ describe("OpenCode bounded residency proof", () => {
     else current.wire.session.location = { directory: "/fixture/moved" };
     await expect(current.driver.releaseConversationResidency(current.target)).rejects.toMatchObject({ name: "BackendError", retryable: false,
       category: kind === "deleted" ? "not_found" : "invalid_state", crossedSubmissionBoundary: false });
-    expect(current.wire.requests).toHaveLength(1);
+    expect(current.wire.requests.filter(request => request.pathname !== "/api/event")).toHaveLength(1);
     expect(current.runtime.assertCurrent).toHaveBeenCalledOnce();
     expect(current.runtime.snapshot().references).toBe(0); expect(current.client.lifetime.aborted).toBe(false);
   });

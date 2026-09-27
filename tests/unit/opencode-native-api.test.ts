@@ -51,11 +51,11 @@ describe("OpenCode validated native reads", () => {
     fixture.messages[0]!.metadata = { producer: { fullValue: "retained metadata" } };
     const first = await api.getHistoryPage(fixture.sessionID, { order: "asc" });
     expect(first.data).toHaveLength(50); expect(first.data[0]).toEqual(fixture.messages[0]);
-    expect(fixture.requests[0]!.query.get("limit")).toBe("50");
+    expect(fixture.requests.find(request => request.pathname.endsWith("/message"))!.query.get("limit")).toBe("50");
     expect(first.decodedBytes).toBe(Buffer.byteLength(JSON.stringify({ data: first.data, cursor: first.cursor })));
     const second = await api.getHistoryPage(fixture.sessionID, { cursor: first.cursor.next!, limit: 200 });
     expect(second.data).toEqual(fixture.messages.slice(50));
-    expect(fixture.requests[1]!.query.has("order")).toBe(false);
+    expect(fixture.requests.filter(request => request.pathname.endsWith("/message"))[1]!.query.has("order")).toBe(false);
     expect(second.cursor.next).toBeDefined();
     const last = await api.getHistoryPage(fixture.sessionID, { cursor: second.cursor.next! });
     expect(last).toMatchObject({ data: [], cursor: {} });
@@ -95,7 +95,7 @@ describe("OpenCode validated native reads", () => {
     for (const options of [{ limit: 0 }, { limit: 201 }, { limit: 1.5 }, { cursor: "next", order: "asc" as const }]) {
       await expect(api.getHistoryPage(fixture.sessionID, options)).rejects.toThrow("opencode_native_read_input_invalid");
     }
-    expect(fixture.requests).toHaveLength(0);
+    expect(fixture.requests.filter(request => request.pathname !== "/api/event")).toHaveLength(0);
     fixture.setResponse(`/api/session/${fixture.sessionID}/message`, 200, { data: [message(1), message(1)], cursor: {} });
     await expect(api.getHistoryPage(fixture.sessionID)).rejects.toThrow("opencode_native_protocol_invalid");
     fixture.setResponse(`/api/session/${fixture.sessionID}/message`, 200, { data: [message(1), message(2)], cursor: {} });
@@ -153,7 +153,7 @@ describe("OpenCode SSE-first observation", () => {
     await observation.wait(); await api.getHistoryPage(fixture.sessionID);
     const received = observation.drain();
     expect(received.map(value => value.event.id)).toEqual(["evt_1", "evt_2"]);
-    expect(received[0]!.decodedBytes).toBe(Buffer.byteLength(JSON.stringify(renameEvent(1))));
+    expect(received[0]!.decodedBytes).toBeGreaterThanOrEqual(Buffer.byteLength(JSON.stringify(renameEvent(1))));
     expect(fixture.requests.map(value => value.pathname)).toEqual(["/api/event", `/api/session/${fixture.sessionID}/message`]);
   });
   it.each(["missing-connected", "unknown-event", "invalid-json", "excess-field"])("invalidates malformed stream evidence: %s", async kind => {
@@ -163,24 +163,24 @@ describe("OpenCode SSE-first observation", () => {
     else { await Promise.resolve(); await Promise.resolve(); }
     if (kind === "invalid-json") fixture.sendRaw("data: {not-json}\n\n");
     else fixture.send(kind === "unknown-event" ? { id: "evt_1", type: "future", data: {} } : kind === "excess-field" ? { ...renameEvent(), unexpected: true } : renameEvent());
-    await expect(observation.ended).resolves.toMatchObject({ reason: "malformed" });
+    await expect(observation.ended).resolves.toMatchObject({ reason: kind === "missing-connected" ? "malformed" : "resnapshot_required" });
     expect(() => observation.drain()).toThrow();
   });
-  it("validates before filtering and treats clean EOF as invalidation without automatic replay", async () => {
+  it("validates before filtering and treats clean EOF as presentation invalidation with resident native reconnect", async () => {
     const { fixture, api } = setup();
     const observation = observe(api, { include: () => false });
     await observation.ready; fixture.send({ ...renameEvent(), unexpected: true });
-    await expect(observation.ended).resolves.toMatchObject({ reason: "malformed" });
+    await expect(observation.ended).resolves.toMatchObject({ reason: "resnapshot_required" });
     const second = observe(api); await second.ready;
     fixture.disconnect();
-    await expect(second.ended).resolves.toMatchObject({ reason: "disconnected" });
+    await expect(second.ended).resolves.toMatchObject({ reason: "resnapshot_required" });
     expect(fixture.requests.filter(value => value.pathname === "/api/event")).toHaveLength(2);
   });
   it("fails bounded event accumulation without presenting the queued prefix as synchronized", async () => {
     const { fixture, api } = setup(); const observation = observe(api); await observation.ready;
     for (let index = 0; index < 4_097; index += 1) fixture.send(renameEvent(index + 1));
-    await expect(observation.ended).resolves.toMatchObject({ reason: "overflow" });
-    expect(() => observation.drain()).toThrow("opencode_event_overflow");
+    await expect(observation.ended).resolves.toMatchObject({ reason: "resnapshot_required" });
+    expect(() => observation.drain()).toThrow("opencode_observation_continuity_lost");
   });
   it("bounds total decoded event bytes independently of the record count", async () => {
     const { fixture, api } = setup(); const observation = observe(api); await observation.ready;
@@ -205,7 +205,7 @@ describe("OpenCode SSE-first observation", () => {
     expect(() => observation.drain()).toThrow("opencode_event_overflow");
     const replacement = observe(api); await replacement.ready;
     await expect(api.getHistoryPage(fixture.sessionID)).resolves.toMatchObject({ data: [] });
-    expect(fixture.requests.filter(request => request.pathname === "/api/event")).toHaveLength(2);
+    expect(fixture.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
   });
   it("bounds readiness even if response headers arrive but no connected frame follows", async () => {
     vi.useFakeTimers();

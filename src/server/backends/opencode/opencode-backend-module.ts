@@ -1,14 +1,18 @@
+import { OpenCodeRemoteRuntime } from "./opencode-remote-runtime.js";
+import { recoverOpenCodeRuntimeAdministration } from "./opencode-runtime-administration.js";
+import { openCodeRuntimeOperations } from "./opencode-runtime-wire.js";
 import { OpenCodeUsageAccounting } from "./opencode-usage-accounting.js";
 import { OpenCodeAgentTools } from "./opencode-agent-tools.js";
 import type { TrustedAgentToolSource } from "../../agent-tools/adapters/backend-facade.js";
 import { randomUUID } from "node:crypto";
 import { configurationFingerprint } from "../../config/configuration-fingerprint.js";
-import { backendStartupEnvironmentVariables, mergeResolvedEnvironment, resolveEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
+import { backendStartupEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { ManagedTerminalCarrierError } from "../../terminal/managed-terminal-carrier.js";
 import type { AgentConnectionProfile } from "../contracts.js";
 import { NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES, type BackendModule, type BackendModuleConfigurationInput, type BackendModuleRuntime, type BackendModuleRuntimeContext, type BackendRuntimeAdministration, type BackendRuntimeInspection, type PreparedBackendModule } from "../module.js";
 import { parseOpenCodeBackendConfiguration, type PreparedOpenCodeBackendConfiguration } from "./opencode-backend-configuration.js";
 import { OpenCodeRuntime, openCodeRuntimeNamespaceKey, type OpenCodeRuntimeInput } from "./opencode-runtime.js";
+import { openCodeRuntimeConfigurationSchema, resolveOpenCodeRuntimeInput } from "./opencode-runtime-configuration.js";
 import { OPENCODE_RELEASE, OpenCodeRuntimeError } from "./opencode-release.js";
 import { BackendRuntimeControlRejectedError } from "../runtime-control.js";
 import { OpenCodeThreadRepository } from "./opencode-thread-repository.js";
@@ -37,6 +41,8 @@ export class OpenCodeBackendModule implements BackendModule {
   readonly backendKind = "opencode" as const;
   readonly connectionKinds = ["opencode_http"] as const;
   readonly protocolRelease = OPENCODE_RELEASE;
+  readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "opencode_runtime", majorVersion: 1,
+    operations: Object.freeze(openCodeRuntimeOperations.map(operation => operation.operation)) }]);
   constructor(readonly createNativeRuntime: NativeRuntimeFactory = input => new OpenCodeRuntime(input)) {}
 
   prepare(input: BackendModuleConfigurationInput): PreparedBackendModule {
@@ -51,11 +57,15 @@ export class OpenCodeBackendModule implements BackendModule {
       backendInstanceId: configuration.backendInstanceId,
       module: this,
       nativeNamespaces: namespace ? Object.freeze([{ sortKey: `opencode:${namespace}`, namespaceKey: namespace }]) : Object.freeze([]),
+      recoverAdministration: context => {
+        if (context.instance.id !== configuration.backendInstanceId) throw new Error("opencode_runtime_context_invalid");
+        return recoverOpenCodeRuntimeAdministration(context);
+      },
       // The lazy resident runtime acquires its physical store lease before HTTP or process admission.
       nativeStores: Object.freeze([]),
       createRuntime: context => {
         if (created || !configuration.enabled || !environmentId || !namespace ||
-            context.environmentOperations.environmentKind !== "local" || context.instance.kind !== "opencode" ||
+            (context.environmentOperations.environmentKind === "local") === !!context.sidecarRuntime || context.instance.kind !== "opencode" ||
             context.instance.id !== configuration.backendInstanceId || context.instance.protocolRelease !== OPENCODE_RELEASE ||
             !context.instance.enabled || context.instance.tenantId !== context.scope.tenantId ||
             context.environmentChannel.executionEnvironmentId !== environmentId ||
@@ -173,7 +183,27 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
       nativeNamespaceKey: namespace, repository, settings, catalog, skills, tools: this.#tools, usage: this.#usage,
       attachmentProvenanceKey: context.toolProvenanceKey, outputArtifacts: context.outputArtifacts, executionEnvironment: this.#executionEnvironment, modelPolicy: configuration.modelPolicy,
       runtime: async () => { const owner = await this.#native(); this.#assertOpen(); return owner; } });
-    if (configuration.connection.ownership === "owned") {
+    if (context.sidecarRuntime) {
+      const recoveryContext = { ...context, sidecarRuntime: { acquireRecovery: (signal?: AbortSignal) => context.sidecarRuntime!.acquire(signal, { existingOnly: true }) } };
+      const getAdministration = () => recoverOpenCodeRuntimeAdministration(recoveryContext);
+      const inspect = async (): Promise<BackendRuntimeInspection> => {
+        const administration = await getAdministration();
+        return administration ? administration.inspect() : { state: "idle", incarnation: this.#incarnation,
+          revision: configurationFingerprint({ incarnation: this.#incarnation, state: "absent" }), blockers: [] };
+      };
+      const administer = async (request: { expectedRevision: string; force: boolean }, restart: boolean) => {
+        if (this.#administrating) throw new BackendRuntimeControlRejectedError("confirmation_stale");
+        this.#administrating = true;
+        try {
+          const administration = await getAdministration();
+          if (administration) await administration.stop(request);
+          else if ((await inspect()).revision !== request.expectedRevision) throw new BackendRuntimeControlRejectedError("confirmation_stale");
+          await this.#owner?.close(); this.#owner = undefined;
+          if (restart) { const owner = await this.#native(); await owner.start(); }
+        } finally { this.#administrating = false; }
+      };
+      this.administration = { inspect, stop: request => administer(request, false), restart: request => administer(request, true) };
+    } else if (configuration.connection.ownership === "owned") {
       this.administration = {
         inspect: async () => this.#inspect(),
         stop: input => this.#administer(input, false),
@@ -206,28 +236,28 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     if (this.#owner) return this.#owner;
     if (this.#opening) return this.#opening;
     this.#opening = (async () => {
-      const environment = this.configuration.connection.ownership === "owned"
-        ? mergeResolvedEnvironment(this.input.environment, await resolveEnvironmentVariables(this.#startup, this.input.environment))
-        : this.input.environment;
-      this.#assertOpen();
-      const configured = this.configuration.connection;
-      const owner = this.createNativeRuntime({
-        authority: { ...this.context.scope, backendInstanceId: this.context.instance.id,
-          executionEnvironmentId: this.context.environmentChannel.executionEnvironmentId },
+      const runtimeConfiguration = openCodeRuntimeConfigurationSchema.parse({
+        instance: this.context.instance, connections: this.context.connections,
+        startupEnvironmentVariables: this.#startup,
         nativeStorePath: this.configuration.nativeStorePath,
         configDirectory: this.configuration.configDirectory,
-        environment,
+        connection: this.configuration.connection,
+      });
+      if (this.context.sidecarRuntime) return this.#owner = new OpenCodeRemoteRuntime({
+        configuration: runtimeConfiguration, provider: this.context.sidecarRuntime,
+        acquireRecovery: signal => this.context.sidecarRuntime!.acquire(signal, { existingOnly: true }),
+      });
+      const resolved = await resolveOpenCodeRuntimeInput({ configuration: runtimeConfiguration,
+        scope: this.context.scope,
+        executionEnvironmentId: this.context.environmentChannel.executionEnvironmentId,
+        hostIncarnation: this.#incarnation,
+        environmentChannel: this.context.environmentChannel,
+        environment: this.input.environment,
         agentTools: { cli: this.context.agentToolCli,
           invoke: (capability, request, signal) => this.#tools.callHostTool(capability, request, signal) },
-        connection: configured.ownership === "owned" ? configured : { ownership: "external", channel: { type: "http", url: configured.channel.url } },
-        ...(configured.ownership === "external" ? { externalPassword: async () => {
-          this.#assertOpen();
-          const secret = await this.context.environmentChannel.resolveSecret({ ...this.context.scope,
-            backendInstanceId: this.context.instance.id, executionEnvironmentId: this.context.environmentChannel.executionEnvironmentId },
-            configured.channel.authentication.secret, ++this.#revision, AbortSignal.timeout(10_000), "http_basic_password");
-          try { this.#assertOpen(); return secret.value; } finally { secret.discard(); }
-        } } : {}),
       });
+      this.#assertOpen();
+      const owner = this.createNativeRuntime({ ...resolved, assertLaunchAdmission: () => this.#assertOpen() });
       if (owner.nativeNamespaceKey !== this.namespace) throw new Error("opencode_runtime_namespace_changed");
       return this.#owner = owner;
     })().finally(() => { this.#opening = undefined; });

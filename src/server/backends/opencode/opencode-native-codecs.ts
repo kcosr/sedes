@@ -25,7 +25,8 @@ import { OpenCodeRuntimeError } from "./opencode-release.js";
 import { z } from "zod";
 import { environmentVariableOverridesSchema } from "../../../shared/protocol/environment-variables.js";
 import type { OpenCodeNativeFailure, OpenCodeReadMethod, OpenCodeReadInput, OpenCodeReadOutput,
-  OpenCodeMutationMethod, OpenCodeMutationInput, OpenCodeMutationOutput, OpenCodeMutationControl, OpenCodeApplicationOperationIdentity } from "./opencode-native-port.js";
+  OpenCodeMutationMethod, OpenCodeMutationInput, OpenCodeMutationOutput, OpenCodeMutationControl, OpenCodeApplicationOperationIdentity,
+  OpenCodeObservationBoundary, OpenCodeObservationRecord } from "./opencode-native-port.js";
 
 // These encoded native DTOs never cross the provider-private boundary.
 export type OpenCodeNativeMessage = SessionMessageInfo;
@@ -299,6 +300,39 @@ export const openCodeNativeAuthoritySchema = z.strictObject({ tenantId: identity
   executionEnvironmentId: identityPart, backendInstanceId: identityPart, runtimeId: identityPart, nativeGeneration: identityPart,
   directory: directorySchema, session: z.strictObject({ applicationThreadId: identityPart, nativeSessionID: sessionIdSchema,
     bindingFingerprint: identityPart }).optional() });
+// One native 32-MiB event plus its bounded observation envelope and array syntax.
+// Baselines travel separately from replay batches; they never aggregate history.
+export const OPENCODE_OBSERVATION_WIRE_BYTES = OPENCODE_NATIVE_EVENT_BUFFER_BYTES + 4_096;
+const observationSequence = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+export const openCodeObservationCursorSchema = z.strictObject({ journalId: identityPart, sequence: observationSequence });
+const nativeProofSchema = z.strictObject({ nativeSequence: observationSequence,
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/u), type: identityPart,
+  inputId: identityPart.nullable(), boundaryId: identityPart.nullable() });
+export const openCodeObservationBoundarySchema = z.strictObject({ journalId: identityPart,
+  throughSequence: observationSequence, retainedAfterSequence: observationSequence,
+  nativeConnected: z.boolean(), nativeContinuity: identityPart,
+  proof: z.strictObject({ nativeFrontier: observationSequence.nullable(), coverageFloor: observationSequence.nullable(),
+    currentInputId: identityPart.nullable(), authorityEpoch: observationSequence, proofs: z.array(nativeProofSchema).max(100_000) }),
+}).refine(value => value.retainedAfterSequence <= value.throughSequence &&
+  value.proof.proofs.every((proof, index, all) => (index === 0 || proof.nativeSequence > all[index - 1]!.nativeSequence) &&
+    (value.proof.nativeFrontier === null || proof.nativeSequence <= value.proof.nativeFrontier)) &&
+  value.proof.coverageFloor === (value.proof.proofs[0]?.nativeSequence ?? null));
+const observationPosition = { journalId: identityPart, sequence: observationSequence, nativeContinuity: identityPart,
+  decodedBytes: z.number().int().nonnegative().max(OPENCODE_OBSERVATION_WIRE_BYTES) };
+export const openCodeObservationRecordSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ ...observationPosition, kind: z.literal("native"), event: z.unknown().transform(parseOpenCodeNativeEvent) }),
+  z.strictObject({ ...observationPosition, kind: z.literal("native_break"), reason: z.enum(["disconnected", "malformed", "overflow", "owner_lost"]) }),
+]);
+export function parseOpenCodeObservationBoundary(value: unknown): OpenCodeObservationBoundary {
+  try { return openCodeObservationBoundarySchema.parse(snapshotBoundedJson(value, { ...requestLimits,
+    maximumEncodedBytes: OPENCODE_OBSERVATION_WIRE_BYTES })); }
+  catch { throw new OpenCodeNativeProtocolError(); }
+}
+export function parseOpenCodeObservationRecords(value: unknown): OpenCodeObservationRecord[] {
+  try { return z.array(openCodeObservationRecordSchema).max(OPENCODE_NATIVE_EVENT_BUFFER_RECORDS + 4_096)
+    .parse(snapshotBoundedJson(value, { ...requestLimits, maximumEncodedBytes: OPENCODE_OBSERVATION_WIRE_BYTES })); }
+  catch { throw new OpenCodeNativeProtocolError(); }
+}
 export const openCodeApplicationOperationIdentitySchema = z.strictObject({ applicationOperationId: identityPart,
   operationKind: z.enum(["create", "submit", "steer", "action", "interaction", "interrupt"]) });
 export function parseOpenCodeApplicationOperationIdentity(value: unknown): OpenCodeApplicationOperationIdentity {
@@ -428,6 +462,8 @@ const nativeFailureCodes = [
   "opencode_mutation_retention_full", "opencode_mutation_outcome_unknown", "opencode_mutation_pending", "opencode_mutation_owner_closed",
   "opencode_mutation_wait_cancelled",
   "opencode_environment_topology_unsupported", "opencode_environment_resolution_failed", "opencode_agent_tools_unavailable",
+  "opencode_observation_retention_full", "opencode_observation_controller_superseded",
+  "opencode_observation_cursor_conflict",
 ] as const;
 const failureCodeSchema = z.enum(nativeFailureCodes);
 export const openCodeNativeFailureSchema = z.discriminatedUnion("kind", [

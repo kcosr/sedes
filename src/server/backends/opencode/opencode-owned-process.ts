@@ -17,6 +17,12 @@ export interface OpenCodeOwnedProcess {
   stop(): Promise<void>;
 }
 
+/** Host-private cleanup authority survives a failed launch. Never serialize the
+ * callback or replace its already-admitted process identities with a new scan. */
+export class OpenCodeOwnedCleanupUnprovedError extends OpenCodeRuntimeError {
+  constructor(readonly retryCleanup: () => Promise<void>) { super("opencode_owned_cleanup_unproved"); }
+}
+
 function waitBounded(exit: Promise<void>, milliseconds: number): Promise<void> {
   return new Promise(resolve => {
     const timer = setTimeout(resolve, milliseconds);
@@ -30,11 +36,14 @@ export async function startOpenCodeOwnedProcess(input: {
   readonly nativeStorePath: string;
   readonly configDirectory: string;
   readonly environment: Readonly<NodeJS.ProcessEnv>;
+  readonly processMarker: string;
+  readonly assertLaunchAdmission?: () => void;
 }): Promise<OpenCodeOwnedProcess> {
   if (process.platform !== "linux" || !path.isAbsolute(input.workingDirectory)) throw new OpenCodeRuntimeError("opencode_owned_platform_unavailable");
   const executablePath = await admitOpenCodeExecutable(input.executablePath);
   const workingDirectory = await realpath(input.workingDirectory);
-  const marker = randomBytes(32).toString("hex");
+  const marker = input.processMarker;
+  if (!/^[a-f0-9]{64}$/u.test(marker)) throw new OpenCodeRuntimeError("opencode_owned_marker_invalid");
   const password = randomBytes(32).toString("base64url");
   const environment = openCodeOwnedEnvironment({ ...input, marker, password });
   const shellEnvironment = Object.freeze(Object.fromEntries(Object.entries(environment)
@@ -59,7 +68,9 @@ export async function startOpenCodeOwnedProcess(input: {
     throw cause;
   });
   try {
+    input.assertLaunchAdmission?.();
     await probeOpenCodeRelease(executablePath, environment);
+    input.assertLaunchAdmission?.();
     child = spawn(executablePath, ["serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0"], {
       cwd: workingDirectory, env: environment, detached: true, stdio: ["pipe", "pipe", "pipe"],
     });
@@ -110,7 +121,7 @@ export async function startOpenCodeOwnedProcess(input: {
     return Object.freeze({ pid: launched.pid, executablePath, endpoint, client, exited: exit, shellEnvironment, stop });
   } catch (cause) {
     try { await stop(); }
-    catch { throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved"); }
+    catch { throw new OpenCodeOwnedCleanupUnprovedError(stop); }
     throw cause instanceof OpenCodeRuntimeError ? cause : new OpenCodeRuntimeError("opencode_owned_start_failed");
   }
 }

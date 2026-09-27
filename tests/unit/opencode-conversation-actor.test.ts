@@ -50,7 +50,7 @@ describe("OpenCode driver through the shared conversation actor", () => {
     try {
       await borrowed!.control.interrupt({ applicationOperationId: "stop-after-failed-hydration", deadlineAt: Date.now() + 30_000 });
       expect(current.interrupts()).toHaveLength(1);
-      expect(current.runtime.snapshot().references).toBe(1);
+      expect(current.runtime.snapshot().references).toBe(2);
     } finally { borrowed!.release(); }
     current.wire.clearResponse(messages);
     const recovered = await current.acquire();
@@ -143,9 +143,10 @@ describe("OpenCode driver through the shared conversation actor", () => {
     expect(recovered.timeline.generation).not.toBe(initial.timeline.generation);
     expect(recovered.timeline.orderedTurnIds).toEqual(initial.timeline.orderedTurnIds);
     expect(acquired.actor.projectionRecoveryRequired).toBe(false);
-    expect(current.attached).toHaveBeenCalledOnce(); expect(current.runtime.snapshot()).toMatchObject({ generation: "native-generation", references: 1 });
-    // Both the input tracker and projection independently reconnect exactly once.
-    expect(current.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(4);
+    expect(current.attached).toHaveBeenCalledOnce(); expect(current.runtime.snapshot()).toMatchObject({ generation: "native-generation", references: 2 });
+    // The resident owner reconnects its single native stream; input evidence and
+    // presentation subscribe independently to that shared observation hub.
+    expect(current.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(2);
     expect(current.interrupts()).toHaveLength(0); acquired.release();
   });
 
@@ -168,7 +169,7 @@ describe("OpenCode driver through the shared conversation actor", () => {
     const recovered = await acquired.actor.captureSnapshotState();
     expect(recovered.timeline.generation).not.toBe(initial.timeline.generation);
     expect(recovered.timeline.orderedTurnIds).toEqual(initial.timeline.orderedTurnIds);
-    expect(current.runtime.snapshot()).toMatchObject({ state: "ready", references: 1, generation: "native-generation" });
+    expect(current.runtime.snapshot()).toMatchObject({ state: "ready", references: 2, generation: "native-generation" });
     expect(current.attached).toHaveBeenCalledOnce(); expect(current.interrupts()).toHaveLength(0);
     acquired.release();
   });

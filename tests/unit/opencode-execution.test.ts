@@ -451,7 +451,7 @@ describe("OpenCode execution settings and explicit actions", () => {
   it("fences stale runtime, wrong scope and desired changes during native readback", async () => {
     const f = fixture({ native: modelB });
     const wrong = new OpenCodeExecutionSettings(f.context, { ...f.attach, scope: { ...scope, principalId: "other" } }, f.runtime, f.port, "wrong", f.settings.lifetime);
-    await expect(wrong.prepare("wrong", "submit")).rejects.toThrow(); expect(f.calls).toEqual([]);
+    await expect(wrong.prepare("wrong", "submit")).rejects.toThrow(); expect(f.calls.map(call => call.path)).toEqual(["/api/event"]);
     const original = vi.mocked(f.runtime.assertCurrent).getMockImplementation()!;
     vi.mocked(f.runtime.assertCurrent).mockImplementation(async signal => {
       await original(signal);

@@ -4,14 +4,16 @@ import { randomUUID } from "node:crypto";
 import { SessionInbox } from "@opencode/schema/session-inbox";
 import type { AttachConversationInput, SubmissionReconciliation } from "../contracts.js";
 import { boundDisplayText } from "../../conversations/payload-policy.js";
-import { requireOpenCodeBinding, type OpenCodeConversationRuntime, type OpenCodeDriverContext } from "./opencode-conversation-context.js";
+import { openCodeRuntimeTarget, requireOpenCodeBinding, type OpenCodeConversationRuntime, type OpenCodeDriverContext } from "./opencode-conversation-context.js";
 import { OpenCodeInputEvidenceRepository, openCodeOperationFingerprint, openCodePreparedPayloadFingerprint,
   type OpenCodeInputEvidence, type OpenCodeInputKind } from "./opencode-input-evidence.js";
 import { OpenCodeNativeApi, OpenCodeNativeProtocolError, openCodeNativeParser, type OpenCodeNativeEvent,
-  type OpenCodeNativeMessage, type OpenCodeNativeObservation } from "./opencode-native-api.js";
+  type OpenCodeNativeMessage } from "./opencode-native-api.js";
 import { readOpenCodeNativeLog, type OpenCodeNativeDurableEvent } from "./opencode-native-log.js";
 import { OpenCodeNativeMutations, type OpenCodeNativePromptAdmission } from "./opencode-native-mutations.js";
-import type { OpenCodeNativePort } from "./opencode-native-port.js";
+import type { OpenCodeNativePort, OpenCodePortObservation, OpenCodeObservationBoundary,
+  } from "./opencode-native-port.js";
+import { OpenCodeObservationCursorRepository, type OpenCodeObservationCheckpoint } from "./opencode-observation-cursor-repository.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
 
@@ -39,6 +41,7 @@ export interface OpenCodeInputObserverOptions { readonly onProofChanged?: () => 
  */
 export class OpenCodeInputObserver {
   readonly #repository: OpenCodeInputEvidenceRepository;
+  readonly #cursors: OpenCodeObservationCursorRepository;
   readonly #api: OpenCodeNativeApi;
   readonly #mutations: OpenCodeNativeMutations;
   readonly #controller = new AbortController();
@@ -54,13 +57,16 @@ export class OpenCodeInputObserver {
   readonly #events = new Map<number, EventProof>();
   readonly #boundaries = new Map<string, number>();
   readonly #waiters = new Set<() => void>();
+  readonly #lostOperations = new Set<string>();
+  #afterCommit?: (() => void)[];
+  #cacheUndo?: (() => void)[];
   #currentInput?: string;
   #inputAuthority = new AbortController();
-  #trackerId = randomUUID();
+  #trackerId: string = randomUUID();
   #connected = false;
   #started = false;
   #closed = false;
-  #observation?: OpenCodeNativeObservation;
+  #observation?: OpenCodePortObservation;
   #liveFrontier = -1;
   #refreshTimer?: ReturnType<typeof setTimeout>;
   #refreshing = false;
@@ -74,6 +80,7 @@ export class OpenCodeInputObserver {
     const detail = requireOpenCodeBinding(context, attach);
     this.#sessionID = detail.sessionId; this.#threadID = attach.binding.applicationThreadId;
     this.#repository = new OpenCodeInputEvidenceRepository(context.repository);
+    this.#cursors = new OpenCodeObservationCursorRepository(context.repository.database, lease.client.authority, context.nativeNamespaceKey);
     this.#api = new OpenCodeNativeApi(lease.client); this.#mutations = new OpenCodeNativeMutations(lease.client);
     this.#signal = AbortSignal.any([lifetime, lease.client.lifetime, this.#controller.signal]);
     this.#signal.addEventListener("abort", () => this.close(), { once: true });
@@ -109,6 +116,7 @@ export class OpenCodeInputObserver {
   }
 
   #changeInputAuthority(input?: string): void {
+    if (this.#afterCommit) { this.#afterCommit.push(() => this.#changeInputAuthority(input)); return; }
     this.#inputAuthority.abort();
     this.#inputAuthority = new AbortController();
     this.#currentInput = input;
@@ -159,7 +167,7 @@ export class OpenCodeInputObserver {
     const read = this.#reads.get(operationKey(operationId, kind));
     if (read?.trackerId !== this.#trackerId || !this.#connected) return unresolved();
     if (read.pending) return unresolved("OpenCode has admitted this input and it is still pending consumption.");
-    if (evidence.trackerId !== this.#trackerId && read.absent) {
+    if ((evidence.trackerId !== this.#trackerId || this.#lostOperations.has(operationKey(operationId, kind))) && read.absent) {
       await waitFor(this.#recoverLog(), signal);
       evidence = this.#evidence(tracked);
       const recovered = this.#terminal(evidence); if (recovered) return recovered;
@@ -288,6 +296,7 @@ export class OpenCodeInputObserver {
     void acknowledgeOpenCodeTerminalOperation(this.lease.client, () => evidence.receipt);
   }
   #proofChanged(evidence: OpenCodeInputEvidence): void {
+    if (this.#afterCommit) { this.#afterCommit.push(() => this.#proofChanged(evidence)); return; }
     this.#acknowledgeTerminal(evidence);
     if (evidence.payloadConflict && evidence.receipt.nativeInputId === this.#currentInput) this.#changeInputAuthority();
     this.#notify(evidence); this.#wake();
@@ -299,7 +308,7 @@ export class OpenCodeInputObserver {
       { payloadFingerprint: openCodePreparedPayloadFingerprint(item.payload), delivery: item.delivery,
         ...(enqueueSequence === undefined ? {} : { enqueueSequence }) });
     const key = operationKey(tracked.operationId, tracked.kind);
-    this.#admissionRevisions.set(key, (this.#admissionRevisions.get(key) ?? 0) + 1);
+    this.#setMap(this.#admissionRevisions, key, (this.#admissionRevisions.get(key) ?? 0) + 1);
     if (proofKey(before) !== proofKey(evidence)) this.#proofChanged(evidence);
   }
   #consumeMessage(tracked: Tracked, message: Extract<OpenCodeNativeMessage, { type: "user" }>): void {
@@ -320,8 +329,8 @@ export class OpenCodeInputObserver {
     const inputId = "inboxID" in event.data ? event.data.inboxID : undefined;
     const proof: EventProof = { fingerprint, type: event.type, ...(inputId === undefined ? {} : { inputId }),
       ...(event.type === "session.revert.committed" ? { boundary: event.data.to } : {}) };
-    this.#events.set(seq, proof);
-    if (this.#events.size > MAX_EVENT_PROOFS) this.#events.delete(this.#events.keys().next().value!);
+    this.#setMap(this.#events, seq, proof);
+    if (this.#events.size > MAX_EVENT_PROOFS) this.#deleteMap(this.#events, this.#events.keys().next().value!);
     const tracked = inputId === undefined ? undefined : this.#byInput.get(inputId);
     const evidence = tracked && this.#evidence(tracked);
     if (tracked && evidence && dispatched(evidence)) {
@@ -337,7 +346,7 @@ export class OpenCodeInputObserver {
     if (event.type === "session.inbox.delivered") this.#rememberBoundary(event.data.inboxID, seq);
     else if (event.type === "session.step.started") this.#rememberBoundary(event.data.assistantMessageID, seq);
     else if (event.type === "session.revert.committed") this.#proveRevert(event.data.to, seq, fingerprint);
-    else if (event.type === "session.deleted") { this.#boundaries.clear(); this.#events.clear(); }
+    else if (event.type === "session.deleted") { this.#clearMap(this.#boundaries); this.#clearMap(this.#events); }
     if (live) {
       if (event.type === "session.inbox.delivered") this.#changeInputAuthority(event.data.inboxID);
       else if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed" ||
@@ -347,8 +356,8 @@ export class OpenCodeInputObserver {
     // No native event is retained in the handle's history queue by this observer.
   }
   #rememberBoundary(id: string, seq: number): void {
-    if (!this.#boundaries.has(id)) this.#boundaries.set(id, seq);
-    if (this.#boundaries.size > MAX_EVENT_PROOFS) this.#boundaries.delete(this.#boundaries.keys().next().value!);
+    if (!this.#boundaries.has(id)) this.#setMap(this.#boundaries, id, seq);
+    if (this.#boundaries.size > MAX_EVENT_PROOFS) this.#deleteMap(this.#boundaries, this.#boundaries.keys().next().value!);
   }
   #proveRevert(boundary: string, revertSequence: number, fingerprint: string): void {
     const boundarySequence = this.#boundaries.get(boundary);
@@ -372,7 +381,116 @@ export class OpenCodeInputObserver {
         tracked.operationId, tracked.kind, "reverted", openCodeOperationFingerprint({ fingerprint, boundary, boundarySequence, enqueue })));
     }
     // Future reuse of an erased native ID must establish its insertion again.
-    for (const [id, seq] of this.#boundaries) if (seq >= boundarySequence) this.#boundaries.delete(id);
+    for (const [id, seq] of this.#boundaries) if (seq >= boundarySequence) this.#deleteMap(this.#boundaries, id);
+  }
+
+  #markContinuityLost(): void {
+    for (const [key, tracked] of this.#tracked) {
+      const evidence = this.#evidence(tracked);
+      if (dispatched(evidence) && !this.#terminal(evidence) && !this.#lostOperations.has(key)) {
+        this.#cacheUndo?.push(() => this.#lostOperations.delete(key)); this.#lostOperations.add(key);
+      }
+    }
+    this.#changeInputAuthority(); this.#reads.clear(); this.#liveFrontier = -1;
+  }
+
+  #hydrateProof(boundary: OpenCodeObservationBoundary): void {
+    this.#clearMap(this.#events); this.#clearMap(this.#boundaries); this.#liveFrontier = -1;
+    for (const fact of boundary.proof.proofs) {
+      this.#setMap(this.#events, fact.nativeSequence, { fingerprint: fact.fingerprint, type: fact.type,
+        ...(fact.inputId === null ? {} : { inputId: fact.inputId }),
+        ...(fact.boundaryId === null ? {} : { boundary: fact.boundaryId }) });
+      if (fact.type === "session.inbox.delivered" && fact.inputId) this.#rememberBoundary(fact.inputId, fact.nativeSequence);
+      if (fact.type === "session.step.started" && fact.boundaryId) this.#rememberBoundary(fact.boundaryId, fact.nativeSequence);
+    }
+  }
+
+  /** No callback, permission epoch, or native ACK can escape a failed SQL commit. */
+  #commitCursor(previous: OpenCodeObservationCheckpoint | undefined, next: OpenCodeObservationCheckpoint,
+    apply: () => void, reset = false): void {
+    const tracker = this.#trackerId, frontier = this.#liveFrontier;
+    const effects: (() => void)[] = [], undo: (() => void)[] = [];
+    this.#afterCommit = effects; this.#cacheUndo = undo;
+    try { this.#cursors.commit(previous, next, apply, { reset }); }
+    catch (error) {
+      for (let index = undo.length - 1; index >= 0; index--) undo[index]!();
+      this.#trackerId = tracker; this.#liveFrontier = frontier; throw error;
+    } finally { this.#afterCommit = undefined; this.#cacheUndo = undefined; }
+    for (const effect of effects) effect();
+  }
+
+  #setMap<K, V>(map: Map<K, V>, key: K, value: V): void {
+    if (this.#cacheUndo) {
+      const had = map.has(key), before = map.get(key);
+      this.#cacheUndo.push(() => { if (had) map.set(key, before!); else map.delete(key); });
+    }
+    map.set(key, value);
+  }
+  #deleteMap<K, V>(map: Map<K, V>, key: K): void {
+    if (!map.has(key)) return;
+    const before = map.get(key)!; this.#cacheUndo?.push(() => { map.set(key, before); }); map.delete(key);
+  }
+  #clearMap<K, V>(map: Map<K, V>): void {
+    if (this.#cacheUndo && map.size) {
+      const before = [...map]; this.#cacheUndo.push(() => { map.clear(); for (const [key, value] of before) map.set(key, value); });
+    }
+    map.clear();
+  }
+
+  #checkpoint(journalId: string, sequence: number, nativeContinuity: string): OpenCodeObservationCheckpoint {
+    return { journalId, sequence, nativeContinuity, runtimeId: this.lease.client.authority.runtimeId,
+      nativeGeneration: this.lease.client.authority.nativeGeneration };
+  }
+
+  async #follow(observation: OpenCodePortObservation, boundary: OpenCodeObservationBoundary,
+    previous: OpenCodeObservationCheckpoint | undefined): Promise<void> {
+    const reset = !previous || previous.journalId !== boundary.journalId ||
+      previous.runtimeId !== this.lease.client.authority.runtimeId ||
+      previous.nativeGeneration !== this.lease.client.authority.nativeGeneration || previous.sequence < boundary.retainedAfterSequence;
+    let checkpoint = this.#checkpoint(boundary.journalId, reset ? boundary.retainedAfterSequence : previous.sequence,
+      reset ? boundary.nativeContinuity : previous.nativeContinuity);
+    this.#commitCursor(previous, checkpoint, () => {
+      if (previous && (reset || previous.nativeContinuity !== boundary.nativeContinuity)) this.#markContinuityLost();
+      this.#hydrateProof(boundary);
+    }, reset);
+    let caughtUp = false;
+    const baseline = () => {
+      if (caughtUp || checkpoint.sequence !== boundary.throughSequence) return;
+      const next = { ...checkpoint, nativeContinuity: boundary.nativeContinuity };
+      this.#commitCursor(checkpoint, next, () => {
+        this.#trackerId = boundary.nativeContinuity;
+        this.#liveFrontier = boundary.proof.nativeFrontier ?? -1;
+        this.#changeInputAuthority(boundary.nativeConnected ? boundary.proof.currentInputId ?? undefined : undefined);
+      });
+      checkpoint = next; caughtUp = true;
+      this.#connected = boundary.nativeConnected; this.#wake();
+      if (this.#connected) this.#scheduleRefresh(0);
+    };
+    baseline();
+    // A reconnect can complete without another native event. Reattach to take
+    // a connected atomic baseline instead of granting authority from stale SSE.
+    if (caughtUp && !boundary.nativeConnected) return;
+    while (!this.#signal.aborted) {
+      const records = observation.drain();
+      for (const record of records) {
+        if (record.journalId !== checkpoint.journalId) throw new OpenCodeRuntimeError("opencode_observation_continuity_lost");
+        if (record.sequence <= checkpoint.sequence) continue;
+        if (record.sequence !== checkpoint.sequence + 1) throw new OpenCodeRuntimeError("opencode_observation_continuity_lost");
+        const next = this.#checkpoint(record.journalId, record.sequence, record.nativeContinuity);
+        this.#commitCursor(checkpoint, next, () => {
+          if (record.kind === "native_break") {
+            this.#markContinuityLost(); this.#trackerId = record.nativeContinuity;
+          } else this.#event(record.event, true);
+        });
+        checkpoint = next;
+        await observation.acknowledge({ journalId: checkpoint.journalId, sequence: checkpoint.sequence });
+        baseline();
+        if (caughtUp && (record.kind === "native_break" && record.sequence > boundary.throughSequence || !boundary.nativeConnected)) return;
+      }
+      // Retrying a lost ACK is safe: the durable cursor is the release fence.
+      await observation.acknowledge({ journalId: checkpoint.journalId, sequence: checkpoint.sequence });
+      await observation.wait(this.#signal);
+    }
   }
 
   async #run(): Promise<void> {
@@ -380,18 +498,36 @@ export class OpenCodeInputObserver {
     while (!this.#signal.aborted) {
       try {
         await this.#assertCurrent(this.#signal);
-        if (attempt++ > 0) this.#trackerId = randomUUID();
-        this.#liveFrontier = -1;
-        const observation = this.#api.observe({ signal: this.#signal, include: event => { this.#event(event, true); return false; } });
+        const checkpoint = this.#cursors.read();
+        let observation: OpenCodePortObservation;
+        try { observation = this.lease.client.observe({ purpose: "evidence", signal: this.#signal,
+          ...(checkpoint ? { after: { journalId: checkpoint.journalId, sequence: checkpoint.sequence } } : {}) }); }
+        catch (error) {
+          if (!(error instanceof OpenCodeRuntimeError) || error.code !== "opencode_observation_continuity_lost") throw error;
+          observation = this.lease.client.observe({ purpose: "evidence", signal: this.#signal });
+        }
         this.#observation = observation;
-        await observation.ready; await this.#assertCurrent(this.#signal);
-        this.#connected = true; this.#wake(); this.#scheduleRefresh(0);
-        await observation.ended;
-      } catch { /* This exact subscription is terminal. A new tracker may recover only positive proof. */ }
-      this.#changeInputAuthority();
-      this.#connected = false; this.#reads.clear(); this.#wake(); this.#observation?.close();
+        let boundary: OpenCodeObservationBoundary;
+        try { boundary = await observation.ready; }
+        catch (error) {
+          if (!(error instanceof OpenCodeRuntimeError) || error.code !== "opencode_observation_continuity_lost") throw error;
+          await observation.close();
+          observation = this.lease.client.observe({ purpose: "evidence", signal: this.#signal });
+          this.#observation = observation; boundary = await observation.ready;
+        }
+        await this.#assertCurrent(this.#signal);
+        await this.#follow(observation, boundary, checkpoint);
+      } catch (error) {
+        if (error instanceof OpenCodeRuntimeError && error.code === "opencode_observation_controller_superseded") {
+          this.close(); break;
+        }
+        // Carrier detach preserves the host journal and native continuity.
+        // Only an explicit loss boundary may make unresolved input unknown.
+      }
+      this.#changeInputAuthority(); this.#connected = false; this.#reads.clear(); this.#wake();
+      await this.#observation?.close();
       if (this.#signal.aborted) break;
-      try { await delay(Math.min(1_000, 100 * attempt), this.#signal); } catch { break; }
+      try { await delay(Math.min(1_000, 100 * ++attempt), this.#signal); } catch { break; }
     }
   }
   #refresh(tracked: Tracked): Promise<void> {
@@ -486,7 +622,7 @@ export class OpenCodeInputObserver {
 }
 
 interface Subscriber { readonly attach: AttachConversationInput; readonly options: OpenCodeInputObserverOptions; }
-interface SharedObserver { readonly observer: OpenCodeInputObserver; readonly subscribers: Set<Subscriber>; readonly owner: AbortController; }
+interface SharedObserver { readonly observer: OpenCodeInputObserver; readonly subscribers: Set<Subscriber>; readonly owner: AbortController; readonly lease: OpenCodeRuntimeLease; }
 const registry = new Map<string, Map<string, SharedObserver>>();
 function authorityKey(attach: AttachConversationInput): string {
   return JSON.stringify([attach.scope.tenantId, attach.scope.principalId, attach.binding.applicationThreadId,
@@ -505,12 +641,14 @@ export function acquireOpenCodeInputObserver(context: OpenCodeDriverContext, att
   const key = authorityKey(attach); let shared = entries.get(key);
   if (!shared) {
     const subscribers = new Set<Subscriber>(); const owner = new AbortController();
-    const observer = new OpenCodeInputObserver(context, { ...attach, onSubmissionObserved: input => {
+    const retainedLease = runtime.acquire(openCodeRuntimeTarget(attach));
+    let observer: OpenCodeInputObserver;
+    try { observer = new OpenCodeInputObserver(context, { ...attach, onSubmissionObserved: input => {
       for (const subscriber of subscribers) safelyNotify(() => subscriber.attach.onSubmissionObserved?.(input));
-    } }, runtime, lease, owner.signal, { onProofChanged: () => {
+    } }, runtime, retainedLease, owner.signal, { onProofChanged: () => {
       for (const subscriber of subscribers) safelyNotify(() => subscriber.options.onProofChanged?.());
-    } });
-    shared = { observer, subscribers, owner }; entries.set(key, shared);
+    } }); } catch (error) { retainedLease.release(); throw error; }
+    shared = { observer, subscribers, owner, lease: retainedLease }; entries.set(key, shared);
   }
   const selected = shared; const subscriber = { attach, options }; selected.subscribers.add(subscriber);
   // Replay exact durable positive proof to a newly attached actor, including
@@ -524,7 +662,7 @@ export function acquireOpenCodeInputObserver(context: OpenCodeDriverContext, att
   let released = false;
   const release = () => {
     if (released) return; released = true; lifetime.removeEventListener("abort", release); selected.subscribers.delete(subscriber);
-    if (selected.subscribers.size === 0) { selected.owner.abort(); selected.observer.close(); if (entries!.get(key) === selected) entries!.delete(key); if (entries!.size === 0) registry.delete(lease.client.ownerKey); }
+    if (selected.subscribers.size === 0) { selected.owner.abort(); selected.observer.close(); selected.lease.release(); if (entries!.get(key) === selected) entries!.delete(key); if (entries!.size === 0) registry.delete(lease.client.ownerKey); }
   };
   lifetime.addEventListener("abort", release, { once: true });
   return { observer: selected.observer, release };

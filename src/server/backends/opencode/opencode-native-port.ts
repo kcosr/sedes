@@ -97,15 +97,32 @@ export type OpenCodeReadOutput<K extends OpenCodeReadMethod> = OpenCodeReadMetho
 export type OpenCodeMutationInput<K extends OpenCodeMutationMethod> = OpenCodeMutationMethods[K]["input"];
 export type OpenCodeMutationOutput<K extends OpenCodeMutationMethod> = OpenCodeMutationMethods[K]["output"];
 
-export interface OpenCodeObservationRecord {
+export interface OpenCodeObservationCursor { readonly journalId: string; readonly sequence: number; }
+export interface OpenCodeNativeProof {
+  readonly nativeSequence: number; readonly fingerprint: string; readonly type: string;
+  readonly inputId: string | null; readonly boundaryId: string | null;
+}
+export interface OpenCodeNativeProofBaseline {
+  readonly nativeFrontier: number | null; readonly coverageFloor: number | null;
+  readonly currentInputId: string | null; readonly authorityEpoch: number;
+  readonly proofs: readonly OpenCodeNativeProof[];
+}
+interface OpenCodeObservationPosition {
+  readonly journalId: string;
   readonly sequence: number;
-  readonly continuity: string;
-  readonly event: OpenCodeNativeEvent;
+  readonly nativeContinuity: string;
   readonly decodedBytes: number;
 }
-export interface OpenCodeObservationBoundary { readonly continuity: string; readonly baselineSequence: number; }
+export type OpenCodeObservationRecord = OpenCodeObservationPosition & (
+  | { readonly kind: "native"; readonly event: OpenCodeNativeEvent }
+  | { readonly kind: "native_break"; readonly reason: "disconnected" | "malformed" | "overflow" | "owner_lost" });
+export interface OpenCodeObservationBoundary {
+  readonly journalId: string; readonly throughSequence: number; readonly retainedAfterSequence: number;
+  readonly nativeConnected: boolean; readonly nativeContinuity: string;
+  readonly proof: OpenCodeNativeProofBaseline;
+}
 export interface OpenCodeObservationEnd {
-  readonly reason: "closed" | "aborted" | "disconnected" | "malformed" | "overflow" | "failed";
+  readonly reason: "closed" | "aborted" | "disconnected" | "malformed" | "overflow" | "failed" | "resnapshot_required" | "superseded";
   readonly error?: OpenCodeRuntimeError;
 }
 /** In-process interface; only strict DTOs are serialized by the sidecar client. */
@@ -115,7 +132,7 @@ export interface OpenCodePortObservation {
   readonly failure: OpenCodeRuntimeError | undefined;
   drain(): OpenCodeObservationRecord[];
   wait(signal?: AbortSignal): Promise<void>;
-  acknowledge(sequence: number): Promise<void>;
+  acknowledge(cursor: OpenCodeObservationCursor): Promise<void>;
   close(): Promise<void>;
 }
 export interface OpenCodeNativePort {
@@ -135,7 +152,7 @@ export interface OpenCodeNativePort {
   /** Release all currently retained substeps after the exact main operation's
    * durable disposition. Includes dynamic Stop withdrawal identities. */
   acknowledgeOperation(identity: OpenCodeApplicationOperationIdentity): Promise<void>;
-  observe(input?: { readonly after?: { readonly continuity: string; readonly sequence: number }; readonly signal?: AbortSignal }): OpenCodePortObservation;
+  observe(input: { readonly purpose: "evidence" | "presentation"; readonly after?: OpenCodeObservationCursor; readonly signal?: AbortSignal }): OpenCodePortObservation;
 }
 
 /** These effects must not queue behind history/body transfers. */

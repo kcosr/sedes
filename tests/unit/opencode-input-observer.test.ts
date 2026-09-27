@@ -73,6 +73,64 @@ async function consumed(f: ReturnType<typeof fixture>, operationId = "operation"
 }
 
 describe("OpenCode independent private input observation", () => {
+  it("commits evidence and cursor together and never ACKs or notifies on SQL rollback", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    f.wire.send(enqueue(1)); await vi.waitFor(() => expect(f.row().enqueueSequence).toBe(1));
+    await vi.waitFor(() => expect(f.host.retentionSnapshot().observation.pendingEvidenceCount).toBe(0));
+    f.database.exec(`CREATE TRIGGER reject_observation_cursor BEFORE UPDATE ON opencode_observation_cursors
+      WHEN NEW.sequence = 2 BEGIN SELECT RAISE(ABORT,'cursor fixture rollback'); END`);
+    f.wire.send(delivered(2));
+    await vi.waitFor(() => expect(f.host.retentionSnapshot().observation.pendingEvidenceCount).toBe(1));
+    await new Promise(resolve => setTimeout(resolve, 150));
+    expect(f.row().consumedFingerprint).toBeNull(); expect(f.observed).not.toHaveBeenCalled();
+    expect(f.database.prepare("SELECT sequence FROM opencode_observation_cursors").get()).toEqual({ sequence: 1 });
+    f.database.exec("DROP TRIGGER reject_observation_cursor");
+    await consumed(f);
+    await vi.waitFor(() => expect(f.host.retentionSnapshot().observation.pendingEvidenceCount).toBe(0));
+    expect(f.database.prepare("SELECT sequence FROM opencode_observation_cursors").get()).toEqual({ sequence: 2 });
+    expect(f.observed).toHaveBeenCalledExactlyOnceWith({ backendCorrelation: "operation" });
+  });
+
+  it("replays detached consumption before granting replacement observer authority without a native history read", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    const tracker = f.observer.trackerId; f.observer.close();
+    f.wire.send(enqueue(1)); f.wire.send(delivered(2));
+    await vi.waitFor(() => expect(f.host.retentionSnapshot().observation.pendingEvidenceCount).toBe(2));
+    const replacement = f.createObserver(); await replacement.start();
+    expect(replacement.trackerId).toBe(tracker); expect(f.row().consumedFingerprint).not.toBeNull();
+    const authority = await replacement.accessDecisionAuthority().acquire(new AbortController().signal);
+    expect(authority.isCurrent()).toBe(true); authority.release();
+    expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
+    expect(f.wire.requests.filter(request => request.pathname.endsWith("/message"))).toHaveLength(0);
+  });
+
+  it("owns a separate main lease while any shared actor or reader still observes", async () => {
+    const f = fixture(); const acquire = vi.mocked(f.runtime.acquire).getMockImplementation()!;
+    const ports: AbortController[] = [];
+    vi.spyOn(f.runtime, "acquire").mockImplementation(target => {
+      const source = acquire(target), lifetime = new AbortController(); ports.push(lifetime);
+      return { ...source, client: { ...source.client, lifetime: AbortSignal.any([source.client.lifetime, lifetime.signal]) },
+        release: () => { lifetime.abort(); source.release(); } };
+    });
+    const first = f.runtime.acquire(openCodeRuntimeTarget(f.attach)), second = f.runtime.acquire(openCodeRuntimeTarget(f.attach));
+    const owner = new AbortController();
+    const a = acquireOpenCodeInputObserver(f.context, f.attach, f.runtime, first, owner.signal);
+    const b = acquireOpenCodeInputObserver(f.context, f.attach, f.runtime, second, owner.signal);
+    await b.observer.start(); const tracker = b.observer.trackerId;
+    a.release(); first.release();
+    await b.observer.start(); expect(b.observer.trackerId).toBe(tracker);
+    expect(ports.map(port => port.signal.aborted)).toEqual([true, false, false]);
+    b.release(); second.release(); expect(ports.every(port => port.signal.aborted)).toBe(true);
+  });
+
+  it("actor detach alone never creates false native continuity loss", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve(); const tracker = f.observer.trackerId;
+    f.observer.close(); const replacement = f.createObserver(); await replacement.start();
+    expect(replacement.trackerId).toBe(tracker);
+    expect((await replacement.reconcile("operation", "submit")).status).toBe("unresolved");
+    expect(f.row().terminalLostAt).toBeNull();
+  });
+
   it("releases retained prompt evidence on exact cancellation without an enqueue event", async () => {
     const f = fixture(); await f.observer.start(); const row = f.reserve();
     f.wire.setResponse(`/api/session/${f.wire.sessionID}/prompt`, 200, { data: admission() });
@@ -178,7 +236,7 @@ describe("OpenCode independent private input observation", () => {
     else { f.wire.send(delivered(0, "msg_boundary")); f.wire.send(enqueue(1)); }
     if (mode === "reuse") f.wire.send(enqueue(2));
     f.wire.send(reverted(3)); await vi.waitFor(() => expect(f.row().enqueueSequence).not.toBeNull());
-    expect((await f.observer.reconcile("operation", "submit")).status).toBe("unresolved");
+    expect((await f.observer.reconcile("operation", "submit")).status).toBe(mode === "reuse" ? "unresolved" : "failed_unknown");
     expect(f.row().withdrawnFingerprint).toBeNull();
   });
 
@@ -207,7 +265,7 @@ describe("OpenCode independent private input observation", () => {
 
   it("retires lost inputs from polling and retention while a later live consumption still recovers", async () => {
     vi.useFakeTimers();
-    const f = fixture(); await f.observer.start(); f.reserve(); f.observer.close(); f.log([], 2);
+    const f = fixture(); await f.observer.start(); f.reserve(); f.observer.close(); f.wire.disconnect(); await vi.advanceTimersByTimeAsync(200); f.log([], 2);
     const recovery = f.createObserver(); await recovery.start();
     expect((await recovery.reconcile("operation", "submit")).status).toBe("failed_unknown");
     expect(f.row().terminalLostAt).not.toBeNull(); expect(f.evidence.hasUnresolved(scope, threadID)).toBe(false);
@@ -268,7 +326,7 @@ describe("OpenCode independent private input observation", () => {
     vi.spyOn(f.runtime, "assertCurrent").mockImplementationOnce(async () => { entered(); await held; });
     const reconciling = f.observer.reconcile("operation", "submit"); await reached;
     f.wire.disconnect(); await vi.waitFor(() => expect(f.observer.trackerId).not.toBe(tracker));
-    expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(2);
+    await vi.waitFor(() => expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(2));
     release(); expect((await reconciling).status).toBe("unresolved");
     expect(f.wire.requests.some(request => request.pathname.endsWith("/inbox"))).toBe(false);
     f.pending([admission()]); f.wire.connected(); await f.observer.start();
@@ -307,10 +365,12 @@ describe("OpenCode independent private input observation", () => {
   });
 
   it("recovers positive cancellation from a validated retained log but treats watermark-only history as gaps", async () => {
-    const f = fixture(); await f.observer.start(); f.reserve(); f.observer.close();
+    const f = fixture(); await f.observer.start(); f.reserve(); f.observer.close(); f.wire.disconnect();
+    await vi.waitFor(() => expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(2));
     f.log([cancelled(3)], 3); const recovery = f.createObserver(); await recovery.start();
     expect(await recovery.reconcile("operation", "submit")).toMatchObject({ status: "not_accepted", retryable: false });
-    f.reserve("second", "msg_second", "submit", true, recovery); recovery.close(); f.log([], 9);
+    f.reserve("second", "msg_second", "submit", true, recovery); recovery.close(); f.wire.disconnect();
+    await vi.waitFor(() => expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(3)); f.log([], 9);
     const secondRecovery = f.createObserver(); await secondRecovery.start();
     expect((await secondRecovery.reconcile("second", "submit")).status).toBe("failed_unknown");
   });
@@ -368,12 +428,14 @@ describe("OpenCode current-input access decisions", () => {
     await expect(authority.acquire(signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
     lease.release();
   });
-  it("does not grant a cold observer current-input authority from an older consumed receipt", async () => {
+  it("recovers current-input authority from the resident host after actor detach", async () => {
     const f = fixture(); await f.observer.start(); f.reserve();
     f.wire.send(enqueue(1)); f.wire.send(delivered(2)); await consumed(f);
     f.wire.messages.push(user()); f.observer.close();
     const cold = f.createObserver(); await cold.start(); cold.observeHistory(f.wire.messages);
-    await expect(cold.accessDecisionAuthority().acquire(new AbortController().signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+    const authority = await cold.accessDecisionAuthority().acquire(new AbortController().signal);
+    expect(authority.isCurrent()).toBe(true); authority.release();
+    expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
   });
   it("invalidates pending access decisions on an observation gap", async () => {
     const f = fixture(); await f.observer.start(); f.reserve();

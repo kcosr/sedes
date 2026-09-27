@@ -5,12 +5,13 @@ import { OpenCodeHistoryProjection, openCodeHistoryItemId } from "../../src/serv
 import { OPENCODE_HISTORY_LIMITS } from "../../src/server/backends/opencode/opencode-history-reader.js";
 import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-native-api.js";
 import { OPENCODE_MAXIMUM_RESPONSE_BYTES } from "../../src/server/backends/opencode/opencode-http-client.js";
+import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 import { createOpenCodeConversationFixture, scope } from "../support/opencode-conversation-fixture.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const close of cleanup.splice(0).reverse()) await close(); });
-function setup(messages: SessionMessageInfo[] = []) {
-  const fixture = createOpenCodeConversationFixture({ messages }); cleanup.push(fixture.dispose); return fixture;
+function setup(messages: SessionMessageInfo[] = [], wire?: ReturnType<typeof createOpenCodeApiFixture>) {
+  const fixture = createOpenCodeConversationFixture({ messages, ...(wire ? { wire } : {}) }); cleanup.push(fixture.dispose); return fixture;
 }
 async function attached(messages: SessionMessageInfo[] = []) {
   const fixture = setup(messages); const handle = await fixture.driver.attach(fixture.target); cleanup.push(() => handle.close());
@@ -23,10 +24,13 @@ const assistant = (content: Extract<SessionMessageInfo, { type: "assistant" }>["
 const idle = (id = "msg_idle"): SessionMessageInfo => ({ id, type: "idle", outcome: "succeeded", time: { created: 3 } });
 const signal = () => new AbortController().signal;
 let eventNumber = 0;
+const durableSequences = new Map<string, number>();
 function event(type: string, data: Record<string, unknown>, durable = false) {
-  const index = ++eventNumber;
+  const index = ++eventNumber, aggregateID = typeof data.sessionID === "string" ? data.sessionID : "ses_fixture";
+  const seq = (durableSequences.get(aggregateID) ?? 0) + 1;
+  if (durable) durableSequences.set(aggregateID, seq);
   return { id: `evt_handle_${index}`, created: index, type, data: { sessionID: "ses_fixture", ...data },
-    ...(durable ? { durable: { aggregateID: "ses_fixture", seq: index, version: 1 } } : {}) };
+    ...(durable ? { durable: { aggregateID, seq, version: 1 } } : {}) };
 }
 function textEvent(kind: "text" | "reasoning", phase: "delta" | "ended", text: string, ordinal = 0) {
   return event(`session.${kind}.${phase}`, { assistantMessageID: "msg_assistant", ordinal, [phase === "delta" ? "delta" : "text"]: text }, phase === "ended");
@@ -172,7 +176,8 @@ describe("OpenCode conversation authority and finite discovery", () => {
       { workspace: { ...current.target.workspace, canonicalPath: "/foreign" } }]) {
       await expect(current.driver.attach({ ...current.target, ...change })).rejects.toMatchObject({ category: "permission_denied", crossedSubmissionBoundary: false });
     }
-    expect(current.runtime.start).not.toHaveBeenCalled(); expect(current.wire.requests).toHaveLength(0);
+    expect(current.runtime.start).not.toHaveBeenCalled();
+    expect(current.wire.requests.map(request => request.pathname)).toEqual(["/api/event"]);
   });
   it("discovers native title/binding and carries a scope-bound opaque cursor without writes", async () => {
     const current = setup(); const input = { scope, workspace: current.target.workspace, signal: signal(), limit: 1 };
@@ -191,7 +196,9 @@ describe("OpenCode conversation authority and finite discovery", () => {
 
 describe("OpenCode SSE and native history composition", () => {
   it("waits for SSE readiness before the first history request", async () => {
-    const current = await attached(); const held = current.wire.hold("/api/event");
+    const wire = createOpenCodeApiFixture(), held = wire.hold("/api/event"), fixture = setup([], wire);
+    const handle = await fixture.driver.attach(fixture.target); cleanup.push(() => handle.close());
+    const current = { ...fixture, handle };
     const read = current.handle.establishProjection({ signal: signal() });
     await held.entered;
     expect(current.wire.requests.some(request => request.pathname.endsWith("/message"))).toBe(false);
@@ -199,7 +206,9 @@ describe("OpenCode SSE and native history composition", () => {
     expect((await read).snapshot.orderedBackendTurnIds).toEqual([]);
   });
   it("still awaits the same SSE readiness after its first establishment caller cancels", async () => {
-    const current = await attached(); const held = current.wire.hold("/api/event");
+    const wire = createOpenCodeApiFixture(), held = wire.hold("/api/event"), fixture = setup([], wire);
+    const handle = await fixture.driver.attach(fixture.target); cleanup.push(() => handle.close());
+    const current = { ...fixture, handle };
     const cancellation = new AbortController();
     const first = current.handle.establishProjection({ signal: cancellation.signal });
     const rejected = expect(first).rejects.toBeInstanceOf(Error);
@@ -211,8 +220,8 @@ describe("OpenCode SSE and native history composition", () => {
     expect(current.wire.requests.some(request => request.pathname.endsWith("/message"))).toBe(false);
     expect(current.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
     held.release(); await second;
-    // One reused input tracker plus the independently owned projection stream.
-    expect(current.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(2);
+    // Input evidence and presentation reuse the same resident native stream.
+    expect(current.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
   });
   it("reports maximal-image event overflow while hydration is blocked and recovers authoritative history", async () => {
     const current = await attached([user(), { ...assistant([{ type: "text", text: "Before overflow" }]),
@@ -248,7 +257,7 @@ describe("OpenCode SSE and native history composition", () => {
     expect(recovered.snapshot.orderedBackendTurnIds).toEqual(initial.snapshot.orderedBackendTurnIds);
     expect(recovered.snapshot.runState).toBe("idle");
     expect(current.wire.requests.every(request => request.method === "GET")).toBe(true);
-    expect(current.runtime.snapshot()).toMatchObject({ state: "ready", generation: "native-generation", references: 1 });
+    expect(current.runtime.snapshot()).toMatchObject({ state: "ready", generation: "native-generation", references: 2 });
   });
   it("ignores child token fragments and main compaction fragments while refreshing child activity without history reads", async () => {
     const current = await attached([user(), assistant()]);

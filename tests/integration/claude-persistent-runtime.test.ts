@@ -1,3 +1,4 @@
+import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import { ClaudeConversationBackendDriver } from "../../src/server/backends/claude/claude-conversation-driver.js";
 import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
 import { ScopedThreadEventHubRegistry, ThreadRuntimeCoordinator } from "../../src/server/events/thread-runtime-coordinator.js";
@@ -21,7 +22,7 @@ import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execu
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import { createSidecarAbandonmentArchive, type SidecarAbandonmentRecord } from "../../src/server/sidecar/sidecar-abandonment-archive.js";
 import type { SidecarRuntimeLease, SidecarRuntimeProvider } from "../../src/server/sidecar/runtime-channel.js";
-import { createClaudeFramedCarrier, createFakePersistentClaudeRuntime, FakePersistentClaudeSession } from "../helpers/persistent-claude-fixture.js";
+import { createFakePersistentClaudeRuntime, FakePersistentClaudeSession } from "../helpers/persistent-claude-fixture.js";
 
 const scope = { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "ssh-environment", backendInstanceId: "claude-remote" };
 const configuration = { ...scope, executablePath: "/provider/claude", configDirectory: "/provider/.claude", initializationTimeoutMs: 5_000 };
@@ -59,7 +60,7 @@ async function fixture(options: {
   const clients: ClaudePersistentRuntimeClient[] = [];
   const carriers: { close(): Promise<void> }[] = [];
   async function attach() {
-    const carrier = await createClaudeFramedCarrier();
+    const carrier = await createSidecarFramedCarrier();
     const controllerEpoch = services.attach(serviceConfiguration);
     const detach = registerClaudePersistentRuntimeHost({
       registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, controllerEpoch,

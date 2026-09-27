@@ -1,3 +1,4 @@
+import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import { CodexRemoteRuntimeSupervisor } from "../../src/server/backends/codex/runtime/codex-remote-runtime-supervisor.js";
 import { CodexServerRequestRouter } from "../../src/server/backends/codex/codex-server-request-router.js";
 import { codexRuntimeMethod } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
@@ -10,7 +11,6 @@ import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persi
 import { sidecarAbandonmentEvidenceCarriesWork } from "../../src/server/sidecar/sidecar-abandonment-archive.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execution/environment-channel.js";
 import { CodexSidecarRuntimeConnection, registerCodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-sidecar-runtime.js";
-import { createClaudeFramedCarrier } from "../helpers/persistent-claude-fixture.js";
 
 const native = vi.hoisted(() => ({ launches: 0, closes: 0, cleanupFailure: false }));
 vi.mock("../../src/server/backends/codex/codex-runtime-config.js", () => ({
@@ -148,7 +148,7 @@ it("retains a runtime with cleanup uncertainty even after explicit force", async
 it("reports forced cleanup failure over the carrier and retries only the retained owner", async () => {
   const f = fixture();
   const host = await f.hosts.ensure(configuration, f.epoch);
-  const carrier = await createClaudeFramedCarrier();
+  const carrier = await createSidecarFramedCarrier();
   const detach = registerCodexRuntimeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel,
     hosts: f.hosts, services: f.services, controllerEpoch: f.epoch, onDetach: () => f.services.detach(f.epoch) });
   const connection = new CodexSidecarRuntimeConnection(carrier.mainChannel);
@@ -214,7 +214,7 @@ it("reads the applied owned PATH across pending startup edits and changes it onl
   const f = fixture();
   const owned = { ...configuration, connection: { ownership: "owned" as const, channel: { type: "process_stdio" as const, executablePath: "/usr/bin/false", workingDirectory: directory, codexHome: directory } }, startupEnvironmentVariables: { PATH: { kind: "literal" as const, value: "/applied/bin" } } };
   const desired = { ...owned, startupEnvironmentVariables: { PATH: { kind: "literal" as const, value: "/pending/bin" } } };
-  const carrier = await createClaudeFramedCarrier();
+  const carrier = await createSidecarFramedCarrier();
   const detach = registerCodexRuntimeHost({ registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts: f.hosts, services: f.services, controllerEpoch: f.epoch, onDetach: () => f.services.detach(f.epoch) });
   const connection = new CodexSidecarRuntimeConnection(carrier.mainChannel);
   let host = await f.hosts.ensure(owned, f.epoch);

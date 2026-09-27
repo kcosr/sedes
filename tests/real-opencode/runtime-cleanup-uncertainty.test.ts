@@ -54,7 +54,7 @@ it.skipIf(!enabled)("cleans confirmed detached native children despite an unrela
     await mkdir(configDirectory);
     await writeFile(path.join(root, "models.json"), "{}");
     await writeFile(path.join(configDirectory, "opencode.json"), JSON.stringify({ update: "disable" }));
-    runtime = new OpenCodeRuntime({
+    runtime = new OpenCodeRuntime({ hostIncarnation: "fixture-host",
       authority: { tenantId: "qualification", principalId: "qualification", backendInstanceId: "uncertainty", executionEnvironmentId: "local" },
       nativeStorePath, configDirectory,
       environment: { HOME: root, PATH: process.env.PATH, SHELL: "/bin/sh",

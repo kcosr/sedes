@@ -1,3 +1,4 @@
+import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 import { createOpenCodeNativePortFixture } from "../helpers/opencode-native-port-fixture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
@@ -12,8 +13,10 @@ function event(seq: number, data: Record<string, unknown> = {}) {
 const synced = (seq?: number) => ({ type: "log.synced", aggregateID: "ses_owned", ...(seq === undefined ? {} : { seq }) });
 function fixture(frames: unknown[], close = true) {
   const requests: URL[] = [];
+  const observation = createOpenCodeApiFixture();
   let cancelled = false;
   const fetch = vi.fn(async (value: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    if (new URL(String(value)).pathname === "/api/event") return observation.fetch(value, init);
     requests.push(new URL(String(value)));
     expect(init?.redirect).toBe("error");
     expect(new Headers(init?.headers).has("authorization")).toBe(true);

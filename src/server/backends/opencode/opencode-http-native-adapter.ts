@@ -129,12 +129,19 @@ class HttpNativeApi {
     id(sessionID, "ses_");
     return this.#read((client, budget) => nativeRead(() => client.session.interrupt({ sessionID }, { signal: budget }), sessionID), parseInterrupt, signal);
   }
-  observe(input: { readonly signal?: AbortSignal; readonly include?: (event: OpenCodeNativeEvent) => boolean } = {}): OpenCodeHttpObservation {
+  observe(input: OpenCodeHttpObservationInput = {}): OpenCodeHttpObservation {
     return new OpenCodeHttpObservation(this.client, input);
   }
 }
 
 export interface OpenCodeNativeObservedEvent { readonly event: OpenCodeNativeEvent; readonly decodedBytes: number; }
+export interface OpenCodeHttpObservationInput {
+  readonly signal?: AbortSignal;
+  readonly include?: (event: OpenCodeNativeEvent) => boolean;
+  /** Host-only synchronous evidence capture, before EOF can clear presentation. */
+  readonly onEvent?: (event: OpenCodeNativeObservedEvent) => void;
+  readonly onConnected?: () => void;
+}
 export interface OpenCodeHttpObservationEnd {
   readonly reason: "closed" | "aborted" | "disconnected" | "malformed" | "overflow" | "failed";
   readonly error?: OpenCodeRuntimeError;
@@ -154,7 +161,7 @@ export class OpenCodeHttpObservation {
   #readyResolve!: () => void;
   #readyReject!: (error: OpenCodeRuntimeError) => void;
   #endResolve!: (value: OpenCodeHttpObservationEnd) => void;
-  constructor(client: OpenCodeHttpClient, input: { readonly signal?: AbortSignal; readonly include?: (event: OpenCodeNativeEvent) => boolean }) {
+  constructor(client: OpenCodeHttpClient, input: OpenCodeHttpObservationInput) {
     this.ready = new Promise((resolve, reject) => { this.#readyResolve = resolve; this.#readyReject = reject; });
     void this.ready.catch(() => undefined);
     this.ended = new Promise(resolve => { this.#endResolve = resolve; });
@@ -170,11 +177,12 @@ export class OpenCodeHttpObservation {
           if (signal.aborted) break;
           if (!connected) {
             if (raw.type !== "server.connected") throw new OpenCodeNativeProtocolError();
-            connected = true; clearTimeout(timer); this.#readyResolve(); continue;
+            connected = true; clearTimeout(timer); input.onConnected?.(); this.#readyResolve(); continue;
           }
           if (raw.type === "server.connected") throw new OpenCodeNativeProtocolError();
-          if (input.include && !input.include(raw)) continue;
           const bytes = decodedBytes(raw);
+          input.onEvent?.({ event: raw, decodedBytes: bytes });
+          if (input.include && !input.include(raw)) continue;
           if (this.#queue.length >= OPENCODE_NATIVE_EVENT_BUFFER_RECORDS || this.#queuedBytes + bytes > OPENCODE_NATIVE_EVENT_BUFFER_BYTES) {
             this.#finish({ reason: "overflow", error: new OpenCodeRuntimeError("opencode_event_overflow") });
             this.#controller.abort(); break;
@@ -458,7 +466,7 @@ export class OpenCodeHttpNativeAdapter {
     }
     return parseOpenCodeMutationOutput(method, input, value);
   }
-  observe(input: { readonly signal?: AbortSignal } = {}): OpenCodeHttpObservation { return this.#reads.observe(input); }
+  observe(input: OpenCodeHttpObservationInput = {}): OpenCodeHttpObservation { return this.#reads.observe(input); }
   /** Host-only hook. Callers have already merged the admitted immutable launch baseline. */
   setEnvironmentVariables(input: { sessionID: string; variables: Readonly<Record<string, string>> }, signal?: AbortSignal): Promise<void> {
     return this.#writes.setEnvironment(input, signal);

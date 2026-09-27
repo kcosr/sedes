@@ -47,7 +47,7 @@ describe.each([false, true])("OpenCode native port (JSON framed=%s)", framed => 
     await expect(port.read("getSession", input as never)).rejects.toMatchObject({ code: "opencode_native_read_input_invalid" });
     await expect(port.mutate("interruptSession", input as never, control)).rejects.toBeInstanceOf(OpenCodeNativeMutationInputError);
     expect(getter).not.toHaveBeenCalled();
-    expect(fixture.requests).toHaveLength(1);
+    expect(fixture.requests.filter(request => request.pathname !== "/api/event")).toHaveLength(1);
   });
 
   it("acknowledges all exact application substeps without replaying native effects", async () => {
@@ -62,7 +62,7 @@ describe.each([false, true])("OpenCode native port (JSON framed=%s)", framed => 
     await port.acknowledgeOperation(operation);
     for (const attempt of [control, later]) await expect(port.mutate("interruptSession", { sessionID: fixture.sessionID }, attempt))
       .rejects.toMatchObject({ delivery: "sent_outcome_unknown", code: "opencode_mutation_acknowledged" });
-    expect(fixture.requests).toHaveLength(2);
+    expect(fixture.requests.filter(request => request.pathname !== "/api/event")).toHaveLength(2);
   });
 
   it("keeps interrupt dispatch independent of a stalled native history read", async () => {
@@ -74,20 +74,22 @@ describe.each([false, true])("OpenCode native port (JSON framed=%s)", framed => 
     } finally { hold.release(); await reading; }
   });
 
-  it("preserves attributed eager observations and exposes explicit sequence acknowledgment", async () => {
+  it("preserves attributed presentation and reserves acknowledgment for evidence", async () => {
     const { fixture, port } = setup(framed), include = vi.fn(() => false);
     const observation = new OpenCodeNativeApi(port).observe({ include });
+    const evidence = port.observe({ purpose: "evidence" });
     try {
       await observation.ready;
       fixture.send({ id: "evt_synthetic", type: "session.synthetic", created: 1,
         durable: { aggregateID: fixture.sessionID, seq: 1, version: 1 }, data: { sessionID: fixture.sessionID, text: "evidence" } });
       await vi.waitFor(() => expect(include).toHaveBeenCalledOnce());
-      const [, record] = include.mock.calls[0] as unknown as [unknown, { sequence: number; continuity: string }];
-      expect(record).toMatchObject({ sequence: 1, continuity: observation.boundary!.continuity });
+      const [, record] = include.mock.calls[0] as unknown as [unknown, { sequence: number; journalId: string }];
+      expect(record).toMatchObject({ sequence: 1, journalId: observation.boundary!.journalId });
       expect(observation.drain()).toEqual([]);
-      await observation.acknowledge(record.sequence);
-      await expect(observation.acknowledge(record.sequence + 1)).rejects.toMatchObject({ code: "opencode_request_authority_mismatch" });
-    } finally { await observation.close(); }
+      await evidence.ready; await evidence.wait(); evidence.drain();
+      await evidence.acknowledge({ journalId: record.journalId, sequence: record.sequence });
+      await expect(evidence.acknowledge({ journalId: record.journalId, sequence: record.sequence + 1 })).rejects.toMatchObject({ code: "opencode_request_authority_mismatch" });
+    } finally { await observation.close(); await evidence.close(); }
   });
 
   it("routes nested form ownership for the root, known children and global notices without foreign session forms", async () => {

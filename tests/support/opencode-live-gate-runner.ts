@@ -52,7 +52,7 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
     await writeFile(canaryFile, canary, { mode: 0o600 });
     await writeFile(path.join(root, "models.json"), "{}", { mode: 0o600 });
     await writeFile(path.join(config, "opencode.json"), JSON.stringify(liveConfiguration(input, canaryFile)), { mode: 0o600 });
-    runtime = new OpenCodeRuntime({ authority: { tenantId: scope.tenantId, principalId: scope.principalId, backendInstanceId: "live-gate", executionEnvironmentId: "local" },
+    runtime = new OpenCodeRuntime({ hostIncarnation: "fixture-host", authority: { tenantId: scope.tenantId, principalId: scope.principalId, backendInstanceId: "live-gate", executionEnvironmentId: "local" },
       nativeStorePath: store, configDirectory: config,
       connection: { ownership: "owned", channel: { type: "process_stdio", workingDirectory: workspace, executablePath: input.executable } },
       environment: { PATH: process.env.PATH, LANG: "C.UTF-8", SHELL: "/bin/sh", HOME: path.join(root, "home"),

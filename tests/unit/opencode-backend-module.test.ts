@@ -26,7 +26,7 @@ function configuration(ownership: "owned" | "external" = "owned"): BackendModule
 function context() {
   const database = new Database(":memory:"); databases.push(database);
   const instance = { id: "opencode", tenantId: "tenant", kind: "opencode" as const, label: "OpenCode", enabled: true, configurationRevision: 1, protocolRelease: "2.0.18" };
-  const connection = { id: "profile", ...scope, ownerPrincipalId: scope.principalId, templateId: "profile-template", kind: "opencode_http" as const,
+  const connection = { id: "profile", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "profile-template", kind: "opencode_http" as const,
     backendInstanceId: "opencode", executionEnvironmentId: "local", label: "OpenCode", enabled: true, configurationRevision: 1 };
   const discard = vi.fn();
   const resolveSecret = vi.fn(async () => ({ value: "fixture-basic-password", identity: {}, discard }));

@@ -34,7 +34,7 @@ function controlledObservation() {
     },
     sessionID: "ses_fixture", signal: lifetime.signal, onFailure,
   });
-  return { monitor, emit: (value: OpenCodeNativeEvent) => include(value, { event: value, sequence: 1, continuity: "fixture", decodedBytes: Buffer.byteLength(JSON.stringify(value)) }), end, release, close, onFailure, lifetime };
+  return { monitor, emit: (value: OpenCodeNativeEvent) => include(value, { kind: "native", event: value, sequence: 1, journalId: "fixture", nativeContinuity: "fixture", decodedBytes: Buffer.byteLength(JSON.stringify(value)) }), end, release, close, onFailure, lifetime };
 }
 
 describe("live OpenCode monitor finalization", () => {

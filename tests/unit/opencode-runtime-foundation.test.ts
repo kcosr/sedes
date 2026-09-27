@@ -32,6 +32,10 @@ async function server(input: { authenticated?: boolean; version?: string; redire
       response.writeHead(401).end(); return;
     }
     if (input.redirect) { response.writeHead(302, { location: input.redirect }).end(); return; }
+    if (request.url === "/api/event") {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write('data: {"id":"evt_connected","type":"server.connected","data":{}}\n\n'); return;
+    }
     response.setHeader("content-type", "application/json");
     response.end(input.oversized ? JSON.stringify("s".repeat(17 * 1024 * 1024)) : JSON.stringify({
       version: input.version ?? "2.0.18", pid: process.pid, urls: [], paths: { tmp: os.tmpdir() },
@@ -130,7 +134,7 @@ describe.skipIf(process.platform !== "linux")("OpenCode native store and externa
   it("excludes duplicate Sedes owners and never deletes the canonical native database", async () => {
     const root = await directory();
     const store = path.join(root, "opencode.db"); await writeFile(store, "native history");
-    const lifecycle = createOpenCodeNativeStoreLifecycle({ canonicalStorePath: store, label: "test" });
+    const lifecycle = createOpenCodeNativeStoreLifecycle({ canonicalStorePath: store, label: "test", ownership: "external", hostIncarnation: "fixture-host" });
     const lease = await lifecycle.acquire();
     await expect(lifecycle.acquire()).rejects.toThrow("opencode_native_store_already_owned");
     await lease.release(); await lease.release();
@@ -146,17 +150,18 @@ describe.skipIf(process.platform !== "linux")("OpenCode native store and externa
   });
   it("retains tampered ownership evidence instead of releasing an unproved lease", async () => {
     const root = await directory(); const store = path.join(root, "opencode.db"); await writeFile(store, "native history");
-    const lifecycle = createOpenCodeNativeStoreLifecycle({ canonicalStorePath: store, label: "test" });
+    const lifecycle = createOpenCodeNativeStoreLifecycle({ canonicalStorePath: store, label: "test", ownership: "external", hostIncarnation: "fixture-host" });
     const lease = await lifecycle.acquire();
     const lock = (await readdir(root)).find(name => name.endsWith(".lock"))!;
     await writeFile(path.join(root, lock, "owner.json"), JSON.stringify({ token: "replacement" }));
     await expect(lease.release()).rejects.toThrow("opencode_native_store_release_unproved");
-    await expect(lifecycle.acquire()).rejects.toThrow("opencode_native_store_already_owned");
+    await expect(lifecycle.acquire()).rejects.toThrow("opencode_native_store_recovery_required");
   });
   it("keeps an external server alive after references and disconnect, and fences store replacement", async () => {
     const root = await directory(); const store = path.join(root, "opencode.db"); await writeFile(store, "native history");
     const fixture = await server();
     const runtime = new OpenCodeRuntime({
+      hostIncarnation: "fixture-host",
       authority: { tenantId: "tenant", principalId: "principal", backendInstanceId: "backend", executionEnvironmentId: "local" },
       nativeStorePath: store, environment: {}, externalPassword: async () => password,
       connection: { ownership: "external", channel: { type: "http", url: fixture.endpoint } },
@@ -187,13 +192,14 @@ describe.skipIf(process.platform !== "linux")("OpenCode native store and externa
     await expect(runtime.close()).resolves.toEqual({ cleanup: "proved", nativeInterrupts: "not_owned" });
     const stillRunning = new OpenCodeHttpClient({ endpoint: fixture.endpoint, password });
     await expect(stillRunning.info()).resolves.toMatchObject({ pid: process.pid });
-    expect(fixture.requests.every(value => value === "GET /api/info")).toBe(true);
+    expect(fixture.requests.every(value => value === "GET /api/info" || value === "GET /api/event")).toBe(true);
     stillRunning.close();
   });
   it("does not revoke a healthy native owner when one identity probe is cancelled", async () => {
     const root = await directory(); const store = path.join(root, "opencode.db"); await writeFile(store, "native history");
     const fixture = await server();
     const runtime = new OpenCodeRuntime({
+      hostIncarnation: "fixture-host",
       authority: { tenantId: "tenant", principalId: "principal", backendInstanceId: "backend", executionEnvironmentId: "local" },
       nativeStorePath: store, environment: {}, externalPassword: async () => password,
       connection: { ownership: "external", channel: { type: "http", url: fixture.endpoint } },
@@ -223,6 +229,7 @@ describe.skipIf(process.platform !== "linux")("OpenCode native store and externa
     const root = await directory(); const store = path.join(root, "opencode.db"); await writeFile(store, "native history");
     const fixture = await server();
     const runtime = new OpenCodeRuntime({
+      hostIncarnation: "fixture-host",
       authority: { tenantId: "tenant", principalId: "principal", backendInstanceId: "backend", executionEnvironmentId: "local" },
       nativeStorePath: store, environment: {}, externalPassword: async () => password,
       connection: { ownership: "external", channel: { type: "http", url: fixture.endpoint } },
@@ -242,6 +249,7 @@ describe.skipIf(process.platform !== "linux")("OpenCode native store and externa
     const root = await directory(); const store = path.join(root, "opencode.db"); await writeFile(store, "native history");
     const fixture = await server();
     const runtime = new OpenCodeRuntime({
+      hostIncarnation: "fixture-host",
       authority: { tenantId: "tenant", principalId: "principal", backendInstanceId: "backend", executionEnvironmentId: "local" },
       nativeStorePath: store, environment: {}, externalPassword: async () => password,
       connection: { ownership: "external", channel: { type: "http", url: fixture.endpoint } },

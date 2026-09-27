@@ -40,7 +40,8 @@ describe("OpenCode native host authority", () => {
     const f = fixture();
     for (let page = 0; page < 4; page++) await f.session.read("getHistoryPage", { sessionID: f.wire.sessionID, order: "asc" });
     expect(f.assertCurrent).not.toHaveBeenCalled();
-    expect(f.wire.requests).toHaveLength(4);
+    expect(f.wire.requests.filter(request => request.pathname !== "/api/event")).toHaveLength(4);
+    expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
     await f.session.mutate("interruptSession", { sessionID: f.wire.sessionID }, openCodeTestMutationControl("interrupt"));
     expect(f.assertCurrent).toHaveBeenCalledOnce();
   });
@@ -74,8 +75,8 @@ describe("OpenCode native host authority", () => {
     } finally { hold.release(); await reading; }
     expect(second.lifetime.aborted).toBe(true);
   });
-  it("retains an observation after lease release and reclaims its scope on close", async () => {
-    const f = fixture(), observation = f.session.observe();
+  it("retains critical evidence after presentation closes and reclaims its scope after evidence ACK", async () => {
+    const f = fixture(), observation = f.session.observe({ purpose: "presentation" });
     try {
       await observation.ready; f.host.release(f.session);
       expect(f.session.lifetime.aborted).toBe(false);
@@ -83,6 +84,12 @@ describe("OpenCode native host authority", () => {
         durable: { aggregateID: f.wire.sessionID, seq: 1, version: 1 }, data: { sessionID: f.wire.sessionID, text: "retained" } });
       await vi.waitFor(() => expect(observation.drain()).toHaveLength(1));
     } finally { await observation.close(); }
+    expect(f.session.lifetime.aborted).toBe(false);
+    const evidence = f.session.observe({ purpose: "evidence" });
+    const boundary = await evidence.ready, records = evidence.drain();
+    expect(records).toHaveLength(1);
+    await evidence.acknowledge({ journalId: boundary.journalId, sequence: records[0]!.sequence });
+    await evidence.close();
     expect(f.session.lifetime.aborted).toBe(true);
   });
   it("keeps completed journal evidence after lease release until its durable ACK", async () => {
@@ -108,6 +115,35 @@ describe("OpenCode native host authority", () => {
     expect(f.host.snapshot().operations).toHaveLength(0);
     expect(f.session.lifetime.aborted).toBe(true);
   });
+  it("retains accepted input tracking after receipt ACK and detach before the first SSE frame", async () => {
+    const f = fixture(), control = openCodeTestMutationControl("prompt"), id = "msg_delayed_event";
+    f.wire.setResponse(`/api/session/${f.wire.sessionID}/prompt`, 200, { data: {
+      id, sessionID: f.wire.sessionID, type: "user", delivery: "queue", payload: { text: "queued" }, time: { created: 1 },
+    } });
+    await f.session.mutate("prompt", { sessionID: f.wire.sessionID, id, text: "queued", delivery: "queue", resume: false }, control);
+    await f.session.acknowledgeMutation("prompt", control.identity);
+    f.host.release(f.session);
+    expect(f.host.snapshot().operations).toHaveLength(0);
+    expect(f.session.lifetime.aborted).toBe(false);
+    const evidence = f.session.observe({ purpose: "evidence" }), boundary = await evidence.ready;
+    f.wire.send({ id: "evt_late_enqueue", type: "session.inbox.enqueued", created: 1,
+      durable: { aggregateID: f.wire.sessionID, seq: 1, version: 1 }, data: { sessionID: f.wire.sessionID,
+        inboxID: id, item: { type: "user", delivery: "queue", payload: { text: "queued" } } } });
+    await evidence.wait();
+    const records = evidence.drain();
+    expect(records).toHaveLength(1);
+    await evidence.acknowledge({ journalId: boundary.journalId, sequence: records[0]!.sequence });
+    await evidence.close();
+    expect(f.session.lifetime.aborted).toBe(false);
+    const settled = f.session.observe({ purpose: "evidence" }); await settled.ready;
+    f.wire.send({ id: "evt_cancelled", type: "session.inbox.cancelled", created: 2,
+      durable: { aggregateID: f.wire.sessionID, seq: 2, version: 1 }, data: { sessionID: f.wire.sessionID, inboxID: id } });
+    await settled.wait();
+    const cancelled = settled.drain(); expect(cancelled).toHaveLength(1);
+    await settled.acknowledge({ journalId: boundary.journalId, sequence: cancelled[0]!.sequence });
+    await settled.close();
+    expect(f.session.lifetime.aborted).toBe(true);
+  });
   it("admits creation preflight only after proving the returned workspace", async () => {
     const f = fixture();
     await expect(f.directory.read("getSession", { sessionID: f.wire.sessionID })).resolves.toEqual(f.wire.session);
@@ -117,13 +153,13 @@ describe("OpenCode native host authority", () => {
   it.each(sessionReads)("refuses directory-only $name access before native I/O", async ({ read }) => {
     const f = fixture();
     await expect(read(f.directory)).rejects.toMatchObject({ code: "opencode_request_authority_mismatch" });
-    expect(f.wire.requests).toEqual([]);
+    expect(f.wire.requests.map(request => request.pathname)).toEqual(["/api/event"]);
   });
   it("does not let a bound session create another session", async () => {
     const f = fixture();
     await expect(f.session.mutate("createSession", { id: "ses_foreign", location: { directory: f.wire.directory } },
       openCodeTestMutationControl("create"))).rejects.toMatchObject({ delivery: "not_sent", code: "opencode_request_authority_mismatch" });
-    expect(f.wire.requests).toEqual([]);
+    expect(f.wire.requests.map(request => request.pathname)).toEqual(["/api/event"]);
   });
   it("keeps a completed effect unknown after owner loss instead of manufacturing a not-sent proof", async () => {
     const f = fixture(), control = openCodeTestMutationControl("interrupt");

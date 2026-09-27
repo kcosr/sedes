@@ -1,10 +1,10 @@
+import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { ClaudeInteractionBridge } from "../../src/server/backends/claude/claude-interaction-bridge.js";
 import { ClaudePersistentRuntimeClient } from "../../src/server/backends/claude/runtime/claude-remote-runtime-client.js";
 import type { ClaudePersistentCommand, ClaudePersistentEvent } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-wire.js";
 import type { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.js";
 import type { ClaudeRuntimeSessionOptions } from "../../src/server/backends/claude/claude-runtime-client.js";
-import { createClaudeFramedCarrier } from "../helpers/persistent-claude-fixture.js";
 
 const connectionState = vi.hoisted(() => ({ nextOpen: undefined as unknown, instances: [] as { ensureInputs: unknown[]; execute: ReturnType<typeof vi.fn>; listener?: (event: ClaudePersistentEvent) => void }[] }));
 vi.mock("../../src/server/backends/claude/runtime/claude-sidecar-runtime.js", async (importOriginal) => ({
@@ -138,7 +138,7 @@ it("keeps a local session alive and retries a transient SSH acquisition failure"
 });
 
 it("keeps the session and permission pending when recovery acquires an already closed framed channel", async () => {
-  const closedCarrier = await createClaudeFramedCarrier();
+  const closedCarrier = await createSidecarFramedCarrier();
   try { await closedCarrier.start(); } finally { await closedCarrier.close(); }
   vi.useFakeTimers();
   const { client, acquire, carriers, options } = setup();

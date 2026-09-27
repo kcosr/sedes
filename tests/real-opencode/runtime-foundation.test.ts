@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,7 +46,7 @@ it.skipIf(!enabled).each(["opencode.db", "opencode.db (deleted)"])("rejects repl
     await mkdir(configDirectory);
     await writeFile(path.join(root, "models.json"), "{}");
     await writeFile(path.join(configDirectory, "opencode.json"), JSON.stringify({ update: "disable" }));
-    native = await startOpenCodeOwnedProcess({
+    native = await startOpenCodeOwnedProcess({ processMarker: randomBytes(32).toString("hex"),
       executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2",
       workingDirectory: root, nativeStorePath, configDirectory,
       environment: { HOME: root, PATH: process.env.PATH, SHELL: "/bin/sh",
@@ -106,7 +107,7 @@ it.skipIf(!enabled)("owned opencode2 preserves native configuration, remains res
     await writeFile(environment.OPENCODE_MODELS_PATH!, "{}");
     const config = JSON.stringify({ update: "disable", permission: { shell: "allow" } });
     await writeFile(path.join(configDirectory, "opencode.json"), config);
-    runtime = new OpenCodeRuntime({
+    runtime = new OpenCodeRuntime({ hostIncarnation: "fixture-host",
       authority: { tenantId: "qualification", principalId: "qualification", backendInstanceId: "fixture", executionEnvironmentId: "local" },
       nativeStorePath, environment,
       connection: { ownership: "owned", channel: { type: "process_stdio",
@@ -188,7 +189,7 @@ it.skipIf(!enabled)("external stock opencode2 keeps its daemon and background sh
     await mkdir(configDirectory);
     await writeFile(path.join(root, "models.json"), "{}");
     await writeFile(path.join(configDirectory, "opencode.json"), JSON.stringify({ update: "disable" }));
-    native = await startOpenCodeOwnedProcess({
+    native = await startOpenCodeOwnedProcess({ processMarker: randomBytes(32).toString("hex"),
       executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2",
       workingDirectory: root, nativeStorePath, configDirectory,
       environment: { HOME: root, PATH: process.env.PATH, SHELL: "/bin/sh",
@@ -205,7 +206,7 @@ it.skipIf(!enabled)("external stock opencode2 keeps its daemon and background sh
     if (!password) throw new Error("isolated fixture password unavailable");
     const wrongStorePath = path.join(root, "wrong.db");
     await writeFile(wrongStorePath, "unrelated database canary");
-    const mismatched = new OpenCodeRuntime({
+    const mismatched = new OpenCodeRuntime({ hostIncarnation: "fixture-host",
       authority: { tenantId: "qualification", principalId: "qualification", backendInstanceId: "mismatch", executionEnvironmentId: "local" },
       nativeStorePath: wrongStorePath, environment: {}, externalPassword: async () => password,
       connection: { ownership: "external", channel: { type: "http", url: native.endpoint } },
@@ -215,7 +216,7 @@ it.skipIf(!enabled)("external stock opencode2 keeps its daemon and background sh
     expect(await readFile(wrongStorePath, "utf8")).toBe("unrelated database canary");
     expect((await readdir(root)).some(name => name.endsWith(".lock"))).toBe(false);
     expect(await alive(native.pid)).toBe(true);
-    runtime = new OpenCodeRuntime({
+    runtime = new OpenCodeRuntime({ hostIncarnation: "fixture-host",
       authority: { tenantId: "qualification", principalId: "qualification", backendInstanceId: "external", executionEnvironmentId: "local" },
       nativeStorePath, environment: {}, externalPassword: async () => password,
       connection: { ownership: "external", channel: { type: "http", url: native.endpoint } },

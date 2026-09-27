@@ -186,6 +186,18 @@ history for each page. These are Claude-private rules: Codex, Pi, and Grok retai
 their existing history and delivery contracts, and no browser capability or
 protocol changes.
 
+OpenCode's resident host uses per-thread evidence journals and a compact native
+baseline independent of presentation subscriptions. Input dispatch must retain
+its scope before native admission can race the first SSE event. Main commits
+operation evidence and its journal cursor atomically before ACK; transaction
+failure must restore in-memory proof and publish no callbacks. Carrier loss
+does not break native continuity, while native stream loss does. Bounded
+retention must preserve unresolved evidence or explicitly fence new work.
+Control admission, including the scope acquisition and evidence catch-up needed
+by a fresh Stop caller, must not wait behind bulk history. These are private
+host contracts; OpenCode remote product admission remains disabled until its
+tool relay and topology qualification are complete.
+
 Backend runtime control adapters expose `BackendRuntimeControlRejectedError`
 only for positively received, known provider refusals, normalized as stale
 confirmation, blocked, or cleanup unproven. Keep provider refusal codes private

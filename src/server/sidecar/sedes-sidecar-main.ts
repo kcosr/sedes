@@ -60,6 +60,8 @@ import { PersistentSidecarManagementReceipts } from "./persistent-sidecar-manage
 import { SidecarRuntimeAttachment, SidecarUpstreamUnavailableError } from "./sidecar-runtime-attachment.js";
 import { SidecarRuntimeChannel } from "./runtime-channel.js";
 import { LocalEnvironmentChannelProvider } from "../execution/local-environment-channel.js";
+import { OpenCodeRuntimeHostRegistry } from "../backends/opencode/opencode-runtime-host-registry.js";
+import { registerOpenCodeRuntimeHost } from "../backends/opencode/opencode-sidecar-runtime.js";
 import { CodexRuntimeHostRegistry } from "../backends/codex/runtime/codex-runtime-host-registry.js";
 import { registerCodexRuntimeHost } from "../backends/codex/runtime/codex-sidecar-runtime.js";
 import { registerCodexManagedTuiHost } from "../backends/codex/runtime/codex-runtime-managed-tui.js";
@@ -83,6 +85,7 @@ const compiledSidecarCapabilities = Object.freeze([
   Object.freeze({ capabilityId: "interactive_terminal", majorVersion: 2 }),
   Object.freeze({ capabilityId: "runtime_bodies", majorVersion: 1 }),
   Object.freeze({ capabilityId: "codex_runtime", majorVersion: 1 }),
+  Object.freeze({ capabilityId: "opencode_runtime", majorVersion: 1 }),
   Object.freeze({ capabilityId: "claude_persistent_runtime", majorVersion: 2 }),
   Object.freeze({ capabilityId: "codex_managed_tui", majorVersion: 1 }),
 ]);
@@ -134,6 +137,7 @@ async function main(): Promise<void> {
   catch { /* The handshake omits capabilities whose native prerequisite failed. */ }
   const claudeRuntimeAvailable = supportsClaudeRuntimeHost(process.platform, process.versions.node);
   const enabledSidecarCapabilities = Object.freeze(compiledSidecarCapabilities.filter(capability =>
+    (process.platform === "linux" || capability.capabilityId !== "opencode_runtime") &&
     (claudeRuntimeAvailable || capability.capabilityId !== "claude_persistent_runtime") &&
     (nativePtyAvailable || (capability.capabilityId !== "interactive_terminal" && capability.capabilityId !== "codex_managed_tui"))));
   const paths = await preparePersistentSidecarNamespace(input.scope);
@@ -170,9 +174,11 @@ async function main(): Promise<void> {
         onDetach: () => attachment.detach(controllerEpoch) });
       const detachClaude = claudeRuntimeAvailable ? registerClaudePersistentRuntimeHost({ registry, channel: runtimeChannel, hosts: claudeHosts, controllerEpoch,
         onDetach: () => attachment.detach(controllerEpoch) }) : () => undefined;
+      const detachOpenCode = process.platform === "linux" ? registerOpenCodeRuntimeHost({ registry, channel: runtimeChannel,
+        hosts: openCodeHosts, services: serviceRegistry, controllerEpoch }) : () => undefined;
       const detachTui = nativePtyAvailable ? registerCodexManagedTuiHost({ registry, channel: runtimeChannel, hosts: codexHosts.managedTui, services: serviceRegistry, controllerEpoch }) : () => undefined;
       const unsubscribe = attachment.subscribe((event) => {
-        if (event === "detached" && attachment.controllerEpoch === controllerEpoch) { detachTui(); detachCodex(); detachClaude(); runtimeChannel.close(); unsubscribe(); }
+        if (event === "detached" && attachment.controllerEpoch === controllerEpoch) { detachTui(); detachCodex(); detachClaude(); detachOpenCode(); runtimeChannel.close(); unsubscribe(); }
       });
   registerWorkspaceFilesV8Operations(registry, workspaceFiles.handlers);
   registerWorkspaceToolsV2Operations(registry, workspaceTools.handlers);
@@ -258,6 +264,8 @@ async function main(): Promise<void> {
     executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env,
   });
   const codexHosts = new CodexRuntimeHostRegistry({ scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
+    executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, environmentChannel, services: serviceRegistry });
+  const openCodeHosts = new OpenCodeRuntimeHostRegistry({ scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, environmentChannel, services: serviceRegistry });
   const claudeHosts = new ClaudePersistentRuntimeRegistry({
     scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },

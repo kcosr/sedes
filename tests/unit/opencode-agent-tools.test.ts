@@ -192,18 +192,18 @@ describe("OpenCode MCP runtime admission", () => {
     expect(f.wire.requests.filter(request => request.pathname.endsWith("/prompt") || request.pathname.endsWith("/interrupt"))).toEqual([]);
     expect(handle.retirementBlocked).toBe(false);
   });
-  it("retains one routing scope after the last handle closes without retaining a native event subscription", async () => {
+  it("retains routing and one resident native stream across actor attachments", async () => {
     const f = fixture(); await f.admit();
     expect(f.runtime.snapshot().references).toBe(1);
-    expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(0);
+    expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
     const channel = await connect(f.registrations[0]!.config.environment);
     const first = await f.driver.attach(f.target), second = await f.driver.attach(f.target);
     cleanups.push(async () => { await first.close(); await second.close(); });
     await first.establishProjection({ signal: new AbortController().signal });
     await second.establishProjection({ signal: new AbortController().signal });
     const observer = findOpenCodeInputObserver(f.port, f.target);
-    expect(observer).toBeDefined(); expect(f.runtime.snapshot().references).toBe(3);
-    expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(3);
+    expect(observer).toBeDefined(); expect(f.runtime.snapshot().references).toBe(4);
+    expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
     await first.close();
     expect(findOpenCodeInputObserver(f.port, f.target)).toBe(observer);
     await second.close();
@@ -212,10 +212,10 @@ describe("OpenCode MCP runtime admission", () => {
     const response = await channel.call(f.wire.sessionID);
     expect(response.status).toBe(200); await response.body?.cancel();
     expect(f.runtime.snapshot().references).toBe(1);
-    expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(3);
+    expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
     expect(f.registrations).toHaveLength(1);
   });
-  it("revokes approval authority with the last live handle and requires fresh input proof after reattach", async () => {
+  it("revokes borrowed approval authority on detach and restores it only after retained native proof catch-up", async () => {
     const f = fixture({ cli: true }); const handle = await f.driver.attach(f.target);
     cleanups.push(() => handle.close());
     await handle.establishProjection({ signal: new AbortController().signal });
@@ -242,7 +242,12 @@ describe("OpenCode MCP runtime admission", () => {
     await expect(authority.acquire(new AbortController().signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
     const replacement = await f.driver.attach(f.target); cleanups.push(() => replacement.close());
     await replacement.establishProjection({ signal: new AbortController().signal });
-    expect(findOpenCodeInputObserver(f.port, f.target)?.trackerId).not.toBe(observer.trackerId);
+    expect(findOpenCodeInputObserver(f.port, f.target)?.trackerId).toBe(observer.trackerId);
+    const recovered = await authority.acquire(new AbortController().signal);
+    expect(recovered.isCurrent()).toBe(true);
+    f.wire.disconnect();
+    await vi.waitFor(() => expect(recovered.signal.aborted).toBe(true));
+    recovered.release();
     await expect(authority.acquire(new AbortController().signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
   });
   it.each([0, OPENCODE_MCP_WATCHDOG_MS + 1])("readmits using elapsed time since actual revocation (%i ms)", async elapsed => {

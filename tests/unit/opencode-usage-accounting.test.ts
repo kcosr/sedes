@@ -85,7 +85,8 @@ describe("OpenCode usage evidence", () => {
     const f = setup(); const sink = { ...NO_USAGE_SINK, open: vi.fn() }; const service = new OpenCodeUsageAccounting(sink);
     const lease = service.acquire(f.context, { ...f.target, scope: { ...scope, principalId: "foreign" } }, f.runtime, f.port);
     lease.record(history(), turns(f.wire.sessionID)); await lease.settled(); lease.release(); service.close();
-    expect(sink.open).not.toHaveBeenCalled(); expect(f.wire.requests).toEqual([]);
+    expect(sink.open).not.toHaveBeenCalled();
+    expect(f.wire.requests.map(request => request.pathname)).toEqual(["/api/event"]);
   });
   it("shares actor/read captures, coalesces bursts and seals only after the last pending read", async () => {
     const f = setup(); const { accounting, sink, capture } = recorder();

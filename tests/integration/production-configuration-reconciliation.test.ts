@@ -1,3 +1,4 @@
+import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import { authenticatedProductionFetch } from "../helpers/authenticated-production-client.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -15,7 +16,6 @@ import { SidecarRuntimeOwner, SidecarUnavailableError } from "../../src/server/s
 import { SidecarServiceManagementError, SidecarServiceStagingError } from "../../src/server/sidecar/sidecar-provisioner.js";
 import { SIDECAR_WIRE_VERSION } from "../../src/internal/sidecar-protocol/envelopes.js";
 import type { SidecarServiceStatus } from "../../src/internal/sidecar-protocol/service-management-v1.js";
-import { createClaudeFramedCarrier } from "../helpers/persistent-claude-fixture.js";
 import { compiledBackendModuleCatalog } from "../../src/server/backends/compiled-module-catalog.js";
 import { BackendRuntimeControlRejectedError } from "../../src/server/backends/runtime-control.js";
 import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
@@ -299,7 +299,7 @@ describe("production configuration reconciliation", () => {
       resources: [], resourcesFingerprint: "b".repeat(64) };
     // Negotiate a real framed daemon handshake with no Claude host registered,
     // as supported Windows or older-Node daemons truthfully advertise.
-    const carrier = await createClaudeFramedCarrier();
+    const carrier = await createSidecarFramedCarrier();
     try {
       await carrier.start();
       const release = vi.fn();

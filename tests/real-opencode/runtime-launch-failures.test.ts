@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -21,7 +22,7 @@ async function fake(source: string, version = "2.0.18") {
   await mkdir(path.join(root, "config"));
   await writeFile(executablePath, `#!${process.execPath}\nif(process.argv.includes("--version")){console.log("opencode v${version}");process.exit(0)}\nrequire("node:fs").writeFileSync(${JSON.stringify(evidence)},JSON.stringify({pid:process.pid}));\n${source}\n`);
   await chmod(executablePath, 0o700);
-  return { root, evidence, input: { executablePath, workingDirectory: root, nativeStorePath: path.join(root, "opencode.db"),
+  return { root, evidence, input: { processMarker: randomBytes(32).toString("hex"), executablePath, workingDirectory: root, nativeStorePath: path.join(root, "opencode.db"),
     configDirectory: path.join(root, "config"), environment: { HOME: root, PATH: process.env.PATH, SHELL: "/bin/sh" } } };
 }
 

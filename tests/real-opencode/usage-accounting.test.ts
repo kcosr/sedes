@@ -15,8 +15,10 @@ it.runIf(RUN_REAL_OPENCODE)("captures persisted stock v2 usage, auxiliary title 
   const model = await startOpencodeModelFixture(); model.config.providers.probe.models["probe-model"].cost = { input: 1, output: 2 };
   let native: Awaited<ReturnType<typeof startOpencodeNativeFixture>> | undefined;
   let current: ReturnType<typeof createOpenCodeConversationFixture> | undefined;
+  let acquired: Awaited<ReturnType<ReturnType<typeof createOpenCodeConversationFixture>["acquire"]>> | undefined;
   let client: OpenCodeHttpClient | undefined, handle: ConversationHandle | undefined, accounting: OpenCodeUsageAccounting | undefined;
   const captured: UsageObservation[] = [];
+  let projectionReplacements = 0;
   const sink: UsageSink = { ...NO_USAGE_SINK, enabled: true, open: () => ({ ...NO_USAGE_CAPTURE,
     capture: values => { captured.push(...values); return true; } }) };
   try {
@@ -33,12 +35,13 @@ it.runIf(RUN_REAL_OPENCODE)("captures persisted stock v2 usage, auxiliary title 
     vi.spyOn(current.repository, "hasCreatedRoot").mockReturnValue(false);
     accounting = new OpenCodeUsageAccounting(sink); current.context.usage = accounting;
     current.context.settings.updateDesired(scope, threadID, { expectedRevision: 0, desired: { providerID: "probe", id: "probe-model" }, now: Date.now() });
-    handle = await current.driver.attach(current.target);
-    await handle.establishProjection({ signal: new AbortController().signal });
+    acquired = await current.acquire();
+    acquired.actor.subscribe(event => { if (event.type === "projection_replaced") projectionReplacements++; });
+    handle = await current.handle();
     await handle.submit({ applicationOperationId: "usage-input", mutationId: "usage-input", reconciliationToken: "usage-input", source: { kind: "user" },
       text: "Explain the fixture usage", contextExcerpts: [], taskContexts: [], attachments: [] });
-    // No projection refresh here: the actor must receive the ephemeral native
-    // usage update from the title helper as well as ordinary durable steps.
+    // No manual projection refresh: the production actor observes native usage
+    // and repairs a declared stock SSE gap through authoritative history.
     await vi.waitFor(async () => {
       const info = await api.getSession(session.id);
       expect(model.requests.length).toBeGreaterThanOrEqual(2);
@@ -59,11 +62,13 @@ it.runIf(RUN_REAL_OPENCODE)("captures persisted stock v2 usage, auxiliary title 
       expect(info.tokens.input).toBeGreaterThan(before.tokens.input);
       expect(captured.filter(item => item.replaceCheckpoint).at(-1)?.facts).toEqual(openCodeUsageCheckpoint(info).facts);
       expect(captured.some(item => item.facts.some(fact => fact.activity === "compaction" && fact.sessionContribution === "none"))).toBe(true);
+      expect(acquired!.actor.projectionRecoveryRequired).toBe(false);
+      expect(projectionReplacements).toBeGreaterThan(0);
     }, { timeout: 20_000, interval: 50 });
     expect(captured.flatMap(item => item.facts).filter(fact => fact.sessionContribution !== "none").every(fact => fact.id === "native-session-counter")).toBe(true);
     expect(captured.flatMap(item => item.facts).filter(fact => fact.turn).every(fact => fact.sessionContribution === "none")).toBe(true);
   } finally {
-    await handle?.close(); accounting?.close();
+    acquired?.release(); accounting?.close();
     try { await current?.dispose(); } finally { client?.close(); try { await native?.stop(); } finally { await model.stop(); } }
     vi.restoreAllMocks();
   }

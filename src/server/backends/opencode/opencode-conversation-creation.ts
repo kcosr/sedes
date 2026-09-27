@@ -1,5 +1,5 @@
 import { acknowledgeOpenCodeTerminalOperation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
-import type { OpenCodeNativePort } from "./opencode-native-port.js";
+import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { BackendError, type CreateConversationInput, type CreateConversationResult } from "../contracts.js";
@@ -25,7 +25,7 @@ const CREATE_MARKER = "sedes_create";
 export async function createOpenCodeConversation(context: OpenCodeDriverContext, input: CreateConversationInput): Promise<CreateConversationResult> {
   let crossed = false;
   let receipt: Readonly<OpenCodeOperationReceipt> | undefined;
-  let mutationPort: OpenCodeNativePort | undefined;
+  let mutationLease: OpenCodeRuntimeLease | undefined;
   try {
     assertOpenCodeWorkspace(context, input);
     context.executionEnvironment.assertDefinitionSupport(input.scope, input.applicationThreadId);
@@ -49,12 +49,14 @@ export async function createOpenCodeConversation(context: OpenCodeDriverContext,
       opaqueBindingDetail: serializeOpenCodeBindingDetail({ version: 1, tenantId: input.scope.tenantId, principalId: input.scope.principalId,
         backendInstanceId: context.instance.id, connectionProfileId: context.connection.id, executionEnvironmentId: context.connection.executionEnvironmentId,
         canonicalWorkspacePath: input.workspace.canonicalPath, nativeNamespaceKey: context.nativeNamespaceKey, sessionId: id }) };
+    const target = { directory: input.workspace.canonicalPath, session: { applicationThreadId: request.applicationThreadId,
+      nativeSessionID: id, bindingFingerprint: createHash("sha256").update(result.opaqueBindingDetail!).digest("hex") } };
     if (receipt.disposition === "accepted" || receipt.disposition === "not_applied") {
       // Retry a lost ACK against an already-ready owner without starting one.
       try {
         const runtime = await context.runtime();
         if (runtime.nativeNamespaceKey === context.nativeNamespaceKey && runtime.snapshot().state === "ready") {
-          const lease = runtime.acquire({ directory: input.workspace.canonicalPath });
+          const lease = runtime.acquire(target);
           try { await acknowledgeOpenCodeTerminalOperation(lease.client, () => receipt); }
           finally { lease.release(); }
         }
@@ -72,50 +74,48 @@ export async function createOpenCodeConversation(context: OpenCodeDriverContext,
     const runtime = await waitOpenCode(context.runtime(), budget);
     if (runtime.nativeNamespaceKey !== context.nativeNamespaceKey) throw rejected();
     await waitOpenCode(runtime.start(), budget);
-    const lease = runtime.acquire({ directory: input.workspace.canonicalPath });
-    mutationPort = lease.client;
-    try {
-      const api = new OpenCodeNativeApi(lease.client);
-      const native = new OpenCodeNativeMutations(lease.client);
-      const signal = AbortSignal.any([budget, lease.client.lifetime]);
-      const prove = async (session: OpenCodeNativeSession, requireRequestedModel = false): Promise<CreateConversationResult> => {
-        await runtime.assertCurrent(signal); signal.throwIfAborted(); assertAuthority(context, input, id);
-        assertNativeCreation(session, id, input.workspace.canonicalPath, fingerprint);
-        if (requireRequestedModel && !sameOpenCodeSelection(session.model ?? null, frozen.selection)) throw unknown();
-        const evidence = digest(["sedes.opencode.created.v1", context.nativeNamespaceKey, id, input.workspace.canonicalPath,
-          frozen.selection, fingerprint, session.time.created]);
-        const current = context.repository.requireOperation(input.scope, request.applicationThreadId, request.applicationOperationId, "create");
-        if (current.disposition === "accepted") {
-          if (current.nativeEvidenceFingerprint !== evidence) throw unknown();
-        } else if (current.disposition !== "dispatched" && current.disposition !== "unknown") throw unknown();
-        else if (!context.repository.recordOutcome(input.scope, request.applicationThreadId, request.applicationOperationId, "create",
-          { expected: current.disposition, disposition: "accepted", nativeEvidenceFingerprint: evidence, now: Date.now() })) throw unknown();
-        return result;
-      };
-      if (receipt.disposition !== "prepared") return await prove(await api.getSession(id, signal));
-      // Native create is first-writer-wins. Never adopt a session that predates our dispatch.
-      try { await api.getSession(id, signal); throw rejected(); }
-      catch (error) { if (!(error instanceof OpenCodeRuntimeError) || error.code !== "opencode_native_not_found") throw error; }
+    const lease = runtime.acquire(target);
+    mutationLease = lease;
+    const api = new OpenCodeNativeApi(lease.client);
+    const native = new OpenCodeNativeMutations(lease.client);
+    const signal = AbortSignal.any([budget, lease.client.lifetime]);
+    const prove = async (session: OpenCodeNativeSession, requireRequestedModel = false): Promise<CreateConversationResult> => {
       await runtime.assertCurrent(signal); signal.throwIfAborted(); assertAuthority(context, input, id);
-      if (!context.repository.markDispatched(input.scope, request.applicationThreadId, request.applicationOperationId, "create", Date.now())) {
-        crossed = true; return await prove(await api.getSession(id, signal));
+      assertNativeCreation(session, id, input.workspace.canonicalPath, fingerprint);
+      if (requireRequestedModel && !sameOpenCodeSelection(session.model ?? null, frozen.selection)) throw unknown();
+      const evidence = digest(["sedes.opencode.created.v1", context.nativeNamespaceKey, id, input.workspace.canonicalPath,
+        frozen.selection, fingerprint, session.time.created]);
+      const current = context.repository.requireOperation(input.scope, request.applicationThreadId, request.applicationOperationId, "create");
+      if (current.disposition === "accepted") {
+        if (current.nativeEvidenceFingerprint !== evidence) throw unknown();
+      } else if (current.disposition !== "dispatched" && current.disposition !== "unknown") throw unknown();
+      else if (!context.repository.recordOutcome(input.scope, request.applicationThreadId, request.applicationOperationId, "create",
+        { expected: current.disposition, disposition: "accepted", nativeEvidenceFingerprint: evidence, now: Date.now() })) throw unknown();
+      return result;
+    };
+    if (receipt.disposition !== "prepared") return await prove(await api.getSession(id, signal));
+    // Native create is first-writer-wins. Never adopt a session that predates our dispatch.
+    try { await api.getSession(id, signal); throw rejected(); }
+    catch (error) { if (!(error instanceof OpenCodeRuntimeError) || error.code !== "opencode_native_not_found") throw error; }
+    await runtime.assertCurrent(signal); signal.throwIfAborted(); assertAuthority(context, input, id);
+    if (!context.repository.markDispatched(input.scope, request.applicationThreadId, request.applicationOperationId, "create", Date.now())) {
+      crossed = true; return await prove(await api.getSession(id, signal));
+    }
+    crossed = true;
+    let session: OpenCodeNativeSession;
+    try {
+      session = await native.createSession({ id, model: frozen.selection, location: { directory: input.workspace.canonicalPath },
+        ...(request.title === undefined ? {} : { title: request.title }), metadata: { [CREATE_MARKER]: { version: 1, fingerprint } } }, openCodeOperationControl(receipt, "create-session"), signal);
+    } catch (error) {
+      if (openCodeMutationWasNotSent(error)) {
+        context.repository.recordOutcome(input.scope, request.applicationThreadId, request.applicationOperationId, "create",
+          { expected: "dispatched", disposition: "not_applied", nativeEvidenceFingerprint: null, now: Date.now() });
+        crossed = false; throw rejected();
       }
-      crossed = true;
-      let session: OpenCodeNativeSession;
-      try {
-        session = await native.createSession({ id, model: frozen.selection, location: { directory: input.workspace.canonicalPath },
-          ...(request.title === undefined ? {} : { title: request.title }), metadata: { [CREATE_MARKER]: { version: 1, fingerprint } } }, openCodeOperationControl(receipt, "create-session"), signal);
-      } catch (error) {
-        if (openCodeMutationWasNotSent(error)) {
-          context.repository.recordOutcome(input.scope, request.applicationThreadId, request.applicationOperationId, "create",
-            { expected: "dispatched", disposition: "not_applied", nativeEvidenceFingerprint: null, now: Date.now() });
-          crossed = false; throw rejected();
-        }
-        // The one POST may already have committed, including after a lost response.
-        return await prove(await api.getSession(id, signal));
-      }
-      return await prove(session, true);
-    } finally { lease.release(); }
+      // The one POST may already have committed, including after a lost response.
+      return await prove(await api.getSession(id, signal));
+    }
+    return await prove(session, true);
   } catch (error) {
     // Another caller may have dispatched the same prepared receipt while this
     // caller was awaiting catalog/GET preflight. Its effect must survive our
@@ -137,8 +137,12 @@ export async function createOpenCodeConversation(context: OpenCodeDriverContext,
     if (error instanceof DomainError || error instanceof z.ZodError || openCodeMutationWasNotSent(error)) throw rejected();
     throw mapOpenCodeConversationError(error);
   } finally {
-    if (mutationPort) await acknowledgeOpenCodeTerminalOperation(mutationPort,
-      () => context.repository.readOperation(input.scope, input.applicationThreadId, input.applicationOperationId, "create"));
+    if (mutationLease) {
+      try {
+        await acknowledgeOpenCodeTerminalOperation(mutationLease.client,
+          () => context.repository.readOperation(input.scope, input.applicationThreadId, input.applicationOperationId, "create"));
+      } finally { mutationLease.release(); }
+    }
   }
 }
 

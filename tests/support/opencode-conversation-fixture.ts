@@ -1,3 +1,4 @@
+import { openCodeObservationCursorsMigration } from "../../src/server/db/migrations/125-opencode-observation-cursors.js";
 import { randomUUID } from "node:crypto";
 import { OpenCodeNativeHost, type OpenCodeNativeHostHooks } from "../../src/server/backends/opencode/opencode-native-host.js";
 import { OpenCodeHttpNativeAdapter } from "../../src/server/backends/opencode/opencode-http-native-adapter.js";
@@ -40,12 +41,13 @@ const workspaceID = "ba11a564-8ef6-4d99-8bc1-680a05a87f00";
 
 export function createOpenCodeConversationFixture(input: {
   messages?: SessionMessageInfo[];
+  wire?: ReturnType<typeof createOpenCodeApiFixture>;
   retentionMilliseconds?: number;
   /** Isolated stock-native HTTP transport; fixture disposal also closes this client. */
   native?: { client?: OpenCodeHttpClient; sessionID: string; directory: string; runtime?: OpenCodeConversationRuntime };
 } = {}) {
   const namespace = input.native?.runtime?.nativeNamespaceKey ?? "fixture-native-store";
-  const wire = createOpenCodeApiFixture({ messages: input.messages });
+  const wire = input.wire ?? createOpenCodeApiFixture({ messages: input.messages });
   const client = input.native?.client ?? new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture-only-canary", fetch: wire.fetch });
   const sessionID = input.native?.sessionID ?? wire.sessionID;
   const directory = input.native?.directory ?? wire.directory;
@@ -66,6 +68,7 @@ export function createOpenCodeConversationFixture(input: {
   database.exec(openCodeNativeEvidenceMigration.sql);
   database.exec(openCodeExecutionSettingsMigration.sql);
   database.exec(openCodeRecoveryRetirementMigration.sql);
+  database.exec(openCodeObservationCursorsMigration.sql);
   const repository = new OpenCodeThreadRepository({ database, scope, backendInstanceId: backend, nativeNamespaceKey: namespace });
   const detail: OpenCodeBindingDetail = { version: 1, ...scope, sessionId: sessionID, backendInstanceId: backend,
     connectionProfileId: connectionID, executionEnvironmentId: environmentID, canonicalWorkspacePath: directory, nativeNamespaceKey: namespace };
@@ -108,7 +111,8 @@ export function createOpenCodeConversationFixture(input: {
     acquire: vi.fn(target => {
       if (client.lifetime.aborted) throw new OpenCodeRuntimeError("opencode_runtime_identity_changed");
       references++; let released = false;
-      return { client: host.acquire(target), generation: "native-generation", identity, release: () => { if (!released) { released = true; references--; } } };
+      const port = host.acquire(target);
+      return { client: port, generation: "native-generation", identity, release: () => { if (!released) { released = true; references--; host.release(port); } } };
     }),
   };
   const settings = new OpenCodeThreadSettingsRepository({ database, scope, backendInstanceId: backend });

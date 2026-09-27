@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { configurationFingerprint } from "../../config/configuration-fingerprint.js";
 import { OpenCodeHttpNativeAdapter } from "./opencode-http-native-adapter.js";
+import { OpenCodeObservationHub } from "./opencode-observation-hub.js";
+import { OPENCODE_CONTROL_MUTATIONS } from "./opencode-native-port.js";
 import { OpenCodeMutationJournal } from "./opencode-mutation-journal.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import { openCodeNativeAuthoritySchema, parseOpenCodeApplicationOperationIdentity, parseOpenCodeReadInput, parseOpenCodeMutationInput,
@@ -35,8 +36,15 @@ export class OpenCodeNativeHost {
   readonly #routes = new Map<string, ReturnType<typeof eventFilter>>();
   readonly #lifetime = new AbortController();
   readonly #observations = new Set<OpenCodePortObservation>();
+  readonly #hub: OpenCodeObservationHub;
+  #frozen = false;
+  #inventory?: { readonly observationRevision: number; readonly journalRevision: number; readonly pendingInteractions: number; readonly activeWork: number };
   constructor(readonly owner: OpenCodeNativeOwner, readonly adapter: OpenCodeHttpNativeAdapter,
     readonly hooks: OpenCodeNativeHostHooks, nativeLifetime: AbortSignal) {
+    this.#hub = new OpenCodeObservationHub(adapter, {
+      route: (authority, event) => this.#routes.get(configurationFingerprint(authority))?.accept(event) ?? false,
+      onRetentionChanged: () => { for (const scope of this.#scopes.values()) this.#collectScope(scope.port.authority); },
+    });
     nativeLifetime.addEventListener("abort", () => this.close(), { once: true });
     if (nativeLifetime.aborted) this.close();
   }
@@ -50,6 +58,7 @@ export class OpenCodeNativeHost {
     const key = configurationFingerprint(authority);
     const existing = this.#scopes.get(key);
     if (existing) { existing.references++; return existing.port; }
+    if (this.#frozen) throw new OpenCodeRuntimeError("opencode_mutation_admission_closed");
     if (this.#scopes.size >= 4_096) throw new OpenCodeRuntimeError("opencode_native_scope_capacity");
     const lifetime = new AbortController();
     const port: OpenCodeNativePort = Object.freeze({ authority, ownerKey: `${this.owner.runtimeId}:${this.owner.nativeGeneration}`,
@@ -70,11 +79,25 @@ export class OpenCodeNativeHost {
         this.#assertAuthority(authority);
         this.#journal.acknowledgeOperation(authority, parseOpenCodeApplicationOperationIdentity(identity));
       },
-      observe: (input?: Parameters<OpenCodeNativePort["observe"]>[0]) => this.observe(authority, input),
+      observe: (input: Parameters<OpenCodeNativePort["observe"]>[0]) => this.observe(authority, input),
     });
     this.#scopes.set(key, { port, lifetime, references: 1, operations: 0, observations: 0 });
     if (authority.session) this.#routes.set(key, eventFilter(authority.session.nativeSessionID));
+    try { this.#hub.admitScope(authority); }
+    catch (error) { this.#scopes.delete(key); this.#routes.delete(key); lifetime.abort(); throw error; }
     return port;
+  }
+
+  /** Recovery may borrow only a still-retained exact thread authority. It
+   * cannot create a fresh observation scope or adopt a merely existing native session. */
+  acquireRetained(target: OpenCodeRuntimeTarget): OpenCodeNativePort {
+    this.#assertOpen();
+    let authority: OpenCodeNativeAuthority;
+    try { authority = openCodeNativeAuthoritySchema.parse({ ...this.owner, ...target }); }
+    catch { throw denied(); }
+    const existing = this.#scopes.get(configurationFingerprint(authority));
+    if (!authority.session || !existing || existing.port.lifetime.aborted) throw denied();
+    existing.references++; return existing.port;
   }
 
   /** Release one acquired reference. In-flight calls, observations and retained
@@ -143,6 +166,10 @@ export class OpenCodeNativeHost {
       const budget = AbortSignal.any([deadline, this.#lifetime.signal]);
       try { await this.hooks.assertCurrent(budget); this.#assertAuthority(authority); }
       catch { throw new OpenCodeNativeMutationDeliveryError("not_sent", "opencode_runtime_unavailable"); }
+      if (!OPENCODE_CONTROL_MUTATIONS.has(method)) {
+        try { await this.#hub.ensureListening(AbortSignal.any([budget, AbortSignal.timeout(5_000)])); }
+        catch { throw new OpenCodeNativeMutationDeliveryError("not_sent", "opencode_event_ready_timeout"); }
+      }
       if (method === "installSessionEnvironment") {
         await this.hooks.installSessionEnvironment(authority, captured as OpenCodeMutationInput<"installSessionEnvironment">, budget);
         return { ok: true } as OpenCodeMutationOutput<K>;
@@ -152,19 +179,32 @@ export class OpenCodeNativeHost {
         return { ok: true } as OpenCodeMutationOutput<K>;
       }
       const leaf = method as Exclude<OpenCodeMutationMethod, "installSessionEnvironment" | "ensureMcpRegistration">;
-      return this.adapter.mutate(leaf, captured as OpenCodeMutationInput<typeof leaf>, budget) as Promise<OpenCodeMutationOutput<K>>;
+      const inputId = method === "prompt" || method === "compact"
+        ? (captured as OpenCodeMutationInput<"prompt"> | OpenCodeMutationInput<"compact">).id : undefined;
+      // Admission and its durable receipt can precede the first native event.
+      // Pin the scope before dispatch so a carrier close cannot lose that event.
+      if (inputId) {
+        try { this.#hub.beginInput(authority, inputId); }
+        catch (error) { throw new OpenCodeNativeMutationDeliveryError("not_sent",
+          error instanceof OpenCodeRuntimeError ? error.code : "opencode_observation_retention_full"); }
+      }
+      try {
+        return await this.adapter.mutate(leaf, captured as OpenCodeMutationInput<typeof leaf>, budget) as OpenCodeMutationOutput<K>;
+      } catch (error) {
+        if (inputId && error instanceof OpenCodeNativeMutationDeliveryError && error.delivery === "not_sent") {
+          this.#hub.refuseInput(authority, inputId);
+        }
+        throw error;
+      }
     }, signal); }
     finally { scope.operations--; this.#collectScope(authority); }
   }
 
-  observe(authority: OpenCodeNativeAuthority, input: Parameters<OpenCodeNativePort["observe"]>[0] = {}): OpenCodePortObservation {
+  observe(authority: OpenCodeNativeAuthority, input: Parameters<OpenCodeNativePort["observe"]>[0]): OpenCodePortObservation {
     const scope = this.#assertAuthority(authority);
     if (!authority.session) throw denied();
-    // R1 local composition retains the native subscription lifetime. Persistent
-    // host replay is installed before remote capability admission in R2.
-    if (input.after) throw new OpenCodeRuntimeError("opencode_observation_continuity_lost");
-    const filter = this.#routes.get(configurationFingerprint(authority))!;
-    const raw = this.adapter.observe({ signal: AbortSignal.any([this.#lifetime.signal, ...(input.signal ? [input.signal] : [])]) });
+    const raw = this.#hub.subscribe(authority, { ...input,
+      signal: AbortSignal.any([this.#lifetime.signal, ...(input.signal ? [input.signal] : [])]) });
     scope.observations++;
     let released = false;
     const release = () => {
@@ -172,16 +212,8 @@ export class OpenCodeNativeHost {
       released = true; this.#observations.delete(observation); scope.observations--;
       this.#collectScope(authority);
     };
-    const continuity = randomUUID(); let sequence = 0, acknowledged = 0;
-    const observation: OpenCodePortObservation = {
-      ready: raw.ready.then(() => ({ continuity, baselineSequence: 0 })), ended: raw.ended,
+    const observation: OpenCodePortObservation = { ...raw,
       get failure() { return raw.failure; },
-      drain: () => raw.drain().filter(({ event }) => filter.accept(event)).map(event => ({ ...event, continuity, sequence: ++sequence })),
-      wait: signal => raw.wait(signal),
-      acknowledge: async value => {
-        if (!Number.isSafeInteger(value) || value < acknowledged || value > sequence) throw denied();
-        acknowledged = value;
-      },
       close: async () => { try { await raw.close(); } finally { release(); } },
     };
     void observation.ready.catch(() => undefined);
@@ -190,10 +222,54 @@ export class OpenCodeNativeHost {
     return observation;
   }
 
+  freezeAdmission(): void { this.#frozen = true; this.#journal.freeze(); }
+  restoreAdmission(): void { if (!this.#lifetime.signal.aborted) { this.#frozen = false; this.#journal.restore(); } }
+  hasAdmittedTarget(target: OpenCodeRuntimeTarget): boolean {
+    return this.#scopes.has(configurationFingerprint({ ...this.owner, ...target }));
+  }
+  retentionSnapshot() {
+    const journal = this.#journal.snapshot(), observation = this.#hub.retentionSnapshot();
+    const inventory = this.#inventory?.observationRevision === observation.revision && this.#inventory.journalRevision === journal.revision ? this.#inventory : undefined;
+    return {
+      revision: configurationFingerprint({ journal: journal.revision, observation: observation.revision, inventory: inventory ?? null }),
+      threadIds: [...new Set([...observation.retainedThreadIds, ...journal.operations.flatMap(item => item.authority.session ? [item.authority.session.applicationThreadId] : [])])],
+      pendingMutationCount: journal.operations.filter(item => item.status === "pending").length,
+      retainedMutationCount: journal.operations.length,
+      observation: { pendingEvidenceCount: observation.evidenceRecords, nativeConnected: observation.nativeConnected,
+        currentInputCount: observation.currentInputScopes, retentionExhausted: observation.retentionExhausted },
+      pendingInteractionCount: inventory?.pendingInteractions ?? null,
+      activeWorkCount: inventory?.activeWork ?? null,
+    };
+  }
+  /** Bounded read-only refresh; this never claims complete background inventory. */
+  async prepareRetirement(): Promise<void> {
+    this.#assertOpen(); this.#inventory = undefined;
+    const signal = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(5_000)]);
+    const observationRevision = this.#hub.retentionSnapshot().revision, journalRevision = this.#journal.snapshot().revision;
+    const scopes = [...this.#scopes.values()].filter(item => item.port.authority.session);
+    let pendingInteractions = 0, activeWork = 0;
+    try {
+      await this.hooks.assertCurrent(signal);
+      for (let start = 0; start < scopes.length; start += 16) {
+        await Promise.all(scopes.slice(start, start + 16).map(async ({ port }) => {
+          const sessionID = port.authority.session!.nativeSessionID;
+          const [activity, interactions] = await Promise.all([
+            port.read("getActivity", { sessionID, directory: port.authority.directory }, { signal }),
+            port.read("getInteractions", { sessionID }, { signal }),
+          ]);
+          pendingInteractions += interactions.permissions.length + interactions.forms.length;
+          activeWork += Number(activity.active) + activity.activeChildren.length + activity.shells.filter(item => item.status === "running").length;
+        }));
+      }
+      signal.throwIfAborted();
+      this.#inventory = { observationRevision, journalRevision, pendingInteractions, activeWork };
+    } catch { /* Unknown inventory remains an explicit lifecycle blocker. */ }
+  }
+
   snapshot() { return this.#journal.snapshot(); }
   close(): void {
     if (this.#lifetime.signal.aborted) return;
-    this.#lifetime.abort(); this.#journal.close();
+    this.#lifetime.abort(); this.#journal.close(); this.#hub.close();
     for (const observer of this.#observations) void observer.close();
     this.#scopes.clear(); this.#routes.clear();
   }
@@ -213,6 +289,8 @@ export class OpenCodeNativeHost {
     const key = configurationFingerprint(authority), scope = this.#scopes.get(key);
     if (!scope || scope.references || scope.operations || scope.observations ||
         this.#journal.hasRetainedAuthority(authority)) return;
+    this.#hub.releaseScope(authority);
+    if (this.#hub.hasRetainedAuthority(authority)) return;
     this.#scopes.delete(key); this.#routes.delete(key);
     scope.lifetime.abort();
   }

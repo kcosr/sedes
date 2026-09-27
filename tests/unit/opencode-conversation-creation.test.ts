@@ -1,3 +1,4 @@
+import type { OpenCodeNativePort } from "../../src/server/backends/opencode/opencode-native-port.js";
 import { createOpenCodeNativePortFixture } from "../helpers/opencode-native-port-fixture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelInfo, SessionInfo } from "@opencode/client";
@@ -35,6 +36,7 @@ function fixture() {
     getResponse?: { status: number; body: unknown } } = {};
   const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture", fetch: async (value, init) => {
     const path = new URL(String(value)).pathname; const method = init?.method ?? "GET";
+    if (path === "/api/event") return base.wire.fetch(value, init);
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     calls.push({ method, path, body });
     const json = (status: number, data: unknown) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
@@ -54,7 +56,21 @@ function fixture() {
     return state.native ? json(200, { data: state.native }) : json(404, { _tag: "SessionNotFoundError", sessionID, message: "missing" });
   } });
   const originalAcquire = vi.mocked(runtime.acquire).getMockImplementation()!;
-  vi.mocked(runtime.acquire).mockImplementation(target => ({ ...originalAcquire(target), client: createOpenCodeNativePortFixture(client, { directory: target.directory, sessionID }) }));
+  const leases: { lifetime: AbortSignal; port: OpenCodeNativePort; acknowledgedDisposition?: string }[] = [];
+  vi.mocked(runtime.acquire).mockImplementation(target => {
+    const lease = originalAcquire(target), controller = new AbortController();
+    const port = createOpenCodeNativePortFixture(client, { directory: target.directory, sessionID });
+    const record: (typeof leases)[number] = { lifetime: controller.signal, port };
+    leases.push(record);
+    return { ...lease, client: { ...port, lifetime: controller.signal,
+      acknowledgeOperation: async identity => {
+        // A remote lease closes its facade immediately on release, even when
+        // the resident execution-host journal still retains the mutation.
+        controller.signal.throwIfAborted();
+        record.acknowledgedDisposition = context.repository.readOperation(scope, applicationThreadId, operationId, "create")?.disposition;
+        await port.acknowledgeOperation(identity);
+      } }, release: () => { controller.abort(); lease.release(); } };
+  });
   const readNative = vi.fn(async () => ({ models: nativeModel.enabled ? [nativeModel] : [], defaultModel: nativeModel }));
   const catalog = new OpenCodeModelCatalog({ readNative, modelPolicy: context.modelPolicy });
   const getRuntime = vi.fn(async () => runtime);
@@ -63,11 +79,25 @@ function fixture() {
   const input: CreateConversationInput = { scope, applicationThreadId, applicationOperationId: operationId, source: { kind: "user" },
     workspace, requestedBackendConversationId: sessionID, title: "Created" };
   cleanup.push(async () => { client.close(); await base.dispose(); });
-  return { ...base, driver, input, calls, state, nativeModel, readNative, getRuntime, creationContext,
+  return { ...base, driver, input, calls, state, nativeModel, readNative, getRuntime, creationContext, leases,
     receipt: () => context.repository.readOperation(scope, applicationThreadId, operationId, "create") };
 }
 
 describe("OpenCode reserved native conversation creation", () => {
+  it.each(["accepted", "unknown"] as const)("acknowledges durable %s creation before releasing its remote-shaped lease", async disposition => {
+    const current = fixture();
+    if (disposition === "unknown") current.state.mismatch = "marker";
+    if (disposition === "accepted") await current.driver.create(current.input);
+    else await expect(current.driver.create(current.input)).rejects.toMatchObject({ category: "submission_unknown" });
+    expect(current.receipt()?.disposition).toBe(disposition);
+    expect(current.leases).toHaveLength(1);
+    const lease = current.leases[0]!;
+    expect(lease.acknowledgedDisposition).toBe(disposition);
+    expect(lease.lifetime.aborted).toBe(true);
+    expect(current.runtime.snapshot().references).toBe(0);
+    await expect(lease.port.outcome("createSession", { origin: "application", applicationOperationId: current.input.applicationOperationId,
+      operationKind: "create", step: "create-session" })).rejects.toMatchObject({ code: "opencode_mutation_outcome_unknown" });
+  });
   it("replays a prepared creation older than sixty seconds", async () => {
     const current = fixture(), reserve = current.repository.reserveOperation.bind(current.repository);
     vi.spyOn(current.repository, "reserveOperation").mockImplementation((scope, input, now) => reserve(scope, input, now - 120_000));

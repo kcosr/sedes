@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { openCodeNativeFactFingerprint } from "./opencode-native-observation-proof.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import { OpenCodeNativeProtocolError, type OpenCodeNativeInboxItem, type OpenCodeNativeMessage } from "./opencode-native-api.js";
 import type { OpenCodeOperationReceipt, OpenCodeThreadRepository } from "./opencode-thread-repository.js";
@@ -163,9 +163,6 @@ export function openCodePreparedPayloadFingerprint(value: Extract<OpenCodeNative
     agents: value.agents ?? null, skills: value.skills ?? null, metadata: value.metadata ?? null });
 }
 export function openCodeOperationFingerprint(value: unknown): string {
-  const canonical = (item: unknown): unknown => Array.isArray(item) ? item.map(canonical)
-    : item !== null && typeof item === "object" ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
-      .filter(([, value]) => value !== undefined).map(([key, value]) => [key, canonical(value)])) : item;
-  return createHash("sha256").update("sedes-opencode-operation-v1\n").update(JSON.stringify(canonical(value))).digest("hex");
+  return openCodeNativeFactFingerprint(value);
 }
 function digest(value: string): void { if (!/^[0-9a-f]{64}$/u.test(value)) throw new OpenCodeNativeProtocolError(); }

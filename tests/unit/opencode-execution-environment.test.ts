@@ -46,12 +46,12 @@ describe("OpenCode scoped execution environment", () => {
   it("preserves an imported empty snapshot without reading native state, adopting defaults, or resolving secrets", async () => {
     const f = fixture({});
     await f.prepare();
-    expect(f.resolve).not.toHaveBeenCalled(); expect(f.wire.requests).toEqual([]); expect(f.effects).toEqual([]);
+    expect(f.resolve).not.toHaveBeenCalled(); expect(f.wire.requests.map(request => request.pathname)).toEqual(["/api/event"]); expect(f.effects).toEqual([]);
   });
   it("rejects nonempty external definitions before resolving secrets or acquiring native authority", async () => {
     const f = fixture({ TOKEN: { kind: "secret", source: { kind: "environment", name: "SOURCE_TOKEN" } } }, "external");
     await expect(f.prepare()).rejects.toMatchObject({ backendCode: "opencode_environment_unsupported" });
-    expect(f.resolve).not.toHaveBeenCalled(); expect(f.wire.requests).toEqual([]); expect(f.effects).toEqual([]);
+    expect(f.resolve).not.toHaveBeenCalled(); expect(f.wire.requests.map(request => request.pathname)).toEqual(["/api/event"]); expect(f.effects).toEqual([]);
   });
   it("installs an imported idle root map after preserving operator rules and proving child denial", async () => {
     const f = fixture(); f.wire.session.permissions = [{ action: "shell", resource: "*", effect: "ask" }];

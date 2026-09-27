@@ -16,6 +16,31 @@ const REQUIRED_SHARED_SOURCES = Object.freeze([
 ]);
 
 const ALLOWED_REPOSITORY_SOURCES = new Set([
+  // OpenCode execution-host implementation; no main repositories or SQL.
+  "src/server/backends/opencode/opencode-release.ts",
+  "src/server/backends/opencode/opencode-sse.ts",
+  "src/server/backends/opencode/opencode-http-client.ts",
+  "src/server/backends/opencode/opencode-native-identity.ts",
+  "src/server/backends/opencode/opencode-process-cleanup.ts",
+  "src/server/backends/opencode/opencode-native-store.ts",
+  "src/server/backends/opencode/opencode-owned-process.ts",
+  "src/server/backends/opencode/opencode-native-base64.ts",
+  "src/server/backends/opencode/opencode-native-codecs.ts",
+  "src/server/backends/opencode/opencode-http-native-adapter.ts",
+  "src/server/backends/opencode/opencode-native-observation-proof.ts",
+  "src/server/backends/opencode/opencode-observation-hub.ts",
+  "src/server/backends/opencode/opencode-native-port.ts",
+  "src/server/backends/opencode/opencode-mutation-journal.ts",
+  "src/server/backends/opencode/opencode-native-host.ts",
+  "src/server/agent-tools/adapters/backend-facade.ts",
+  "src/server/backends/opencode/opencode-mcp-ingress.ts",
+  "src/server/backends/opencode/opencode-host-agent-tools.ts",
+  "src/server/backends/opencode/opencode-runtime.ts",
+  "src/shared/protocol/opencode-configuration.ts",
+  "src/server/backends/opencode/opencode-runtime-configuration.ts",
+  "src/server/backends/opencode/opencode-runtime-host-registry.ts",
+  "src/server/backends/opencode/opencode-runtime-wire.ts",
+  "src/server/backends/opencode/opencode-sidecar-runtime.ts",
   // Normalized error/schema primitives used by the provider-owned Stop journal.
   "src/server/backends/contracts.ts",
   "src/server/environment-variables/runtime-environment.ts",
@@ -190,6 +215,12 @@ const ALLOWED_SOURCE_PREFIXES = Object.freeze([
   "src/internal/agent-tool-cli-protocol/",
   "src/internal/agent-tool-mcp/",
   "src/internal/sidecar-protocol/",
+  // Pinned OpenCode 2.0.18 contracts and Effect schema/HTTP runtime.
+  // Database adapters remain forbidden by the import audit below.
+  "node_modules/@opencode/client/",
+  "node_modules/@opencode/protocol/",
+  "node_modules/@opencode/schema/",
+  "node_modules/effect/",
   "node_modules/ajv/",
   "node_modules/diff/",
   "node_modules/fast-deep-equal/",
@@ -205,6 +236,7 @@ const ALLOWED_SOURCE_PREFIXES = Object.freeze([
 ]);
 
 const ALLOWED_EXTERNAL_IMPORTS = new Set([
+  "node:timers/promises",
   "node:async_hooks",
   "node:child_process",
   "node:crypto",

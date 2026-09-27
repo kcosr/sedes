@@ -1,3 +1,4 @@
+import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 import { createOpenCodeNativePortFixture, openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelInfo } from "@opencode/client";
@@ -15,8 +16,10 @@ const model: ModelInfo = { providerID: "provider/slash", id: "model", modelID: "
 function fixture(status = 204, body?: unknown) {
   const requests: { path: string; method: string; query: URLSearchParams; body: unknown }[] = [];
   let nextStatus = status, nextBody = body;
+  const observation = createOpenCodeApiFixture();
   const fetch = vi.fn(async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     const url = new URL(String(input));
+    if (url.pathname === "/api/event") return observation.fetch(input, init);
     expect(init?.redirect).toBe("error");
     expect(new Headers(init?.headers).get("authorization")).toBe(`Basic ${Buffer.from("opencode:fixture").toString("base64")}`);
     requests.push({ path: url.pathname, method: init?.method ?? "GET", query: url.searchParams, body: init?.body ? JSON.parse(String(init.body)) : undefined });
