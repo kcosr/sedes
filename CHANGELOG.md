@@ -4,6 +4,11 @@
 
 ### Breaking Changes
 
+- Claude worker and persistent runtime capabilities now require major 2 for
+  bounded, recoverable conversation Stop. Rebuild local helpers and upgrade
+  Claude sidecars with this server. Migration 119 closes old unconfirmed Stop
+  receipts without sending a new cancellation.
+
 - Browser and packaged clients must use client protocol 127, which adds
   confirmed live background-work counts to sidebar thread summaries. (#16)
 
@@ -130,6 +135,10 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Stop uses the existing native conversation control independently of history
+  loading, with a fixed 30-second deadline. Unconfirmed Stop requests no longer
+  block the Queue indefinitely, and retrying one does not cancel newer work.
 
 - Codex archives now unsubscribe Sedes from the native conversation and refuse
   while a native turn or goal is active. Archiving or changing tools also

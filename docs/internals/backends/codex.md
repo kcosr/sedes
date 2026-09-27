@@ -74,8 +74,11 @@ topology verification remain separate.
 
 Sedes opts into only the contracted experimental `thread/settings/update`
 method. Unknown experimental methods are rejected. The stable, invoked
-`thread/turns/list` and `thread/items/list` methods belong only to the private
-`paginated` history adapter; `legacy` never calls them.
+`thread/turns/list` and `thread/items/list` methods provide paginated history.
+Conversation Stop may use `thread/turns/list` with `itemsView: "notLoaded"`
+regardless of the history adapter, solely to choose the current native target
+without reading item history. It selects that target once and never retries
+against a replacement turn.
 
 Method stability is distinct from the selected wire artifact. Because Sedes
 initializes app-server with `experimentalApi`, nine reviewed route directions

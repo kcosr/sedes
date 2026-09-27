@@ -1718,8 +1718,17 @@ display description. Absence explicitly means this observation is unsupported;
 Only a known empty inventory proves no observed work remains. Snapshot replacement
 must replace this observation, and browser disconnection must suppress claims
 that a retained count is current. Neither historical launch rows nor main-turn
-completion establish background liveness. Outstanding or unknown activity must
-block automatic idle eviction without changing Send, Queue, or main-turn Stop.
+completion establish background liveness. Every handle declares
+`automaticEviction`: `requires_quiescence` keeps outstanding or unknown activity
+as an automatic-retirement blocker; `client_detach` allows an idle presentation
+to detach while its independently owned native runtime remains resident.
+Pi, Codex, Claude and Grok require quiescence. Automatic retirement uses
+`canAutomaticallyEvict`; archive, policy changes and other maintenance still
+use strict `canEvict` and reject outstanding or unknown work. Neither mode
+changes Send, Queue or main-turn Stop. Pending interactions, active foreground
+work, control borrowers, unresolved cleanup and failed projection recovery
+continue to block the relevant owner retirement. Client-only automatic disposal
+detaches the interaction binding without sending provider cancellations.
 When a provider clears its live inventory before delivering the terminal
 bookend, its handle's `retirementBlocked` observation keeps cleanup from
 destroying the unsettled outcome. This private lifecycle hold does not invent
@@ -2188,6 +2197,43 @@ expose reviewed semantics for every accepted but not-yet-materialized input,
 including whether it survives, is cancelled, or is fenced from a later turn. If
 any of target admission, receipt, history grouping, or interrupt-race evidence
 is absent, advertise only provider-neutral next-turn Queue and omit Steer.
+
+User Stop targets the conversation, with an immutable application operation ID
+and a server-admitted 30-second deadline. Provider handles publish an independent
+`ConversationControl` after validating their existing native owner, before
+history hydration. The actor manager borrows only that scoped, live generation;
+Stop never opens a query or attaches a new native owner to make control available.
+A failed first projection keeps the same valid handle and environment lease for
+control and later history recovery. No snapshot means unknown readiness, never
+idle. Control borrowers pin owner resources and all cleanup waiters are released
+when the last control borrow ends.
+
+The mutation gateway serializes initial Stop dispatch with queue-owned Send and
+Steer. Pi and Claude use their native session/query cancellation; Grok selects
+one current prompt and requires its cancelled settlement, since writing an ACP
+notification is not acknowledgement. Codex selects its current native turn from
+control metadata and turn shells without hydrating item history, and sends one
+exact-target interrupt. An authoritative idle observation accepts a no-op.
+A stale native target is nonapplication; old-turn disappearance alone never
+proves command acceptance. Drivers record operation/generation evidence before
+effects. Persistent Claude owner evidence survives main-client replacement;
+worker and persistent capability major 2 are required, without a version-1 parser.
+
+The deadline includes pending-input withdrawal and carrier/SDK acknowledgement.
+An uncertain receipt is reconciled read-only; no internal retry can resend Stop
+or chase later work. Persist and preserve the original deadline on replay and
+startup recovery. Gateway expiry works independently of a stalled driver:
+possibly dispatched unresolved Stop becomes terminal `failed_unknown` with a
+bounded diagnostic, and stops blocking the durable Queue. Late acknowledgements
+cannot reopen it or mark a replacement turn stopping. Confirmed acceptance stays
+accepted while native events determine actual settlement. Proven nonapplication
+retains the established receipt-deletion policy for a later explicit invocation.
+Migration 119 removes old prepared receipts, preserves accepted receipts and
+closes old uncertain turn-targeted receipts without dispatching session Stop.
+
+Automatic interaction cleanup attempts only the exact original response/cancel.
+A failure is reported to the matching binding and projection; it never falls
+back to broad session Stop or abandons unrelated replacement interactions.
 
 **Stop means stop.** This rule is the same for every backend:
 

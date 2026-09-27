@@ -105,7 +105,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/backends/claude/claude-message-scope.ts",
   "src/server/backends/claude/claude-skill-name.ts",
   "src/server/backends/claude/claude-skills.ts",
-  "src/server/backends/claude/worker/claude-runtime-v1.ts",
+  "src/server/backends/claude/worker/claude-runtime-v2.ts",
   "src/server/backends/claude/worker/claude-runtime-host-support.ts",
   "src/server/backends/claude/claude-runtime-worker-client.ts",
   "src/server/backends/claude/claude-fork-launch.ts",

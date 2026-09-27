@@ -375,6 +375,15 @@ export class ConversationEventBridge {
     };
     const binding: ConversationEventBridgeBinding = {
       ready,
+      failed: (scope, applicationThreadId, generation, message) => {
+        this.#assertPublisherOwner(input, scope, applicationThreadId);
+        const operation = mailbox.enqueue(() => {
+          if (!bindingValid || input.hub.projectionGeneration !== generation) return;
+          input.hub.publish({ type: "notice", generation,
+            notice: { id: "interaction-cleanup-unconfirmed", tone: "error", message: { text: message }, createdAt: new Date().toISOString() } });
+        });
+        void operation.catch(reportFailure);
+      },
       opened: (
         scope,
         applicationThreadId,

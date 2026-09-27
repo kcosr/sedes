@@ -1188,6 +1188,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         readonly ("text" | "image")[]
       >();
       const handle = new CodexConversationHandle({
+        onControlReady: input.onControlReady,
         usageSink: this.#usageSink,
         nativeNamespace: this.#nativeNamespace,
         usageProvenZero: this.#newUsageCounters.get(input.binding.backendConversationId) === this.#client.lifecycleSnapshot().generation,

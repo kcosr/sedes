@@ -566,7 +566,7 @@ plugins = false
       );
       await handle.interrupt({
         applicationOperationId: "sedes-c2-live-interrupt",
-        expectedBackendTurnId: interruptedSubmission.backendTurnId!,
+        deadlineAt: Date.now() + 30_000,
       });
       await waitUntil(
         () =>
@@ -1009,7 +1009,7 @@ plugins = false
         );
         await handle.interrupt({
           applicationOperationId: `steer-live-stop-${randomUUID()}`,
-          expectedBackendTurnId: turnId,
+          deadlineAt: Date.now() + 30_000,
         });
         await interrupted;
         const snapshot = await reestablish();
@@ -2393,7 +2393,7 @@ plugins = false
           );
           await handle.interrupt({
             applicationOperationId: `steer-stop-uds-stop-${randomFixtureId()}`,
-            expectedBackendTurnId: turnId,
+            deadlineAt: Date.now() + 30_000,
           });
           await interrupted;
           unsubscribe();

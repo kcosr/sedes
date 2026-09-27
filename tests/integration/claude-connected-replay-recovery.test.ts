@@ -357,9 +357,9 @@ describe("Stop after main replacement", () => {
       await native.emit(lifecycle(sessionId, operationId, "cancelled"));
       return true;
     });
-    await handle.interrupt({ applicationOperationId: randomUUID(), expectedBackendTurnId: restored.snapshot.activeBackendTurnId! });
+    await handle.interrupt({ applicationOperationId: randomUUID(), deadlineAt: Date.now() + 30_000});
     // Claude's owner withdrew it exactly once; this handle never knew it.
-    expect(native.cancelQueuedInput.mock.calls).toEqual([[steer.operationId]]);
+    expect(native.cancelQueuedInput.mock.calls.map(([operationId]) => [operationId])).toEqual([[steer.operationId]]);
     expect(native.interrupt).toHaveBeenCalledOnce();
     expect(native.cancelQueuedInput.mock.invocationCallOrder[0]).toBeLessThan(native.interrupt.mock.invocationCallOrder[0]!);
     expect(handle.withdrewSubmission(steer.operationId)).toBe(false);

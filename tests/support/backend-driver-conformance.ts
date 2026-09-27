@@ -1,3 +1,5 @@
+// Shared immutable operation deadline keeps replays identical throughout this local suite.
+const interruptDeadlineAt = Date.now() + 3_600_000;
 import { describe, expect, it } from "vitest";
 import {
   backendConversationSnapshotSchema,
@@ -273,7 +275,7 @@ export function describeBackendDriverConformance(
       established.subscribeFromNext((event) => sequenced.push(event));
       await handle.interrupt({
         applicationOperationId: "projection-interrupt",
-        expectedBackendTurnId: await activeBackendTurnId(handle),
+        deadlineAt: interruptDeadlineAt,
       });
 
       expect(sequenced.length).toBeGreaterThanOrEqual(7);
@@ -443,31 +445,24 @@ export function describeBackendDriverConformance(
         attachments: [],
       });
       expect(steering.reconciliationToken).toBe("steer-mutation");
-      const interruptTarget = await activeBackendTurnId(handle);
       await handle.interrupt({
         applicationOperationId: "interrupt-operation",
-        expectedBackendTurnId: interruptTarget,
+        deadlineAt: interruptDeadlineAt,
       });
       await expect(
         handle.reconcileInterrupt({
           applicationOperationId: "interrupt-operation",
-          expectedBackendTurnId: interruptTarget,
+          deadlineAt: interruptDeadlineAt,
         }),
       ).resolves.toEqual({ outcome: "accepted" });
       await handle.interrupt({
         applicationOperationId: "interrupt-operation",
-        expectedBackendTurnId: interruptTarget,
+        deadlineAt: interruptDeadlineAt,
       });
-      let idleInterruptError: unknown;
-      try {
-        await handle.interrupt({
-          applicationOperationId: "second-interrupt",
-          expectedBackendTurnId: interruptTarget,
-        });
-      } catch (error) {
-        idleInterruptError = error;
-      }
-      expectBackendError(idleInterruptError, "invalid_state");
+      await expect(handle.interrupt({
+        applicationOperationId: "second-interrupt",
+        deadlineAt: interruptDeadlineAt,
+      })).resolves.toBeUndefined();
 
       const submittedReconciliation = await fixture.driver.reconcileSubmission({
         scope: fixture.scope,
@@ -608,7 +603,7 @@ export function describeBackendDriverConformance(
       expectBackendError(mismatch, "rejected");
       await handle.interrupt({
         applicationOperationId: "task-context-interrupt",
-        expectedBackendTurnId: await activeBackendTurnId(handle),
+        deadlineAt: interruptDeadlineAt,
       });
       await closeAll([handle], fixture);
     });
@@ -670,7 +665,7 @@ export function describeBackendDriverConformance(
         });
         await handle.interrupt({
           applicationOperationId: `history-interrupt-${index}`,
-          expectedBackendTurnId: await activeBackendTurnId(handle),
+          deadlineAt: interruptDeadlineAt,
         });
       }
       const renameAction = {
@@ -788,7 +783,7 @@ export function describeBackendDriverConformance(
       if (!firstTurnId) throw new Error("conformance_located_turn_missing");
       await handle.interrupt({
         applicationOperationId: "locate-turn-first-interrupt",
-        expectedBackendTurnId: firstTurnId,
+        deadlineAt: interruptDeadlineAt,
       });
 
       const second = await handle.submit({
@@ -845,7 +840,7 @@ export function describeBackendDriverConformance(
       ).resolves.toEqual({ status: "not_found" });
       await handle.interrupt({
         applicationOperationId: "locate-turn-second-interrupt",
-        expectedBackendTurnId: secondTurnId,
+        deadlineAt: interruptDeadlineAt,
       });
       await closeAll([handle], fixture);
     });
@@ -912,7 +907,7 @@ export function describeBackendDriverConformance(
 
       await first.interrupt({
         applicationOperationId: "subscriber-interrupt",
-        expectedBackendTurnId: await activeBackendTurnId(first),
+        deadlineAt: interruptDeadlineAt,
       });
       await first.close();
       await second.close();
@@ -998,11 +993,11 @@ export function describeBackendDriverConformance(
       ).toMatchObject({ status: "not_accepted" });
       await first.interrupt({
         applicationOperationId: "scope-first-stop",
-        expectedBackendTurnId: await activeBackendTurnId(first),
+        deadlineAt: interruptDeadlineAt,
       });
       await second.interrupt({
         applicationOperationId: "scope-second-stop",
-        expectedBackendTurnId: await activeBackendTurnId(second),
+        deadlineAt: interruptDeadlineAt,
       });
       await closeAll([first, second], fixture);
     });

@@ -1,3 +1,4 @@
+import type { ConversationInterruptBudget } from "../conversation-interrupt.js";
 import type {
   ListSessionsResponse,
   PromptRequest,
@@ -105,6 +106,9 @@ interface ActiveHistoryRoute {
     previousCursor?: string;
     previousCursorByPromptId: Readonly<Record<string, string>>;
     current: boolean;
+    initialized: boolean;
+    initialEvents: (() => void | Promise<void>)[];
+    initialEventBytes: number;
   };
   readonly publication: { suppressed: boolean };
 }
@@ -145,8 +149,6 @@ interface ActivePrompt {
   liveTerminal?: GrokSourceCandidateTurnCompletedNotification;
   violation?: string;
   outcomeUnknownReason?: string;
-  interrupt?: Promise<void>;
-  interruptAccepted?: boolean;
   completion?: Promise<GrokPromptResult>;
   failureClose?: Promise<void>;
   postTerminalSettlementTimer?: ReturnType<typeof setTimeout>;
@@ -208,6 +210,8 @@ export class GrokSessionLifecycle {
   #mutationInFlight: GrokLifecycleMutation | undefined;
   #titleOperationInFlight = false;
   #publishTail: Promise<void> = Promise.resolve();
+  readonly #controlLifetime = new AbortController();
+  get controlLifetime(): AbortSignal { return this.#controlLifetime.signal; }
   #closed = false;
 
   private constructor(input: {
@@ -292,6 +296,7 @@ export class GrokSessionLifecycle {
       ...(input.signal ? { signal: input.signal } : {}),
     });
     lifecycle.#connection = connection;
+    void connection.closed.then(() => lifecycle.#controlLifetime.abort());
     return lifecycle;
   }
 
@@ -434,23 +439,22 @@ export class GrokSessionLifecycle {
 
   async loadSession(
     sessionId: string,
-    input?: { readonly signal?: AbortSignal },
+    input?: { readonly signal?: AbortSignal; readonly deferHistory?: boolean },
   ): Promise<GrokLifecycleSessionResult> {
     const route = this.#route(sessionId);
     this.#beginMutation("load");
     try {
       const claim = this.#registry.beginLoad(route);
-      let nativeHistory: GrokNativeHistoryReadResult;
-      try {
-        nativeHistory = await this.#readLatestNativeHistory(
-          sessionId,
-          input?.signal,
-        );
-      } catch (error) {
-        this.#registry.failLoad(claim);
-        throw error;
+      let active: ActiveHistoryRoute;
+      if (input?.deferHistory) {
+        active = this.#installProvisional(route);
+        active.history.current = false;
+        active.history.initialized = false;
+      } else {
+        try {
+          active = this.#installNativeProvisional(route, await this.#readLatestNativeHistory(sessionId, input?.signal));
+        } catch (error) { this.#registry.failLoad(claim); throw error; }
       }
-      const active = this.#installNativeProvisional(route, nativeHistory);
       let providerSucceeded = false;
       let finalized = false;
       try {
@@ -746,36 +750,35 @@ export class GrokSessionLifecycle {
     }
   }
 
-  async interruptPrompt(sessionId: string, promptId: string): Promise<void> {
-    if (
-      this.#closed ||
-      !boundedIdentifier(sessionId) ||
-      !boundedIdentifier(promptId)
-    ) {
-      throw new Error("grok_prompt_interrupt_target_invalid");
-    }
-    const prompt = this.#activePrompt;
+  assertControlAuthority(sessionId: string): void {
+    if (this.closed || this.#controlLifetime.signal.aborted) throw new Error("grok_session_lifecycle_closed");
+    const route = this.#route(sessionId);
+    this.#registry.requireResident(route);
     const active = this.#active.get(sessionId);
-    if (
-      !prompt ||
-      prompt.sessionId !== sessionId ||
-      prompt.promptId !== promptId ||
-      !active ||
-      !this.#registry.authorizeNotification(active.route)
-    ) {
+    if (!active || !sameRoute(active.route, route) || !this.#registry.authorizeNotification(active.route)) {
+      throw new Error("grok_session_owner_mismatch");
+    }
+  }
+
+  async interruptPrompt(sessionId: string, promptId: string, budget?: ConversationInterruptBudget): Promise<void> {
+    this.assertControlAuthority(sessionId);
+    const prompt = this.#activePrompt;
+    if (!prompt || prompt.sessionId !== sessionId || prompt.promptId !== promptId || !prompt.completion) {
       throw new Error("grok_prompt_interrupt_target_changed");
     }
-    if (prompt.interruptAccepted) return;
-    if (prompt.interrupt) return await prompt.interrupt;
-    const interrupt = this.connection.cancelSession({ sessionId });
-    prompt.interrupt = interrupt;
-    try {
-      await interrupt;
-      prompt.interruptAccepted = true;
-    } catch (error) {
-      if (prompt.interrupt === interrupt) prompt.interrupt = undefined;
-      throw error;
-    }
+    const interrupt = (async () => {
+      budget?.dispatch();
+      await this.connection.cancelSession({ sessionId }, budget ? {
+        cancellationSignal: budget.signal,
+        deadlineMilliseconds: Math.min(30_000, budget.remainingMilliseconds()),
+      } : undefined);
+      const result = await (budget ? budget.wait(prompt.completion!) : prompt.completion!);
+      budget?.remainingMilliseconds();
+      if (result.promptId !== promptId || result.response.stopReason !== "cancelled") {
+        throw new Error("grok_prompt_interrupt_unconfirmed");
+      }
+    })();
+    return await interrupt;
   }
 
   async #completePrompt(
@@ -867,6 +870,12 @@ export class GrokSessionLifecycle {
     }
   }
 
+  async ensureInitialHistory(sessionId: string, signal?: AbortSignal): Promise<void> {
+    const active = this.#active.get(sessionId);
+    if (active?.history.initialized) return;
+    await this.historyPage(sessionId, { limit: 10, ...(signal ? { signal } : {}) });
+  }
+
   history(sessionId: string): readonly GrokHistoryRecord[] {
     const route = this.#route(sessionId);
     this.#registry.requireResident(route);
@@ -934,13 +943,14 @@ export class GrokSessionLifecycle {
         try {
           active = await operation;
         } catch (error) {
-          if (!requestLocalNativeHistoryFailure(error)) throw error;
+          if (!active.history.initialized || !requestLocalNativeHistoryFailure(error)) throw error;
         } finally {
           if (this.#pageAcquisition === acquisition) {
             this.#pageAcquisition = undefined;
           }
         }
       }
+      if (!active.history.initialized) throw new GrokNativeHistoryReadError("grok_native_history_busy");
       return Object.freeze({
         records: active.projector.records(),
         evictedPromptCount: active.projector.diagnostics().evictedPromptCount,
@@ -983,6 +993,7 @@ export class GrokSessionLifecycle {
 
   async close(reason = "grok_lifecycle_close"): Promise<void> {
     this.#closed = true;
+    this.#controlLifetime.abort();
     const prompt = this.#activePrompt;
     const page = this.#pageAcquisition;
     page?.cancellation.abort(new Error("grok_session_lifecycle_closed"));
@@ -1069,6 +1080,10 @@ export class GrokSessionLifecycle {
       ) {
         throw new Error("grok_session_replay_after_no_replay");
       }
+      if (!active.history.initialized) {
+        this.#bufferInitialEvent(active, notification, () => this.#processSessionUpdate(notification, inline));
+        return;
+      }
       if (this.#activePrompt?.violation) return;
       const updateKind = notification.update.sessionUpdate;
       const correlated = this.#correlatePromptUpdate(notification);
@@ -1114,6 +1129,7 @@ export class GrokSessionLifecycle {
             `grok_prompt_history_${result.reason}`,
           );
         } else {
+          this.#controlLifetime.abort();
           this.#registry.markSessionLost(active.route);
           this.#active.delete(notification.sessionId);
         }
@@ -1173,6 +1189,10 @@ export class GrokSessionLifecycle {
       }
       return;
     }
+    if (!active.history.initialized) {
+      this.#bufferInitialEvent(active, event, () => this.#subagentEvent(event));
+      return;
+    }
     const activePrompt =
       !event.replay && this.#activePrompt?.sessionId === event.sessionId
         ? this.#activePrompt
@@ -1207,6 +1227,7 @@ export class GrokSessionLifecycle {
           `grok_prompt_history_${result.reason}`,
         );
       } else {
+        this.#controlLifetime.abort();
         this.#registry.markSessionLost(active.route);
         this.#active.delete(event.sessionId);
       }
@@ -1232,9 +1253,14 @@ export class GrokSessionLifecycle {
       }
       return;
     }
+    if (!active.history.initialized) {
+      this.#bufferInitialEvent(active, notification, () => this.#turnCompleted(notification, replay));
+      return;
+    }
     const prompt = replay ? undefined : this.#activePrompt;
     if (!replay) {
       if (!prompt || prompt.sessionId !== notification.sessionId) {
+        this.#controlLifetime.abort();
         this.#registry.markSessionLost(active.route);
         this.#active.delete(notification.sessionId);
         return;
@@ -1277,6 +1303,7 @@ export class GrokSessionLifecycle {
           `grok_prompt_history_${result.reason}`,
         );
       } else {
+        this.#controlLifetime.abort();
         this.#registry.markSessionLost(active.route);
         this.#active.delete(notification.sessionId);
       }
@@ -1564,6 +1591,9 @@ export class GrokSessionLifecycle {
         epoch: nativeHistoryEpoch(),
         previousCursorByPromptId: Object.freeze({}),
         current: true,
+        initialized: true,
+        initialEvents: [],
+        initialEventBytes: 0,
       },
       publication: { suppressed: true },
     });
@@ -1613,6 +1643,9 @@ export class GrokSessionLifecycle {
         ...(previousCursor ? { previousCursor } : {}),
         previousCursorByPromptId,
         current: true,
+        initialized: true,
+        initialEvents: [],
+        initialEventBytes: 0,
       },
       publication: { suppressed: true },
     });
@@ -1640,6 +1673,16 @@ export class GrokSessionLifecycle {
     return await this.#refreshResidentHistory(active, signal);
   }
 
+  #bufferInitialEvent(active: ActiveHistoryRoute, value: unknown, replay: () => void | Promise<void>): void {
+    const bytes = Buffer.byteLength(JSON.stringify(value));
+    if (active.history.initialEvents.length >= 1_024 || active.history.initialEventBytes + bytes > 2_097_152) {
+      this.#fenceGeneration();
+      throw new Error("grok_initial_history_buffer_exhausted");
+    }
+    active.history.initialEvents.push(replay);
+    active.history.initialEventBytes += bytes;
+  }
+
   async #refreshResidentHistory(
     active: ActiveHistoryRoute,
     signal?: AbortSignal,
@@ -1657,6 +1700,12 @@ export class GrokSessionLifecycle {
     fresh.publication.suppressed = false;
     if (this.#active.get(active.route.sessionId) === active) {
       this.#active.set(active.route.sessionId, fresh);
+      // Native notifications may arrive between admission and the first history
+      // read. Replay their bounded tail through the same deduplicating projector.
+      const pending = active.history.initialEvents.splice(0);
+      active.history.initialEventBytes = 0;
+      await Promise.all(pending.map((replay) => replay()));
+      this.assertControlAuthority(active.route.sessionId);
     }
     return fresh;
   }
@@ -1779,6 +1828,7 @@ export class GrokSessionLifecycle {
   }
 
   #fenceGeneration(): void {
+    this.#controlLifetime.abort();
     this.#registry.fenceGeneration(this.#owner);
     this.#active.clear();
     this.#pageAcquisition?.cancellation.abort(

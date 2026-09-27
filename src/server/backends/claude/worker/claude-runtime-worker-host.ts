@@ -34,8 +34,8 @@ import {
   claudeRuntimePermissionResponseAckOperation,
   claudeRuntimeQueryFailedEventSchema,
   claudeRuntimeQueryMessageEventSchema,
-  type ClaudeRuntimeV1WorkerHandlers,
-} from "./claude-runtime-v1.js";
+  type ClaudeRuntimeV2WorkerHandlers,
+} from "./claude-runtime-v2.js";
 import type { ClaudeQueryProcessScope } from "./tracked-claude-sdk-facade.js";
 
 export interface ClaudeRuntimeWorkerProtocolPeer {
@@ -88,12 +88,12 @@ type RuntimeConfiguration = {
 /**
  * Provider-private owner for all SDK and native-store work in one worker
  * generation. The main server communicates with this host only through the
- * closed claude_runtime@1 binding.
+ * closed claude_runtime@2 binding.
  */
 export class ClaudeRuntimeWorkerHost {
-  readonly handlers: ClaudeRuntimeV1WorkerHandlers;
+  readonly handlers: ClaudeRuntimeV2WorkerHandlers;
   readonly #sdk: ClaudeSdkFacade;
-  readonly #history = new ClaudeHistoryPager<Awaited<ReturnType<ClaudeRuntimeV1WorkerHandlers["getSessionMessages"]>>["messages"][number]>();
+  readonly #history = new ClaudeHistoryPager<Awaited<ReturnType<ClaudeRuntimeV2WorkerHandlers["getSessionMessages"]>>["messages"][number]>();
   readonly #peer: ClaudeRuntimeWorkerProtocolPeer;
   readonly #maximumQueries: number;
   readonly #queries = new Map<string, ActiveQuery>();
@@ -122,7 +122,7 @@ export class ClaudeRuntimeWorkerHost {
       (() => ({ sdk: options.sdk, settled: async () => undefined }));
     this.#peer = options.peer;
     this.#maximumQueries = maximumQueries;
-    const handlers: ClaudeRuntimeV1WorkerHandlers = {
+    const handlers: ClaudeRuntimeV2WorkerHandlers = {
       initialize: async (request, context) =>
         await this.#initialize(request, context.signal),
       probe: async ({ cwd }, context) => await this.#probe(cwd, context.signal),
@@ -144,9 +144,15 @@ export class ClaudeRuntimeWorkerHost {
       openQuery: async (request, context) =>
         await this.#openQuery(request, context.signal),
       sendQuery: (request) => this.#sendQuery(request),
-      interruptQuery: async ({ queryId }) =>
-        await this.#interruptQuery(queryId),
-      cancelQueryInput: async ({ queryId, operationId }) => {
+      interruptQuery: async (request, context) => {
+        context.signal.throwIfAborted();
+        return await this.#interruptQuery(request);
+      },
+      interruptDisposition: async ({ queryId, operationId }) => ({
+        outcome: await this.#query(queryId).session.reconcileInterrupt({ applicationOperationId: operationId, deadlineAt: Date.now() }),
+      }),
+      cancelQueryInput: async ({ queryId, operationId }, context) => {
+        context.signal.throwIfAborted();
         this.#assertOpen();
         return { cancelled: await this.#query(queryId).session.cancelQueuedInput(operationId) };
       },
@@ -209,7 +215,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #listSessions(
-    request: Parameters<ClaudeRuntimeV1WorkerHandlers["listSessions"]>[0],
+    request: Parameters<ClaudeRuntimeV2WorkerHandlers["listSessions"]>[0],
   ) {
     this.#assertOpen();
     const sessions = await this.#sdk.listSessions(
@@ -220,7 +226,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #getSessionInfo(
-    request: Parameters<ClaudeRuntimeV1WorkerHandlers["getSessionInfo"]>[0],
+    request: Parameters<ClaudeRuntimeV2WorkerHandlers["getSessionInfo"]>[0],
   ) {
     this.#assertOpen();
     const session = await this.#sdk.getSessionInfo(
@@ -232,7 +238,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #getSessionMessages(
-    request: Parameters<ClaudeRuntimeV1WorkerHandlers["getSessionMessages"]>[0],
+    request: Parameters<ClaudeRuntimeV2WorkerHandlers["getSessionMessages"]>[0],
   ) {
     this.#assertOpen();
     const { sessionId, offset: _offset, limit: _limit, cursor: _cursor, maintenance: _maintenance, ...options } = request;
@@ -267,7 +273,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #renameSession(
-    request: Parameters<ClaudeRuntimeV1WorkerHandlers["renameSession"]>[0],
+    request: Parameters<ClaudeRuntimeV2WorkerHandlers["renameSession"]>[0],
   ) {
     this.#assertOpen();
     await this.#sdk.renameSession(
@@ -280,7 +286,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #openQuery(
-    request: Parameters<ClaudeRuntimeV1WorkerHandlers["openQuery"]>[0],
+    request: Parameters<ClaudeRuntimeV2WorkerHandlers["openQuery"]>[0],
     signal: AbortSignal,
   ) {
     this.#assertOpen();
@@ -456,7 +462,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #sendQuery(
-    request: Parameters<ClaudeRuntimeV1WorkerHandlers["sendQuery"]>[0],
+    request: Parameters<ClaudeRuntimeV2WorkerHandlers["sendQuery"]>[0],
   ) {
     this.#assertOpen();
     if (
@@ -476,9 +482,11 @@ export class ClaudeRuntimeWorkerHost {
     return { accepted: true as const };
   }
 
-  async #interruptQuery(queryId: string) {
+  async #interruptQuery(request: { queryId: string; operationId: string; timeoutMilliseconds: number }) {
     this.#assertOpen();
-    const receipt = await this.#query(queryId).session.interrupt();
+    const receipt = await this.#query(request.queryId).session.interrupt({
+      applicationOperationId: request.operationId, deadlineAt: Date.now() + request.timeoutMilliseconds,
+    });
     return {
       receipt: receipt
         ? {
@@ -580,7 +588,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #initialize(
-    request: Parameters<ClaudeRuntimeV1WorkerHandlers["initialize"]>[0],
+    request: Parameters<ClaudeRuntimeV2WorkerHandlers["initialize"]>[0],
     signal: AbortSignal,
   ): Promise<{ readonly initialized: true; readonly configDirectory: string }> {
     this.#assertOpen();

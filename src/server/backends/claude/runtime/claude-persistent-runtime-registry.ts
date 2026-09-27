@@ -4,7 +4,7 @@ import type { ExecutionEnvironmentChannelProvider } from "../../../execution/env
 import type { ManagedWorkerArtifactRegistration } from "../../../managed-workers/artifact.js";
 import { SidecarResourceHandoffPendingError, type PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import type { ClaudeOwnedRuntimeClient } from "../claude-runtime-client.js";
-import type { ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v1.js";
+import type { ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v2.js";
 import { ClaudeManagedRuntimeOwner } from "../claude-managed-runtime-owner.js";
 import { ClaudePersistentRuntimeHost } from "./claude-persistent-runtime-host.js";
 import { claudePersistentConfigurationSchema, type ClaudePersistentConfiguration } from "./claude-persistent-runtime-wire.js";

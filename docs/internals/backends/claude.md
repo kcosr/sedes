@@ -37,7 +37,10 @@ historical definitions retain IDs and provider bindings until explicitly
 enabled. One
 principal/backend runtime owns the SDK queries admitted by the shared Sedes
 conversation-runtime budget for that execution environment. A live Sedes thread
-has at most one warm query.
+has at most one warm query. The strict worker and persistent sidecar capabilities
+are `claude_runtime@2` and `claude_persistent_runtime@2`. Worker operations are
+defined in `src/server/backends/claude/worker/claude-runtime-v2.ts`; older majors
+are not accepted.
 Closing a handle does not delete its Claude session, and attaching the same
 native session twice is denied independently. After a query closes or fails,
 the worker keeps its native session reserved until every Claude process the
@@ -54,8 +57,10 @@ epoch, replays retained events, and restores the live stream. Native provider
 history remains authoritative after a service restart; retained transport
 events are recovery evidence, not an alternative transcript store.
 
-A remote query stays resident only while it can be useful. Main evicts a
-handle that fails or whose projection is invalidated, and the host retires that
+A remote query stays resident only while it can be useful. Main can evict a
+failed handle once it no longer holds usable control authority; failed initial
+history loading retains the same owner and control lease for Stop and retry.
+The host retires that
 query once its events are acknowledged and nothing is outstanding, so reopening
 the thread starts a fresh query instead of requiring a backend restart. The host
 keeps the admission journal of up to 256 queries it retired, whether after a
@@ -236,8 +241,10 @@ the separate service-owned lifetime and reattachment contract described above.
 
 ## Authoritative history and paging
 
-On attach, Claude first arms the resumed SDK stream, then acquires a complete
-provider-history baseline. It merges any live messages or
+On attach, Claude first arms the resumed SDK stream and publishes an
+existing-owner control lease before acquiring a complete provider-history
+baseline. A stalled or failed initial history read does not prevent Stop or
+create another native query; projection retry uses the same handle. It merges any live messages or
 retractions observed during that acquisition. The handle retains the resulting
 provider-private value for its lifetime. Reading after start keeps a reattached
 remote query's held replay behind the baseline; the read resolves through the
@@ -650,24 +657,37 @@ therefore:
 - persists the SDK's single per-turn `result` as the authoritative success,
   failure, or interruption receipt.
 
-The active run and interrupt target stay latched until that result boundary.
+The active run stays latched until that result boundary. Stop targets the native
+session; observed turn IDs remain projection and reconciliation evidence.
 An intermediate SDK `session_state_changed: idle` frame cannot settle an
 otherwise in-progress normalized turn. These rules prevent duplicate or
 misplaced live text, premature turn footers, and Stop-button flicker between
 blocks, including after reload.
 
-Stop is bounded, because Claude has then acknowledged the interrupt. If
-Claude's reported state is `idle` when the interrupt is acknowledged, or
-becomes `idle` afterwards, the turn settles after a one-second grace, which
-lets a result Claude already emitted land. The grace waits for no input still
-awaiting its start: a steer Claude withdraws on Stop no longer counts, so an
-`idle` that arrived before the withdrawal still settles within the grace.
-Otherwise it settles after 30
-seconds. A Sedes turn then gets an `interrupted` receipt with the reason
-`interrupt_unconfirmed`. A turn Claude started ends without one, as its result
-would. When a stopped turn Claude started opens its own live turn, the Stop
-and its remaining bound move to that turn. A result that arrives first settles the turn normally. A reattached
-query's state is not assumed idle until Claude reports it.
+Stop admission carries one operation ID and its original 30-second deadline.
+The local handle and native owner reserve that operation before effects, bound
+withdrawals and interrupt acknowledgement by the remaining budget, and never
+resend an uncertain operation. The persistent wire passes a remaining duration;
+the owner retains its first local deadline without assuming synchronized host
+clocks. The bounded owner journal records an exact native acknowledgement and
+survives main or carrier replacement. Its read-only disposition operation never
+infers acceptance from idle status or disappearance of an old turn. A late
+acknowledgement cannot accept an expired Stop receipt.
+
+Persistent Stop and its reconciliation use only an existing authenticated
+attachment to the same runtime and native startup identity. They do not open a
+carrier, resume a query, or wait for transcript replay. Normal reconnect can
+restore that authority. A new native startup identity revokes the old control
+lease and publishes a new generation; carrier replacement alone does not.
+
+An acknowledged interrupt does not prove that an unfinished turn ended.
+Claude's `idle` observation or silence leaves that turn pending until native
+terminal evidence arrives. Sedes no longer synthesizes an interrupted receipt
+on a one-second idle grace or a 30-second timeout. A late native terminal event
+still settles the actual outcome. Exact `cancelled` lifecycle frames continue
+to prove withdrawal of individual unstarted inputs independently of Stop's
+acknowledgement. A reattached query's state is not assumed idle until Claude
+reports it.
 
 ### Input acceptance and turns Claude starts
 

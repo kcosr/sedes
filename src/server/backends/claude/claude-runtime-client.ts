@@ -1,3 +1,4 @@
+import type { InterruptConversationInput } from "../contracts.js";
 import type { ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import type { BackgroundActivity } from "../../../shared/protocol/background-activity.js";
 import { ClaudeHistoryPager, readClaudeSessionHistory, type ClaudeHistoryPage, type ClaudeHistoryPageOptions } from "./claude-session-history.js";
@@ -28,7 +29,7 @@ import type {
   VerifiedClaudeRuntimeVersion,
 } from "./claude-release-guard.js";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
-import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v1.js";
+import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v2.js";
 import {
   runClaudeForkLaunch,
   type ClaudeRuntimeForkOptions,
@@ -88,6 +89,8 @@ export interface ClaudeRuntimeSessionOptions {
   readonly onVersionAssessmentFailed?: () => void;
   readonly onMessage: (message: SDKMessage, evidence?: { readonly consumedTurnRootUuid: string }) => void | false | Promise<void | false>;
   readonly onFailure?: (error: unknown) => void;
+  /** A retained client attached to a newly created native query owner. */
+  readonly onControlAuthorityChanged?: () => void;
 }
 
 /**
@@ -134,7 +137,8 @@ export interface ClaudeRuntimeSession {
    * that Claude has not started, as Stop requires, including inputs an earlier
    * main attachment sent. Otherwise this interrupts only.
    */
-  interrupt(): Promise<SDKControlInterruptResponse | undefined>;
+  interrupt(input: InterruptConversationInput): Promise<SDKControlInterruptResponse | undefined>;
+  reconcileInterrupt?(input: InterruptConversationInput): Promise<"accepted" | "unknown">;
   /**
    * Asks Claude to withdraw one input it admitted but has not started. Claude
    * closes a withdrawn input with a `command_lifecycle` `cancelled` frame
@@ -147,7 +151,7 @@ export interface ClaudeRuntimeSession {
    * the interrupt. A service-owned session omits it: its owner outlives main's
    * attachments and withdraws on `interrupt`.
    */
-  cancelQueuedInput?(operationId: string): Promise<boolean>;
+  cancelQueuedInput?(operationId: string, input?: Pick<InterruptConversationInput, "deadlineAt" | "signal">): Promise<boolean>;
   setModel(model?: string): Promise<void>;
   setEffort(effort?: EffortLevel): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
@@ -160,7 +164,7 @@ export interface ClaudeRuntimeSession {
  * that opened it, and a persistent owner holds the queries it serves.
  */
 export interface ClaudeOwnedRuntimeSession extends ClaudeRuntimeSession {
-  cancelQueuedInput(operationId: string): Promise<boolean>;
+  cancelQueuedInput(operationId: string, input?: Pick<InterruptConversationInput, "deadlineAt" | "signal">): Promise<boolean>;
 }
 
 /**

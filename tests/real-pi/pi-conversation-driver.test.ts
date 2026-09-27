@@ -974,10 +974,7 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
       );
       await conversation.handle.interrupt({
         applicationOperationId: `interrupt-${randomUUID()}`,
-        expectedBackendTurnId: eventOfType(
-          events.slice(stopEventStart),
-          "turn_started",
-        ).at(-1)!.turn.backendTurnId,
+        deadlineAt: Date.now() + 30_000,
       });
       await waitFor(
         () =>
@@ -1118,7 +1115,7 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
       }
       await conversation.handle.interrupt({
         applicationOperationId: `steer-stop-interrupt-${randomUUID()}`,
-        expectedBackendTurnId: turnId,
+        deadlineAt: Date.now() + 30_000,
       });
       await waitFor(
         () =>

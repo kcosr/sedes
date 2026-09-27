@@ -43,8 +43,8 @@ type InterruptRecord = {
   threadId: string;
   operationId: string;
   applicationOperationId: string;
-  expectedActiveTurnId: string;
-  state: "prepared" | "uncertain" | "accepted";
+  deadlineAt: number;
+  state: "prepared" | "uncertain" | "accepted" | "failed_unknown";
   createdAt: number;
 };
 
@@ -74,6 +74,8 @@ function fixture(input?: {
   discardFork?: (scope: RequestScope, threadId: string) => Promise<{
     status: "aborted"; childThreadId: string; diagnostic: string; restartable: boolean;
   }>;
+  now?: () => number;
+  controlUnavailable?: boolean;
   interrupt?: () => Promise<void>;
   reconcileInterrupt?: () => Promise<{
     outcome: "accepted" | "not_applied" | "unknown";
@@ -196,7 +198,7 @@ function fixture(input?: {
     interrupt: vi.fn(input?.interrupt ?? (async () => undefined)),
     reconcileInterrupt: vi.fn(
       input?.reconcileInterrupt ??
-        (async () => ({ outcome: "not_applied" as const })),
+        (async () => ({ outcome: "unknown" as const })),
     ),
     mutateProviderFeature: vi.fn(async () => ({
       outcome: "accepted" as const,
@@ -213,6 +215,12 @@ function fixture(input?: {
     listUncertainInteractionResponses: vi.fn(() => []),
     rejectSteerBeforeAcceptance: vi.fn(),
     findSteer: vi.fn(() => input?.steerDeliveryReplay),
+    expireInterrupts: vi.fn((_scope: RequestScope, now: number) => {
+      if (record && record.deadlineAt <= now) {
+        if (record.state === "prepared") record = undefined;
+        else if (record.state === "uncertain") record = { ...record, state: "failed_unknown" };
+      }
+    }),
     findUncertainThreadOperation: vi.fn(
       (_scope: RequestScope, threadId: string) =>
         record?.state === "uncertain"
@@ -241,7 +249,6 @@ function fixture(input?: {
         threadId: string,
         prepare: {
           operationId: string;
-          expectedActiveTurnId: string;
           now: number;
         },
       ) => {
@@ -251,7 +258,7 @@ function fixture(input?: {
           threadId,
           operationId: prepare.operationId,
           applicationOperationId: prepare.operationId,
-          expectedActiveTurnId: prepare.expectedActiveTurnId,
+          deadlineAt: prepare.now + 30_000,
           state: "prepared",
           createdAt: prepare.now,
         };
@@ -265,7 +272,7 @@ function fixture(input?: {
     }),
     acceptInterrupt: vi.fn(() => {
       if (!record) throw new Error("missing interrupt record");
-      record = { ...record, state: "accepted" };
+      if (record.state !== "failed_unknown") record = { ...record, state: "accepted" };
       return record;
     }),
     rejectInterruptProvenNotApplied: vi.fn(() => {
@@ -397,6 +404,7 @@ function fixture(input?: {
     } as never,
     forks: { recoverActive: () => undefined, discardActive: input?.discardFork ?? (async () => { throw new Error("test_unexpected_discard"); }) },
     queue: {
+      withDispatchFence: (_scope: RequestScope, _thread: string, effect: () => Promise<unknown>) => effect(),
       reconcileUncertain,
       onAuthoritativeSettled,
       enqueue,
@@ -407,6 +415,7 @@ function fixture(input?: {
     completions: { database } as never,
     queueGateway: {} as never,
     runtimes: {
+      acquireExistingControl: vi.fn(() => input?.controlUnavailable ? undefined : { control: actor, release: runtimeRelease }),
       acquire: acquireRuntime,
     } as never,
     interactions: {} as never,
@@ -423,7 +432,7 @@ function fixture(input?: {
     publishThreadSnapshot,
     onPublicationError: input?.onPublicationError,
     onThreadChanged,
-    now: () => 1_800_000_000_000,
+    now: input?.now ?? (() => 1_800_000_000_000),
   });
   return {
     reconcileUncertain,
@@ -475,6 +484,7 @@ describe("ThreadMutationGateway pending Steer restart recovery", () => {
     };
     Object.assign(subject.operations, {
       listUncertainSteers: vi.fn(() => [receipt]),
+      expireInterrupts: vi.fn(),
       findUncertainThreadOperation: vi.fn(() => receipt.state === "uncertain" ? {
         operationKind: "conversation_steer", mutationId: receipt.mutationId,
       } : undefined),
@@ -1006,6 +1016,69 @@ describe("ThreadMutationGateway Stop receipts", () => {
     );
   });
 
+  it("closes a stalled native Stop at its original deadline and ignores its late ACK", async () => {
+    vi.useFakeTimers();
+    const ack = deferred<void>();
+    const subject = fixture({ now: Date.now, interrupt: () => ack.promise });
+    try {
+      const operation = { kind: "interrupt" as const, operationId: "stalled-stop" };
+      const pending = subject.gateway.mutate(scope, "thread-1", operation);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await pending).toEqual({ status: "recovery_required", retryable: false });
+      expect(subject.getRecord()?.state).toBe("failed_unknown");
+      ack.resolve();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(subject.getRecord()?.state).toBe("failed_unknown");
+      expect(subject.operations.acceptInterrupt).not.toHaveBeenCalled();
+      expect(await subject.gateway.mutate(scope, "thread-1", operation)).toEqual({ status: "recovery_required", retryable: false });
+      expect(subject.actor.interrupt).toHaveBeenCalledOnce();
+      expect(subject.actor.reconcileInterrupt).not.toHaveBeenCalled();
+    } finally { ack.resolve(); await subject.gateway.close(); vi.useRealTimers(); }
+  });
+
+  it("does not dispatch after its original deadline expires while waiting for the queue fence", async () => {
+    vi.useFakeTimers();
+    const gate = deferred<void>();
+    const subject = fixture({ now: Date.now });
+    subject.gateway.input.queue.withDispatchFence = async (_scope, _thread, effect) => { await gate.promise; return effect(); };
+    try {
+      const pending = subject.gateway.mutate(scope, "thread-1", { kind: "interrupt", operationId: "queued-stop" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await pending).toEqual({ status: "recovery_required", retryable: false });
+      expect(subject.getRecord()).toBeUndefined();
+      gate.resolve();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(subject.actor.interrupt).not.toHaveBeenCalled();
+    } finally { gate.resolve(); await subject.gateway.close(); vi.useRealTimers(); }
+  });
+
+  it("does not extend an uncertain Stop deadline on a read-only retry", async () => {
+    vi.useFakeTimers();
+    const subject = fixture({ now: Date.now, interrupt: async () => { throw new Error("ACK lost"); } });
+    try {
+      const operation = { kind: "interrupt" as const, operationId: "retry-budget" };
+      await subject.gateway.mutate(scope, "thread-1", operation);
+      const deadline = subject.getRecord()!.deadlineAt;
+      await vi.advanceTimersByTimeAsync(20_000);
+      await subject.gateway.mutate(scope, "thread-1", operation);
+      expect(subject.getRecord()!.deadlineAt).toBe(deadline);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(subject.getRecord()?.state).toBe("failed_unknown");
+      expect(subject.actor.interrupt).toHaveBeenCalledOnce();
+    } finally { await subject.gateway.close(); vi.useRealTimers(); }
+  });
+
+  it("uses existing control even when projection access fails and another mutation is uncertain", async () => {
+    const subject = fixture();
+    Object.defineProperty(subject.actor, "timeline", { get: () => { throw new Error("history unavailable"); } });
+    subject.operations.findUncertainThreadOperation.mockReturnValue({ threadId: "thread-1", mutationId: "older-action", operationKind: "conversation_compact" });
+    await expect(subject.gateway.mutate(scope, "thread-1", { kind: "interrupt", operationId: "stop-without-history" }))
+      .resolves.toMatchObject({ status: "accepted" });
+    expect(subject.acquireRuntime).not.toHaveBeenCalled();
+    expect(subject.actor.interrupt).toHaveBeenCalledOnce();
+    await subject.gateway.close();
+  });
+
   it("replays an accepted Stop without aborting the backend twice", async () => {
     const subject = fixture();
     const operation = {
@@ -1100,24 +1173,12 @@ describe("ThreadMutationGateway Stop receipts", () => {
     expect(subject.getRecord()?.state).toBe("uncertain");
 
     subject.setTimeline("running", "turn-2");
-    await expect(
-      subject.gateway.mutate(scope, "thread-1", operation),
-    ).resolves.toEqual({
-      status: "accepted",
-      operationId: "stop-operation-2",
-    });
-
+    await expect(subject.gateway.mutate(scope, "thread-1", operation))
+      .resolves.toEqual({ status: "recovery_required", retryable: true });
     expect(subject.actor.interrupt).toHaveBeenCalledTimes(1);
-    expect(subject.getRecord()?.state).toBe("accepted");
-    expect(subject.publishThreadSnapshot).toHaveBeenCalledWith(
-      scope,
-      "thread-1",
-    );
-    expect(subject.publishAuthoritativeReplacement).not.toHaveBeenCalled();
-    expect(subject.onAuthoritativeSettled).toHaveBeenCalledWith(
-      scope,
-      "thread-1",
-    );
+    expect(subject.getRecord()?.state).toBe("uncertain");
+    expect(subject.acquireRuntime).not.toHaveBeenCalled();
+    await subject.gateway.close();
   });
 
   it("reconciles an accepted uncertain Stop without repeating it", async () => {
@@ -1170,12 +1231,12 @@ describe("ThreadMutationGateway Stop receipts", () => {
     expect(subject.getRecord()?.state).toBe("uncertain");
   });
 
-  it("retries a Stop only after the backend proves it was not applied", async () => {
+  it("requires a new user Stop after proven nonapplication", async () => {
     const interrupt = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(new Error("response lost"))
       .mockResolvedValueOnce(undefined);
-    const subject = fixture({ interrupt });
+    const subject = fixture({ interrupt, reconcileInterrupt: async () => ({ outcome: "not_applied" }) });
     const operation = {
       kind: "interrupt" as const,
       operationId: "not-applied-stop",
@@ -1184,9 +1245,9 @@ describe("ThreadMutationGateway Stop receipts", () => {
     await subject.gateway.mutate(scope, "thread-1", operation);
     await expect(
       subject.gateway.mutate(scope, "thread-1", operation),
-    ).resolves.toMatchObject({ status: "accepted" });
+    ).rejects.toMatchObject({ code: "invalid_transition" });
 
-    expect(interrupt).toHaveBeenCalledTimes(2);
+    expect(interrupt).toHaveBeenCalledTimes(1);
     expect(subject.actor.reconcileInterrupt).toHaveBeenCalledOnce();
   });
 
@@ -1234,7 +1295,7 @@ describe("ThreadMutationGateway Stop receipts", () => {
         interrupt: async () => {
           throw new Error("response lost");
         },
-        reconcileInterrupt: async () => ({ outcome: "not_applied" }),
+        reconcileInterrupt: async () => ({ outcome: "unknown" }),
       });
       await subject.gateway.mutate(scope, "thread-1", {
         kind: "interrupt",
@@ -1419,6 +1480,7 @@ describe("ThreadMutationGateway several uncertain Steers", () => {
       queue: { steerUserInput, onAuthoritativeSettled: vi.fn(async () => undefined) } as never,
       operations: {
         database,
+        expireInterrupts: vi.fn(),
         findUncertainThreadOperation: vi.fn(() => uncertain[0]
           ? { threadId: "thread-1", mutationId: uncertain[0].mutationId, operationKind: "conversation_steer" }
           : undefined),
@@ -1473,6 +1535,7 @@ describe("ThreadMutationGateway delivery readiness", () => {
       } as never,
       operations: {
         database,
+        expireInterrupts: vi.fn(),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -1585,6 +1648,7 @@ describe("ThreadMutationGateway delivery readiness", () => {
       } as never,
       operations: {
         database,
+        expireInterrupts: vi.fn(),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -1921,6 +1985,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       } as never,
       operations: {
         database,
+        expireInterrupts: vi.fn(),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -2160,6 +2225,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       } as never,
       operations: {
         database,
+        expireInterrupts: vi.fn(),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -2284,6 +2350,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       } as never,
       operations: {
         database,
+        expireInterrupts: vi.fn(),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -2401,6 +2468,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       } as never,
       operations: {
         database,
+        expireInterrupts: vi.fn(),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -2547,6 +2615,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       } as never,
       operations: {
         database,
+        expireInterrupts: vi.fn(),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -2926,6 +2995,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       } as never,
       operations: {
         database,
+        expireInterrupts: vi.fn(),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -3039,6 +3109,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       queue: { findComposerDeliveryReplay: vi.fn(() => undefined) } as never,
       operations: {
         database,
+        expireInterrupts: vi.fn(),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -3144,6 +3215,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       } as never,
       operations: {
         database,
+        expireInterrupts: vi.fn(),
         findUncertainThreadOperation: vi.fn(() => ({
           threadId: "thread-1",
           mutationId: "prior-steer",
@@ -3259,6 +3331,7 @@ function interactionResponseFixture(input?: {
   const respond = vi.fn(input?.respond ?? (async () => undefined));
   const operations = {
     database,
+    expireInterrupts: vi.fn(),
     findUncertainThreadOperation: vi.fn(() =>
       state === "uncertain"
         ? {
@@ -3692,6 +3765,7 @@ function backendActionFixture(input?: {
   };
   const operations = {
     database,
+    expireInterrupts: vi.fn(),
     findUncertainThreadOperation: vi.fn(() =>
       record?.state === "uncertain"
         ? {
@@ -3934,6 +4008,7 @@ function unboundSettingFixture(input?: {
     queue: {} as never,
     operations: {
       database,
+      expireInterrupts: vi.fn(),
       findUncertainThreadOperation: vi.fn(() => undefined),
       hasPendingMaterializationSteer: vi.fn(() => false),
       hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -4029,6 +4104,7 @@ function boundSettingActionFixture(input?: {
   };
   const operations = {
     database,
+    expireInterrupts: vi.fn(),
     findUncertainThreadOperation: vi.fn(() =>
       record?.state === "uncertain"
         ? {
@@ -4424,8 +4500,10 @@ describe("ThreadMutationGateway backend-action receipts", () => {
 
     await expect(
       subject.gateway.mutate(scope, "thread-1", {
-        kind: "interrupt",
-        operationId: "unrelated-stop",
+        kind: "perform",
+        mutationId: "unrelated-rename",
+        expectedThreadRevision: 4,
+        operation: { action: "rename", title: "Other" },
       }),
     ).rejects.toMatchObject({ code: "operation_outcome_uncertain" });
     await expect(
@@ -4872,6 +4950,7 @@ function providerFeatureMutationFixture(input: {
     queue: {} as never,
     operations: {
       database,
+      expireInterrupts: vi.fn(),
       findUncertainThreadOperation: vi.fn(() => undefined),
       hasPendingMaterializationSteer: vi.fn(() => false),
       hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -5078,6 +5157,7 @@ function agentToolPolicyMutationFixture(input: {
     queue: {} as never,
     operations: {
       database,
+      expireInterrupts: vi.fn(),
       findUncertainThreadOperation: vi.fn(() =>
         input.uncertain
           ? {

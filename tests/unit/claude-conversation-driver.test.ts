@@ -899,12 +899,14 @@ describe("ClaudeConversationBackendDriver", () => {
         session_id: "99999999-9999-4999-8999-999999999999",
       },
     ]);
-    await expect(driver.attach(input)).rejects.toMatchObject({
+    const handle = await driver.attach(input);
+    await expect(handle.establishProjection({ signal: new AbortController().signal })).rejects.toMatchObject({
       backendCode: "claude_session_identity_mismatch",
     });
     await expect(driver.read(input)).rejects.toMatchObject({
       backendCode: "claude_session_identity_mismatch",
     });
+    await handle.close();
   });
 
   it("reads and attaches valid history beyond the former cumulative turn ceiling", async () => {
@@ -968,7 +970,7 @@ describe("ClaudeConversationBackendDriver", () => {
       binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
     };
-    for (const operation of [() => driver.read(input), () => driver.attach(input)]) {
+    for (const operation of [() => driver.read(input), async () => { const handle = await driver.attach(input); try { return await handle.establishProjection({ signal: new AbortController().signal }); } finally { await handle.close(); } }]) {
       await expect(operation()).rejects.toMatchObject({
         category: "incompatible_protocol",
         backendCode: "claude_message_payload_too_large",

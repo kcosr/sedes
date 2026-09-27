@@ -322,6 +322,13 @@ export interface AttachConversationInput {
   readonly binding: ConversationBinding;
   readonly workspace: ValidatedWorkspace;
   readonly opaqueBindingDetail: string;
+  /**
+   * Publish only after this exact native owner is controllable, independently
+   * of transcript hydration. Revoke the registration when owner authority is
+   * lost; a replacement owner must publish a new generation. This callback
+   * never authorizes launching or resuming work merely to make Stop available.
+   */
+  readonly onControlReady?: (control: ConversationControl) => void;
 }
 
 export interface ReadConversationInput {
@@ -567,14 +574,26 @@ export type SteerTurnResult =
       readonly backendTurnId?: string;
     });
 
-export interface InterruptTurnInput {
+export interface InterruptConversationInput {
   readonly applicationOperationId: string;
   /**
-   * Exact normalized backend turn identity captured before the interrupt
-   * receipt crossed the backend boundary. Drivers must refuse to interrupt a
-   * different active turn.
+   * Original server admission deadline in epoch milliseconds. A replay must
+   * never extend it. Select any native target once at dispatch; the shared
+   * operation has no earlier projected-turn precondition.
    */
-  readonly expectedBackendTurnId: string;
+  readonly deadlineAt: number;
+  readonly signal?: AbortSignal;
+}
+
+/** Existing native control authority; contains no transcript dependency. */
+export interface ConversationControl {
+  readonly generation: string;
+  /** Aborts when this published control authority is revoked. */
+  readonly lifetime: AbortSignal;
+  interrupt(input: InterruptConversationInput): Promise<void>;
+  reconcileInterrupt(input: InterruptConversationInput): Promise<BackendMutationReconciliation>;
+  /** Best-effort normalized feature cleanup after an accepted Stop. */
+  readonly mutateProviderFeature?: ConversationHandle["mutateProviderFeature"];
 }
 
 export type RegisteredBackendActionId =
@@ -623,6 +642,8 @@ export type BackendEventListener = (event: SequencedBackendEvent) => void;
 
 export interface ConversationHandle {
   readonly binding: ConversationBinding;
+  /** Whether idle client eviction can detach while native background work remains resident. */
+  readonly automaticEviction: "requires_quiescence" | "client_detach";
 
   /** Provider outcomes still settling after live work ends; blocks automatic eviction only. */
   readonly retirementBlocked?: boolean;
@@ -651,9 +672,9 @@ export interface ConversationHandle {
   captureSubmissionRetryAnchor(): Promise<string>;
   submit(input: SubmitTurnInput): Promise<SubmitTurnResult>;
   steer(input: SteerTurnInput): Promise<SteerTurnResult>;
-  interrupt(input: InterruptTurnInput): Promise<void>;
+  interrupt(input: InterruptConversationInput): Promise<void>;
   reconcileInterrupt(
-    input: InterruptTurnInput,
+    input: InterruptConversationInput,
   ): Promise<BackendMutationReconciliation>;
   perform(input: RegisteredBackendActionInput): Promise<BackendActionResult>;
   reconcileAction(

@@ -7,6 +7,7 @@ import { nativeMcpAgentToolDefaultsMigration } from "./migrations/115-native-mcp
 import { abortedForkReservationsMigration } from "./migrations/116-aborted-fork-reservations.js";
 import { claudeForkChildrenMigration } from "./migrations/117-claude-fork-children.js";
 import { queuedInputFailureReasonMigration } from "./migrations/118-queued-input-failure-reason.js";
+import { conversationStopReceiptsMigration } from "./migrations/119-conversation-stop-receipts.js";
 import { claudeTurnFailureDetailsMigration } from "./migrations/109-claude-turn-failure-details.js";
 import { forkEnvironmentFingerprintsMigration } from "./migrations/108-fork-environment-fingerprints.js";
 import { scopedEnvironmentVariablesMigration } from "./migrations/107-scoped-environment-variables.js";
@@ -250,6 +251,7 @@ export const backendNormalizedMigrations = [
   abortedForkReservationsMigration,
   claudeForkChildrenMigration,
   queuedInputFailureReasonMigration,
+  conversationStopReceiptsMigration,
 ] as const;
 
 export type DatabaseMigration = {

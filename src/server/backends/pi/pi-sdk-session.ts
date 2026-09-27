@@ -62,6 +62,7 @@ import {
 } from "./pi-remote-workspace.js";
 
 export interface PiSdkSession {
+  readonly controlLifetime?: AbortSignal;
   readonly sessionId: string;
   readonly sessionName?: string;
   readonly isIdle: boolean;
@@ -118,7 +119,7 @@ export interface PiSdkSession {
     readonly steering: readonly string[];
     readonly followUp: readonly string[];
   };
-  abort(): Promise<void>;
+  abort(input?: { readonly signal: AbortSignal; readonly deadlineAt: number; readonly isCurrent?: () => boolean }): Promise<void>;
   compact(instructions?: string): Promise<void>;
   setSessionName(title: string): void;
   setModel(model: unknown): Promise<void>;
@@ -240,6 +241,8 @@ function boundedDisplay(
 }
 
 class PiSdkSessionFence {
+  readonly #lifetime = new AbortController();
+  get lifetime(): AbortSignal { return this.#lifetime.signal; }
   #active = true;
 
   assertActive(): void {
@@ -251,6 +254,7 @@ class PiSdkSessionFence {
   invalidate(): boolean {
     if (!this.#active) return false;
     this.#active = false;
+    this.#lifetime.abort();
     return true;
   }
 }
@@ -624,6 +628,8 @@ class DefaultPiSdkSession implements PiSdkSession {
     this.isolatedWorkspace = isolatedWorkspace;
   }
 
+  get controlLifetime(): AbortSignal { return this.#fence.lifetime; }
+
   async ready(): Promise<void> {
     await this.#ready;
     this.#fence.assertActive();
@@ -728,11 +734,16 @@ class DefaultPiSdkSession implements PiSdkSession {
     // already-admitted volatile input continue before disposal.
     return this.#session.clearQueue();
   }
-  abort(): Promise<void> {
+  abort(input?: { readonly signal: AbortSignal; readonly deadlineAt: number; readonly isCurrent?: () => boolean }): Promise<void> {
     // Keep this cleanup path available after the execution fence closes so an
     // owner can still drain a compromised session. Callers must withdraw the
     // native queue first when abort must not continue queued work.
-    return this.#ready.then(() => this.#session.abort());
+    return this.#ready.then(() => {
+      if (input && (input.signal.aborted || Date.now() >= input.deadlineAt || input.isCurrent?.() === false)) {
+        throw new Error("pi_interrupt_budget_expired");
+      }
+      return this.#session.abort();
+    });
   }
   async compact(instructions?: string): Promise<void> {
     await this.#ready;

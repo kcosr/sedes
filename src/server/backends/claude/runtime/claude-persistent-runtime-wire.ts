@@ -1,6 +1,6 @@
 import { backgroundActivitySchema } from "../../../../shared/protocol/background-activity.js";
 import { z } from "zod";
-import * as worker from "../worker/claude-runtime-v1.js";
+import * as worker from "../worker/claude-runtime-v2.js";
 
 /** Resident sessions plus running fork launches, per persistent runtime. */
 export const CLAUDE_PERSISTENT_MAXIMUM_SESSIONS = 32;
@@ -27,7 +27,8 @@ export const claudePersistentCommandSchema = z.discriminatedUnion("action", [
   command("open", claudePersistentOpenRequestSchema).extend({ replay: z.enum(["full", "unacknowledged"]) }),
   command("fork", worker.claudeRuntimeForkRequestSchema),
   command("send", worker.claudeRuntimeQuerySendRequestSchema),
-  command("interrupt", z.strictObject({ queryId: z.string().uuid() })),
+  command("interrupt", worker.claudeRuntimeQueryInterruptRequestSchema.extend({ startupProbeUuid: z.string().uuid() })),
+  command("interrupt_disposition", worker.claudeRuntimeQueryInterruptDispositionRequestSchema.extend({ startupProbeUuid: z.string().uuid() })),
   command("set_model", worker.claudeRuntimeQuerySetModelRequestSchema),
   command("set_effort", worker.claudeRuntimeQuerySetEffortRequestSchema),
   command("set_permission_mode", worker.claudeRuntimeQuerySetPermissionModeRequestSchema),

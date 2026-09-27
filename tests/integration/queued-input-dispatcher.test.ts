@@ -627,7 +627,6 @@ describe("ConversationOperationRepository interrupt rejection", () => {
         );
         operations.prepareInterrupt(fixture.scope, threadId, {
           operationId: `rejected-${state}-stop`,
-          expectedActiveTurnId: "turn-original",
           now: 500,
         });
         if (state === "uncertain") {
@@ -661,7 +660,6 @@ describe("ConversationOperationRepository interrupt rejection", () => {
       const operations = new ConversationOperationRepository(fixture.database);
       operations.prepareInterrupt(fixture.scope, threadId, {
         operationId: "accepted-stop",
-        expectedActiveTurnId: "turn-original",
         now: 500,
       });
       operations.acceptInterrupt(fixture.scope, "accepted-stop");
@@ -687,7 +685,6 @@ describe("ConversationOperationRepository interrupt rejection", () => {
       const operations = new ConversationOperationRepository(fixture.database);
       operations.prepareInterrupt(fixture.scope, threadId, {
         operationId: "principal-scoped-stop",
-        expectedActiveTurnId: "turn-original",
         now: 500,
       });
 
@@ -2531,12 +2528,10 @@ describe("QueuedInputDispatcher", () => {
       expect(
         operations.prepareInterrupt(fixture.scope, threadId, {
           operationId: "durable-stop",
-          expectedActiveTurnId: "turn-original",
           now: 500,
         }),
       ).toMatchObject({
         state: "prepared",
-        expectedActiveTurnId: "turn-original",
       });
       operations.markInterruptStarted(fixture.scope, "durable-stop");
 
@@ -2552,7 +2547,6 @@ describe("QueuedInputDispatcher", () => {
         reopened.getInterrupt(fixture.scope, "durable-stop"),
       ).toMatchObject({
         state: "uncertain",
-        expectedActiveTurnId: "turn-original",
       });
       expect(
         reopened.acceptInterrupt(fixture.scope, "durable-stop"),
@@ -2560,17 +2554,14 @@ describe("QueuedInputDispatcher", () => {
       expect(
         reopened.prepareInterrupt(fixture.scope, threadId, {
           operationId: "durable-stop",
-          expectedActiveTurnId: "ignored-on-replay",
           now: 900,
         }),
       ).toMatchObject({
         state: "accepted",
-        expectedActiveTurnId: "turn-original",
       });
       expect(() =>
         reopened.prepareInterrupt(fixture.scope, otherThreadId, {
           operationId: "durable-stop",
-          expectedActiveTurnId: "turn-other",
           now: 901,
         }),
       ).toThrow(/another operation/i);

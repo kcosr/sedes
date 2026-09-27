@@ -1,3 +1,5 @@
+// Shared immutable operation deadline keeps replays identical throughout this local suite.
+const interruptDeadlineAt = Date.now() + 3_600_000;
 import { describe, expect, it } from "vitest";
 import type { SequencedBackendEvent } from "../../src/shared/protocol/backend.js";
 import type {
@@ -287,7 +289,7 @@ describe("in-memory conformance fault boundaries", () => {
 
     await handle.interrupt({
       applicationOperationId: "active-fork-cleanup",
-      expectedBackendTurnId: active.backendTurnId!,
+      deadlineAt: interruptDeadlineAt,
     });
     await handle.close();
   });
@@ -346,7 +348,7 @@ describe("in-memory conformance fault boundaries", () => {
     replacement.subscribeFromNext((event) => afterReplacement.push(event));
     await handle.interrupt({
       applicationOperationId: "overflow-interrupt",
-      expectedBackendTurnId: replacement.snapshot.activeBackendTurnId!,
+      deadlineAt: interruptDeadlineAt,
     });
     expect(
       afterReplacement.map(({ handleSequence }) => handleSequence),
@@ -427,7 +429,7 @@ describe("in-memory conformance fault boundaries", () => {
     });
     await handle.interrupt({
       applicationOperationId: "uncertain-interrupt",
-      expectedBackendTurnId: replay.backendTurnId!,
+      deadlineAt: interruptDeadlineAt,
     });
     expect(
       await current.driver.reconcileSubmission({
@@ -480,7 +482,7 @@ describe("in-memory conformance fault boundaries", () => {
       });
       await handle.interrupt({
         applicationOperationId: `stale-history-interrupt-${index}`,
-        expectedBackendTurnId: submitted.backendTurnId!,
+        deadlineAt: interruptDeadlineAt,
       });
     }
     const page = await handle.history({ limit: 1 });
@@ -497,7 +499,7 @@ describe("in-memory conformance fault boundaries", () => {
     });
     await handle.interrupt({
       applicationOperationId: "stale-history-interrupt-3",
-      expectedBackendTurnId: submitted.backendTurnId!,
+      deadlineAt: interruptDeadlineAt,
     });
     await expect(
       handle.history({ cursor: page.previousCursor, limit: 1 }),

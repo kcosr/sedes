@@ -387,6 +387,7 @@ function createHandle(
     readonly agentToolCliClosed?: Promise<unknown>;
     readonly agentToolCli?: import("../../src/server/backends/module.js").AgentToolCliAvailability;
     readonly settings?: ClaudeThreadRepository;
+    readonly onControlReady?: import("../../src/server/backends/contracts.js").AttachConversationInput["onControlReady"];
     readonly initialMessages?: readonly SessionMessage[];
     readonly loadInitialMessages?: () => Promise<readonly SessionMessage[]>;
     /**
@@ -435,6 +436,7 @@ function createHandle(
       usage: options.usage ?? NO_USAGE_SINK,
       nativeNamespace: "claude-test-native",
       binding: BINDING,
+      onControlReady: options.onControlReady,
       canonicalWorkspacePath: "/workspace",
       workspaceId: "workspace-a",
       opaqueBindingDetail: '{"version":1}',
@@ -2284,7 +2286,7 @@ describe("ClaudeConversationHandle", () => {
     expect(activeTurnId).toBeTruthy();
     await handle.interrupt({
       applicationOperationId: "44444444-4444-4444-8444-444444444444",
-      expectedBackendTurnId: activeTurnId!,
+      deadlineAt: Date.now() + 30_000,
     });
     expect(provider.controls.interrupt).toHaveBeenCalledOnce();
     await expect(
@@ -2680,7 +2682,7 @@ describe("ClaudeConversationHandle", () => {
     );
     const interrupt = handle.interrupt({
       applicationOperationId: "33333333-3333-4333-8333-333333333333",
-      expectedBackendTurnId: backendTurnId,
+      deadlineAt: Date.now() + 30_000,
     });
     if (scenario !== "result_before_ack") await interrupt;
     const marker = {
@@ -2839,7 +2841,7 @@ describe("ClaudeConversationHandle", () => {
     const published = (events.find(event => event.type === "item_completed" &&
       event.item.semanticKind === "command") as Extract<BackendConversationEvent, { type: "item_completed" }>).item;
     const backendTurnId = (await handle.history({ limit: 10 })).orderedBackendTurnIds.at(-1)!;
-    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: backendTurnId });
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000});
     provider.messages.push(stoppedResult);
     const marker = {
       type: "user" as const, uuid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" as const, session_id: SESSION_ID,
@@ -4764,7 +4766,7 @@ describe("Claude conversation-scoped native next delivery", () => {
     const original = await snapshot(handle);
     await handle.steer(steerInput);
     await provider.prompt()[Symbol.asyncIterator]().next();
-    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: original.orderedBackendTurnIds[0]! });
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000});
     expect(await handle.steer(steerInput)).toMatchObject({ status: "pending_materialization" });
     expect(JSON.stringify(await snapshot(handle))).not.toContain(steerInput.text);
     // Stop asked Claude to withdraw it, but its answer alone proves nothing.
@@ -4781,7 +4783,7 @@ describe("Claude conversation-scoped native next delivery", () => {
     await handle.steer(steerInput);
     await provider.prompt()[Symbol.asyncIterator]().next();
     provider.controls.cancelAsyncMessage.mockRejectedValueOnce(new Error("claude_control_request_failed"));
-    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: original.orderedBackendTurnIds[0]! });
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000});
     expect(provider.controls.interrupt).toHaveBeenCalledOnce();
     expect(handle.withdrewSubmission(steerId)).toBe(false);
     expect(handle.hasPendingSubmissionObservation(steerId)).toBe(true);
@@ -4802,7 +4804,7 @@ describe("Claude conversation-scoped native next delivery", () => {
       provider.messages.push(nativeFrames.lifecycle(steerId, "cancelled"));
       return true;
     });
-    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: original.orderedBackendTurnIds[0]! });
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000});
     expect(provider.controls.cancelAsyncMessage).toHaveBeenCalledExactlyOnceWith(steerId);
     expect(provider.controls.interrupt).toHaveBeenCalledExactlyOnceWith();
     // Withdrawn first, so the interrupted turn's end cannot start it.
@@ -4836,7 +4838,7 @@ describe("Claude conversation-scoped native next delivery", () => {
     await vi.waitFor(() => expect(handle.hasUnconfirmedSubmission(steerId)).toBe(false));
     expect(settings.listSteerOperations(scope, BINDING.applicationThreadId).get(steerId)).toBe(OPERATION_ID);
     expect((await snapshot(handle)).turnsById[turnId]!.completionCorrelations).toEqual([OPERATION_ID, steerId]);
-    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: turnId });
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000});
     // Stop leaves an input Claude started alone.
     expect(provider.controls.cancelAsyncMessage).not.toHaveBeenCalled();
     // An interrupted turn closes the inputs it started with `cancelled`.
@@ -4876,7 +4878,7 @@ describe("Claude conversation-scoped native next delivery", () => {
       provider.messages.push(nativeFrames.lifecycle(uuid, "cancelled"));
       return true;
     });
-    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: turnId });
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000});
     expect(provider.controls.cancelAsyncMessage.mock.calls.map(([uuid]) => uuid)).toEqual([ids[1], ids[2]]);
     await vi.waitFor(() => expect(handle.withdrewSubmission(ids[1]!) && handle.withdrewSubmission(ids[2]!)).toBe(true));
     expect(handle.withdrewSubmission(ids[0]!)).toBe(false);
@@ -5164,7 +5166,7 @@ describe("Claude conversation-scoped native next delivery", () => {
       provider.messages.push(nativeFrames.lifecycle(steerId, "cancelled"));
       return { still_queued: [] };
     });
-    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: original.orderedBackendTurnIds[0]! });
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000});
     expect(provider.controls.cancelAsyncMessage).not.toHaveBeenCalled();
     expect(provider.controls.interrupt).toHaveBeenCalledExactlyOnceWith();
     await vi.waitFor(() => expect(handle.withdrewSubmission(steerId)).toBe(true));
@@ -5322,7 +5324,7 @@ describe("Claude native run state without prompt echoes", () => {
     await handle.close();
   });
 
-  it("keeps a Stop and its bound when the stopped turn's live boundary opens", async () => {
+  it("keeps Stop pending when the stopped turn's live boundary opens", async () => {
     const provider = fixture();
     const { handle } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
     const established = await handle.establishProjection({ signal: new AbortController().signal });
@@ -5334,7 +5336,7 @@ describe("Claude native run state without prompt echoes", () => {
     try {
       vi.useFakeTimers();
       await handle.interrupt({ applicationOperationId: crypto.randomUUID(),
-        expectedBackendTurnId: (await projectionSnapshot(handle)).activeBackendTurnId! });
+        deadlineAt: Date.now() + 30_000});
       expect(runStates(events)).toEqual(["running", "stopping"]);
       // Claude's first response opens the turn's own boundary while stopping.
       provider.messages.push(nativeFrames.start("msg-notified"));
@@ -5345,7 +5347,7 @@ describe("Claude native run state without prompt echoes", () => {
       expect(events.filter(event => event.type === "run_state_changed").at(-1)).toMatchObject({
         activeBackendTurnId: opened?.type === "turn_started" ? opened.turn.backendTurnId : "" });
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(runStates(events).at(-1)).toBe("idle");
+      expect(runStates(events).at(-1)).toBe("stopping");
     } finally {
       vi.useRealTimers();
     }
@@ -5423,7 +5425,7 @@ describe("Claude native run state without prompt echoes", () => {
     provider.messages.push(nativeFrames.start("msg-peer"));
     await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("running"));
     const active = (await projectionSnapshot(handle)).activeBackendTurnId!;
-    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: active });
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000});
     expect(provider.controls.interrupt).toHaveBeenCalledOnce();
     expect((await projectionSnapshot(handle)).runState).toBe("stopping");
     provider.messages.push(nativeFrames.result([], { subtype: "error_during_execution", is_error: true,
@@ -5670,7 +5672,7 @@ describe("Claude compaction, lost processes, and bounded Stop", () => {
 
   it("settles Stop during a compacted turn with Claude's interrupted result", async () => {
     const { handle, settings, provider, events, turnId } = await compactedTurn();
-    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: turnId });
+    await handle.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000});
     expect(runStates(events).at(-1)).toBe("stopping");
     const result = nativeFrames.result([PROMPT_ID], { terminal_reason: "aborted_streaming" });
     provider.messages.push(result);
@@ -5855,68 +5857,53 @@ describe("Claude compaction, lost processes, and bounded Stop", () => {
       }
       const turnId = (await projectionSnapshot(handle)).activeBackendTurnId!;
       vi.useFakeTimers();
-      await handle.interrupt({ applicationOperationId: crypto.randomUUID(), expectedBackendTurnId: turnId });
+      await handle.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000});
       expect(runStates(events).at(-1)).toBe("stopping");
       const receipt = () => settings.findTerminalReceipt(scope, { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId });
       return { handle, provider, events, turnId, receipt };
     }
 
-    it("ends it after the bound with a truthful receipt", async () => {
+    it("does not synthesize a terminal result after a Stop deadline", async () => {
       const { handle, events, turnId, receipt } = await stopping({ claudeRunning: true });
-      await vi.advanceTimersByTimeAsync(29_999);
+      await vi.advanceTimersByTimeAsync(60_000);
       expect(runStates(events).at(-1)).toBe("stopping");
-      await vi.advanceTimersByTimeAsync(1);
-      expect(runStates(events).at(-1)).toBe("idle");
-      expect(receipt()).toMatchObject({ status: "interrupted", providerTerminalReason: "interrupt_unconfirmed", providerResultUuid: null });
-      expect((await projectionSnapshot(handle)).turnsById[turnId]).toMatchObject({ status: "interrupted" });
+      expect(receipt()).toBeUndefined();
+      expect((await projectionSnapshot(handle)).turnsById[turnId]).toMatchObject({ status: "in_progress" });
       await handle.close();
     });
 
-    it("ends it shortly after Claude reports idle, unless the result lands first", async () => {
-      const idle = await stopping({ claudeRunning: true });
-      idle.provider.messages.push(nativeFrames.state("idle"));
-      await vi.advanceTimersByTimeAsync(999);
-      expect(runStates(idle.events).at(-1)).toBe("stopping");
-      await vi.advanceTimersByTimeAsync(1);
-      expect(runStates(idle.events).at(-1)).toBe("idle");
-      expect(idle.receipt()).toMatchObject({ providerTerminalReason: "interrupt_unconfirmed" });
-      await idle.handle.close();
-      vi.useRealTimers();
-
+    it("retains the unfinished turn after idle until a native terminal result arrives", async () => {
       const settled = await stopping({ claudeRunning: true });
       settled.provider.messages.push(nativeFrames.state("idle"));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runStates(settled.events).at(-1)).toBe("stopping");
+      expect(settled.receipt()).toBeUndefined();
       const result = nativeFrames.result([PROMPT_ID], { terminal_reason: "aborted_streaming" });
       settled.provider.messages.push(result);
       await vi.advanceTimersByTimeAsync(10);
       expect(runStates(settled.events).at(-1)).toBe("idle");
-      await vi.advanceTimersByTimeAsync(STOP_BOUND);
       expect(settled.receipt()).toMatchObject({ providerTerminalReason: "aborted_streaming",
         providerResultUuid: (result as { uuid: string }).uuid });
       expect(runStates(settled.events).filter(state => state === "idle")).toHaveLength(1);
       await settled.handle.close();
     });
 
-    it("ends it within the idle grace once Claude withdraws a steer it still held", async () => {
+    it("withdraws only the exact cancelled steer without settling unfinished work", async () => {
       const { handle, provider, events, receipt } = await stopping({ claudeRunning: true, heldSteer: true });
-      // Idle alone does not settle it while Sedes still waits on the steer.
       provider.messages.push(nativeFrames.state("idle"));
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(runStates(events).at(-1)).toBe("stopping");
       provider.messages.push(nativeFrames.lifecycle(HELD_STEER_ID, "cancelled"));
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(60_000);
       expect(runStates(events).at(-1)).toBe("stopping");
-      await vi.advanceTimersByTimeAsync(1);
-      expect(runStates(events).at(-1)).toBe("idle");
       expect(handle.withdrewSubmission(HELD_STEER_ID)).toBe(true);
-      expect(receipt()).toMatchObject({ status: "interrupted", providerTerminalReason: "interrupt_unconfirmed" });
+      expect(receipt()).toBeUndefined();
       await handle.close();
     });
 
-    it("ends it quickly when Claude had nothing running", async () => {
+    it("does not treat a missing running observation as terminal evidence", async () => {
       const { handle, events, receipt } = await stopping({ claudeRunning: false });
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(runStates(events).at(-1)).toBe("idle");
-      expect(receipt()).toMatchObject({ status: "interrupted", providerTerminalReason: "interrupt_unconfirmed" });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runStates(events).at(-1)).toBe("stopping");
+      expect(receipt()).toBeUndefined();
       await handle.close();
     });
   });
@@ -6434,5 +6421,58 @@ describe("Claude image reads and meta rows", () => {
     expect(Object.values(located.page.itemsById).filter(item => item.semanticKind === "image")).toHaveLength(1);
     expect(freshPublished).toHaveLength(2);
     await reopened.close();
+  });
+});
+
+
+describe("Claude existing-owner Stop control", () => {
+  it("publishes Stop before stalled history and retains authority after failed hydration", async () => {
+    const provider = fixture();
+    let control: import("../../src/server/backends/contracts.js").ConversationControl | undefined;
+    let rejectHistory!: (error: Error) => void;
+    const history = vi.fn(() => new Promise<readonly SessionMessage[]>((_resolve, reject) => { rejectHistory = reject; }));
+    const { handle } = createHandle(provider, vi.fn(), { loadInitialMessages: history, onControlReady: value => { control = value; } });
+    const projection = handle.establishProjection({ signal: new AbortController().signal });
+    const failed = expect(projection).rejects.toMatchObject({ category: "unavailable" });
+    await vi.waitFor(() => expect(control).toBeDefined());
+    const first = { applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000 };
+    await control!.interrupt(first);
+    expect(provider.controls.interrupt).toHaveBeenCalledOnce();
+    rejectHistory(new Error("history_unavailable"));
+    await failed;
+    expect(control!.lifetime.aborted).toBe(false);
+    await control!.interrupt(first);
+    expect(provider.controls.interrupt).toHaveBeenCalledOnce();
+    await control!.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000 });
+    expect(provider.controls.interrupt).toHaveBeenCalledTimes(2);
+    history.mockResolvedValueOnce([]);
+    await handle.establishProjection({ signal: new AbortController().signal });
+    expect(history).toHaveBeenCalledTimes(2);
+    await handle.close();
+    expect(control!.lifetime.aborted).toBe(true);
+  });
+
+  it("does not publish stopping or accept an acknowledgement after its original deadline", async () => {
+    const provider = fixture();
+    let control: import("../../src/server/backends/contracts.js").ConversationControl | undefined;
+    const { handle } = createHandle(provider, vi.fn(), { onControlReady: value => { control = value; } });
+    const projection = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    projection.subscribeFromNext(({ event }) => events.push(event));
+    let acknowledge!: (value: SDKControlInterruptResponse) => void;
+    provider.controls.interrupt.mockImplementationOnce(() => new Promise(resolve => { acknowledge = resolve; }));
+    vi.useFakeTimers();
+    try {
+      const input = { applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 20 };
+      const pending = expect(control!.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+      await vi.advanceTimersByTimeAsync(20);
+      await pending;
+      acknowledge({ still_queued: [] });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await control!.reconcileInterrupt(input)).toEqual({ outcome: "unknown" });
+      expect(events.some(event => event.type === "run_state_changed" && event.state === "stopping")).toBe(false);
+      await expect(control!.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+      expect(provider.controls.interrupt).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); await handle.close(); }
   });
 });

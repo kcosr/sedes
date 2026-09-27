@@ -352,6 +352,10 @@ input.on("line", async (line) => {
       });
       return;
     }
+    if (session.nativeHistoryFailure === true) {
+      send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "fixture history unavailable" } });
+      return;
+    }
     const native = storedHistory(session);
     let start = message.params.offset ?? 0;
     if (

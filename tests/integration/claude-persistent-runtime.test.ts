@@ -149,7 +149,7 @@ function policyRefreshGateway(client: ClaudePersistentRuntimeClient, sessionId: 
     bindings: { database }, inventory: { database, assertWorkspaceActive: () => {},
       getThread: () => ({ thread: { availability: "available", backingState: "bound" }, inventory: { inventoryState: "active" } }) },
     lifecycle: {}, forks: { recoverActive: () => undefined }, queue: {},
-    operations: { database, findUncertainThreadOperation: () => undefined }, completions: { database },
+    operations: { database, findUncertainThreadOperation: () => undefined, expireInterrupts: () => {} }, completions: { database },
     queueGateway: {}, runtimes: coordinator, interactions: {}, presentation: {},
     agentToolPolicies: { database, get: () => policy, update }, actionPersistence: new Map(), publishThreadSnapshot: async () => {},
   } as unknown as ConstructorParameters<typeof ThreadMutationGateway>[0]);
@@ -496,9 +496,9 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
       if (operationId === withdrawn.operationId) await native.emit(lifecycle(sessionId, withdrawn.operationId, "cancelled"));
       return true;
     });
-    await remote.interrupt();
+    await remote.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000 });
     // A failed request does not block the interrupt, which comes last.
-    expect(native.cancelQueuedInput.mock.calls).toEqual([[withdrawn.operationId], [unconfirmed.operationId], [failing.operationId]]);
+    expect(native.cancelQueuedInput.mock.calls.map(([operationId]) => [operationId])).toEqual([[withdrawn.operationId], [unconfirmed.operationId], [failing.operationId]]);
     expect(native.interrupt).toHaveBeenCalledOnce();
     expect(Math.max(...native.cancelQueuedInput.mock.invocationCallOrder)).toBeLessThan(native.interrupt.mock.invocationCallOrder[0]!);
     // The interrupted turn closes the inputs it started with `cancelled` too.
@@ -547,14 +547,83 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
       await native.emit(lifecycle(sessionId, operationId, "cancelled"));
       return true;
     });
-    await replacement.interrupt();
-    expect(native.cancelQueuedInput.mock.calls).toEqual([[steer.operationId]]);
+    await replacement.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000 });
+    expect(native.cancelQueuedInput.mock.calls.map(([operationId]) => [operationId])).toEqual([[steer.operationId]]);
     expect(native.cancelQueuedInput.mock.invocationCallOrder[0]).toBeLessThan(native.interrupt.mock.invocationCallOrder[0]!);
     // It no longer counts as work Claude can still run after the Stop.
     expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ pendingInputIds: [] });
     expect(host.abandonmentEvidence().sessions[0]!.activeOperationIds).not.toContain(steer.operationId);
     await expect(client.submissionDisposition({ sessionId, cwd: "/workspace", operationId: steer.operationId })).resolves.toBe("cancelled");
     await expect(client.submissionDisposition({ sessionId, cwd: "/workspace", operationId: turn.operationId })).resolves.toBe("submitted");
+  });
+
+  it("retains an operation-specific Stop acknowledgement across main replacement without redispatch", async () => {
+    const f = await fixture();
+    const first = await f.attach();
+    const firstClient = f.client();
+    const sessionId = randomUUID();
+    const original = firstClient.createSession(sessionOptions(sessionId));
+    await original.start();
+    const native = f.sessions[0]!;
+    const input = { applicationOperationId: randomUUID(), deadlineAt: Date.now() + 30_000 };
+    await original.interrupt(input);
+    await firstClient.close();
+    await first.close();
+    await f.attach();
+    const secondClient = f.client();
+    const replacement = secondClient.createSession(sessionOptions(sessionId, { launch: "resume" }));
+    await replacement.start();
+    expect(replacement.reattached).toBe(true);
+    await expect(replacement.reconcileInterrupt!(input)).resolves.toBe("accepted");
+    await replacement.interrupt(input);
+    expect(native.interrupt).toHaveBeenCalledOnce();
+    expect(f.runtime.createSession).toHaveBeenCalledOnce();
+  });
+
+  it("recovers the native Stop acknowledgement lost with the old main carrier", async () => {
+    const f = await fixture();
+    const first = await f.attach();
+    const firstClient = f.client();
+    const sessionId = randomUUID();
+    const original = firstClient.createSession(sessionOptions(sessionId));
+    await original.start();
+    const native = f.sessions[0]!;
+    let acknowledge!: () => void;
+    native.interrupt.mockImplementationOnce(() => new Promise<undefined>(resolve => { acknowledge = () => resolve(undefined); }));
+    const input = { applicationOperationId: randomUUID(), deadlineAt: Date.now() + 30_000 };
+    const failed = expect(original.interrupt(input)).rejects.toBeDefined();
+    await vi.waitFor(() => expect(native.interrupt).toHaveBeenCalledOnce());
+    await first.close();
+    await failed;
+    acknowledge();
+    await firstClient.close();
+    await f.attach();
+    const replacement = f.client().createSession(sessionOptions(sessionId, { launch: "resume" }));
+    await replacement.start();
+    await vi.waitFor(async () => expect(await replacement.reconcileInterrupt!(input)).toBe("accepted"));
+    expect(native.interrupt).toHaveBeenCalledOnce();
+    expect(f.runtime.createSession).toHaveBeenCalledOnce();
+  });
+
+  it("retains a late native Stop acknowledgement as unknown and never redispatches it", async () => {
+    const f = await fixture();
+    await f.attach();
+    const client = f.client();
+    const sessionId = randomUUID();
+    const remote = client.createSession(sessionOptions(sessionId));
+    await remote.start();
+    const native = f.sessions[0]!;
+    let acknowledge!: () => void;
+    native.interrupt.mockImplementationOnce(() => new Promise<undefined>(resolve => { acknowledge = () => resolve(undefined); }));
+    const input = { applicationOperationId: randomUUID(), deadlineAt: Date.now() + 100 };
+    const failed = expect(remote.interrupt(input)).rejects.toBeDefined();
+    await vi.waitFor(() => expect(native.interrupt).toHaveBeenCalledOnce());
+    await failed;
+    acknowledge();
+    // A new translated remote duration must not reopen the retained owner entry.
+    await expect(remote.reconcileInterrupt!({ ...input, deadlineAt: Date.now() + 30_000 })).resolves.toBe("unknown");
+    await expect(remote.interrupt({ ...input, deadlineAt: Date.now() + 30_000 })).rejects.toBeDefined();
+    expect(native.interrupt).toHaveBeenCalledOnce();
   });
 
   it("reattaches the same active native query after main client replacement and replays disconnected output once", async () => {
@@ -1468,7 +1537,7 @@ describe("remote query residency", () => {
         await native.emit(lifecycle(sessionId, operationId, "cancelled"));
         return true;
       });
-      await remote.interrupt();
+      await remote.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000 });
       await native.emit({ type: "result", session_id: sessionId, uuid: randomUUID(), user_message_uuid: turn.operationId } as SDKMessage);
       // Main applied and acknowledged the cancellation, then detached before
       // its queue reconciliation committed.

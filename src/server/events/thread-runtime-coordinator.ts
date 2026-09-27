@@ -222,10 +222,16 @@ export class ThreadRuntimeRetirementUnprovenError extends Error {
  * idle and no borrower remains, the complete binding is released so the actor
  * manager can evict the backend handle and workspace lease.
  */
+function canAutomaticallyRelease(runtime: EstablishedRuntime): boolean {
+  return runtime.actor.canAutomaticallyEvict &&
+    (runtime.actor.automaticEviction !== "client_detach" ||
+      !runtime.hub.snapshot || runtime.hub.snapshot.interactions.length === 0);
+}
+
 export class ThreadRuntimeCoordinator {
   readonly #actors: Pick<
     ConversationActorManager,
-    "acquire" | "runWithRuntimeRetired" | "runWithRuntimesStopped"
+    "acquire" | "acquireExistingControl" | "runWithRuntimeRetired" | "runWithRuntimesStopped"
   >;
   readonly #targets: ThreadApplicationActorTargetResolver;
   readonly #bridge: ConversationEventBridge;
@@ -250,7 +256,7 @@ export class ThreadRuntimeCoordinator {
   constructor(input: {
     readonly actors: Pick<
       ConversationActorManager,
-      "acquire" | "runWithRuntimeRetired" | "runWithRuntimesStopped"
+      "acquire" | "acquireExistingControl" | "runWithRuntimeRetired" | "runWithRuntimesStopped"
     >;
     readonly targets: ThreadApplicationActorTargetResolver;
     readonly bridge: ConversationEventBridge;
@@ -275,6 +281,11 @@ export class ThreadRuntimeCoordinator {
     this.#onAuthoritativeSettled = input.onAuthoritativeSettled;
     assertConversationRetentionMilliseconds(input.retentionMilliseconds);
     this.#retentionMilliseconds = input.retentionMilliseconds;
+  }
+
+  acquireExistingControl(scope: RequestScope, applicationThreadId: string) {
+    if (this.#closed || this.#maintenance.has(scopedKey(scope, applicationThreadId))) return undefined;
+    return this.#actors.acquireExistingControl(scope, applicationThreadId);
   }
 
   async acquire(
@@ -681,7 +692,7 @@ export class ThreadRuntimeCoordinator {
       ) {
         continue;
       }
-      if (!runtime.actor.canEvict) continue;
+      if (!canAutomaticallyRelease(runtime)) continue;
       entry.idleSince ??= now;
       const candidate = {
         key,
@@ -1378,7 +1389,7 @@ export class ThreadRuntimeCoordinator {
     }
     if (
       (entry.runtime?.hub.subscriberCount ?? 0) > 0 ||
-      !entry.runtime?.actor.canEvict
+      !(entry.runtime && canAutomaticallyRelease(entry.runtime))
     ) {
       entry.idleSince = undefined;
       if (entry.evictionTimer) {
@@ -1424,10 +1435,10 @@ export class ThreadRuntimeCoordinator {
     ) {
       return;
     }
-    if (!runtime.actor.canEvict) {
+    if (!canAutomaticallyRelease(runtime)) {
       return;
     }
-    const eviction = this.#dispose(runtime);
+    const eviction = this.#dispose(runtime, true);
     entry.eviction = eviction;
     try {
       await eviction;
@@ -1448,7 +1459,7 @@ export class ThreadRuntimeCoordinator {
       expectedEntry.references > 0 ||
       !expectedEntry.runtime ||
       expectedEntry.runtime.hub.subscriberCount > 0 ||
-      !expectedEntry.runtime.actor.canEvict
+      !canAutomaticallyRelease(expectedEntry.runtime)
     ) {
       return undefined;
     }
@@ -1516,8 +1527,8 @@ export class ThreadRuntimeCoordinator {
       throw new ThreadRuntimeNotIdleError();
     }
     const runtime = entry.runtime;
-    if (!runtime.actor.canEvict) throw new ThreadRuntimeNotIdleError();
-    await this.#dispose(runtime);
+    if (!canAutomaticallyRelease(runtime)) throw new ThreadRuntimeNotIdleError();
+    await this.#dispose(runtime, true);
     if (this.#entries.get(key) === entry) this.#entries.delete(key);
   }
 
@@ -1590,7 +1601,7 @@ export class ThreadRuntimeCoordinator {
     if (this.#entries.get(key) === entry) this.#entries.delete(key);
   }
 
-  async #dispose(runtime: EstablishedRuntime): Promise<void> {
+  async #dispose(runtime: EstablishedRuntime, automatic = false): Promise<void> {
     if (this.#detached.has(runtime)) return;
     this.#detached.add(runtime);
     // Publish after fencing reads, before asynchronous teardown. A late old
@@ -1626,7 +1637,8 @@ export class ThreadRuntimeCoordinator {
       failures.push(error);
     }
     try {
-      await runtime.interaction.release();
+      if (automatic && runtime.actor.automaticEviction === "client_detach") runtime.interaction.detach();
+      else await runtime.interaction.release();
     } catch (error) {
       failures.push(error);
     }

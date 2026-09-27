@@ -13,6 +13,7 @@ import type {
   BackendCheckpointRef,
   BranchCheckpointSelection,
   ConversationHandle,
+  InterruptConversationInput,
   EstablishedBackendProjection,
   InteractionResponseInput,
   LocateTurnResult,
@@ -291,11 +292,16 @@ export class ConversationActor {
         );
       }
     });
-    await this.#mailbox.enqueue(() => this.#establishProjection(input.signal));
+    try {
+      await this.#mailbox.enqueue(() => this.#establishProjection(input.signal));
+    } catch (error) {
+      this.#projectionRecoveryRequired = true;
+      throw error;
+    }
   }
 
   get timeline(): ProjectedConversationTimeline {
-    if (!this.#started || this.#closed) {
+    if (!this.#started || this.#closed || !this.#snapshotState) {
       throw new Error("conversation_actor_projection_unavailable");
     }
     return this.#projector.timeline();
@@ -303,19 +309,35 @@ export class ConversationActor {
 
   /** Main-turn readiness is independent of background work and cleanup safety. */
   get authoritativelySettled(): boolean {
-    if (!this.#started || this.#closing || this.#closed || this.#handleReplacementRequired) return false;
+    if (!this.#started || this.#closing || this.#closed || this.#handleReplacementRequired || !this.#snapshotState || this.#projectionRecoveryRequired) return false;
     const state = this.#projector.timeline().runState;
     return !this.#awaitingAuthoritativeIdle && (state === "idle" || state === "failed");
   }
 
+  get automaticEviction(): ConversationHandle["automaticEviction"] {
+    return this.#handle.automaticEviction;
+  }
+
+  /** Archive, policy changes and other maintenance require native quiescence. */
   get canEvict(): boolean {
+    return this.#canRetire(false);
+  }
+
+  /** A resident native owner may allow idle presentation detachment only. */
+  get canAutomaticallyEvict(): boolean {
+    return this.#canRetire(this.#handle.automaticEviction === "client_detach");
+  }
+
+  #canRetire(clientDetach: boolean): boolean {
     if (!this.#started || this.#closing || this.#closed) return false;
     if (this.#handleReplacementRequired) return true;
+    if (!this.#snapshotState || this.#projectionRecoveryRequired) return false;
     const timeline = this.#projector.timeline();
     return (
       !this.#awaitingAuthoritativeIdle &&
       !this.#handle.retirementBlocked &&
-      !hasOutstandingBackgroundActivity(timeline.backgroundActivity) &&
+      this.#pendingInteractions.size === 0 &&
+      (clientDetach || !hasOutstandingBackgroundActivity(timeline.backgroundActivity)) &&
       (timeline.runState === "idle" || timeline.runState === "failed")
     );
   }
@@ -956,75 +978,22 @@ export class ConversationActor {
     });
   }
 
-  interrupt(input: {
-    readonly applicationOperationId: string;
-    readonly expectedActiveTurnId: string;
-  }): Promise<void> {
-    return this.#enqueue(() => {
-      const timeline = this.#projector.timeline();
-      if (
-        timeline.activeTurnId !== input.expectedActiveTurnId ||
-        (timeline.runState !== "running" &&
-          timeline.runState !== "waiting_for_approval" &&
-          timeline.runState !== "waiting_for_input")
-      ) {
-        throw new BackendError({
-          category: "invalid_state",
-          retryable: false,
-          crossedSubmissionBoundary: false,
-          safeMessage: "The active turn changed before interrupt.",
-        });
-      }
-      const expectedBackendTurnId = this.#projector.backendTurnId(
-        input.expectedActiveTurnId,
-      );
-      if (!expectedBackendTurnId) {
-        throw new BackendError({
-          category: "invalid_state",
-          retryable: false,
-          crossedSubmissionBoundary: false,
-          safeMessage: "The interrupt target is no longer available.",
-        });
-      }
-      return this.#handle.interrupt({
-        applicationOperationId: input.applicationOperationId,
-        expectedBackendTurnId,
-      });
-    });
-  }
-
-  async interruptForInteractionFailure(
-    applicationOperationId: string,
-  ): Promise<void> {
-    const activeTurnId = this.timeline.activeTurnId;
-    if (!activeTurnId) return;
-    try {
-      await this.interrupt({
-        applicationOperationId,
-        expectedActiveTurnId: activeTurnId,
-      });
-    } catch {
-      // A failed provider cancellation is not proof that the unseen prompt
-      // disappeared. Closing is the existing terminal runtime fail-closed
-      // path; it releases the provider handle and execution-environment lease.
-      await this.close();
+  /** Session control is independent of transcript projection and its mailbox. */
+  interrupt(input: InterruptConversationInput): Promise<void> {
+    if (this.#closing || this.#closed || this.#handleReplacementRequired) {
+      return Promise.reject(new BackendError({
+        category: "unavailable", retryable: true, crossedSubmissionBoundary: false,
+        safeMessage: "The existing conversation control is unavailable.",
+      }));
     }
+    return this.#handle.interrupt(input);
   }
 
-  reconcileInterrupt(input: {
-    readonly applicationOperationId: string;
-    readonly expectedActiveTurnId: string;
-  }): Promise<BackendMutationReconciliation> {
-    return this.#enqueue(() => {
-      const expectedBackendTurnId = this.#projector.backendTurnId(
-        input.expectedActiveTurnId,
-      );
-      if (!expectedBackendTurnId) return { outcome: "unknown" };
-      return this.#handle.reconcileInterrupt({
-        applicationOperationId: input.applicationOperationId,
-        expectedBackendTurnId,
-      });
-    });
+  reconcileInterrupt(input: InterruptConversationInput): Promise<BackendMutationReconciliation> {
+    if (this.#closing || this.#closed || this.#handleReplacementRequired) {
+      return Promise.resolve({ outcome: "unknown" });
+    }
+    return this.#handle.reconcileInterrupt(input);
   }
 
   perform(input: RegisteredBackendActionInput): Promise<BackendActionResult> {
@@ -1128,6 +1097,10 @@ export class ConversationActor {
     });
   }
 
+  async closeIfAutomaticallyIdle(): Promise<boolean> {
+    return this.#closeConditionally(() => this.canAutomaticallyEvict, true);
+  }
+
   async closeIfIdle(): Promise<boolean> {
     return this.#closeConditionally(() => this.canEvict, true);
   }
@@ -1142,7 +1115,7 @@ export class ConversationActor {
       await this.#idleCloseAttempt;
       if (this.#closed) return false;
     }
-    if (this.canEvict && this.#establishing) {
+    if (predicate() && this.#establishing) {
       this.#establishmentAbort?.abort();
     }
     this.#idleCloseAttempt = (async () => {

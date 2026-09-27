@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { ConversationInterruptLedger } from "../conversation-interrupt.js";
 import { NO_USAGE_SINK, type UsageCapture, type UsageSink } from "../../usage/contracts.js";
 import {
   backendConversationEventSchema,
@@ -30,6 +32,7 @@ import {
   type ConversationBackendDriver,
   type ConversationBinding,
   type ConversationHandle,
+  type ConversationControl,
   type ConversationReadResult,
   type CreateConversationInput,
   type CreateConversationResult,
@@ -39,7 +42,7 @@ import {
   type EstablishedBackendProjection,
   type HistoryPageInput,
   type InteractionResponseInput,
-  type InterruptTurnInput,
+  type InterruptConversationInput,
   type LocateTurnInput,
   type LocateTurnResult,
   type ReadConversationInput,
@@ -118,7 +121,6 @@ interface InMemoryConversation {
   historyRevision: number;
   turnCounter: number;
   itemCounter: number;
-  readonly completedInterruptOperations: Map<string, string>;
   readonly completedActionOperations: Map<
     string,
     { readonly fingerprint: string; readonly result: BackendActionResult }
@@ -635,6 +637,7 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
       this.#maximumProjectionBufferEvents,
     );
     record.handles.add(handle);
+    input.onControlReady?.(handle.control);
     return handle;
   }
 
@@ -846,7 +849,6 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
       historyRevision: 1,
       turnCounter: input.snapshot.orderedBackendTurnIds.length,
       itemCounter: Object.keys(input.snapshot.itemsById).length,
-      completedInterruptOperations: new Map(),
       completedActionOperations: new Map(),
       handles: new Set(),
     };
@@ -1520,6 +1522,14 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
 }
 
 class InMemoryConversationHandle implements ConversationHandle {
+  readonly automaticEviction = "requires_quiescence" as const;
+  readonly #lifetime = new AbortController();
+  readonly #interrupts = new ConversationInterruptLedger();
+  readonly control: ConversationControl = Object.freeze({
+    generation: randomUUID(), lifetime: this.#lifetime.signal,
+    interrupt: (input: InterruptConversationInput) => this.interrupt(input),
+    reconcileInterrupt: (input: InterruptConversationInput) => this.reconcileInterrupt(input),
+  });
   readonly #accounting: UsageCapture;
   readonly binding: ConversationBinding;
   readonly #driver: InMemoryConformanceDriver;
@@ -1884,83 +1894,46 @@ class InMemoryConversationHandle implements ConversationHandle {
     return result;
   }
 
-  async interrupt(input: InterruptTurnInput): Promise<void> {
+  async interrupt(input: InterruptConversationInput): Promise<void> {
     this.#assertOpen();
-    const priorTarget = this.#record.completedInterruptOperations.get(
-      input.applicationOperationId,
-    );
-    if (priorTarget) {
-      if (priorTarget !== input.expectedBackendTurnId) {
-        throw error(
-          "rejected",
-          "The interrupt operation was replayed for another turn.",
-          "memory_interrupt_replay_mismatch",
-        );
-      }
-      return;
-    }
-    if (this.#record.snapshot.runState !== "running") {
-      throw error(
-        "invalid_state",
-        "Interrupt requires an active backend turn.",
-        "memory_interrupt_without_active_turn",
-      );
-    }
-    if (
-      this.#record.snapshot.activeBackendTurnId !== input.expectedBackendTurnId
-    ) {
-      throw error(
-        "invalid_state",
-        "The active backend turn changed before interrupt.",
-        "memory_interrupt_target_changed",
-      );
-    }
-    this.#record.snapshot.runState = "stopping";
-    this.#driver.emit(this.#record, {
-      type: "run_state_changed",
-      state: "stopping",
-      activeBackendTurnId: this.#record.snapshot.activeBackendTurnId,
-    });
-    const prior = this.#activeTurn();
-    const interrupted: BackendTurn = {
-      ...prior,
-      status: "interrupted",
-      endedBy: "interrupted",
-      completedAt: this.#driver.now(),
-    };
-    this.#record.snapshot.turnsById[prior.backendTurnId] = interrupted;
-    this.#record.snapshot.runState = "idle";
-    delete this.#record.snapshot.activeBackendTurnId;
-    this.#record.updatedAt = this.#driver.now();
-    this.#record.historyRevision += 1;
-    this.#record.completedInterruptOperations.set(
-      input.applicationOperationId,
-      input.expectedBackendTurnId,
-    );
-    this.#driver.updateTerminalReconciliation(this.#record, interrupted);
-    this.#driver.emit(this.#record, {
-      type: "turn_completed",
-      turn: interrupted,
-    });
-    this.#driver.emit(this.#record, {
-      type: "run_state_changed",
-      state: "idle",
+    await this.#interrupts.execute(input, this.#lifetime.signal, async (budget) => {
+      if (this.#record.snapshot.runState !== "running" && this.#record.snapshot.runState !== "stopping") return;
+      budget.dispatch();
+      this.#record.snapshot.runState = "stopping";
+      this.#driver.emit(this.#record, {
+        type: "run_state_changed",
+        state: "stopping",
+        activeBackendTurnId: this.#record.snapshot.activeBackendTurnId,
+      });
+      const prior = this.#activeTurn();
+      const interrupted: BackendTurn = {
+        ...prior,
+        status: "interrupted",
+        endedBy: "interrupted",
+        completedAt: this.#driver.now(),
+      };
+      this.#record.snapshot.turnsById[prior.backendTurnId] = interrupted;
+      this.#record.snapshot.runState = "idle";
+      delete this.#record.snapshot.activeBackendTurnId;
+      this.#record.updatedAt = this.#driver.now();
+      this.#record.historyRevision += 1;
+      this.#driver.updateTerminalReconciliation(this.#record, interrupted);
+      this.#driver.emit(this.#record, {
+        type: "turn_completed",
+        turn: interrupted,
+      });
+      this.#driver.emit(this.#record, {
+        type: "run_state_changed",
+        state: "idle",
+      });
     });
   }
 
   async reconcileInterrupt(
-    input: InterruptTurnInput,
+    input: InterruptConversationInput,
   ): Promise<BackendMutationReconciliation> {
     this.#assertOpen();
-    if (
-      this.#record.completedInterruptOperations.get(
-        input.applicationOperationId,
-      ) === input.expectedBackendTurnId ||
-      this.#record.snapshot.activeBackendTurnId !== input.expectedBackendTurnId
-    ) {
-      return { outcome: "accepted" };
-    }
-    return { outcome: "not_applied" };
+    return this.#interrupts.reconcile(input);
   }
 
   async perform(
@@ -2137,6 +2110,7 @@ class InMemoryConversationHandle implements ConversationHandle {
       return;
     }
     this.#closed = true;
+    this.#lifetime.abort();
     this.#rawListeners.clear();
     this.#projectionListener = undefined;
     this.#sequencedBuffer.length = 0;

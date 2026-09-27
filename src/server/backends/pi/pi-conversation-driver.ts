@@ -1,3 +1,4 @@
+import { ConversationInterruptLedger } from "../conversation-interrupt.js";
 import { PiUsageAccounting } from "./pi-usage-accounting.js";
 import type { UsageSink } from "../../usage/contracts.js";
 import type {
@@ -54,6 +55,7 @@ import {
   type ConversationBackendDriver,
   type ConversationBinding,
   type ConversationHandle,
+  type ConversationControl,
   type ConversationReadResult,
   type CreateConversationInput,
   type CreateConversationResult,
@@ -64,7 +66,7 @@ import {
   type EstablishedBackendProjection,
   type HistoryPageInput,
   type InteractionResponseInput,
-  type InterruptTurnInput,
+  type InterruptConversationInput,
   type LocateTurnInput,
   type LocateTurnResult,
   type ReadConversationInput,
@@ -1878,6 +1880,7 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
         },
       });
       this.#openHandles.set(input.binding.backendConversationId, handle);
+      input.onControlReady?.(handle.control);
       return handle;
     } catch (cause) {
       session.dispose();
@@ -2566,6 +2569,7 @@ interface PiConversationHandleOptions {
 }
 
 class PiConversationHandle implements ConversationHandle {
+  readonly automaticEviction = "requires_quiescence" as const;
   readonly #usageAccounting: PiUsageAccounting | undefined;
   static readonly #assistantSourceOrderStride =
     PI_ASSISTANT_SOURCE_ORDER_STRIDE;
@@ -2588,7 +2592,7 @@ class PiConversationHandle implements ConversationHandle {
   readonly #refreshProgressiveAgentToolSnapshot: PiAgentToolSet["refreshProgressiveSnapshot"];
   readonly #cliEnvironment?: PiAgentToolCliEnvironment;
   readonly #agentToolTurnCorrelation?: PiAgentToolTurnCorrelation;
-  readonly #projection: PiProjectionEstablisher;
+  #projection: PiProjectionEstablisher | undefined;
   readonly #listeners = new Set<(event: BackendConversationEvent) => void>();
   readonly #pendingInteractionEvents = new Map<
     string,
@@ -2596,7 +2600,15 @@ class PiConversationHandle implements ConversationHandle {
   >();
   readonly #submissionResults = new Map<string, SubmitTurnResult>();
   readonly #steerResults = new Map<string, SteerTurnResult>();
-  readonly #completedInterruptOperations = new Map<string, string>();
+  readonly #interrupts = new ConversationInterruptLedger();
+  readonly #controlLifetime = new AbortController();
+  #runGeneration = 0;
+  readonly control: ConversationControl = Object.freeze({
+    generation: randomUUID(),
+    lifetime: this.#controlLifetime.signal,
+    interrupt: (input: InterruptConversationInput) => this.interrupt(input),
+    reconcileInterrupt: (input: InterruptConversationInput) => this.reconcileInterrupt(input),
+  });
   readonly #markedToolCalls = new Set<string>();
   readonly #assistantItems = new Map<
     string,
@@ -2680,6 +2692,11 @@ class PiConversationHandle implements ConversationHandle {
     this.#onEffectiveSettings = options.onEffectiveSettings;
     this.#modelPolicy = options.modelPolicy;
     this.#outputArtifacts = options.outputArtifacts;
+    if (options.session.controlLifetime) {
+      const revoke = () => this.#controlLifetime.abort();
+      if (options.session.controlLifetime.aborted) revoke();
+      else options.session.controlLifetime.addEventListener("abort", revoke, { once: true, signal: this.#controlLifetime.signal });
+    }
     this.#runState = options.session.isIdle ? "idle" : "running";
     if (options.session.isIdle) {
       const branch = options.session.sessionManager.getBranch();
@@ -2729,12 +2746,6 @@ class PiConversationHandle implements ConversationHandle {
     });
     this.#usageAccounting = options.usage.enabled ? new PiUsageAccounting({sink: options.usage, binding: this.binding,
       nativeNamespace: options.nativeNamespace, manager: this.#session.sessionManager, authentication: this.#toolIdentityAuthentication}) : undefined;
-    const initial = this.#authoritativeProjectionSeed();
-    this.#projection = new PiProjectionEstablisher({
-      initialSnapshot: initial.snapshot,
-      initialHistory: initial.history,
-      refreshProjection: () => this.#authoritativeProjectionSeed(),
-    });
     this.#interactions.setPublisher((event) => {
       if (event.type === "interaction_opened") {
         this.#pendingInteractionEvents.set(
@@ -2756,6 +2767,17 @@ class PiConversationHandle implements ConversationHandle {
         });
       }
     });
+  }
+
+  #requireProjection(): PiProjectionEstablisher {
+    if (!this.#projection) {
+      const initial = this.#authoritativeProjectionSeed();
+      this.#projection = new PiProjectionEstablisher({
+        initialSnapshot: initial.snapshot, initialHistory: initial.history,
+        refreshProjection: () => this.#authoritativeProjectionSeed(),
+      });
+    }
+    return this.#projection;
   }
 
   get authoritativelySettled(): boolean {
@@ -2808,10 +2830,10 @@ class PiConversationHandle implements ConversationHandle {
     this.#assertOpen();
     await backendCall(() => this.#session.ready());
     const established = await backendCall(() =>
-      this.#projection.establishProjection(input),
+      this.#requireProjection().establishProjection(input),
     );
     for (const event of this.#pendingInteractionEvents.values()) {
-      this.#projection.publish(event);
+      this.#projection?.publish(event);
     }
     return established;
   }
@@ -2929,7 +2951,7 @@ class PiConversationHandle implements ConversationHandle {
   async readCurrent(): Promise<ConversationReadResult> {
     this.#assertOpen();
     await backendCall(() => this.#session.ready());
-    const snapshot = this.#projection.snapshot();
+    const snapshot = this.#requireProjection().snapshot();
     return {
       snapshot: selectPiSnapshotWindow(
         snapshot,
@@ -3500,66 +3522,48 @@ class PiConversationHandle implements ConversationHandle {
     return result;
   }
 
-  async interrupt(input: InterruptTurnInput): Promise<void> {
+  async interrupt(input: InterruptConversationInput): Promise<void> {
     this.#assertOpen();
-    await backendCall(() => this.#session.ready());
-    const priorTarget = this.#completedInterruptOperations.get(
-      input.applicationOperationId,
-    );
-    if (priorTarget) {
-      if (priorTarget !== input.expectedBackendTurnId) {
+    await this.#interrupts.execute(input, this.#controlLifetime.signal, async (budget) => {
+      await budget.wait(backendCall(() => this.#session.ready()));
+      budget.remainingMilliseconds();
+      if (this.#session.isIdle) return;
+      const generation = this.#runGeneration;
+      const previousOutcome = this.#terminalOutcome;
+      budget.dispatch();
+      this.#terminalOutcome = "interrupted";
+      try {
+        this.#interactions.cancelPending();
+        this.#session.clearQueue();
+        // The SDK rechecks the selected native generation immediately before abort.
+        await budget.wait(this.#session.abort({
+          signal: budget.signal, deadlineAt: input.deadlineAt,
+          isCurrent: () => generation === this.#runGeneration,
+        }));
+        budget.remainingMilliseconds();
+        if (generation === this.#runGeneration && !this.#session.isIdle) {
+          for (const event of this.#liveTools.interruptActive()) this.#emit(event);
+        }
+      } catch (cause) {
+        if (
+          !budget.signal.aborted && Date.now() < input.deadlineAt &&
+          generation === this.#runGeneration && !this.#session.isIdle
+        ) {
+          this.#terminalOutcome = previousOutcome;
+        }
         throw error(
-          "rejected",
-          "The Pi interrupt operation was replayed for another turn.",
-          "pi_interrupt_replay_mismatch",
+          "submission_unknown", "Pi could not confirm conversation Stop.",
+          "pi_interrupt_outcome_unknown", false, true, cause,
         );
       }
-      return;
-    }
-    if (this.#session.isIdle) {
-      throw error(
-        "invalid_state",
-        "Pi cannot interrupt an idle conversation.",
-        "pi_interrupt_requires_active_turn",
-      );
-    }
-    if (this.#activeTurnId !== input.expectedBackendTurnId) {
-      throw error(
-        "invalid_state",
-        "The active Pi turn changed before interrupt.",
-        "pi_interrupt_target_changed",
-      );
-    }
-    const previousOutcome = this.#terminalOutcome;
-    this.#terminalOutcome = "interrupted";
-    try {
-      this.#interactions.cancelPending();
-      this.#session.clearQueue();
-      await this.#session.abort();
-    } catch (cause) {
-      this.#terminalOutcome = previousOutcome;
-      throw mappedError(cause);
-    }
-    this.#completedInterruptOperations.set(
-      input.applicationOperationId,
-      input.expectedBackendTurnId,
-    );
-    for (const event of this.#liveTools.interruptActive()) this.#emit(event);
+    });
   }
 
   async reconcileInterrupt(
-    input: InterruptTurnInput,
+    input: InterruptConversationInput,
   ): Promise<BackendMutationReconciliation> {
     this.#assertOpen();
-    await backendCall(() => this.#session.ready());
-    if (
-      this.#completedInterruptOperations.get(input.applicationOperationId) ===
-        input.expectedBackendTurnId ||
-      this.#activeTurnId !== input.expectedBackendTurnId
-    ) {
-      return { outcome: "accepted" };
-    }
-    return { outcome: "unknown" };
+    return this.#interrupts.reconcile(input);
   }
 
   async perform(
@@ -3944,6 +3948,7 @@ class PiConversationHandle implements ConversationHandle {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    this.#controlLifetime.abort();
     let failure: unknown;
     let failed = false;
     const captureFailure = (cause: unknown): void => {
@@ -3990,7 +3995,7 @@ class PiConversationHandle implements ConversationHandle {
       captureFailure(cause);
     }
     try {
-      this.#projection.close();
+      this.#projection?.close();
     } catch (cause) {
       captureFailure(cause);
     }
@@ -4057,6 +4062,7 @@ class PiConversationHandle implements ConversationHandle {
         },
       });
     } else if (event.type === "agent_start") {
+      this.#runGeneration += 1;
       this.#terminalOutcome = undefined;
       this.#terminalFailure = undefined;
       this.#terminalAssistantItemIds.clear();
@@ -5063,7 +5069,8 @@ class PiConversationHandle implements ConversationHandle {
   }
 
   #requestProjectionRefreshForWindow(): void {
-    const current = this.#projection.snapshot();
+    if (!this.#projection) return;
+    const current = this.#requireProjection().snapshot();
     const bounded = selectPiSnapshotWindow(
       current,
       readSnapshotTurns,
@@ -5113,7 +5120,7 @@ class PiConversationHandle implements ConversationHandle {
         // Backend observers cannot affect Pi ownership or acceptance.
       }
     }
-    this.#projection.publish(parsed);
+    this.#projection?.publish(parsed);
   }
 
   #assertOpen(): void {

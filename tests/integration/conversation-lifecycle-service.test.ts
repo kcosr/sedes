@@ -167,6 +167,7 @@ class NeutralDriver {
 
   #handle(binding: ConversationHandle["binding"]): ConversationHandle {
     return {
+      automaticEviction: "requires_quiescence",
       binding,
       establishProjection: async () => {
         return {

@@ -632,6 +632,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         // Read only after start: a reattached remote query holds its replay
         // until this history is installed. The read resolves through the
         // startup message this launch just persisted.
+        onControlReady: input.onControlReady,
         loadInitialMessages: async () => {
           if (!exists) return [];
           const messages = await this.#runtimeClient.getSessionMessages(

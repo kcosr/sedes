@@ -18,8 +18,8 @@ import {
   CLAUDE_RUNTIME_CAPABILITY_ID,
   CLAUDE_RUNTIME_MAJOR_VERSION,
   claudeRuntimeHostOperations,
-  registerClaudeRuntimeV1WorkerOperations,
-} from "./claude-runtime-v1.js";
+  registerClaudeRuntimeV2WorkerOperations,
+} from "./claude-runtime-v2.js";
 import { ClaudeRuntimeWorkerHost } from "./claude-runtime-worker-host.js";
 import { TrackedClaudeSdkFacade } from "./tracked-claude-sdk-facade.js";
 import {
@@ -167,7 +167,7 @@ async function runInternalWorker(
       close: (reason) => peer!.close(reason),
     },
   });
-  registerClaudeRuntimeV1WorkerOperations(registry, host.handlers);
+  registerClaudeRuntimeV2WorkerOperations(registry, host.handlers);
   registerControlV2Operations(registry, {
     buildId: __SEDES_CLAUDE_RUNTIME_WORKER_BUILD_ID__,
     artifactSha256,
