@@ -151,6 +151,17 @@ export class OpenCodeThreadRepository {
     return Object.freeze(receipt);
   }
 
+  /** An exact request with a possible native effect cannot acquire another response. */
+  findDispatchedInteraction(scope: RequestScope, applicationThreadId: string, nativeSessionId: string, nativeInputId: string): Readonly<OpenCodeOperationReceipt> | undefined {
+    this.#assertScope(scope); this.#target(scope, applicationThreadId);
+    identifier.parse(nativeSessionId); identifier.parse(nativeInputId);
+    const row = this.database.prepare(`SELECT application_operation_id AS operationId FROM opencode_operation_receipts
+      WHERE tenant_id=? AND owner_principal_id=? AND native_namespace_key=? AND native_session_id=?
+      AND native_input_id=? AND operation_kind='interaction' AND disposition IN ('dispatched','unknown','accepted')`)
+      .get(scope.tenantId, scope.principalId, this.#nativeNamespaceKey, nativeSessionId, nativeInputId) as { operationId: string } | undefined;
+    return row ? this.requireOperation(scope, applicationThreadId, row.operationId, "interaction") : undefined;
+  }
+
   /** Returns true only to the caller that first reserves dispatch authority. */
   markDispatched(scope: RequestScope, applicationThreadId: string, applicationOperationId: string, operationKind: OpenCodeOperationKind, now: number): boolean {
     this.requireOperation(scope, applicationThreadId, applicationOperationId, operationKind);

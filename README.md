@@ -17,7 +17,7 @@
 > clients connected to a long-running Sedes server on Linux, with persistent remote
 > environments reached over SSH or HTTP(S). Most day-to-day use is Codex via
 > an external app-server's Unix-domain socket (UDS), plus Pi SDK for local
-> models. These workflows receive the most everyday use. Claude and Grok are
+> models. These workflows receive the most everyday use. Claude, Grok, and OpenCode are
 > less mature integrations and are used less often. See the
 > [connection guide](docs/operator/connections.md) for how the layers fit together.
 

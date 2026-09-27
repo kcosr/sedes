@@ -19,12 +19,17 @@ export interface OpenCodeObservedSettings {
 export class OpenCodeExecutionSettings {
   readonly #api: OpenCodeNativeApi;
   readonly #native: OpenCodeNativeMutations;
+  readonly lifetime: AbortSignal;
+  #observationSequence = 0;
   constructor(readonly context: OpenCodeDriverContext, readonly input: AttachConversationInput,
-    readonly runtime: OpenCodeConversationRuntime, readonly client: OpenCodeHttpClient, readonly generation: string) {
+    readonly runtime: OpenCodeConversationRuntime, readonly client: OpenCodeHttpClient, readonly generation: string, lifetime: AbortSignal) {
     this.#api = new OpenCodeNativeApi(client); this.#native = new OpenCodeNativeMutations(client);
+    this.lifetime = AbortSignal.any([client.lifetime, lifetime]);
   }
 
   async observe(signal?: AbortSignal): Promise<OpenCodeObservedSettings> {
+    signal = this.#signal(signal);
+    const sequence = ++this.#observationSequence;
     await this.assertCurrent(signal);
     const settings = this.context.settings.get(this.input.scope, this.input.binding.applicationThreadId);
     if (settings.observationGeneration !== this.generation) {
@@ -37,6 +42,7 @@ export class OpenCodeExecutionSettings {
     ]);
     this.#assertSession(session);
     await this.assertCurrent(signal);
+    if (sequence !== this.#observationSequence) throw changed();
     const observed = classifyObserved({ selection: nativeSelection(session, catalog), catalog });
     if (!this.context.settings.recordObserved(this.input.scope, settings.applicationThreadId,
       { expectedRevision: settings.revision, generation: this.generation, observed, now: Date.now() })) throw changed();
@@ -65,16 +71,21 @@ export class OpenCodeExecutionSettings {
   }
 
   /** Explicit settings actions may repair custom native state; ordinary work may not. */
-  async apply(selection: OpenCodeSelection, read: OpenCodeObservedSettings, signal?: AbortSignal): Promise<void> {
+  async apply(selection: OpenCodeSelection, read: OpenCodeObservedSettings, signal?: AbortSignal, beforeDispatch?: () => void): Promise<void> {
+    signal = this.#signal(signal);
     const desired = resolveOpenCodeSelection({ connection: this.context.connection, catalog: read.catalog.catalog,
       modelId: qualifiedOpenCodeModelId(selection), variant: selection.variant, modelPolicy: this.context.modelPolicy });
     await this.assertCurrent(signal);
     if (this.context.settings.get(this.input.scope, read.settings.applicationThreadId).revision !== read.settings.revision) throw changed();
+    // Receipt ownership is claimed only after every asynchronous admission check.
+    beforeDispatch?.();
+    const sequence = ++this.#observationSequence;
     await this.#native.setModel({ sessionID: this.input.binding.backendConversationId, model: desired }, signal);
     const session = await this.#api.getSession(this.input.binding.backendConversationId, signal);
     this.#assertSession(session); await this.assertCurrent(signal);
     // A native no-op still gets a readback; 204 and ModelSelected alone do not prove selection.
     if (!sameOpenCodeSelection(session.model ?? null, desired)) throw unavailable("The requested OpenCode model selection could not be confirmed.");
+    if (sequence !== this.#observationSequence) return;
     const observed = classifyObserved({ selection: desired, catalog: read.catalog });
     if (!this.context.settings.recordObserved(this.input.scope, read.settings.applicationThreadId, {
       expectedRevision: read.settings.revision, generation: this.generation, observed, now: Date.now(),
@@ -82,9 +93,16 @@ export class OpenCodeExecutionSettings {
   }
 
   async assertCurrent(signal?: AbortSignal): Promise<void> {
-    requireOpenCodeBinding(this.context, this.input); this.client.lifetime.throwIfAborted(); signal?.throwIfAborted();
+    signal = this.#signal(signal);
+    this.assertCurrentSync(signal);
     await this.runtime.assertCurrent(signal);
-    this.client.lifetime.throwIfAborted(); signal?.throwIfAborted();
+    this.assertCurrentSync(signal);
+  }
+  assertCurrentSync(signal?: AbortSignal): void {
+    requireOpenCodeBinding(this.context, this.input); this.lifetime.throwIfAborted(); signal?.throwIfAborted();
+  }
+  #signal(signal?: AbortSignal): AbortSignal {
+    return signal ? AbortSignal.any([this.lifetime, signal]) : this.lifetime;
   }
   markUnknown(): void {
     const settings = this.context.settings.get(this.input.scope, this.input.binding.applicationThreadId);
@@ -104,5 +122,5 @@ function nativeSelection(session: OpenCodeNativeSession, catalog: OpenCodeModelC
   const model = catalog.catalog.models.find(model => model.isDefault);
   return model ? decodeOpenCodeModelId(model.id) : null;
 }
-function changed() { return unavailable("The OpenCode settings changed while this operation was being prepared."); }
+function changed() { return openCodeConversationError("opencode_settings_changed", "The OpenCode settings changed while this operation was being prepared.", "invalid_state"); }
 function unavailable(message: string) { return openCodeConversationError("opencode_settings_unavailable", message, "invalid_state"); }

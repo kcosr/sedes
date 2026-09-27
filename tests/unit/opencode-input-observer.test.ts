@@ -7,7 +7,10 @@ import { createOpenCodeConversationFixture, scope, threadID } from "../support/o
 import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 
 const cleanups: (() => Promise<void>)[] = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+afterEach(async () => {
+  try { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); }
+  finally { vi.useRealTimers(); vi.restoreAllMocks(); }
+});
 const admission = (id = "msg_owned", text = "prepared text"): SessionInboxUser =>
   ({ id, sessionID: "ses_fixture", type: "user", payload: { text }, delivery: "queue", time: { created: 1 } });
 const user = (id = "msg_owned", text = "prepared text"): SessionMessageInfo => ({ id, type: "user", text, time: { created: 1 } });
@@ -184,6 +187,79 @@ describe("OpenCode independent private input observation", () => {
     const result = await f.observer.reconcile("operation", "submit");
     expect(result.status).toBe("failed_unknown"); expect(JSON.stringify(result)).toContain("delayed request");
     expect(f.wire.requests.every(request => request.method === "GET")).toBe(true);
+  });
+
+  it("retires lost inputs from polling and retention while a later live consumption still recovers", async () => {
+    vi.useFakeTimers();
+    const f = fixture(); await f.observer.start(); f.reserve(); f.observer.close(); f.log([], 2);
+    const recovery = f.createObserver(); await recovery.start();
+    expect((await recovery.reconcile("operation", "submit")).status).toBe("failed_unknown");
+    expect(f.row().terminalLostAt).not.toBeNull(); expect(f.evidence.hasUnresolved(scope, threadID)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const reads = f.wire.requests.length;
+    await vi.advanceTimersByTimeAsync(5_000); expect(f.wire.requests).toHaveLength(reads);
+    f.wire.send(delivered(3)); await vi.advanceTimersByTimeAsync(0);
+    expect(await recovery.reconcile("operation", "submit")).toEqual({ status: "accepted" });
+    expect(f.observed).toHaveBeenCalledExactlyOnceWith({ backendCorrelation: "operation" });
+    expect(recovery.correlations().get("msg_owned")).toBe("operation");
+    expect(f.evidence.unresolved(scope, threadID)).toEqual([]);
+  });
+
+  it("retires conflicted inputs from polling without converting later consumption into an unsafe correlation", async () => {
+    vi.useFakeTimers();
+    const f = fixture(); await f.observer.start(); f.reserve();
+    f.observer.recordAdmission("operation", "submit", admission());
+    f.observer.recordAdmission("operation", "submit", admission("msg_owned", "conflict"));
+    expect(f.evidence.hasUnresolved(scope, threadID)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000); const reads = f.wire.requests.length;
+    await vi.advanceTimersByTimeAsync(5_000); expect(f.wire.requests).toHaveLength(reads);
+    f.wire.send(delivered(3)); await vi.advanceTimersByTimeAsync(0);
+    expect(f.row().consumedFingerprint).not.toBeNull();
+    expect((await f.observer.reconcile("operation", "submit")).status).toBe("unresolved");
+    expect(f.observer.correlations().size).toBe(0); expect(f.observed).not.toHaveBeenCalled();
+    expect(f.row().terminalLostAt).toBeNull(); expect(f.evidence.unresolved(scope, threadID)).toEqual([]);
+  });
+
+  it.each(["enqueue", "ack"] as const)("does not declare tracker loss when a new %s arrives after the inbox/message cut", async mode => {
+    const f = fixture(); await f.observer.start(); f.reserve(); f.observer.close(); f.log([], 2);
+    let release!: () => void; let entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; }); const reached = new Promise<void>(resolve => { entered = resolve; });
+    const original = vi.mocked(f.runtime.assertCurrent).getMockImplementation()!; let blocked = false;
+    vi.spyOn(f.runtime, "assertCurrent").mockImplementation(async signal => {
+      await original(signal);
+      if (!blocked && f.wire.requests.some(request => request.pathname === "/api/session/ses_fixture/message/msg_owned")) {
+        blocked = true; entered(); await held;
+      }
+    });
+    const recovery = f.createObserver(); await recovery.start(); const reconciling = recovery.reconcile("operation", "submit");
+    await reached;
+    if (mode === "enqueue") {
+      f.wire.send(enqueue(1)); await vi.waitFor(() => expect(f.row().enqueueSequence).toBe(1));
+    } else recovery.recordAdmission("operation", "submit", admission());
+    f.pending([admission()]); release();
+    expect((await reconciling).status).toBe("unresolved"); expect(f.row().terminalLostAt).toBeNull();
+    expect(f.evidence.hasUnresolved(scope, threadID)).toBe(true);
+    f.wire.send(delivered(2)); await consumed(f);
+    expect(await recovery.reconcile("operation", "submit")).toEqual({ status: "accepted" });
+  });
+
+  it("does not start an inbox cut when the ready subscription disconnects during its identity check", async () => {
+    const f = fixture({ autoConnect: false }); const starting = f.observer.start();
+    await vi.waitFor(() => expect(f.wire.requests.some(request => request.pathname === "/api/event")).toBe(true));
+    f.wire.connected(); await starting; f.reserve(); const tracker = f.observer.trackerId;
+    let release!: () => void; let entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; }); const reached = new Promise<void>(resolve => { entered = resolve; });
+    vi.spyOn(f.runtime, "assertCurrent").mockImplementationOnce(async () => { entered(); await held; });
+    const reconciling = f.observer.reconcile("operation", "submit"); await reached;
+    f.wire.disconnect(); await vi.waitFor(() => expect(f.observer.trackerId).not.toBe(tracker));
+    expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(2);
+    release(); expect((await reconciling).status).toBe("unresolved");
+    expect(f.wire.requests.some(request => request.pathname.endsWith("/inbox"))).toBe(false);
+    f.pending([admission()]); f.wire.connected(); await f.observer.start();
+    expect((await f.observer.reconcile("operation", "submit")).status).toBe("unresolved");
+    const paths = f.wire.requests.map(request => request.pathname);
+    expect(paths.lastIndexOf("/api/event")).toBeLessThan(paths.indexOf("/api/session/ses_fixture/inbox"));
+    expect(f.row().terminalLostAt).toBeNull();
   });
 
   it("keeps known pending recovery unresolved and consumes automatically without history hydration", async () => {

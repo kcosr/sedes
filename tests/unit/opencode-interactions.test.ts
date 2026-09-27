@@ -25,7 +25,7 @@ function fixture() {
     requests.push({ path: url.pathname, method, ...(body === undefined ? {} : { body }) });
     if (held?.path === url.pathname) { const wait = held; wait.entered(); await wait.wait; init?.signal?.throwIfAborted(); }
     const pieces = url.pathname.split("/"); const id = pieces[5]; const permissionRoute = pieces[4] === "permission";
-    if (!id) return json(permissionRoute ? [...permissions.values()] : [...forms.values()].filter(item => item.state.status === "pending").map(({ state: _state, ...request }) => request));
+    if (!id) return json(permissionRoute ? [...permissions.values()].filter(item => item.sessionID === pieces[3]) : [...forms.values()].filter(item => item.sessionID === pieces[3] && item.state.status === "pending").map(({ state: _state, ...request }) => request));
     const item = permissionRoute ? permissions.get(id) : forms.get(id);
     if (!item) return new Response(JSON.stringify({ _tag: permissionRoute ? "PermissionNotFoundError" : "FormNotFoundError", sessionID: "ses_fixture",
       ...(permissionRoute ? { requestID: id } : { formID: id }), message: "missing" }), { status: 404, headers: { "content-type": "application/json" } });
@@ -190,7 +190,7 @@ describe("OpenCode exact interaction controller", () => {
   it("rechecks live runtime identity after the native request read before reserving or dispatching", async () => {
     const f = fixture(); f.forms.set("frm_owned", form()); await f.controller.refresh(); const input = f.response("form");
     const held = f.hold("/api/session/ses_fixture/form/frm_owned");
-    const sending = f.controller.respond(input); const rejected = expect(sending).rejects.toThrow("identity changed");
+    const sending = f.controller.respond(input); const rejected = expect(sending).rejects.toMatchObject({ crossedSubmissionBoundary: false });
     await held.entered; vi.spyOn(f.runtime, "assertCurrent").mockRejectedValue(new Error("identity changed")); held.release(); await rejected;
     expect(f.effects()).toHaveLength(0); expect(f.receipt()).toBeUndefined();
   });
@@ -201,5 +201,70 @@ describe("OpenCode exact interaction controller", () => {
     await expect(f.controller.respond(input)).rejects.toMatchObject({ backendCode: "opencode_interaction_response_unknown", crossedSubmissionBoundary: true });
     expect(f.effects()).toHaveLength(1); expect(f.receipt()).toMatchObject({ disposition: "unknown" });
     expect(await f.controller.reconcileInteractionResponse(input)).toEqual({ outcome: "unknown" });
+  });
+
+  it.each(["prepared", "not_applied"] as const)("allows a fresh response after a %s receipt while preserving old evidence", async disposition => {
+    const f = fixture(); f.forms.set("frm_owned", form()); await f.controller.refresh();
+    f.repository.reserveOperation(scope, { applicationThreadId: threadID, connectionProfileId: f.target.binding.connectionProfileId,
+      executionEnvironmentId: f.target.binding.executionEnvironmentId, nativeSessionId: "ses_fixture", applicationOperationId: "old-response",
+      operationKind: "interaction", nativeInputId: "form:frm_owned", requestFingerprint: "a".repeat(64), requestSource: null, deadlineAt: null }, Date.now());
+    if (disposition === "not_applied") f.repository.recordOutcome(scope, threadID, "old-response", "interaction", {
+      expected: "prepared", disposition, nativeEvidenceFingerprint: null, now: Date.now() });
+    await f.controller.respond(f.response("form"));
+    expect(f.receipt("old-response")?.disposition).toBe(disposition);
+    expect(f.receipt()?.disposition).toBe("accepted"); expect(f.effects()).toHaveLength(1);
+  });
+
+  it.each(["answer", "reset_cancel"])("classifies a new %s as unavailable after an unknown earlier response without redispatch", async mode => {
+    const f = fixture(); f.forms.set("frm_owned", form()); await f.controller.refresh(); const response = f.response("form");
+    f.lose(); f.settle(false); await expect(f.controller.respond(response)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    const input: InteractionResponseInput = mode === "answer" ? { ...response, applicationOperationId: "second" }
+      : { applicationOperationId: "force-reset:second", interactionId: response.interactionId, kind: "cancel" };
+    await expect(f.controller.respond(input)).rejects.toMatchObject({ backendCode: "opencode_interaction_response_unavailable", crossedSubmissionBoundary: false });
+    expect(f.effects()).toHaveLength(1); expect(f.receipt(input.applicationOperationId)).toBeUndefined();
+    expect(f.events.mock.calls.some(([event]) => event.type === "notice" && event.notice.message.text.includes("including during reset"))).toBe(true);
+  });
+
+  it("allows only one possible native response across concurrent controllers", async () => {
+    const f = fixture(); f.forms.set("frm_owned", form()); f.settle(false); await f.controller.refresh();
+    const other = f.create(); await other.refresh(); const response = f.response("form");
+    const results = await Promise.allSettled([f.controller.respond(response), other.respond({ ...response, applicationOperationId: "other-response" })]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.find(result => result.status === "rejected")).toMatchObject({ reason: { crossedSubmissionBoundary: false } });
+    expect(f.effects()).toHaveLength(1);
+  });
+
+  it("preserves the native __proto__ answer through intent persistence, dispatch, and terminal recovery", async () => {
+    const f = fixture(); f.forms.set("frm_owned", { ...form(), fields: [{ key: "__proto__", type: "string", required: true }] });
+    await f.controller.refresh(); const response = f.response("form"); f.lose();
+    await expect(f.controller.respond(response)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    expect(Object.keys(f.effects()[0]!.body.answer)).toEqual(["__proto__"]);
+    expect(f.effects()[0]!.body.answer["__proto__"]).toBe("Ada");
+    expect(await f.controller.reconcileInteractionResponse(response)).toEqual({ outcome: "accepted" });
+  });
+
+  it("classifies a missing fresh request or failed local reservation before native mutation", async () => {
+    const f = fixture(); f.forms.set("frm_owned", form()); await f.controller.refresh(); const response = f.response("form");
+    f.forms.clear(); await expect(f.controller.respond(response)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    f.forms.set("frm_owned", form()); vi.spyOn(f.repository, "reserveOperation").mockImplementation(() => { throw new Error("database unavailable"); });
+    await expect(f.controller.respond(response)).rejects.toMatchObject({ crossedSubmissionBoundary: false }); expect(f.effects()).toHaveLength(0);
+  });
+
+  it("warns for global and verified child requests while ignoring unrelated session forms", async () => {
+    const f = fixture(); const global = { ...form(), sessionID: "global" }; const sibling = { ...form(), sessionID: "ses_sibling" };
+    for (const request of [sibling, global]) {
+      const { state: _state, ...native } = request;
+      f.controller.observe(parseOpenCodeNativeEvent({ id: `evt_${request.sessionID}`, created: 1, type: "form.created", data: { form: native } }));
+    }
+    expect(f.events.mock.calls.filter(([event]) => event.type === "notice")).toHaveLength(1);
+    const child = { ...f.wire.session, id: "ses_child", parentID: "ses_fixture" };
+    f.permissions.set("per_child", { ...permission("per_child"), sessionID: child.id });
+    f.forms.set("frm_child", { ...form("frm_child"), sessionID: child.id });
+    await f.controller.refresh(undefined, [child]);
+    const notices = f.events.mock.calls.filter(([event]) => event.type === "notice").map(([event]) => event.notice.message.text);
+    expect(notices.some(text => text.includes("subagent is waiting for permission"))).toBe(true);
+    expect(notices.some(text => text.includes("subagent is waiting for a form response"))).toBe(true);
+    expect(notices.some(text => text.includes("no matching session owner"))).toBe(false);
+    expect(f.controller.snapshotInteractions()).toEqual([]); expect(f.effects()).toHaveLength(0);
   });
 });

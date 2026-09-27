@@ -243,6 +243,10 @@ gaps remain explicit, and a watermark alone proves no event payload. Stock CLI
 replay payload. With no surviving proof, lost tracking becomes `failed_unknown`;
 a healthy pending tracker never does so solely because time passes. There is
 no automatic resend or late-acceptance path for terminal ordinary Submit.
+Private lost-continuity markers and conflicting evidence stop automatic input
+polling and do not retain an otherwise idle actor. They never prove withdrawal.
+Explicit recovery or later exact positive native evidence can still update the
+private proof; a payload conflict remains unresolved and grants no correlation.
 
 Rename and model/effort changes reserve immutable private intent, perform one
 native effect and read back its exact result. Desired settings revisions change
@@ -261,3 +265,9 @@ permission request cannot. An external client's settlement removes the gate
 without creating a Sedes operation receipt. Unsupported session-owned forms
 receive one exact automatic cancellation; global unowned forms receive a notice
 and no effect. Permission cancellation without native rejection is unsupported.
+Known direct-child gates produce an inspection notice without granting the
+parent authority to answer them; unrelated sessions are ignored. An unresolved
+dispatched reply blocks any new reply, including force-reset cancellation, until
+its native result can be proved. A never-dispatched attempt permits a fresh
+response. Settlements observed while projection is disconnected are replayed
+on re-establishment so stale interaction panels close.

@@ -11,6 +11,7 @@ import { OpenCodeModelCatalog } from "../../src/server/backends/opencode/opencod
 import { OpenCodeNativeMutations } from "../../src/server/backends/opencode/opencode-native-mutations.js";
 import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
 import { openCodeExecutionSettingsMigration } from "../../src/server/db/migrations/123-opencode-execution-settings.js";
+import { openCodeRecoveryRetirementMigration } from "../../src/server/db/migrations/124-opencode-recovery-retirement.js";
 import { OpenCodeThreadRepository } from "../../src/server/backends/opencode/opencode-thread-repository.js";
 import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
 import type { OpenCodeNativeIdentity } from "../../src/server/backends/opencode/opencode-native-identity.js";
@@ -55,6 +56,7 @@ export function createOpenCodeConversationFixture(input: {
   database.prepare("INSERT INTO conversation_bindings VALUES (?,?,?,?,?,?,?)").run(scope.tenantId, scope.principalId, threadID, backend, connectionID, environmentID, sessionID);
   database.exec(openCodeNativeEvidenceMigration.sql);
   database.exec(openCodeExecutionSettingsMigration.sql);
+  database.exec(openCodeRecoveryRetirementMigration.sql);
   const repository = new OpenCodeThreadRepository({ database, scope, backendInstanceId: backend, nativeNamespaceKey: namespace });
   const detail: OpenCodeBindingDetail = { version: 1, ...scope, sessionId: sessionID, backendInstanceId: backend,
     connectionProfileId: connectionID, executionEnvironmentId: environmentID, canonicalWorkspacePath: directory, nativeNamespaceKey: namespace };
@@ -110,4 +112,3 @@ export function createOpenCodeConversationFixture(input: {
   const interrupts = () => wire.requests.filter(request => request.pathname.endsWith("/interrupt"));
   return { wire, client, runtime, context, database, repository, driver, manager, target, acquire, handle, attached, environmentRelease, interrupts, dispose };
 }
-

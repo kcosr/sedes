@@ -466,6 +466,11 @@ creation shows provenance and lets you override, remove, or restore inherited
 values. Thread snapshots remain fixed, and forks inherit them. Ordinary
 terminals use environment-level tool defaults when launched.
 
+OpenCode currently stores these execution definitions but does not inject them
+into native session shells. Its supported environment boundary is owned-daemon
+startup only; see [OpenCode v2](backends/opencode.md). Do not rely on configured
+thread values for OpenCode work until scoped execution injection is available.
+
 A value can be a literal, a reference to an execution-host environment variable,
 a reference to a protected execution-host file, or an explicit removal. Use
 references for secrets: Sedes stores the reference and resolves it on that

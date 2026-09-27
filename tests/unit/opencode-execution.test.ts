@@ -7,6 +7,11 @@ import { OpenCodeExecutionSettings } from "../../src/server/backends/opencode/op
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
 import { OpenCodeInputObserver } from "../../src/server/backends/opencode/opencode-input-observer.js";
 import { OpenCodeInputEvidenceRepository } from "../../src/server/backends/opencode/opencode-input-evidence.js";
+import { openCodeOperationFingerprint } from "../../src/server/backends/opencode/opencode-input-evidence.js";
+import { OpenCodeMutationEvidenceRepository } from "../../src/server/backends/opencode/opencode-mutation-evidence.js";
+import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
+import { mapOpenCodeConversationError } from "../../src/server/backends/opencode/opencode-conversation-error.js";
+import { DomainError } from "../../src/server/domain/errors.js";
 import { qualifiedOpenCodeModelId, type OpenCodeSelection } from "../../src/server/backends/opencode/opencode-model-selection.js";
 import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 import { createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
@@ -23,7 +28,7 @@ function fixture(input: { desired?: OpenCodeSelection | null; native?: OpenCodeS
   const wire = createOpenCodeApiFixture(); wire.session.model = input.native ?? modelA;
   const calls: { path: string; method: string; body?: any }[] = [];
   const state = {
-    models: [nativeModel(modelA), nativeModel(modelB)], modelUpdate: true, dropModelAck: false,
+    models: [nativeModel(modelA), nativeModel(modelB)], modelUpdate: true, dropModelAck: false, dropRenameAck: false,
     admission: true, consume: true, dropPromptAck: false, preparedText: undefined as string | undefined,
     pending: [] as SessionInboxUser[], postGate: undefined as Promise<void> | undefined,
   };
@@ -40,7 +45,9 @@ function fixture(input: { desired?: OpenCodeSelection | null; native?: OpenCodeS
       return new Response(null, { status: 204 });
     }
     if (path === `/api/session/${wire.sessionID}` && method === "PATCH") {
-      wire.session.title = body.title; return new Response(null, { status: 204 });
+      wire.session.title = body.title;
+      if (state.dropRenameAck) throw new Error("lost rename acknowledgment");
+      return new Response(null, { status: 204 });
     }
     if (path === `/api/session/${wire.sessionID}/prompt` && method === "POST") {
       const text = state.preparedText ?? body.text;
@@ -62,7 +69,7 @@ function fixture(input: { desired?: OpenCodeSelection | null; native?: OpenCodeS
   });
   const attach = { ...base.target, onSubmissionObserved: vi.fn() };
   const lease = base.runtime.acquire(), lifetime = new AbortController();
-  const settings = new OpenCodeExecutionSettings(base.context, attach, base.runtime, client, "execution-generation");
+  const settings = new OpenCodeExecutionSettings(base.context, attach, base.runtime, client, "execution-generation", lifetime.signal);
   const observer = new OpenCodeInputObserver(base.context, attach, base.runtime, lease, lifetime.signal);
   const actions = new OpenCodeActions(base.context, attach, settings);
   const delivery = new OpenCodeDelivery(base.context, attach, settings, observer);
@@ -147,9 +154,93 @@ describe("OpenCode execution settings and explicit actions", () => {
     expect(f.posts("/model")).toHaveLength(1);
   });
 
+  it.each(["runtime", "revision"] as const)("records an action refused by the final %s check as not applied", async failure => {
+    const f = fixture({ native: modelB }); const action = f.action();
+    const assertCurrent = f.settings.assertCurrent.bind(f.settings);
+    vi.spyOn(f.settings, "assertCurrent").mockImplementation(async signal => {
+      await assertCurrent(signal);
+      if (f.repository.readOperation(scope, threadID, action.applicationOperationId, "action")?.disposition === "prepared") {
+        if (failure === "runtime") throw new OpenCodeRuntimeError("opencode_request_failed");
+        const current = f.context.settings.get(scope, threadID);
+        f.context.settings.updateDesired(scope, threadID, { expectedRevision: current.revision, desired: modelB, now: Date.now() });
+      }
+    });
+    await expect(f.actions.perform(action)).rejects.toMatchObject({ crossedSubmissionBoundary: false,
+      category: failure === "runtime" ? "unavailable" : "invalid_state" });
+    expect(f.repository.readOperation(scope, threadID, action.applicationOperationId, "action")?.disposition).toBe("not_applied");
+    await expect(f.actions.reconcile(action)).resolves.toEqual({ outcome: "not_applied" });
+    await expect(f.actions.perform(action)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(f.posts("/model")).toHaveLength(0);
+  });
+
+  it("rejects a prepared action whose model was removed before dispatch without creating uncertainty", async () => {
+    const f = fixture({ native: modelB }); const action = f.action(); const binding = f.attach.binding;
+    f.repository.reserveOperation(scope, { applicationThreadId: threadID, connectionProfileId: binding.connectionProfileId,
+      executionEnvironmentId: binding.executionEnvironmentId, nativeSessionId: binding.backendConversationId,
+      applicationOperationId: action.applicationOperationId, operationKind: "action", nativeInputId: null,
+      requestFingerprint: openCodeOperationFingerprint(action), requestSource: null, deadlineAt: null }, Date.now());
+    new OpenCodeMutationEvidenceRepository(f.repository).prepare(scope, threadID, action.applicationOperationId, "action", { kind: "model", selection: modelA });
+    f.state.models = [nativeModel(modelB)];
+    await expect(f.actions.perform(action)).rejects.toMatchObject({ category: "invalid_state", crossedSubmissionBoundary: false });
+    await expect(f.actions.reconcile(action)).resolves.toEqual({ outcome: "not_applied" });
+    expect(f.posts("/model")).toHaveLength(0);
+  });
+
+  it("records native request validation failure as not applied even after claiming the action", async () => {
+    const f = fixture(); const action: RegisteredBackendActionInput = { action: "rename", applicationOperationId: "oversized-rename", title: "é".repeat(10_000) };
+    await expect(f.actions.perform(action)).rejects.toMatchObject({ category: "invalid_state", crossedSubmissionBoundary: false });
+    await expect(f.actions.reconcile(action)).resolves.toEqual({ outcome: "not_applied" });
+    expect(f.calls.filter(call => call.method === "PATCH")).toHaveLength(0);
+  });
+
+  it("preserves another caller's accepted action when a prepared caller loses the dispatch claim", async () => {
+    const f = fixture({ native: modelB }); const action = f.action();
+    let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
+    let waiting = false;
+    const assertCurrent = f.settings.assertCurrent.bind(f.settings);
+    vi.spyOn(f.settings, "assertCurrent").mockImplementation(async signal => {
+      await assertCurrent(signal);
+      if (!waiting && f.repository.readOperation(scope, threadID, action.applicationOperationId, "action")?.disposition === "prepared") {
+        waiting = true; await held;
+      }
+    });
+    const original = f.actions.perform(action);
+    await vi.waitFor(() => expect(waiting).toBe(true));
+    await expect(f.actions.perform(action)).resolves.toEqual({ accepted: true });
+    release(); await expect(original).resolves.toEqual({ accepted: true });
+    expect(f.repository.readOperation(scope, threadID, action.applicationOperationId, "action")?.disposition).toBe("accepted");
+    expect(f.posts("/model")).toHaveLength(1);
+  });
+
+  it("reconciles the exact applied model after catalog removal without repeating or reauthorizing work", async () => {
+    const f = fixture({ native: modelB }); const action = f.action(); f.state.dropModelAck = true;
+    await expect(f.actions.perform(action)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    const read = vi.spyOn(f.context.catalog, "read").mockRejectedValue(new Error("catalog no longer available"));
+    await expect(f.actions.reconcile(action)).resolves.toEqual({ outcome: "accepted" });
+    expect(read).not.toHaveBeenCalled(); expect(f.posts("/model")).toHaveLength(1);
+  });
+
+  it("reconciles rename independently of model catalog availability and retains location fencing", async () => {
+    const f = fixture(); const action: RegisteredBackendActionInput = { action: "rename", applicationOperationId: "rename", title: "Renamed" };
+    f.state.dropRenameAck = true;
+    await expect(f.actions.perform(action)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    const read = vi.spyOn(f.context.catalog, "read").mockRejectedValue(new Error("catalog no longer available"));
+    f.wire.session.location = { directory: "/foreign" };
+    await expect(f.actions.reconcile(action)).resolves.toEqual({ outcome: "unknown" });
+    f.wire.session.location = { directory: f.wire.directory };
+    await expect(f.actions.reconcile(action)).resolves.toEqual({ outcome: "accepted" });
+    expect(read).not.toHaveBeenCalled(); expect(f.calls.filter(call => call.method === "PATCH")).toHaveLength(1);
+  });
+
+  it.each(["invalid_transition", "conflict"] as const)("preserves actionable %s settings errors", code => {
+    const message = "The selected OpenCode model or reasoning effort is unavailable.";
+    expect(mapOpenCodeConversationError(new DomainError(code, message))).toMatchObject({ category: "invalid_state",
+      crossedSubmissionBoundary: false, safeMessage: message });
+  });
+
   it("fences stale runtime, wrong scope and desired changes during native readback", async () => {
     const f = fixture({ native: modelB });
-    const wrong = new OpenCodeExecutionSettings(f.context, { ...f.attach, scope: { ...scope, principalId: "other" } }, f.runtime, f.client, "wrong");
+    const wrong = new OpenCodeExecutionSettings(f.context, { ...f.attach, scope: { ...scope, principalId: "other" } }, f.runtime, f.client, "wrong", f.settings.lifetime);
     await expect(wrong.prepare("wrong", "submit")).rejects.toThrow(); expect(f.calls).toEqual([]);
     const original = vi.mocked(f.runtime.assertCurrent).getMockImplementation()!;
     vi.mocked(f.runtime.assertCurrent).mockImplementation(async signal => {
@@ -161,6 +252,96 @@ describe("OpenCode execution settings and explicit actions", () => {
     await expect(f.settings.prepare("raced", "submit")).rejects.toThrow();
     expect(f.context.settings.get(scope, threadID).desired).toEqual(modelB);
     expect(f.posts("/model")).toHaveLength(1);
+  });
+});
+
+describe("OpenCode settings observation fencing", () => {
+  it.each(["action", "submit", "steer"] as const)("fences an in-flight %s when its handle closes during catalog preparation", async operation => {
+    const f = fixture(); const handle = await f.driver.attach(f.attach); cleanup.push(() => handle.close());
+    let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
+    const read = f.context.catalog.read.bind(f.context.catalog);
+    let entered = false;
+    vi.spyOn(f.context.catalog, "read").mockImplementationOnce(async input => {
+      const result = await read(input); entered = true; await held; return result;
+    });
+    const pending = (operation === "action" ? handle.perform(f.action("closed-action", modelB))
+      : operation === "submit" ? handle.submit(f.submit("closed-submit")) : handle.steer(f.steer("closed-steer"))).catch(error => error);
+    await vi.waitFor(() => expect(entered).toBe(true));
+    await handle.close(); release();
+    expect(await pending).toMatchObject({ crossedSubmissionBoundary: false });
+    expect(f.posts("/model")).toHaveLength(0); expect(f.posts("/prompt")).toHaveLength(0);
+    expect(f.client.lifetime.aborted).toBe(false);
+  });
+
+  it("checks the handle lifetime synchronously immediately before claiming prompt dispatch", async () => {
+    const f = fixture(); const handle = await f.driver.attach(f.attach); cleanup.push(() => handle.close());
+    const track = OpenCodeInputObserver.prototype.track;
+    let tracked = 0;
+    vi.spyOn(OpenCodeInputObserver.prototype, "track").mockImplementation(function (this: OpenCodeInputObserver, evidence) {
+      track.call(this, evidence);
+      if (++tracked === 2) void handle.close();
+    });
+    await expect(handle.submit(f.submit("close-before-dispatch"))).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(tracked).toBe(2); expect(f.posts("/prompt")).toHaveLength(0);
+    expect(f.repository.readOperation(scope, threadID, "close-before-dispatch", "submit")?.disposition).toBe("prepared");
+    expect(f.client.lifetime.aborted).toBe(false);
+  });
+
+  it("retries a desired revision race without clearing a confirmed native selection", async () => {
+    const f = fixture(); const handle = await f.driver.attach(f.attach); cleanup.push(() => handle.close());
+    await handle.backendCapabilities();
+    const read = f.context.catalog.read.bind(f.context.catalog);
+    const catalog = vi.spyOn(f.context.catalog, "read").mockImplementationOnce(async input => {
+      const result = await read(input);
+      const current = f.context.settings.get(scope, threadID);
+      f.context.settings.updateDesired(scope, threadID, { expectedRevision: current.revision, desired: modelB, now: Date.now() });
+      return result;
+    });
+    await handle.backendCapabilities();
+    expect(catalog).toHaveBeenCalledTimes(2);
+    expect(f.context.settings.get(scope, threadID)).toMatchObject({ desired: modelB,
+      observationState: "confirmed", observed: { resolvedSelection: modelA } });
+  });
+
+  it.each(["failure", "success"] as const)("does not let an older %s replace a newer observation", async outcome => {
+    const f = fixture(); const handle = await f.driver.attach(f.attach); cleanup.push(() => handle.close());
+    await handle.backendCapabilities();
+    let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
+    const read = f.context.catalog.read.bind(f.context.catalog);
+    let entered = false;
+    vi.spyOn(f.context.catalog, "read").mockImplementationOnce(async input => {
+      const result = await read(input); entered = true; await held;
+      if (outcome === "failure") throw new Error("old catalog request failed");
+      return result;
+    });
+    const old = handle.backendCapabilities();
+    await vi.waitFor(() => expect(entered).toBe(true));
+    f.wire.session.model = modelB;
+    await handle.backendCapabilities();
+    release(); await old;
+    expect(f.context.settings.get(scope, threadID)).toMatchObject({ observationState: "confirmed", observed: { resolvedSelection: modelB } });
+  });
+
+  it("does not let a closed handle invalidate its replacement's confirmed observation", async () => {
+    const f = fixture(); const first = await f.driver.attach(f.attach); cleanup.push(() => first.close());
+    await first.backendCapabilities();
+    const originalGeneration = f.context.settings.get(scope, threadID).observationGeneration;
+    let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
+    const read = f.context.catalog.read.bind(f.context.catalog);
+    let entered = false;
+    vi.spyOn(f.context.catalog, "read").mockImplementationOnce(async input => {
+      const result = await read(input); entered = true; await held; return result;
+    });
+    const old = first.backendCapabilities();
+    await vi.waitFor(() => expect(entered).toBe(true));
+    await first.close();
+    const replacement = await f.driver.attach(f.attach); cleanup.push(() => replacement.close());
+    await replacement.backendCapabilities();
+    const generation = f.context.settings.get(scope, threadID).observationGeneration;
+    expect(generation).not.toBe(originalGeneration);
+    release(); await old;
+    expect(f.context.settings.get(scope, threadID)).toMatchObject({ observationGeneration: generation,
+      observationState: "confirmed", observed: { resolvedSelection: modelA } });
   });
 });
 

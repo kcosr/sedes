@@ -15,12 +15,20 @@ export interface OpenCodeInputEvidence {
   readonly withdrawnFingerprint: string | null;
   readonly withdrawalKind: "cancelled" | "reverted" | null;
   readonly payloadConflict: boolean;
+  /** Lost continuity is terminal for automatic polling, never proof of nonacceptance. */
+  readonly terminalLostAt: number | null;
 }
 type StoredEvidence = Omit<OpenCodeInputEvidence, "receipt" | "payloadConflict"> & { payloadConflict: number };
 const columns = `tracker_id AS trackerId, requested_delivery AS requestedDelivery, admitted_delivery AS admittedDelivery,
   prepared_payload_fingerprint AS preparedPayloadFingerprint, enqueue_sequence AS enqueueSequence,
   consumed_fingerprint AS consumedFingerprint, withdrawn_fingerprint AS withdrawnFingerprint, withdrawal_kind AS withdrawalKind,
-  payload_conflict AS payloadConflict`;
+  payload_conflict AS payloadConflict, terminal_lost_at AS terminalLostAt`;
+const unresolvedInput = `FROM opencode_input_evidence AS evidence JOIN opencode_operation_receipts AS receipt
+  USING (tenant_id,owner_principal_id,application_operation_id,operation_kind)
+  WHERE evidence.tenant_id=? AND evidence.owner_principal_id=? AND receipt.application_thread_id=?
+    AND receipt.disposition IN ('dispatched','accepted','unknown')
+    AND evidence.consumed_fingerprint IS NULL AND evidence.withdrawn_fingerprint IS NULL
+    AND evidence.payload_conflict=0 AND evidence.terminal_lost_at IS NULL`;
 
 /** Provider-private operation proof only; no transcript or pending input content is mirrored. */
 export class OpenCodeInputEvidenceRepository {
@@ -66,6 +74,29 @@ export class OpenCodeInputEvidenceRepository {
       ORDER BY receipt.created_at LIMIT 100001`).all(scope.tenantId, scope.principalId, threadId) as { id: string; kind: OpenCodeInputKind }[];
     if (rows.length > 100_000) throw new OpenCodeNativeProtocolError();
     return rows.map(row => this.get(scope, threadId, row.id, row.kind));
+  }
+
+  hasUnresolved(scope: RequestScope, threadId: string): boolean {
+    this.operations.getBinding(scope, threadId);
+    return this.operations.database.prepare(`SELECT 1 ${unresolvedInput} LIMIT 1`)
+      .get(scope.tenantId, scope.principalId, threadId) !== undefined;
+  }
+
+  unresolved(scope: RequestScope, threadId: string): readonly { operationId: string; kind: OpenCodeInputKind }[] {
+    this.operations.getBinding(scope, threadId);
+    const rows = this.operations.database.prepare(`SELECT evidence.application_operation_id AS operationId,
+      evidence.operation_kind AS kind ${unresolvedInput} ORDER BY receipt.created_at LIMIT 100001`)
+      .all(scope.tenantId, scope.principalId, threadId) as { operationId: string; kind: OpenCodeInputKind }[];
+    if (rows.length > 100_000) throw new OpenCodeNativeProtocolError();
+    return rows;
+  }
+
+  recordTerminalLoss(scope: RequestScope, threadId: string, operationId: string, kind: OpenCodeInputKind): void {
+    this.#dispatched(scope, threadId, operationId, kind);
+    this.operations.database.prepare(`UPDATE opencode_input_evidence SET terminal_lost_at=coalesce(terminal_lost_at,?)
+      WHERE tenant_id=? AND owner_principal_id=? AND application_operation_id=? AND operation_kind=?
+        AND consumed_fingerprint IS NULL AND withdrawn_fingerprint IS NULL AND payload_conflict=0`)
+      .run(Date.now(), scope.tenantId, scope.principalId, operationId, kind);
   }
 
   admit(scope: RequestScope, threadId: string, operationId: string, kind: OpenCodeInputKind,

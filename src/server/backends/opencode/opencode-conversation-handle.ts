@@ -93,7 +93,11 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   #activityRevision = 0;
   #observedActivityRevision = 0;
   #observedSettings?: OpenCodeObservedSettings;
+  #settingsRefreshSequence = 0;
   #proofRefreshPending = false;
+  // Keep gates announced to a projection until a subscriber receives their
+  // resolution. A native refresh may settle them before the next cut is taken.
+  readonly #announcedInteractionIds = new Set<string>();
 
   constructor(readonly context: OpenCodeDriverContext, readonly input: AttachConversationInput,
     readonly runtime: OpenCodeConversationRuntime, readonly lease: OpenCodeRuntimeLease) {
@@ -106,7 +110,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       reconcileInterrupt: (value: InterruptConversationInput) => this.reconcileInterrupt(value),
     });
     this.#settings = new OpenCodeExecutionSettings(context, input, runtime, lease.client,
-      `${lease.generation}:${openCodeHistoryFingerprint([this.binding, input.opaqueBindingDetail])}`);
+      `${lease.generation}:${openCodeHistoryFingerprint([this.binding, input.opaqueBindingDetail])}:${randomUUID()}`, this.#lifetime);
     this.#inputObservation = acquireOpenCodeInputObserver(context, input, runtime, lease, this.#lifetime,
       { onProofChanged: () => this.#inputProofChanged() });
     this.#delivery = new OpenCodeDelivery(context, input, this.#settings, this.#inputObservation.observer);
@@ -141,13 +145,21 @@ export class OpenCodeConversationHandle implements ConversationHandle {
           // No await between replay and registration: native events cannot fall into the gap.
           const replayedInteractions = new Set<string>();
           for (const entry of this.#journal) if (entry.value.handleSequence > after) {
-            if (entry.value.event.type === "interaction_opened") replayedInteractions.add(entry.value.event.interaction.backendInteractionId);
+            if (entry.value.event.type === "interaction_opened") {
+              replayedInteractions.add(entry.value.event.interaction.backendInteractionId);
+              this.#announcedInteractionIds.add(entry.value.event.interaction.backendInteractionId);
+            } else if (entry.value.event.type === "interaction_resolved") this.#announcedInteractionIds.delete(entry.value.event.backendInteractionId);
             listener(entry.value);
           }
           this.#listeners.add(listener);
           // Interactions are live gates, outside the native transcript snapshot.
           // Re-establishment must republish gates that opened before its cut.
-          for (const interaction of this.#interactions.snapshotInteractions()) {
+          const interactions = this.#interactions.snapshotInteractions();
+          const pendingIds = new Set(interactions.map(interaction => interaction.backendInteractionId));
+          for (const id of this.#announcedInteractionIds) if (!pendingIds.has(id)) {
+            this.#emit({ type: "interaction_resolved", backendInteractionId: id });
+          }
+          for (const interaction of interactions) {
             if (!replayedInteractions.has(interaction.backendInteractionId)) this.#emit({ type: "interaction_opened", interaction });
           }
           return () => this.#listeners.delete(listener);
@@ -215,8 +227,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   }
   get retirementBlocked(): boolean {
     if (this.#closed || this.#lifetime.aborted) return false;
-    try { return new OpenCodeInputEvidenceRepository(this.context.repository).list(this.input.scope, this.binding.applicationThreadId)
-      .some(item => item.receipt.disposition !== "prepared" && item.receipt.disposition !== "not_applied" && !item.consumedFingerprint && !item.withdrawnFingerprint); }
+    try { return new OpenCodeInputEvidenceRepository(this.context.repository).hasUnresolved(this.input.scope, this.binding.applicationThreadId); }
     catch { return true; }
   }
   async respond(input: Parameters<ConversationHandle["respond"]>[0]): Promise<void> {
@@ -448,7 +459,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       this.#activity = activity.active ? suffix.length ? "running" : "unknown"
         : unfinished || pending.length || interactions.permissions.length || interactions.forms.length ? "unknown" : "idle";
       this.#acceptActivity(activity);
-      await this.#interactions.refresh(interactions);
+      await this.#interactions.refresh(interactions, activity.children);
       await this.runtime.assertCurrent(signal);
       check();
       this.#inputObservation.observer.observeHistory(retained.messages);
@@ -675,14 +686,30 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     }).catch(() => undefined).finally(() => { this.#proofRefreshPending = false; });
   }
   async #refreshSettings(): Promise<void> {
-    try { this.#observedSettings = await this.#settings.observe(this.#lifetime); }
-    catch {
-      this.#observedSettings = undefined;
-      try { this.#settings.markUnknown(); } catch { /* Retired authority cannot publish new effective state. */ }
+    const sequence = ++this.#settingsRefreshSequence;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (this.#closed || this.#lifetime.aborted || sequence !== this.#settingsRefreshSequence) return;
+      try {
+        const observed = await this.#settings.observe(this.#lifetime);
+        if (!this.#closed && !this.#lifetime.aborted && sequence === this.#settingsRefreshSequence) this.#observedSettings = observed;
+        return;
+      } catch (error) {
+        if (this.#closed || this.#lifetime.aborted || sequence !== this.#settingsRefreshSequence) return;
+        // A desired write or a newer read superseded this observation. Neither
+        // invalidates an already confirmed native state; retry the current view.
+        if (error instanceof BackendError && error.backendCode === "opencode_settings_changed") continue;
+        this.#observedSettings = undefined;
+        try { this.#settings.markUnknown(); } catch { /* Retired authority cannot publish new effective state. */ }
+        return;
+      }
     }
   }
   #emit(value: BackendConversationEvent): void {
     const event = backendConversationEventSchema.parse(value);
+    if (this.#listeners.size || this.#rawListeners.size) {
+      if (event.type === "interaction_opened") this.#announcedInteractionIds.add(event.interaction.backendInteractionId);
+      else if (event.type === "interaction_resolved") this.#announcedInteractionIds.delete(event.backendInteractionId);
+    }
     const sequenced = Object.freeze({ handleSequence: ++this.#sequence, event });
     const bytes = Buffer.byteLength(JSON.stringify(sequenced));
     this.#journal.push({ value: sequenced, bytes }); this.#journalBytes += bytes;

@@ -90,6 +90,26 @@ describe("OpenCode conversation authority and finite discovery", () => {
     unsubscribe();
     expect(current.wire.requests.every(request => request.method === "GET")).toBe(true);
   });
+  it.each([false, true])("replays external gate settlement across an unsubscribed projection cut (event observed: %s)", async observed => {
+    const current = await attached(); const route = `/api/session/${current.wire.sessionID}/permission`;
+    current.wire.setResponse(route, 200, { data: [{ id: "per_old", sessionID: current.wire.sessionID, action: "write", resources: ["file"] }] });
+    const first = await current.handle.establishProjection({ signal: signal() }); const initial: SequencedBackendEvent[] = [];
+    const unsubscribe = first.subscribeFromNext(value => initial.push(value));
+    const opened = initial.find(value => value.event.type === "interaction_opened")!;
+    unsubscribe(); current.wire.clearResponse(route);
+    if (observed) {
+      current.wire.send({ id: "evt_detached_permission", type: "permission.replied", created: 2,
+        data: { sessionID: current.wire.sessionID, requestID: "per_old", reply: "once" } });
+      await vi.waitFor(() => expect(current.wire.requests.filter(request => request.pathname === route).length).toBeGreaterThan(1));
+    }
+    const fresh = await current.handle.establishProjection({ signal: signal() }); const events: SequencedBackendEvent[] = [];
+    fresh.subscribeFromNext(value => events.push(value));
+    expect(events.filter(value => value.event.type === "interaction_resolved")).toEqual([{
+      handleSequence: fresh.handleSequence + 1, event: { type: "interaction_resolved", backendInteractionId:
+        opened.event.type === "interaction_opened" ? opened.event.interaction.backendInteractionId : "unreachable" },
+    }]);
+    expect(events.some(value => value.event.type === "interaction_opened")).toBe(false);
+  });
   it("rejects foreign scope and immutable binding fields before acquiring a runtime", async () => {
     const current = setup();
     for (const change of [{ scope: { ...scope, principalId: "foreign" } },

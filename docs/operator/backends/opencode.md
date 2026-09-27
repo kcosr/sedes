@@ -80,6 +80,10 @@ observed changes but cannot attribute those external actions to a Sedes user
 operation. Managed TUI handoff is unavailable. Observed child sessions and
 session-attributed shells contribute background counts; this is not a complete
 inventory of every native Job.
+If an interaction reply loses its acknowledgment and its result cannot be
+proved, Sedes blocks a second response, including reset cancellation. Inspect
+the native request before proceeding. Pending requests in known direct child
+sessions produce a notice and require a native client to answer them.
 
 Attachments, image input/viewing, generated-image artifacts, Sedes agent-tool
 MCP/CLI, per-thread execution environment injection, manual compaction, forks,

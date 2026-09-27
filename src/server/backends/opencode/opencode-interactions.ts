@@ -10,7 +10,7 @@ import { openCodeOperationFingerprint } from "./opencode-input-evidence.js";
 import { mapOpenCodeForm, mapOpenCodePermission, OpenCodeInteractionMappingError, resolveOpenCodeInteractionResponse,
   type OpenCodeInteractionAuthority, type OpenCodeInteractionMapResult, type OpenCodeInteractionNativeResponse } from "./opencode-interaction-mapper.js";
 import { OpenCodeMutationEvidenceRepository } from "./opencode-mutation-evidence.js";
-import { OpenCodeNativeApi, OpenCodeNativeProtocolError, type OpenCodeNativeEvent, type OpenCodeNativeInteractions } from "./opencode-native-api.js";
+import { OpenCodeNativeApi, OpenCodeNativeProtocolError, type OpenCodeNativeEvent, type OpenCodeNativeInteractions, type OpenCodeNativeSession } from "./opencode-native-api.js";
 import { OpenCodeNativeMutations, OpenCodeNativeMutationInputError } from "./opencode-native-mutations.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
@@ -22,9 +22,15 @@ interface Gate { readonly source: Source; readonly nativeId: string; readonly ma
 const MAX_GATES = 1_000;
 const jsonLimits = { maximumDepth: 32, maximumObjectProperties: 10_000, maximumArrayItems: 10_000,
   maximumTotalNodes: 100_000, maximumStringBytes: 1_048_576, maximumEncodedBytes: 1_048_576 };
+// z.record reconstructs ordinary objects and drops a legitimate __proto__ field.
+// The enclosing bounded JSON snapshot already rejects accessors and exotic objects.
+const answerSchema = z.custom<Record<string, string | number | boolean | string[]>>(value =>
+  value !== null && typeof value === "object" && !Array.isArray(value) && Object.values(value).every(item =>
+    typeof item === "string" || typeof item === "boolean" || typeof item === "number" && Number.isFinite(item) ||
+    Array.isArray(item) && item.every(part => typeof part === "string")));
 const nativeResponseSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("permission_reply"), input: z.strictObject({ sessionID: z.string(), requestID: z.string(), decision: z.enum(["once", "reject"]) }) }),
-  z.strictObject({ kind: z.literal("form_reply"), input: z.strictObject({ sessionID: z.string(), formID: z.string(), answer: z.record(z.string(), z.union([z.string(), z.number().finite(), z.boolean(), z.array(z.string())])) }) }),
+  z.strictObject({ kind: z.literal("form_reply"), input: z.strictObject({ sessionID: z.string(), formID: z.string(), answer: answerSchema }) }),
   z.strictObject({ kind: z.literal("form_cancel"), input: z.strictObject({ sessionID: z.string(), formID: z.string() }) }),
 ]);
 const intentSchema = z.strictObject({ version: z.literal(1), source: z.enum(["permission", "form"]), nativeId: z.string().min(1).max(256),
@@ -43,6 +49,7 @@ export class OpenCodeInteractions {
   readonly #signal: AbortSignal;
   readonly #gates = new Map<string, Gate>();
   readonly #notices = new Set<string>();
+  readonly #children = new Set<string>();
   readonly #operations = new Map<string, { readonly fingerprint: string; readonly promise: Promise<void> }>();
   #refresh: Promise<void> | undefined;
   #refreshAgain = false;
@@ -60,15 +67,19 @@ export class OpenCodeInteractions {
     this.#signal.addEventListener("abort", () => this.close(), { once: true });
   }
 
-  async refresh(inventory?: OpenCodeNativeInteractions): Promise<void> {
+  async refresh(inventory?: OpenCodeNativeInteractions, children?: readonly OpenCodeNativeSession[]): Promise<void> {
     this.#assertOpen();
+    if (children) {
+      if (children.length > MAX_GATES || children.some(child => child.parentID !== this.#authority.sessionID)) throw new OpenCodeNativeProtocolError();
+      this.#children.clear(); for (const child of children) this.#children.add(child.id);
+    }
     if (this.#refresh) { this.#refreshAgain = true; return this.#refresh; }
     const reading = (async () => {
       let supplied = inventory;
       do {
         this.#refreshAgain = false; await this.#assertCurrent();
         const current = supplied ?? await this.#api.getInteractions(this.#authority.sessionID, this.#signal); supplied = undefined;
-        this.#assertOpen();
+        await this.#assertCurrent();
         if (current.permissions.length + current.forms.length > MAX_GATES) throw new OpenCodeNativeProtocolError();
         const next = new Map<string, Gate>();
         for (const request of current.permissions) this.#include(next, "permission", request);
@@ -76,6 +87,7 @@ export class OpenCodeInteractions {
         for (const id of this.#gates.keys()) if (!next.has(id)) this.#send({ type: "interaction_resolved", backendInteractionId: id });
         for (const [id, gate] of next) if (!this.#gates.has(id)) this.#send({ type: "interaction_opened", interaction: gate.mapped.interaction });
         this.#gates.clear(); for (const [id, gate] of next) this.#gates.set(id, gate);
+        await this.#refreshChildren();
       } while (this.#refreshAgain && !this.#signal.aborted);
     })();
     this.#refresh = reading;
@@ -84,9 +96,18 @@ export class OpenCodeInteractions {
 
   observe(event: OpenCodeNativeEvent): void {
     if (this.#closed) return;
+    if ((event.type === "session.created" || event.type === "session.forked") && event.data.parentID === this.#authority.sessionID) {
+      if (this.#children.size < MAX_GATES) this.#children.add(event.data.sessionID);
+      return;
+    }
+    if (event.type === "session.deleted") this.#children.delete(event.data.sessionID);
     if (event.type === "form.created" && event.data.form.sessionID !== this.#authority.sessionID) {
-      const result = mapOpenCodeForm({ request: event.data.form, authority: this.#authority, openedAt: new Date().toISOString() });
-      if (result.status === "unowned") this.#notice(`unowned:${event.data.form.id}`, result.notice);
+      if (event.data.form.sessionID === "global") this.#globalNotice(event.data.form.id);
+      else if (this.#children.has(event.data.form.sessionID)) this.#childNotice(event.data.form.sessionID, "form");
+      return;
+    }
+    if (event.type === "permission.asked" && this.#children.has(event.data.sessionID)) {
+      this.#childNotice(event.data.sessionID, "permission");
       return;
     }
     const relevant = event.type === "form.created" ? event.data.form.sessionID === this.#authority.sessionID
@@ -98,6 +119,14 @@ export class OpenCodeInteractions {
   snapshotInteractions(): DriverInteraction[] { this.#assertOpen(); return [...this.#gates.values()].map(gate => gate.mapped.interaction); }
 
   async respond(input: InteractionResponseInput): Promise<void> {
+    try { await this.#respond(input); }
+    catch (error) {
+      if (error instanceof BackendError) throw error;
+      throw invalid("OpenCode could not validate this interaction response before dispatch. Refresh the request before trying again.");
+    }
+  }
+
+  async #respond(input: InteractionResponseInput): Promise<void> {
     this.#assertOpen(); const response = this.#parseResponse(input);
     const fingerprint = openCodeOperationFingerprint(response);
     const previous = this.#receipt(response.applicationOperationId);
@@ -142,10 +171,15 @@ export class OpenCodeInteractions {
   }
 
   close(): void {
-    if (this.#closed) return; this.#closed = true; this.#controller.abort(); this.#gates.clear(); this.#notices.clear();
+    if (this.#closed) return; this.#closed = true; this.#controller.abort(); this.#gates.clear(); this.#notices.clear(); this.#children.clear();
   }
 
   #include(next: Map<string, Gate>, source: Source, request: PermissionRequest | FormInfo): void {
+    if (request.sessionID !== this.#authority.sessionID) {
+      if (source === "form" && request.sessionID === "global") this.#globalNotice(request.id);
+      else if (this.#children.has(request.sessionID)) this.#childNotice(request.sessionID, source);
+      return;
+    }
     const old = [...this.#gates.values()].find(gate => gate.source === source && gate.nativeId === request.id);
     const openedAt = old?.mapped.interaction.openedAt ?? new Date().toISOString();
     const result = this.#map(source, request, openedAt);
@@ -205,37 +239,49 @@ export class OpenCodeInteractions {
     if (running) { if (running.fingerprint !== fingerprint) throw invalid("The interaction response differs from its in-flight operation."); return running.promise; }
     if (this.#operations.size >= MAX_GATES) throw new OpenCodeNativeProtocolError();
     const dispatching = (async () => {
-      this.#assertOpen();
-      if (intent.generation !== this.generation) throw invalid("This OpenCode interaction belongs to a stale generation.");
-      await this.#assertCurrent();
-      const current = await this.#fresh(intent); await this.#assertCurrent();
-      if (!this.#sameRequest(intent, current.request) || current.detail && current.detail.state.status !== "pending") throw invalid("The native OpenCode request has changed or is already settled.");
-      const receipt = this.context.repository.reserveOperation(this.context.scope, {
-        applicationThreadId: this.#authority.applicationThreadId, connectionProfileId: this.attach.binding.connectionProfileId,
-        executionEnvironmentId: this.attach.binding.executionEnvironmentId, nativeSessionId: this.#authority.sessionID,
-        applicationOperationId: operationId, operationKind: "interaction", nativeInputId: `${intent.source}:${intent.nativeId}`,
-        requestFingerprint: intent.responseFingerprint, requestSource: null, deadlineAt: null,
-      }, Date.now());
-      this.#evidence.prepare(this.context.scope, this.#authority.applicationThreadId, operationId, "interaction", intent);
-      if (receipt.disposition === "accepted") return;
-      if (receipt.disposition !== "prepared") throw unknown();
-      this.#assertOpen();
-      if (!this.context.repository.markDispatched(this.context.scope, this.#authority.applicationThreadId, operationId, "interaction", Date.now())) throw unknown();
+      let crossed = false;
       try {
-        if (intent.nativeResponse.kind === "permission_reply") await this.#native.replyPermission(intent.nativeResponse.input, this.#signal);
-        else if (intent.nativeResponse.kind === "form_reply") await this.#native.replyForm(intent.nativeResponse.input, this.#signal);
-        else await this.#native.cancelForm(intent.nativeResponse.input, this.#signal);
+        this.#assertOpen();
+        if (intent.generation !== this.generation) throw invalid("This OpenCode interaction belongs to a stale generation.");
         await this.#assertCurrent();
-        this.#outcome(operationId, "accepted", openCodeOperationFingerprint({ kind: "native_response_ack", intent }));
-        this.#resolveGate(intent.interactionId);
-        // Reject may settle several permission requests. Refresh presentation
-        // without forging response receipts for those external settlements.
-        void this.refresh().catch(() => undefined);
-      } catch (error) {
-        if (error instanceof OpenCodeNativeMutationInputError) {
-          this.#outcome(operationId, "not_applied", null); throw invalid("The OpenCode response was rejected before dispatch.");
+        const current = await this.#fresh(intent); await this.#assertCurrent();
+        if (!this.#sameRequest(intent, current.request) || current.detail && current.detail.state.status !== "pending") throw invalid("The native OpenCode request has changed or is already settled.");
+        this.#assertResponseAvailable(operationId, intent);
+        const receipt = this.context.repository.reserveOperation(this.context.scope, {
+          applicationThreadId: this.#authority.applicationThreadId, connectionProfileId: this.attach.binding.connectionProfileId,
+          executionEnvironmentId: this.attach.binding.executionEnvironmentId, nativeSessionId: this.#authority.sessionID,
+          applicationOperationId: operationId, operationKind: "interaction", nativeInputId: `${intent.source}:${intent.nativeId}`,
+          requestFingerprint: intent.responseFingerprint, requestSource: null, deadlineAt: null,
+        }, Date.now());
+        this.#evidence.prepare(this.context.scope, this.#authority.applicationThreadId, operationId, "interaction", intent);
+        if (receipt.disposition === "accepted") return;
+        if (receipt.disposition !== "prepared") throw unknown();
+        this.#assertOpen();
+        if (!this.context.repository.markDispatched(this.context.scope, this.#authority.applicationThreadId, operationId, "interaction", Date.now())) throw unknown();
+        crossed = true;
+        try {
+          if (intent.nativeResponse.kind === "permission_reply") await this.#native.replyPermission(intent.nativeResponse.input, this.#signal);
+          else if (intent.nativeResponse.kind === "form_reply") await this.#native.replyForm(intent.nativeResponse.input, this.#signal);
+          else await this.#native.cancelForm(intent.nativeResponse.input, this.#signal);
+          await this.#assertCurrent();
+          this.#outcome(operationId, "accepted", openCodeOperationFingerprint({ kind: "native_response_ack", intent }));
+          this.#resolveGate(intent.interactionId);
+          // Reject may settle several permission requests. Refresh presentation
+          // without forging response receipts for those external settlements.
+          void this.refresh().catch(() => undefined);
+        } catch (error) {
+          if (error instanceof OpenCodeNativeMutationInputError) {
+            this.#outcome(operationId, "not_applied", null); throw invalid("The OpenCode response was rejected before dispatch.");
+          }
+          this.#outcome(operationId, "unknown", null); throw unknown();
         }
-        this.#outcome(operationId, "unknown", null); throw unknown();
+      } catch (error) {
+        if (error instanceof BackendError) throw error;
+        if (crossed) throw unknown();
+        // The unique native-request dispatch index also fences other handles.
+        // If a concurrent response won it, report a classified pre-effect block.
+        this.#assertResponseAvailable(operationId, intent);
+        throw invalid("OpenCode could not validate or reserve this interaction response before dispatch. Refresh the request before trying again.");
       }
     })();
     this.#operations.set(operationId, { fingerprint, promise: dispatching });
@@ -271,6 +317,38 @@ export class OpenCodeInteractions {
   }
   async #assertCurrent(): Promise<void> { this.#assertOpen(); await this.runtime.assertCurrent(this.#signal); this.#assertOpen(); }
   #resolveGate(id: string): void { if (this.#gates.delete(id)) this.#send({ type: "interaction_resolved", backendInteractionId: id }); }
+  #assertResponseAvailable(operationId: string, intent: Intent): void {
+    const prior = this.context.repository.findDispatchedInteraction(this.context.scope, this.#authority.applicationThreadId,
+      this.#authority.sessionID, `${intent.source}:${intent.nativeId}`);
+    if (!prior || prior.applicationOperationId === operationId) return;
+    const message = boundDisplayText("An earlier response to this OpenCode request may already have taken effect. Sedes cannot send another response or cancel it, including during reset. Inspect the request in the native client.");
+    this.#notice(`response_unavailable:${intent.source}:${intent.nativeId}`, message);
+    throw new BackendError({ category: "invalid_state", crossedSubmissionBoundary: false, retryable: false,
+      backendCode: "opencode_interaction_response_unavailable", safeMessage: message.text });
+  }
+  async #refreshChildren(): Promise<void> {
+    const children = [...this.#children].slice(0, 32);
+    const signal = AbortSignal.any([this.#signal, AbortSignal.timeout(3_000)]);
+    if (this.#children.size > children.length) this.#notice("child_inventory_bounded", boundDisplayText("Some OpenCode subagent interactions could not be inspected within Sedes's inventory limit. Inspect those subagents in the native client."));
+    for (let offset = 0; offset < children.length && !signal.aborted; offset += 4) {
+      await Promise.all(children.slice(offset, offset + 4).map(async child => {
+        try {
+          const pending = await this.#api.getInteractions(child, signal);
+          await this.runtime.assertCurrent(signal); signal.throwIfAborted(); this.#assertOpen();
+          if (pending.permissions.length) this.#childNotice(child, "permission");
+          if (pending.forms.length) this.#childNotice(child, "form");
+        } catch {
+          this.#notice(`child_inventory:${child}`, boundDisplayText("OpenCode subagent interactions could not be inspected. Sedes cannot answer or cancel child-session requests; inspect the subagent in the native client."));
+        }
+      }));
+    }
+  }
+  #globalNotice(id: string): void {
+    this.#notice(`global:${id}`, boundDisplayText("OpenCode opened a global form outside this conversation. Sedes cannot answer or cancel global forms; use the native client."));
+  }
+  #childNotice(id: string, source: Source): void {
+    this.#notice(`child:${source}:${id}`, boundDisplayText(`An OpenCode subagent is waiting for ${source === "permission" ? "permission" : "a form response"}. Sedes cannot answer or cancel child-session requests; use the native client.`));
+  }
   #notice(key: string, message: BoundedDisplayText): void {
     if (this.#closed || this.#notices.has(key)) return;
     if (this.#notices.size >= MAX_GATES) this.#notices.delete(this.#notices.values().next().value!);

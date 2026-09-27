@@ -61,7 +61,7 @@ contradict it.
 Notes on individual rows:
 
 - **Steer.** Turn-scoped Steer targets the exact active turn. Claude and OpenCode Steer is
-  conversation-scoped: it is delivered at Claude's next native opportunity and
+  conversation-scoped: it is delivered at the provider's next native opportunity and
   may join the current turn or start the next one, and it never interrupts
   work. Grok advertises no Steer, so active-turn input stays in Sedes Queue.
 - **Local image input.** Sedes accepts PNG, JPEG, GIF, and WebP composer
@@ -124,11 +124,12 @@ recorded fixtures on each change.
 
 Maintainer positioning, stated as judgment rather than measurement: Pi SDK and
 Codex are the primary integrations and carry the broadest feature set and the
-longest history in Sedes. Claude and Grok are supported with the explicit
+longest history in Sedes. Claude, Grok, and OpenCode are supported with the explicit
 limits in the capability matrix; Claude gained conversation-scoped Steer and
 the sidecar-hosted runtime in September 2026 and is the more actively
-extended of the two, while Grok remains a local-only runtime with no Steer,
-compact, or fork support. Expect rougher edges in the two newer integrations
+extended of those two, while Grok remains a local-only runtime with no Steer,
+compact, or fork support. OpenCode is the newest integration and currently
+supports stock v2 on local Linux. Expect rougher edges in these newer integrations
 and report reproducible problems with the backend, runtime version, and
 topology named.
 

@@ -59,8 +59,9 @@ Use current typed contracts and production composition for exact behavior:
 - provider implementations under
   [`src/server/backends/pi`](../../src/server/backends/pi),
   [`src/server/backends/codex`](../../src/server/backends/codex),
-  [`src/server/backends/claude`](../../src/server/backends/claude), and
-  [`src/server/backends/grok`](../../src/server/backends/grok)
+  [`src/server/backends/claude`](../../src/server/backends/claude),
+  [`src/server/backends/grok`](../../src/server/backends/grok), and
+  [`src/server/backends/opencode`](../../src/server/backends/opencode)
 - the shared [model policy](../../src/server/backends/model-policy.ts),
   [Saved Agent adapter](../../src/server/backends/saved-agent-adapter.ts),
   [automation policy](../../src/server/runtime/automation-execution-policy.ts),
@@ -959,12 +960,13 @@ synthesize idle. Receipt replay is observational and must never retire a newer
 generation. This contract is backend-neutral and shared code must not branch on
 provider identity.
 
-Force reset also releases the exact provider interactions it abandons. After
+Force reset also attempts to release the exact provider interactions it abandons. After
 the durable commit and before replacing a runtime, send each abandoned
 provider-owned interaction the normalized `cancel` response through its owning
 runtime, and wait at most 10 seconds in total. This cancellation is not a user
-response: record no receipt, never report it as provider success, ignore its
-failures, and never let it block or undo the commit. Every backend that
+response: record no shared user-response receipt, never report it as provider success, ignore its
+failures, and never let it block or undo the commit. A backend may retain private
+dispatch evidence to prevent repeating a native cancellation. Every backend that
 advertises interaction kinds must map `cancel` for each kind to its native
 cancel, decline, or dismissal, or reject it without side effects with its exact unsupported disposition when a resident native owner outlives
 the handle. Actor replacement alone must not be claimed to release that request. Record each backend's disposition in
@@ -1533,7 +1535,7 @@ the timeout as retryable normalized evidence. The browser may retry a
 classified transient failure only a bounded number of times before requiring
 an explicit user retry.
 
-Thread viewing has a 90-second outer runtime-acquisition budget for all four
+Thread viewing has a 90-second outer runtime-acquisition budget for all five
 compiled backends. Codex establishment shares one 60-second cancellation
 deadline across metadata reads, resume or retained-session attachment,
 hydration, and stabilization retries, in both legacy and paginated history
@@ -2285,7 +2287,7 @@ explicit Stop can retry pending withdrawal, but replay of an accepted Stop never
 interrupts later work. This applies to an uncertain ordinary Submit as well as
 Steer. No Sedes Queue row that has not crossed its provider boundary is removed.
 
-**Stop means stop.** This rule is the same for every backend:
+**Stop and pending inputs.** The shared policy is:
 
 - Stop never removes Sedes's durable Queue, including a Steer intent Sedes has
   not yet sent to the provider. That input is Sedes's own work and runs after
@@ -2294,7 +2296,10 @@ Steer. No Sedes Queue row that has not crossed its provider boundary is removed.
   landed returns to the user as not sent, each on its own evidence. It must
   neither start a turn after Stop nor disappear while Sedes records it
   delivered, and it is never resent automatically. Runtime retirement or loss
-  of the process holding it has the same outcome.
+  of the process holding it has the same outcome when withdrawal is proved.
+  OpenCode is an explicit stock limitation: interrupt preserves its inbox, and
+  bounded withdrawal can fail or lose its acknowledgment. Such an input remains
+  unresolved and can still run later; Stop success does not prove its removal.
 - A Steer the provider already started or consumed belongs to the stopped
   turn and is accepted with it.
 
@@ -2302,16 +2307,20 @@ Each backend proves the outcome per input: withdrawal evidence the provider
 emits for that input, or the input's absence from final history once its
 target turn can no longer use it. A receipt list, an empty provider queue, or
 a missing history row while the target turn can still use the input is never
-evidence. A proven unused Steer reconciles `not_accepted` with
+evidence. A proven withdrawn input (Steer or ordinary Submit) reconciles `not_accepted` with
 `retryable: false` and a bounded not-sent `diagnostic`; the queue fails the
 entry with the normalized `failureReason: "not_sent"` (the browser labels it
 from that field, never from diagnostic text), returns it to restore or
 dismiss, and later entries wait for that decision. Insufficient evidence stays unresolved (or `failed_unknown`
 for terminally lost conversation-Steer tracking), never a guess.
-`not_accepted` with `retryable: true` is reserved for input proven unsent
-before the provider accepted it, such as pre-boundary stale-target evidence or
-a provider refusal; the queue keeps that as Sedes's own work, which the
-stale-target rule dispatches after Stop.
+`not_accepted` with `retryable: true` permits a fresh dispatch only for input
+proven unsent before provider acceptance, such as pre-boundary stale-target
+evidence or a provider refusal; the queue keeps that as Sedes's own work, which
+the stale-target rule dispatches after Stop. A backend may instead return
+`retryable: false` for a conclusively never-dispatched operation when that
+operation must not be reused. OpenCode does so for its private `not_applied`
+receipt; this is positive local non-dispatch evidence, not inferred native
+withdrawal. The queue marks that input `not_sent` for explicit restore or dismissal.
 
 Steer reconciliation receives `steerTarget`, the exact target durably recorded
 when the Steer crossed the provider boundary, so a backend can prove that the

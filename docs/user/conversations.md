@@ -305,14 +305,15 @@ work already persisted by the provider, and it does not imply that every
 external side effect was rolled back. If the outcome cannot be confirmed, use
 the displayed recovery action rather than repeating Stop.
 
-Stop means stop, on every backend:
+Stop preserves these input distinctions:
 
 - Sedes's own Queue is untouched: queued entries keep their order and run
   after the stopped turn. A Steer card Sedes has not yet sent to the provider
   is also still Sedes's own work.
-- Every Steer the provider received but has not used yet never runs. Each
-  card shows **Not sent**. Restore it to the composer or dismiss it; later
-  queued entries wait for those choices. Sedes never resends it.
+- A Steer the provider proves it withdrew shows **Not sent**. Restore it to
+  the composer or dismiss it; later queued entries wait for those choices.
+  Sedes never resends it. OpenCode can leave an input unconfirmed when native
+  withdrawal fails or exceeds the Stop deadline; that pending input may still run.
 - A Steer the provider already used stays with the stopped turn.
 
 If the provider's runtime ends or Sedes restarts before the provider used a
@@ -326,6 +327,7 @@ Sedes never resends it.
 | Pi | Stop clears Pi's steering queue before interrupting. |
 | Codex | Codex discards it when it interrupts the turn. Sedes reports it not sent once the stopped turn's history is final without it. |
 | Grok | Grok has no Steer; active-turn input waits in Queue. |
+| OpenCode v2 | Stop interrupts the session, then requests withdrawal of each exact Sedes-owned pending input within the same deadline. Only proven withdrawal marks it not sent. Failed or uncertain cleanup stays unconfirmed and may leave native work pending. |
 
 ### Mobile composer focus
 

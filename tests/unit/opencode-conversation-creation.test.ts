@@ -122,11 +122,26 @@ describe("OpenCode reserved native conversation creation", () => {
     await expect(current.driver.create(current.input)).resolves.toMatchObject({ backendConversationId: "ses_reserved" });
     expect(current.calls.filter(call => call.method === "POST")).toHaveLength(1);
   });
-  it.each(["marker", "model", "id", "workspace"] as const)("never accepts mismatched %s evidence after dispatch", async mismatch => {
+  it.each(["marker", "id", "workspace"] as const)("never accepts mismatched %s evidence after dispatch", async mismatch => {
     const current = fixture(); current.state.mismatch = mismatch;
     await expect(current.driver.create(current.input)).rejects.toMatchObject({ crossedSubmissionBoundary: true, retryable: false, backendCode: "opencode_create_unknown" });
     expect(current.receipt()?.disposition).toBe("unknown");
     await expect(current.driver.create(current.input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    expect(current.calls.filter(call => call.method === "POST")).toHaveLength(1);
+  });
+  it("recovers exact creation evidence after another client changes the model", async () => {
+    const current = fixture(); current.state.defer = true;
+    await expect(current.driver.create(current.input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    current.state.native = { ...current.state.pending!, model: { providerID: "foreign", id: "foreign" } };
+    current.readNative.mockRejectedValue(new Error("catalog was removed"));
+    await expect(current.driver.create(current.input)).resolves.toMatchObject({ backendConversationId: "ses_reserved" });
+    expect(current.receipt()?.disposition).toBe("accepted");
+    expect(current.calls.filter(call => call.method === "POST")).toHaveLength(1);
+  });
+  it("does not accept a wrong initial model ACK but recovers the separately proved creation", async () => {
+    const current = fixture(); current.state.mismatch = "model";
+    await expect(current.driver.create(current.input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    await expect(current.driver.create(current.input)).resolves.toMatchObject({ backendConversationId: "ses_reserved" });
     expect(current.calls.filter(call => call.method === "POST")).toHaveLength(1);
   });
   it("does not discover/adopt preexisting native sessions or accept generic absence", async () => {

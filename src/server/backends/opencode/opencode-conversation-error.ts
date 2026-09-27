@@ -1,4 +1,5 @@
 import { BackendError } from "../contracts.js";
+import { DomainError } from "../../domain/errors.js";
 import { OpenCodeHistoryError } from "./opencode-history-reader.js";
 import { OpenCodeNativeProtocolError, OpenCodeNativeReadLimitError } from "./opencode-native-api.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
@@ -15,6 +16,9 @@ const retryable = new Set([
 /** Read/control-admission boundary only: this does not classify mutation acceptance. */
 export function mapOpenCodeConversationError(error: unknown): BackendError {
   if (error instanceof BackendError) return error;
+  if (error instanceof DomainError && (error.code === "invalid_transition" || error.code === "conflict")) {
+    return failure("opencode_settings_unavailable", "invalid_state", error.retryable, error.message);
+  }
   if (error instanceof OpenCodeNativeReadLimitError) {
     return new OpenCodeHistoryError(error.limit === "response_bytes" ? "response_bytes" : "records");
   }

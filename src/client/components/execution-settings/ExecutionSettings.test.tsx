@@ -572,7 +572,7 @@ describe("execution configuration administration", () => {
     expect(api.configurationLifecycle).not.toHaveBeenCalled();
   });
 
-  it("requires an environment before choosing an eligible backend and keeps Grok local", async () => {
+  it("requires an environment before choosing an eligible backend and keeps Grok and OpenCode local", async () => {
     render(<ExecutionSettings initialPage="backends" controls={controls(configurationWithOutbound())} />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Add backend" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Add backend" }));
@@ -585,7 +585,7 @@ describe("execution configuration administration", () => {
       fireEvent.change(environment, { target: { value: id } });
       for (const name of ["Claude", "Codex", "Pi SDK"]) expect(within(provider).getByRole("option", { name })).toBeEnabled();
       expect(within(provider).getByRole("option", { name: "Grok" })).toHaveProperty("disabled", id !== localId);
-      expect(within(provider).getByRole("option", { name: "OpenCode v2 (unavailable)" })).toBeDisabled();
+      expect(within(provider).getByRole("option", { name: "OpenCode v2" })).toHaveProperty("disabled", id !== localId);
     }
     fireEvent.change(provider, { target: { value: "pi" } });
     expect(screen.getByText(/SDK and model connection run on Sedes/)).toBeVisible();
@@ -597,6 +597,107 @@ describe("execution configuration administration", () => {
     fireEvent.change(provider, { target: { value: "codex_app_server" } });
     expect(screen.getByRole("button", { name: "Save backend" })).toBeEnabled();
     expect(screen.queryByRole("option", { name: "Cursor" })).toBeNull();
+  });
+
+  it.each(["process_stdio", "http"] as const)("creates a local OpenCode v2 backend using %s", async (channel) => {
+    const api = controls();
+    render(<ExecutionSettings initialPage="backends" controls={api} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add backend" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Add backend" }));
+    fireEvent.change(screen.getByLabelText("Execution environment"), { target: { value: localId } });
+    fireEvent.change(screen.getByLabelText("Backend type"), { target: { value: "opencode" } });
+    expect(screen.getByRole("option", { name: "OpenCode v2" })).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "Local OpenCode" } });
+    fireEvent.change(screen.getByLabelText("Native database path"), { target: { value: "/data/opencode/opencode.db" } });
+    if (channel === "process_stdio") {
+      expect(screen.getByLabelText("Connection ownership")).toHaveValue("process_stdio");
+      fireEvent.change(screen.getByLabelText("OpenCode v2 executable path"), { target: { value: "/opt/bin/opencode2" } });
+      fireEvent.change(screen.getByLabelText("Working directory"), { target: { value: "/work" } });
+    } else {
+      fireEvent.change(screen.getByLabelText("Connection ownership"), { target: { value: "http" } });
+      fireEvent.change(screen.getByLabelText("HTTP endpoint"), { target: { value: "http://127.0.0.1:4096" } });
+      fireEvent.change(screen.getByLabelText("Password file reference"), { target: { value: "/secrets/opencode-password" } });
+    }
+    expect(screen.getByLabelText("Backend enabled")).toBeChecked();
+    expect(screen.getByLabelText("Connection enabled")).toBeChecked();
+    expect(screen.getByRole("button", { name: "Save backend" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Save backend" }));
+    await waitFor(() => expect(api.saveConfiguration).toHaveBeenCalledOnce());
+    const saved = api.saveConfiguration.mock.calls[0]![0].configuration;
+    expect(saved.backends[0]).toMatchObject({ kind: "opencode", label: "Local OpenCode", enabled: true, moduleConfiguration: {
+      nativeStorePath: "/data/opencode/opencode.db", connection: channel === "process_stdio"
+        ? { ownership: "owned", channel: { type: channel, executablePath: "/opt/bin/opencode2", workingDirectory: "/work" } }
+        : { ownership: "external", channel: { type: channel, url: "http://127.0.0.1:4096", authentication: {
+          type: "basic", username: "opencode", secret: { source: "protected_file", path: "/secrets/opencode-password" },
+        } } },
+    } });
+    expect(saved.targets[0]).toMatchObject({ kind: "opencode_http", backendInstanceId: saved.backends[0].id, executionEnvironmentId: localId, enabled: true });
+    expect(saved.defaultTargetId).toBe(saved.targets[0].id);
+    expect(api.configurationLifecycle).not.toHaveBeenCalled();
+  });
+
+  it("enables a retained local OpenCode backend and connection without changing their identity", async () => {
+    const document = configuration();
+    const backend = { ...backendEditors.opencode.createBackend("local-opencode"), label: "Local OpenCode", enabled: false };
+    document.backends.push(backend);
+    document.targets.push({ ...backendEditors.opencode.createTarget("opencode-target", backend.id, localId), enabled: false });
+    const api = controls(document);
+    render(<ExecutionSettings initialPage="backends" controls={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Local OpenCode details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Local OpenCode" }));
+    expect(screen.getByLabelText("Execution environment")).toBeDisabled();
+    expect(screen.getByLabelText("Backend type")).toBeDisabled();
+    expect(screen.getByLabelText("Backend enabled")).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("Native database path"), { target: { value: "/data/opencode/opencode.db" } });
+    fireEvent.change(screen.getByLabelText("OpenCode v2 executable path"), { target: { value: "/opt/bin/opencode2" } });
+    fireEvent.change(screen.getByLabelText("Working directory"), { target: { value: "/work" } });
+    fireEvent.click(screen.getByLabelText("Backend enabled"));
+    expect(screen.getByLabelText("Connection enabled")).toBeEnabled();
+    fireEvent.click(screen.getByLabelText("Connection enabled"));
+    fireEvent.click(screen.getByRole("button", { name: "Save backend" }));
+    await waitFor(() => expect(api.saveConfiguration).toHaveBeenCalledOnce());
+    const saved = api.saveConfiguration.mock.calls[0]![0].configuration;
+    expect(saved.backends[0]).toMatchObject({ id: backend.id, kind: "opencode", enabled: true });
+    expect(saved.targets[0]).toMatchObject({ id: "opencode-target", backendInstanceId: backend.id, executionEnvironmentId: localId, enabled: true });
+    expect(api.configurationLifecycle).not.toHaveBeenCalled();
+  });
+
+  it.each([remoteId, outboundId])("blocks moving a new OpenCode backend to remote environment %s", async (environmentId) => {
+    const api = controls(configurationWithOutbound());
+    render(<ExecutionSettings initialPage="backends" controls={api} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add backend" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Add backend" }));
+    fireEvent.change(screen.getByLabelText("Execution environment"), { target: { value: localId } });
+    fireEvent.change(screen.getByLabelText("Backend type"), { target: { value: "opencode" } });
+    fireEvent.change(screen.getByLabelText("Execution environment"), { target: { value: environmentId } });
+    expect(screen.getByLabelText("Backend type")).toHaveValue("opencode");
+    expect(screen.getByLabelText("Execution environment")).toHaveValue(environmentId);
+    expect(screen.getByRole("option", { name: "OpenCode v2" })).toBeDisabled();
+    expect(screen.getByLabelText("Backend enabled")).toBeDisabled();
+    expect(screen.getByLabelText("Connection enabled")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save backend" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Save backend" }));
+    expect(api.saveConfiguration).not.toHaveBeenCalled();
+  });
+
+  it.each([remoteId, outboundId])("keeps retained OpenCode bindings disabled on remote environment %s", async (environmentId) => {
+    const document = configurationWithOutbound();
+    const backend = { ...backendEditors.opencode.createBackend("remote-opencode"), label: "Remote OpenCode", enabled: false };
+    document.backends.push(backend);
+    document.targets.push({ ...backendEditors.opencode.createTarget("remote-opencode-target", backend.id, environmentId), enabled: false });
+    const api = controls(document);
+    render(<ExecutionSettings initialPage="backends" controls={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remote OpenCode details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Remote OpenCode" }));
+    expect(screen.getByLabelText("Execution environment")).toBeDisabled();
+    expect(screen.getByLabelText("Execution environment")).toHaveValue(environmentId);
+    expect(screen.getByLabelText("Backend enabled")).toBeDisabled();
+    expect(screen.getByLabelText("Connection enabled")).toBeDisabled();
+    expect(screen.getByLabelText("Backend enabled")).not.toBeChecked();
+    expect(screen.getByLabelText("Connection enabled")).not.toBeChecked();
+    expect(screen.getByText("This retained remote connection is unsupported and must remain disabled.")).toBeVisible();
+    expect(api.saveConfiguration).not.toHaveBeenCalled();
+    expect(api.configurationLifecycle).not.toHaveBeenCalled();
   });
 
   it.each([localId, remoteId, outboundId])("saves Claude on %s with the execution account's native configuration default", async (environmentId) => {

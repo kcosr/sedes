@@ -96,12 +96,13 @@ export class OpenCodeDelivery {
     await this.observer.start();
     this.observer.track(this.#evidence.begin(scope, binding.applicationThreadId, operationId, kind,
       this.observer.trackerId, kind === "submit" ? "queue" : "steer"));
+    this.settings.assertCurrentSync();
     if (!this.context.repository.markDispatched(scope, binding.applicationThreadId, operationId, kind, Date.now())) {
       return this.observer.reconcile(operationId, kind);
     }
     try {
       const admitted = await this.#native.prompt({ sessionID: binding.backendConversationId, id: nativeInputId,
-        text, delivery: kind === "submit" ? "queue" : "steer", resume: true });
+        text, delivery: kind === "submit" ? "queue" : "steer", resume: true }, this.settings.lifetime);
       await this.settings.assertCurrent();
       this.observer.recordAdmission(operationId, kind, admitted);
     } catch (error) {

@@ -6,7 +6,7 @@ import { serializeOpenCodeBindingDetail } from "./opencode-binding-detail.js";
 import { assertOpenCodeWorkspace, openCodeConversationError, type OpenCodeDriverContext } from "./opencode-conversation-context.js";
 import { mapOpenCodeConversationError } from "./opencode-conversation-error.js";
 import { waitOpenCode } from "./opencode-conversation-handle.js";
-import { qualifiedOpenCodeModelId, resolveOpenCodeSelection, sameOpenCodeSelection, type OpenCodeSelection } from "./opencode-model-selection.js";
+import { qualifiedOpenCodeModelId, resolveOpenCodeSelection, sameOpenCodeSelection } from "./opencode-model-selection.js";
 import { OpenCodeNativeApi, type OpenCodeNativeSession } from "./opencode-native-api.js";
 import { OpenCodeNativeMutations, OpenCodeNativeMutationInputError } from "./opencode-native-mutations.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
@@ -62,9 +62,10 @@ export async function createOpenCodeConversation(context: OpenCodeDriverContext,
       const api = new OpenCodeNativeApi(lease.client);
       const native = new OpenCodeNativeMutations(lease.client);
       const signal = AbortSignal.any([budget, lease.client.lifetime]);
-      const prove = async (session: OpenCodeNativeSession): Promise<CreateConversationResult> => {
+      const prove = async (session: OpenCodeNativeSession, requireRequestedModel = false): Promise<CreateConversationResult> => {
         await runtime.assertCurrent(signal); signal.throwIfAborted(); assertAuthority(context, input, id);
-        assertNativeCreation(session, id, input.workspace.canonicalPath, frozen.selection, fingerprint);
+        assertNativeCreation(session, id, input.workspace.canonicalPath, fingerprint);
+        if (requireRequestedModel && !sameOpenCodeSelection(session.model ?? null, frozen.selection)) throw unknown();
         const evidence = digest(["sedes.opencode.created.v1", context.nativeNamespaceKey, id, input.workspace.canonicalPath,
           frozen.selection, fingerprint, session.time.created]);
         const current = context.repository.requireOperation(input.scope, request.applicationThreadId, request.applicationOperationId, "create");
@@ -97,7 +98,7 @@ export async function createOpenCodeConversation(context: OpenCodeDriverContext,
         // The one POST may already have committed, including after a lost response.
         return await prove(await api.getSession(id, signal));
       }
-      return await prove(session);
+      return await prove(session, true);
     } finally { lease.release(); }
   } catch (error) {
     // Another caller may have dispatched the same prepared receipt while this
@@ -133,9 +134,10 @@ function assertAuthority(context: OpenCodeDriverContext, input: CreateConversati
         { workspaceId: string; canonicalPath: string } | undefined;
   if (!target || target.workspaceId !== input.workspace.summary.id || target.canonicalPath !== input.workspace.canonicalPath) throw rejected();
 }
-function assertNativeCreation(session: OpenCodeNativeSession, id: string, directory: string, selection: OpenCodeSelection, fingerprint: string): void {
+function assertNativeCreation(session: OpenCodeNativeSession, id: string, directory: string, fingerprint: string): void {
   const marker = session.metadata?.[CREATE_MARKER];
-  if (session.id !== id || session.location.directory !== directory || !session.model || !sameOpenCodeSelection(session.model, selection) ||
+  // The exact private intent marker proves creation even if another client later changes settings.
+  if (session.id !== id || session.location.directory !== directory ||
     !marker || typeof marker !== "object" || Array.isArray(marker) || marker.version !== 1 || marker.fingerprint !== fingerprint) throw unknown();
 }
 function digest(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }

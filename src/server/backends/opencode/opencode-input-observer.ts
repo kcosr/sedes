@@ -21,7 +21,7 @@ const unresolved = (text = "OpenCode has not yet proved consumption or withdrawa
 const lost = (): SubmissionReconciliation => ({ status: "failed_unknown", diagnostic: boundDisplayText(
   "OpenCode input tracking was lost. The input may have been consumed or withdrawn, and a delayed request may still be admitted. Review the retained input before deciding what to do; it has not been resent.") });
 interface Tracked { readonly operationId: string; readonly kind: OpenCodeInputKind; readonly inputId: string; }
-interface ReadState { readonly trackerId: string; readonly pending: boolean; readonly absent: boolean; }
+interface ReadState { readonly trackerId: string; readonly admissionRevision: number; readonly pending: boolean; readonly absent: boolean; }
 interface EventProof {
   readonly fingerprint: string;
   readonly type: string;
@@ -46,6 +46,7 @@ export class OpenCodeInputObserver {
   readonly #tracked = new Map<string, Tracked>();
   readonly #byInput = new Map<string, Tracked>();
   readonly #reads = new Map<string, ReadState>();
+  readonly #admissionRevisions = new Map<string, number>();
   readonly #reading = new Map<string, Promise<void>>();
   readonly #notified = new Set<string>();
   readonly #events = new Map<number, EventProof>();
@@ -127,7 +128,11 @@ export class OpenCodeInputObserver {
       evidence = this.#evidence(tracked);
       const recovered = this.#terminal(evidence); if (recovered) return recovered;
       const currentRead = this.#reads.get(operationKey(operationId, kind));
-      if (this.#connected && currentRead === read && read.trackerId === this.#trackerId && !evidence.payloadConflict) return lost();
+      if (this.#connected && currentRead === read && read.trackerId === this.#trackerId && !evidence.payloadConflict &&
+          read.admissionRevision === (this.#admissionRevisions.get(operationKey(operationId, kind)) ?? 0)) {
+        this.#repository.recordTerminalLoss(this.context.scope, this.#threadID, operationId, kind);
+        return lost();
+      }
     }
     return unresolved();
   }
@@ -244,6 +249,8 @@ export class OpenCodeInputObserver {
     const evidence = this.#repository.admit(this.context.scope, this.#threadID, tracked.operationId, tracked.kind,
       { payloadFingerprint: openCodePreparedPayloadFingerprint(item.payload), delivery: item.delivery,
         ...(enqueueSequence === undefined ? {} : { enqueueSequence }) });
+    const key = operationKey(tracked.operationId, tracked.kind);
+    this.#admissionRevisions.set(key, (this.#admissionRevisions.get(key) ?? 0) + 1);
     if (proofKey(before) !== proofKey(evidence)) this.#proofChanged(evidence);
   }
   #consumeMessage(tracked: Tracked, message: Extract<OpenCodeNativeMessage, { type: "user" }>): void {
@@ -334,9 +341,14 @@ export class OpenCodeInputObserver {
     const key = operationKey(tracked.operationId, tracked.kind); const existing = this.#reading.get(key); if (existing) return existing;
     const reading = (async () => {
       try {
-        await this.start(this.#signal); await this.#assertCurrent(this.#signal);
+        await this.start(this.#signal);
         const trackerId = this.#trackerId;
+        await this.#assertCurrent(this.#signal);
+        this.#reads.delete(key);
+        // A replacement subscription must be ready before its inbox cut starts.
+        if (!this.#connected || trackerId !== this.#trackerId) return;
         if (!dispatched(this.#evidence(tracked))) return;
+        const admissionRevision = this.#admissionRevisions.get(key) ?? 0;
         const pending = await this.#api.getPending(this.#sessionID, this.#signal);
         await this.#assertCurrent(this.#signal);
         const item = pending.find(item => item.id === tracked.inputId);
@@ -352,7 +364,7 @@ export class OpenCodeInputObserver {
           absent = true;
         }
         await this.#assertCurrent(this.#signal);
-        if (this.#connected && trackerId === this.#trackerId) this.#reads.set(key, { trackerId, pending: item !== undefined, absent });
+        if (this.#connected && trackerId === this.#trackerId) this.#reads.set(key, { trackerId, admissionRevision, pending: item !== undefined, absent });
       } catch { this.#reads.delete(key); }
       finally { this.#wake(); this.#scheduleRefresh(); }
     })();
@@ -388,9 +400,11 @@ export class OpenCodeInputObserver {
     this.#refreshing = true;
     let remains = false;
     try {
-      const pending = [...this.#tracked.values()].filter(tracked => {
-        const evidence = this.#evidence(tracked); return dispatched(evidence) && !evidence.consumedFingerprint && !evidence.withdrawnFingerprint && !evidence.payloadConflict;
-      });
+      // Terminal tracker loss and conflicting proof cannot improve by polling.
+      // Keep exact live/history consumption recovery, without retaining an idle
+      // actor or scanning every settled operation on each background tick.
+      const pending = this.#repository.unresolved(this.context.scope, this.#threadID)
+        .flatMap(ref => { const tracked = this.#tracked.get(operationKey(ref.operationId, ref.kind)); return tracked ? [tracked] : []; });
       if (!pending.length) return;
       remains = true;
       const selected = Array.from({ length: Math.min(8, pending.length) }, (_, index) => pending[(this.#refreshOffset + index) % pending.length]!);
