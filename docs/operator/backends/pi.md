@@ -229,8 +229,10 @@ a model without image input, or a non-image file under an image name shows the
 row without an image. Pi's `blockImages` setting is not visible to Sedes, so
 the image is still shown when that setting withheld it from the model. Images
 returned by MCP servers, extensions, or other tools are not shown this way.
-Older and forked threads gain their images in the background when opened, and
-older history pages publish theirs as they load.
+Older and forked threads gain their images in the background when opened. An
+older history page or a linked turn waits up to two seconds for its four
+newest images; the rest appear when it is loaded again or, for recent turns,
+as they finish.
 
 ## Operational boundaries
 

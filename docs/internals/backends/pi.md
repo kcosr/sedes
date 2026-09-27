@@ -259,7 +259,7 @@ tool-result entry and content index that locate the image part.
 - Every projection seed, from construction or `refreshProjection`, first adds
   the children that already exist by synchronous `findImage` for the newest
   ten turns, then selects its window. It publishes the window's missing
-  children in the background, serially and newest first, at most 32 per seed.
+  children in the background, newest first, at most 32 per seed.
   This backfills forks and sessions from before image capture.
 - A late child is delivered as `item_completed` only. The projections order it
   by its reserved source order; no turn update follows, because the handle's
@@ -269,14 +269,20 @@ tool-result entry and content index that locate the image part.
   after a refresh adds the child under the new generation's identity, or
   nothing when the new window no longer contains it. Concurrent publications of
   one key share one attempt.
-- `history()` publishes the missing children of its page before returning,
-  newest first and at most 16 per call; a later call continues. `locateTurn`
-  and an unattached `read` only look artifacts up.
+- `history()` and `locateTurn` wait for at most the four newest missing
+  children of their page or turn, for at most two seconds in total, as Codex
+  and Claude readers do. The rest, and any still running at the deadline,
+  publish in the background, newest first and at most 32 per call; they show
+  on the next fetch, or live when the live window contains them. An unattached
+  `read` only looks artifacts up.
+- Background publication runs serially, holds at most 256 queued
+  publications per handle, and skips keys the handle knows failed.
 - A candidate exists only for non-empty data of a supported output media type.
   Each handle remembers up to 4096 keys whose publication failed and does not
   retry them; a new attachment does.
 - No publication starts once the handle is closed. `close()` waits for those
-  already started, which deliver nothing, before it disposes the session.
+  already started, which deliver nothing, before it disposes the session. A
+  page or turn lookup still waiting fails with `pi_handle_closed`.
 - A seed taken during a running turn can include image reads whose results
   Pi has not persisted yet; with parallel tools, Pi persists a batch's results
   together once all of them finish. History reports these rows, still
