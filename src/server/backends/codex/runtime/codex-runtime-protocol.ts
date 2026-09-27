@@ -11,7 +11,9 @@ import type {
 } from "../rpc/codex-rpc-client.js";
 
 /** Provider-private payload; the sidecar carrier never interprets native methods. */
-export const CODEX_RUNTIME_PROTOCOL_VERSION = 1;
+// Version 2 requires native unsubscribe to invalidate retained session
+// configuration, so a new main cannot refresh tools through an older host.
+export const CODEX_RUNTIME_PROTOCOL_VERSION = 2;
 export type CodexRuntimeAuthority = Readonly<{
   scope: ProviderTransportScope;
   runtimeId: string;

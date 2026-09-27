@@ -188,6 +188,7 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
         if (!this.#abandoning) {
           try {
             if (resume) resume.apply(receipt);
+            else if (input.method === "thread/unsubscribe") this.#sessions!.unsubscribe((params as { threadId: string }).threadId, receipt.generation);
             else this.#sessions!.observeResult(input.method, receipt.result, receipt.generation);
           } catch { this.#sessions!.markUnknown(); }
         }

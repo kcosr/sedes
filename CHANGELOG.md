@@ -4,6 +4,11 @@
 
 ### Breaking Changes
 
+- Codex persistent runtimes require Codex runtime protocol 2 so tool-policy
+  refreshes cannot reuse an older sidecar’s cached session configuration.
+  Upgrade existing sidecars before reconnecting. No database migration or
+  browser protocol change is required for this fix.
+
 - Codex viewed images use a new `viewed_image` transcript item, introduced
   in client protocol 123. This build requires client protocol 126; see the
   client protocol entries below. (#11, #13, #14)
@@ -465,6 +470,11 @@
   ([#51](https://github.com/kcosr/sedes/pull/51))
 
 ### Fixed
+
+- Refresh Native agent tools and CLI presentation settings when an idle
+  Codex or Claude thread already has a persistent SSH session, including
+  after the server reconnects. Provider release failures leave the saved
+  policy unchanged. CLI access edits still apply live.
 
 - Keep pending messages queued and retry unavailable backends during startup,
   instead of preventing the server from starting.

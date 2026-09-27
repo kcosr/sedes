@@ -16778,3 +16778,108 @@ describe("CodexBackendDriverFactory", () => {
     });
   });
 });
+
+describe("Codex provider residency release for tool changes", () => {
+  it.each(["legacy", "paginated"] as const)("preserves an unmaterialized %s thread instead of dropping its only subscription", async historyMode => {
+    const harness = new RpcHarness();
+    harness.enqueue("thread/read", { thread: nativeThread({ historyMode, turns: [] }) });
+    const method = historyMode === "paginated" ? "thread/turns/list" : "thread/read";
+    harness.enqueue(method, new CodexRpcRemoteError({ code: -32600, message: "thread not materialized yet", generation: 1, method }));
+    await expect(driver(harness).releaseConversationResidency(attachInput())).rejects.toMatchObject({
+      category: "invalid_state", backendCode: "codex_residency_history_unmaterialized",
+    });
+    expect(harness.calls.some(call => call.method === "thread/unsubscribe")).toBe(false);
+    expect(harness.retirements).toEqual([]);
+  });
+
+  it("uses a bounded page to prove paginated history before releasing the subscription", async () => {
+    const harness = new RpcHarness();
+    harness.enqueue("thread/read", { thread: nativeThread({ historyMode: "paginated", turns: [] }) });
+    harness.enqueue("thread/turns/list", { data: [], nextCursor: null, backwardsCursor: null });
+    harness.enqueue("thread/goal/get", { goal: null });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await expect(driver(harness).releaseConversationResidency(attachInput())).resolves.toBe("released");
+    expect(harness.calls.find(call => call.method === "thread/turns/list")?.params).toEqual({
+      threadId: "thread-1", limit: 1, sortDirection: "desc", itemsView: "notLoaded",
+    });
+  });
+
+  it.each(["idle", "notLoaded"] as const)("unsubscribes an %s thread without attaching or changing sibling sessions", async status => {
+    const persistent = { reattachThread: vi.fn(), detachThread: vi.fn() };
+    const harness = new RpcHarness(persistent);
+    harness.enqueue("thread/read", { thread: nativeThread({ status: { type: status } }) }, { thread: nativeThread({ status: { type: status } }) });
+    harness.enqueue("thread/goal/get", { goal: null });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await expect(driver(harness).releaseConversationResidency(attachInput())).resolves.toBe("released");
+    expect(harness.calls).toEqual([
+      { method: "thread/read", params: { threadId: "thread-1", includeTurns: false } },
+      { method: "thread/read", params: { threadId: "thread-1", includeTurns: true } },
+      { method: "thread/goal/get", params: { threadId: "thread-1" } },
+      { method: "thread/unsubscribe", params: { threadId: "thread-1" } },
+    ]);
+    expect(persistent.detachThread).not.toHaveBeenCalled();
+    expect(persistent.reattachThread).not.toHaveBeenCalled();
+    expect(harness.retirements).toEqual([]);
+  });
+
+  it("refuses active native work even with no local handle", async () => {
+    const harness = new RpcHarness();
+    harness.enqueue("thread/read", { thread: nativeThread({ status: { type: "active", activeFlags: [] } }) });
+    await expect(driver(harness).releaseConversationResidency(attachInput())).resolves.toBe("busy");
+    expect(harness.calls.map(call => call.method)).toEqual(["thread/read"]);
+  });
+
+  it("refuses an active native goal between turns", async () => {
+    const harness = new RpcHarness();
+    harness.enqueue("thread/read", { thread: nativeThread() }, { thread: nativeThread() });
+    harness.enqueue("thread/goal/get", { goal: {
+      threadId: "thread-1", objective: "Keep working", status: "active", tokenBudget: null,
+      tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1,
+    } });
+    await expect(driver(harness).releaseConversationResidency(attachInput())).resolves.toBe("busy");
+    expect(harness.calls.some(call => call.method === "thread/unsubscribe")).toBe(false);
+  });
+
+  it("does not detach a locally owned conversation", async () => {
+    const harness = new RpcHarness();
+    const selected = driver(harness);
+    const handle = await selected.attach(attachInput());
+    await expect(selected.releaseConversationResidency(attachInput())).resolves.toBe("busy");
+    expect(harness.calls).toEqual([]);
+    await handle.close();
+  });
+
+  it("propagates unsubscribe failure instead of reporting refreshed policy", async () => {
+    const harness = new RpcHarness();
+    harness.enqueue("thread/read", { thread: nativeThread() }, { thread: nativeThread() });
+    harness.enqueue("thread/goal/get", { goal: null });
+    harness.enqueue("thread/unsubscribe", new CodexRpcDeliveryError({
+      code: "carrier_closed", delivery: "sent_outcome_unknown", generation: 1, method: "thread/unsubscribe",
+    }));
+    await expect(driver(harness).releaseConversationResidency(attachInput())).rejects.toMatchObject({
+      category: "unavailable", backendCode: "carrier_closed",
+    });
+    expect(harness.retirements).toEqual([]);
+  });
+
+  it("rejects a generation change during release", async () => {
+    const harness = new RpcHarness();
+    harness.enqueue("thread/read", { thread: nativeThread() }, { thread: nativeThread() });
+    harness.enqueue("thread/goal/get", { goal: null });
+    harness.after("thread/goal/get", () => harness.lifecycle("ready", 2));
+    await expect(driver(harness).releaseConversationResidency(attachInput())).rejects.toMatchObject({
+      backendCode: "codex_residency_release_generation_changed",
+    });
+    expect(harness.calls.some(call => call.method === "thread/unsubscribe")).toBe(false);
+  });
+
+  it("checks principal and native thread identity before unsubscribing", async () => {
+    const harness = new RpcHarness();
+    const selected = driver(harness);
+    await expect(selected.releaseConversationResidency({ ...attachInput(), scope: { ...scope, principalId: "foreign" } })).rejects.toBeInstanceOf(BackendError);
+    expect(harness.calls).toEqual([]);
+    harness.enqueue("thread/read", { thread: nativeThread({ id: "foreign-thread" }) });
+    await expect(selected.releaseConversationResidency(attachInput())).rejects.toBeInstanceOf(BackendError);
+    expect(harness.calls.some(call => call.method === "thread/unsubscribe")).toBe(false);
+  });
+});

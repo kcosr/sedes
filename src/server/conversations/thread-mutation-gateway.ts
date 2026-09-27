@@ -41,6 +41,7 @@ import type { ThreadAgentToolPolicyRepository } from "../db/repositories/thread-
 import type { ToolInitiator } from "../agent-tools/contracts/tool-initiator.js";
 import { ThreadCompletionCallbackRepository } from "../db/repositories/thread-completion-callback-repository.js";
 import {
+  ThreadProviderOutputUndeliveredError,
   ThreadRuntimeNotIdleError,
   ThreadRuntimeRetirementUnprovenError,
 } from "../events/thread-runtime-coordinator.js";
@@ -2839,6 +2840,9 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           scope,
           applicationThreadId,
           async () => {
+            await this.input.runtimes.releaseProviderResidency(
+              scope, applicationThreadId, { failurePolicy: "propagate" },
+            );
             return this.input.agentToolPolicies.update(
               scope,
               applicationThreadId,
@@ -2858,6 +2862,14 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           throw new DomainError(
             "invalid_transition",
             "Agent tool exposure can change only while the thread is idle.",
+            false,
+            { cause: error },
+          );
+        }
+        if (error instanceof ThreadProviderOutputUndeliveredError) {
+          throw new DomainError(
+            "invalid_transition",
+            "The thread has agent output that Sedes could not apply yet. Open the thread so its output is applied, then change agent tool exposure.",
             false,
             { cause: error },
           );

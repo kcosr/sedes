@@ -58,6 +58,7 @@
     "verify:codex-runtime": "tsx scripts/codex-probes/verify-runtime-compatibility.ts",
     "probe:codex-release": "node scripts/codex-probes/probe-release.mjs",
     "probe:codex-d1": "node scripts/codex-probes/probe-d1-empty-thread.mjs",
+    "probe:codex-tool-refresh": "node scripts/codex-probes/probe-tool-refresh.mjs",
     "probe:codex-d2a": "node scripts/codex-probes/probe-d2a-mcp-isolation.mjs",
     "install:server": "node scripts/install-server.mjs",
     "uninstall:server": "node scripts/install-server.mjs --uninstall",

@@ -36,6 +36,24 @@ function fixture(answer: (method: string, params: Record<string, unknown>) => un
 }
 
 describe("persistent Codex native session recovery", () => {
+  it("requires native resume after unsubscribe without invalidating a sibling session", async () => {
+    const f = fixture((_method, params) => ({ thread: thread(String(params.threadId)) }));
+    f.sessions.observeResult("thread/resume", resumed(), 1);
+    f.sessions.observeResult("thread/resume", { ...resumed(), thread: thread("sibling") }, 1);
+    f.sessions.evict("thread", 1);
+    f.sessions.unsubscribe("thread", 1);
+    expect(await f.sessions.reattach("thread", { timeoutMilliseconds: 1_000 })).toBeUndefined();
+    expect(f.request).not.toHaveBeenCalled();
+    expect((await f.sessions.reattach("sibling", { timeoutMilliseconds: 1_000 }))?.result.thread.id).toBe("sibling");
+  });
+
+  it("does not discard current subscription metadata for an older unsubscribe", () => {
+    const f = fixture(() => ({}));
+    f.sessions.observeResult("thread/resume", resumed(), 1);
+    f.sessions.unsubscribe("thread", 0);
+    expect(f.sessions.hasCurrent("thread")).toBe(true);
+  });
+
   it.each(["turn/started", "turn/completed"] as const)("applies newer %s evidence after an in-flight resume response", method => {
     const f = fixture(() => ({}));
     const pending = f.sessions.trackResume("thread", 1);

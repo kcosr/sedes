@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializeEmptyBackendNormalizedDatabase } from "../../src/server/db/migrate.js";
 import { CodexRuntimeClient } from "../../src/server/backends/codex/runtime/codex-runtime-client.js";
 import { CodexRuntimeReceiptStore } from "../../src/server/backends/codex/runtime/codex-runtime-receipt-store.js";
-import { codexRuntimeMethod, type CodexRuntimeAuthority, type CodexRuntimeConnection, type CodexRuntimeEvent, type CodexRuntimeOutcome } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
+import { CODEX_RUNTIME_PROTOCOL_VERSION, codexRuntimeMethod, type CodexRuntimeAuthority, type CodexRuntimeConnection, type CodexRuntimeEvent, type CodexRuntimeOutcome } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
 import { CodexRpcRemoteError, codexSteerRejectionReason } from "../../src/server/backends/codex/rpc/errors.js";
 
 const authority: CodexRuntimeAuthority = { scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "backend" }, runtimeId: "runtime", controllerId: "controller" };
@@ -27,7 +27,7 @@ function fixture(message = "no active turn to steer", code = -32600) {
     return latest;
   });
   const connection: CodexRuntimeConnection = {
-    attach: async (_, receive) => { listener = receive; return { protocolVersion: 1, runtimeId: authority.runtimeId,
+    attach: async (_, receive) => { listener = receive; return { protocolVersion: CODEX_RUNTIME_PROTOCOL_VERSION, runtimeId: authority.runtimeId,
       lifecycle: { state: "ready", generation: 1 }, runtimeAssessment: null, pendingRequests: [], outcomes: [] }; },
     evictThread: async () => {},
     detach: async () => {}, submit, acknowledge, outcome: async () => latest,

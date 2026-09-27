@@ -54,8 +54,12 @@ The agent learns about added tools on its next discovery request, not through
 an automatic message.
 
 Native-tool policy and all surface/mode changes require an idle thread and
-runtime retirement. Native presentation keeps its tool list for the Pi turn or
-the Codex or Claude provider session; every invocation still rechecks policy.
+runtime retirement. Before saving a bound thread's policy, Sedes also releases
+its provider residency, even when no local runtime is attached. Resolution or
+provider-release failures leave the policy unchanged; busy work or unapplied
+provider output blocks the change. Native presentation keeps its tool list for
+the Pi turn or the Codex or Claude provider session; every invocation still
+rechecks policy.
 
 ## Principal Tool clients
 
@@ -302,8 +306,13 @@ Injection is per thread and never changes operator configuration:
   cancel a pending access approval. The shell policy still strips every Sedes
   variable. The server lives while Codex keeps the thread loaded; a resume
   that carries config rebuilds an idle, unsubscribed loaded thread with the
-  current entry. Runtime request fingerprints record only the entry's
-  variable names.
+  current entry. Tool-policy retirement unsubscribes Sedes and invalidates the
+  persistent runtime's cached attach metadata (Codex runtime protocol 2).
+  Unsubscribe does not immediately unload the native thread or stop its MCP
+  process; reconstruction happens on the next configuration-bearing resume.
+  Another external client subscribed to the same native thread can prevent
+  reconstruction, so close that client's thread before changing presentation.
+  Runtime request fingerprints record only the entry's variable names.
 - **Claude** receives `mcpServers.sedes` on the query beside the servers its
   setting sources load. The Agent SDK passes MCP servers to the CLI as a
   `--mcp-config` argument that other local users can read, so the entry names
@@ -689,10 +698,11 @@ retry. Live provider and skill gates remain separately opt-in.
   Grok SSH target, no Pi remote CLI, and no surface or transport fallback.
 - Missing CLI or sidecar admission disables agent tools for that presentation;
   it does not disable ordinary provider conversation capabilities.
-- Native policy and surface/mode changes wait for idle. For a bound thread, Sedes proves the complete
-  provider runtime retired before committing the new policy, so the next
-  attach reconstructs Pi, Codex, Claude, or Grok presentation state and CLI
-  environment from one current policy instead of retaining a stale mode.
+- Native policy and surface/mode changes wait for idle. For a bound thread, Sedes retires its local runtime and releases its provider residency before
+  committing the new policy. The next attach reconstructs presentation state
+  and the CLI environment from the current policy. Codex reconstruction also
+  requires other external clients to unsubscribe from that native thread;
+  Sedes does not disconnect those clients or restart their shared app-server.
 
 Contract generation and opt-in live skill gates are documented in
 [Development](../developer/development.md).

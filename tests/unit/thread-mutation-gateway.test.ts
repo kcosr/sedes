@@ -9,6 +9,7 @@ import { threadAgentToolPolicyRepository } from "../support/thread-agent-tool-po
 import { DomainError } from "../../src/server/domain/errors.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 import {
+  ThreadProviderOutputUndeliveredError,
   ThreadRuntimeNotIdleError,
   ThreadRuntimeRetirementUnprovenError,
 } from "../../src/server/events/thread-runtime-coordinator.js";
@@ -4991,6 +4992,7 @@ function agentToolPolicyMutationFixture(input: {
   readonly uncertain?: boolean;
   readonly updateError?: Error;
   readonly retirementUnproven?: boolean;
+  readonly providerReleaseError?: Error;
 }) {
   const lifecycle: string[] = [];
   const database = {
@@ -5052,6 +5054,10 @@ function agentToolPolicyMutationFixture(input: {
       return result;
     },
   );
+  const releaseProviderResidency = vi.fn(async () => {
+    lifecycle.push("provider_released");
+    if (input.providerReleaseError) throw input.providerReleaseError;
+  });
   const publishThreadSnapshot = vi.fn(async () => undefined);
   const gateway = new ThreadMutationGateway({
     bindings: { database } as never,
@@ -5082,7 +5088,7 @@ function agentToolPolicyMutationFixture(input: {
     } as never,
     completions: { database } as never,
     queueGateway: {} as never,
-    runtimes: { runWithRuntimeRetired } as never,
+    runtimes: { runWithRuntimeRetired, releaseProviderResidency } as never,
     interactions: {} as never,
     presentation: {} as never,
     agentToolPolicies,
@@ -5106,6 +5112,7 @@ function agentToolPolicyMutationFixture(input: {
     operation,
     update,
     runWithRuntimeRetired,
+    releaseProviderResidency,
     lifecycle,
     publishThreadSnapshot,
   };
@@ -5206,6 +5213,7 @@ describe("ThreadMutationGateway agent-tool policy", () => {
       );
       expect(subject.lifecycle).toEqual([
         "runtime_retired",
+        "provider_released",
         "policy_updated",
         "retirement_released",
       ]);
@@ -5215,6 +5223,38 @@ describe("ThreadMutationGateway agent-tool policy", () => {
       );
     },
   );
+
+  it.each([
+    { error: new ThreadRuntimeNotIdleError(), code: "invalid_transition" },
+    { error: new ThreadProviderOutputUndeliveredError(), code: "invalid_transition" },
+    { error: new ThreadRuntimeRetirementUnprovenError(new Error("lost acknowledgement")), code: "operation_outcome_uncertain" },
+    { error: new DomainError("runtime_unavailable", "Provider unavailable."), code: "runtime_unavailable" },
+  ])("leaves policy unchanged when provider release fails with $code", async ({ error, code }) => {
+    const subject = agentToolPolicyMutationFixture({ providerReleaseError: error });
+    await expect(subject.gateway.mutate(scope, "thread-1", subject.operation)).rejects.toMatchObject({ code });
+    expect(subject.releaseProviderResidency).toHaveBeenCalledExactlyOnceWith(scope, "thread-1", { failurePolicy: "propagate" });
+    expect(subject.update).not.toHaveBeenCalled();
+    expect(subject.publishThreadSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ surface: "native", mode: "individual" }, { surface: "native", mode: "individual" }],
+    [{ surface: "native", mode: "individual" }, { surface: "native", mode: "progressive" }],
+    [{ surface: "native", mode: "individual" }, { surface: "cli", mode: "individual" }],
+    [{ surface: "cli", mode: "individual" }, { surface: "native", mode: "individual" }],
+    [{ surface: "cli", mode: "individual" }, { surface: "cli", mode: "progressive" }],
+  ] as const)("releases provider residency before applying %j to %j", async (before, after) => {
+    const subject = agentToolPolicyMutationFixture({ presentation: before });
+    await subject.gateway.mutate(scope, "thread-1", { ...subject.operation, presentation: after });
+    expect(subject.lifecycle).toEqual(["runtime_retired", "provider_released", "policy_updated", "retirement_released"]);
+  });
+
+  it("does not release the provider for live CLI grant changes", async () => {
+    const subject = agentToolPolicyMutationFixture({ runState: "running", presentation: { surface: "cli", mode: "individual" } });
+    await subject.gateway.mutate(scope, "thread-1", subject.operation);
+    expect(subject.releaseProviderResidency).not.toHaveBeenCalled();
+    expect(subject.update).toHaveBeenCalledOnce();
+  });
 
   it("allows an unbound idle draft without retiring a runtime", async () => {
     const subject = agentToolPolicyMutationFixture({ backingState: "unbound" });

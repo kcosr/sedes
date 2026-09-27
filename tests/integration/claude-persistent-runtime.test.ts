@@ -1,3 +1,8 @@
+import { ClaudeConversationBackendDriver } from "../../src/server/backends/claude/claude-conversation-driver.js";
+import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
+import { ScopedThreadEventHubRegistry, ThreadRuntimeCoordinator } from "../../src/server/events/thread-runtime-coordinator.js";
+import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import type { EnvironmentVariableOverrides } from "../../src/shared/protocol/environment-variables.js";
 import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
 import { randomUUID } from "node:crypto";
@@ -105,6 +110,56 @@ function sessionOptions(sessionId: string, overrides: Partial<ClaudeRuntimeSessi
   return { executablePath: configuration.executablePath, initializationTimeoutMs: 5_000,
     sessionId, cwd: "/workspace", launch: "new", environment: {}, onMessage: vi.fn(), ...overrides };
 }
+/** No Sedes actor is loaded: policy maintenance must reach the retained host query. */
+function policyRefreshGateway(client: ClaudePersistentRuntimeClient, sessionId: string,
+  initial: { enabled: boolean; enabledToolIds: readonly string[]; presentation: { surface: "native" | "cli"; mode: "individual" | "progressive" } }) {
+  const threadId = "policy-thread";
+  const binding = { tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
+    applicationThreadId: threadId, backendInstanceId: scope.backendInstanceId,
+    connectionProfileId: "profile", executionEnvironmentId: scope.executionEnvironmentId,
+    backendConversationId: sessionId };
+  const workspace = { authorityRevision: 1, canonicalPath: "/workspace",
+    summary: { id: "workspace", environmentId: scope.executionEnvironmentId } };
+  const driver = new ClaudeConversationBackendDriver({
+    usage: NO_USAGE_SINK, nativeNamespace: "test", runtimeClient: client,
+    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "claude_agent_sdk" },
+    connection: { id: "profile", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
+      kind: "claude_agent_sdk", backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId },
+    executablePath: configuration.executablePath, initializationTimeoutMs: 5_000, probeDirectory: "/workspace",
+    settings: {}, permissionPolicy: { allowedModes: ["default"] },
+    modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"),
+    attachmentProvenanceKey: new Uint8Array(32).fill(1), toolProvenanceKey: new Uint8Array(32).fill(2),
+    outputArtifacts: {}, agentToolSourceCapabilities: {}, agentTools: {}, childEnvironment: {},
+  } as unknown as ConstructorParameters<typeof ClaudeConversationBackendDriver>[0]);
+  const coordinator = new ThreadRuntimeCoordinator({
+    actors: { runWithRuntimeRetired: async (input: Parameters<import("../../src/server/conversations/conversation-actor-manager.js").ConversationActorManager["runWithRuntimeRetired"]>[0]) => { await input.detachCoordinatorRuntime(); return input.operation(); } },
+    targets: { resolve: async () => ({ scope, binding, workspace, driver,
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) }) },
+    bridge: {}, interactions: {}, hubs: new ScopedThreadEventHubRegistry(), retentionMilliseconds: 60_000,
+  } as unknown as ConstructorParameters<typeof ThreadRuntimeCoordinator>[0]);
+  let policy = { ...initial, accessBoundary: "environment" as const, revision: 1 };
+  const database = { prepare: () => ({ get: () => undefined }) };
+  const update = vi.fn((_scope, _threadId, input) => {
+    expect(input.expectedRevision).toBe(policy.revision);
+    policy = { ...policy, enabled: input.enabled, enabledToolIds: input.enabledToolIds,
+      presentation: input.presentation, revision: policy.revision + 1 };
+    return policy;
+  });
+  const gateway = new ThreadMutationGateway({
+    bindings: { database }, inventory: { database, assertWorkspaceActive: () => {},
+      getThread: () => ({ thread: { availability: "available", backingState: "bound" }, inventory: { inventoryState: "active" } }) },
+    lifecycle: {}, forks: { recoverActive: () => undefined }, queue: {},
+    operations: { database, findUncertainThreadOperation: () => undefined }, completions: { database },
+    queueGateway: {}, runtimes: coordinator, interactions: {}, presentation: {},
+    agentToolPolicies: { database, get: () => policy, update }, actionPersistence: new Map(), publishThreadSnapshot: async () => {},
+  } as unknown as ConstructorParameters<typeof ThreadMutationGateway>[0]);
+  cleanups.push(async () => { await coordinator.close(); await driver.close(); });
+  return { update, policy: () => policy, mutate: async (next: typeof initial) => gateway.mutate(scope, threadId, {
+    kind: "set_agent_tool_policy", mutationId: randomUUID(), expectedPolicyRevision: policy.revision,
+    ...next, enabledToolIds: [...next.enabledToolIds], accessBoundary: "environment",
+  }) };
+}
+
 function delta(sessionId: string, text: string): SDKMessage {
   return { type: "stream_event", uuid: randomUUID(), session_id: sessionId, parent_tool_use_id: null,
     event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } } };
@@ -128,6 +183,57 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     endpoint: "unix:///run/user/1000/sedes/agent-tools.sock",
     sourceCapability: "m".repeat(48),
   };
+
+  it.each([
+    { name: "enabling Native tools", before: { enabled: false, enabledToolIds: [] as string[], presentation: { surface: "native", mode: "individual" } }, after: { enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "native", mode: "individual" } } },
+    { name: "changing Native tool IDs", before: { enabled: true, enabledToolIds: ["agent.context"], presentation: { surface: "native", mode: "individual" } }, after: { enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "native", mode: "individual" } } },
+    { name: "switching Native to CLI", before: { enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "native", mode: "individual" } }, after: { enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "cli", mode: "individual" } } },
+    { name: "switching CLI to Native", before: { enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "cli", mode: "individual" } }, after: { enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "native", mode: "individual" } } },
+    { name: "changing Native mode", before: { enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "native", mode: "individual" } }, after: { enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "native", mode: "progressive" } } },
+  ] as const)("retires a detached persistent query before $name", async ({ before, after }) => {
+    const f = await fixture({ validateAgentToolMcp: () => {} });
+    const carrier = await f.attach();
+    const first = f.client();
+    const id = randomUUID();
+    const options = (policy: typeof before | typeof after) => sessionOptions(id, policy.presentation.surface === "native"
+      ? { agentToolMcp: { ...agentToolMcp, mode: policy.presentation.mode } }
+      : { environment: { SEDES_AGENT_TOOL_CLI_MODE: policy.presentation.mode, SEDES_AGENT_TOOL_ENDPOINT: agentToolMcp.endpoint, SEDES_AGENT_TOOL_SOURCE_CAPABILITY: agentToolMcp.sourceCapability, PATH: "/remote/sedes/sidecar:/usr/bin" } });
+    await first.createSession(options(before)).start();
+    const original = f.sessions[0]!;
+    await carrier.close();
+    expect(original.closed).toBe(false);
+    await f.attach();
+    const replacement = f.client();
+    const refresh = policyRefreshGateway(replacement, id, before);
+    await refresh.mutate(after);
+    expect(original.close).toHaveBeenCalledOnce();
+    expect(original.close.mock.invocationCallOrder[0]).toBeLessThan(refresh.update.mock.invocationCallOrder[0]!);
+    await replacement.createSession(options(after)).start();
+    expect(f.sessions).toHaveLength(2);
+    expect(f.sessions[1]!.options.agentToolMcp?.mode).toBe(after.presentation.surface === "native" ? after.presentation.mode : undefined);
+    expect(refresh.policy()).toMatchObject({ ...after, revision: 2 });
+  });
+
+  it.each(["busy", "failure"] as const)("keeps policy unchanged when a detached persistent query release reports %s", async failure => {
+    const f = await fixture({ validateAgentToolMcp: () => {} });
+    const carrier = await f.attach();
+    const id = randomUUID();
+    const active = f.client().createSession(sessionOptions(id, { agentToolMcp }));
+    await active.start();
+    if (failure === "busy") await active.send({ operationId: randomUUID(), content: "Still running" });
+    await carrier.close();
+    await f.attach();
+    const replacement = f.client();
+    if (failure === "failure") vi.spyOn(replacement, "retireSession").mockRejectedValueOnce(new Error("lost release response"));
+    const before = { enabled: false, enabledToolIds: [], presentation: { surface: "native", mode: "individual" } } as const;
+    const refresh = policyRefreshGateway(replacement, id, before);
+    await expect(refresh.mutate({ ...before, enabled: true, enabledToolIds: ["thread.status"] })).rejects.toMatchObject({
+      code: failure === "busy" ? "invalid_transition" : "operation_outcome_uncertain",
+    });
+    expect(refresh.update).not.toHaveBeenCalled();
+    expect(refresh.policy()).toMatchObject({ ...before, revision: 1 });
+    expect(f.sessions[0]!.closed).toBe(false);
+  });
 
   it("admits a Native MCP server only through the sidecar's own validator", async () => {
     const open = (
