@@ -194,6 +194,14 @@ export class GrokPromptOutcomeUnknownError extends Error {
   }
 }
 
+/** Only the session/cancel transport write can prove this Stop was not sent. */
+export class GrokInterruptNotSentError extends Error {
+  constructor(cause: AcpDeliveryError) {
+    super("grok_interrupt_not_sent", { cause });
+    this.name = "GrokInterruptNotSentError";
+  }
+}
+
 /** Provider-private lifecycle for one production-owned Grok ACP generation. */
 export class GrokSessionLifecycle {
   readonly #owner: GrokSessionLifecycleOwner;
@@ -771,10 +779,17 @@ export class GrokSessionLifecycle {
     if (prompt.liveTerminal) return;
     const interrupt = (async () => {
       budget?.dispatch();
-      await this.connection.cancelSession({ sessionId }, budget ? {
-        cancellationSignal: budget.signal,
-        deadlineMilliseconds: Math.min(30_000, budget.remainingMilliseconds()),
-      } : undefined);
+      try {
+        await this.connection.cancelSession({ sessionId }, budget ? {
+          cancellationSignal: budget.signal,
+          deadlineMilliseconds: Math.min(30_000, budget.remainingMilliseconds()),
+        } : undefined);
+      } catch (cause) {
+        if (cause instanceof AcpDeliveryError && cause.delivery === "not_sent") {
+          throw new GrokInterruptNotSentError(cause);
+        }
+        throw cause;
+      }
       const result = await (budget ? budget.wait(prompt.completion!) : prompt.completion!);
       budget?.remainingMilliseconds();
       if (result.promptId !== promptId || result.response.stopReason !== "cancelled") {

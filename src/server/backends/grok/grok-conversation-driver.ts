@@ -132,6 +132,7 @@ import {
   grokRuntimeIncompatibilityCode,
 } from "./grok-release-guard.js";
 import {
+  GrokInterruptNotSentError,
   GrokPromptOutcomeUnknownError,
   GrokSessionLifecycle,
 } from "./grok-session-lifecycle.js";
@@ -3131,6 +3132,15 @@ function mapSubmissionError(
 }
 
 function mapInterruptError(error: unknown, dispatched: boolean): BackendError {
+  if (error instanceof GrokInterruptNotSentError) {
+    return grokError(
+      "unavailable",
+      "Grok was unavailable before the interrupt was sent.",
+      "grok_interrupt_not_sent",
+      true,
+      error,
+    );
+  }
   // Errors while waiting for prompt completion describe that separate RPC,
   // not whether the already-dispatched session/cancel took effect.
   if (dispatched) return interruptOutcomeUnknown(error);

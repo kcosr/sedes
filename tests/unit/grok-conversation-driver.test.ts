@@ -21,7 +21,8 @@ import {
 } from "../../src/server/backends/contracts.js";
 import { GrokConversationBackendDriver } from "../../src/server/backends/grok/grok-conversation-driver.js";
 import { GrokSessionLifecycle } from "../../src/server/backends/grok/grok-session-lifecycle.js";
-import { AcpBindingError } from "../../src/server/provider-protocol/bindings/acp-v1/index.js";
+import { GrokAcpConnection } from "../../src/server/backends/grok/grok-acp-connection.js";
+import { AcpBindingError, AcpDeliveryError } from "../../src/server/provider-protocol/bindings/acp-v1/index.js";
 import {
   parseGrokConversationBindingDetail,
   serializeGrokConversationBindingDetail,
@@ -2008,8 +2009,34 @@ describe("normalized Grok conversation driver", () => {
     }
   }, 30_000);
 
-  it.each(["acp_binding_protocol_violation", "acp_binding_capability_denied", "acp_binding_overloaded"] as const)(
-    "retains uncertain Stop evidence when a post-cancel continuation fails with %s", async code => {
+  it("retains proven nonapplication when the actual cancel write is not sent, without replaying it", async () => {
+    const sessionId = "bbbbbbbb-3535-4353-8353-454545454545";
+    const fixtureState = await openDriver([{ ...session(sessionId, "Cancel not sent"), promptDelayMs: 30_000 }]);
+    const handle = await fixtureState.driver.attach({ scope, workspace: fixtureState.workspace,
+      binding: conversationBinding(sessionId), opaqueBindingDetail: fixtureState.bindingDetail(sessionId) });
+    const cancel = vi.spyOn(GrokAcpConnection.prototype, "cancelSession")
+      .mockRejectedValueOnce(new AcpDeliveryError("acp_binding_closed", "not_sent"));
+    try {
+      await handle.submit(submitInput());
+      const input = { applicationOperationId: "cancel-not-sent", deadlineAt: Date.now() + 30_000 };
+      await expect(handle.interrupt(input)).rejects.toMatchObject({ category: "unavailable", crossedSubmissionBoundary: false, backendCode: "grok_interrupt_not_sent" });
+      await expect(handle.reconcileInterrupt(input)).resolves.toEqual({ outcome: "not_applied" });
+      await expect(handle.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect((await readState(fixtureState.workspace.canonicalPath)).sessions[0].cancelCalls ?? 0).toBe(0);
+
+      cancel.mockRestore();
+      await expect(handle.interrupt({ ...input, applicationOperationId: "fresh-stop" })).resolves.toBeUndefined();
+      expect((await readState(fixtureState.workspace.canonicalPath)).sessions[0].cancelCalls).toBe(1);
+    } finally { cancel.mockRestore(); await handle.close().catch(() => undefined); await fixtureState.close(); }
+  });
+
+  it.each([
+    ...(["acp_binding_protocol_violation", "acp_binding_capability_denied", "acp_binding_overloaded"] as const)
+      .map(code => ({ name: code, failure: new AcpBindingError(code) })),
+    { name: "completion delivery not_sent", failure: new AcpDeliveryError("acp_binding_closed", "not_sent") },
+  ])(
+    "retains uncertain Stop evidence when a post-cancel continuation fails with $name", async ({ failure }) => {
       const sessionId = "bbbbbbbb-3434-4343-8343-454545454545";
       const fixtureState = await openDriver([{ ...session(sessionId, "Post-cancel failure"), promptDelayMs: 30_000 }]);
       const handle = await fixtureState.driver.attach({ scope, workspace: fixtureState.workspace,
@@ -2019,7 +2046,7 @@ describe("normalized Grok conversation driver", () => {
       // caller-facing continuation. The error class is no proof of non-dispatch.
       const failing = vi.spyOn(GrokSessionLifecycle.prototype, "interruptPrompt").mockImplementation(async function (this: GrokSessionLifecycle, ...arguments_) {
         await interrupt.apply(this, arguments_);
-        throw new AcpBindingError(code);
+        throw failure;
       });
       try {
         await handle.submit(submitInput());
