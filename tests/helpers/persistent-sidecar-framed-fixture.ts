@@ -39,11 +39,11 @@ export async function createSidecarFramedCarrier() {
   let closePromise: Promise<void> | undefined;
   return {
     mainPeer, hostPeer, mainChannel, hostChannel, mainRegistry, hostRegistry,
-    async start() {
+    async start(options: Pick<Parameters<typeof registerControlV2Operations>[1], "prepareSedesCapabilities"> = {}) {
       const capabilities = hostRegistry.capabilities().map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion }));
       registerControlV2Operations(hostRegistry, {
         buildId: "persistent-runtime-test", artifactSha256: "a".repeat(64),
-        enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: mainRegistry.capabilities(),
+        enabledSidecarCapabilities: capabilities, enabledSedesCapabilities: mainRegistry.capabilities(), ...options,
       });
       mainPeer.start(); hostPeer.start();
       await mainPeer.call(controlHelloOperation, {

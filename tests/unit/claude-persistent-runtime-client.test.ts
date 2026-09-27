@@ -32,7 +32,7 @@ function setup(input: { nativeDefault?: boolean; supportsRuntime?: boolean } = {
     const lost = deferred<void>(); const release = vi.fn(); carriers.push({ lost, release });
     return { channel: { assertReady: vi.fn(), supportsOperation: () => input.supportsRuntime !== false } as unknown as SidecarRuntimeChannel, controllerEpoch: carriers.length, serviceIncarnation: "service", closed: lost.promise, release };
   });
-  const client = new ClaudePersistentRuntimeClient({ scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "claude" }, sidecarRuntime: { acquire }, executablePath: "/bin/claude", ...(input.nativeDefault ? {} : { configDirectory: "/config" }), initializationTimeoutMs: 1000 });
+  const client = new ClaudePersistentRuntimeClient({ scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "claude" }, sidecarRuntime: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire }, executablePath: "/bin/claude", ...(input.nativeDefault ? {} : { configDirectory: "/config" }), initializationTimeoutMs: 1000 });
   const options: ClaudeRuntimeSessionOptions = { executablePath: "/bin/claude", initializationTimeoutMs: 1000, sessionId: SESSION_ID, cwd: "/work", launch: "new", environment: {}, onMessage: vi.fn() };
   return { client, acquire, carriers, options };
 }

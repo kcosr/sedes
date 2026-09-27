@@ -73,7 +73,21 @@ export function registerOpenCodeRuntimeHost(input: {
           input.services.assertAdmission(input.controllerEpoch);
           if (!command.configuration.instance.enabled || !command.configuration.connections.some(connection => connection.enabled)) throw denied();
         }
-        runtimes.set(runtime.runtimeId, recovery ? "recovery" : "attached"); return runtimeInfo(runtime);
+        // An existing-only borrower shares this channel with normal clients.
+        // It cannot revoke their prior admission; its own port remains narrow.
+        if (!recovery || runtimes.get(runtime.runtimeId) !== "attached") runtimes.set(runtime.runtimeId, recovery ? "recovery" : "attached");
+        return runtimeInfo(runtime);
+      }
+      case "tools_admit": {
+        input.services.assertAdmission(input.controllerEpoch);
+        if (runtimes.get(command.runtimeId) !== "attached") throw denied();
+        const runtime = input.hosts.getRuntime(command.runtimeId);
+        if (runtime.snapshot().generation !== command.nativeGeneration) throw denied();
+        const host = runtime.nativeHost;
+        if (!host) throw denied();
+        const port = host.acquireRetained(command.target);
+        try { return await runtime.admitToolSession(command.target, command.admission, signal); }
+        finally { host.release(port); }
       }
       case "lookup_retained": {
         const runtime = await input.hosts.lookupRetained(command.backendInstanceId, input.controllerEpoch);
@@ -136,7 +150,7 @@ export function registerOpenCodeRuntimeHost(input: {
     if (command.action === "assert_current") { await runtime.assertCurrent(); return { ok: true }; }
     if (command.action === "acquire" || command.action === "acquire_retained") {
       const recovery = command.action === "acquire_retained";
-      if (recovery ? runtimes.get(command.runtimeId) !== "recovery" : runtimes.get(command.runtimeId) !== "attached") throw denied();
+      if (!recovery && runtimes.get(command.runtimeId) !== "attached") throw denied();
       if (!recovery) input.services.assertAdmission(input.controllerEpoch);
       if (ports.size >= 4_096) throw denied();
       const host = input.hosts.get(command.runtimeId), port = recovery ? host.acquireRetained(command.target) : host.acquire(command.target), portId = randomUUID();

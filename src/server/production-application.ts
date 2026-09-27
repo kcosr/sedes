@@ -795,6 +795,14 @@ export async function startProductionApplication(
             agentToolSourceCapabilities: agentToolSources, agentToolCli: cli,
             ...(environmentRuntimes.get(environmentId)?.sidecarRuntime ? {
               sidecarRuntime: {
+                async acquireExisting(signal = new AbortController().signal) {
+                  const owner = environmentRuntimes.get(environmentId)!.sidecarRuntime!;
+                  const lease = await owner.acquireExisting(scope, environmentId, signal);
+                  return {channel: lease.session.runtimeChannel,
+                    controllerEpoch: lease.serviceStatus.controllerEpoch,
+                    serviceIncarnation: lease.serviceStatus.serviceIncarnation,
+                    closed: lease.session.closed, release: () => lease.release()};
+                },
                 async acquire(signal = new AbortController().signal, options = {}) {
                   const owner = environmentRuntimes.get(environmentId)!.sidecarRuntime!;
                   const lease = options.existingOnly

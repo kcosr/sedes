@@ -9,6 +9,7 @@ import { OpenCodeHttpNativeAdapter } from "../../src/server/backends/opencode/op
 import { OpenCodeNativeHost } from "../../src/server/backends/opencode/opencode-native-host.js";
 import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 import { openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
+import type { OpenCodeToolInvocationStamp } from "../../src/server/backends/opencode/opencode-tool-invocation.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" }, executionEnvironmentId = "environment";
 const serviceConfiguration = { environmentRevision: 1, operationsRevision: 1 };
@@ -29,6 +30,12 @@ function fixture(createHost?: (runtimeId: string) => OpenCodeNativeHost) {
     readonly runtimeId = randomUUID();
     readonly liveHost = createHost?.(this.runtimeId);
     generation = "native-generation";
+    readonly cliCapabilities = new Map<string, OpenCodeToolInvocationStamp>();
+    ownsCliCapability(capability: string) { return this.cliCapabilities.has(capability); }
+    captureCliInvocation(capability: string) {
+      if (this.state !== "ready") throw new Error("runtime unavailable");
+      return this.cliCapabilities.get(capability);
+    }
     state: OpenCodeRuntimeSnapshot["state"] = "stopped";
     frozen = false; revision = 0; retained = 0; active: number | null = null; interactions: number | null = null;
     startPromise?: Promise<void>;
@@ -72,6 +79,29 @@ function fixture(createHost?: (runtimeId: string) => OpenCodeNativeHost) {
 }
 
 describe("resident OpenCode runtime registry", () => {
+  it("captures a known CLI route without controller admission or capability decoding", async () => {
+    const f = fixture(); const runtime = await f.hosts.ensure(configuration, f.epoch), owner = f.owners[0]!;
+    const stamp: OpenCodeToolInvocationStamp = { authority: { ...scope, executionEnvironmentId,
+      backendInstanceId: "backend", runtimeId: runtime.runtimeId, nativeGeneration: "generation", directory: "/workspace",
+      session: { applicationThreadId: "thread", nativeSessionID: "ses_fixture", bindingFingerprint: "binding" } },
+      journalId: "journal", throughSequence: 2, nativeContinuity: "continuity", inputId: "msg_input", authorityEpoch: 1, nativeConnected: true };
+    owner.cliCapabilities.set("opaque-capability", stamp);
+    f.services.detach(f.epoch);
+    expect(f.hosts.captureCliInvocation("opaque-capability")).toBe(stamp);
+    expect(f.hosts.captureCliInvocation("unknown-capability")).toBeUndefined();
+    owner.state = "disconnected";
+    expect(() => f.hosts.captureCliInvocation("opaque-capability")).toThrow("runtime unavailable");
+    expect(f.controls.created).toHaveBeenCalledOnce();
+  });
+
+  it("denies duplicate CLI capabilities across resident runtimes without choosing a route", async () => {
+    const f = fixture(); await f.hosts.ensure(configuration, f.epoch);
+    await f.hosts.ensure({ ...configuration, instance: { ...configuration.instance, id: "other-backend" },
+      connections: [{ ...configuration.connections[0]!, backendInstanceId: "other-backend" }], nativeStorePath: "/native/other.db" }, f.epoch);
+    for (const owner of f.owners) owner.cliCapabilities.set("duplicate-capability", {} as OpenCodeToolInvocationStamp);
+    expect(() => f.hosts.captureCliInvocation("duplicate-capability")).toThrow("scope_denied");
+  });
+
   it("shares startup, makes lookup existing-only and preserves startup definitions until retirement", async () => {
     const f = fixture(); expect(await f.hosts.lookup(configuration, f.epoch)).toBeUndefined(); expect(f.controls.created).not.toHaveBeenCalled();
     f.controls.beforeLaunch = deferred();

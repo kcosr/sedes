@@ -3,12 +3,20 @@ import type { AgentToolSourceCapabilityIssuer, AgentToolSourceCapabilityTranspor
 import { BackendAgentToolRequestError, type BackendAgentToolAccessDecisionAuthority,
   type BackendAgentToolFacade, type TrustedAgentToolSource } from "../../agent-tools/adapters/backend-facade.js";
 import { openCodeRuntimeTarget, requireOpenCodeBinding, type OpenCodeConversationRuntime, type OpenCodeDriverContext } from "./opencode-conversation-context.js";
-import { findOpenCodeInputObserver } from "./opencode-input-observer.js";
+import { acquireOpenCodeInputObserver } from "./opencode-input-observer.js";
 import type { OpenCodeNativePort } from "./opencode-native-port.js";
 import { OpenCodeNativeApi } from "./opencode-native-api.js";
 import type { OpenCodeMcpRequest } from "../../../internal/opencode-mcp/contracts.js";
 import type { OpenCodeHostToolAdmissionResult } from "./opencode-host-agent-tools.js";
 import { acknowledgeOpenCodeMutation } from "./opencode-operation-control.js";
+import { assertOpenCodeInvocationAuthority, assertOpenCodeInvocationSource, captureOpenCodeInvocation,
+  parseOpenCodeToolInvocationStamp, runWithOpenCodeInvocation, type OpenCodeToolInvocationStamp } from "./opencode-tool-invocation.js";
+
+export interface OpenCodeRecoveredInvocation {
+  readonly context: OpenCodeDriverContext;
+  readonly input: AttachConversationInput;
+  readonly runtime: OpenCodeConversationRuntime;
+}
 
 interface Admission { readonly context: OpenCodeDriverContext; readonly input: AttachConversationInput;
   readonly runtime: OpenCodeConversationRuntime; readonly client: OpenCodeNativePort; readonly generation: string;
@@ -23,9 +31,14 @@ export class OpenCodeAgentTools {
   readonly #admitting = new Map<string, Promise<void>>();
   readonly #admissionOwners = new Map<string, AbortController>();
   #closed = false;
+  readonly #lifetime = new AbortController();
   constructor(readonly options: { readonly facade: BackendAgentToolFacade;
     readonly sourceCapabilities: AgentToolSourceCapabilityIssuer;
-    readonly sourceCapabilityTransport: AgentToolSourceCapabilityTransport }) {}
+    readonly sourceCapabilityTransport: AgentToolSourceCapabilityTransport;
+    readonly recoverInvocation?: (source: TrustedAgentToolSource, stamp: OpenCodeToolInvocationStamp,
+      signal: AbortSignal) => Promise<OpenCodeRecoveredInvocation>;
+    readonly captureLocalInvocation?: (source: TrustedAgentToolSource) => OpenCodeToolInvocationStamp | undefined;
+  }) {}
 
   admit(context: OpenCodeDriverContext, input: AttachConversationInput, runtime: OpenCodeConversationRuntime, signal?: AbortSignal): Promise<void> {
     requireOpenCodeBinding(context, input); signal?.throwIfAborted();
@@ -112,17 +125,63 @@ export class OpenCodeAgentTools {
     return undefined;
   }
   accessDecisionAuthority(source: TrustedAgentToolSource): BackendAgentToolAccessDecisionAuthority {
-    return { acquire: async signal => {
-      const entry = this.#sessions.get(source.sourceThreadId);
-      if (!entry || !sameSource(entry.source, source)) throw denied();
-      await this.#assertCurrent(entry, signal);
-      const observer = findOpenCodeInputObserver(entry.client, entry.input);
-      if (!observer) throw denied();
-      return observer.accessDecisionAuthority().acquire(signal);
-    } };
+    // Source resolution is the invocation boundary for the local CLI. Remote
+    // calls must carry the host-captured context; they never sample main time.
+    let stamp: OpenCodeToolInvocationStamp | undefined;
+    try {
+      const value = captureOpenCodeInvocation() ?? (this.options.sourceCapabilityTransport === "management_http"
+        ? this.options.captureLocalInvocation?.(source) : undefined);
+      if (value) { stamp = parseOpenCodeToolInvocationStamp(value); assertOpenCodeInvocationSource(stamp, source); }
+    } catch { stamp = undefined; }
+    return { acquire: signal => stamp ? this.#acquireInvocationAuthority(source, stamp, signal) : Promise.reject(denied()) };
+  }
+
+  async #acquireInvocationAuthority(source: TrustedAgentToolSource, stamp: OpenCodeToolInvocationStamp, signal: AbortSignal) {
+    const entry = this.#sessions.get(source.sourceThreadId);
+    const lifetime = AbortSignal.any([signal, this.#lifetime.signal, ...(entry ? [entry.owner.signal] : [])]); lifetime.throwIfAborted();
+    if (this.#closed) throw denied();
+    assertOpenCodeInvocationSource(stamp, source);
+    let recovered: OpenCodeRecoveredInvocation;
+    if (entry) {
+      if (!sameSource(entry.source, source)) throw denied();
+      assertOpenCodeInvocationAuthority(stamp, entry.client.authority);
+      await this.#assertCurrent(entry, lifetime);
+      recovered = entry;
+    } else {
+      if (!this.options.recoverInvocation) throw denied();
+      recovered = await this.options.recoverInvocation(source, stamp, lifetime);
+    }
+    lifetime.throwIfAborted(); if (this.#closed) throw denied();
+    const { context, input, runtime } = recovered;
+    requireOpenCodeBinding(context, input);
+    if (context.scope.tenantId !== source.scope.tenantId || context.scope.principalId !== source.scope.principalId ||
+        input.binding.applicationThreadId !== source.sourceThreadId || input.workspace.summary.id !== source.sourceWorkspaceId ||
+        input.binding.executionEnvironmentId !== source.sourceEnvironmentId ||
+        !context.repository.hasCreatedRoot(input.scope, source.sourceThreadId, input.binding.backendConversationId)) throw denied();
+    const lease = runtime.acquire(openCodeRuntimeTarget(input));
+    let observerBorrow: ReturnType<typeof acquireOpenCodeInputObserver> | undefined;
+    try {
+      assertOpenCodeInvocationAuthority(stamp, lease.client.authority);
+      await runtime.assertCurrent(lifetime);
+      const session = await new OpenCodeNativeApi(lease.client).getSession(input.binding.backendConversationId, lifetime);
+      await runtime.assertCurrent(lifetime); requireOpenCodeBinding(context, input); lifetime.throwIfAborted();
+      if (this.#closed || session.parentID || session.fork || session.location.directory !== input.workspace.canonicalPath) throw denied();
+      observerBorrow = acquireOpenCodeInputObserver(context, input, runtime, lease, lifetime);
+      const approval = await observerBorrow.observer.accessDecisionAuthority(stamp).acquire(lifetime);
+      const borrow = observerBorrow;
+      let released = false;
+      const release = () => {
+        if (released) return; released = true;
+        approval.signal.removeEventListener("abort", release); approval.release(); borrow.release(); lease.release();
+      };
+      approval.signal.addEventListener("abort", release, { once: true });
+      if (approval.signal.aborted) release();
+      return { signal: approval.signal, isCurrent: approval.isCurrent, release };
+    } catch (error) { observerBorrow?.release(); lease.release(); throw error; }
   }
   /** Local composition uses this same capability-shaped relay as remote hosts. */
-  async callHostTool(sourceCapability: string, request: OpenCodeMcpRequest, signal: AbortSignal): Promise<unknown> {
+  async callHostTool(sourceCapability: string, request: OpenCodeMcpRequest, signal: AbortSignal,
+    stamp: OpenCodeToolInvocationStamp | undefined): Promise<unknown> {
     const entries = [...this.#sessions.values()].filter(entry => entry.sourceCapability === sourceCapability &&
       entry.input.binding.backendConversationId === request.sessionID);
     if (entries.length !== 1) throw denied();
@@ -130,12 +189,16 @@ export class OpenCodeAgentTools {
     switch (request.operation) {
       case "list": return { tools: this.options.facade.catalogSummaries(entry.source, "mcp") };
       case "describe": return { tools: this.options.facade.describeMany(entry.source, "mcp", request.toolIds) };
-      case "invoke": return this.options.facade.invoke({ source: entry.source, adapter: "mcp", request: request.request,
-        signal: AbortSignal.any([signal, entry.owner.signal]), accessDecisionAuthority: this.accessDecisionAuthority(entry.source) });
+      case "invoke": {
+        if (!stamp) throw denied();
+        assertOpenCodeInvocationSource(stamp, entry.source); assertOpenCodeInvocationAuthority(stamp, entry.client.authority);
+        return runWithOpenCodeInvocation(stamp, () => this.options.facade.invoke({ source: entry.source, adapter: "mcp", request: request.request,
+          signal: AbortSignal.any([signal, entry.owner.signal]), accessDecisionAuthority: this.accessDecisionAuthority(entry.source) }));
+      }
     }
   }
   async close(): Promise<void> {
-    this.#closed = true; const pending = [...this.#admitting.values()];
+    this.#closed = true; this.#lifetime.abort(); const pending = [...this.#admitting.values()];
     for (const owner of this.#admissionOwners.values()) owner.abort();
     this.#admissionOwners.clear(); for (const threadId of this.#sessions.keys()) this.release(threadId);
     await Promise.allSettled(pending);

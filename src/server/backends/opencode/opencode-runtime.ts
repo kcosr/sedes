@@ -11,8 +11,8 @@ import { OpenCodeHttpNativeAdapter } from "./opencode-http-native-adapter.js";
 import { OpenCodeNativeHost, type OpenCodeRuntimeTarget } from "./opencode-native-host.js";
 import type { OpenCodeMutationInput, OpenCodeNativeAuthority, OpenCodeNativePort } from "./opencode-native-port.js";
 import { OpenCodeHostAgentTools, type OpenCodeHostToolAdmission, type OpenCodeHostToolAdmissionResult,
-  type OpenCodeHostToolInvoker, type OpenCodeHostToolTarget } from "./opencode-host-agent-tools.js";
-import type { AgentToolCliAvailability } from "../module.js";
+  type OpenCodeHostToolInvoker, type OpenCodeHostToolTarget, type OpenCodeHostToolEndpoint } from "./opencode-host-agent-tools.js";
+import type { OpenCodeToolInvocationStamp } from "./opencode-tool-invocation.js";
 import { configurationFingerprint } from "../../config/configuration-fingerprint.js";
 import { OpenCodeNativeMutationDeliveryError } from "./opencode-native-codecs.js";
 
@@ -35,7 +35,7 @@ export interface OpenCodeRuntimeInput {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly connection: OpenCodeRuntimeConnection;
   readonly externalPassword?: () => Promise<string>;
-  readonly agentTools?: { readonly cli: AgentToolCliAvailability; readonly invoke: OpenCodeHostToolInvoker };
+  readonly agentTools?: { readonly cli: () => OpenCodeHostToolEndpoint | undefined; readonly invoke: OpenCodeHostToolInvoker };
   /** When supplied, the module startup stack owns release after proved runtime cleanup. */
   readonly storeLease?: OpenCodeNativeStoreLease;
 }
@@ -119,15 +119,28 @@ export class OpenCodeRuntime {
       await this.assertCurrent(signal);
       const result = await tools.admit(target, admission, signal);
       admitted = true;
-      signal?.throwIfAborted();
       if (this.#host !== host || port.lifetime.aborted) throw new OpenCodeRuntimeError("opencode_runtime_unavailable");
       const key = target.session.applicationThreadId, previous = this.#toolScopes.get(key);
       this.#toolScopes.set(key, { target: structuredClone(target), host, port }); retained = true;
       previous?.host.release(previous.port);
+      // Once committed, a cancelled caller only loses its response. The host
+      // continues owning its routing scope and native helper lifetime.
+      signal?.throwIfAborted();
       return result;
     } finally {
       if (!retained) { if (admitted) tools.release(target); host.release(port); }
     }
+  }
+
+  captureToolInvocation(target: OpenCodeHostToolTarget): OpenCodeToolInvocationStamp {
+    if (this.#state !== "ready" || !this.#host) throw new OpenCodeRuntimeError("opencode_runtime_unavailable");
+    return this.#host.captureToolInvocation(target);
+  }
+  ownsCliCapability(sourceCapability: string): boolean { return this.#tools?.ownsCliCapability(sourceCapability) ?? false; }
+  captureCliInvocation(sourceCapability: string): OpenCodeToolInvocationStamp | undefined {
+    if (!this.#tools?.ownsCliCapability(sourceCapability)) return undefined;
+    if (this.#state !== "ready" || !this.#host) throw new OpenCodeRuntimeError("opencode_runtime_unavailable");
+    return this.#tools.captureCliInvocation(sourceCapability);
   }
 
   releaseToolSession(target: OpenCodeHostToolTarget): void {
@@ -219,8 +232,8 @@ export class OpenCodeRuntime {
       this.#state = "ready";
       this.#adapter = new OpenCodeHttpNativeAdapter(this.#client);
       if (this.#input.agentTools) this.#tools = new OpenCodeHostAgentTools({ adapter: this.#adapter,
-        cli: this.#input.agentTools.cli.availability === "available" ? this.#input.agentTools.cli : undefined, invoke: this.#input.agentTools.invoke,
-        assertCurrent: signal => this.assertCurrent(signal) });
+        cli: this.#input.agentTools.cli, invoke: this.#input.agentTools.invoke,
+        capture: target => this.captureToolInvocation(target), assertCurrent: signal => this.assertCurrent(signal) });
       this.#host = new OpenCodeNativeHost({ ...this.#input.authority, runtimeId: this.#runtimeId,
         nativeGeneration: this.#generation }, this.#adapter, {
         assertCurrent: signal => this.assertCurrent(signal),

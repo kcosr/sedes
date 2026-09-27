@@ -389,6 +389,7 @@ export async function createExecutionEnvironmentRuntime(
         authority: { scope, executionEnvironmentId: record.id },
         sources: input.agentToolSources,
         tools: input.agentTools,
+        openCodeTools: input.authorizedRuntimeCapabilities.some(capability => capability.capabilityId === "opencode_runtime" && capability.majorVersion === 1),
       });
     const runtimeOptions = {
       scope,

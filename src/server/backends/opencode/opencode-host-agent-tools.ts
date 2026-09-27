@@ -18,8 +18,10 @@ export interface OpenCodeHostToolAdmissionResult {
   readonly cliAdmissionId: string | null;
 }
 /** The same router calls a local facade or the authenticated sidecar reverse relay. */
-export type OpenCodeHostToolInvoker = (sourceCapability: string, request: OpenCodeMcpRequest, signal: AbortSignal) => Promise<unknown>;
+export type OpenCodeHostToolInvoker = (sourceCapability: string, request: OpenCodeMcpRequest, signal: AbortSignal,
+  stamp: OpenCodeToolInvocationStamp | undefined) => Promise<unknown>;
 
+import type { OpenCodeToolInvocationStamp } from "./opencode-tool-invocation.js";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
@@ -28,11 +30,18 @@ import { OPENCODE_MCP_WATCHDOG_MS } from "../../../internal/opencode-mcp/contrac
 import { OpenCodeHttpNativeAdapter } from "./opencode-http-native-adapter.js";
 import { OpenCodeMcpIngress, type OpenCodeMcpChannel } from "./opencode-mcp-ingress.js";
 import { BackendAgentToolRequestError } from "../../agent-tools/adapters/backend-facade.js";
-import { OpenCodeNativeMutationDeliveryError } from "./opencode-native-codecs.js";
+import { openCodeNativeAuthoritySchema, openCodeMutationControlSchema, OpenCodeNativeMutationDeliveryError } from "./opencode-native-codecs.js";
 
-const admissionSchema = z.strictObject({ sourceCapability: z.string().min(1).max(16_384),
+export const openCodeHostToolTargetSchema = openCodeNativeAuthoritySchema.pick({ directory: true, session: true }).required({ session: true });
+export const openCodeHostToolAdmissionSchema = z.strictObject({ sourceCapability: z.string().min(1).max(16_384),
   catalog: z.array(agentToolCatalogSummarySchema).max(256),
   cli: z.strictObject({ sourceCapability: z.string().min(1).max(16_384), mode: z.enum(["individual", "progressive"]) }).optional() });
+export const openCodeHostToolAdmissionResultSchema = z.strictObject({
+  registrationAdmissionId: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+  registrationName: z.string().regex(/^sedes_[a-f0-9]{48}$/u),
+  registrationControl: openCodeMutationControlSchema.refine(control => control.identity.origin === "host" && control.identity.step === "register-mcp"),
+  cliAdmissionId: z.string().regex(/^[A-Za-z0-9_-]{43}$/u).nullable(),
+});
 interface HostSession { readonly target: OpenCodeHostToolTarget; readonly admission: OpenCodeHostToolAdmission;
   readonly result: OpenCodeHostToolAdmissionResult; readonly owner: AbortController; }
 interface HostRegistration { readonly channel: OpenCodeMcpChannel; readonly ready: Promise<void>; }
@@ -47,19 +56,29 @@ export interface OpenCodeHostToolEndpoint {
 export class OpenCodeHostAgentTools {
   readonly #ingress = new OpenCodeMcpIngress();
   readonly #sessions = new Map<string, HostSession>();
+  readonly #cliCapabilities = new Map<string, HostSession>();
   readonly #locations = new Map<string, HostLocation>();
   #closed = false;
   #admissions = 0;
   constructor(readonly options: { readonly adapter: OpenCodeHttpNativeAdapter;
-    readonly cli?: OpenCodeHostToolEndpoint;
+    readonly cli: () => OpenCodeHostToolEndpoint | undefined;
+    readonly capture: (target: OpenCodeHostToolTarget) => OpenCodeToolInvocationStamp;
     readonly invoke: OpenCodeHostToolInvoker;
     readonly assertCurrent: (signal?: AbortSignal) => Promise<void>;
   }) {}
 
   async admit(target: OpenCodeHostToolTarget, value: OpenCodeHostToolAdmission, signal?: AbortSignal): Promise<OpenCodeHostToolAdmissionResult> {
-    const admission = admissionSchema.parse(value);
+    target = openCodeHostToolTargetSchema.parse(target);
+    const admission = openCodeHostToolAdmissionSchema.parse(value);
+    if (admission.cli) {
+      const known = this.#cliCapabilities.get(admission.cli.sourceCapability);
+      if (known && !sameTarget(known.target, target) || !known && this.#cliCapabilities.size >= 4_096) throw denied();
+    }
     await this.#assertTarget(target, signal);
     if (admission.cli) {
+      // Concurrent admission can change the capability index during validation.
+      const known = this.#cliCapabilities.get(admission.cli.sourceCapability);
+      if (known && !sameTarget(known.target, target) || !known && this.#cliCapabilities.size >= 4_096) throw denied();
       // CLI authority needs no native MCP registration, catalogue or workspace
       // slot. Keep its exact session bound and subject to the same live limit.
       const key = target.session.applicationThreadId, previous = this.#sessions.get(key);
@@ -69,7 +88,8 @@ export class OpenCodeHostAgentTools {
       const result = Object.freeze({ registrationAdmissionId: randomBytes(32).toString("base64url"),
         registrationName: registrationName(), registrationControl: registrationControl(randomBytes(32).toString("base64url")),
         cliAdmissionId: randomBytes(32).toString("base64url") });
-      this.#sessions.set(key, { target: structuredClone(target), admission, result, owner: new AbortController() });
+      const entry = { target: structuredClone(target), admission, result, owner: new AbortController() };
+      this.#sessions.set(key, entry); this.#cliCapabilities.set(admission.cli.sourceCapability, entry);
       return result;
     }
     let location = this.#locations.get(target.directory);
@@ -112,10 +132,23 @@ export class OpenCodeHostAgentTools {
 
   cliEnvironment(target: OpenCodeHostToolTarget, cliAdmissionId: string): { readonly generated: Readonly<Record<string, string>>; readonly executableDirectory: string } {
     const entry = this.#require(target);
-    const cli = entry.admission.cli, endpoint = this.options.cli;
+    const cli = entry.admission.cli, endpoint = this.options.cli();
     if (!cli || entry.result.cliAdmissionId !== cliAdmissionId || !endpoint || !path.posix.isAbsolute(endpoint.executableDirectory)) throw denied();
     return { generated: Object.freeze({ SEDES_AGENT_TOOL_ENDPOINT: endpoint.endpoint,
       SEDES_AGENT_TOOL_SOURCE_CAPABILITY: cli.sourceCapability, SEDES_AGENT_TOOL_CLI_MODE: cli.mode }), executableDirectory: endpoint.executableDirectory };
+  }
+
+  ownsCliCapability(sourceCapability: string): boolean { return this.#cliCapabilities.has(sourceCapability); }
+
+  /** Native CLI callers supply only an opaque admitted capability, never a session ID. */
+  captureCliInvocation(sourceCapability: string): OpenCodeToolInvocationStamp | undefined {
+    const entry = this.#cliCapabilities.get(sourceCapability);
+    if (!entry) return undefined;
+    // Keep revoked capability recognition until owner retirement. Otherwise an
+    // old route could fall through to another backend's generic CLI relay.
+    this.#require(entry.target);
+    if (this.#sessions.get(entry.target.session.applicationThreadId) !== entry || entry.owner.signal.aborted) throw denied();
+    return this.options.capture(entry.target);
   }
 
   release(target: OpenCodeHostToolTarget): void {
@@ -126,7 +159,7 @@ export class OpenCodeHostAgentTools {
   async close(): Promise<void> {
     this.#closed = true;
     for (const entry of this.#sessions.values()) entry.owner.abort();
-    this.#sessions.clear();
+    this.#sessions.clear(); this.#cliCapabilities.clear();
     for (const location of this.#locations.values()) location.registration?.channel.revoke();
     await this.#ingress.close();
     await Promise.allSettled([...this.#locations.values()].flatMap(location => location.task ? [location.task] : []));
@@ -150,8 +183,13 @@ export class OpenCodeHostAgentTools {
     const entries = [...this.#sessions.values()].filter(entry => entry.target.directory === directory && entry.target.session.nativeSessionID === request.sessionID);
     if (entries.length !== 1) throw denied();
     const entry = entries[0]!;
-    this.#require(entry.target); await this.#assertTarget(entry.target, signal); this.#require(entry.target);
-    return this.options.invoke(entry.admission.sourceCapability, request, AbortSignal.any([signal, entry.owner.signal]));
+    this.#require(entry.target);
+    const stamp = request.operation === "invoke" ? this.options.capture(entry.target) : undefined;
+    const invocationSignal = AbortSignal.any([signal, entry.owner.signal]);
+    await this.#assertTarget(entry.target, invocationSignal);
+    if (this.#require(entry.target) !== entry) throw denied();
+    invocationSignal.throwIfAborted();
+    return this.options.invoke(entry.admission.sourceCapability, request, invocationSignal, stamp);
   }
   async #register(entry: HostSession, location: HostLocation, signal?: AbortSignal): Promise<void> {
     let nativeWritePossible = location.registration !== undefined;
@@ -168,7 +206,7 @@ export class OpenCodeHostAgentTools {
         location.name = registrationName();
       }
       if (Date.now() < location.retryAfter || location.admissionCount >= 8 || this.#admissions >= 64) throw denied();
-      const cli = this.options.cli, client = this.options.adapter.client, directory = entry.target.directory;
+      const cli = this.options.cli(), client = this.options.adapter.client, directory = entry.target.directory;
       if (!cli || !path.posix.isAbsolute(cli.executableDirectory)) throw denied();
       const adapter = this.options.adapter;
       const inventory = await adapter.listMcp(directory, signal);

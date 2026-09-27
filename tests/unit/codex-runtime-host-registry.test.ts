@@ -230,7 +230,7 @@ it("reads the applied owned PATH across pending startup edits and changes it onl
     // still attach and perform native RPC using the retained applied owner.
     await connection.detach(authority());
     const replacement = new CodexRemoteRuntimeSupervisor({ scope: authority().scope, configuration: desired,
-      provider: { acquire: async () => ({ channel: carrier.mainChannel, controllerEpoch: f.epoch, serviceIncarnation: f.services.serviceIncarnation, closed: new Promise<void>(() => {}), release() {} }) },
+      provider: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire: async () => ({ channel: carrier.mainChannel, controllerEpoch: f.epoch, serviceIncarnation: f.services.serviceIncarnation, closed: new Promise<void>(() => {}), release() {} }) },
       serverRequests: new CodexServerRequestRouter(),
       receipts: { reserve: () => { throw new Error("unused"); }, recordOutcome: () => "untracked", pending: () => [], reconcileRecordedApplicationState: () => 0, compactRetiredRuntime: () => 0, releaseRejected: () => false },
     });

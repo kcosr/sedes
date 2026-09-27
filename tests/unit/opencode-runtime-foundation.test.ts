@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { createServer, type Server } from "node:http";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import { link, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { admitOpenCodeNativeProfile, admitOpenCodeRelease, openCodeOwnedEnvironm
 import { canonicalOpenCodeStore } from "../../src/server/backends/opencode/opencode-native-identity.js";
 import { createOpenCodeNativeStoreLifecycle } from "../../src/server/backends/opencode/opencode-native-store.js";
 import { OpenCodeRuntime } from "../../src/server/backends/opencode/opencode-runtime.js";
+import { OpenCodeHostAgentTools } from "../../src/server/backends/opencode/opencode-host-agent-tools.js";
 import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
 import { openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
 
@@ -15,6 +16,7 @@ const roots: string[] = [];
 const servers: Server[] = [];
 const password = "fixture-private-password";
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const server of servers.splice(0)) {
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
@@ -24,8 +26,9 @@ afterEach(async () => {
 async function directory(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "opencode-runtime-test-")); roots.push(root); return root;
 }
-async function server(input: { authenticated?: boolean; version?: string; redirect?: string; oversized?: boolean } = {}) {
+async function server(input: { authenticated?: boolean; version?: string; redirect?: string; oversized?: boolean; sessionDirectory?: string } = {}) {
   const requests: string[] = [];
+  const eventStreams = new Set<ServerResponse>();
   const http = createServer((request, response) => {
     requests.push(`${request.method} ${request.url}`);
     if (input.authenticated !== false && request.headers.authorization !== `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`) {
@@ -34,9 +37,14 @@ async function server(input: { authenticated?: boolean; version?: string; redire
     if (input.redirect) { response.writeHead(302, { location: input.redirect }).end(); return; }
     if (request.url === "/api/event") {
       response.writeHead(200, { "content-type": "text/event-stream" });
+      eventStreams.add(response); response.once("close", () => eventStreams.delete(response));
       response.write('data: {"id":"evt_connected","type":"server.connected","data":{}}\n\n'); return;
     }
     response.setHeader("content-type", "application/json");
+    if (input.sessionDirectory && request.url === "/api/session/ses_fixture") {
+      response.end(JSON.stringify({ data: { id: "ses_fixture", projectID: "prj_fixture", title: "Fixture", location: { directory: input.sessionDirectory },
+        cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 } } })); return;
+    }
     response.end(input.oversized ? JSON.stringify("s".repeat(17 * 1024 * 1024)) : JSON.stringify({
       version: input.version ?? "2.0.18", pid: process.pid, urls: [], paths: { tmp: os.tmpdir() },
     }));
@@ -44,7 +52,8 @@ async function server(input: { authenticated?: boolean; version?: string; redire
   servers.push(http);
   await new Promise<void>(resolve => http.listen(0, "127.0.0.1", resolve));
   const address = http.address(); if (!address || typeof address === "string") throw new Error();
-  return { endpoint: `http://127.0.0.1:${address.port}`, requests };
+  return { endpoint: `http://127.0.0.1:${address.port}`, requests,
+    send: (event: unknown) => { for (const response of eventStreams) response.write(`data: ${JSON.stringify(event)}\n\n`); } };
 }
 
 describe("OpenCode v2 transport admission", () => {
@@ -131,6 +140,39 @@ describe("OpenCode v2 transport admission", () => {
 });
 
 describe.skipIf(process.platform !== "linux")("OpenCode native store and external ownership", () => {
+  it("retains host tool routing and native observation after the caller's last port closes", async () => {
+    const root = await directory(), store = path.join(root, "opencode.db"); await writeFile(store, "native history");
+    const fixture = await server({ sessionDirectory: root });
+    const runtime = new OpenCodeRuntime({ hostIncarnation: "fixture-host",
+      authority: { tenantId: "tenant", principalId: "principal", backendInstanceId: "backend", executionEnvironmentId: "local" },
+      nativeStorePath: store, environment: {}, externalPassword: async () => password,
+      connection: { ownership: "external", channel: { type: "http", url: fixture.endpoint } },
+      agentTools: { cli: () => ({ endpoint: "http://127.0.0.1:4784", executableDirectory: "/host/bin" }),
+        invoke: async () => { throw new Error("no relay attached"); } } });
+    const target = { directory: root, session: { applicationThreadId: "thread", nativeSessionID: "ses_fixture", bindingFingerprint: "b".repeat(64) } };
+    try {
+      await runtime.start(); const lease = runtime.acquire(target);
+      const admission = { sourceCapability: "mcp-capability", catalog: [], cli: { sourceCapability: "cli-first", mode: "individual" as const } };
+      await runtime.admitToolSession(target, admission);
+      lease.release(); expect(lease.client.lifetime.aborted).toBe(false);
+      await vi.waitFor(() => expect(runtime.captureCliInvocation("cli-first")?.nativeConnected).toBe(true));
+      fixture.send({ id: "evt_delivered", type: "session.inbox.delivered", created: 1,
+        durable: { aggregateID: "ses_fixture", seq: 1, version: 1 }, data: { sessionID: "ses_fixture", inboxID: "msg_native_only" } });
+      await vi.waitFor(() => expect(runtime.captureCliInvocation("cli-first")?.inputId).toBe("msg_native_only"));
+      expect(runtime.snapshot().references).toBe(0);
+      const cancelled = new AbortController(), admit = OpenCodeHostAgentTools.prototype.admit;
+      vi.spyOn(OpenCodeHostAgentTools.prototype, "admit").mockImplementationOnce(async function (this: OpenCodeHostAgentTools, ...args) {
+        const result = await admit.apply(this, args); cancelled.abort(); return result;
+      });
+      await expect(runtime.admitToolSession(target, { ...admission, cli: { ...admission.cli, sourceCapability: "cli-second" } }, cancelled.signal)).rejects.toThrow();
+      expect(() => runtime.captureCliInvocation("cli-first")).toThrow();
+      expect(runtime.captureCliInvocation("cli-second")?.inputId).toBe("msg_native_only");
+      expect(fixture.requests.filter(request => request === "GET /api/event")).toHaveLength(1);
+      await runtime.close(); expect(lease.client.lifetime.aborted).toBe(true);
+      expect(runtime.captureCliInvocation("cli-second")).toBeUndefined();
+    } finally { await runtime.close(); }
+  });
+
   it("excludes duplicate Sedes owners and never deletes the canonical native database", async () => {
     const root = await directory();
     const store = path.join(root, "opencode.db"); await writeFile(store, "native history");

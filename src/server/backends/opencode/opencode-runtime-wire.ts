@@ -6,6 +6,7 @@ import { openCodeRuntimeConfigurationSchema } from "./opencode-runtime-configura
 import { openCodeNativeAuthoritySchema, openCodeNativeFailureSchema, openCodeMutationControlSchema,
   openCodeApplicationOperationIdentitySchema, openCodeReadMethods, openCodeMutationMethods } from "./opencode-native-codecs.js";
 import { OPENCODE_CONTROL_MUTATIONS } from "./opencode-native-port.js";
+import { openCodeHostToolAdmissionSchema, openCodeHostToolTargetSchema } from "./opencode-host-agent-tools.js";
 
 const id = z.string().min(1).max(256);
 const position = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -31,6 +32,7 @@ export const openCodeRuntimeCommandSchema = z.discriminatedUnion("action", [
   z.strictObject({ ...runtime, action: z.literal("stop"), expectedRevision: id, force: z.boolean() }),
   z.strictObject({ ...runtime, action: z.literal("acquire"), nativeGeneration: id, target: openCodeRuntimeTargetSchema }),
   z.strictObject({ ...runtime, action: z.literal("acquire_retained"), nativeGeneration: id, target: openCodeRuntimeTargetSchema }),
+  z.strictObject({ ...runtime, action: z.literal("tools_admit"), nativeGeneration: id, target: openCodeHostToolTargetSchema, admission: openCodeHostToolAdmissionSchema }),
   z.strictObject({ ...scope, action: z.literal("release") }),
   z.strictObject({ ...scope, action: z.literal("read"), method: readMethod, input: z.unknown(), deadlineAt: position.nullable() }),
   z.strictObject({ ...scope, action: z.literal("mutate"), method: mutationMethod, input: z.unknown(), control: openCodeMutationControlSchema }),
@@ -62,7 +64,7 @@ export function openCodeRuntimeCommandLane(command: OpenCodeRuntimeCommand | Ope
   if (command.action === "mutate") return OPENCODE_CONTROL_MUTATIONS.has(command.method) ? "control" : "operation";
   if (command.action === "read") return controlReads.has(command.method) ? "control" : "operation";
   if (command.action === "observe_open" || command.action === "observe_poll") return command.purpose === "evidence" ? "control" : "operation";
-  return command.action === "ensure" ? "operation" : "control";
+  return command.action === "ensure" || command.action === "tools_admit" ? "operation" : "control";
 }
 
 export const openCodeRuntimeResponseSchema = z.discriminatedUnion("status", [

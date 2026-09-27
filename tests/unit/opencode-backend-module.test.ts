@@ -7,9 +7,24 @@ import { BackendModuleCatalog } from "../../src/server/backends/module-catalog.j
 import type { BackendModuleConfigurationInput, BackendModuleRuntimeContext } from "../../src/server/backends/module.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
+import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
+import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
+import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
+import { OpenCodeHttpNativeAdapter } from "../../src/server/backends/opencode/opencode-http-native-adapter.js";
+import { OpenCodeNativeHost } from "../../src/server/backends/opencode/opencode-native-host.js";
+import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
+import { openCodeRuntimeTarget, type OpenCodeConversationRuntime } from "../../src/server/backends/opencode/opencode-conversation-context.js";
+import { OpenCodeInputObserver } from "../../src/server/backends/opencode/opencode-input-observer.js";
+import { OpenCodeInputEvidenceRepository } from "../../src/server/backends/opencode/opencode-input-evidence.js";
+import { runWithOpenCodeInvocation } from "../../src/server/backends/opencode/opencode-tool-invocation.js";
+import { OpenCodeThreadRepository } from "../../src/server/backends/opencode/opencode-thread-repository.js";
+import { OpenCodeConversationBackendDriver } from "../../src/server/backends/opencode/opencode-conversation-driver.js";
 
 const databases: Database.Database[] = [];
-afterEach(() => { for (const database of databases.splice(0)) database.close(); });
+const cleanups: (() => Promise<unknown> | void)[] = [];
+afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  for (const database of databases.splice(0)) database.close(); vi.restoreAllMocks(); });
 const scope = { tenantId: "tenant", principalId: "principal" };
 const authority = { ...scope, backendInstanceId: "opencode", executionEnvironmentId: "local" };
 function configuration(ownership: "owned" | "external" = "owned"): BackendModuleConfigurationInput {
@@ -65,7 +80,144 @@ function nativeFactory() {
   return { create: vi.fn((input: OpenCodeRuntimeInput) => { const instance = native(input); instances.push(instance); return instance; }), instances };
 }
 
+async function persistedInvocationFixture() {
+  const persisted = savedAgentDatabase(); databases.push(persisted.database);
+  const { database, scope } = persisted;
+  const environmentId = "019196f7-a0a8-7bc4-a89b-8cf013978405";
+  const wire = createOpenCodeApiFixture(), base = context();
+  const instance = { ...base.value.instance, tenantId: scope.tenantId };
+  const connection = { ...base.connection, tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, executionEnvironmentId: environmentId };
+  database.prepare(`INSERT INTO agent_backend_instances
+    (tenant_id,owner_principal_id,id,kind,label,enabled,configuration_revision,protocol_release,created_at,updated_at)
+    VALUES (?,?,?,'opencode','OpenCode',1,1,'2.0.18',100,100)`).run(scope.tenantId, scope.principalId, instance.id);
+  database.prepare(`INSERT INTO agent_connection_profiles
+    (tenant_id,owner_principal_id,id,template_id,backend_instance_id,backend_kind,execution_environment_id,kind,label,enabled,configuration_revision,created_at,updated_at)
+    VALUES (?,?,?,?,?,'opencode',?,'opencode_http','OpenCode',1,1,100,100)`)
+    .run(scope.tenantId, scope.principalId, connection.id, connection.templateId, instance.id, environmentId);
+  const workspace = new InventoryRepository(database).upsertWorkspace(scope, {
+    environmentId, canonicalPath: wire.directory, displayName: "Persisted OpenCode", available: true,
+    trustState: "trusted", environmentConfigurationRevision: 1, now: 100,
+  });
+  const bindings = new ConversationBindingRepository(database);
+  const thread = bindings.createUnboundThread(scope, { workspaceId: workspace.id, connectionProfileId: connection.id, title: "Recovered", now: 100 });
+  const binding = bindings.bindDiscoveredConversation(scope, thread.id, { backendConversationId: wire.sessionID, now: 100 });
+  const input = configuration();
+  const configured = { ...input, connections: input.connections.map(item => ({ ...item, executionEnvironmentId: environmentId })),
+    executionEnvironments: [{ id: environmentId, kind: "local" as const }] };
+  const runtimeContext = { ...base.value, scope, database, instance, connections: [connection],
+    environmentChannel: { ...base.value.environmentChannel, scope, executionEnvironmentId: environmentId } };
+  const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture", fetch: wire.fetch });
+  const host = new OpenCodeNativeHost({ ...scope, backendInstanceId: instance.id, executionEnvironmentId: environmentId,
+    runtimeId: "persisted-runtime", nativeGeneration: "persisted-generation" }, new OpenCodeHttpNativeAdapter(client), {
+    assertCurrent: async () => {}, installSessionEnvironment: vi.fn(async () => { throw new Error("recovery must not install environment"); }),
+    ensureMcpRegistration: vi.fn(async () => { throw new Error("recovery must not register MCP"); }),
+  }, client.lifetime);
+  const namespace = openCodeRuntimeNamespaceKey(environmentId, "/native/opencode.db");
+  const identity = { pid: process.pid, startTime: "1", uid: process.getuid?.() ?? 0, executablePath: "/native/opencode2",
+    executable: { device: "1", inode: "2" }, nativeStorePath: "/native/opencode.db", store: { device: "1", inode: "3" }, storeObservation: "open_file" as const };
+  let state: OpenCodeRuntimeSnapshot["state"] = "stopped";
+  const owner: OpenCodeConversationRuntime & { close(): Promise<{ cleanup: "proved"; nativeInterrupts: "not_owned" }>; stop(): Promise<{ cleanup: "proved"; nativeInterrupts: "not_owned" }> } = {
+    nativeNamespaceKey: namespace,
+    start: vi.fn(async () => { state = "ready"; }), health: async () => ({ available: state === "ready", checkedAt: new Date().toISOString() }),
+    snapshot: () => ({ state, ownership: "owned", references: 0, generation: "persisted-generation", identity }),
+    assertCurrent: vi.fn(async () => { if (state !== "ready") throw new Error("not ready"); }),
+    acquire: vi.fn(target => { const port = host.acquire(target); let released = false;
+      return { client: port, generation: "persisted-generation", identity, release: () => { if (!released) { released = true; host.release(port); } } }; }),
+    admitToolSession: vi.fn(async (): Promise<never> => { throw new Error("recovery must not admit tools"); }), releaseToolSession: vi.fn(),
+    stop: async () => ({ cleanup: "proved", nativeInterrupts: "not_owned" }),
+    close: async () => { host.close(); client.close(); return { cleanup: "proved", nativeInterrupts: "not_owned" }; },
+  };
+  const factory = vi.fn(() => owner);
+  const runtime = new OpenCodeBackendModule(factory).prepare(configured).createRuntime(runtimeContext);
+  cleanups.push(() => runtime.close());
+  const driver = runtime.driverFactory.create(connection);
+  if (!(driver instanceof OpenCodeConversationBackendDriver)) throw new Error("unexpected backend driver");
+  const repository = new OpenCodeThreadRepository({ database, scope, backendInstanceId: instance.id, nativeNamespaceKey: namespace });
+  repository.saveBinding(scope, thread.id, { version: 1, ...scope, sessionId: wire.sessionID, backendInstanceId: instance.id,
+    connectionProfileId: connection.id, executionEnvironmentId: environmentId, canonicalWorkspacePath: wire.directory, nativeNamespaceKey: namespace });
+  const target = { scope, binding: { ...binding, createdAt: new Date(binding.createdAt).toISOString() },
+    opaqueBindingDetail: repository.getBinding(scope, thread.id)!,
+    workspace: { canonicalPath: wire.directory, authorityRevision: workspace.environmentConfigurationRevision,
+      summary: { id: workspace.id, environmentId, displayName: workspace.displayName, displayPath: wire.directory,
+        availability: workspace.availability, trustState: workspace.trustState, revision: workspace.revision } } };
+  driver.input.settings.initialize(scope, thread.id, { backendInstanceId: instance.id, connectionProfileId: connection.id,
+    executionEnvironmentId: environmentId }, { providerID: "provider", id: "model" }, 100);
+  driver.input.settings.captureOperation(scope, { applicationThreadId: thread.id, applicationOperationId: "creation",
+    operationKind: "create", expectedRevision: 0, now: 100 });
+  repository.reserveOperation(scope, { applicationThreadId: thread.id, applicationOperationId: "creation", operationKind: "create",
+    nativeSessionId: wire.sessionID, nativeInputId: null, connectionProfileId: connection.id, executionEnvironmentId: environmentId,
+    requestFingerprint: "a".repeat(64), requestSource: { kind: "user" }, deadlineAt: null }, 100);
+  repository.markDispatched(scope, thread.id, "creation", "create", 101);
+  repository.recordOutcome(scope, thread.id, "creation", "create", { expected: "dispatched", disposition: "accepted", nativeEvidenceFingerprint: "b".repeat(64), now: 102 });
+  database.prepare(`INSERT INTO conversation_creation_attempts
+    (tenant_id,owner_principal_id,application_thread_id,attempt_id,mutation_id,backend_instance_id,connection_profile_id,execution_environment_id,
+      creation_kind,source_kind,initial_input_text,consumed_draft_revision,backend_creation_correlation,phase,provisional_backend_conversation_id,
+      provisional_opaque_binding_detail,prepared_at,external_call_started_at,accepted_at,reconciled_at)
+    VALUES (?,?,?,'creation-attempt','creation',?,?,?,'first_input','composer','initial input',1,?,'bound',?,?,100,101,102,103)`)
+    .run(scope.tenantId, scope.principalId, thread.id, instance.id, connection.id, environmentId, wire.sessionID, wire.sessionID, target.opaqueBindingDetail);
+  expect(repository.hasCreatedRoot(scope, thread.id, wire.sessionID)).toBe(true);
+  await driver.health();
+  const lease = owner.acquire(openCodeRuntimeTarget(target));
+  const observer = new OpenCodeInputObserver(driver.input, target, owner, lease, client.lifetime);
+  cleanups.push(() => { observer.close(); lease.release(); });
+  await observer.start();
+  const evidence = new OpenCodeInputEvidenceRepository(repository);
+  repository.reserveOperation(scope, { applicationThreadId: thread.id, connectionProfileId: connection.id,
+    executionEnvironmentId: environmentId, nativeSessionId: wire.sessionID, applicationOperationId: "persisted-input", operationKind: "submit",
+    nativeInputId: "msg_persisted", requestFingerprint: "a".repeat(64), requestSource: { kind: "user" }, deadlineAt: null }, 100);
+  observer.track(evidence.begin(scope, thread.id, "persisted-input", "submit", observer.trackerId, "queue"));
+  repository.markDispatched(scope, thread.id, "persisted-input", "submit", 101);
+  observer.recordAdmission("persisted-input", "submit", { id: "msg_persisted", sessionID: wire.sessionID, type: "user",
+    payload: { text: "current owned input" }, delivery: "queue", time: { created: 100 } });
+  wire.send({ id: "evt_persisted", type: "session.inbox.delivered", created: 102,
+    durable: { aggregateID: wire.sessionID, seq: 1, version: 1 }, data: { sessionID: wire.sessionID, inboxID: "msg_persisted" } });
+  await vi.waitFor(() => expect(evidence.get(scope, thread.id, "persisted-input", "submit").consumedFingerprint).not.toBeNull());
+  const stamp = host.captureToolInvocation(openCodeRuntimeTarget(target));
+  observer.close(); lease.release();
+  const source = { scope, sourceThreadId: thread.id, sourceWorkspaceId: workspace.id, sourceEnvironmentId: environmentId, backendKind: "opencode" as const };
+  return { database, wire, host, owner, factory, runtime, target, source, stamp, configured, runtimeContext };
+}
+
 describe("OpenCode compiled module", () => {
+  it("recovers exact invocation authority from persisted inventory and native binding without bootstrap effects", async () => {
+    const f = await persistedInvocationFixture();
+    const before = f.wire.requests.length;
+    const authority = runWithOpenCodeInvocation(f.stamp, () => f.runtime.agentToolAccessDecisionAuthority!(f.source));
+    const approval = await authority.acquire(new AbortController().signal);
+    expect(approval.isCurrent()).toBe(true);
+    expect(f.factory).toHaveBeenCalledOnce(); expect(f.owner.start).toHaveBeenCalledOnce();
+    expect(f.owner.admitToolSession).not.toHaveBeenCalled();
+    expect(f.wire.requests.slice(before).filter(request => request.method !== "GET")).toEqual([]);
+    expect(f.wire.requests.slice(before).some(request => request.pathname === `/api/session/${f.wire.sessionID}`)).toBe(true);
+    approval.release();
+  });
+
+  it("denies a mismatched invocation stamp and a changed persisted native binding", async () => {
+    const f = await persistedInvocationFixture();
+    const before = f.wire.requests.length;
+    const stamp = { ...f.stamp, authority: { ...f.stamp.authority,
+      session: { ...f.stamp.authority.session, bindingFingerprint: "f".repeat(64) } } };
+    const mismatched = runWithOpenCodeInvocation(stamp, () => f.runtime.agentToolAccessDecisionAuthority!(f.source));
+    await expect(mismatched.acquire(new AbortController().signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+    const exact = runWithOpenCodeInvocation(f.stamp, () => f.runtime.agentToolAccessDecisionAuthority!(f.source));
+    f.database.prepare("UPDATE conversation_bindings SET backend_conversation_id='ses_replaced' WHERE application_thread_id=?")
+      .run(f.source.sourceThreadId);
+    await expect(exact.acquire(new AbortController().signal)).rejects.toBeDefined();
+    expect(f.factory).toHaveBeenCalledOnce(); expect(f.owner.start).toHaveBeenCalledOnce();
+    expect(f.owner.admitToolSession).not.toHaveBeenCalled();
+    expect(f.wire.requests.slice(before).filter(request => request.method !== "GET")).toEqual([]);
+  });
+
+  it("does not construct a local native owner for a retained invocation after module replacement", async () => {
+    const f = await persistedInvocationFixture();
+    const factory = nativeFactory();
+    const replacement = new OpenCodeBackendModule(factory.create).prepare(f.configured).createRuntime(f.runtimeContext);
+    cleanups.push(() => replacement.close());
+    const authority = runWithOpenCodeInvocation(f.stamp, () => replacement.agentToolAccessDecisionAuthority!(f.source));
+    await expect(authority.acquire(new AbortController().signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+    expect(factory.create).not.toHaveBeenCalled();
+  });
+
   it("is registered in production and does not start during preparation", async () => {
     expect(compiledBackendModuleCatalog.moduleForBackendKind("opencode")).toBeInstanceOf(OpenCodeBackendModule);
     expect(compiledBackendModuleCatalog.moduleForConnectionKind("opencode_http")).toBe(compiledBackendModuleCatalog.moduleForBackendKind("opencode"));

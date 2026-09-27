@@ -87,10 +87,10 @@ conservatively unknown for automatic retirement; forced confirmation is stable
 for the exact native owner while detailed inspection and abandonment evidence
 continue to report retained activity.
 
-Remote product admission remains disabled pending tool relay and full remote
-qualification. The host implementation is exercised through test composition;
-it is not yet a Settings-supported topology. Pi, Codex, Claude and Grok retain
-their existing backend contracts.
+Remote product admission remains disabled pending full remote qualification.
+The resident host and tool relay are implemented and qualified through private
+test composition; remote OpenCode is not yet a Settings-supported topology.
+Pi, Codex, Claude and Grok retain their existing backend contracts.
 
 ## Native ownership
 
@@ -375,23 +375,47 @@ on re-establishment so stale interaction panels close.
 
 ## Per-call Sedes tools
 
-`OpenCodeAgentTools` holds residency-scoped admission independently of actor
-handles. Only an exact accepted private create receipt, matching settings
+`OpenCodeAgentTools` holds main-side admission independently of actor handles;
+`OpenCodeHostAgentTools` owns the helper registration and routing on the native
+execution host. Only an exact accepted private create receipt, matching settings
 snapshot, current binding, and non-reset first-input creation attempt admit a
 root. First submission uses the same exact provisional authority. Sibling
 threads share a native runtime/location registration, never a mutable current
 thread field. Discovery lists three conservative gateways without a session;
 every call resolves an immutable client from `ai.opencode/sessionID` metadata.
-The provider-private loopback ingress authenticates its channel before routing,
-then validates current scope, binding, runtime generation, native location and
-policy. It fixes the adapter to MCP; ordinary CLI source references retain
-their existing audience and adapter.
+The provider-private loopback ingress runs beside OpenCode, authenticates its
+channel before routing, and validates exact scope, binding, runtime generation
+and native location. Main applies current Sedes tool policy. Local source
+references use the management audience; sidecar references use the execution
+environment audience. Their authenticated presentation selects MCP or CLI.
 
-Routing admission retains neither a runtime lease nor an input observer. Live
-conversation handles share the exact session's input observer; closing the last
-handle releases it. Admission and per-call identity checks borrow a runtime lease
-only for their bounded validation. Thus idle actor eviction preserves bridge
-routing without leaving one daemon-wide event stream per admitted thread.
+Main admission retains an exact runtime lease until release. Host tool admission
+also retains its native scope, keeping source routing and invocation evidence
+available after carrier detach or main restart. Releasing a remote facade does
+not revoke the host route; native-owner retirement or a newly validated admission
+ends or replaces it. Routing alone does not create a main input observer.
+Conversation handles and active approval invocations share one observer per
+exact owner/binding, with independent reference-counted leases. Closing the last
+handle releases the observer only when no invocation still borrows it. These
+observers consume the host's resident journal, not one native SSE connection per
+thread.
+
+For each invocation the host synchronously captures an immutable private stamp
+before awaiting native validation or relay delivery. It names the exact runtime,
+generation, workspace and session binding, observation journal and sequence,
+native continuity, current input and authority epoch. Host CLI ingress resolves
+its already-admitted opaque source capability to the same stamp. Local MCP and
+CLI use the same authority checks; remote calls cannot substitute a stamp sampled
+later on main.
+
+The private `opencode_tools` reverse operation carries that stamp beside the
+canonical tool request. It requires both the OpenCode runtime capability and the
+existing `agent_tools_cli` grant. Source resolution, policy, approvals, invocation
+and result projection continue through the shared canonical relay; catalog and
+description use its existing operations. Unstamped OpenCode invocation through
+the generic reverse operation is rejected. Cancellation and carrier loss do not
+replay a tool call. A lost response after dispatch reports an uncertain outcome;
+a missing upstream reports unavailability.
 
 The stdio helper is bundled as `sedes opencode-mcp`. An authenticated lifetime
 stream fences child invocations with a current stream ID, emits heartbeats every
@@ -404,8 +428,9 @@ uses a new high-entropy name and an absence inventory preflight. Stock PUT is
 unconditional and native GET has no ownership token, so no existing entry is
 replaced, removed, connected or disconnected. Unknown PUT acknowledgment does
 not trigger another registration. Per location there are at most eight channel
-admissions per main lifetime, with 64 total and a 256-entry inventory bound.
-Failed rows can accumulate across main restarts and require a native restart.
+admissions per host-runtime lifetime, with 64 total and a 256-entry inventory
+bound. Failed rows can accumulate across host-runtime restarts and require a
+native restart.
 The native MCP execution timeout is 24 hours, distinct from bounded startup,
 catalog, transport and lifetime checks. No MCP readiness sleep gates messages.
 
@@ -421,26 +446,38 @@ child receives it; native session environment injection carries CLI references,
 not the shared channel credential.
 
 Interactive cross-boundary access additionally acquires the provider's current
-input authority. `OpenCodeInputObserver` requires live consumption of the exact
-private dispatched user input, prepared payload proof, and no conflict. Native
-or automation inputs cannot adopt old user provenance. Replacement input,
-terminal execution, revert, deletion, event gaps, disconnect and binding/runtime
-loss invalidate pending approval leases. Cold history proves delivery, but does
-not by itself prove which input is current. The generic source service checks
-this optional lease before and after approval; boundary-free calls do not need
-it. With no live handle observer, access-boundary approval fails closed; after
-reattachment, a newly observed user input must establish fresh authority. Routing
-alone never starts an observer. CLI ingress resolves the hook from the current
-server-owned backend module on every call, including stateless references issued
+input authority. `OpenCodeInputObserver` commits evidence through the stamped
+observation cut and requires the same native continuity, current input and
+authority epoch. Exact private dispatched user provenance, consumed-input
+evidence and prepared payload proof must agree without conflict. An intervening
+native or automation input cannot borrow old user provenance, even if another
+Sedes user input follows it before main handles the call. Replacement input,
+terminal execution, revert, deletion, native event gaps and binding/runtime loss
+invalidate pending approval leases. Cold history alone does not establish which
+input was current at invocation. The generic source service checks this optional
+lease before and after approval; scope-limited calls needing no access-boundary
+decision do not require this input proof.
+
+An invocation can lazily recover its observer when no actor or main admission is
+resident. The current backend module reconstructs the thread, workspace and exact
+native binding from durable application records, validates creation provenance,
+then borrows the retained owner and catches up its journal. Recovery neither
+launches a missing daemon nor registers MCP, writes session environment variables
+or replays a prompt. A later ordinary runtime start separately checks current
+configuration before permitting new work. Missing retained identity, mismatched
+stamps or changed bindings fail closed. CLI ingress resolves this hook from the
+current server-owned backend module on every call, including references issued
 before a main restart.
 Pi, Codex, Claude and Grok keep their existing approval authority behavior.
 
 A pending access decision also holds the shared `ThreadRuntimeCoordinator`
 approval borrow through the approved invocation's completion. This existing
 canonical-operation reference blocks both retention and pressure eviction, even
-when the native timeline is idle. An explicit actor close aborts the approval
-and observer authority, returns typed `cancelled` through the bridge, and never
-replays the invocation. Idle routing admission alone holds no such borrow.
+when the native timeline is idle. The invocation also holds its own observer
+borrow, so actor detach alone does not revoke valid approval authority. Invocation
+cancellation, helper-channel revocation, carrier loss or native authority loss
+ends the outstanding call; reconnect never replays it. Idle routing admission
+alone holds no approval borrow.
 
 Native permission responses retain the complete native action fingerprint;
 only an exact known Sedes registration/gateway receives a readable Sedes title.

@@ -6,6 +6,7 @@ import { openCodeRuntimeNamespaceKey, type OpenCodeRuntimeLease, type OpenCodeRu
 import type { OpenCodeRuntimeConfiguration } from "./opencode-runtime-configuration.js";
 import type { OpenCodeRuntimeTarget } from "./opencode-native-host.js";
 import type { OpenCodeHostToolAdmission, OpenCodeHostToolAdmissionResult, OpenCodeHostToolTarget } from "./opencode-host-agent-tools.js";
+import { openCodeHostToolAdmissionSchema, openCodeHostToolAdmissionResultSchema, openCodeHostToolTargetSchema } from "./opencode-host-agent-tools.js";
 import type { OpenCodeApplicationOperationIdentity, OpenCodeMutationControl, OpenCodeMutationIdentity, OpenCodeMutationInput, OpenCodeMutationMethod,
   OpenCodeMutationOutcome, OpenCodeMutationOutput, OpenCodeNativeAuthority, OpenCodeNativePort,
   OpenCodeObservationEnd, OpenCodeObservationRecord, OpenCodePortObservation, OpenCodeReadInput,
@@ -28,6 +29,7 @@ export class OpenCodeRemoteRuntime {
   #starting?: Promise<void>;
   #closed = false;
   #recovery = false;
+  #invocationRecovery = false;
   #serviceIncarnation?: string;
   #lifetime = new AbortController();
   readonly #ports = new Set<{ release(): Promise<void> }>();
@@ -44,13 +46,25 @@ export class OpenCodeRemoteRuntime {
   start(): Promise<void> {
     if (this.#closed) return Promise.reject(unavailable());
     if (this.#starting) return this.#starting;
-    if (this.#attachment && this.#info?.snapshot.state === "ready") return this.assertCurrent();
+    if (this.#attachment && this.#info?.snapshot.state === "ready") {
+      if (!this.#invocationRecovery) return this.assertCurrent();
+      return this.#starting = this.#admitCurrentConfiguration().finally(() => { this.#starting = undefined; });
+    }
     this.#starting = this.#start().finally(() => { this.#starting = undefined; });
     return this.#starting;
   }
-  async #start(): Promise<void> {
-    let recovery = !this.input.configuration.instance.enabled || !this.input.configuration.connections.some(connection => connection.enabled);
-    const attachment = recovery ? await this.input.acquireRecovery() : await this.input.provider.acquire().catch(async error => {
+  /** A retained tool invocation is never authority to ensure a new daemon. */
+  startRetained(): Promise<void> {
+    if (this.#closed) return Promise.reject(unavailable());
+    if (this.#starting) return this.#starting;
+    if (this.#attachment && this.#info?.snapshot.state === "ready") return this.assertCurrent();
+    this.#starting = this.#start(true).finally(() => { this.#starting = undefined; });
+    return this.#starting;
+  }
+  async #start(existingOnly = false): Promise<void> {
+    let recovery = existingOnly || !this.input.configuration.instance.enabled || !this.input.configuration.connections.some(connection => connection.enabled);
+    const attachment = existingOnly ? await this.input.provider.acquireExisting()
+      : recovery ? await this.input.acquireRecovery() : await this.input.provider.acquire().catch(async error => {
       if (!isSidecarRevisionChanged(error)) throw error;
       recovery = true; return this.input.acquireRecovery();
     });
@@ -61,13 +75,43 @@ export class OpenCodeRemoteRuntime {
       const info = openCodeRuntimeInfoSchema.parse(value);
       if (info.nativeNamespaceKey !== this.nativeNamespaceKey ||
           this.#info && (this.#info.runtimeId !== info.runtimeId || this.#info.snapshot.generation !== info.snapshot.generation ||
+            configurationFingerprint(this.#info.snapshot.identity ?? null) !== configurationFingerprint(info.snapshot.identity ?? null) ||
             this.#serviceIncarnation !== attachment.serviceIncarnation) ||
           info.snapshot.state !== "ready" || !info.snapshot.generation || !info.snapshot.identity) throw unavailable();
       if (this.#closed) throw unavailable();
       this.#lifetime = new AbortController(); this.#info = info; this.#attachment = attachment;
       this.#recovery = recovery; this.#serviceIncarnation = attachment.serviceIncarnation;
+      this.#invocationRecovery = existingOnly;
       void attachment.closed.then(() => this.#disconnected(attachment), () => this.#disconnected(attachment));
     } catch (error) { attachment.release(); throw error; }
+  }
+  async #admitCurrentConfiguration(): Promise<void> {
+    const retained = this.#ready();
+    const fresh = await this.input.provider.acquire();
+    let adopted = false;
+    try {
+      if (this.#closed || fresh.serviceIncarnation !== retained.attachment.serviceIncarnation ||
+          fresh.controllerEpoch < retained.attachment.controllerEpoch ||
+          fresh.channel !== retained.attachment.channel && fresh.controllerEpoch === retained.attachment.controllerEpoch) throw unavailable();
+      const info = openCodeRuntimeInfoSchema.parse(await call(fresh, { action: "lookup", configuration: this.input.configuration }));
+      if (this.#closed || info.nativeNamespaceKey !== this.nativeNamespaceKey || info.runtimeId !== retained.info.runtimeId ||
+          info.snapshot.state !== "ready" || info.snapshot.generation !== retained.info.snapshot.generation ||
+          configurationFingerprint(info.snapshot.identity ?? null) !== configurationFingerprint(retained.info.snapshot.identity ?? null) ||
+          this.#attachment !== undefined && this.#attachment !== retained.attachment) throw unavailable();
+      if (fresh.channel !== retained.attachment.channel || fresh.controllerEpoch !== retained.attachment.controllerEpoch) {
+        // The production owner retires a recovery carrier before opening its
+        // normal replacement. Its close callback may already have cleared our
+        // attachment. Native identity, not the old controller epoch, fences the
+        // replacement. Old ports remain invalid and are never silently rebound.
+        this.#lifetime.abort();
+        for (const port of [...this.#ports]) void port.release();
+        this.#lifetime = new AbortController(); this.#attachment = fresh; this.#info = info;
+        this.#serviceIncarnation = fresh.serviceIncarnation; adopted = true;
+        void fresh.closed.then(() => this.#disconnected(fresh), () => this.#disconnected(fresh));
+        retained.attachment.release();
+      }
+      this.#recovery = false; this.#invocationRecovery = false;
+    } finally { if (!adopted) fresh.release(); }
   }
   #disconnected(attachment: SidecarRuntimeLease): void {
     if (this.#attachment !== attachment) return;
@@ -165,9 +209,18 @@ export class OpenCodeRemoteRuntime {
     this.#ports.add(lease);
     return Object.freeze({ client, generation: info.snapshot.generation!, identity: info.snapshot.identity!, release: () => { void lease.release(); } });
   }
-  async admitToolSession(_target: OpenCodeHostToolTarget, _admission: OpenCodeHostToolAdmission,
-    _signal?: AbortSignal): Promise<OpenCodeHostToolAdmissionResult> { throw new OpenCodeRuntimeError("opencode_agent_tools_unavailable"); }
-  releaseToolSession(_target: OpenCodeHostToolTarget): void { /* R3 installs the retained host tool route. */ }
+  async admitToolSession(target: OpenCodeHostToolTarget, admission: OpenCodeHostToolAdmission,
+    signal?: AbortSignal): Promise<OpenCodeHostToolAdmissionResult> {
+    if (this.#recovery) throw unavailable();
+    const { attachment, info } = this.#ready();
+    return openCodeHostToolAdmissionResultSchema.parse(await call(attachment, { action: "tools_admit",
+      runtimeId: info.runtimeId, nativeGeneration: info.snapshot.generation!,
+      target: openCodeHostToolTargetSchema.parse(target), admission: openCodeHostToolAdmissionSchema.parse(admission) }, signal));
+  }
+  releaseToolSession(_target: OpenCodeHostToolTarget): void {
+    // Main owns the attachment; retained host routing ends at runtime retirement
+    // or is replaced by an explicit, newly validated admission.
+  }
   async inspect() {
     const { attachment, info } = this.#ready();
     return openCodeRuntimeInspectionSchema.parse(await call(attachment, { action: "inspect", runtimeId: info.runtimeId }));
@@ -198,7 +251,7 @@ export async function callOpenCodeRemoteRuntime(attachment: SidecarRuntimeLease,
   signal?.throwIfAborted();
   const channel = attachment.channel;
   const definition = openCodeRuntimeCommandLane(command) === "control" ? openCodeRuntimeControlOperation : openCodeRuntimeExecuteOperation;
-  if (!channel.supportsOperation(definition)) throw unavailable();
+  if (!channel.supportsOperation(definition)) throw new OpenCodeRuntimeError("opencode_runtime_capability_unavailable");
   const body = await channel.encodeBody({ ...command, controllerEpoch: attachment.controllerEpoch, serviceIncarnation: attachment.serviceIncarnation });
   signal?.throwIfAborted();
   const response = openCodeRuntimeResponseSchema.parse(await channel.decodeBody(await channel.call(definition, body, { signal })));

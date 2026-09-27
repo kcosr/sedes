@@ -32,7 +32,7 @@ it.runIf(RUN_REAL_OPENCODE)("installs complete isolated shell maps with cleanup 
     await writeFile(probe, `import {writeFileSync} from 'node:fs'; writeFileSync(process.argv[2], JSON.stringify(Object.fromEntries(['INHERITED','REMOVE_ME','EMPTY','TOKEN','PATH','OPENCODE_PASSWORD','OPENCODE_SERVER_PASSWORD','SEDES_AGENT_TOOL_SOURCE_CAPABILITY','SEDES_OPENCODE_MCP_CREDENTIAL','SEDES_OPENCODE_RUNTIME_OWNER'].map(key=>[key,process.env[key]??null]))));`);
     runtime = new OpenCodeRuntime({ hostIncarnation: "fixture-host", authority: { tenantId: "fixture", principalId: "fixture", backendInstanceId: "fixture", executionEnvironmentId: "local" },
       nativeStorePath, configDirectory, environment,
-      agentTools: { cli: { availability: "available", endpoint: "http://127.0.0.1:4784", executableDirectory: "/fixture/helper", inheritedPath: process.env.PATH ?? "" },
+      agentTools: { cli: () => ({ endpoint: "http://127.0.0.1:4784", executableDirectory: "/fixture/helper" }),
         invoke: async () => { throw new Error("fixture has no tool calls"); } }, connection: { ownership: "owned", channel: { type: "process_stdio", workingDirectory: workspace,
         executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2" } } });
     await runtime.start();

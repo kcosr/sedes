@@ -1,3 +1,4 @@
+import type { OpenCodeToolInvocationStamp } from "./opencode-tool-invocation.js";
 import { configurationFingerprint } from "../../config/configuration-fingerprint.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../execution/environment-channel.js";
@@ -79,6 +80,14 @@ export class OpenCodeRuntimeHostRegistry {
     const resident = await this.#existing(backendInstanceId);
     this.input.services.assertController(controllerEpoch);
     return resident?.runtime;
+  }
+
+  /** Called synchronously by the shared host CLI ingress before any relay await. */
+  captureCliInvocation(sourceCapability: string): OpenCodeToolInvocationStamp | undefined {
+    const matches = [...this.#runtimes.values()].filter(resident => resident.runtime.ownsCliCapability(sourceCapability));
+    if (!matches.length) return undefined;
+    if (matches.length !== 1 || matches[0]!.retiring) throw error("configuration_scope_denied");
+    return matches[0]!.runtime.captureCliInvocation(sourceCapability);
   }
 
   getRuntime(runtimeId: string): OpenCodeRuntime { return this.#resident(runtimeId).runtime; }

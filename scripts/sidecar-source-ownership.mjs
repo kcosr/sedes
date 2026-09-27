@@ -35,6 +35,8 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/agent-tools/adapters/backend-facade.ts",
   "src/server/backends/opencode/opencode-mcp-ingress.ts",
   "src/server/backends/opencode/opencode-host-agent-tools.ts",
+  "src/server/backends/opencode/opencode-tool-invocation.ts",
+  "src/server/backends/opencode/opencode-tool-relay-wire.ts",
   "src/server/backends/opencode/opencode-runtime.ts",
   "src/shared/protocol/opencode-configuration.ts",
   "src/server/backends/opencode/opencode-runtime-configuration.ts",
@@ -157,6 +159,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
 
 
   "src/server/sidecar/agent-tool-cli-local-ingress.ts",
+  "src/server/sidecar/agent-tool-request-relay.ts",
   "src/server/sidecar/composer-attachments-sidecar-host.ts",
   "src/server/sidecar/directory-browser-sidecar-host.ts",
   "src/server/sidecar/workspace-files-sidecar-host.ts",

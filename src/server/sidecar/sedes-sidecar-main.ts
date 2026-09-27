@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { environmentVariablesResolveOperation } from "../../internal/sidecar-protocol/environment-variables-v1.js";
 import { resolveEnvironmentVariables } from "../environment-variables/runtime-environment.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { windowsSidecarIpc } from "./sidecar-windows-ipc.js";
 import { connect } from "node:net";
 import { readFile } from "node:fs/promises";
@@ -13,7 +13,6 @@ import {
   registerDirectoryBrowserV1Operations,
   INTERACTIVE_TERMINAL_V2_EVIDENCE,
   registerComposerAttachmentsV1Operations,
-  SidecarProtocolDeliveryError,
   registerControlV2Operations,
   registerWorkspaceFilesV8Operations,
   registerWorkspaceToolsV2Operations,
@@ -30,8 +29,8 @@ import {
 } from "../../internal/sidecar-protocol/index.js";
 import type {
   AgentToolCliRequest,
-  AgentToolCliResult,
 } from "../../internal/agent-tool-cli-protocol/index.js";
+import { relayAgentToolRequest } from "./agent-tool-request-relay.js";
 import { runSedesCli } from "../../cli/sedes-cli.js";
 import { ComposerAttachmentsSidecarHost } from "./composer-attachments-sidecar-host.js";
 import { DirectoryBrowserSidecarHost } from "./directory-browser-sidecar-host.js";
@@ -62,6 +61,8 @@ import { SidecarRuntimeChannel } from "./runtime-channel.js";
 import { LocalEnvironmentChannelProvider } from "../execution/local-environment-channel.js";
 import { OpenCodeRuntimeHostRegistry } from "../backends/opencode/opencode-runtime-host-registry.js";
 import { registerOpenCodeRuntimeHost } from "../backends/opencode/opencode-sidecar-runtime.js";
+import { openCodeToolInvokeOperation } from "../backends/opencode/opencode-tool-relay-wire.js";
+import { BackendAgentToolRequestError } from "../agent-tools/adapters/backend-facade.js";
 import { CodexRuntimeHostRegistry } from "../backends/codex/runtime/codex-runtime-host-registry.js";
 import { registerCodexRuntimeHost } from "../backends/codex/runtime/codex-sidecar-runtime.js";
 import { registerCodexManagedTuiHost } from "../backends/codex/runtime/codex-runtime-managed-tui.js";
@@ -90,6 +91,8 @@ const compiledSidecarCapabilities = Object.freeze([
   Object.freeze({ capabilityId: "codex_managed_tui", majorVersion: 1 }),
 ]);
 const enabledSedesCapabilities = Object.freeze([
+  Object.freeze({ capabilityId: openCodeToolInvokeOperation.capabilityId, majorVersion: openCodeToolInvokeOperation.majorVersion,
+    operations: Object.freeze([openCodeToolInvokeOperation.operation]) }),
   Object.freeze({ capabilityId: "runtime_bodies", majorVersion: 1, operations: Object.freeze(["body.offer"]) }),
   Object.freeze({
     capabilityId: "agent_tools_cli",
@@ -227,8 +230,10 @@ async function main(): Promise<void> {
       agentToolIngress ??= await AgentToolCliLocalIngress.start({
         endpointKey: input.agentToolEndpointKey,
         relay: {
-          handle: async (request, options) =>
-            await relayAgentToolRequest(attachment, request, options.signal),
+          handle: (request, options) => {
+            const stamp = request.operation.type === "invoke" ? openCodeHosts.captureCliInvocation(request.sourceCapability) : undefined;
+            return relayAgentToolRequest(attachment, request, options.signal, stamp);
+          },
         },
       });
       return {
@@ -266,7 +271,22 @@ async function main(): Promise<void> {
   const codexHosts = new CodexRuntimeHostRegistry({ scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, environmentChannel, services: serviceRegistry });
   const openCodeHosts = new OpenCodeRuntimeHostRegistry({ scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
-    executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, environmentChannel, services: serviceRegistry });
+    executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, environmentChannel, services: serviceRegistry,
+    agentTools: {
+      cli: () => agentToolIngress && attachment.currentPeer?.supportsOperation(openCodeToolInvokeOperation)
+        ? { endpoint: agentToolIngress.endpointUrl, executableDirectory: path.dirname(executablePath) } : undefined,
+      invoke: async (sourceCapability, request, signal, stamp) => {
+        const operation: AgentToolCliRequest["operation"] = request.operation === "list" ? { type: "list" }
+          : request.operation === "describe" ? { type: "describe", toolIds: request.toolIds }
+          : { type: "invoke", request: request.request };
+        try {
+          return (await relayAgentToolRequest(attachment, { protocolVersion: 3, requestId: randomUUID(), sourceCapability, operation }, signal, stamp)).value;
+        } catch (error) {
+          if (error instanceof AgentToolCliIngressError) throw new BackendAgentToolRequestError(error.toolError);
+          throw error;
+        }
+      },
+    } });
   const claudeHosts = new ClaudePersistentRuntimeRegistry({
     scope: { tenantId: input.scope.tenantId, principalId: input.scope.principalId },
     executionEnvironmentId: input.scope.executionEnvironmentId, environment: process.env, environmentChannel, services: serviceRegistry,
@@ -470,91 +490,6 @@ async function proxyToService(endpointPath: string): Promise<void> {
     process.stdin.unpipe(socket); socket.unpipe(process.stdout); socket.destroy(); process.stdin.destroy();
     process.removeListener("SIGTERM", stop); process.removeListener("SIGINT", stop);
   }
-}
-
-async function relayAgentToolRequest(
-  peer: SidecarRuntimeAttachment,
-  request: AgentToolCliRequest,
-  signal: AbortSignal,
-): Promise<AgentToolCliResult> {
-  switch (request.operation.type) {
-    case "list": {
-      let response;
-      try {
-        response = await peer.call(
-          agentToolsCatalogOperation,
-          { sourceCapability: request.sourceCapability },
-          { signal, deadlineMilliseconds: 30_000 },
-        );
-      } catch (error) {
-        throw mapAgentToolDeliveryError(error, false);
-      }
-      if (response.outcome === "error") {
-        throw new AgentToolCliIngressError(response.error);
-      }
-      return { type: "list", value: { tools: response.tools } };
-    }
-    case "describe": {
-      let response;
-      try {
-        response = await peer.call(
-          agentToolsDescribeOperation,
-          {
-            sourceCapability: request.sourceCapability,
-            toolIds: request.operation.toolIds,
-          },
-          { signal, deadlineMilliseconds: 30_000 },
-        );
-      } catch (error) {
-        throw mapAgentToolDeliveryError(error, false);
-      }
-      if (response.outcome === "error") {
-        throw new AgentToolCliIngressError(response.error);
-      }
-      return { type: "describe", value: { tools: response.tools } };
-    }
-    case "invoke": {
-      let response;
-      try {
-        response = await peer.call(
-          agentToolsInvokeOperation,
-          {
-            sourceCapability: request.sourceCapability,
-            ...request.operation.request,
-          },
-          { signal },
-        );
-      } catch (error) {
-        throw mapAgentToolDeliveryError(error, true);
-      }
-      if (response.outcome === "error") {
-        throw new AgentToolCliIngressError(response.error);
-      }
-      return { type: "invoke", value: response.result };
-    }
-  }
-}
-
-function mapAgentToolDeliveryError(
-  error: unknown,
-  invocation: boolean,
-): unknown {
-  if (error instanceof SidecarUpstreamUnavailableError) {
-    return new AgentToolCliIngressError({ code: "unavailable", message: "Upstream Sedes is unavailable.", retryable: true });
-  }
-  if (!(error instanceof SidecarProtocolDeliveryError)) return error;
-  if (invocation && error.delivery === "sent_outcome_unknown") {
-    return new AgentToolCliIngressError({
-      code: "uncertain_outcome",
-      message: "The agent-tool invocation outcome is unknown.",
-      retryable: false,
-    });
-  }
-  return new AgentToolCliIngressError({
-    code: "unavailable",
-    message: "Agent tools are currently unavailable.",
-    retryable: true,
-  });
 }
 
 function boundedDiagnostic(value: string): string {

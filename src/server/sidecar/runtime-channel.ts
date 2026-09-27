@@ -35,6 +35,8 @@ export interface SidecarRuntimeLease {
 }
 export interface SidecarRuntimeProvider {
   acquire(signal?: AbortSignal, options?: { readonly existingOnly?: boolean }): Promise<SidecarRuntimeLease>;
+  /** Borrow existing authority without replacing its carrier or starting a service. */
+  acquireExisting(signal?: AbortSignal): Promise<SidecarRuntimeLease>;
 }
 
 /** Only a configuration mismatch permits the narrower retained-work attachment. */

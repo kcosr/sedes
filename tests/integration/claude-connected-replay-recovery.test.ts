@@ -44,6 +44,7 @@ async function fixture() {
   });
   let current: SidecarRuntimeLease | undefined;
   const sidecarRuntime: SidecarRuntimeProvider = {
+    acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); },
     acquire: vi.fn(async signal => {
       signal?.throwIfAborted();
       if (!current) throw new Error("test_carrier_unavailable");

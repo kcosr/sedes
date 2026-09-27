@@ -21,6 +21,7 @@ import { ScopedThreadEventHubRegistry, ThreadRuntimeCoordinator } from "../../sr
 import type { ConversationEventBridge } from "../../src/server/events/conversation-event-bridge.js";
 import type { InteractionBroker } from "../../src/server/conversations/interaction-broker.js";
 import type { AgentToolApplicationReader } from "../../src/server/agent-tools/tools/agent-tool-readers.js";
+import { runWithOpenCodeInvocation } from "../../src/server/backends/opencode/opencode-tool-invocation.js";
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); vi.restoreAllMocks(); });
@@ -59,8 +60,9 @@ function fixture(options: { inventory?: unknown; beforeInventory?: () => Promise
       accessBoundary: "thread" as const, enabledToolIds: ["agent.context"] })),
     invoke: vi.fn<BackendAgentToolFacade["invoke"]>(async () => { throw new Error("unexpected invocation"); }) as
       ReturnType<typeof vi.fn<BackendAgentToolFacade["invoke"]>> & BackendAgentToolFacade["invoke"] };
-  const tools = new OpenCodeAgentTools({ facade, sourceCapabilities: { issue: (source, _transport, presentation) => `${source.sourceThreadId}:${presentation}` }, sourceCapabilityTransport: "management_http" });
-  const hostTools = new OpenCodeHostAgentTools({ adapter: f.adapter, ...(options.unavailableCli ? {} : { cli: { endpoint: "http://127.0.0.1:4784", executableDirectory: "/bundled/bin" } }), assertCurrent: signal => f.runtime.assertCurrent(signal), invoke: (capability, request, signal) => tools.callHostTool(capability, request, signal) });
+  const tools = new OpenCodeAgentTools({ facade, sourceCapabilities: { issue: (source, _transport, presentation) => `${source.sourceThreadId}:${presentation}` }, sourceCapabilityTransport: "management_http",
+    captureLocalInvocation: () => f.host.captureToolInvocation(openCodeRuntimeTarget(f.target)) });
+  const hostTools = new OpenCodeHostAgentTools({ adapter: f.adapter, cli: () => options.unavailableCli ? undefined : ({ endpoint: "http://127.0.0.1:4784", executableDirectory: "/bundled/bin" }), assertCurrent: signal => f.runtime.assertCurrent(signal), capture: target => f.host.captureToolInvocation(target), invoke: (capability, request, signal, stamp) => tools.callHostTool(capability, request, signal, stamp) });
   f.setHostTools(hostTools);
   cleanups.push(() => f.dispose()); cleanups.push(() => tools.close());
   const context = Object.assign(f.context, { tools });
@@ -78,6 +80,47 @@ async function connect(environment: Record<string, string>) {
     body: JSON.stringify({ operation: "list", sessionID }) }) };
 }
 describe("OpenCode MCP runtime admission", () => {
+  it("recovers stamped invocation authority after main observer replacement without registering or sending native work", async () => {
+    const f = fixture({ cli: true });
+    const handle = await f.driver.attach(f.target); cleanups.push(() => handle.close());
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const observer = findOpenCodeInputObserver(f.port, f.target)!;
+    const { scope, binding, workspace } = f.target;
+    const evidence = new OpenCodeInputEvidenceRepository(f.repository);
+    f.repository.reserveOperation(scope, { applicationThreadId: binding.applicationThreadId,
+      connectionProfileId: binding.connectionProfileId, executionEnvironmentId: binding.executionEnvironmentId,
+      nativeSessionId: f.wire.sessionID, applicationOperationId: "recovered-input", operationKind: "submit",
+      nativeInputId: "msg_recovered", requestFingerprint: "a".repeat(64), requestSource: { kind: "user" }, deadlineAt: null }, Date.now());
+    observer.track(evidence.begin(scope, binding.applicationThreadId, "recovered-input", "submit", observer.trackerId, "queue"));
+    f.repository.markDispatched(scope, binding.applicationThreadId, "recovered-input", "submit", Date.now());
+    observer.recordAdmission("recovered-input", "submit", { id: "msg_recovered", sessionID: f.wire.sessionID,
+      type: "user", payload: { text: "recover this exact input" }, delivery: "queue", time: { created: 1 } });
+    f.wire.send({ id: "evt_recovered", type: "session.inbox.delivered", created: 1,
+      durable: { aggregateID: f.wire.sessionID, seq: 1, version: 1 }, data: { sessionID: f.wire.sessionID, inboxID: "msg_recovered" } });
+    await vi.waitFor(() => expect(evidence.get(scope, binding.applicationThreadId, "recovered-input", "submit").consumedFingerprint).not.toBeNull());
+    const stamp = f.host.captureToolInvocation(openCodeRuntimeTarget(f.target));
+    await handle.close(); expect(findOpenCodeInputObserver(f.port, f.target)).toBeUndefined();
+    const recoverInvocation = vi.fn(async () => ({ context: f.context, input: f.target, runtime: f.runtime }));
+    const remote = new OpenCodeAgentTools({ facade: f.facade, sourceCapabilities: { issue: () => { throw new Error("recovery does not issue capabilities"); } },
+      sourceCapabilityTransport: "execution_environment_sidecar", recoverInvocation });
+    cleanups.push(() => remote.close());
+    const source = { scope, sourceThreadId: binding.applicationThreadId, sourceWorkspaceId: workspace.summary.id,
+      sourceEnvironmentId: binding.executionEnvironmentId, backendKind: "opencode" as const };
+    const before = f.wire.requests.length;
+    const authority = runWithOpenCodeInvocation(stamp, () => remote.accessDecisionAuthority(source));
+    const approval = await authority.acquire(new AbortController().signal);
+    expect(approval.isCurrent()).toBe(true); expect(recoverInvocation).toHaveBeenCalledOnce();
+    expect(findOpenCodeInputObserver(f.port, f.target)).toBeDefined();
+    expect(f.wire.requests.slice(before).filter(request => request.method !== "GET")).toEqual([]);
+    expect(f.registrations).toEqual([]);
+    approval.release(); expect(findOpenCodeInputObserver(f.port, f.target)).toBeUndefined();
+    await expect(remote.accessDecisionAuthority(source).acquire(new AbortController().signal))
+      .rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+    expect(recoverInvocation).toHaveBeenCalledOnce();
+    vi.mocked(f.repository.hasCreatedRoot).mockReturnValue(false);
+    await expect(authority.acquire(new AbortController().signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+    expect(findOpenCodeInputObserver(f.port, f.target)).toBeUndefined();
+  });
   it("reclaims repeated refused host registrations and preserves the native write boundary", async () => {
     const f = fixture({ unavailableCli: true });
     const ensure = f.hostTools.ensureRegistration.bind(f.hostTools);
@@ -215,7 +258,7 @@ describe("OpenCode MCP runtime admission", () => {
     expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
     expect(f.registrations).toHaveLength(1);
   });
-  it("revokes borrowed approval authority on detach and restores it only after retained native proof catch-up", async () => {
+  it("retains approval observation across actor detach and revokes it on native continuity loss", async () => {
     const f = fixture({ cli: true }); const handle = await f.driver.attach(f.target);
     cleanups.push(() => handle.close());
     await handle.establishProjection({ signal: new AbortController().signal });
@@ -238,13 +281,14 @@ describe("OpenCode MCP runtime admission", () => {
     const authority = f.tools.accessDecisionAuthority(source);
     const approval = await authority.acquire(new AbortController().signal);
     expect(approval.isCurrent()).toBe(true);
-    await handle.close(); expect(approval.signal.aborted).toBe(true); expect(approval.isCurrent()).toBe(false); approval.release();
-    await expect(authority.acquire(new AbortController().signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+    await handle.close(); expect(approval.signal.aborted).toBe(false); expect(approval.isCurrent()).toBe(true);
+    expect(findOpenCodeInputObserver(f.port, f.target)).toBe(observer);
+    approval.release(); expect(findOpenCodeInputObserver(f.port, f.target)).toBeUndefined();
+    const recovered = await authority.acquire(new AbortController().signal);
+    expect(recovered.isCurrent()).toBe(true);
     const replacement = await f.driver.attach(f.target); cleanups.push(() => replacement.close());
     await replacement.establishProjection({ signal: new AbortController().signal });
     expect(findOpenCodeInputObserver(f.port, f.target)?.trackerId).toBe(observer.trackerId);
-    const recovered = await authority.acquire(new AbortController().signal);
-    expect(recovered.isCurrent()).toBe(true);
     f.wire.disconnect();
     await vi.waitFor(() => expect(recovered.signal.aborted).toBe(true));
     recovered.release();

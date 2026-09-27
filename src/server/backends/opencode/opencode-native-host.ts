@@ -1,3 +1,4 @@
+import type { OpenCodeToolInvocationStamp } from "./opencode-tool-invocation.js";
 import { configurationFingerprint } from "../../config/configuration-fingerprint.js";
 import { OpenCodeHttpNativeAdapter } from "./opencode-http-native-adapter.js";
 import { OpenCodeObservationHub } from "./opencode-observation-hub.js";
@@ -227,6 +228,13 @@ export class OpenCodeNativeHost {
 
   freezeAdmission(): void { this.#frozen = true; this.#journal.freeze(); }
   restoreAdmission(): void { if (!this.#lifetime.signal.aborted) { this.#frozen = false; this.#journal.restore(); } }
+  captureToolInvocation(target: OpenCodeRuntimeTarget): OpenCodeToolInvocationStamp {
+    this.#assertOpen();
+    const scope = this.#scopes.get(configurationFingerprint({ ...this.owner, ...target }));
+    if (!scope || !target.session || scope.port.lifetime.aborted) throw denied();
+    this.#assertAuthority(scope.port.authority);
+    return this.#hub.captureToolInvocation(scope.port.authority);
+  }
   hasAdmittedTarget(target: OpenCodeRuntimeTarget): boolean {
     return this.#scopes.has(configurationFingerprint({ ...this.owner, ...target }));
   }

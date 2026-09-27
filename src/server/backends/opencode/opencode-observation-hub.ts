@@ -1,3 +1,4 @@
+import { parseOpenCodeToolInvocationStamp, type OpenCodeToolInvocationStamp } from "./opencode-tool-invocation.js";
 import { randomUUID } from "node:crypto";
 import { configurationFingerprint } from "../../config/configuration-fingerprint.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
@@ -83,6 +84,15 @@ export class OpenCodeObservationHub {
   hasRetainedAuthority(authority: OpenCodeNativeAuthority): boolean {
     const scope = this.#scopes.get(configurationFingerprint(authority));
     return !!scope && (scope.records.length > 0 || scope.subscribers.size > 0 || scope.proof.hasWork);
+  }
+  /** Invocation provenance is one synchronous snapshot, before metadata or relay awaits. */
+  captureToolInvocation(authority: OpenCodeNativeAuthority): OpenCodeToolInvocationStamp {
+    this.#assertOpen();
+    const scope = this.#scopes.get(configurationFingerprint(authority));
+    if (!scope || !authority.session) throw unavailable("opencode_request_authority_mismatch");
+    return parseOpenCodeToolInvocationStamp({ authority: scope.authority, journalId: scope.journalId,
+      throughSequence: scope.sequence, nativeContinuity: scope.continuity, inputId: scope.proof.currentInputId,
+      authorityEpoch: scope.proof.authorityEpoch, nativeConnected: this.#connected });
   }
   /** Pin a dispatched input before its admission response can race the SSE frame. */
   beginInput(authority: OpenCodeNativeAuthority, inputId: string): void {

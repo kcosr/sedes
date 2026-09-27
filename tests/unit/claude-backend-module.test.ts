@@ -207,7 +207,7 @@ describe("ClaudeBackendModule", () => {
           scope,
           executionEnvironmentId: "environment-1",
         } as BackendModuleRuntimeContext["environmentChannel"],
-        ...(environmentKind !== "local" ? { sidecarRuntime: { acquire: vi.fn() } } : {}),
+        ...(environmentKind !== "local" ? { sidecarRuntime: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire: vi.fn() } } : {}),
         environmentOperations: unavailableEnvironmentOperations({
           environmentId: "environment-1",
           environmentKind,
@@ -227,7 +227,7 @@ describe("ClaudeBackendModule", () => {
         expect(() => prepared.createRuntime({ ...context, sidecarRuntime: undefined }))
           .toThrow("claude_sidecar_runtime_required");
       } else {
-        expect(() => prepared.createRuntime({ ...context, sidecarRuntime: { acquire: vi.fn() } }))
+        expect(() => prepared.createRuntime({ ...context, sidecarRuntime: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire: vi.fn() } }))
           .toThrow("claude_backend_runtime_context_invalid");
       }
       for (const wrongScope of [

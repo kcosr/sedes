@@ -28,6 +28,10 @@ import { OpenCodeNativeMutations } from "./opencode-native-mutations.js";
 import { OpenCodeExecutionEnvironment } from "./opencode-execution-environment.js";
 import { OpenCodeSkillCatalog } from "./opencode-skill-catalog.js";
 import { OpenCodeCliEnvironment } from "./opencode-cli-environment.js";
+import { InventoryRepository } from "../../db/repositories/inventory-repository.js";
+import { ConversationBindingRepository } from "../../db/repositories/conversation-binding-repository.js";
+import { openCodeRuntimeTarget, requireOpenCodeBinding } from "./opencode-conversation-context.js";
+import { assertOpenCodeInvocationSource, openCodeToolInvocationDenied } from "./opencode-tool-invocation.js";
 
 type NativeRuntime = Pick<OpenCodeRuntime, "nativeNamespaceKey" | "start" | "health" | "snapshot" | "stop" | "close" | "acquire" | "assertCurrent" | "admitToolSession" | "releaseToolSession">;
 type NativeRuntimeFactory = (input: OpenCodeRuntimeInput) => NativeRuntime;
@@ -124,7 +128,23 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     readonly input: BackendModuleConfigurationInput, readonly namespace: string, readonly createNativeRuntime: NativeRuntimeFactory) {
     this.scope = context.scope; this.instance = context.instance;
     this.#usage = new OpenCodeUsageAccounting(context.usage);
-    this.#tools = new OpenCodeAgentTools({ facade: context.agentTools, sourceCapabilities: context.agentToolSourceCapabilities, sourceCapabilityTransport: "management_http" });
+    this.#tools = new OpenCodeAgentTools({ facade: context.agentTools, sourceCapabilities: context.agentToolSourceCapabilities,
+      sourceCapabilityTransport: context.sidecarRuntime ? "execution_environment_sidecar" : "management_http",
+      captureLocalInvocation: source => {
+        if (context.sidecarRuntime || !(this.#owner instanceof OpenCodeRuntime)) return undefined;
+        return this.#owner.captureToolInvocation(openCodeRuntimeTarget(this.#invocationTarget(source).input));
+      },
+      recoverInvocation: async (source, stamp, signal) => {
+        assertOpenCodeInvocationSource(stamp, source);
+        const target = this.#invocationTarget(source);
+        const runtime = context.sidecarRuntime ? await this.#native() : this.#owner;
+        if (!runtime) throw openCodeToolInvocationDenied();
+        if (runtime instanceof OpenCodeRemoteRuntime) await runtime.startRetained();
+        else if (runtime.snapshot().state !== "ready") throw openCodeToolInvocationDenied();
+        await runtime.assertCurrent(signal); this.#assertOpen();
+        return { ...target, runtime };
+      },
+    });
     this.#startup = backendStartupEnvironmentVariables(input);
     this.#executionEnvironment = new OpenCodeExecutionEnvironment({ scope: context.scope, ownership: configuration.connection.ownership,
       readDefinitions: threadId => {
@@ -215,6 +235,27 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
 
   agentToolAccessDecisionAuthority(source: TrustedAgentToolSource) { return this.#tools.accessDecisionAuthority(source); }
 
+  #invocationTarget(source: TrustedAgentToolSource) {
+    if (source.backendKind !== "opencode" || source.scope.tenantId !== this.scope.tenantId ||
+        source.scope.principalId !== this.scope.principalId) throw openCodeToolInvocationDenied();
+    const inventory = new InventoryRepository(this.context.database);
+    const thread = inventory.getThread(source.scope, source.sourceThreadId).thread;
+    const workspace = inventory.getWorkspace(source.scope, source.sourceWorkspaceId);
+    const binding = new ConversationBindingRepository(this.context.database).getBinding(source.scope, source.sourceThreadId);
+    const opaqueBindingDetail = this.threadPersistence.repository.getBinding(source.scope, source.sourceThreadId);
+    const connection = this.context.connections.find(candidate => candidate.id === binding?.connectionProfileId);
+    if (!binding || !opaqueBindingDetail || !connection || binding.backendInstanceId !== this.instance.id ||
+        thread.workspaceId !== workspace.id || workspace.environmentId !== source.sourceEnvironmentId ||
+        binding.executionEnvironmentId !== source.sourceEnvironmentId) throw openCodeToolInvocationDenied();
+    const context = this.driverFactory.create(connection).input;
+    const input = { scope: source.scope, binding: { ...binding, createdAt: new Date(binding.createdAt).toISOString() }, opaqueBindingDetail,
+      workspace: { canonicalPath: workspace.canonicalPath, authorityRevision: workspace.environmentConfigurationRevision,
+        summary: { id: workspace.id, environmentId: workspace.environmentId, displayName: workspace.displayName,
+          displayPath: workspace.canonicalPath, availability: workspace.availability, trustState: workspace.trustState, revision: workspace.revision } } };
+    requireOpenCodeBinding(context, input);
+    return { context, input };
+  }
+
   async start(): Promise<void> { this.#assertOpen(); }
   async startupEnvironmentState(): Promise<"not_started" | "started" | "unknown"> {
     const state = this.#owner?.snapshot().state;
@@ -253,8 +294,8 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
         hostIncarnation: this.#incarnation,
         environmentChannel: this.context.environmentChannel,
         environment: this.input.environment,
-        agentTools: { cli: this.context.agentToolCli,
-          invoke: (capability, request, signal) => this.#tools.callHostTool(capability, request, signal) },
+        agentTools: { cli: () => this.context.agentToolCli.availability === "available" ? this.context.agentToolCli : undefined,
+          invoke: (capability, request, signal, stamp) => this.#tools.callHostTool(capability, request, signal, stamp) },
       });
       this.#assertOpen();
       const owner = this.createNativeRuntime({ ...resolved, assertLaunchAdmission: () => this.#assertOpen() });

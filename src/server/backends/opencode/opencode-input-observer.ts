@@ -16,6 +16,8 @@ import type { OpenCodeNativePort, OpenCodePortObservation, OpenCodeObservationBo
 import { OpenCodeObservationCursorRepository, type OpenCodeObservationCheckpoint } from "./opencode-observation-cursor-repository.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
+import { assertOpenCodeInvocationAuthority, openCodeToolInvocationDenied, parseOpenCodeToolInvocationStamp,
+  type OpenCodeToolInvocationStamp } from "./opencode-tool-invocation.js";
 
 const MAX_INPUTS = 100_000;
 const MAX_EVENT_PROOFS = 100_000;
@@ -68,6 +70,8 @@ export class OpenCodeInputObserver {
   #closed = false;
   #observation?: OpenCodePortObservation;
   #liveFrontier = -1;
+  #nativeAuthorityEpoch = 0;
+  #committedObservation?: OpenCodeObservationCheckpoint;
   #refreshTimer?: ReturnType<typeof setTimeout>;
   #refreshing = false;
   #refreshOffset = 0;
@@ -90,16 +94,18 @@ export class OpenCodeInputObserver {
   get trackerId(): string { return this.#trackerId; }
 
   /** A prior user receipt is not authority for an unrelated current native turn. */
-  accessDecisionAuthority(): BackendAgentToolAccessDecisionAuthority {
+  accessDecisionAuthority(value: OpenCodeToolInvocationStamp): BackendAgentToolAccessDecisionAuthority {
+    const stamp = parseOpenCodeToolInvocationStamp(value);
     return { acquire: async signal => {
       signal.throwIfAborted();
+      await this.#catchUpInvocation(stamp, signal);
       await this.#assertCurrent(signal);
-      const input = this.#currentInput;
+      const input = stamp.inputId;
       const epoch = this.#inputAuthority;
       const current = () => {
         try {
           this.#assertAuthority();
-          if (!input || !this.#connected || epoch.signal.aborted || this.#currentInput !== input) return false;
+          if (!input || epoch.signal.aborted || !this.#matchesInvocation(stamp)) return false;
           const tracked = this.#byInput.get(input);
           if (!tracked) return false;
           const proof = this.#evidence(tracked);
@@ -113,6 +119,28 @@ export class OpenCodeInputObserver {
       return { signal: AbortSignal.any([signal, epoch.signal, this.#signal, controller.signal]),
         isCurrent: current, release: () => controller.abort() };
     } };
+  }
+
+  async #catchUpInvocation(stamp: OpenCodeToolInvocationStamp, signal: AbortSignal): Promise<void> {
+    assertOpenCodeInvocationAuthority(stamp, this.lease.client.authority);
+    if (!stamp.nativeConnected || !stamp.inputId) throw openCodeToolInvocationDenied();
+    await this.start(signal);
+    while (true) {
+      this.#assertAuthority(); signal.throwIfAborted();
+      const checkpoint = this.#committedObservation;
+      if (!checkpoint || checkpoint.journalId !== stamp.journalId) throw openCodeToolInvocationDenied();
+      if (checkpoint.sequence >= stamp.throughSequence) {
+        if (!this.#matchesInvocation(stamp)) throw openCodeToolInvocationDenied();
+        return;
+      }
+      await this.#changed(signal);
+    }
+  }
+  #matchesInvocation(stamp: OpenCodeToolInvocationStamp): boolean {
+    const checkpoint = this.#committedObservation;
+    return this.#connected && !!checkpoint && checkpoint.journalId === stamp.journalId &&
+      checkpoint.sequence >= stamp.throughSequence && checkpoint.nativeContinuity === stamp.nativeContinuity &&
+      this.#nativeAuthorityEpoch === stamp.authorityEpoch && this.#currentInput === stamp.inputId;
   }
 
   #changeInputAuthority(input?: string): void {
@@ -348,10 +376,10 @@ export class OpenCodeInputObserver {
     else if (event.type === "session.revert.committed") this.#proveRevert(event.data.to, seq, fingerprint);
     else if (event.type === "session.deleted") { this.#clearMap(this.#boundaries); this.#clearMap(this.#events); }
     if (live) {
-      if (event.type === "session.inbox.delivered") this.#changeInputAuthority(event.data.inboxID);
+      if (event.type === "session.inbox.delivered") { this.#nativeAuthorityEpoch++; this.#changeInputAuthority(event.data.inboxID); }
       else if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed" ||
           event.type === "session.execution.interrupted" || event.type === "session.revert.committed" ||
-          event.type === "session.revert.staged" || event.type === "session.deleted") this.#changeInputAuthority();
+          event.type === "session.revert.staged" || event.type === "session.deleted") { this.#nativeAuthorityEpoch++; this.#changeInputAuthority(); }
     }
     // No native event is retained in the handle's history queue by this observer.
   }
@@ -422,15 +450,17 @@ export class OpenCodeInputObserver {
   /** No callback, permission epoch, or native ACK can escape a failed SQL commit. */
   #commitCursor(previous: OpenCodeObservationCheckpoint | undefined, next: OpenCodeObservationCheckpoint,
     apply: () => void, reset = false): void {
-    const tracker = this.#trackerId, frontier = this.#liveFrontier;
+    const tracker = this.#trackerId, frontier = this.#liveFrontier, epoch = this.#nativeAuthorityEpoch;
     const effects: (() => void)[] = [], undo: (() => void)[] = [];
     this.#afterCommit = effects; this.#cacheUndo = undo;
     try { this.#cursors.commit(previous, next, apply, { reset }); }
     catch (error) {
       for (let index = undo.length - 1; index >= 0; index--) undo[index]!();
-      this.#trackerId = tracker; this.#liveFrontier = frontier; throw error;
+      this.#trackerId = tracker; this.#liveFrontier = frontier; this.#nativeAuthorityEpoch = epoch; throw error;
     } finally { this.#afterCommit = undefined; this.#cacheUndo = undefined; }
+    this.#committedObservation = next;
     for (const effect of effects) effect();
+    this.#wake();
   }
 
   #setMap<K, V>(map: Map<K, V>, key: K, value: V): void {
@@ -473,6 +503,7 @@ export class OpenCodeInputObserver {
       const next = { ...checkpoint, nativeContinuity: boundary.nativeContinuity };
       this.#commitCursor(checkpoint, next, () => {
         this.#trackerId = boundary.nativeContinuity;
+        this.#nativeAuthorityEpoch = boundary.proof.authorityEpoch;
         this.#liveFrontier = boundary.proof.nativeFrontier ?? -1;
         this.#changeInputAuthority(boundary.nativeConnected ? boundary.proof.currentInputId ?? undefined : undefined);
       });
@@ -493,6 +524,7 @@ export class OpenCodeInputObserver {
         const next = this.#checkpoint(record.journalId, record.sequence, record.nativeContinuity);
         this.#commitCursor(checkpoint, next, () => {
           if (record.kind === "native_break") {
+            this.#nativeAuthorityEpoch++;
             this.#markContinuityLost(); this.#trackerId = record.nativeContinuity;
           } else if (record.kind === "native_fact") this.#fact(record.sessionID, record.fact);
           else this.#event(record.event, true);

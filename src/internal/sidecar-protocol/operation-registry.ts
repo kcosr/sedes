@@ -122,6 +122,9 @@ function validateDefinition(
   definition: SidecarOperationDefinition<unknown, unknown>,
 ): void {
   const callerAbortAllowed =
+    (definition.capabilityId === "opencode_tools" &&
+      definition.majorVersion === 1 && definition.operation === "tools.invoke" &&
+      definition.lane === "operation") ||
     (definition.capabilityId === "agent_tools_cli" &&
       definition.majorVersion === 3 &&
       definition.operation === "tool.invoke" &&

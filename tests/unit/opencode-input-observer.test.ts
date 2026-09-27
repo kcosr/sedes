@@ -123,7 +123,7 @@ describe("OpenCode independent private input observation", () => {
     await vi.waitFor(() => expect(f.host.retentionSnapshot().observation.pendingEvidenceCount).toBe(2));
     const replacement = f.createObserver(); await replacement.start();
     expect(replacement.trackerId).toBe(tracker); expect(f.row().consumedFingerprint).not.toBeNull();
-    const authority = await replacement.accessDecisionAuthority().acquire(new AbortController().signal);
+    const authority = await replacement.accessDecisionAuthority(f.host.captureToolInvocation(openCodeRuntimeTarget(f.attach))).acquire(new AbortController().signal);
     expect(authority.isCurrent()).toBe(true); authority.release();
     expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
     expect(f.wire.requests.filter(request => request.pathname.endsWith("/message"))).toHaveLength(0);
@@ -450,12 +450,51 @@ describe("OpenCode independent private input observation", () => {
 });
 
 describe("OpenCode current-input access decisions", () => {
+  it("waits for the invocation cut to commit and cannot grant authority from rolled back consumption", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    f.wire.send(enqueue(1)); await vi.waitFor(() => expect(f.row().enqueueSequence).toBe(1));
+    f.database.exec(`CREATE TRIGGER hold_invocation_cursor BEFORE UPDATE ON opencode_observation_cursors
+      WHEN NEW.sequence = 2 BEGIN SELECT RAISE(ABORT,'hold invocation cut'); END`);
+    f.wire.send(delivered(2));
+    await vi.waitFor(() => expect(f.host.captureToolInvocation(openCodeRuntimeTarget(f.attach)).throughSequence).toBe(2));
+    const stamp = f.host.captureToolInvocation(openCodeRuntimeTarget(f.attach));
+    let settled = false;
+    const acquiring = f.observer.accessDecisionAuthority(stamp).acquire(new AbortController().signal).then(value => { settled = true; return value; });
+    await new Promise(resolve => setTimeout(resolve, 125));
+    expect(settled).toBe(false); expect(f.row().consumedFingerprint).toBeNull();
+    f.database.exec("DROP TRIGGER hold_invocation_cursor");
+    const lease = await acquiring; expect(lease.isCurrent()).toBe(true); lease.release();
+  });
+  it("does not borrow a later Sedes input for an invocation from a foreign native input", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    f.wire.send(delivered(1, "msg_foreign"));
+    await vi.waitFor(() => expect(f.host.captureToolInvocation(openCodeRuntimeTarget(f.attach)).inputId).toBe("msg_foreign"));
+    const stamp = f.host.captureToolInvocation(openCodeRuntimeTarget(f.attach));
+    f.wire.send(enqueue(2)); f.wire.send(delivered(3)); await consumed(f);
+    await expect(f.observer.accessDecisionAuthority(stamp).acquire(new AbortController().signal))
+      .rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+  });
+  it("rejects a reused input ID after the host authority epoch changes", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve(); f.wire.send(enqueue(1)); f.wire.send(delivered(2)); await consumed(f);
+    const stamp = f.host.captureToolInvocation(openCodeRuntimeTarget(f.attach));
+    f.wire.send(delivered(3));
+    await vi.waitFor(() => expect(f.host.captureToolInvocation(openCodeRuntimeTarget(f.attach)).authorityEpoch).toBe(stamp.authorityEpoch + 1));
+    await vi.waitFor(() => expect(f.database.prepare("SELECT sequence FROM opencode_observation_cursors").get()).toEqual({ sequence: 3 }));
+    await expect(f.observer.accessDecisionAuthority(stamp).acquire(new AbortController().signal))
+      .rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+  });
+  it("rejects a stale native owner even when the input and observation coordinates match", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve(); f.wire.send(enqueue(1)); f.wire.send(delivered(2)); await consumed(f);
+    const stamp = f.host.captureToolInvocation(openCodeRuntimeTarget(f.attach));
+    await expect(f.observer.accessDecisionAuthority({ ...stamp, authority: { ...stamp.authority, nativeGeneration: "old-generation" } })
+      .acquire(new AbortController().signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+  });
   it("requires consumption plus prepared private user provenance and loses the lease on foreign delivery", async () => {
     const f = fixture(); await f.observer.start(); f.reserve();
-    const authority = f.observer.accessDecisionAuthority(); const signal = new AbortController().signal;
+    const authority = f.observer.accessDecisionAuthority(f.host.captureToolInvocation(openCodeRuntimeTarget(f.attach))); const signal = new AbortController().signal;
     await expect(authority.acquire(signal)).rejects.toMatchObject({ toolError: { code: "permission_denied", retryable: false } });
     f.wire.send(enqueue(1)); f.wire.send(delivered(2)); await consumed(f);
-    const lease = await authority.acquire(signal);
+    const lease = await f.observer.accessDecisionAuthority(f.host.captureToolInvocation(openCodeRuntimeTarget(f.attach))).acquire(signal);
     expect(lease.isCurrent()).toBe(true);
     f.wire.send(delivered(3, "msg_foreign"));
     await vi.waitFor(() => expect(lease.signal.aborted).toBe(true));
@@ -468,14 +507,14 @@ describe("OpenCode current-input access decisions", () => {
     f.wire.send(enqueue(1)); f.wire.send(delivered(2)); await consumed(f);
     f.wire.messages.push(user()); f.observer.close();
     const cold = f.createObserver(); await cold.start(); cold.observeHistory(f.wire.messages);
-    const authority = await cold.accessDecisionAuthority().acquire(new AbortController().signal);
+    const authority = await cold.accessDecisionAuthority(f.host.captureToolInvocation(openCodeRuntimeTarget(f.attach))).acquire(new AbortController().signal);
     expect(authority.isCurrent()).toBe(true); authority.release();
     expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
   });
   it("invalidates pending access decisions on an observation gap", async () => {
     const f = fixture(); await f.observer.start(); f.reserve();
     f.wire.send(enqueue(1)); f.wire.send(delivered(2)); await consumed(f);
-    const lease = await f.observer.accessDecisionAuthority().acquire(new AbortController().signal);
+    const lease = await f.observer.accessDecisionAuthority(f.host.captureToolInvocation(openCodeRuntimeTarget(f.attach))).acquire(new AbortController().signal);
     f.wire.send(renamed(4));
     await vi.waitFor(() => expect(lease.signal.aborted).toBe(true)); expect(lease.isCurrent()).toBe(false);
   });

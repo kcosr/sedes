@@ -124,6 +124,68 @@ function fixture(
 }
 
 describe("SidecarRuntimeOwner", () => {
+  it.each(["ssh_stdio", "outbound_websocket"])("borrows the current %s carrier for existing invocation authority", async transportKind => {
+    const value = fixture({ transportKind });
+    const signal = new AbortController().signal;
+    const original = await value.owner.acquireOperation(scope, environmentId, signal);
+    const existing = await value.owner.acquireExisting(scope, environmentId, signal);
+    expect(existing.session).toBe(original.session);
+    expect(existing.carrierGeneration).toBe(original.carrierGeneration);
+    expect(value.provisioner.attachExisting).not.toHaveBeenCalled();
+    expect(value.launch).toHaveBeenCalledOnce();
+    original.release();
+    expect(value.owner.activeOperationLeaseCount).toBe(1);
+    expect(existing.session.close).not.toHaveBeenCalled();
+    existing.release();
+    await value.owner.close();
+  });
+
+  it.each(["manual", "automatic", "retained"] as const)("shares a %s recovery carrier until its last existing borrow ends", async kind => {
+    const value = fixture();
+    const signal = new AbortController().signal;
+    const original = await (kind === "manual" ? value.owner.acquireRecovery(scope, environmentId, signal)
+      : kind === "automatic" ? value.owner.acquireAutomaticRecovery(scope, environmentId, signal)
+      : value.owner.acquireRetainedRecovery(scope, environmentId, signal));
+    const existing = await value.owner.acquireExisting(scope, environmentId, signal);
+    expect(existing.session).toBe(original.session);
+    original.release();
+    expect(existing.session.close).not.toHaveBeenCalled();
+    expect(value.provisioner.attachExisting).toHaveBeenCalledOnce();
+    expect(value.launch).not.toHaveBeenCalled();
+    existing.release();
+    await vi.waitFor(() => expect(existing.session.close).toHaveBeenCalledOnce());
+    await value.owner.close();
+  });
+
+  it("only attaches existing services and preserves pending-configuration recovery", async () => {
+    const empty = fixture();
+    const signal = new AbortController().signal;
+    const recovery = await empty.owner.acquireExisting(scope, environmentId, signal);
+    expect(empty.provisioner.attachExisting).toHaveBeenCalledOnce();
+    expect(empty.launch).not.toHaveBeenCalled();
+    recovery.release(); await empty.owner.close();
+    const value = fixture();
+    const original = await value.owner.acquireOperation(scope, environmentId, signal);
+    value.setEnvironmentRevision(4);
+    const retained = await value.owner.acquireExisting(scope, environmentId, signal);
+    expect(retained.session).not.toBe(original.session);
+    expect(original.session.close).toHaveBeenCalledWith("sidecar_revision_changed");
+    expect(value.launch).toHaveBeenCalledOnce();
+    expect(value.provisioner.attachExisting).toHaveBeenCalledOnce();
+    retained.release(); original.release(); await value.owner.close();
+  });
+
+  it("denies existing carrier borrowing across scope, abort, and explicit disconnect", async () => {
+    const value = fixture();
+    const original = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);
+    await expect(value.owner.acquireExisting({ ...scope, principalId: "other" }, environmentId, new AbortController().signal)).rejects.toBeDefined();
+    await expect(value.owner.acquireExisting(scope, environmentId, AbortSignal.abort())).rejects.toBeDefined();
+    await value.owner.disconnect();
+    await expect(value.owner.acquireExisting(scope, environmentId, new AbortController().signal)).rejects.toBeDefined();
+    expect(value.provisioner.attachExisting).not.toHaveBeenCalled();
+    original.release(); await value.owner.close();
+  });
+
   it("does not enter the actor boundary or retire a live carrier when provisioner staging fails", async () => {
     const value = fixture();
     const lease = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);

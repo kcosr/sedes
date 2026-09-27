@@ -23,6 +23,7 @@ export class OpenCodeNativeObservationProof {
   get bytes(): number { return this.#bytes + 1_024 + this.#workBytes; }
   get hasWork(): boolean { return this.#unknownWork || this.#unknownExecution || this.#current !== null || this.#pending.size !== 0 || this.#work.size !== 0; }
   get currentInputId(): string | null { return this.#current; }
+  get authorityEpoch(): number { return this.#epoch; }
   prepareInput(id: string, maximumBytes: number): boolean {
     if (this.#pending.has(id)) return true;
     const bytes = Buffer.byteLength(id) + 32;

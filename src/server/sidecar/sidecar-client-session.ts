@@ -194,6 +194,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
         registry.capabilities(),
         agentToolCliAuthorized,
         input.authorizedRuntimeCapabilities.length > 0,
+        agentToolCliAuthorized && input.authorizedRuntimeCapabilities.some(capability => capability.capabilityId === "opencode_runtime" && capability.majorVersion === 1),
       );
       const runtimeCapabilities: readonly SidecarCapabilityInventory[] = input.authorizedRuntimeCapabilities.length === 0 ? [] : [
         ...input.authorizedRuntimeCapabilities,
@@ -550,16 +551,18 @@ function validateSedesCapabilities(
   capabilities: readonly SidecarCapabilityInventory[],
   agentToolCliAuthorized: boolean,
   runtimeAuthorized: boolean,
+  openCodeToolsAuthorized: boolean,
 ): readonly SidecarCapabilityInventory[] {
   const expectedOperations = agentToolsV3Operations
     .map(({ operation }) => operation)
     .sort();
   const selected = capabilities.filter((capability) => capability.capabilityId !== "runtime_bodies" || runtimeAuthorized);
   const valid =
-    selected.length === (agentToolCliAuthorized ? 1 : 0) + (runtimeAuthorized ? 1 : 0) &&
+    selected.length === (agentToolCliAuthorized ? 1 : 0) + (runtimeAuthorized ? 1 : 0) + (openCodeToolsAuthorized ? 1 : 0) &&
     selected.every(
       ({ capabilityId, majorVersion, operations }) =>
         capabilityId === "runtime_bodies" ? runtimeAuthorized && majorVersion === 1 && JSON.stringify(operations) === JSON.stringify([sidecarRuntimeBodyOffer.operation]) :
+        capabilityId === "opencode_tools" ? openCodeToolsAuthorized && majorVersion === 1 && JSON.stringify(operations) === JSON.stringify(["tools.invoke"]) :
         capabilityId === "agent_tools_cli" && agentToolCliAuthorized &&
         majorVersion === 3 &&
         JSON.stringify([...operations].sort()) ===

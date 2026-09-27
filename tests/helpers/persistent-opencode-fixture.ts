@@ -71,7 +71,8 @@ export function createPersistentOpenCodeFixture(ownership: "owned" | "external" 
   let current: SidecarRuntimeLease | undefined;
   let normalError: Error | undefined;
   const acquireRecovery = vi.fn(async () => { if (!current) throw new Error("fixture_carrier_missing"); return current; });
-  const provider: SidecarRuntimeProvider = { acquire: vi.fn(async () => {
+  const acquireExisting = vi.fn(async () => { if (!current) throw new Error("fixture_carrier_missing"); return current; });
+  const provider: SidecarRuntimeProvider = { acquireExisting, acquire: vi.fn(async () => {
     if (normalError) throw normalError;
     if (!current) throw new Error("fixture_carrier_missing"); return current;
   }) };
@@ -92,7 +93,7 @@ export function createPersistentOpenCodeFixture(ownership: "owned" | "external" 
     } };
     carriers.push(attached); return attached;
   }
-  return { scope, configuration, services, hosts, wire, adapter, archive, owners, provider, acquireRecovery, attach,
+  return { scope, configuration, services, hosts, wire, adapter, archive, owners, provider, acquireRecovery, acquireExisting, attach,
     setNormalError(error?: Error) { normalError = error; },
     holdPromptResponse() {
       let release!: () => void, entered!: () => void;
