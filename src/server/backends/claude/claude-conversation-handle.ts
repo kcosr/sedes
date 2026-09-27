@@ -98,6 +98,11 @@ import {
 } from "./claude-permission-policy.js";
 import { findClaudeSafeSkill } from "./claude-skills.js";
 import { ClaudeOperationalNoticeProjector } from "./claude-operational-notices.js";
+import type { OutputArtifactPublisher } from "../../output-artifacts/contracts.js";
+import {
+  ClaudeViewedImagePublications,
+  type ClaudeViewedImageCandidate,
+} from "./claude-viewed-images.js";
 
 const MAXIMUM_EVENT_JOURNAL = 256;
 const MAXIMUM_ACKNOWLEDGEMENT_WAIT_MS = 30_000;
@@ -187,6 +192,8 @@ export interface ClaudeConversationHandleInput {
   readonly permissionPolicy: ClaudePermissionPolicy;
   readonly modelPolicy: CompiledBackendModelPolicy;
   readonly attachmentProvenanceKey: Uint8Array;
+  /** Publishes the in-band images Claude's reads return. */
+  readonly outputArtifacts: OutputArtifactPublisher;
   readonly agentToolCli?: AgentToolCliAvailability;
   readonly agentToolCliMode?: AgentToolPresentationMode;
   /** Native presentation: `sourceCapability` is then bound to MCP. */
@@ -248,6 +255,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
   readonly #session: ClaudeRuntimeSession;
   readonly #interactions: ClaudeInteractionBridge;
   readonly #operationalNotices: ClaudeOperationalNoticeProjector;
+  /** This attachment's published and failed read images, by publication key. */
+  readonly #viewedImages: ClaudeViewedImagePublications;
   readonly #backgroundActivity = new ClaudeBackgroundActivity();
   readonly #releaseSession: () => void;
   readonly #releaseAgentToolCli: () => void;
@@ -378,6 +387,11 @@ export class ClaudeConversationHandle implements ConversationHandle {
       tenantId: input.binding.tenantId,
       principalId: input.binding.ownerPrincipalId,
     };
+    this.#viewedImages = new ClaudeViewedImagePublications({
+      outputArtifacts: input.outputArtifacts,
+      scope: this.#scope,
+      applicationThreadId: input.binding.applicationThreadId,
+    });
     // A verified fork child's copied turns are inherited, not its own work.
     const forkChild = this.#settings.findForkChild(this.#scope, input.binding.applicationThreadId);
     if (forkChild && forkChild.nativeSessionId !== input.binding.backendConversationId) {
@@ -504,6 +518,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
         }
         this.#usageAccounting?.beginDelivery();
         await this.#consume(message);
+        // A message can move the window over a read whose image is not yet
+        // published, for example a retraction or a relinked compaction.
+        await this.#publishWindowViewedImages();
         return this.#usageAccounting?.deliveryCommitted === false ? false : undefined;
       },
       onFailure: (error) => {
@@ -526,6 +543,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
       } else if (!this.#session.reattached && this.#backgroundActivity.snapshot().state === "unknown" && !this.#backgroundActivity.retirementBlocked) this.#backgroundActivity.reset();
       const initialMessages = await input.loadInitialMessages();
       this.#installInitialMessages(initialMessages);
+      // The first snapshot already shows the images of the reads it holds.
+      await this.#publishWindowViewedImages();
       this.#effectiveModel =
         initialization.actualModel ?? desired.model ?? undefined;
       if (this.#effectiveModel) {
@@ -649,25 +668,30 @@ export class ClaudeConversationHandle implements ConversationHandle {
               input.cursor,
               this.#historyCursorNonce,
             );
-      const selectionInput = {
-        before,
-        limit: input.limit,
-        authentication: this.#historyAuthentication(),
-      } as const;
-      const preliminary = projectClaudeHistoryPageAtIndex(
-        this.#messages,
-        selectionInput,
-      );
-      const terminalReceipts = this.#terminalReceipts(
-        preliminary.page.orderedBackendTurnIds,
-      );
-      const selected =
-        terminalReceipts.length === 0
+      const select = () => {
+        const selectionInput = {
+          before,
+          limit: input.limit,
+          authentication: this.#historyAuthentication(),
+        } as const;
+        const preliminary = projectClaudeHistoryPageAtIndex(
+          this.#messages,
+          selectionInput,
+        );
+        const terminalReceipts = this.#terminalReceipts(
+          preliminary.page.orderedBackendTurnIds,
+        );
+        return terminalReceipts.length === 0
           ? preliminary
           : projectClaudeHistoryPageAtIndex(this.#messages, {
               ...selectionInput,
               terminalReceipts,
             });
+      };
+      let selected = select();
+      if (await this.#viewedImages.publish(selected.pendingViewedImages, input.signal)) {
+        selected = select();
+      }
       this.#usageAccounting?.registerTurns(Object.values(selected.page.turnsById));
       return {
         ...selected.page,
@@ -695,27 +719,33 @@ export class ClaudeConversationHandle implements ConversationHandle {
       const selectionInput = {
         matchesBackendTurnId: input.matchesBackendTurnId,
         maximumTurnCandidates: input.maximumTurnCandidates,
-        authentication: this.#historyAuthentication(),
       } as const;
-      const preliminary = locateClaudeHistoryTurn(
-        this.#messages,
-        selectionInput,
-      );
+      const preliminary = locateClaudeHistoryTurn(this.#messages, {
+        ...selectionInput,
+        authentication: this.#historyAuthentication(),
+      });
       input.signal?.throwIfAborted();
       if (preliminary.status !== "found") return preliminary;
       const backendTurnId = preliminary.page.orderedBackendTurnIds[0]!;
-      const terminalReceipts = this.#terminalReceipts([backendTurnId]);
-      if (terminalReceipts.length === 0) return preliminary;
-      const selected = locateClaudeHistoryTurn(this.#messages, {
-        ...selectionInput,
-        matchesBackendTurnId: (candidate) => candidate === backendTurnId,
-        terminalReceipts,
-      });
-      input.signal?.throwIfAborted();
-      if (selected.status !== "found") {
-        throw new ClaudeHistoryProjectionError("claude_history_invalid");
+      const select = () => {
+        const terminalReceipts = this.#terminalReceipts([backendTurnId]);
+        const selected = locateClaudeHistoryTurn(this.#messages, {
+          ...selectionInput,
+          matchesBackendTurnId: (candidate) => candidate === backendTurnId,
+          authentication: this.#historyAuthentication(),
+          ...(terminalReceipts.length === 0 ? {} : { terminalReceipts }),
+        });
+        input.signal?.throwIfAborted();
+        if (selected.status !== "found") {
+          throw new ClaudeHistoryProjectionError("claude_history_invalid");
+        }
+        return selected;
+      };
+      let selected = this.#terminalReceipts([backendTurnId]).length === 0 ? preliminary : select();
+      if (await this.#viewedImages.publish(selected.pendingViewedImages, input.signal)) {
+        selected = select();
       }
-      return selected;
+      return { status: "found", page: selected.page };
     } catch (error) {
       throw mapClaudeHistoryRequestError(error);
     }
@@ -747,6 +777,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
         permittedByOperationId.set(applicationOperationId, permitted);
         return permitted;
       },
+      viewedImages: this.#viewedImages,
       resolveSkillName: (nativeUserMessageUuid) => {
         if (skillByNativeUserUuid.has(nativeUserMessageUuid)) {
           return skillByNativeUserUuid.get(nativeUserMessageUuid) ?? undefined;
@@ -1649,6 +1680,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
       // Wait for Claude's exact start or stamp, or the owner's retained evidence.
       return;
     }
+    if (message.type === "user" && !this.#messages.some(({ uuid }) => uuid === sessionMessage.uuid)) {
+      await this.#publishArrivingViewedImages(sessionMessage);
+      if (this.#closed || this.#projectionInvalidated) return;
+    }
     if (!this.#messages.some(({ uuid }) => uuid === sessionMessage.uuid)) {
       if (message.type === "assistant" && this.#providerTurn) this.#providerTurn.responded = true;
       const previous = this.#projection;
@@ -2379,6 +2414,37 @@ export class ClaudeConversationHandle implements ConversationHandle {
     }
   }
 
+  /**
+   * A read's image goes out with the read's completion, in one delta. The
+   * result is first projected on a copy of the window, and any image it
+   * completes is published before the real projection sees the result.
+   */
+  async #publishArrivingViewedImages(message: SessionMessage): Promise<void> {
+    if (!carriesToolResultImage(message)) return;
+    let pending: readonly ClaudeViewedImageCandidate[];
+    try {
+      pending = this.#projectLatest([...this.#projectionMessages, message], {
+        turnOffset: this.#projectionTurnOffset,
+        userMessageOrdinalBase: this.#projectionUserMessageOrdinalBase,
+      }).pendingViewedImages;
+    } catch {
+      // Projecting the message for real reports its failure.
+      return;
+    }
+    await this.#viewedImages.publish(pending);
+  }
+
+  /** Publishes the window's pending read images, then shows them as new items. */
+  async #publishWindowViewedImages(): Promise<void> {
+    if (this.#closed || this.#projectionInvalidated) return;
+    const pending = this.#viewedImages.publishable(this.#projection.pendingViewedImages);
+    if (pending.length === 0 || !(await this.#viewedImages.publish(pending))) return;
+    if (this.#closed || this.#projectionInvalidated) return;
+    const previous = this.#projection.snapshot;
+    this.#refreshProjection();
+    this.#emitProjectionDelta(previous, this.#projection.snapshot);
+  }
+
   #refreshProjection(rebuildWindow = false): void {
     const messages = rebuildWindow ? this.#messages : this.#projectionMessages;
     const turnOffset = rebuildWindow ? 0 : this.#projectionTurnOffset;
@@ -3093,6 +3159,18 @@ function modelOutputMessageId(message: SDKMessage): string | undefined {
   if (message.type === "assistant") return message.parent_tool_use_id === null ? message.message.id : undefined;
   if (message.type !== "stream_event" || message.parent_tool_use_id !== null) return undefined;
   return message.event.type === "message_start" ? message.event.message.id : undefined;
+}
+
+/** A user row with a tool result that carries an image block. */
+function carriesToolResultImage(message: SessionMessage): boolean {
+  const content = (message.message as { readonly content?: unknown } | null)?.content;
+  return Array.isArray(content) && content.some((block: unknown) =>
+    isRecord(block) && block.type === "tool_result" && Array.isArray(block.content) &&
+    block.content.some((part: unknown) => isRecord(part) && part.type === "image"));
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function copySessionMessage(message: SessionMessage): SessionMessage {

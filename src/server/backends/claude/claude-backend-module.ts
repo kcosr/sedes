@@ -224,6 +224,7 @@ class ClaudeBackendModuleRuntime implements BackendModuleRuntime {
       permissionPolicy: prepared.runtime.permissionPolicy,
       modelPolicy: prepared.modelPolicy,
       attachmentProvenanceKey: context.toolProvenanceKey,
+      outputArtifacts: context.outputArtifacts,
       connections: context.connections,
       agentToolCli: context.agentToolCli,
       agentToolSourceCapabilities: context.agentToolSourceCapabilities,

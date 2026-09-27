@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -206,6 +207,7 @@ async function liveDriver(tools: readonly string[], allowedTools: readonly strin
     toolProvenanceKey: new Uint8Array(32).fill(7), childEnvironment,
     agentToolSourceCapabilities: createFakeAgentToolSourceCapabilities().issuer, agentTools,
     attachmentProvenanceKey: new Uint8Array(32).fill(0x43),
+    outputArtifacts: createInMemoryOutputArtifactPublisher(),
   });
   const catalog = await driver.catalog({ scope, workspace });
   if (catalog.models.filter((model) => model.id === REQUIRED_MODEL && model.supportedReasoningEfforts?.includes(REQUIRED_EFFORT)).length !== 1) {

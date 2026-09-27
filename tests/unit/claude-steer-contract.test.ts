@@ -1,4 +1,5 @@
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
+import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import { claudeTurnFailureDetailsMigration } from "../../src/server/db/migrations/109-claude-turn-failure-details.js";
 import { claudeSteerOperationsMigration } from "../../src/server/db/migrations/102-claude-steer-operations.js";
 import { claudeForkChildrenMigration } from "../../src/server/db/migrations/117-claude-fork-children.js";
@@ -264,6 +265,7 @@ function handle(runtimeClient: ClaudeSdkRuntimeAdapter): ClaudeConversationHandl
     permissionPolicy: { allowedModes: ["default"] },
     modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"),
     attachmentProvenanceKey: new Uint8Array(32).fill(0x42),
+    outputArtifacts: createInMemoryOutputArtifactPublisher(),
     childEnvironment: { HOME: "/home/test", PATH: "/usr/bin" },
     forkBoundaryAuthentication: {
       installationKey: new Uint8Array(32).fill(7),

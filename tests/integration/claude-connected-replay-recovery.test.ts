@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import { initializeEmptyBackendNormalizedDatabase } from "../../src/server/db/migrate.js";
 import { ClaudeConversationHandle } from "../../src/server/backends/claude/claude-conversation-handle.js";
 import { ClaudeThreadRepository } from "../../src/server/backends/claude/claude-thread-repository.js";
@@ -267,7 +268,7 @@ describe("connected Claude replay reclamation recovery", () => {
       usage: { ...NO_USAGE_SINK, enabled }, nativeNamespace: "test", binding, canonicalWorkspacePath: "/workspace", workspaceId: "workspace",
       opaqueBindingDetail: '{"version":1}', runtimeClient: client, executablePath: configuration.executablePath, initializationTimeoutMs: 5000,
       permissionPolicy: { allowedModes: ["default"] }, modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"),
-      queryGeneration: 2, attachmentProvenanceKey: new Uint8Array(32).fill(1), settings,
+      queryGeneration: 2, attachmentProvenanceKey: new Uint8Array(32).fill(1), outputArtifacts: createInMemoryOutputArtifactPublisher(), settings,
       forkBoundaryAuthentication: { installationKey: new Uint8Array(32).fill(2), ...scope }, childEnvironment: {},
       loadInitialMessages: () => client.getSessionMessages(sessionId, { dir: "/workspace" }, {}), resumeSession: true, releaseSession: () => {},
     });
@@ -345,7 +346,7 @@ describe("Stop after main replacement", () => {
       usage: NO_USAGE_SINK, nativeNamespace: "test", binding, canonicalWorkspacePath: "/workspace", workspaceId: "workspace",
       opaqueBindingDetail: '{"version":1}', runtimeClient: client, executablePath: configuration.executablePath, initializationTimeoutMs: 5000,
       permissionPolicy: { allowedModes: ["default"] }, modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"),
-      queryGeneration: 2, attachmentProvenanceKey: new Uint8Array(32).fill(1), settings,
+      queryGeneration: 2, attachmentProvenanceKey: new Uint8Array(32).fill(1), outputArtifacts: createInMemoryOutputArtifactPublisher(), settings,
       forkBoundaryAuthentication: { installationKey: new Uint8Array(32).fill(2), ...scope }, childEnvironment: {},
       loadInitialMessages: () => client.getSessionMessages(sessionId, { dir: "/workspace" }, {}), resumeSession: true, releaseSession: () => {},
     });
@@ -391,7 +392,7 @@ describe("steer placement over the persistent owner", () => {
       usage: NO_USAGE_SINK, nativeNamespace: "test", binding: thread.binding, canonicalWorkspacePath: "/workspace", workspaceId: "workspace",
       opaqueBindingDetail: '{"version":1}', runtimeClient: client, executablePath: configuration.executablePath, initializationTimeoutMs: 5000,
       permissionPolicy: { allowedModes: ["default"] }, modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"),
-      queryGeneration: 2, attachmentProvenanceKey: new Uint8Array(32).fill(1), settings: thread.settings,
+      queryGeneration: 2, attachmentProvenanceKey: new Uint8Array(32).fill(1), outputArtifacts: createInMemoryOutputArtifactPublisher(), settings: thread.settings,
       forkBoundaryAuthentication: { installationKey: new Uint8Array(32).fill(2), ...scope }, childEnvironment: {},
       loadInitialMessages: () => client.getSessionMessages(thread.binding.backendConversationId, { dir: "/workspace" }, {}),
       resumeSession, releaseSession: () => {},
