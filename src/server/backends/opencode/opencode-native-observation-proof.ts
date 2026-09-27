@@ -9,7 +9,8 @@ export const OPENCODE_NATIVE_PROOF_BYTES = 32 * 1_024 * 1_024;
 export class OpenCodeNativeObservationProof {
   readonly #proofs = new Map<number, OpenCodeNativeProof>();
   readonly #pending = new Map<string, number | null>();
-  readonly #work = new Set<string>();
+  readonly #work = new Map<string, string>();
+  #retentionRevision = 0;
   #unknownWork = false;
   #unknownExecution = false;
   #workBytes = 0;
@@ -34,7 +35,7 @@ export class OpenCodeNativeObservationProof {
     // Known pending inputs and work IDs survive the break and can be settled by
     // their exact later events. Only the current input loses its execution fence.
     this.#unknownExecution ||= this.#current !== null;
-    this.#epoch++; this.#current = null; this.#frontier = null;
+    this.#retentionRevision++; this.#epoch++; this.#current = null; this.#frontier = null;
   }
   isDuplicate(event: OpenCodeNativeEvent): boolean {
     return "durable" in event && !!event.durable && event.durable.aggregateID === this.sessionID &&
@@ -49,13 +50,16 @@ export class OpenCodeNativeObservationProof {
       this.#frontier !== null && event.durable.seq !== this.#frontier + 1;
   }
   accept(event: OpenCodeNativeEvent): void {
-    if (event.type === "permission.asked") this.#addWork(`permission:${event.data.id}`);
+    if (event.type === "permission.asked") this.#addWork(`permission:${event.data.id}`, event.data.sessionID);
     else if (event.type === "permission.replied") this.#removeWork(`permission:${event.data.requestID}`);
-    else if (event.type === "form.created" && event.data.form.sessionID !== "global") this.#addWork(`form:${event.data.form.id}`);
+    else if (event.type === "form.created" && event.data.form.sessionID !== "global") this.#addWork(`form:${event.data.form.id}`, event.data.form.sessionID);
     else if (event.type === "form.replied" || event.type === "form.cancelled") this.#removeWork(`form:${event.data.id}`);
-    else if (event.type === "shell.created" && event.data.info.status === "running") this.#addWork(`shell:${event.data.info.id}`);
+    else if (event.type === "shell.created" && event.data.info.status === "running") {
+      if (typeof event.data.info.metadata.sessionID !== "string") throw new OpenCodeNativeProtocolError();
+      this.#addWork(`shell:${event.data.info.id}`, event.data.info.metadata.sessionID);
+    }
     else if (event.type === "shell.exited" || event.type === "shell.deleted") this.#removeWork(`shell:${event.data.id}`);
-    else if (event.type === "session.execution.started") this.#addWork(`execution:${event.data.sessionID}`);
+    else if (event.type === "session.execution.started") this.#addWork(`execution:${event.data.sessionID}`, event.data.sessionID);
     else if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed" ||
       event.type === "session.execution.interrupted" || event.type === "session.deleted") this.#removeWork(`execution:${event.data.sessionID}`);
     if (!("durable" in event) || !event.durable || event.durable.aggregateID !== this.sessionID ||
@@ -85,6 +89,34 @@ export class OpenCodeNativeObservationProof {
       if (["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"].includes(event.type)) this.#unknownExecution = false;
     }
   }
+  /** Lifecycle-only cut: this never grants input/approval or receipt authority. */
+  retentionCut() {
+    return { revision: this.#retentionRevision, epoch: this.#epoch,
+      pending: [...this.#pending].filter((entry): entry is [string, number] => entry[1] !== null),
+      work: [...this.#work].map(([id, sessionID]) => ({ id, sessionID })), unknownExecution: this.#unknownExecution };
+  }
+  reconcileRetention(cut: ReturnType<OpenCodeNativeObservationProof["retentionCut"]>, inventory: {
+    pending: ReadonlySet<string>; checkedOwners: ReadonlySet<string>; work: ReadonlyMap<string, string>;
+  }): boolean {
+    // An event/dispatch racing any read invalidates the whole cut. Null pins
+    // were never natively observed and cannot be settled by missing inventory.
+    if (cut.revision !== this.#retentionRevision || cut.epoch !== this.#epoch) return false;
+    if (inventory.checkedOwners.has(this.sessionID)) {
+      for (const [id] of cut.pending) if (!inventory.pending.has(id)) this.#removePending(id);
+      if (cut.unknownExecution && !inventory.work.has(`execution:${this.sessionID}`)) {
+        this.#unknownExecution = false; this.#retentionRevision++;
+      }
+    }
+    for (const { id, sessionID } of cut.work) {
+      if (inventory.checkedOwners.has(sessionID) && !inventory.work.has(id)) this.#removeWork(id);
+    }
+    // Positive activity observed after the inbox read can replace an input pin
+    // whose consumption occurred during lost SSE continuity. It remains only
+    // lifecycle authority, never current-input or approval evidence.
+    for (const [id, sessionID] of inventory.work) this.#addWork(id, sessionID);
+    // Collapsed overflow inventories stay unknown: their exact IDs were lost.
+    return true;
+  }
   /** Density fingerprints are reconstructible; lifecycle markers are not. */
   reclaimCachedProofBytes(bytes: number): number {
     const before = this.#bytes;
@@ -98,7 +130,7 @@ export class OpenCodeNativeObservationProof {
     if (this.bytes <= maximumBytes && this.#pending.size + this.#work.size <= OPENCODE_NATIVE_PROOF_RECORDS) return true;
     // A bounded unknown marker preserves lifecycle uncertainty without keeping
     // an unbounded inventory of IDs or asserting that dropped work completed.
-    this.#unknownWork = true; this.#pending.clear(); this.#work.clear(); this.#workBytes = 0; this.#current = null;
+    this.#retentionRevision++; this.#unknownWork = true; this.#pending.clear(); this.#work.clear(); this.#workBytes = 0; this.#current = null;
     return false;
   }
   #revert(boundary: string, through: number): void {
@@ -115,13 +147,24 @@ export class OpenCodeNativeObservationProof {
     const first = this.#proofs.entries().next().value!;
     this.#proofs.delete(first[0]); this.#bytes -= Buffer.byteLength(JSON.stringify(first[1])) + 1;
   }
-  #addWork(id: string): void { if (!this.#work.has(id)) { this.#work.add(id); this.#workBytes += Buffer.byteLength(id) + 32; } }
-  #removeWork(id: string): void { if (this.#work.delete(id)) this.#workBytes -= Buffer.byteLength(id) + 32; }
+  #addWork(id: string, sessionID: string): void {
+    this.#retentionRevision++;
+    const previous = this.#work.get(id);
+    if (previous === undefined) this.#workBytes += Buffer.byteLength(id) + Buffer.byteLength(sessionID) + 32;
+    else this.#workBytes += Buffer.byteLength(sessionID) - Buffer.byteLength(previous);
+    this.#work.set(id, sessionID);
+  }
+  #removeWork(id: string): void {
+    const sessionID = this.#work.get(id);
+    if (sessionID === undefined) return;
+    this.#work.delete(id); this.#retentionRevision++;
+    this.#workBytes -= Buffer.byteLength(id) + Buffer.byteLength(sessionID) + 32;
+  }
   #addPending(id: string, sequence: number | null): void {
     if (!this.#pending.has(id)) this.#workBytes += Buffer.byteLength(id) + 32;
-    this.#pending.set(id, sequence);
+    this.#retentionRevision++; this.#pending.set(id, sequence);
   }
-  #removePending(id: string): void { if (this.#pending.delete(id)) this.#workBytes -= Buffer.byteLength(id) + 32; }
+  #removePending(id: string): void { if (this.#pending.delete(id)) { this.#retentionRevision++; this.#workBytes -= Buffer.byteLength(id) + 32; } }
   snapshot(): OpenCodeNativeProofBaseline {
     return { nativeFrontier: this.#frontier, coverageFloor: this.#proofs.keys().next().value ?? null,
       currentInputId: this.#current, authorityEpoch: this.#epoch, proofs: [...this.#proofs.values()].map(proof => ({ ...proof })) };
