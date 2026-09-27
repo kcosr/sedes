@@ -4,7 +4,6 @@ import { OpenCodeActions } from "../../src/server/backends/opencode/opencode-act
 import { OpenCodeExecutionSettings } from "../../src/server/backends/opencode/opencode-execution-settings.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
 import { OpenCodeExecutionEnvironment } from "../../src/server/backends/opencode/opencode-execution-environment.js";
-import { OpenCodeNativeMutations } from "../../src/server/backends/opencode/opencode-native-mutations.js";
 import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 import { createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
 const cleanup: (() => Promise<void>)[] = [];
@@ -44,15 +43,15 @@ function fixture(environment?: "owned" | "external") {
   const resolve = vi.fn(async () => ({ TEST_VALUE: state.secret }));
   if (environment) {
     base.context.executionEnvironment = new OpenCodeExecutionEnvironment({ scope, ownership: environment,
-      readDefinitions: () => ({ TEST_VALUE: { kind: "secret", source: { kind: "environment", name: "SOURCE_VALUE" } } }), resolve });
-    base.runtime.installSessionEnvironment = vi.fn(async input => {
-      await new OpenCodeNativeMutations(client).setEnvironment({ sessionID: input.sessionID,
-        variables: Object.fromEntries(Object.entries(input.overrides).filter((entry): entry is [string, string] => entry[1] !== null)) }, input.signal);
+      readDefinitions: () => ({ TEST_VALUE: { kind: "secret", source: { kind: "environment", name: "SOURCE_VALUE" } } }) });
+    vi.mocked(base.hostHooks.installSessionEnvironment).mockImplementation(async (_authority, input, signal) => {
+      const variables = await resolve();
+      await base.adapter.setEnvironmentVariables({ sessionID: input.sessionID, variables }, signal);
     });
   }
   base.context.settings.updateDesired(scope, threadID, { expectedRevision: 0, desired: model, now: 1 });
   const lifetime = new AbortController();
-  const settings = new OpenCodeExecutionSettings(base.context, base.target, base.runtime, client, "compact-generation", lifetime.signal);
+  const settings = new OpenCodeExecutionSettings(base.context, base.target, base.runtime, base.port, "compact-generation", lifetime.signal);
   const actions = new OpenCodeActions(base.context, base.target, settings);
   const input = { action: "compact", applicationOperationId: "compact-operation" } as const;
   const posts = () => calls.filter(call => call.method === "POST");
@@ -106,7 +105,7 @@ describe("OpenCode manual compaction", () => {
     await expect(f.actions.perform(f.input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
     await expect(f.actions.reconcile(f.input)).resolves.toEqual({ outcome: "unknown" });
     await expect(f.actions.perform(f.input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
-    await f.actions.withdrawPendingCompactions(new AbortController().signal, Date.now() + 1_000);
+    await f.actions.withdrawPendingCompactions(new AbortController().signal, Date.now() + 1_000, `stop-${Date.now() + 1_000}`);
     expect(f.posts()).toHaveLength(1); expect(f.calls.filter(call => call.method === "DELETE")).toEqual([]);
   });
   it("recovers lost acknowledgment from exact pending control with no resend", async () => {
@@ -133,9 +132,9 @@ describe("OpenCode manual compaction", () => {
   it("withdraws only exact owned pending controls, preserving accepted admission and Stop deadline", async () => {
     const f = fixture(); await f.actions.perform(f.input);
     f.state.pending.push({ id: "msg_foreign", sessionID: f.wire.sessionID, type: "compaction", payload: {}, delivery: "queue", time: { created: 1 } });
-    await f.actions.withdrawPendingCompactions(new AbortController().signal, Date.now() + 1_000);
+    await f.actions.withdrawPendingCompactions(new AbortController().signal, Date.now() + 1_000, `stop-${Date.now() + 1_000}`);
     expect(f.calls.filter(call => call.method === "DELETE").map(call => call.path)).toEqual([`/api/session/${f.wire.sessionID}/inbox/${f.receipt().nativeInputId}`]);
     expect(f.receipt().disposition).toBe("accepted"); expect(f.state.pending.map(item => item.id)).toEqual(["msg_foreign"]);
-    await expect(f.actions.withdrawPendingCompactions(new AbortController().signal, Date.now() - 1)).rejects.toThrow();
+    await expect(f.actions.withdrawPendingCompactions(new AbortController().signal, Date.now() - 1, `stop-${Date.now() - 1}`)).rejects.toThrow();
   });
 });

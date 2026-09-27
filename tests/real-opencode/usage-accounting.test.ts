@@ -1,3 +1,4 @@
+import { createOpenCodeNativePortFixture, openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
 import { expect, it, vi } from "vitest";
 import type { ConversationHandle } from "../../src/server/backends/contracts.js";
 import { NO_USAGE_CAPTURE, NO_USAGE_SINK, type UsageObservation, type UsageSink } from "../../src/server/usage/contracts.js";
@@ -24,8 +25,9 @@ it.runIf(RUN_REAL_OPENCODE)("captures persisted stock v2 usage, auxiliary title 
     const password = environment.split("\0").find(entry => entry.startsWith("OPENCODE_PASSWORD="))?.slice("OPENCODE_PASSWORD=".length);
     if (!password) throw new Error("isolated native credential unavailable");
     client = new OpenCodeHttpClient({ endpoint: native.url, password });
-    const api = new OpenCodeNativeApi(client), mutations = new OpenCodeNativeMutations(client);
-    const session = await mutations.createSession({ id: "ses_m4_usage", location: { directory: native.workspace }, model: { providerID: "probe", id: "probe-model" } });
+    const port = createOpenCodeNativePortFixture(client, { directory: native.workspace, sessionID: "ses_m4_usage" });
+    const api = new OpenCodeNativeApi(port), mutations = new OpenCodeNativeMutations(port);
+    const session = await mutations.createSession({ id: "ses_m4_usage", location: { directory: native.workspace }, model: { providerID: "probe", id: "probe-model" } }, openCodeTestMutationControl("create"));
     await vi.waitFor(async () => expect((await mutations.listModels(native!.workspace)).some(item => item.id === "probe-model")).toBe(true), { timeout: 20_000, interval: 25 });
     current = createOpenCodeConversationFixture({ native: { client, sessionID: session.id, directory: native.workspace } });
     vi.spyOn(current.repository, "hasCreatedRoot").mockReturnValue(false);

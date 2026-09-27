@@ -1,3 +1,4 @@
+import { openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenCodeExecutionEnvironment } from "../../src/server/backends/opencode/opencode-execution-environment.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
@@ -27,16 +28,16 @@ function fixture(definitions: EnvironmentVariableOverrides = { TEST_VALUE: { kin
   const base = createOpenCodeConversationFixture({ native: { client, sessionID: wire.sessionID, directory: wire.directory } });
   const originalSnapshot = base.runtime.snapshot;
   base.runtime.snapshot = () => ({ ...originalSnapshot(), generation: state.generation, ownership });
-  base.runtime.installSessionEnvironment = vi.fn(async input => {
-    expect(input.expectedGeneration).toBe(state.generation);
-    await new OpenCodeNativeMutations(client).setEnvironment({ sessionID: input.sessionID,
-      variables: { ...Object.fromEntries(Object.entries(input.overrides).filter((entry): entry is [string, string] => entry[1] !== null)), ...input.generated } }, input.signal);
+  const resolve = vi.fn(async (_definitions: EnvironmentVariableOverrides) => ({ TEST_VALUE: "resolved" }));
+  vi.mocked(base.hostHooks.installSessionEnvironment).mockImplementation(async (_authority, input, signal) => {
+    const values = await resolve(input.definitions);
+    signal.throwIfAborted();
+    await base.adapter.setEnvironmentVariables({ sessionID: input.sessionID, variables: values }, signal);
   });
-  const resolve = vi.fn(async () => ({ TEST_VALUE: "resolved" }));
-  const environment = new OpenCodeExecutionEnvironment({ scope, ownership, readDefinitions: () => definitions, resolve });
+  const environment = new OpenCodeExecutionEnvironment({ scope, ownership, readDefinitions: () => definitions });
   const context = { ...base.context, executionEnvironment: environment };
   const prepare = (operation: "submit" | "steer" | "compact" = "submit", signal = new AbortController().signal) =>
-    environment.prepare({ context, input: base.target, runtime: base.runtime, operation, signal });
+    environment.prepare({ context, input: base.target, runtime: base.runtime, operation, signal, control: openCodeTestMutationControl() });
   closes.push(base.dispose);
   return { ...base, context, wire, effects, state, resolve, environment, prepare };
 }
@@ -58,7 +59,7 @@ describe("OpenCode scoped execution environment", () => {
     expect(f.effects.map(item => item.kind)).toEqual(["permissions", "environment"]);
     expect(f.wire.session.permissions).toEqual([{ action: "shell", resource: "*", effect: "ask" }, { action: "subagent", resource: "*", effect: "deny" }]);
     expect(f.effects[1]!.value).toEqual({ variables: { TEST_VALUE: "resolved" } });
-    expect(f.resolve).toHaveBeenCalledWith(threadID);
+    expect(f.resolve).toHaveBeenCalledWith({ TEST_VALUE: { kind: "literal", value: "resolved" } });
   });
   it.each(["active", "pending", "shell", "child", "permission"])("does not install during native %s work", async kind => {
     const f = fixture();
@@ -106,20 +107,20 @@ describe("OpenCode scoped execution environment", () => {
     }
     expect(environmentVariableOverridesSchema.safeParse({ OPENAI_API_KEY: { kind: "literal", value: "fixture" }, OPENCODE_EXPERIMENTAL: { kind: "unset" } }).success).toBe(true);
   });
-  it.each(["close", "release"] as const)("fences pending secret resolution when %s ends preparation authority", async ending => {
+  it.each(["close", "release"] as const)("ends the caller wait without claiming an admitted host environment write was cancelled when %s ends preparation authority", async ending => {
     const f = fixture(); let finish!: (value: { TEST_VALUE: string }) => void;
     f.resolve.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     const work = f.prepare(); const rejected = expect(work).rejects.toBeDefined();
     await vi.waitFor(() => expect(f.resolve).toHaveBeenCalledTimes(1));
     if (ending === "close") f.environment.close(); else f.environment.release(threadID);
     finish({ TEST_VALUE: "late-secret" }); await rejected;
-    expect(f.runtime.installSessionEnvironment).not.toHaveBeenCalled();
-    expect(f.effects.map(effect => effect.kind)).toEqual(["permissions"]);
+    await vi.waitFor(() => expect(f.effects.map(effect => effect.kind)).toEqual(["permissions", "environment"]));
+    expect(f.effects.at(-1)!.value).toEqual({ variables: { TEST_VALUE: "late-secret" } });
     if (ending === "close") {
       await expect(f.prepare()).rejects.toBeDefined(); expect(f.resolve).toHaveBeenCalledTimes(1);
     } else {
       await expect(f.prepare("steer")).rejects.toMatchObject({ backendCode: "opencode_environment_unavailable" });
-      await f.prepare(); expect(f.runtime.installSessionEnvironment).toHaveBeenCalledTimes(1);
+      await f.prepare(); expect(f.hostHooks.installSessionEnvironment).toHaveBeenCalledTimes(2);
       expect(f.effects.at(-1)!.value).toEqual({ variables: { TEST_VALUE: "resolved" } });
     }
   });

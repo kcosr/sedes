@@ -6,7 +6,7 @@ import { nativeUsageMoney } from "../../usage/native-money.js";
 import type { AttachConversationInput } from "../contracts.js";
 import { requireOpenCodeBinding, type OpenCodeDriverContext, type OpenCodeConversationRuntime } from "./opencode-conversation-context.js";
 import { OpenCodeNativeApi, type OpenCodeNativeMessage, type OpenCodeNativeSession } from "./opencode-native-api.js";
-import type { OpenCodeHttpClient } from "./opencode-http-client.js";
+import type { OpenCodeNativePort } from "./opencode-native-port.js";
 import { openCodeHistoryTurnId } from "./opencode-history-projection.js";
 
 export interface OpenCodeUsageLease {
@@ -18,7 +18,7 @@ export interface OpenCodeUsageLease {
 const disabled: OpenCodeUsageLease = { record() {}, gap() {}, release() {}, settled: async () => {} };
 interface Entry {
   readonly key: string;
-  readonly client: OpenCodeHttpClient;
+  readonly client: OpenCodeNativePort;
   readonly generation: string;
   readonly context: OpenCodeDriverContext;
   readonly input: AttachConversationInput;
@@ -35,22 +35,22 @@ interface Entry {
 
 /** Shared by actor and read handles. Reconnect never creates a new native accounting epoch. */
 export class OpenCodeUsageAccounting {
-  readonly #clients = new WeakMap<OpenCodeHttpClient, Map<string, Entry>>();
+  readonly #clients = new Map<string, Map<string, Entry>>();
   readonly #entries = new Set<Entry>();
   #closed = false;
   #capacityWarned = false;
   constructor(readonly sink: UsageSink) {}
   get enabled(): boolean { return this.sink.enabled; }
 
-  acquire(context: OpenCodeDriverContext, input: AttachConversationInput, runtime: OpenCodeConversationRuntime, client: OpenCodeHttpClient): OpenCodeUsageLease {
+  acquire(context: OpenCodeDriverContext, input: AttachConversationInput, runtime: OpenCodeConversationRuntime, client: OpenCodeNativePort): OpenCodeUsageLease {
     if (!this.sink.enabled || this.#closed) return disabled;
     requireOpenCodeBinding(context, input);
     const { binding } = input;
     const key = hash([input.scope.tenantId, input.scope.principalId, binding.applicationThreadId,
       binding.backendInstanceId, binding.connectionProfileId, binding.executionEnvironmentId,
       binding.backendConversationId, input.opaqueBindingDetail]);
-    let entries = this.#clients.get(client);
-    if (!entries) { entries = new Map(); this.#clients.set(client, entries); }
+    let entries = this.#clients.get(client.ownerKey);
+    if (!entries) { entries = new Map(); this.#clients.set(client.ownerKey, entries); }
     let entry = entries.get(key);
     if (!entry) {
       if (this.#entries.size >= 1_000) {
@@ -128,7 +128,10 @@ export class OpenCodeUsageAccounting {
     if (entry.closed) return; entry.closed = true;
     entry.pending = undefined;
     entry.client.lifetime.removeEventListener("abort", entry.abort);
-    this.#clients.get(entry.client)?.delete(entry.key); this.#entries.delete(entry);
+    const entries = this.#clients.get(entry.client.ownerKey);
+    entries?.delete(entry.key);
+    if (entries?.size === 0) this.#clients.delete(entry.client.ownerKey);
+    this.#entries.delete(entry);
     safely(() => entry.capture?.seal("detached"));
   }
 }

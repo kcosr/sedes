@@ -1,3 +1,4 @@
+import { openCodeRuntimeTarget } from "../../src/server/backends/opencode/opencode-conversation-context.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import type { ModelInfo, SessionInboxUser } from "@opencode/client";
@@ -7,6 +8,7 @@ import { OpenCodeCliEnvironment } from "../../src/server/backends/opencode/openc
 import { OpenCodeExecutionEnvironment } from "../../src/server/backends/opencode/opencode-execution-environment.js";
 import { OpenCodeDelivery, OPENCODE_MAXIMUM_SERIALIZED_PROMPT_BYTES } from "../../src/server/backends/opencode/opencode-delivery.js";
 import { OpenCodeExecutionSettings } from "../../src/server/backends/opencode/opencode-execution-settings.js";
+import { openCodeOperationControl } from "../../src/server/backends/opencode/opencode-operation-control.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
 import { OpenCodeInputObserver } from "../../src/server/backends/opencode/opencode-input-observer.js";
 import { OpenCodeInputEvidenceRepository } from "../../src/server/backends/opencode/opencode-input-evidence.js";
@@ -76,8 +78,9 @@ function fixture(input: { desired?: OpenCodeSelection | null; native?: OpenCodeS
     expectedRevision: 0, desired: input.desired ?? modelA, now: 1,
   });
   const attach = { ...base.target, onSubmissionObserved: vi.fn() };
-  const lease = base.runtime.acquire(), lifetime = new AbortController();
-  const settings = new OpenCodeExecutionSettings(base.context, attach, base.runtime, client, "execution-generation", lifetime.signal);
+  const lease = base.runtime.acquire(openCodeRuntimeTarget(base.target)), lifetime = new AbortController();
+  // Keep the production host methods while allowing observation of consumer ACK order.
+  const settings = new OpenCodeExecutionSettings(base.context, attach, base.runtime, { ...lease.client }, "execution-generation", lifetime.signal);
   const observer = new OpenCodeInputObserver(base.context, attach, base.runtime, lease, lifetime.signal);
   const actions = new OpenCodeActions(base.context, attach, settings);
   const delivery = new OpenCodeDelivery(base.context, attach, settings, observer);
@@ -143,15 +146,15 @@ describe("OpenCode execution settings and explicit actions", () => {
     vi.spyOn(f.repository, "hasCreatedRoot").mockReturnValue(kind === "external");
     const cli = new OpenCodeCliEnvironment({ ownership,
       availability: { availability: "available", endpoint: "http://127.0.0.1:4784", executableDirectory: "/fixture/bin", inheritedPath: "/bin" },
-      sourceCapabilities: { issue }, tools: { readPolicy: () => ({ enabled: true, presentation: { surface: "cli", mode: "progressive" },
+      tools: { readPolicy: () => ({ enabled: true, presentation: { surface: "cli", mode: "progressive" },
         accessBoundary: "thread", enabledToolIds: ["agent.context"] }) } });
-    f.context.executionEnvironment = new OpenCodeExecutionEnvironment({ scope, ownership, readDefinitions: () => ({}), resolve, cli });
+    f.context.executionEnvironment = new OpenCodeExecutionEnvironment({ scope, ownership, readDefinitions: () => ({}), cli });
     await expect(f.delivery.submit(f.submit())).resolves.toMatchObject({ accepted: true });
     await expect(f.delivery.steer(f.steer())).resolves.toMatchObject({ status: "pending_materialization" });
     expect(f.posts("/prompt")).toHaveLength(2);
     expect(f.context.executionEnvironment.diagnostic(threadID)).toContain("messages and conversation controls remain available");
     expect(issue).not.toHaveBeenCalled(); expect(resolve).not.toHaveBeenCalled();
-    expect(f.runtime.installSessionEnvironment).not.toHaveBeenCalled();
+    expect(f.hostHooks.installSessionEnvironment).not.toHaveBeenCalled();
   });
   it("reapplies desired A over recognized external B for ordinary input without changing desired revision", async () => {
     const f = fixture({ native: modelB });
@@ -203,6 +206,64 @@ describe("OpenCode execution settings and explicit actions", () => {
     expect(f.calls).toHaveLength(count); expect(f.posts("/model")).toHaveLength(1);
     await expect(f.actions.perform({ ...action, modelId: qualifiedOpenCodeModelId(modelB) } as RegisteredBackendActionInput))
       .rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(f.posts("/model")).toHaveLength(1);
+  });
+
+  it.each(["set_model", "set_thinking_level"] as const)("acknowledges %s only after its durable action receipt is accepted", async actionKind => {
+    const f = fixture();
+    const action: RegisteredBackendActionInput = actionKind === "set_model" ? f.action()
+      : { action: "set_thinking_level", applicationOperationId: "effort-operation", level: "default" };
+    const states: (string | undefined)[] = [];
+    const acknowledge = f.settings.client.acknowledgeMutation.bind(f.settings.client);
+    vi.spyOn(f.settings.client, "acknowledgeMutation").mockImplementation(async (method, identity) => {
+      states.push(f.repository.readOperation(scope, threadID, action.applicationOperationId, "action")?.disposition);
+      await acknowledge(method, identity);
+    });
+    await expect(f.actions.perform(action)).resolves.toEqual({ accepted: true });
+    expect(states).toEqual(["accepted"]);
+  });
+
+  it("retains exact model evidence when the durable action commit fails and never repeats the effect", async () => {
+    const f = fixture({ native: modelB }), action = f.action();
+    const acknowledge = vi.spyOn(f.settings.client, "acknowledgeMutation");
+    vi.spyOn(f.repository, "recordOutcome").mockReturnValue(false);
+    await expect(f.actions.perform(action)).rejects.toMatchObject({ category: "submission_unknown" });
+    const receipt = f.repository.requireOperation(scope, threadID, action.applicationOperationId, "action");
+    expect(receipt.disposition).toBe("dispatched");
+    expect(acknowledge).not.toHaveBeenCalled();
+    await expect(f.settings.client.outcome("setModel", openCodeOperationControl(receipt, "action-model").identity))
+      .resolves.toEqual({ status: "completed", result: { ok: true } });
+    f.wire.session.model = modelB;
+    await expect(f.actions.perform(action)).rejects.toMatchObject({ category: "submission_unknown" });
+    expect(f.posts("/model")).toHaveLength(1);
+  });
+
+  it("retains preparation-model evidence until durable prompt admission and never reapplies an exact retry", async () => {
+    const f = fixture({ native: modelB }), input = f.submit("prepared-model");
+    const states: { method: string; disposition?: string; payload: string | null }[] = [];
+    const acknowledge = f.settings.client.acknowledgeMutation.bind(f.settings.client);
+    vi.spyOn(f.settings.client, "acknowledgeMutation").mockImplementation(async (method, identity) => {
+      const receipt = f.repository.readOperation(scope, threadID, input.applicationOperationId, "submit");
+      const payload = receipt ? f.evidence.get(scope, threadID, input.applicationOperationId, "submit").preparedPayloadFingerprint : null;
+      states.push({ method, disposition: receipt?.disposition, payload });
+      await acknowledge(method, identity);
+    });
+    const { snapshot } = await f.settings.prepare(input.applicationOperationId, "submit");
+    expect(states).toEqual([]);
+    const control = openCodeOperationControl(snapshot, "prepare-model");
+    await expect(f.settings.client.outcome("setModel", control.identity))
+      .resolves.toEqual({ status: "completed", result: { ok: true } });
+    // A concurrent native client changing settings cannot turn the retained
+    // original response into permission to repeat the preparation write.
+    f.wire.session.model = modelB;
+    await expect(f.settings.prepare(input.applicationOperationId, "submit")).rejects.toMatchObject({
+      backendCode: "opencode_settings_unavailable" });
+    expect(f.posts("/model")).toHaveLength(1); expect(states).toEqual([]);
+    f.wire.session.model = modelA;
+    await expect(f.delivery.submit(input)).resolves.toMatchObject({ accepted: true });
+    expect(states.filter(state => state.method === "setModel")).toEqual([
+      { method: "setModel", disposition: "accepted", payload: expect.any(String) },
+    ]);
     expect(f.posts("/model")).toHaveLength(1);
   });
 
@@ -305,7 +366,7 @@ describe("OpenCode execution settings and explicit actions", () => {
 
   it("fences stale runtime, wrong scope and desired changes during native readback", async () => {
     const f = fixture({ native: modelB });
-    const wrong = new OpenCodeExecutionSettings(f.context, { ...f.attach, scope: { ...scope, principalId: "other" } }, f.runtime, f.client, "wrong", f.settings.lifetime);
+    const wrong = new OpenCodeExecutionSettings(f.context, { ...f.attach, scope: { ...scope, principalId: "other" } }, f.runtime, f.port, "wrong", f.settings.lifetime);
     await expect(wrong.prepare("wrong", "submit")).rejects.toThrow(); expect(f.calls).toEqual([]);
     const original = vi.mocked(f.runtime.assertCurrent).getMockImplementation()!;
     vi.mocked(f.runtime.assertCurrent).mockImplementation(async signal => {
@@ -510,7 +571,7 @@ describe("OpenCode exact input delivery", () => {
     const first = f.delivery.submit(f.submit());
     await vi.waitFor(() => expect(f.posts("/prompt")).toHaveLength(1));
     await vi.waitFor(() => expect(f.attach.onSubmissionObserved).toHaveBeenCalledWith({ backendCorrelation: "submit-operation" }));
-    await expect(f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000)).resolves.toBeUndefined();
+    await expect(f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000, `stop-${Date.now() + 1_000}`)).resolves.toBeUndefined();
     await expect(f.delivery.submit(f.submit())).resolves.toMatchObject({ accepted: true });
     expect(f.posts("/prompt")).toHaveLength(1);
     release(); await expect(first).resolves.toMatchObject({ accepted: true });

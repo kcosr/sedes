@@ -1,3 +1,4 @@
+import { acknowledgeOpenCodeMutation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
 import type { FormDetail, FormInfo, PermissionRequest } from "@opencode/client";
 import { z } from "zod";
 import { interactionResponseInputSchema, type BackendConversationEvent, type DriverInteraction } from "../../../shared/protocol/backend.js";
@@ -267,17 +268,19 @@ export class OpenCodeInteractions {
         if (!this.context.repository.markDispatched(this.context.scope, this.#authority.applicationThreadId, operationId, "interaction", Date.now())) throw unknown();
         crossed = true;
         try {
-          if (intent.nativeResponse.kind === "permission_reply") await this.#native.replyPermission(intent.nativeResponse.input, this.#signal);
-          else if (intent.nativeResponse.kind === "form_reply") await this.#native.replyForm(intent.nativeResponse.input, this.#signal);
-          else await this.#native.cancelForm(intent.nativeResponse.input, this.#signal);
+          if (intent.nativeResponse.kind === "permission_reply") await this.#native.replyPermission(intent.nativeResponse.input, openCodeOperationControl(receipt, "replyPermission"), this.#signal);
+          else if (intent.nativeResponse.kind === "form_reply") await this.#native.replyForm(intent.nativeResponse.input, openCodeOperationControl(receipt, "replyForm"), this.#signal);
+          else await this.#native.cancelForm(intent.nativeResponse.input, openCodeOperationControl(receipt, "cancelForm"), this.#signal);
           await this.#assertCurrent();
           this.#outcome(operationId, "accepted", openCodeOperationFingerprint({ kind: "native_response_ack", intent }));
+          const method = intent.nativeResponse.kind === "permission_reply" ? "replyPermission" : intent.nativeResponse.kind === "form_reply" ? "replyForm" : "cancelForm";
+          await acknowledgeOpenCodeMutation(this.lease.client, method, openCodeOperationControl(receipt, method));
           this.#resolveGate(intent.interactionId);
           // Reject may settle several permission requests. Refresh presentation
           // without forging response receipts for those external settlements.
           void this.refresh().catch(() => undefined);
         } catch (error) {
-          if (error instanceof OpenCodeNativeMutationInputError) {
+          if (openCodeMutationWasNotSent(error)) {
             this.#outcome(operationId, "not_applied", null); throw invalid("The OpenCode response was rejected before dispatch.");
           }
           this.#outcome(operationId, "unknown", null); throw unknown();

@@ -2,12 +2,16 @@ import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, unlink, writ
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { OpenCodeRuntime } from "../../src/server/backends/opencode/opencode-runtime.js";
 import { startOpenCodeOwnedProcess } from "../../src/server/backends/opencode/opencode-owned-process.js";
 import { boundedOpenCodeProcessFile, readOpenCodeNativeIdentity } from "../../src/server/backends/opencode/opencode-native-identity.js";
 import { startOpencodeNativeFixture } from "../support/opencode-native-fixture.js";
+
+import * as ownedProcesses from "../../src/server/backends/opencode/opencode-owned-process.js";
+import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-native-api.js";
+afterEach(() => vi.restoreAllMocks());
 
 const enabled = process.platform === "linux" && process.env.SEDES_RUN_REAL_OPENCODE === "1";
 
@@ -94,6 +98,7 @@ it.skipIf(!enabled)("owned opencode2 preserves native configuration, remains res
     OPENCODE_PASSWORD: "inherited-password-canary", OPENCODE_SERVER_PASSWORD: "inherited-password-canary",
     OPENCODE_SIMULATE: "1", OPENCODE_CONFIG_CONTENT: "invalid-canary",
   };
+  const launched = vi.spyOn(ownedProcesses, "startOpenCodeOwnedProcess");
   let runtime: OpenCodeRuntime | undefined;
   let cleanupProved = false;
   try {
@@ -108,20 +113,24 @@ it.skipIf(!enabled)("owned opencode2 preserves native configuration, remains res
         executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2", workingDirectory: workspace } },
     });
     await runtime.start();
-    const first = runtime.acquire();
-    const second = runtime.acquire();
+    const first = runtime.acquire({ directory: workspace });
+    const second = runtime.acquire({ directory: workspace });
     const original = runtime.snapshot();
     expect(original.identity?.storeObservation).toBe("open_file");
-    await first.client.requireAuthentication();
-    expect((await first.client.info()).version).toBe("2.0.18");
-    const wrongAuth = await fetch(`${first.client.endpoint}/api/info`, {
+    // Qualification alone uses the owned launch's native fixture handle for
+    // shell setup; application leases expose only the closed native port.
+    const nativeClient = (await (launched.mock.results.at(-1)!.value as ReturnType<typeof ownedProcesses.startOpenCodeOwnedProcess>)).client;
+    await nativeClient.requireAuthentication();
+    expect((await nativeClient.info()).version).toBe("2.0.18");
+    expect((await new OpenCodeNativeApi(first.client).listSessions({ directory: workspace })).data).toEqual([]);
+    const wrongAuth = await fetch(`${nativeClient.endpoint}/api/info`, {
       headers: { authorization: `Basic ${Buffer.from("opencode:inherited-password-canary").toString("base64")}` },
       signal: AbortSignal.timeout(5_000), redirect: "error",
     });
     await wrongAuth.body?.cancel(); expect(wrongAuth.status).toBe(401);
     const shellCode = `require("node:fs").writeFileSync(${JSON.stringify(evidence)}, JSON.stringify({pid:process.pid, passwordPresent:process.env.OPENCODE_PASSWORD!==undefined, legacyPasswordPresent:process.env.OPENCODE_SERVER_PASSWORD!==undefined, autoUpdate:process.env.OPENCODE_DISABLE_AUTOUPDATE,home:process.env.HOME}));setInterval(()=>{},1000)`;
     const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-    const shell = await first.client.call((client, signal) => client.shell.create({
+    const shell = await nativeClient.call((client, signal) => client.shell.create({
       location: { directory: workspace }, command: `${quote(process.execPath)} -e ${quote(shellCode)}`, cwd: workspace,
     }, { signal }), value => z.object({ data: z.object({ id: z.string(), status: z.literal("running") }) }).parse(value));
     const deadline = Date.now() + 5_000;
@@ -134,8 +143,8 @@ it.skipIf(!enabled)("owned opencode2 preserves native configuration, remains res
     first.release(); second.release();
     expect(runtime.snapshot()).toMatchObject({ state: "ready", references: 0, generation: original.generation });
     expect(await alive(shellEvidence.pid)).toBe(true);
-    const reacquired = runtime.acquire();
-    await expect(reacquired.client.call((client, signal) => client.shell.get({ id: shell.data.id, location: { directory: workspace } }, { signal }), value => z.object({ data: z.object({ status: z.string() }) }).parse(value))).resolves.toMatchObject({ data: { status: "running" } });
+    const reacquired = runtime.acquire({ directory: workspace });
+    await expect(nativeClient.call((client, signal) => client.shell.get({ id: shell.data.id, location: { directory: workspace } }, { signal }), value => z.object({ data: z.object({ status: z.string() }) }).parse(value))).resolves.toMatchObject({ data: { status: "running" } });
     reacquired.release();
     expect(await readFile(path.join(configDirectory, "opencode.json"), "utf8")).toBe(config);
     await expect(runtime.stop()).resolves.toEqual({ cleanup: "proved", nativeInterrupts: "complete" });
@@ -212,7 +221,7 @@ it.skipIf(!enabled)("external stock opencode2 keeps its daemon and background sh
       connection: { ownership: "external", channel: { type: "http", url: native.endpoint } },
     });
     await runtime.start();
-    const lease = runtime.acquire(); lease.release();
+    const lease = runtime.acquire({ directory: root }); lease.release();
     expect(runtime.snapshot()).toMatchObject({ state: "ready", references: 0, identity: { pid: native.pid, storeObservation: "open_file" } });
     await expect(runtime.close()).resolves.toEqual({ cleanup: "proved", nativeInterrupts: "not_owned" });
     expect(await alive(native.pid)).toBe(true);

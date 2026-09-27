@@ -1,3 +1,4 @@
+import { createOpenCodeNativePortFixture } from "../helpers/opencode-native-port-fixture.js";
 import { expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { SessionMessageInfo } from "@opencode/client";
@@ -35,7 +36,6 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
     const password = entries.find(entry => entry.startsWith("OPENCODE_PASSWORD="))?.slice("OPENCODE_PASSWORD=".length);
     if (!password) throw new Error("isolated fixture password unavailable");
     client = new OpenCodeHttpClient({ endpoint: native.url, password });
-    const api = new OpenCodeNativeApi(client);
     const created = await native.api("POST", "/api/session", { title: "Actor qualification", location: { directory: native.workspace },
       model: { providerID: "probe", id: "probe-model" } });
     expect(created.status).toBe(200);
@@ -47,6 +47,8 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
     });
     expect(imported.status).toBe(200);
     const sessionID = z.object({ data: z.object({ id: z.string() }) }).parse(imported.body).data.id;
+    const port = createOpenCodeNativePortFixture(client, { directory: native.workspace, sessionID: sessionID });
+    const api = new OpenCodeNativeApi(port);
     current = createOpenCodeConversationFixture({ native: { client, sessionID, directory: native.workspace } });
     acquired = await current.acquire();
     const actor = acquired.actor;

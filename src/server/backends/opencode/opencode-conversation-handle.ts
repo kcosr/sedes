@@ -1,3 +1,5 @@
+import { acknowledgeOpenCodeMutation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
+import { OpenCodeRuntimeError } from "./opencode-release.js";
 import { randomUUID } from "node:crypto";
 import type { BackendCapabilityDocument, BackendConversationEvent, SequencedBackendEvent } from "../../../shared/protocol/backend.js";
 import { backendConversationEventSchema } from "../../../shared/protocol/backend.js";
@@ -286,27 +288,30 @@ export class OpenCodeConversationHandle implements ConversationHandle {
         if (!claimed) throw this.#stopUnconfirmed(true);
         // Control never waits for the projection mutex or its history requests.
         budget.dispatch(); dispatched = true;
-        const acknowledgement = await budget.wait(this.#api.interruptSession(this.binding.backendConversationId, budget.signal));
+        const acknowledgement = await budget.wait(this.#api.interruptSession(this.binding.backendConversationId, openCodeOperationControl({ ...input, operationKind: "interrupt", createdAt: 0 }, "interrupt"), budget.signal));
         await budget.wait(this.runtime.assertCurrent(budget.signal));
         budget.remainingMilliseconds();
         repository.recordOutcome(scope, threadId, input.applicationOperationId, "interrupt", { expected: "dispatched",
           disposition: "accepted", nativeEvidenceFingerprint: openCodeOperationFingerprint(acknowledgement), now: Date.now() });
+        await acknowledgeOpenCodeMutation(this.lease.client, "interruptSession", openCodeOperationControl({ ...input, operationKind: "interrupt", createdAt: 0 }, "interrupt"));
         // Interrupt leaves native inbox entries intact. Cleanup is bounded by
         // this same Stop deadline, including an acknowledged idle no-op.
         await Promise.allSettled([
-          budget.wait(this.#inputObservation.observer.withdrawPending(budget.signal, input.deadlineAt)),
-          budget.wait(this.#actions.withdrawPendingCompactions(budget.signal, input.deadlineAt)),
+          budget.wait(this.#inputObservation.observer.withdrawPending(budget.signal, input.deadlineAt, input.applicationOperationId)),
+          budget.wait(this.#actions.withdrawPendingCompactions(budget.signal, input.deadlineAt, input.applicationOperationId)),
         ]); // A fresh Stop can retry exact pending controls; neither cleanup extends its budget.
       });
     } catch (error) {
       const current = repository.requireOperation(scope, threadId, input.applicationOperationId, "interrupt");
       if (current.disposition === "accepted") return;
-      if (current.disposition === "prepared" || claimed && !dispatched) {
+      if (error instanceof OpenCodeRuntimeError && error.code === "opencode_session_location_changed") this.#ownerLost();
+      const refused = openCodeMutationWasNotSent(error);
+      if (current.disposition === "prepared" || claimed && (!dispatched || refused)) {
         repository.recordOutcome(scope, threadId, input.applicationOperationId, "interrupt", {
           expected: current.disposition === "prepared" ? "prepared" : "dispatched", disposition: "not_applied", nativeEvidenceFingerprint: null, now: Date.now(),
         });
       }
-      throw dispatched ? this.#stopUnconfirmed(true) : error;
+      throw dispatched && !refused ? this.#stopUnconfirmed(true) : mapOpenCodeConversationError(error);
     }
   }
   async reconcileInterrupt(input: InterruptConversationInput): Promise<import("../contracts.js").BackendMutationReconciliation> {

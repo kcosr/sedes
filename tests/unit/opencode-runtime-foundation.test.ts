@@ -159,7 +159,7 @@ describe.skipIf(process.platform !== "linux")("OpenCode native store and externa
       nativeStorePath: store, environment: {}, externalPassword: async () => password,
       connection: { ownership: "external", channel: { type: "http", url: fixture.endpoint } },
     });
-    await runtime.start(); const first = runtime.acquire(); const second = runtime.acquire();
+    await runtime.start(); const first = runtime.acquire({ directory: root }); const second = runtime.acquire({ directory: root });
     first.release(); second.release();
     expect(runtime.snapshot()).toMatchObject({ state: "ready", references: 0 });
     await expect(runtime.stop()).rejects.toThrow("opencode_external_stop_forbidden");
@@ -198,8 +198,27 @@ describe.skipIf(process.platform !== "linux")("OpenCode native store and externa
       const rejected = expect(pending).rejects.toThrow("opencode_request_aborted");
       await entered; abort.abort(); await rejected;
       expect(runtime.snapshot()).toMatchObject({ state: "ready", generation });
-      const lease = runtime.acquire(); expect(lease.client.lifetime.aborted).toBe(false); lease.release();
+      const lease = runtime.acquire({ directory: root }); expect(lease.client.lifetime.aborted).toBe(false); lease.release();
     } finally { await runtime.close(); }
+  });
+  it("revokes acquired ports synchronously when runtime retirement starts", async () => {
+    const root = await directory(); const store = path.join(root, "opencode.db"); await writeFile(store, "native history");
+    const fixture = await server();
+    const runtime = new OpenCodeRuntime({
+      authority: { tenantId: "tenant", principalId: "principal", backendInstanceId: "backend", executionEnvironmentId: "local" },
+      nativeStorePath: store, environment: {}, externalPassword: async () => password,
+      connection: { ownership: "external", channel: { type: "http", url: fixture.endpoint } },
+    });
+    await runtime.start();
+    const lease = runtime.acquire({ directory: root, session: { applicationThreadId: "thread", nativeSessionID: "ses_retiring", bindingFingerprint: "binding" } });
+    const retiring = runtime.close();
+    try {
+      expect(lease.client.lifetime.aborted).toBe(true);
+      await expect(lease.client.mutate("interruptSession", { sessionID: "ses_retiring" }, {
+        identity: { origin: "application", applicationOperationId: "late-stop", operationKind: "interrupt", step: "interrupt" }, deadlineAt: Date.now() + 30_000,
+      })).rejects.toMatchObject({ delivery: "sent_outcome_unknown" });
+      expect(fixture.requests.every(request => request === "GET /api/info")).toBe(true);
+    } finally { lease.release(); await retiring; }
   });
   it("fences restart when native ownership evidence cannot be safely released", async () => {
     const root = await directory(); const store = path.join(root, "opencode.db"); await writeFile(store, "native history");

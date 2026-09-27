@@ -1,3 +1,4 @@
+import { createOpenCodeNativePortFixture } from "../helpers/opencode-native-port-fixture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
 import { readOpenCodeNativeLog } from "../../src/server/backends/opencode/opencode-native-log.js";
@@ -29,7 +30,7 @@ function fixture(frames: unknown[], close = true) {
     return new Response(body, { headers: { "content-type": "text/event-stream" } });
   });
   const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture", fetch }); clients.push(client);
-  return { client, requests, fetch, get cancelled() { return cancelled; } };
+  return { client: createOpenCodeNativePortFixture(client), requests, fetch, get cancelled() { return cancelled; } };
 }
 describe("OpenCode finite native log cuts", () => {
   it("validates the official encoded SSE schema and exact contiguous aggregate cut", async () => {

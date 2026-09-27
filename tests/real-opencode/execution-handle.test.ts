@@ -1,3 +1,4 @@
+import { createOpenCodeNativePortFixture, openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
 import { expect, it, vi } from "vitest";
 import type { BackendConversationEvent, DriverInteraction } from "../../src/shared/protocol/backend.js";
 import type { ConversationHandle, SubmitTurnInput } from "../../src/server/backends/contracts.js";
@@ -40,10 +41,11 @@ it.runIf(RUN_REAL_OPENCODE)("qualifies production handle input, steering, Stop, 
       }
       return response;
     } });
-    const api = new OpenCodeNativeApi(client); const mutations = new OpenCodeNativeMutations(client);
+    const port = createOpenCodeNativePortFixture(client, { directory: native.workspace, sessionID: "ses_execution_handle" });
+    const api = new OpenCodeNativeApi(port); const mutations = new OpenCodeNativeMutations(port);
     const session = await mutations.createSession({ id: "ses_execution_handle", title: "Execution handle qualification",
       location: { directory: native.workspace }, model: { providerID: "probe", id: "probe-model" },
-      permissions: [{ action: "qualification", resource: "*", effect: "ask" }] });
+      permissions: [{ action: "qualification", resource: "*", effect: "ask" }] }, openCodeTestMutationControl("create"));
     await vi.waitFor(async () => expect((await mutations.listModels(native!.workspace)).some(item => item.id === "probe-model")).toBe(true), { timeout: 20_000, interval: 25 });
     current = createOpenCodeConversationFixture({ native: { client, sessionID: session.id, directory: native.workspace } });
     current.context.settings.updateDesired(scope, threadID, { expectedRevision: 0, desired: { providerID: "probe", id: "probe-model" }, now: Date.now() });

@@ -12,6 +12,24 @@ The normalized backend identity is `opencode`, its connection kind is
 `opencode_http`, and the browser brand is `opencode`. Client protocol 128
 includes these closed-enum additions and terminal Stop diagnostics.
 
+Conversation, catalog and tool consumers use the provider-private
+`OpenCodeNativePort`. Its closed read/mutation catalog carries validated JSON
+data, exact workspace/session authority, immutable operation/sub-operation
+identity and the original deadline. `OpenCodeNativeHost` dispatches those
+operations through one host-local HTTP adapter. Native clients, callbacks and
+resolved environment secrets do not cross that boundary. Directory discovery
+can read session metadata; history, interactions and session effects require a
+bound session port.
+
+The host retains bounded mutation outcomes until acknowledgment after the
+application receipt commits. Cancellation ends a caller's wait without
+repeating or retracting an admitted write. Reusing an operation identity with
+different input or a later deadline is rejected. Control operations reserve
+their own queue and retention capacity. Owner retirement fences existing ports
+before native cleanup; a retry after owner loss remains unknown. These
+in-process contracts do not yet advertise remote execution or retained event
+replay. Pi, Codex, Claude and Grok retain their existing backend contracts.
+
 ## Native ownership
 
 The exact admitted release is OpenCode **2.0.18**, with the generated
@@ -371,11 +389,13 @@ are rejected for external mode before secret resolution. Before explicit idle
 Submit or compact, the service qualifies exact binding, runtime generation,
 root location, no native pending input/interactions or running children/shells,
 and a final native subagent-deny rule while preserving earlier operator rules.
-It then resolves secrets and installs the complete shell map from the applied
-launch baseline, thread overrides and generated CLI values last. PATH uses that
-same applied baseline, with the helper directory prepended for CLI. Values are
-not stored in operation receipts or environment fingerprints. Module close and
-session release invalidate pending preparation, including delayed secret reads.
+It sends frozen definitions to the host, which resolves secrets and installs
+the complete shell map from the applied launch baseline, thread overrides and
+generated CLI values last. PATH uses that same applied baseline, with the
+helper directory prepended for CLI. Values are not stored in operation receipts
+or environment fingerprints. Session release ends the caller's preparation and
+prevents its subsequent prompt. An already admitted host mutation may finish
+within its original deadline; closing the native owner cancels it.
 Compaction calls this preparation before its final native settings/control
 checks and dispatch. Replaying an already admitted compaction does not rotate
 secrets or send another request.

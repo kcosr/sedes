@@ -1,5 +1,7 @@
+import { openCodeOperationControl } from "./opencode-operation-control.js";
+import type { OpenCodeMutationControl } from "./opencode-native-port.js";
 import type { AttachConversationInput } from "../contracts.js";
-import type { OpenCodeHttpClient } from "./opencode-http-client.js";
+import type { OpenCodeNativePort } from "./opencode-native-port.js";
 import { OpenCodeNativeApi, type OpenCodeNativeSession } from "./opencode-native-api.js";
 import { OpenCodeNativeMutations } from "./opencode-native-mutations.js";
 import { openCodeConversationError, requireOpenCodeBinding, type OpenCodeConversationRuntime, type OpenCodeDriverContext } from "./opencode-conversation-context.js";
@@ -22,7 +24,7 @@ export class OpenCodeExecutionSettings {
   readonly lifetime: AbortSignal;
   #observationSequence = 0;
   constructor(readonly context: OpenCodeDriverContext, readonly input: AttachConversationInput,
-    readonly runtime: OpenCodeConversationRuntime, readonly client: OpenCodeHttpClient, readonly generation: string, lifetime: AbortSignal) {
+    readonly runtime: OpenCodeConversationRuntime, readonly client: OpenCodeNativePort, readonly generation: string, lifetime: AbortSignal) {
     this.#api = new OpenCodeNativeApi(client); this.#native = new OpenCodeNativeMutations(client);
     this.lifetime = AbortSignal.any([client.lifetime, lifetime]);
   }
@@ -63,13 +65,13 @@ export class OpenCodeExecutionSettings {
     if (!sameOpenCodeSelection(snapshot.selection, desired)) throw changed();
     if (!sameOpenCodeSelection(read.observed.resolvedSelection, desired)) {
       if (kind === "steer") throw unavailable("The desired and active OpenCode settings differ. Steering cannot change the active model.");
-      await this.apply(desired, read, signal);
+      await this.apply(desired, read, openCodeOperationControl(snapshot, "prepare-model"), signal);
     }
     return { snapshot, catalog: read.catalog };
   }
 
   /** Explicit settings actions may repair custom native state; ordinary work may not. */
-  async apply(selection: OpenCodeSelection, read: OpenCodeObservedSettings, signal?: AbortSignal, beforeDispatch?: () => void): Promise<void> {
+  async apply(selection: OpenCodeSelection, read: OpenCodeObservedSettings, control: OpenCodeMutationControl, signal?: AbortSignal, beforeDispatch?: () => void): Promise<void> {
     signal = this.#signal(signal);
     const desired = resolveOpenCodeSelection({ connection: this.context.connection, catalog: read.catalog.catalog,
       modelId: qualifiedOpenCodeModelId(selection), variant: selection.variant, modelPolicy: this.context.modelPolicy });
@@ -78,13 +80,15 @@ export class OpenCodeExecutionSettings {
     // Receipt ownership is claimed only after every asynchronous admission check.
     beforeDispatch?.();
     const sequence = ++this.#observationSequence;
-    await this.#native.setModel({ sessionID: this.input.binding.backendConversationId, model: desired }, signal);
+    await this.#native.setModel({ sessionID: this.input.binding.backendConversationId, model: desired }, control, signal);
     const session = await this.#api.getSession(this.input.binding.backendConversationId, signal);
     this.#assertSession(session); await this.assertCurrent(signal);
     // A native no-op still gets a readback; 204 and ModelSelected alone do not prove selection.
     if (!sameOpenCodeSelection(session.model ?? null, desired)) throw unavailable("The requested OpenCode model selection could not be confirmed.");
     const observed = classifyObserved({ selection: desired, catalog: read.catalog });
     this.#publishObserved(read.settings, observed, sequence);
+    // The observed settings row is mutable, so it cannot release exact host
+    // evidence. The enclosing action or input admission commits that fence.
   }
 
   async assertCurrent(signal?: AbortSignal): Promise<void> {

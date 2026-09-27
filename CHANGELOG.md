@@ -232,6 +232,9 @@
 
 ### Fixed
 
+- OpenCode's bundled MCP helper now launches through both the generated Sedes
+  CLI and the sidecar entry point. (#17)
+
 - Refresh Native agent tools and CLI presentation settings when an idle
   Codex or Claude thread already has a persistent SSH session, including
   after the server reconnects. Provider release failures leave the saved

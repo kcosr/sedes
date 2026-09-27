@@ -1,3 +1,4 @@
+import { createOpenCodeNativePortFixture } from "../helpers/opencode-native-port-fixture.js";
 import { describe, expect, it, vi } from "vitest";
 import { OpenCodeNativeApi, parseOpenCodeNativeEvent, type OpenCodeNativeEvent, type OpenCodeNativeObservationEnd } from "../../src/server/backends/opencode/opencode-native-api.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
@@ -18,7 +19,7 @@ const step = () => event("session.step.started", {
 const text = (length: number, sessionID?: string) => event("session.synthetic", { text: "x".repeat(length) }, sessionID);
 
 function controlledObservation() {
-  let include!: (event: OpenCodeNativeEvent) => boolean;
+  let include!: NonNullable<NonNullable<Parameters<OpenCodeNativeApi["observe"]>[0]>["include"]>;
   let end!: (value: OpenCodeNativeObservationEnd) => void;
   let release!: () => void;
   const ended = new Promise<OpenCodeNativeObservationEnd>(resolve => { end = resolve; });
@@ -33,7 +34,7 @@ function controlledObservation() {
     },
     sessionID: "ses_fixture", signal: lifetime.signal, onFailure,
   });
-  return { monitor, emit: (value: OpenCodeNativeEvent) => include(value), end, release, close, onFailure, lifetime };
+  return { monitor, emit: (value: OpenCodeNativeEvent) => include(value, { event: value, sequence: 1, continuity: "fixture", decodedBytes: Buffer.byteLength(JSON.stringify(value)) }), end, release, close, onFailure, lifetime };
 }
 
 describe("live OpenCode monitor finalization", () => {
@@ -108,7 +109,7 @@ describe("live OpenCode monitor finalization", () => {
   it("inspects real decoded events before the native observation can queue and discard them", async () => {
     const fixture = createOpenCodeApiFixture();
     const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture-only", fetch: fixture.fetch });
-    const api = new OpenCodeNativeApi(client), lifetime = new AbortController(), onFailure = vi.fn();
+    const api = new OpenCodeNativeApi(createOpenCodeNativePortFixture(client, { directory: fixture.directory, sessionID: fixture.sessionID })), lifetime = new AbortController(), onFailure = vi.fn();
     const observation = vi.spyOn(api, "observe");
     const monitor = monitorLiveGate({ observe: options => api.observe(options), sessionID: fixture.sessionID, signal: lifetime.signal, onFailure });
     try {

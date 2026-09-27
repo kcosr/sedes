@@ -3,7 +3,7 @@ import { OpenCodeAgentTools } from "./opencode-agent-tools.js";
 import type { TrustedAgentToolSource } from "../../agent-tools/adapters/backend-facade.js";
 import { randomUUID } from "node:crypto";
 import { configurationFingerprint } from "../../config/configuration-fingerprint.js";
-import { backendStartupEnvironmentVariables, createThreadEnvironmentResolver, mergeResolvedEnvironment, resolveEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
+import { backendStartupEnvironmentVariables, mergeResolvedEnvironment, resolveEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { ManagedTerminalCarrierError } from "../../terminal/managed-terminal-carrier.js";
 import type { AgentConnectionProfile } from "../contracts.js";
 import { NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES, type BackendModule, type BackendModuleConfigurationInput, type BackendModuleRuntime, type BackendModuleRuntimeContext, type BackendRuntimeAdministration, type BackendRuntimeInspection, type PreparedBackendModule } from "../module.js";
@@ -25,7 +25,7 @@ import { OpenCodeExecutionEnvironment } from "./opencode-execution-environment.j
 import { OpenCodeSkillCatalog } from "./opencode-skill-catalog.js";
 import { OpenCodeCliEnvironment } from "./opencode-cli-environment.js";
 
-type NativeRuntime = Pick<OpenCodeRuntime, "nativeNamespaceKey" | "start" | "health" | "snapshot" | "stop" | "close" | "acquire" | "assertCurrent" | "installSessionEnvironment">;
+type NativeRuntime = Pick<OpenCodeRuntime, "nativeNamespaceKey" | "start" | "health" | "snapshot" | "stop" | "close" | "acquire" | "assertCurrent" | "admitToolSession" | "releaseToolSession">;
 type NativeRuntimeFactory = (input: OpenCodeRuntimeInput) => NativeRuntime;
 const managedTerminals = Object.freeze({
   async authorizeAdmission(): Promise<never> { throw terminalUnavailable(); },
@@ -114,14 +114,14 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     readonly input: BackendModuleConfigurationInput, readonly namespace: string, readonly createNativeRuntime: NativeRuntimeFactory) {
     this.scope = context.scope; this.instance = context.instance;
     this.#usage = new OpenCodeUsageAccounting(context.usage);
-    this.#tools = new OpenCodeAgentTools({ facade: context.agentTools, cli: context.agentToolCli });
+    this.#tools = new OpenCodeAgentTools({ facade: context.agentTools, sourceCapabilities: context.agentToolSourceCapabilities, sourceCapabilityTransport: "management_http" });
     this.#startup = backendStartupEnvironmentVariables(input);
     this.#executionEnvironment = new OpenCodeExecutionEnvironment({ scope: context.scope, ownership: configuration.connection.ownership,
       readDefinitions: threadId => {
         if (!context.executionEnvironmentVariables) throw new Error("opencode_environment_snapshot_unavailable");
         return context.executionEnvironmentVariables(threadId);
-      }, resolve: createThreadEnvironmentResolver(context), cli: new OpenCodeCliEnvironment({ ownership: configuration.connection.ownership, availability: context.agentToolCli,
-        sourceCapabilities: context.agentToolSourceCapabilities, tools: context.agentTools }) });
+      }, cli: new OpenCodeCliEnvironment({ ownership: configuration.connection.ownership, availability: context.agentToolCli,
+        tools: context.agentTools }) });
     const repository = new OpenCodeThreadRepository({ database: context.database, scope: context.scope,
       backendInstanceId: context.instance.id, nativeNamespaceKey: namespace });
     const settings = new OpenCodeThreadSettingsRepository({ database: context.database, scope: context.scope, backendInstanceId: context.instance.id });
@@ -141,7 +141,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     this.automationExecutionPolicy = new OpenCodeAutomationExecutionPolicy(adapterInput);
     const catalog = new OpenCodeModelCatalog({ modelPolicy: configuration.modelPolicy, readNative: async (directory, signal) => {
       const runtime = await this.#native(); await runtime.start(); this.#assertOpen(); signal?.throwIfAborted();
-      const lease = runtime.acquire();
+      const lease = runtime.acquire({ directory });
       try {
         const native = new OpenCodeNativeMutations(lease.client);
         const [models, defaultModel] = await Promise.all([native.listModels(directory, signal), native.getDefaultModel(directory, signal)]);
@@ -152,7 +152,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     const skills = new OpenCodeSkillCatalog({ scope: context.scope, backendInstanceId: context.instance.id, nativeNamespaceKey: namespace,
       readNative: async (directory, signal) => {
         const runtime = await this.#native(); await runtime.start(); this.#assertOpen(); signal?.throwIfAborted();
-        const lease = runtime.acquire();
+        const lease = runtime.acquire({ directory });
         try {
           const result = await new OpenCodeNativeMutations(lease.client).listSkills(directory, signal);
           await runtime.assertCurrent(signal); this.#assertOpen();
@@ -217,6 +217,8 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
         nativeStorePath: this.configuration.nativeStorePath,
         configDirectory: this.configuration.configDirectory,
         environment,
+        agentTools: { cli: this.context.agentToolCli,
+          invoke: (capability, request, signal) => this.#tools.callHostTool(capability, request, signal) },
         connection: configured.ownership === "owned" ? configured : { ownership: "external", channel: { type: "http", url: configured.channel.url } },
         ...(configured.ownership === "external" ? { externalPassword: async () => {
           this.#assertOpen();

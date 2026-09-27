@@ -15,7 +15,9 @@ export interface OpenCodeNativeStoreLifecycle extends BackendNativeStoreLifecycl
 }
 
 export function openCodeNativeStoreNamespaceKey(canonicalStorePath: string): string {
-  if (!path.isAbsolute(canonicalStorePath) || path.normalize(canonicalStorePath) !== canonicalStorePath) {
+  // Main derives this identity too, including when a Windows main selects a
+  // Linux execution host. Filesystem admission still belongs to that host.
+  if (!path.posix.isAbsolute(canonicalStorePath) || path.posix.normalize(canonicalStorePath) !== canonicalStorePath) {
     throw new OpenCodeRuntimeError("opencode_native_store_path_invalid");
   }
   return createHash("sha256").update("sedes.opencode-native-store.v2\0").update(canonicalStorePath).digest("hex");

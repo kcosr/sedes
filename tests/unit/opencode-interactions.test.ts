@@ -1,3 +1,5 @@
+import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-native-api.js";
+import { openCodeRuntimeTarget } from "../../src/server/backends/opencode/opencode-conversation-context.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FormDetail, FormInfo, PermissionRequest } from "@opencode/client";
 import type { InteractionResponseInput } from "../../src/server/backends/contracts.js";
@@ -39,7 +41,7 @@ function fixture() {
     return new Response(null, { status: 204 });
   } });
   const native = createOpenCodeConversationFixture({ native: { client, sessionID: wire.sessionID, directory: wire.directory } });
-  const lease = native.runtime.acquire(); const lifetime = new AbortController(); const events = vi.fn();
+  const lease = native.runtime.acquire(openCodeRuntimeTarget(native.target)); const lifetime = new AbortController(); const events = vi.fn();
   const controllers: OpenCodeInteractions[] = [];
   const create = (generation = "runtime-binding-generation") => {
     const controller = new OpenCodeInteractions(native.context, native.target, native.runtime, lease, lifetime.signal, generation, events);
@@ -260,6 +262,8 @@ describe("OpenCode exact interaction controller", () => {
     const child = { ...f.wire.session, id: "ses_child", parentID: "ses_fixture" };
     f.permissions.set("per_child", { ...permission("per_child"), sessionID: child.id });
     f.forms.set("frm_child", { ...form("frm_child"), sessionID: child.id });
+    f.wire.sessions.push(child);
+    await new OpenCodeNativeApi(f.port).getActivity(f.wire.sessionID, f.wire.directory);
     await f.controller.refresh(undefined, [child]);
     const notices = f.events.mock.calls.filter(([event]) => event.type === "notice").map(([event]) => event.notice.message.text);
     expect(notices.some(text => text.includes("subagent is waiting for permission"))).toBe(true);
@@ -274,6 +278,8 @@ describe("OpenCode exact interaction controller", () => {
       id: `ses_child_${index}`, parentID: "ses_fixture", time: { ...f.wire.session.time, updated: index } }));
     const active = children[1_050]!;
     f.permissions.set("per_active_child", { ...permission("per_active_child"), sessionID: active.id });
+    f.wire.sessions.push(...children);
+    await new OpenCodeNativeApi(f.port).getActivity(f.wire.sessionID, f.wire.directory);
     await expect(f.controller.refresh({ permissions: [], forms: [] }, children, [active.id])).resolves.toBeUndefined();
     const childReads = f.requests.filter(request => request.path.includes("/ses_child_"));
     expect(childReads[0]?.path).toBe(`/api/session/${active.id}/permission`);

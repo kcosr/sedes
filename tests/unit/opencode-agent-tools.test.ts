@@ -1,3 +1,5 @@
+import { openCodeRuntimeTarget } from "../../src/server/backends/opencode/opencode-conversation-context.js";
+import { OpenCodeHostAgentTools } from "../../src/server/backends/opencode/opencode-host-agent-tools.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenCodeAgentTools } from "../../src/server/backends/opencode/opencode-agent-tools.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
@@ -56,11 +58,13 @@ function fixture(options: { inventory?: unknown; beforeInventory?: () => Promise
       accessBoundary: "thread" as const, enabledToolIds: ["agent.context"] })),
     invoke: vi.fn<BackendAgentToolFacade["invoke"]>(async () => { throw new Error("unexpected invocation"); }) as
       ReturnType<typeof vi.fn<BackendAgentToolFacade["invoke"]>> & BackendAgentToolFacade["invoke"] };
-  const tools = new OpenCodeAgentTools({ facade, cli: { availability: "available", endpoint: "http://127.0.0.1:4784", executableDirectory: "/bundled/bin", inheritedPath: "/bin" } });
+  const tools = new OpenCodeAgentTools({ facade, sourceCapabilities: { issue: (source, _transport, presentation) => `${source.sourceThreadId}:${presentation}` }, sourceCapabilityTransport: "management_http" });
+  const hostTools = new OpenCodeHostAgentTools({ adapter: f.adapter, cli: { endpoint: "http://127.0.0.1:4784", executableDirectory: "/bundled/bin" }, assertCurrent: signal => f.runtime.assertCurrent(signal), invoke: (capability, request, signal) => tools.callHostTool(capability, request, signal) });
+  f.setHostTools(hostTools);
   cleanups.push(() => f.dispose()); cleanups.push(() => tools.close());
   const context = Object.assign(f.context, { tools });
   const admit = () => tools.admit(context, f.target, f.runtime);
-  return { ...f, wire, context, tools, facade, registrations, mutations, admit };
+  return { ...f, wire, context, tools, hostTools, facade, registrations, mutations, admit };
 }
 async function connect(environment: Record<string, string>) {
   const endpoint = environment[OPENCODE_MCP_ENDPOINT]!; const authorization = `Bearer ${environment[OPENCODE_MCP_CREDENTIAL]}`;
@@ -83,7 +87,7 @@ describe("OpenCode MCP runtime admission", () => {
     cleanups.push(() => coordinator.close());
     const acquired = await coordinator.acquire(scope, binding.applicationThreadId);
     const handle = await f.handle();
-    const observer = findOpenCodeInputObserver(f.client, f.target)!;
+    const observer = findOpenCodeInputObserver(f.port, f.target)!;
     const evidence = new OpenCodeInputEvidenceRepository(f.repository);
     f.repository.reserveOperation(scope, { applicationThreadId: binding.applicationThreadId,
       connectionProfileId: binding.connectionProfileId, executionEnvironmentId: binding.executionEnvironmentId,
@@ -133,14 +137,14 @@ describe("OpenCode MCP runtime admission", () => {
     expect(acquired.actor.canAutomaticallyEvict).toBe(true); // Native state itself is idle.
     expect(coordinator.tryReclaimOldestIdleRuntime({ budgetScope: { ...scope, executionEnvironmentId: binding.executionEnvironmentId } })).toBeUndefined();
     await new Promise(resolve => setTimeout(resolve, 15)); // Also cross the zero-retention timer.
-    expect(acquired.actor.closed).toBe(false); expect(findOpenCodeInputObserver(f.client, f.target)).toBe(observer);
+    expect(acquired.actor.closed).toBe(false); expect(findOpenCodeInputObserver(f.port, f.target)).toBe(observer);
     expect(readThreadStatus).toHaveBeenCalledTimes(phase === "approved execution" ? 1 : 0);
     await acquired.actor.close();
     await vi.waitFor(() => expect(replies.some(reply => reply.id === 2)).toBe(true));
     const response = replies.find(reply => reply.id === 2)!;
     expect(response.result.isError).toBe(true);
     expect(JSON.parse(response.result.content[0].text)).toMatchObject({ error: { code: "cancelled", retryable: false } });
-    expect(findOpenCodeInputObserver(f.client, f.target)).toBeUndefined();
+    expect(findOpenCodeInputObserver(f.port, f.target)).toBeUndefined();
     expect(f.runtime.snapshot().references).toBe(0);
     expect(f.facade.invoke).toHaveBeenCalledOnce(); expect(decision).toHaveBeenCalledOnce();
     expect(readThreadStatus).toHaveBeenCalledTimes(phase === "approved execution" ? 1 : 0);
@@ -156,13 +160,13 @@ describe("OpenCode MCP runtime admission", () => {
     cleanups.push(async () => { await first.close(); await second.close(); });
     await first.establishProjection({ signal: new AbortController().signal });
     await second.establishProjection({ signal: new AbortController().signal });
-    const observer = findOpenCodeInputObserver(f.client, f.target);
+    const observer = findOpenCodeInputObserver(f.port, f.target);
     expect(observer).toBeDefined(); expect(f.runtime.snapshot().references).toBe(2);
     expect(f.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(3);
     await first.close();
-    expect(findOpenCodeInputObserver(f.client, f.target)).toBe(observer);
+    expect(findOpenCodeInputObserver(f.port, f.target)).toBe(observer);
     await second.close();
-    expect(findOpenCodeInputObserver(f.client, f.target)).toBeUndefined();
+    expect(findOpenCodeInputObserver(f.port, f.target)).toBeUndefined();
     expect(f.runtime.snapshot().references).toBe(0);
     const response = await channel.call(f.wire.sessionID);
     expect(response.status).toBe(200); await response.body?.cancel();
@@ -174,7 +178,7 @@ describe("OpenCode MCP runtime admission", () => {
     const f = fixture({ cli: true }); const handle = await f.driver.attach(f.target);
     cleanups.push(() => handle.close());
     await handle.establishProjection({ signal: new AbortController().signal });
-    const observer = findOpenCodeInputObserver(f.client, f.target)!;
+    const observer = findOpenCodeInputObserver(f.port, f.target)!;
     const { scope, binding, workspace } = f.target;
     const evidence = new OpenCodeInputEvidenceRepository(f.repository);
     f.repository.reserveOperation(scope, { applicationThreadId: binding.applicationThreadId,
@@ -197,7 +201,7 @@ describe("OpenCode MCP runtime admission", () => {
     await expect(authority.acquire(new AbortController().signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
     const replacement = await f.driver.attach(f.target); cleanups.push(() => replacement.close());
     await replacement.establishProjection({ signal: new AbortController().signal });
-    expect(findOpenCodeInputObserver(f.client, f.target)?.trackerId).not.toBe(observer.trackerId);
+    expect(findOpenCodeInputObserver(f.port, f.target)?.trackerId).not.toBe(observer.trackerId);
     await expect(authority.acquire(new AbortController().signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
   });
   it.each([0, OPENCODE_MCP_WATCHDOG_MS + 1])("readmits using elapsed time since actual revocation (%i ms)", async elapsed => {
@@ -259,7 +263,7 @@ describe("OpenCode MCP runtime admission", () => {
     const f = fixture(); const admission = f.admit(); await entered.promise;
     expect(channel?.revoked).toBe(false);
     f.tools.release(f.target.binding.applicationThreadId); release.resolve(); await admission;
-    expect(channel?.revoked).toBe(true);
+    await vi.waitFor(() => expect(channel?.revoked).toBe(true));
     expect(f.registrations).toEqual([]); expect(f.mutations).toEqual([]);
   });
   it("reuses one registration across concurrent admission and residency release without native deletion", async () => {
@@ -271,6 +275,7 @@ describe("OpenCode MCP runtime admission", () => {
     f.tools.release(f.target.binding.applicationThreadId);
     response = await channel.call(f.target.binding.backendConversationId); expect(response.status).toBe(403); await response.body?.cancel();
     await f.admit(); expect(f.registrations).toHaveLength(1);
+    expect(f.tools.diagnostic(f.target.binding.applicationThreadId)).toBeUndefined();
     response = await channel.call("ses_foreign"); expect(response.status).toBe(403); await response.body?.cancel();
     expect(f.facade.catalogSummaries).toHaveBeenCalledTimes(1);
     await f.tools.close(); expect(f.mutations).toEqual(["PUT"]);
@@ -286,7 +291,19 @@ describe("OpenCode MCP runtime admission", () => {
     expect(f.registrations).toHaveLength(1); expect(f.tools.diagnostic(f.target.binding.applicationThreadId)).toBeUndefined();
   });
   it("admits CLI provenance without registering MCP and rejects access decisions without current user proof", async () => {
-    const f = fixture({ cli: true }); await f.admit(); expect(f.registrations).toHaveLength(0);
+    const f = fixture({ cli: true });
+    const admit = vi.spyOn(f.runtime, "admitToolSession");
+    await f.admit(); expect(f.registrations).toHaveLength(0);
+    expect(admit).toHaveBeenCalledOnce();
+    const admitted = admit.mock.calls[0]![1];
+    expect(Object.keys(admitted).sort()).toEqual(["catalog", "cli", "sourceCapability"]);
+    expect(JSON.stringify(admitted)).not.toContain("/bundled/bin");
+    const target = openCodeRuntimeTarget(f.target), cliAdmissionId = f.tools.cliAdmission(f.target.binding.applicationThreadId)!;
+    expect(f.hostTools.cliEnvironment(target, cliAdmissionId)).toEqual({ executableDirectory: "/bundled/bin", generated: {
+      SEDES_AGENT_TOOL_ENDPOINT: "http://127.0.0.1:4784", SEDES_AGENT_TOOL_SOURCE_CAPABILITY: `${f.target.binding.applicationThreadId}:cli`, SEDES_AGENT_TOOL_CLI_MODE: "progressive",
+    } });
+    expect(() => f.hostTools.cliEnvironment({ ...target, session: { ...target.session, bindingFingerprint: "a".repeat(64) } }, cliAdmissionId)).toThrow();
+    expect(() => f.hostTools.cliEnvironment(target, "foreign-admission")).toThrow();
     const source = { scope: f.target.scope, sourceThreadId: f.target.binding.applicationThreadId,
       sourceWorkspaceId: f.target.workspace.summary.id, sourceEnvironmentId: f.target.binding.executionEnvironmentId, backendKind: "opencode" as const };
     await expect(f.tools.accessDecisionAuthority(source).acquire(new AbortController().signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });

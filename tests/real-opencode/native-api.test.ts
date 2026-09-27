@@ -1,3 +1,4 @@
+import { createOpenCodeNativePortFixture, openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
 import { expect, it } from "vitest";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
 import { OpenCodeNativeApi, type OpenCodeNativeMessage, type OpenCodeNativeObservation } from "../../src/server/backends/opencode/opencode-native-api.js";
@@ -13,11 +14,11 @@ it.skipIf(!RUN_REAL_OPENCODE)("uses the production parser and SSE-first stream a
     const password = entries.find(value => value.startsWith("OPENCODE_PASSWORD="))?.slice("OPENCODE_PASSWORD=".length);
     if (!password) throw new Error("fixture credential unavailable");
     client = new OpenCodeHttpClient({ endpoint: fixture.url, password });
-    const api = new OpenCodeNativeApi(client);
+    const api = new OpenCodeNativeApi(createOpenCodeNativePortFixture(client, { directory: fixture.workspace, sessionID: "ses_api_read_fixture" }));
     observation = api.observe(); await observation.ready;
     // Fixture-only creation/import seeds durable data; the production API
     // under test exposes no create, prompt, model selection or import method.
-    const created = await fixture.api("POST", "/api/session", { title: "Read qualification", location: { directory: fixture.workspace } });
+    const created = await fixture.api("POST", "/api/session", { id: "ses_api_read_fixture", title: "Read qualification", location: { directory: fixture.workspace } });
     expect(created.status).toBe(200);
     const sessionID: string = created.body.data.id;
     await expect(api.getSession(sessionID)).resolves.toMatchObject({ id: sessionID, location: { directory: fixture.workspace } });
@@ -30,24 +31,25 @@ it.skipIf(!RUN_REAL_OPENCODE)("uses the production parser and SSE-first stream a
     });
     expect(imported.status).toBe(200);
     const seed: string = imported.body.data.id;
-    const first = await api.getHistoryPage(seed, { order: "asc" });
+    const seedApi = new OpenCodeNativeApi(createOpenCodeNativePortFixture(client, { directory: fixture.workspace, sessionID: seed }));
+    const first = await seedApi.getHistoryPage(seed, { order: "asc" });
     expect(first.data).toHaveLength(50);
-    const second = await api.getHistoryPage(seed, { cursor: first.cursor.next! });
+    const second = await seedApi.getHistoryPage(seed, { cursor: first.cursor.next! });
     expect(second.data).toHaveLength(50);
-    const third = await api.getHistoryPage(seed, { cursor: second.cursor.next! });
+    const third = await seedApi.getHistoryPage(seed, { cursor: second.cursor.next! });
     expect(third.data).toHaveLength(5);
-    const end = await api.getHistoryPage(seed, { cursor: third.cursor.next! });
+    const end = await seedApi.getHistoryPage(seed, { cursor: third.cursor.next! });
     expect(end).toMatchObject({ data: [], cursor: {} });
     expect([...first.data, ...second.data, ...third.data].map(value => value.type)).toEqual(messages.map(value => value.type));
-    await expect(api.getMessage(seed, first.data[0]!.id)).resolves.toEqual(first.data[0]);
-    const newest = await api.getHistoryPage(seed, { order: "desc", limit: 2 });
-    const older = await api.getHistoryPage(seed, { cursor: newest.cursor.next!, limit: 2 });
-    const forward = await api.getHistoryPage(seed, { cursor: older.cursor.previous!, limit: 2 });
+    await expect(seedApi.getMessage(seed, first.data[0]!.id)).resolves.toEqual(first.data[0]);
+    const newest = await seedApi.getHistoryPage(seed, { order: "desc", limit: 2 });
+    const older = await seedApi.getHistoryPage(seed, { cursor: newest.cursor.next!, limit: 2 });
+    const forward = await seedApi.getHistoryPage(seed, { cursor: older.cursor.previous!, limit: 2 });
     expect(forward.data).toEqual(newest.data);
-    await expect(api.getPending(seed)).resolves.toEqual([]);
-    await expect(api.getInteractions(seed)).resolves.toEqual({ permissions: [], forms: [] });
-    await expect(api.getActivity(seed, fixture.workspace)).resolves.toMatchObject({ active: false, activeChildren: [], children: [], shells: [] });
-    await expect(api.interruptSession(seed)).resolves.toEqual({ interrupted: false });
+    await expect(seedApi.getPending(seed)).resolves.toEqual([]);
+    await expect(seedApi.getInteractions(seed)).resolves.toEqual({ permissions: [], forms: [] });
+    await expect(seedApi.getActivity(seed, fixture.workspace)).resolves.toMatchObject({ active: false, activeChildren: [], children: [], shells: [] });
+    await expect(seedApi.interruptSession(seed, openCodeTestMutationControl("interruptSession"))).resolves.toEqual({ interrupted: false });
     const events = observation.drain();
     expect(events.some(({ event }) => event.type === "session.created")).toBe(true);
     expect(observation.failure).toBeUndefined();

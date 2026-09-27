@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
+import path from "node:path";
 import type { OpenCodeUsageAccounting } from "./opencode-usage-accounting.js";
 import type { OpenCodeAgentTools } from "./opencode-agent-tools.js";
 import { BackendError, type AgentBackendInstance, type AgentConnectionProfile, type AttachConversationInput, type DiscoverConversationsInput } from "../contracts.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
-import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
 import { parseOpenCodeBindingDetail, serializeOpenCodeBindingDetail, type OpenCodeBindingDetail } from "./opencode-binding-detail.js";
 import type { OpenCodeRuntime } from "./opencode-runtime.js";
 import type { OpenCodeThreadRepository } from "./opencode-thread-repository.js";
@@ -14,7 +15,7 @@ import type { OpenCodeSkillCatalog } from "./opencode-skill-catalog.js";
 import type { OutputArtifactPublisher } from "../../output-artifacts/contracts.js";
 
 export type OpenCodeConversationRuntime = Pick<OpenCodeRuntime,
-  "nativeNamespaceKey" | "start" | "health" | "snapshot" | "acquire" | "assertCurrent" | "installSessionEnvironment">;
+  "nativeNamespaceKey" | "start" | "health" | "snapshot" | "acquire" | "assertCurrent" | "admitToolSession" | "releaseToolSession">;
 
 export interface OpenCodeDriverContext {
   readonly scope: RequestScope;
@@ -28,7 +29,7 @@ export interface OpenCodeDriverContext {
   readonly usage: OpenCodeUsageAccounting;
   readonly executionEnvironment: OpenCodeExecutionEnvironment;
   readonly skills: OpenCodeSkillCatalog;
-  readonly tools: Pick<OpenCodeAgentTools, "admit" | "release" | "diagnostic" | "gatewayAction">;
+  readonly tools: Pick<OpenCodeAgentTools, "admit" | "release" | "diagnostic" | "gatewayAction" | "cliAdmission">;
   readonly attachmentProvenanceKey: Uint8Array;
   readonly outputArtifacts: OutputArtifactPublisher;
   readonly runtime: () => Promise<OpenCodeConversationRuntime>;
@@ -42,7 +43,8 @@ export function assertOpenCodeWorkspace(context: OpenCodeDriverContext,
       context.connection.tenantId !== context.scope.tenantId || context.connection.ownerPrincipalId !== context.scope.principalId ||
       context.connection.backendInstanceId !== context.instance.id || context.connection.kind !== "opencode_http" || !context.connection.enabled ||
       input.workspace.summary.environmentId !== context.connection.executionEnvironmentId ||
-      !normalizedAbsolutePath(input.workspace.canonicalPath) || input.workspace.canonicalPath.length > 4_096) {
+      !path.posix.isAbsolute(input.workspace.canonicalPath) || path.posix.normalize(input.workspace.canonicalPath) !== input.workspace.canonicalPath ||
+      input.workspace.canonicalPath.includes("\0") || input.workspace.canonicalPath.length > 4_096) {
     throw openCodeConversationError("opencode_conversation_authority_invalid", "The OpenCode conversation target does not match its authority.", "permission_denied");
   }
 }
@@ -68,6 +70,15 @@ export function requireOpenCodeBinding(context: OpenCodeDriverContext,
   } catch {
     throw openCodeConversationError("opencode_binding_authority_invalid", "The OpenCode conversation binding is unavailable.", "permission_denied");
   }
+}
+
+/** A native port is always scoped to a workspace and, for a bound thread, its exact binding. */
+export function openCodeRuntimeTarget(input: Pick<AttachConversationInput, "workspace" | "binding" | "opaqueBindingDetail">) {
+  return { directory: input.workspace.canonicalPath, session: {
+    applicationThreadId: input.binding.applicationThreadId,
+    nativeSessionID: input.binding.backendConversationId,
+    bindingFingerprint: createHash("sha256").update(serializeOpenCodeBindingDetail(parseOpenCodeBindingDetail(input.opaqueBindingDetail))).digest("hex"),
+  } };
 }
 
 export function openCodeConversationError(code: string, message: string,

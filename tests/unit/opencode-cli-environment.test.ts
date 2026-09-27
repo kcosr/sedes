@@ -14,7 +14,7 @@ function fixture(availability: AgentToolCliAvailability = { availability: "avail
   const issue = vi.fn(() => "exact-thread-reference");
   const policy = { enabled: true, presentation: { surface: "cli" as "cli" | "native", mode: "progressive" as "progressive" | "individual" },
     accessBoundary: "thread" as const, enabledToolIds: ["agent.context"] };
-  const cli = new OpenCodeCliEnvironment({ ownership: "owned", availability, sourceCapabilities: { issue }, tools: { readPolicy: () => policy } });
+  const cli = new OpenCodeCliEnvironment({ ownership: "owned", availability, tools: { readPolicy: () => policy } });
   const seed = () => {
     f.context.settings.updateDesired(scope, threadID, { desired: { providerID: "provider", id: "model" }, expectedRevision: 0, now: 1 });
     f.context.settings.captureOperation(scope, { applicationThreadId: threadID, applicationOperationId: "creation", operationKind: "create", expectedRevision: 1, now: 1 });
@@ -39,14 +39,15 @@ describe("OpenCode CLI source admission and reusable creation provenance", () =>
     expect(f.cli.plan(f.context, f.target)).toBeUndefined(); expect(f.issue).not.toHaveBeenCalled();
     expect(f.cli.diagnostic(threadID)).toBeUndefined();
   });
-  it("issues only a CLI audience for exact accepted created-root authority", () => {
+  it("plans exact accepted created-root authority without main-host credentials or endpoints", () => {
     const f = fixture(); f.seed();
     expect(f.repository.hasCreatedRoot(scope, threadID, f.target.binding.backendConversationId)).toBe(true);
     const plan = f.cli.plan(f.context, f.target)!;
     expect(f.issue).not.toHaveBeenCalled();
-    expect(f.cli.materialize(plan)).toEqual({ SEDES_AGENT_TOOL_ENDPOINT: "http://127.0.0.1:4784", SEDES_AGENT_TOOL_SOURCE_CAPABILITY: "exact-thread-reference", SEDES_AGENT_TOOL_CLI_MODE: "progressive" });
-    expect(f.issue).toHaveBeenCalledWith({ scope, sourceThreadId: threadID, sourceWorkspaceId: f.target.workspace.summary.id,
-      sourceEnvironmentId: f.context.connection.executionEnvironmentId, backendKind: "opencode" }, "management_http", "cli");
+    expect(plan).toEqual({ source: { scope, sourceThreadId: threadID, sourceWorkspaceId: f.target.workspace.summary.id,
+      sourceEnvironmentId: f.context.connection.executionEnvironmentId, backendKind: "opencode" }, mode: "progressive" });
+    expect(f.issue).not.toHaveBeenCalled();
+
   });
   it.each(["reset", "attempt_target", "attempt_source", "attempt_detail", "snapshot", "receipt_namespace"])("rejects changed %s creation proof", mutation => {
     const f = fixture(); f.seed();
@@ -60,18 +61,18 @@ describe("OpenCode CLI source admission and reusable creation provenance", () =>
     expect(f.cli.plan(f.context, f.target)).toBeUndefined(); expect(f.issue).not.toHaveBeenCalled();
     expect(f.cli.diagnostic(threadID)).toBeDefined();
   });
-  it("rejects wrong scope or session and does not use a managed remote CLI provider", () => {
+  it("rejects wrong scope or session and defers a managed remote CLI endpoint to its execution host", () => {
     const acquire = vi.fn(); const f = fixture({ availability: "managed", provider: { acquire } }); f.seed();
     expect(() => f.repository.hasCreatedRoot({ ...scope, principalId: "foreign" }, threadID, f.target.binding.backendConversationId)).toThrow();
     expect(f.repository.hasCreatedRoot(scope, threadID, "ses_foreign")).toBe(false);
-    expect(f.cli.plan(f.context, f.target)).toBeUndefined(); expect(acquire).not.toHaveBeenCalled(); expect(f.issue).not.toHaveBeenCalled();
-    expect(f.cli.diagnostic(threadID)).toBeDefined();
+    expect(f.cli.plan(f.context, f.target)).toMatchObject({ mode: "progressive" }); expect(acquire).not.toHaveBeenCalled(); expect(f.issue).not.toHaveBeenCalled();
+    expect(f.cli.diagnostic(threadID)).toBeUndefined();
   });
   it("withholds CLI on an external server even for a Sedes-created root", () => {
     const f = fixture(); f.seed();
     const cli = new OpenCodeCliEnvironment({ ...f.cli.options, ownership: "external" });
     expect(cli.plan(f.context, f.target)).toBeUndefined(); expect(f.issue).not.toHaveBeenCalled();
-    expect(cli.diagnostic(threadID)).toContain("owned local server");
+    expect(cli.diagnostic(threadID)).toContain("owned server");
     cli.release(threadID); expect(cli.diagnostic(threadID)).toBeUndefined();
   });
 });

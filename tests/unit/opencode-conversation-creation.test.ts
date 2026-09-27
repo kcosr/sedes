@@ -1,3 +1,4 @@
+import { createOpenCodeNativePortFixture } from "../helpers/opencode-native-port-fixture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelInfo, SessionInfo } from "@opencode/client";
 import type { CreateConversationInput } from "../../src/server/backends/contracts.js";
@@ -53,7 +54,7 @@ function fixture() {
     return state.native ? json(200, { data: state.native }) : json(404, { _tag: "SessionNotFoundError", sessionID, message: "missing" });
   } });
   const originalAcquire = vi.mocked(runtime.acquire).getMockImplementation()!;
-  vi.mocked(runtime.acquire).mockImplementation(() => ({ ...originalAcquire(), client }));
+  vi.mocked(runtime.acquire).mockImplementation(target => ({ ...originalAcquire(target), client: createOpenCodeNativePortFixture(client, { directory: target.directory, sessionID }) }));
   const readNative = vi.fn(async () => ({ models: nativeModel.enabled ? [nativeModel] : [], defaultModel: nativeModel }));
   const catalog = new OpenCodeModelCatalog({ readNative, modelPolicy: context.modelPolicy });
   const getRuntime = vi.fn(async () => runtime);

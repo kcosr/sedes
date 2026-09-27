@@ -1,3 +1,8 @@
+import { randomUUID } from "node:crypto";
+import { OpenCodeNativeHost, type OpenCodeNativeHostHooks } from "../../src/server/backends/opencode/opencode-native-host.js";
+import { OpenCodeHttpNativeAdapter } from "../../src/server/backends/opencode/opencode-http-native-adapter.js";
+import type { OpenCodeHostAgentTools } from "../../src/server/backends/opencode/opencode-host-agent-tools.js";
+import { openCodeRuntimeTarget } from "../../src/server/backends/opencode/opencode-conversation-context.js";
 import { OpenCodeUsageAccounting } from "../../src/server/backends/opencode/opencode-usage-accounting.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import Database from "better-sqlite3";
@@ -37,7 +42,7 @@ export function createOpenCodeConversationFixture(input: {
   messages?: SessionMessageInfo[];
   retentionMilliseconds?: number;
   /** Isolated stock-native HTTP transport; fixture disposal also closes this client. */
-  native?: { client: OpenCodeHttpClient; sessionID: string; directory: string; runtime?: OpenCodeConversationRuntime };
+  native?: { client?: OpenCodeHttpClient; sessionID: string; directory: string; runtime?: OpenCodeConversationRuntime };
 } = {}) {
   const namespace = input.native?.runtime?.nativeNamespaceKey ?? "fixture-native-store";
   const wire = createOpenCodeApiFixture({ messages: input.messages });
@@ -77,6 +82,19 @@ export function createOpenCodeConversationFixture(input: {
   const identity: OpenCodeNativeIdentity = { pid: process.pid, startTime: "fixture-start", uid: process.getuid?.() ?? 0,
     executablePath: "/fixture/opencode2", executable: { device: "1", inode: "2" }, nativeStorePath: "/fixture/opencode.db",
     store: { device: "1", inode: "3" }, storeObservation: "open_file" };
+  let hostTools: OpenCodeHostAgentTools | undefined;
+  const adapter = new OpenCodeHttpNativeAdapter(client);
+  const hostHooks: OpenCodeNativeHostHooks = {
+    assertCurrent: async signal => { signal?.throwIfAborted(); },
+    installSessionEnvironment: vi.fn(async () => { throw new Error("unexpected scoped environment installation"); }),
+    ensureMcpRegistration: async (authority, input, signal) => {
+      if (!hostTools || !authority.session) throw new Error("MCP fixture not configured");
+      await hostTools.ensureRegistration({ directory: authority.directory, session: authority.session }, input.registrationAdmissionId, signal);
+    },
+  };
+  const host = new OpenCodeNativeHost({ tenantId: scope.tenantId, principalId: scope.principalId,
+    backendInstanceId: backend, executionEnvironmentId: environmentID, runtimeId: randomUUID(), nativeGeneration: "native-generation" },
+    adapter, hostHooks, client.lifetime);
   // The runtime-owner seam isolates OS admission already qualified natively in
   // M1; real driver, handle, HTTP client/parser, SQL binding and actor remain.
   const runtime: OpenCodeConversationRuntime = input.native?.runtime ?? {
@@ -85,28 +103,33 @@ export function createOpenCodeConversationFixture(input: {
     health: async () => ({ available: !client.lifetime.aborted, checkedAt: new Date().toISOString() }),
     snapshot: () => ({ state: client.lifetime.aborted ? "disconnected" : "ready", ownership: "owned", generation: "native-generation", references, identity }),
     assertCurrent: vi.fn(async signal => { signal?.throwIfAborted(); if (client.lifetime.aborted) throw new OpenCodeRuntimeError("opencode_runtime_identity_changed"); }),
-    installSessionEnvironment: vi.fn(async () => { throw new Error("unexpected scoped environment installation"); }),
-    acquire: vi.fn(() => {
+    admitToolSession: async (target, admission, signal) => { if (!hostTools) throw new Error("MCP fixture not configured"); return hostTools.admit(target, admission, signal); },
+    releaseToolSession: target => { hostTools?.release(target); },
+    acquire: vi.fn(target => {
       if (client.lifetime.aborted) throw new OpenCodeRuntimeError("opencode_runtime_identity_changed");
       references++; let released = false;
-      return { client, generation: "native-generation", identity, release: () => { if (!released) { released = true; references--; } } };
+      return { client: host.acquire(target), generation: "native-generation", identity, release: () => { if (!released) { released = true; references--; } } };
     }),
   };
   const settings = new OpenCodeThreadSettingsRepository({ database, scope, backendInstanceId: backend });
   const modelPolicy = compileBackendModelPolicy({ type: "catalog" }, "provider_model_effort");
   const catalog = new OpenCodeModelCatalog({ modelPolicy, readNative: async (directory, signal) => {
-    const native = new OpenCodeNativeMutations(client);
-    const models = await native.listModels(directory, signal);
-    const defaultModel = await native.getDefaultModel(directory, signal);
-    return { models, ...(defaultModel ? { defaultModel } : {}) };
+    const lease = runtime.acquire({ directory });
+    try {
+      const native = new OpenCodeNativeMutations(lease.client);
+      const models = await native.listModels(directory, signal);
+      const defaultModel = await native.getDefaultModel(directory, signal);
+      return { models, ...(defaultModel ? { defaultModel } : {}) };
+    } finally { lease.release(); }
   } });
-  const executionEnvironment = new OpenCodeExecutionEnvironment({ scope, ownership: "owned", readDefinitions: () => ({}), resolve: async () => ({}) });
+  const executionEnvironment = new OpenCodeExecutionEnvironment({ scope, ownership: "owned", readDefinitions: () => ({}) });
   const skills = new OpenCodeSkillCatalog({ scope, backendInstanceId: backend, nativeNamespaceKey: namespace,
-    readNative: (directory, signal) => new OpenCodeNativeMutations(client).listSkills(directory, signal) });
+    readNative: async (directory, signal) => { const lease = runtime.acquire({ directory });
+      try { return await new OpenCodeNativeMutations(lease.client).listSkills(directory, signal); } finally { lease.release(); } } });
   const context = { scope, instance, connection, repository, settings, catalog, modelPolicy, executionEnvironment, skills, usage: new OpenCodeUsageAccounting(NO_USAGE_SINK),
     attachmentProvenanceKey: Buffer.alloc(32, 7), outputArtifacts: { findImage: () => undefined,
       publishImage: async (): Promise<import("../../src/server/output-artifacts/contracts.js").OutputImageArtifactDescriptor> => { throw new Error("unexpected image publication"); } },
-    tools: { admit: async () => {}, release: () => {}, diagnostic: () => undefined, gatewayAction: () => undefined }, nativeNamespaceKey: namespace, runtime: async () => runtime };
+    tools: { admit: async () => {}, release: () => {}, diagnostic: () => undefined, gatewayAction: () => undefined, cliAdmission: () => null }, nativeNamespaceKey: namespace, runtime: async () => runtime };
   const driver = new OpenCodeConversationBackendDriver(context);
   const attached = vi.spyOn(driver, "attach");
   const environmentRelease = vi.fn(async () => undefined);
@@ -117,9 +140,9 @@ export function createOpenCodeConversationFixture(input: {
     retentionMilliseconds: input.retentionMilliseconds ?? 60_000, runtimeBudget: 8,
   });
   const target = { scope, binding, workspace, opaqueBindingDetail: serializeOpenCodeBindingDetail(detail), driver };
-  const dispose = async () => { try { await manager.close(); } finally { client.close(); database.close(); } };
+  const dispose = async () => { try { await manager.close(); } finally { await hostTools?.close(); host.close(); client.close(); database.close(); } };
   const acquire = () => manager.acquire(target, { idleRelease: "retain" });
   const handle = async (): Promise<ConversationHandle> => attached.mock.results[0]!.value;
   const interrupts = () => wire.requests.filter(request => request.pathname.endsWith("/interrupt"));
-  return { wire, client, runtime, context, database, repository, driver, manager, target, acquire, handle, attached, environmentRelease, interrupts, dispose };
+  return { wire, client, port: host.acquire(openCodeRuntimeTarget(target)), host, hostHooks, adapter, setHostTools: (tools: OpenCodeHostAgentTools) => { hostTools = tools; }, runtime, context, database, repository, driver, manager, target, acquire, handle, attached, environmentRelease, interrupts, dispose };
 }

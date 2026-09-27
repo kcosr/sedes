@@ -1,3 +1,4 @@
+import { acknowledgeOpenCodeMutation, openCodeOperationControl } from "./opencode-operation-control.js";
 import { BackendAgentToolRequestError, type BackendAgentToolAccessDecisionAuthority } from "../../agent-tools/adapters/backend-facade.js";
 import { randomUUID } from "node:crypto";
 import { SessionInbox } from "@opencode/schema/session-inbox";
@@ -10,7 +11,7 @@ import { OpenCodeNativeApi, OpenCodeNativeProtocolError, openCodeNativeParser, t
   type OpenCodeNativeMessage, type OpenCodeNativeObservation } from "./opencode-native-api.js";
 import { readOpenCodeNativeLog, type OpenCodeNativeDurableEvent } from "./opencode-native-log.js";
 import { OpenCodeNativeMutations, type OpenCodeNativePromptAdmission } from "./opencode-native-mutations.js";
-import type { OpenCodeHttpClient } from "./opencode-http-client.js";
+import type { OpenCodeNativePort } from "./opencode-native-port.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
 
@@ -193,7 +194,7 @@ export class OpenCodeInputObserver {
   }
 
   /** Fresh Stop only: exact owned pending IDs; DELETE 204 is never proof. */
-  async withdrawPending(signal: AbortSignal, deadlineAt: number): Promise<void> {
+  async withdrawPending(signal: AbortSignal, deadlineAt: number, applicationOperationId: string): Promise<void> {
     if (!Number.isSafeInteger(deadlineAt) || deadlineAt < 0) throw new OpenCodeNativeProtocolError();
     const budget = AbortSignal.any([this.#signal, signal, AbortSignal.timeout(Math.min(2_147_483_647, Math.max(0, deadlineAt - Date.now())))]);
     const check = () => { budget.throwIfAborted(); if (Date.now() >= deadlineAt) throw new OpenCodeRuntimeError("opencode_input_withdrawal_deadline"); };
@@ -209,7 +210,8 @@ export class OpenCodeInputObserver {
       this.#admit(tracked, item);
       const admitted = this.#evidence(tracked); if (admitted.payloadConflict || admitted.consumedFingerprint) continue;
       await this.#assertCurrent(budget); check();
-      await this.#mutations.cancelInput({ sessionID: this.#sessionID, inboxID: item.id }, budget);
+      await this.#mutations.cancelInput({ sessionID: this.#sessionID, inboxID: item.id }, openCodeOperationControl({ applicationOperationId, operationKind: "interrupt", deadlineAt, createdAt: 0 }, `withdraw-input:${item.id}`), budget);
+      await acknowledgeOpenCodeMutation(this.lease.client, "cancelInput", openCodeOperationControl({ applicationOperationId, operationKind: "interrupt", deadlineAt, createdAt: 0 }, `withdraw-input:${item.id}`));
       // A raced delivery or a no-op cancellation remains unresolved until proof.
       void this.#refresh(tracked).catch(() => undefined);
     }
@@ -475,21 +477,21 @@ export class OpenCodeInputObserver {
 
 interface Subscriber { readonly attach: AttachConversationInput; readonly options: OpenCodeInputObserverOptions; }
 interface SharedObserver { readonly observer: OpenCodeInputObserver; readonly subscribers: Set<Subscriber>; readonly owner: AbortController; }
-const registry = new WeakMap<OpenCodeHttpClient, Map<string, SharedObserver>>();
+const registry = new Map<string, Map<string, SharedObserver>>();
 function authorityKey(attach: AttachConversationInput): string {
   return JSON.stringify([attach.scope.tenantId, attach.scope.principalId, attach.binding.applicationThreadId,
     attach.binding.backendInstanceId, attach.binding.connectionProfileId, attach.binding.executionEnvironmentId,
     attach.binding.backendConversationId, attach.workspace.canonicalPath, attach.opaqueBindingDetail]);
 }
-export function findOpenCodeInputObserver(client: OpenCodeHttpClient, attach: AttachConversationInput): OpenCodeInputObserver | undefined {
-  return registry.get(client)?.get(authorityKey(attach))?.observer;
+export function findOpenCodeInputObserver(client: OpenCodeNativePort, attach: AttachConversationInput): OpenCodeInputObserver | undefined {
+  return registry.get(client.ownerKey)?.get(authorityKey(attach))?.observer;
 }
 /** Readers and actors share continuity; releasing one borrow cannot lose another's tracker. */
 export function acquireOpenCodeInputObserver(context: OpenCodeDriverContext, attach: AttachConversationInput,
   runtime: OpenCodeConversationRuntime, lease: OpenCodeRuntimeLease, lifetime: AbortSignal, options: OpenCodeInputObserverOptions = {}):
   { readonly observer: OpenCodeInputObserver; release(): void } {
   lifetime.throwIfAborted(); requireOpenCodeBinding(context, attach);
-  let entries = registry.get(lease.client); if (!entries) { entries = new Map(); registry.set(lease.client, entries); }
+  let entries = registry.get(lease.client.ownerKey); if (!entries) { entries = new Map(); registry.set(lease.client.ownerKey, entries); }
   const key = authorityKey(attach); let shared = entries.get(key);
   if (!shared) {
     const subscribers = new Set<Subscriber>(); const owner = new AbortController();
@@ -512,7 +514,7 @@ export function acquireOpenCodeInputObserver(context: OpenCodeDriverContext, att
   let released = false;
   const release = () => {
     if (released) return; released = true; lifetime.removeEventListener("abort", release); selected.subscribers.delete(subscriber);
-    if (selected.subscribers.size === 0) { selected.owner.abort(); selected.observer.close(); if (entries!.get(key) === selected) entries!.delete(key); }
+    if (selected.subscribers.size === 0) { selected.owner.abort(); selected.observer.close(); if (entries!.get(key) === selected) entries!.delete(key); if (entries!.size === 0) registry.delete(lease.client.ownerKey); }
   };
   lifetime.addEventListener("abort", release, { once: true });
   return { observer: selected.observer, release };

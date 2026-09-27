@@ -1,3 +1,4 @@
+import { createOpenCodeNativePortFixture } from "../helpers/opencode-native-port-fixture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenCodeSkillCatalog } from "../../src/server/backends/opencode/opencode-skill-catalog.js";
 import { OpenCodeNativeMutations } from "../../src/server/backends/opencode/opencode-native-mutations.js";
@@ -7,7 +8,7 @@ const closes: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of closes.splice(0).reverse()) await close(); });
 function fixture() {
   const f = createOpenCodeConversationFixture(); closes.push(f.dispose);
-  const native = new OpenCodeNativeMutations(f.client);
+  const native = new OpenCodeNativeMutations(f.port);
   const reader = new OpenCodeSkillCatalog({ scope, backendInstanceId: f.context.instance.id, nativeNamespaceKey: f.context.nativeNamespaceKey,
     readNative: (directory, signal) => native.listSkills(directory, signal) });
   const skill = { id: "manual-review", name: "Manual review", description: "Review current changes", autoinvoke: false,

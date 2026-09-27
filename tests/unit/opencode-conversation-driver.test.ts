@@ -18,6 +18,13 @@ const setting = (index: number): SessionMessageInfo => ({ id: `msg_setting_${ind
   model: { providerID: "fixture", id: "fixture" }, time: { created: index + 3 } });
 
 describe("OpenCode read error classification", () => {
+  it.each(["C:\\workspace", "\\\\server\\workspace", "relative/workspace", "/workspace/../other"])("rejects noncanonical execution-host path %s before starting a runtime", async canonicalPath => {
+    const current = fixture();
+    await expect(current.driver.discover({ scope, workspace: { ...current.target.workspace, canonicalPath }, limit: 10,
+      signal: new AbortController().signal })).rejects.toMatchObject({ category: "permission_denied", crossedSubmissionBoundary: false });
+    expect(current.runtime.start).not.toHaveBeenCalled();
+    expect(current.wire.requests).toEqual([]);
+  });
   it.each(["attach", "discover", "read"] as const)("normalizes transient %s transport failure and releases its lease", async operation => {
     const current = fixture();
     current.wire.setResponse(operation === "discover" ? "/api/session" : `/api/session/${current.wire.sessionID}${operation === "read" ? "/message" : ""}`,

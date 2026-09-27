@@ -1,3 +1,5 @@
+import { openCodeRuntimeTarget } from "../../src/server/backends/opencode/opencode-conversation-context.js";
+import { openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
 import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
@@ -58,9 +60,10 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
         OPENCODE_CONFIG_PROJECT_DISABLE: "1", OPENCODE_DISABLE_MODELS_FETCH: "1", OPENCODE_MODELS_PATH: path.join(root, "models.json"),
         OPENCODE_DISABLE_FFF: "1", OPENCODE_FILEWATCHER_DISABLE: "1", OPENCODE_LIVE_GATE_API_KEY: credential } });
     await wait(runtime.start()); assertLiveGateBudget(deadlineAt, lifetime.signal);
-    const lease = runtime.acquire();
+    const lease = runtime.acquire({ directory: workspace });
+    let sessionLease: ReturnType<OpenCodeRuntime["acquire"]> | undefined;
     try {
-      const api = new OpenCodeNativeApi(lease.client), native = new OpenCodeNativeMutations(lease.client);
+      const native = new OpenCodeNativeMutations(lease.client);
       const model = { providerID: LIVE_GATE_PROVIDER_ID, id: input.model };
       // Stock native provider discovery finishes after the server readiness ACK.
       // Qualify the exact tuple before creating or prompting a session.
@@ -68,8 +71,10 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
         assertLiveGateBudget(deadlineAt, lifetime.signal);
         expect((await native.listModels(workspace, lifetime.signal)).filter(value => value.providerID === LIVE_GATE_PROVIDER_ID && value.id === input.model)).toHaveLength(1);
       }, { timeout: Math.min(20_000, Math.max(1, deadlineAt - Date.now())), interval: 50 }));
-      const session = await wait(native.createSession({ id: `ses_${randomBytes(16).toString("hex")}`, title: "Sedes explicit live qualification", location: { directory: workspace }, model }, lifetime.signal));
-      current = createOpenCodeConversationFixture({ native: { client: lease.client, sessionID: session.id, directory: workspace, runtime } });
+      const session = await wait(native.createSession({ id: `ses_${randomBytes(16).toString("hex")}`, title: "Sedes explicit live qualification", location: { directory: workspace }, model }, { ...openCodeTestMutationControl("live-create"), deadlineAt }, lifetime.signal));
+      current = createOpenCodeConversationFixture({ native: { sessionID: session.id, directory: workspace, runtime } });
+      sessionLease = runtime.acquire(openCodeRuntimeTarget(current.target));
+      const api = new OpenCodeNativeApi(sessionLease.client);
       current.context.settings.updateDesired(scope, threadID, { expectedRevision: 0, desired: model, now: Date.now() });
       expect((await api.getSession(session.id, lifetime.signal)).model).toEqual({ ...model, variant: "default" });
       // Attach itself has no caller signal; preserve any late handle for cleanup.
@@ -146,7 +151,7 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
       await monitor.finish();
       if (monitorFailure) throw monitorFailure;
       // Native cost, if reported, is an estimate. This gate has no bill guarantee.
-    } finally { lease.release(); }
+    } finally { sessionLease?.release(); lease.release(); }
   } catch (error) { originalFailure = monitorFailure ?? error; }
   finally {
     clearTimeout(timer); lifetime.abort();

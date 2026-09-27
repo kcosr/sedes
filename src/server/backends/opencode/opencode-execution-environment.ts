@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { environmentVariableOverridesSchema, type EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
-import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
+import { configurationFingerprint } from "../../config/configuration-fingerprint.js";
+import type { OpenCodeMutationControl } from "./opencode-native-port.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import type { AttachConversationInput } from "../contracts.js";
-import { requireOpenCodeBinding, openCodeConversationError, type OpenCodeDriverContext, type OpenCodeConversationRuntime } from "./opencode-conversation-context.js";
+import { requireOpenCodeBinding, openCodeRuntimeTarget, openCodeConversationError, type OpenCodeDriverContext, type OpenCodeConversationRuntime } from "./opencode-conversation-context.js";
 import { serializeOpenCodeBindingDetail } from "./opencode-binding-detail.js";
 import { OpenCodeNativeApi, type OpenCodeNativeSession } from "./opencode-native-api.js";
 import { OpenCodeNativeMutations } from "./opencode-native-mutations.js";
@@ -16,6 +17,7 @@ export interface OpenCodeEnvironmentPreparation {
   readonly runtime: OpenCodeConversationRuntime;
   readonly operation: "submit" | "steer" | "compact";
   readonly signal: AbortSignal;
+  readonly control: OpenCodeMutationControl;
 }
 interface Installation { readonly generation: string; readonly definition: string; readonly binding: string; readonly cli: string | null; readonly released: boolean; }
 
@@ -29,7 +31,6 @@ export class OpenCodeExecutionEnvironment {
     readonly scope: RequestScope;
     readonly ownership: "owned" | "external";
     readonly readDefinitions: (applicationThreadId: string) => EnvironmentVariableOverrides;
-    readonly resolve: ThreadEnvironmentResolver;
     readonly cli?: OpenCodeCliEnvironment;
   }) {}
 
@@ -89,13 +90,13 @@ export class OpenCodeExecutionEnvironment {
     const generation = runtime.snapshot().generation;
     if (!generation || runtime.snapshot().ownership !== "owned" || this.options.ownership !== "owned") throw unsupported();
     await runtime.assertCurrent(signal); signal.throwIfAborted();
-    const lease = runtime.acquire();
+    const lease = runtime.acquire(openCodeRuntimeTarget(input));
     try {
       if (lease.generation !== generation) throw unavailable();
       const api = new OpenCodeNativeApi(lease.client), native = new OpenCodeNativeMutations(lease.client);
       const session = await api.getSession(sessionID, signal);
       assertRoot(session, input.workspace.canonicalPath);
-      const definition = createHash("sha256").update(JSON.stringify(definitions)).digest("hex");
+      const definition = configurationFingerprint(definitions);
       const cliIdentity = cli ? createHash("sha256").update(JSON.stringify(cli)).digest("hex") : null;
       const installed = this.#installed.get(thread);
       if (operation === "steer") {
@@ -109,22 +110,22 @@ export class OpenCodeExecutionEnvironment {
       if (!deniesChildren(session)) {
         const permissions = [...(session.permissions ?? []), { action: "subagent", resource: "*", effect: "deny" as const }];
         await runtime.assertCurrent(signal); requireOpenCodeBinding(request.context, input); signal.throwIfAborted();
-        await native.setPermissions({ sessionID, permissions }, signal);
+        await native.setPermissions({ sessionID, permissions }, { ...request.control, identity: { ...request.control.identity, step: "prepare-permissions" } }, signal);
         const readback = await api.getSession(sessionID, signal);
         assertRoot(readback, input.workspace.canonicalPath);
         if (!deniesChildren(readback)) throw unavailable();
       }
-      // Resolve values only after exact owned/root/idle admission. Values never enter fingerprints or receipts.
-      const overrides = await this.options.resolve(thread);
+      // Frozen definitions cross the port; secret references resolve only on the execution host.
       signal.throwIfAborted();
       if (cli) await request.context.tools.admit(request.context, input, runtime, signal);
       signal.throwIfAborted();
-      const generated = cli ? this.options.cli!.materialize(cli) : {};
+      const cliAdmissionId = cli ? request.context.tools.cliAdmission(thread) : null;
+      if (cli && !cliAdmissionId) throw unavailable();
       await assertIdle(api, sessionID, input.workspace.canonicalPath, signal);
       await runtime.assertCurrent(signal); requireOpenCodeBinding(request.context, input); signal.throwIfAborted();
       if (runtime.snapshot().generation !== generation) throw unavailable();
-      await runtime.installSessionEnvironment({ expectedGeneration: generation, sessionID, overrides, generated,
-        ...(cli ? { executableDirectory: cli.executableDirectory } : {}), signal });
+      await lease.client.mutate("installSessionEnvironment", { sessionID, definitions, definitionFingerprint: definition, cliAdmissionId },
+        { ...request.control, identity: { ...request.control.identity, step: "install-environment" } }, { signal });
       requireOpenCodeBinding(request.context, input); signal.throwIfAborted();
       if (runtime.snapshot().generation !== generation) throw unavailable();
       this.#installed.set(thread, { generation, definition, binding, cli: cliIdentity, released: false });
@@ -149,5 +150,5 @@ async function assertIdle(api: OpenCodeNativeApi, sessionID: string, directory: 
   if (unfinished || activity.active || activity.activeChildren.length || activity.shells.some(shell => shell.status === "running") ||
       pending.length || interactions.permissions.length || interactions.forms.length) throw unavailable();
 }
-function unsupported() { return openCodeConversationError("opencode_environment_unsupported", "Scoped variables require an owned local OpenCode root session.", "invalid_state"); }
+function unsupported() { return openCodeConversationError("opencode_environment_unsupported", "Scoped variables require an owned OpenCode root session.", "invalid_state"); }
 function unavailable() { return openCodeConversationError("opencode_environment_unavailable", "The OpenCode execution environment could not be safely prepared. No input was sent.", "invalid_state"); }

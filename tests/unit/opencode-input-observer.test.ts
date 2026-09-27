@@ -1,3 +1,4 @@
+import { openCodeRuntimeTarget } from "../../src/server/backends/opencode/opencode-conversation-context.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionInboxUser, SessionMessageInfo } from "@opencode/client";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
@@ -42,7 +43,7 @@ function fixture(input: { autoConnect?: boolean } = {}) {
   const native = createOpenCodeConversationFixture({ native: { client, sessionID: wire.sessionID, directory: wire.directory } });
   const evidence = new OpenCodeInputEvidenceRepository(native.repository);
   const controllers: OpenCodeInputObserver[] = [];
-  const lifetime = new AbortController(); const lease = native.runtime.acquire();
+  const lifetime = new AbortController(); const lease = native.runtime.acquire(openCodeRuntimeTarget(native.target));
   const observed = vi.fn(); const changed = vi.fn();
   const attach = { ...native.target, onSubmissionObserved: observed };
   const createObserver = () => {
@@ -114,7 +115,7 @@ describe("OpenCode independent private input observation", () => {
 
   it("returns exact nonretryable cancellation proof but not native DELETE acknowledgement", async () => {
     const f = fixture(); await f.observer.start(); f.reserve(); f.pending([admission()]);
-    await f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000);
+    await f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000, `stop-${Date.now() + 1_000}`);
     f.pending([]);
     expect((await f.observer.reconcile("operation", "submit")).status).toBe("unresolved");
     f.wire.send(cancelled(1));
@@ -124,9 +125,9 @@ describe("OpenCode independent private input observation", () => {
 
   it("a fresh Stop cancels only exact owned pending inputs, including an idle second attempt", async () => {
     const f = fixture(); await f.observer.start(); f.reserve(); f.pending([admission(), admission("msg_foreign")]);
-    await f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000);
+    await f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000, `stop-${Date.now() + 1_000}`);
     f.onDelete(id => { f.wire.send(cancelled(1, id)); f.pending([admission("msg_foreign")]); });
-    await f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000);
+    await f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000, `stop-${Date.now() + 1_000}`);
     await vi.waitFor(() => expect(f.row().withdrawalKind).toBe("cancelled"));
     expect(f.wire.requests.filter(request => request.method === "DELETE").map(request => request.pathname)).toEqual([
       "/api/session/ses_fixture/inbox/msg_owned", "/api/session/ses_fixture/inbox/msg_owned",
@@ -137,7 +138,7 @@ describe("OpenCode independent private input observation", () => {
   it("a promotion racing cancellation remains consumed", async () => {
     const f = fixture(); await f.observer.start(); f.reserve(); f.pending([admission()]);
     f.onDelete(() => { f.wire.messages.push(user()); f.pending([]); f.wire.send(delivered(1)); });
-    await f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000); await consumed(f);
+    await f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000, `stop-${Date.now() + 1_000}`); await consumed(f);
     expect(await f.observer.reconcile("operation", "submit")).toEqual({ status: "accepted" });
   });
 
@@ -311,8 +312,8 @@ describe("OpenCode independent private input observation", () => {
   it("does not dispatch cancellation after its original deadline or caller cancellation", async () => {
     const f = fixture(); await f.observer.start(); f.reserve(); f.pending([admission()]);
     const abort = new AbortController(); abort.abort();
-    await expect(f.observer.withdrawPending(abort.signal, Date.now() + 1_000)).rejects.toThrow();
-    await expect(f.observer.withdrawPending(new AbortController().signal, Date.now() - 1)).rejects.toThrow();
+    await expect(f.observer.withdrawPending(abort.signal, Date.now() + 1_000, `stop-${Date.now() + 1_000}`)).rejects.toThrow();
+    await expect(f.observer.withdrawPending(new AbortController().signal, Date.now() - 1, `stop-${Date.now() - 1}`)).rejects.toThrow();
     expect(f.wire.requests.some(request => request.method === "DELETE")).toBe(false);
   });
 
@@ -320,13 +321,13 @@ describe("OpenCode independent private input observation", () => {
     const f = fixture(); f.observer.close();
     const readerLifetime = new AbortController(); const actorLifetime = new AbortController();
     const reader = acquireOpenCodeInputObserver(f.context, { ...f.attach, onSubmissionObserved: undefined }, f.runtime, f.lease, readerLifetime.signal);
-    const actor = acquireOpenCodeInputObserver(f.context, f.attach, f.runtime, f.lease, actorLifetime.signal);
-    expect(reader.observer).toBe(actor.observer); expect(findOpenCodeInputObserver(f.client, f.attach)).toBe(actor.observer);
+    const actor = acquireOpenCodeInputObserver(f.context, f.attach, f.runtime, { ...f.lease, client: { ...f.lease.client } }, actorLifetime.signal);
+    expect(reader.observer).toBe(actor.observer); expect(findOpenCodeInputObserver(f.port, f.attach)).toBe(actor.observer);
     await actor.observer.start(); f.reserve("operation", "msg_owned", "submit", true, actor.observer);
     const tracker = actor.observer.trackerId; readerLifetime.abort(); expect(actor.observer.trackerId).toBe(tracker);
     f.wire.send(delivered(1)); await consumed(f); expect(f.observed).toHaveBeenCalledExactlyOnceWith({ backendCorrelation: "operation" });
-    actor.release(); expect(findOpenCodeInputObserver(f.client, f.attach)).toBeUndefined();
-    const next = acquireOpenCodeInputObserver(f.context, f.attach, f.runtime, f.lease, f.lifetime.signal);
+    actor.release(); expect(findOpenCodeInputObserver(f.port, f.attach)).toBeUndefined();
+    const next = acquireOpenCodeInputObserver(f.context, f.attach, f.runtime, { ...f.lease, client: { ...f.lease.client } }, f.lifetime.signal);
     expect(next.observer.trackerId).not.toBe(tracker); await vi.waitFor(() => expect(f.observed).toHaveBeenCalledTimes(2)); next.release();
   });
 

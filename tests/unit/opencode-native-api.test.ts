@@ -1,3 +1,4 @@
+import { createOpenCodeNativePortFixture, openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionMessageInfo } from "@opencode/client";
 import { OpenCodeHttpClient, OPENCODE_MAXIMUM_RESPONSE_BYTES } from "../../src/server/backends/opencode/opencode-http-client.js";
@@ -12,7 +13,7 @@ function setup(input: Parameters<typeof createOpenCodeApiFixture>[0] = {}) {
   const fixture = createOpenCodeApiFixture(input);
   const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture-only-canary", fetch: fixture.fetch });
   clients.push(client);
-  return { fixture, client, api: new OpenCodeNativeApi(client) };
+  return { fixture, client, api: new OpenCodeNativeApi(createOpenCodeNativePortFixture(client, { directory: fixture.directory, sessionID: fixture.sessionID })) };
 }
 function renameEvent(index = 1) {
   return { id: `evt_${index}`, type: "session.renamed", created: index,
@@ -134,7 +135,7 @@ describe("OpenCode validated native reads", () => {
     const read = api.getHistoryPage(fixture.sessionID, { signal: abort.signal });
     const rejected = expect(read).rejects.toThrow("opencode_request_aborted");
     await gate.entered;
-    await expect(api.interruptSession(fixture.sessionID)).resolves.toEqual({ interrupted: true });
+    await expect(api.interruptSession(fixture.sessionID, openCodeTestMutationControl("interrupt"))).resolves.toEqual({ interrupted: true });
     abort.abort(); await rejected; gate.release();
     await expect(api.getSession(fixture.sessionID)).resolves.toMatchObject({ id: fixture.sessionID });
   });

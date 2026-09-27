@@ -22,6 +22,7 @@ import {
 import { SEDES_VERSION } from "../shared/version.js";
 import { createSedesToolClient } from "./create-sedes-tool-client.js";
 import { runSedesMcp } from "./sedes-mcp.js";
+import { runSedesOpenCodeMcp } from "./sedes-opencode-mcp.js";
 import type { SedesToolLocalSocketConnector } from "./sedes-tool-local-client.js";
 import {
   parseDynamicToolInput,
@@ -271,8 +272,9 @@ export async function runSedesCli(
   }
   // The MCP server is a separate Native presentation. It ignores the CLI mode
   // hint and owns stdin/stdout for JSON-RPC until its client closes stdin.
-  if (arguments_[0] === "mcp") {
-    return runSedesMcp(arguments_.slice(1), {
+  if (arguments_[0] === "mcp" || arguments_[0] === "opencode-mcp") {
+    const run = arguments_[0] === "opencode-mcp" ? runSedesOpenCodeMcp : runSedesMcp;
+    return run(arguments_.slice(1), {
       environment,
       stderr: io.stderr,
       ...(dependencies.fetch ? { fetch: dependencies.fetch } : {}),

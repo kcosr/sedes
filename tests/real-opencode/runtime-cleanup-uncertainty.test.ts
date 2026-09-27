@@ -3,9 +3,13 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { OpenCodeRuntime } from "../../src/server/backends/opencode/opencode-runtime.js";
 import { boundedOpenCodeProcessFile } from "../../src/server/backends/opencode/opencode-native-identity.js";
+
+import * as ownedProcesses from "../../src/server/backends/opencode/opencode-owned-process.js";
+import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-native-api.js";
+afterEach(() => vi.restoreAllMocks());
 
 const enabled = process.platform === "linux" && process.env.SEDES_RUN_REAL_OPENCODE === "1";
 async function state(pid: number): Promise<{ live: boolean; parent: number }> {
@@ -42,6 +46,7 @@ it.skipIf(!enabled)("cleans confirmed detached native children despite an unrela
   const termEvidence = path.join(root, "term");
   const unrelatedEvidence = path.join(root, "unrelated");
   let runtime: OpenCodeRuntime | undefined;
+  const launched = vi.spyOn(ownedProcesses, "startOpenCodeOwnedProcess");
   let childPid: number | undefined;
   let unrelatedPid: number | undefined;
   let proved = false;
@@ -59,10 +64,12 @@ it.skipIf(!enabled)("cleans confirmed detached native children despite an unrela
         executablePath: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2", workingDirectory: root } },
     });
     await runtime.start();
-    const lease = runtime.acquire();
+    const lease = runtime.acquire({ directory: root });
+    expect((await new OpenCodeNativeApi(lease.client).listSessions({ directory: root })).data).toEqual([]);
+    const nativeClient = (await (launched.mock.results.at(-1)!.value as ReturnType<typeof ownedProcesses.startOpenCodeOwnedProcess>)).client;
     const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
     const childCode = `const fs=require("node:fs");process.on("SIGTERM",()=>fs.writeFileSync(${JSON.stringify(termEvidence)},"received"));fs.writeFileSync(${JSON.stringify(childEvidence)},String(process.pid));setInterval(()=>{},1000)`;
-    await lease.client.call((client, signal) => client.shell.create({ location: { directory: root }, cwd: root,
+    await nativeClient.call((client, signal) => client.shell.create({ location: { directory: root }, cwd: root,
       command: `${quote(process.execPath)} -e ${quote(childCode)}` }, { signal }), value => value);
     lease.release(); childPid = await pidFile(childEvidence);
     const nativePid = runtime.snapshot().identity!.pid;

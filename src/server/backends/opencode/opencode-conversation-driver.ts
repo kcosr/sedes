@@ -2,7 +2,7 @@ import { z } from "zod";
 import { boundDisplayText } from "../../conversations/payload-policy.js";
 import { BackendError, type AgentBackendInstance, type AgentConnectionProfile, type BackendHealth, type ConversationBackendDriver,
   type AttachConversationInput, type DiscoverConversationsInput, type ReadConversationInput, type ReleaseConversationResidencyInput } from "../contracts.js";
-import { assertOpenCodeWorkspace, openCodeConversationError, requireOpenCodeBinding, type OpenCodeDriverContext } from "./opencode-conversation-context.js";
+import { assertOpenCodeWorkspace, openCodeConversationError, openCodeRuntimeTarget, requireOpenCodeBinding, type OpenCodeDriverContext } from "./opencode-conversation-context.js";
 import { OpenCodeNativeApi } from "./opencode-native-api.js";
 import { OpenCodeConversationHandle, openCodeUnsupported, waitOpenCode } from "./opencode-conversation-handle.js";
 import { serializeOpenCodeBindingDetail } from "./opencode-binding-detail.js";
@@ -50,7 +50,7 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
     if (!receipt) return { status: "unresolved" as const, diagnostic: boundDisplayText("No private OpenCode dispatch proof exists for this input.") };
     if (receipt.disposition === "not_applied") return { status: "not_accepted" as const, retryable: false, diagnostic: boundDisplayText("The input was not dispatched to OpenCode.") };
     const runtime = await this.#runtime(); await runtime.start();
-    const lease = runtime.acquire(); const lifetime = new AbortController();
+    const lease = runtime.acquire(openCodeRuntimeTarget(attach)); const lifetime = new AbortController();
     let observation: ReturnType<typeof acquireOpenCodeInputObserver> | undefined;
     try {
       observation = acquireOpenCodeInputObserver(this.input, attach, runtime, lease, lifetime.signal);
@@ -80,7 +80,7 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
     }
     const runtime = await waitOpenCode(this.#runtime(), input.signal);
     await waitOpenCode(runtime.start(), input.signal); input.signal.throwIfAborted();
-    const lease = runtime.acquire();
+    const lease = runtime.acquire({ directory: input.workspace.canonicalPath });
     try {
       const api = new OpenCodeNativeApi(lease.client);
       const page = await api.listSessions({ ...(cursor ? { cursor } : { directory: input.workspace.canonicalPath }), limit: input.limit, signal: input.signal });
@@ -107,7 +107,7 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
   async #attach(input: AttachConversationInput): Promise<OpenCodeConversationHandle> {
     requireOpenCodeBinding(this.input, input);
     const runtime = await this.#runtime(); await runtime.start();
-    const lease = runtime.acquire();
+    const lease = runtime.acquire(openCodeRuntimeTarget(input));
     let handle: OpenCodeConversationHandle | undefined;
     try {
       const session = await new OpenCodeNativeApi(lease.client).getSession(input.binding.backendConversationId);
@@ -139,14 +139,14 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
     const cancellation = new AbortController();
     try {
       const runtime = await this.#runtime(); await runtime.start();
-      lease = runtime.acquire();
+      lease = runtime.acquire(openCodeRuntimeTarget(input));
       const api = new OpenCodeNativeApi(lease.client);
       const signal = AbortSignal.any([cancellation.signal, AbortSignal.timeout(OPENCODE_HISTORY_LIMITS.milliseconds)]);
       const sessionID = input.binding.backendConversationId;
       // Only the selected session lookup can prove absence. A failed inventory
       // or history lookup remains uncertainty about work, and cannot release it.
       const session = await api.getSession(sessionID, signal).catch(async error => {
-        if (error instanceof OpenCodeRuntimeError && error.code === "opencode_native_not_found") {
+        if (error instanceof OpenCodeRuntimeError && ["opencode_native_not_found", "opencode_session_location_changed"].includes(error.code)) {
           await runtime.assertCurrent(signal); throw mapOpenCodeConversationError(error);
         }
         throw error;

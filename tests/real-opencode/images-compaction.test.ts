@@ -1,3 +1,4 @@
+import { createOpenCodeNativePortFixture, openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
 import { createHash, randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -28,10 +29,11 @@ it.runIf(RUN_REAL_OPENCODE)("qualifies stock v2 canonical image input, exact rea
     const password = environment.split("\0").find(entry => entry.startsWith("OPENCODE_PASSWORD="))?.slice("OPENCODE_PASSWORD=".length);
     if (!password) throw new Error("isolated native credential unavailable");
     client = new OpenCodeHttpClient({ endpoint: native.url, password });
-    const api = new OpenCodeNativeApi(client), mutations = new OpenCodeNativeMutations(client);
+    const port = createOpenCodeNativePortFixture(client, { directory: native.workspace, sessionID: "ses_m4_images_compact" });
+    const api = new OpenCodeNativeApi(port), mutations = new OpenCodeNativeMutations(port);
     const session = await mutations.createSession({ id: "ses_m4_images_compact", title: "M4 images and compaction",
       location: { directory: native.workspace }, model: { providerID: "probe", id: "probe-model" },
-      permissions: [{ action: "*", resource: "*", effect: "allow" }] });
+      permissions: [{ action: "*", resource: "*", effect: "allow" }] }, openCodeTestMutationControl("create"));
     await vi.waitFor(async () => expect((await mutations.listModels(native!.workspace)).some(item => item.id === "probe-model")).toBe(true), { timeout: 20_000, interval: 25 });
     current = createOpenCodeConversationFixture({ native: { client, sessionID: session.id, directory: native.workspace } });
     current.context.settings.updateDesired(scope, threadID, { expectedRevision: 0, desired: { providerID: "probe", id: "probe-model" }, now: Date.now() });

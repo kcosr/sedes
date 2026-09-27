@@ -1,3 +1,4 @@
+import { createOpenCodeNativePortFixture } from "../helpers/opencode-native-port-fixture.js";
 import { expect, it, vi } from "vitest";
 import { z } from "zod";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
@@ -18,12 +19,13 @@ it.runIf(RUN_REAL_OPENCODE)("projects real native history and catches up through
     const password = environment.toString("utf8").split("\0").find(entry => entry.startsWith("OPENCODE_PASSWORD="))?.slice("OPENCODE_PASSWORD=".length);
     if (!password) throw new Error("isolated fixture password unavailable");
     client = new OpenCodeHttpClient({ endpoint: native.url, password });
-    const api = new OpenCodeNativeApi(client);
     const response = await native.api("POST", "/api/session", {
       title: "Retained history projection", location: { directory: native.workspace }, model: { providerID: "probe", id: "probe-model" },
     });
     expect(response.status).toBe(200);
     const sessionId = z.object({ data: z.object({ id: z.string() }) }).parse(response.body).data.id;
+    const port = createOpenCodeNativePortFixture(client, { directory: native.workspace, sessionID: sessionId });
+    const api = new OpenCodeNativeApi(port);
     const identity = { bindingScope: ["qualification", native.workspace, sessionId], generation: "fixture-owner", activity: "idle" as const };
     expect(new OpenCodeHistoryProjection(await readOpenCodeHistory(api, { sessionId }), identity).snapshot().snapshot.orderedBackendTurnIds).toEqual([]);
     expect((await native.api("POST", `/api/session/${sessionId}/prompt`, { id: "msg_first", text: "first" })).status).toBe(200);

@@ -1,3 +1,4 @@
+import { acknowledgeOpenCodeMutation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
 import { contextExcerptArraySchema } from "../../../shared/protocol/context-excerpts.js";
 import { renderTaskContextsForModel } from "../../conversations/delivery-input-projection.js";
 import { BackendError, type AttachConversationInput, type SteerTurnInput, type SteerTurnResult,
@@ -119,7 +120,8 @@ export class OpenCodeDelivery {
     await this.settings.prepare(operationId, kind);
     await this.context.tools.admit(this.context, this.input, this.settings.runtime, this.settings.lifetime);
     await this.context.executionEnvironment.prepare({ context: this.context, input: this.input, runtime: this.settings.runtime,
-      operation: kind, signal: this.settings.lifetime });
+      operation: kind, signal: this.settings.lifetime,
+      control: openCodeOperationControl(this.context.repository.requireOperation(scope, binding.applicationThreadId, operationId, kind), "prepare-environment") });
     await this.settings.assertCurrent();
     await this.observer.start();
     this.observer.track(this.#evidence.begin(scope, binding.applicationThreadId, operationId, kind,
@@ -129,11 +131,17 @@ export class OpenCodeDelivery {
       return this.observer.reconcile(operationId, kind);
     }
     try {
-      const admitted = await this.#native.prompt(nativePrompt, this.settings.lifetime);
+      const control = openCodeOperationControl(this.context.repository.requireOperation(scope, binding.applicationThreadId, operationId, kind), "prompt");
+      const admitted = await this.#native.prompt(nativePrompt, control, this.settings.lifetime);
       await this.settings.assertCurrent();
       this.observer.recordAdmission(operationId, kind, admitted);
+      await acknowledgeOpenCodeMutation(this.settings.client, "prompt", control);
+      await acknowledgeOpenCodeMutation(this.settings.client, "setModel", openCodeOperationControl(snapshot!, "prepare-model"));
+      for (const [method, step] of [["setPermissions", "prepare-permissions"], ["installSessionEnvironment", "install-environment"]] as const) {
+        await acknowledgeOpenCodeMutation(this.settings.client, method, { ...control, identity: { ...control.identity, step } });
+      }
     } catch (error) {
-      if (error instanceof OpenCodeNativeMutationInputError) {
+      if (openCodeMutationWasNotSent(error)) {
         this.context.repository.recordOutcome(scope, binding.applicationThreadId, operationId, kind,
           { expected: "dispatched", disposition: "not_applied", nativeEvidenceFingerprint: null, now: Date.now() });
         throw invalid("The OpenCode input was rejected before dispatch.");

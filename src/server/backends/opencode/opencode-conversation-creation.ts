@@ -1,3 +1,4 @@
+import { acknowledgeOpenCodeMutation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { BackendError, type CreateConversationInput, type CreateConversationResult } from "../contracts.js";
@@ -58,7 +59,7 @@ export async function createOpenCodeConversation(context: OpenCodeDriverContext,
     const runtime = await waitOpenCode(context.runtime(), budget);
     if (runtime.nativeNamespaceKey !== context.nativeNamespaceKey) throw rejected();
     await waitOpenCode(runtime.start(), budget);
-    const lease = runtime.acquire();
+    const lease = runtime.acquire({ directory: input.workspace.canonicalPath });
     try {
       const api = new OpenCodeNativeApi(lease.client);
       const native = new OpenCodeNativeMutations(lease.client);
@@ -75,6 +76,7 @@ export async function createOpenCodeConversation(context: OpenCodeDriverContext,
         } else if (current.disposition !== "dispatched" && current.disposition !== "unknown") throw unknown();
         else if (!context.repository.recordOutcome(input.scope, request.applicationThreadId, request.applicationOperationId, "create",
           { expected: current.disposition, disposition: "accepted", nativeEvidenceFingerprint: evidence, now: Date.now() })) throw unknown();
+        await acknowledgeOpenCodeMutation(lease.client, "createSession", openCodeOperationControl(current, "create-session"));
         return result;
       };
       if (receipt.disposition !== "prepared") return await prove(await api.getSession(id, signal));
@@ -89,9 +91,9 @@ export async function createOpenCodeConversation(context: OpenCodeDriverContext,
       let session: OpenCodeNativeSession;
       try {
         session = await native.createSession({ id, model: frozen.selection, location: { directory: input.workspace.canonicalPath },
-          ...(request.title === undefined ? {} : { title: request.title }), metadata: { [CREATE_MARKER]: { version: 1, fingerprint } } }, signal);
+          ...(request.title === undefined ? {} : { title: request.title }), metadata: { [CREATE_MARKER]: { version: 1, fingerprint } } }, openCodeOperationControl(receipt, "create-session"), signal);
       } catch (error) {
-        if (error instanceof OpenCodeNativeMutationInputError) {
+        if (openCodeMutationWasNotSent(error)) {
           context.repository.recordOutcome(input.scope, request.applicationThreadId, request.applicationOperationId, "create",
             { expected: "dispatched", disposition: "not_applied", nativeEvidenceFingerprint: null, now: Date.now() });
           crossed = false; throw rejected();
@@ -119,7 +121,7 @@ export async function createOpenCodeConversation(context: OpenCodeDriverContext,
       } catch { /* Lost local authority cannot turn an external effect into a negative result. */ }
       throw unknown();
     }
-    if (error instanceof DomainError || error instanceof z.ZodError || error instanceof OpenCodeNativeMutationInputError) throw rejected();
+    if (error instanceof DomainError || error instanceof z.ZodError || openCodeMutationWasNotSent(error)) throw rejected();
     throw mapOpenCodeConversationError(error);
   }
 }
