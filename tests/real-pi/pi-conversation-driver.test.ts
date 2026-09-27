@@ -28,6 +28,7 @@ import type { ValidatedWorkspace } from "../../src/server/execution/contracts.js
 import { CanonicalInlineAgentToolService } from "../../src/server/agent-tools/invocation/canonical-inline-agent-tool-service.js";
 import { evaluateModelEligibility } from "../support/model-eligibility.js";
 import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
+import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-tool-source-capabilities.js";
 
 const requiredProvider = "xai";
@@ -144,6 +145,7 @@ async function createFixture(): Promise<Fixture> {
       agentToolSourceCapabilities,
       toolAccessPolicy: fullToolAccessPolicy,
       modelPolicy: catalogModelPolicy,
+      outputArtifacts: createInMemoryOutputArtifactPublisher(),
       sessionDirectory,
     },
   };

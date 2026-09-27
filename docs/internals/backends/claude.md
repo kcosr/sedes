@@ -529,6 +529,13 @@ number of compactions. Live, the synthetic user row that follows a
 places it before the rows the compaction preserved, then requests one
 resnapshot, so live and reloaded views agree.
 
+Claude Code streams every other meta row as a synthetic user row too, for
+example the `[Image: original WxH, displayed at WxH. …]` dimension note it
+writes after a resized image read. Readers drop meta rows, so the live path
+drops every synthetic user row that is not the summary following a boundary.
+Before this, such a row opened a live-only prompt turn that stayed running and
+disappeared on reload.
+
 A foreground result settles the turn that holds its native input identity
 (`user_message_uuid(s)`), wherever that turn is, rather than the newest turn.
 It ends the run only if no later turn carries an input of its own. A result
@@ -545,6 +552,85 @@ prose are never classifiers.
 Tool results settle the same stable item, including failure and interruption.
 Live and reopened projection converge on the provider's durable tool-call
 identity.
+
+A built-in `Read` whose `file_path` extension is `png`, `jpg`, `jpeg`, `gif`,
+or `webp`, compared case-insensitively, projects as a `viewed_image` item
+instead of a file read. This is Claude Code's own test for answering a read
+with the image itself. The item carries only the path's final component as
+`fileName`, keeps the tool call's item identity, is `streaming` while the read
+runs, and is registered and counted like any tool call. Its result is never
+copied onto it:
+
+- An `is_error` result fails it with a Sedes-written error
+  (`claude_viewed_image_read_failed`, "Claude could not read this image."), because
+  Claude's error text names absolute paths.
+- A Stop result settles it as other tools do, without that error. A read
+  still without a result when its turn ends is `interrupted`, even when the
+  turn failed: the read never completed.
+- A text result, or an image block that is not the result's only image, not a
+  base64 source, not of a supported media type, or beyond the 16 MiB output
+  ceiling, completes it with no image.
+- A result with exactly one such image block completes it, and that exact
+  provider input appears as a separate `image` item (origin `viewed`, capture
+  `provider_input`, the same `fileName`) at the read's source order plus one.
+  Claude items use even slots, and the odd slot after a read is otherwise
+  unused. The image is inserted after its own read, so parallel reads in one
+  assistant message pair correctly whatever order their results arrive in.
+
+The image item's identity is derived from the read's item identity, which
+hashes the native session, message, block, and kind. The publication key is
+`claude-viewed-image:` plus that identity. A fork or import is a new native
+session, so it gets new keys and publishes its own copy from its copied
+transcript. The bytes are in-band: no Files read and no viewed-image capture
+service is involved.
+
+Images are added only after a snapshot window, page, or located turn is
+selected, and only directly after their own read, so trimming an oversized
+turn can never keep an image without its read. Selection counts a fixed
+2 KiB for each completed image read, published or not. A window therefore
+never moves, and a page never passes the transfer limit, when an image is
+published. Publication never changes a history cursor, because the
+projection fingerprint excludes images. An image read takes a turn slot when
+its result arrives, if the turn still has room, and keeps it: later
+transcript items count the slot, so a shown image never gives way, and a
+turn that fills fails as `history_too_large` as a turn without images does.
+A read whose result finds the turn full completes without its image.
+
+The synchronous projector never decodes. For the selected reads only, it
+asks the handle's publication record for a retained association and trusts
+one it finds; a read without one is reported pending. Async callers publish
+those through `publishImage` after a strict base64 decode, then project
+again:
+
+- The first snapshot, `history()`, `locateTurn()`, and `read()` wait for at
+  most their four newest pending images for at most two seconds, as a Codex
+  page capture does. The rest, including one still running at the deadline,
+  publish in the background two at a time. In the live window they appear
+  as ordinary item updates; elsewhere they appear on the next fetch. A
+  driver read keeps its remaining images publishing until the driver
+  closes.
+- Live, a result for a built-in image read (and no other tool result) is
+  first projected on a copy of the window. The images of the reads it
+  completes publish within the same budget before the real projection sees
+  the row, so the settled read and its image leave in one delta with no
+  resnapshot.
+- After every message, pending images a retraction or relinked compaction
+  brought into the window publish in the background.
+- If history drops a located turn while its images publish, `locateTurn()`
+  answers `not_found`.
+
+Each handle keeps a publication record. It remembers verified keys, bounded
+and least recently used first, so reprojection does not look them up again,
+and it does not look up a key it is publishing. It remembers failed keys
+against publish retries only: a lookup still finds an image another handle
+or read published, and a reopened handle retries. Closing the handle, or
+invalidating its projection, stops publication between images and ends
+every wait; a store already running completes unobserved.
+
+Only built-in `Read` images are shown. MCP and other tool images, subagent
+sidechain reads, and assistant image blocks are not. A read of a staged
+attachment is shown like any other read. `providerOutputArtifacts.nativeImage`
+stays `false`: it describes generated output, not viewed input.
 
 Claude can emit one completed assistant wrapper per completed content block.
 Those wrappers share the Anthropic message ID and can use `stop_reason: null`
@@ -1246,8 +1332,12 @@ normalized integration surface:
   `tests/unit/claude-conversation-driver.test.ts` cover session lifecycle,
   exact terminal receipts, capabilities, interactions, history, and recovery.
   This includes live compaction against its reload, compacted fork prefixes,
-  `process_lost` on fresh launches and never on reattachment, and the Stop
-  bound;
+  `process_lost` on fresh launches and never on reattachment, the Stop
+  bound, dropped live meta rows, and image reads live against reload with
+  their publication and failure paths. `tests/unit/claude-history-projector.test.ts`
+  covers image-read recognition, pairing, pending reads, and the item cap, and
+  `tests/unit/claude-viewed-images.test.ts` covers strict decoding, scoped
+  associations, and the per-handle publication record;
 - `tests/unit/claude-native-transcript.test.ts` compares the transcript reader
   with the pinned SDK over synthetic native fixtures. The fixtures cover
   startup-message tips, parallel dead ends and tool results linked only by

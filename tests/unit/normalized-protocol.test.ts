@@ -1551,6 +1551,7 @@ describe("normalized conversation protocol", () => {
     const image = {
       ...common,
       kind: "image" as const,
+      origin: { kind: "generated" as const },
       image: {
         representation: "artifact" as const,
         artifactId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -1575,9 +1576,18 @@ describe("normalized conversation protocol", () => {
         semanticKind: "image",
         status: "completed",
         sourceOrder: 0,
+        origin: image.origin,
         image: image.image,
       }),
     ).toMatchObject({ image: image.image });
+    // Every image states why it exists; a viewed image also states its fidelity.
+    expect(conversationItemSchema.parse({ ...image,
+      origin: { kind: "viewed", capture: "provider_input" } })).toMatchObject({
+      origin: { kind: "viewed", capture: "provider_input" } });
+    for (const origin of [undefined, { kind: "viewed" }, { kind: "generated", capture: "file_snapshot" },
+      { kind: "attached" }]) {
+      expect(conversationItemSchema.safeParse({ ...image, origin }).success).toBe(false);
+    }
 
     for (const invalidImage of [
       {

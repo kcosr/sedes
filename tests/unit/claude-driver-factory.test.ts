@@ -1,4 +1,5 @@
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
+import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AgentBackendInstance,
@@ -113,6 +114,7 @@ describe("ClaudeBackendDriverFactory", () => {
         "model_effort",
       ),
       attachmentProvenanceKey: new Uint8Array(32),
+      outputArtifacts: createInMemoryOutputArtifactPublisher(),
       connections: [firstConnection, secondConnection],
       agentToolCli: {
         availability: "unavailable",

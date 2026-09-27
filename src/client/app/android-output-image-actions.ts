@@ -68,7 +68,7 @@ export async function presentAndroidOutputImageActions(input: {
     sha256: input.artifact.sha256,
     fileName:
       input.artifact.fileName?.text ??
-      `generated-image${extensionForMimeType(input.artifact.mimeType)}`,
+      `image${extensionForMimeType(input.artifact.mimeType)}`,
   };
   let began = false;
   try {

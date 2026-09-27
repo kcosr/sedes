@@ -1,10 +1,10 @@
-import { useId, useMemo, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { useMemo } from "react";
 import type { ImageItem, ViewedImageItem } from "../../../shared/index.js";
+import { ProviderFeatureConversationItems } from "../../provider-features/registry.js";
 import { ConversationItemView } from "../conversation/ConversationItemView.js";
 import {
-  viewedImageLabel,
-  viewedImageRenderer,
+  ViewedImageDisclosure,
+  viewedImageStatus,
 } from "../conversation/renderers/SemanticRenderers.js";
 import {
   defaultItemRenderContext,
@@ -12,9 +12,10 @@ import {
 } from "../conversation/types.js";
 
 /**
- * A viewed image shares the activity row presentation. The row discloses its
- * captured image once that separate item arrives; until then, or when capture
- * never succeeds, it stays static with the chevron's space reserved.
+ * The transcript's viewed-image row, paired with its captured image. The row
+ * itself carries the viewed item's identity and provider features, as
+ * ConversationItemView would, so the disclosed image item is never nested in
+ * another conversation-item wrapper.
  */
 export function ViewedImageGroup({
   item,
@@ -25,9 +26,6 @@ export function ViewedImageGroup({
   readonly image?: ImageItem;
   readonly context?: ItemRenderContext;
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false);
-  const detailsId = useId();
-  const label = viewedImageLabel(item);
   const imageContext = useMemo(
     () => ({ ...context, omitImageCaption: true }),
     [context],
@@ -35,32 +33,25 @@ export function ViewedImageGroup({
   return (
     <section
       className="activity-group viewed-image-group"
+      data-item-id={item.id}
+      data-item-kind={item.kind}
+      data-item-status={item.status}
       data-testid="viewed-image-group"
-      data-viewed-image-item-id={item.id}
+      data-viewed-image-status={viewedImageStatus(item)}
     >
-      {image ? (
-        <button
-          aria-controls={detailsId}
-          aria-expanded={open}
-          className="activity-group-summary"
-          onClick={() => setOpen((value) => !value)}
-          type="button"
-        >
-          <ChevronRight
-            aria-hidden="true"
-            className="activity-group-chevron"
-            size={12}
-            strokeWidth={1.8}
-          />
-          <span className="viewed-image-label">{label}</span>
-        </button>
-      ) : (
-        viewedImageRenderer.render(item, context)
-      )}
-      {image && open ? (
-        <div className="activity-group-disclosure" id={detailsId}>
-          <ConversationItemView item={image} context={imageContext} />
-        </div>
+      <ViewedImageDisclosure
+        item={item}
+        image={
+          image ? (
+            <ConversationItemView item={image} context={imageContext} />
+          ) : undefined
+        }
+      />
+      {item.providerFeatures?.length ? (
+        <ProviderFeatureConversationItems
+          item={item}
+          capabilities={context.providerFeatureCapabilities ?? []}
+        />
       ) : null}
     </section>
   );

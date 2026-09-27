@@ -98,6 +98,12 @@ import {
 } from "./claude-permission-policy.js";
 import { findClaudeSafeSkill } from "./claude-skills.js";
 import { ClaudeOperationalNoticeProjector } from "./claude-operational-notices.js";
+import type { OutputArtifactPublisher } from "../../output-artifacts/contracts.js";
+import {
+  CLAUDE_VIEWED_IMAGE_INLINE_BUDGET,
+  ClaudeViewedImagePublications,
+  type ClaudeViewedImageCandidate,
+} from "./claude-viewed-images.js";
 
 const MAXIMUM_EVENT_JOURNAL = 256;
 const MAXIMUM_ACKNOWLEDGEMENT_WAIT_MS = 30_000;
@@ -187,6 +193,8 @@ export interface ClaudeConversationHandleInput {
   readonly permissionPolicy: ClaudePermissionPolicy;
   readonly modelPolicy: CompiledBackendModelPolicy;
   readonly attachmentProvenanceKey: Uint8Array;
+  /** Publishes the in-band images Claude's reads return. */
+  readonly outputArtifacts: OutputArtifactPublisher;
   readonly agentToolCli?: AgentToolCliAvailability;
   readonly agentToolCliMode?: AgentToolPresentationMode;
   /** Native presentation: `sourceCapability` is then bound to MCP. */
@@ -248,6 +256,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
   readonly #session: ClaudeRuntimeSession;
   readonly #interactions: ClaudeInteractionBridge;
   readonly #operationalNotices: ClaudeOperationalNoticeProjector;
+  /** This attachment's published and failed read images, by publication key. */
+  readonly #viewedImages: ClaudeViewedImagePublications;
+  #viewedImagesPublished = false;
   readonly #backgroundActivity = new ClaudeBackgroundActivity();
   readonly #releaseSession: () => void;
   readonly #releaseAgentToolCli: () => void;
@@ -378,6 +389,12 @@ export class ClaudeConversationHandle implements ConversationHandle {
       tenantId: input.binding.tenantId,
       principalId: input.binding.ownerPrincipalId,
     };
+    this.#viewedImages = new ClaudeViewedImagePublications({
+      outputArtifacts: input.outputArtifacts,
+      scope: this.#scope,
+      applicationThreadId: input.binding.applicationThreadId,
+      onPublished: () => this.#showPublishedViewedImages(),
+    });
     // A verified fork child's copied turns are inherited, not its own work.
     const forkChild = this.#settings.findForkChild(this.#scope, input.binding.applicationThreadId);
     if (forkChild && forkChild.nativeSessionId !== input.binding.backendConversationId) {
@@ -504,6 +521,11 @@ export class ClaudeConversationHandle implements ConversationHandle {
         }
         this.#usageAccounting?.beginDelivery();
         await this.#consume(message);
+        // A message can move the window over a read whose image is not yet
+        // published, for example a retraction or a relinked compaction.
+        if (!this.#closed && !this.#projectionInvalidated) {
+          this.#viewedImages.schedule(this.#projection.pendingViewedImages);
+        }
         return this.#usageAccounting?.deliveryCommitted === false ? false : undefined;
       },
       onFailure: (error) => {
@@ -526,6 +548,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
       } else if (!this.#session.reattached && this.#backgroundActivity.snapshot().state === "unknown" && !this.#backgroundActivity.retirementBlocked) this.#backgroundActivity.reset();
       const initialMessages = await input.loadInitialMessages();
       this.#installInitialMessages(initialMessages);
+      // The first snapshot shows the newest images of the reads it holds;
+      // the rest follow as live updates.
+      await this.#publishWindowViewedImages();
       this.#effectiveModel =
         initialization.actualModel ?? desired.model ?? undefined;
       if (this.#effectiveModel) {
@@ -649,25 +674,38 @@ export class ClaudeConversationHandle implements ConversationHandle {
               input.cursor,
               this.#historyCursorNonce,
             );
-      const selectionInput = {
-        before,
-        limit: input.limit,
-        authentication: this.#historyAuthentication(),
-      } as const;
-      const preliminary = projectClaudeHistoryPageAtIndex(
-        this.#messages,
-        selectionInput,
-      );
-      const terminalReceipts = this.#terminalReceipts(
-        preliminary.page.orderedBackendTurnIds,
-      );
-      const selected =
-        terminalReceipts.length === 0
+      const select = () => {
+        const selectionInput = {
+          before,
+          limit: input.limit,
+          authentication: this.#historyAuthentication(),
+        } as const;
+        const preliminary = projectClaudeHistoryPageAtIndex(
+          this.#messages,
+          selectionInput,
+        );
+        const terminalReceipts = this.#terminalReceipts(
+          preliminary.page.orderedBackendTurnIds,
+        );
+        return terminalReceipts.length === 0
           ? preliminary
           : projectClaudeHistoryPageAtIndex(this.#messages, {
               ...selectionInput,
               terminalReceipts,
             });
+      };
+      let selected = select();
+      if (await this.#viewedImages.publish(selected.pendingViewedImages, CLAUDE_VIEWED_IMAGE_INLINE_BUDGET, input.signal)) {
+        input.signal?.throwIfAborted();
+        this.#assertOpen();
+        try {
+          selected = select();
+        } catch {
+          // History changed while images were published; the page read
+          // before stays exact, only without them.
+        }
+      }
+      input.signal?.throwIfAborted();
       this.#usageAccounting?.registerTurns(Object.values(selected.page.turnsById));
       return {
         ...selected.page,
@@ -695,27 +733,37 @@ export class ClaudeConversationHandle implements ConversationHandle {
       const selectionInput = {
         matchesBackendTurnId: input.matchesBackendTurnId,
         maximumTurnCandidates: input.maximumTurnCandidates,
-        authentication: this.#historyAuthentication(),
       } as const;
-      const preliminary = locateClaudeHistoryTurn(
-        this.#messages,
-        selectionInput,
-      );
+      const preliminary = locateClaudeHistoryTurn(this.#messages, {
+        ...selectionInput,
+        authentication: this.#historyAuthentication(),
+      });
       input.signal?.throwIfAborted();
       if (preliminary.status !== "found") return preliminary;
       const backendTurnId = preliminary.page.orderedBackendTurnIds[0]!;
-      const terminalReceipts = this.#terminalReceipts([backendTurnId]);
-      if (terminalReceipts.length === 0) return preliminary;
-      const selected = locateClaudeHistoryTurn(this.#messages, {
-        ...selectionInput,
-        matchesBackendTurnId: (candidate) => candidate === backendTurnId,
-        terminalReceipts,
-      });
-      input.signal?.throwIfAborted();
+      const select = () => {
+        const terminalReceipts = this.#terminalReceipts([backendTurnId]);
+        const selected = locateClaudeHistoryTurn(this.#messages, {
+          ...selectionInput,
+          matchesBackendTurnId: (candidate) => candidate === backendTurnId,
+          authentication: this.#historyAuthentication(),
+          ...(terminalReceipts.length === 0 ? {} : { terminalReceipts }),
+        });
+        input.signal?.throwIfAborted();
+        return selected;
+      };
+      let selected = this.#terminalReceipts([backendTurnId]).length === 0 ? preliminary : select();
       if (selected.status !== "found") {
         throw new ClaudeHistoryProjectionError("claude_history_invalid");
       }
-      return selected;
+      if (await this.#viewedImages.publish(selected.pendingViewedImages, CLAUDE_VIEWED_IMAGE_INLINE_BUDGET, input.signal)) {
+        this.#assertOpen();
+        selected = select();
+        // History changed while images were published.
+        if (selected.status !== "found") return { status: "not_found" };
+      }
+      input.signal?.throwIfAborted();
+      return { status: "found", page: selected.page };
     } catch (error) {
       throw mapClaudeHistoryRequestError(error);
     }
@@ -747,6 +795,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
         permittedByOperationId.set(applicationOperationId, permitted);
         return permitted;
       },
+      viewedImages: this.#viewedImages,
       resolveSkillName: (nativeUserMessageUuid) => {
         if (skillByNativeUserUuid.has(nativeUserMessageUuid)) {
           return skillByNativeUserUuid.get(nativeUserMessageUuid) ?? undefined;
@@ -1457,6 +1506,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   async close(options?: { readonly reason: "evicted" }): Promise<void> {
     if (this.#closed) return this.#closePromise;
     this.#closed = true;
+    this.#viewedImages.close();
     this.#clearStopConfirmation();
     this.#usageAccounting?.close();
     // Detaching first fences remote permission callbacks before the local
@@ -1615,6 +1665,12 @@ export class ClaudeConversationHandle implements ConversationHandle {
       return;
     }
     if (message.type !== "user" && message.type !== "assistant") return;
+    // Claude Code streams its meta rows, such as the dimension note after a
+    // resized image read, as synthetic user rows. Provider history omits meta
+    // rows, so they are neither a prompt nor a turn boundary here either. The
+    // one synthetic row history keeps is a compaction summary, which follows
+    // its boundary.
+    if (message.type === "user" && message.isSynthetic === true && this.#liveCompaction === undefined) return;
     // Claude Code streams a compaction's summary right after its boundary, as
     // a synthetic user row; history marks the same row as the summary.
     const compaction = this.#liveCompaction;
@@ -1642,6 +1698,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
       // A replay/echo of queued input does not establish which turn consumes it.
       // Wait for Claude's exact start or stamp, or the owner's retained evidence.
       return;
+    }
+    if (message.type === "user" && !this.#messages.some(({ uuid }) => uuid === sessionMessage.uuid)) {
+      await this.#publishArrivingViewedImages(sessionMessage);
+      if (this.#closed || this.#projectionInvalidated) return;
     }
     if (!this.#messages.some(({ uuid }) => uuid === sessionMessage.uuid)) {
       if (message.type === "assistant" && this.#providerTurn) this.#providerTurn.responded = true;
@@ -1860,6 +1920,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       backendCode: code,
     });
     if (this.#projectionInvalidated) return error;
+    this.#viewedImages.close();
     this.#partialItems.clear();
     this.#partialMessageId = undefined;
     this.#partialMessageSourceOrderBase = undefined;
@@ -2371,6 +2432,60 @@ export class ClaudeConversationHandle implements ConversationHandle {
       this.#partialMessageId = undefined;
       this.#partialMessageSourceOrderBase = undefined;
     }
+  }
+
+  /**
+   * A read's image goes out with the read's completion, in one delta. The
+   * result is first projected on a copy of the window, and any image it
+   * completes is published before the real projection sees the result.
+   */
+  async #publishArrivingViewedImages(message: SessionMessage): Promise<void> {
+    if (!carriesImageReadResult(message, this.#projection.imageReadToolUseIds)) return;
+    let pending: readonly ClaudeViewedImageCandidate[];
+    try {
+      pending = this.#projectLatest([...this.#projectionMessages, message], {
+        turnOffset: this.#projectionTurnOffset,
+        userMessageOrdinalBase: this.#projectionUserMessageOrdinalBase,
+      }).pendingViewedImages;
+    } catch {
+      // Projecting the message for real reports its failure.
+      return;
+    }
+    // Only the reads this row completes; earlier ones publish in the background.
+    const earlier = new Set(this.#projection.pendingViewedImages.map(({ publicationKey }) => publicationKey));
+    await this.#viewedImages.publish(
+      pending.filter(({ publicationKey }) => !earlier.has(publicationKey)),
+      CLAUDE_VIEWED_IMAGE_INLINE_BUDGET,
+    );
+  }
+
+  /**
+   * Publishes the window's newest pending read images within the inline
+   * budget, then shows them as new items; the rest follow in the background.
+   */
+  async #publishWindowViewedImages(): Promise<void> {
+    if (this.#closed || this.#projectionInvalidated) return;
+    const pending = this.#projection.pendingViewedImages;
+    if (pending.length === 0 || !(await this.#viewedImages.publish(pending, CLAUDE_VIEWED_IMAGE_INLINE_BUDGET))) return;
+    this.#showViewedImages();
+  }
+
+  /** A background publication finished; show every newly published window image at once. */
+  #showPublishedViewedImages(): void {
+    if (this.#viewedImagesPublished) return;
+    this.#viewedImagesPublished = true;
+    queueMicrotask(() => {
+      this.#viewedImagesPublished = false;
+      this.#showViewedImages();
+    });
+  }
+
+  #showViewedImages(): void {
+    if (this.#closed || this.#projectionInvalidated || !this.#initialHistoryLoaded) return;
+    if (!this.#projection.pendingViewedImages.some(({ publicationKey }) => this.#viewedImages.find(publicationKey))) return;
+    const previous = this.#projection.snapshot;
+    this.#refreshProjection();
+    this.#emitProjectionDelta(previous, this.#projection.snapshot);
   }
 
   #refreshProjection(rebuildWindow = false): void {
@@ -3087,6 +3202,19 @@ function modelOutputMessageId(message: SDKMessage): string | undefined {
   if (message.type === "assistant") return message.parent_tool_use_id === null ? message.message.id : undefined;
   if (message.type !== "stream_event" || message.parent_tool_use_id !== null) return undefined;
   return message.event.type === "message_start" ? message.event.message.id : undefined;
+}
+
+/** A user row with an image result for one of the given built-in image reads. */
+function carriesImageReadResult(message: SessionMessage, imageReadToolUseIds: ReadonlySet<string>): boolean {
+  const content = (message.message as { readonly content?: unknown } | null)?.content;
+  return imageReadToolUseIds.size > 0 && Array.isArray(content) && content.some((block: unknown) =>
+    isRecord(block) && block.type === "tool_result" && typeof block.tool_use_id === "string" &&
+    imageReadToolUseIds.has(block.tool_use_id) && Array.isArray(block.content) &&
+    block.content.some((part: unknown) => isRecord(part) && part.type === "image"));
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function copySessionMessage(message: SessionMessage): SessionMessage {

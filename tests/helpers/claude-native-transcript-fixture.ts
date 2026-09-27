@@ -145,6 +145,28 @@ export class ClaudeTranscriptFixture {
   }
 
   /**
+   * A Read result carrying the image Claude Code sent the model, in its
+   * persisted shape: one base64 image block, plus the structured result.
+   */
+  imageResult(toolUseId: string, parentUuid: string, image: { readonly data: string; readonly mediaType: string }): string {
+    return this.from(parentUuid).#append({ type: "user", message: { role: "user", content: [
+      { type: "tool_result", tool_use_id: toolUseId, content: [
+        { type: "image", source: { type: "base64", data: image.data, media_type: image.mediaType } },
+      ] },
+    ] }, sourceToolAssistantUUID: parentUuid, toolUseResult: { type: "image", file: {
+      base64: image.data, type: image.mediaType, originalSize: image.data.length,
+    } } });
+  }
+
+  /**
+   * A meta row Claude Code writes after a tool result, such as the dimension
+   * note after a resized image read. Readers omit meta rows.
+   */
+  companion(text: string): string {
+    return this.#append({ type: "user", message: { role: "user", content: text }, isMeta: true, turnCompanion: true });
+  }
+
+  /**
    * Parallel calls: the result of the last call is written first and becomes a
    * dead end; the conversation continues from the first call's result.
    */

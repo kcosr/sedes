@@ -23,7 +23,6 @@ import {
 } from "../../src/server/backends/codex/codex-c1-protocol.js";
 import { decodeCodexC2Notification } from "../../src/server/backends/codex/codex-c2-protocol.js";
 import {
-  CODEX_VIEWED_IMAGE_RESERVATION_BYTES,
   CodexHistoryProjectionError,
   codexViewedImageItem,
   materializeCodexGeneratedImagePublications,
@@ -57,7 +56,11 @@ import { codexContextExcerptCarrier } from "../../src/server/backends/codex/code
 import { codexTaskContextCarrier } from "../../src/server/backends/codex/codex-task-contexts.js";
 import { stagedAttachmentManifest } from "../../src/server/backends/staged-attachment-manifest.js";
 import { USER_FORK_CONTEXT_BOUNDARY_TEXT } from "../../src/server/backends/fork-context-boundary.js";
-import { MAXIMUM_OUTPUT_IMAGE_BYTES, type OutputArtifactPublisher } from "../../src/server/output-artifacts/contracts.js";
+import {
+  MAXIMUM_OUTPUT_IMAGE_BYTES,
+  VIEWED_IMAGE_CHILD_RESERVATION_BYTES,
+  type OutputArtifactPublisher,
+} from "../../src/server/output-artifacts/contracts.js";
 import { backendConversationSnapshotSchema } from "../../src/shared/protocol/backend.js";
 
 const baseThread = {
@@ -3788,7 +3791,7 @@ it("reserves enough bytes for the largest viewed-image child, its record key and
       orderedBackendItemIds: [...projection.snapshot.turnsById[turnId]!.orderedBackendItemIds, child.backendItemId] } } };
   expect(backendConversationSnapshotSchema.safeParse(withChild).success).toBe(true);
   expect(serializedUtf8Bytes(withChild) - projection.serializedSnapshotBytes)
-    .toBeLessThanOrEqual(CODEX_VIEWED_IMAGE_RESERVATION_BYTES);
+    .toBeLessThanOrEqual(VIEWED_IMAGE_CHILD_RESERVATION_BYTES);
 });
 
 it("reserves a viewed-image child at the native turn item ceiling before reading bytes", async () => {

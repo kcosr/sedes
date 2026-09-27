@@ -198,6 +198,108 @@ conversation/call-bound markers. Missing, copied, malformed, or tampered
 markers reopen as bounded generic tools with diagnostics. Provider text cannot
 promote itself to a trusted command, file-read, file-change, or image card.
 
+Live assistant blocks take source order `base + 2 * contentIndex`, with a
+stride of 2000 per assistant message and content indexes below 1000. The odd
+position after each block is reserved for a child item added later; history
+reserves the same position after each viewed image. A tool call seen only
+through execution events takes its index from the ended assistant message.
+History numbers items across the whole branch, so a seed taken during a
+running turn advances the next live base past every item and reserved slot of
+that turn. Source order never reaches the browser.
+
+### Viewed images
+
+A trusted built-in `read` (identity `pi:builtin:read`, including the
+`<sdk:read>` override of SSH and isolated sessions) whose `path` argument ends
+in `png`, `jpg`, `jpeg`, `gif`, `webp`, or `bmp`, case-insensitively, projects
+as a standalone `viewed_image` item instead of a file-read card. It carries
+only the path's final component as `fileName`. The decision uses the requested
+path, not Pi's content sniffing: a text file named `*.png` shows as a viewed
+image with no image, and an image with any other extension keeps its file-read
+card. History requires the authenticated identity marker, so an unmarked read
+stays a generic tool.
+
+Pi streams tool arguments as partial JSON and an emitted item cannot change
+kind, so the live item of every built-in read waits for `toolcall_end`. The
+`tool_execution_start` fallback already has complete arguments, and a read
+interrupted while its arguments stream decides from the partial path. The row
+stays `streaming` until `tool_execution_end`. Success completes it; an error
+fails it with the Sedes-written `pi_viewed_image_read_failed` message, because
+native errors can contain absolute paths. A persisted read without a result is
+`interrupted` with `pi_tool_result_missing`.
+
+The image child is the first image part of the read's own result, which is the
+exact in-band data Pi sent the model after its resizing and BMP-to-PNG
+conversion. It is an `image` item with origin
+`{ kind: "viewed", capture: "provider_input" }` at the reserved position; no
+Files read or `ViewedImageCaptureService` is involved. There is no child for
+an error, a text-only result (Pi could not process the image, or the file was
+not one), a result carrying Pi's non-vision-model note, or bytes that are not
+strict base64 of a supported, magic-matching image within 16 MiB. Pi's
+`blockImages` setting strips images from provider requests without marking
+the stored result, so Sedes cannot detect it and still shows the child. Images
+from MCP servers, extensions, and other tools keep their bounded tool-result
+metadata, and `providerOutputArtifacts.nativeImage` remains `false`.
+
+The publication key is `pi-viewed-image:` followed by the SHA-256 of
+`[sessionId, assistantEntryId, toolCallId, imageIndex]`, where `imageIndex` is
+the image part's index in the result content. The tool-result entry ID does
+not exist live, so it is not part of the key. Live observation, history,
+pagination, and reattachment therefore resolve one artifact. A fork copies
+entries into a new session and thread, so it gets its own key and artifact.
+
+Only the conversation handle publishes. `PiHistoryProjector` stays pure,
+because usage accounting, checkpoint resolution, and submission reconciliation
+also construct it; it returns each completed image read that has a child as a
+candidate with the child identity, reserved order, native coordinates, and the
+tool-result entry and content index that locate the image part.
+
+- At `tool_execution_end`, the handle resolves the assistant entry, publishes
+  the in-band part, and adds the child.
+- Every projection seed, from construction or `refreshProjection`, first adds
+  the children that already exist by synchronous `findImage` for the newest
+  ten turns, then selects its window. It publishes the window's missing
+  children in the background, newest first, at most 32 per seed.
+  This backfills forks and sessions from before image capture.
+- A late child is delivered as `item_completed` only. The projections order it
+  by its reserved source order; no turn update follows, because the handle's
+  tracked turn update would reopen a completed turn.
+- The handle maps each publication key to the current generation's child
+  identity and replaces that map on every seed. A publication that finishes
+  after a refresh adds the child under the new generation's identity, or
+  nothing when the new window no longer contains it. Concurrent publications of
+  one key share one attempt.
+- `history()` and `locateTurn` wait for at most the four newest missing
+  children of their page or turn, for at most two seconds in total, as Codex
+  and Claude readers do. The rest, and any still running at the deadline,
+  publish in the background, newest first and at most 32 per call; they show
+  on the next fetch, or live when the live window contains them. An unattached
+  `read` only looks artifacts up.
+- Background publication runs serially, holds at most 256 queued
+  publications per handle, and skips keys the handle knows failed.
+- A candidate exists only for non-empty data of a supported output media type.
+  Each handle remembers up to 4096 keys whose publication failed and does not
+  retry them; a new attachment does.
+- No publication starts once the handle is closed. `close()` waits for those
+  already started, which deliver nothing, before it disposes the session. A
+  page or turn lookup still waiting fails with `pi_handle_closed`.
+- A seed taken during a running turn can include image reads whose results
+  Pi has not persisted yet; with parallel tools, Pi persists a batch's results
+  together once all of them finish. History reports these rows, still
+  `streaming`, and the handle completes each one as history would when its
+  result persists, then publishes its child. At settlement any such row still
+  waiting completes from a persisted result or is interrupted with
+  `pi_tool_result_missing`, so no viewed row stays `streaming`. The image the
+  earlier generation published live is not shown for an interrupted row.
+
+Pi's window and page selection, including its 1000-item turn bound and byte
+budget, measure turns without viewed-image children, so a child never changes
+which turns are transferred or fails a transfer. Each child pairs with a
+counted viewed item, so a turn carries at most 2000 items, well within the
+shared 20000-item limit. Children return with their turns unless they would
+push the payload past Pi's 4 MiB ceiling; the rows are then returned without
+them.
+
 Targeted turn lookup projects the retained authoritative branch once, scans
 turn identities newest-first within the caller's candidate bound, and returns
 only the matched whole turn without a cursor. It performs no normalized
@@ -379,6 +481,9 @@ For Pi changes, test the affected paths across:
   recovery;
 - bounded history, targeted lookup, compaction, event reconciliation, and
   trusted semantic-marker downgrade behavior;
+- viewed-image classification, reserved child order, late child delivery
+  through the shared projector without a resnapshot, refresh races, and
+  backfill, with usage accounting never publishing;
 - direct, isolated, and managed SSH execution, including unsupported and
   fail-closed paths;
 - Steer FIFO materialization with several Steers pending at once, per-input

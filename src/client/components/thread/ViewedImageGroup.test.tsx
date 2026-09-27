@@ -25,6 +25,7 @@ const image: ImageItem = {
   kind: "image",
   revision: 1,
   status: "completed",
+  origin: { kind: "viewed", capture: "file_snapshot" },
   image: {
     representation: "artifact",
     artifactId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -43,10 +44,7 @@ describe("ViewedImageGroup", () => {
     expect(container.querySelector(".viewed-image-chevron-space")).not.toBeNull();
 
     const loadOutputArtifactContent = vi.fn(async () => new Blob());
-    vi.stubGlobal("IntersectionObserver", class {
-      observe() {}
-      disconnect() {}
-    });
+    stubIntersectionObserver();
     rerender(
       <ViewedImageGroup
         item={viewed}
@@ -74,4 +72,134 @@ describe("ViewedImageGroup", () => {
     render(<ViewedImageGroup item={unnamed} />);
     expect(screen.getByText("Viewed image")).toBeVisible();
   });
+
+  it("carries the viewed item's identity on the row itself", () => {
+    const { container } = render(<ViewedImageGroup item={viewed} image={image} />);
+    const row = screen.getByTestId("viewed-image-group");
+    expect(row).toHaveAttribute("data-item-id", "viewed-1");
+    expect(row).toHaveAttribute("data-item-kind", "viewed_image");
+    expect(row).toHaveAttribute("data-item-status", "completed");
+    expect(row).toHaveAttribute("data-viewed-image-status", "completed");
+    expect(container.querySelector(".conversation-item")).toBeNull();
+  });
+
+  it("shows a running read as working, disclosing an image that already exists", () => {
+    const streaming: ViewedImageItem = { ...viewed, status: "streaming" };
+    const { container, rerender } = render(<ViewedImageGroup item={streaming} />);
+    const row = screen.getByTestId("viewed-image-group");
+    expect(row).toHaveAttribute("data-viewed-image-status", "working");
+    expect(row).toHaveTextContent(/^Viewed image · screen\.png · Working…$/);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(container.querySelector(".viewed-image-chevron-space")).not.toBeNull();
+
+    stubIntersectionObserver();
+    rerender(<ViewedImageGroup item={streaming} image={image} />);
+    const disclosure = screen.getByRole("button", {
+      name: "Viewed image · screen.png · Working…",
+    });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(container.querySelector('[data-item-kind="image"]')).toBeNull();
+    fireEvent.click(disclosure);
+    expect(container.querySelector('[data-item-kind="image"]')).not.toBeNull();
+  });
+
+  it("discloses a failed read's error in place of an image", () => {
+    const failed: ViewedImageItem = {
+      ...viewed,
+      status: "failed",
+      error: { category: "not_found", message: { text: "File does not exist." } },
+    };
+    const { container } = render(<ViewedImageGroup item={failed} />);
+    const row = screen.getByTestId("viewed-image-group");
+    expect(row).toHaveAttribute("data-viewed-image-status", "failed");
+    expect(row).toHaveAttribute("data-item-status", "failed");
+    const disclosure = screen.getByRole("button", {
+      name: "Viewed image · screen.png · Failed",
+    });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(disclosure).toHaveAccessibleDescription("File does not exist.");
+    expect(screen.queryByText("File does not exist.")).not.toBeVisible();
+    expect(container.querySelector(".op-error")).toBeNull();
+
+    fireEvent.click(disclosure);
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    const error = container.querySelector(".op-error");
+    expect(error).toHaveTextContent("File does not exist.");
+    expect(error).toBeVisible();
+    expect(
+      container.querySelector(`#${CSS.escape(disclosure.getAttribute("aria-controls")!)}`),
+    ).toContainElement(error as HTMLElement);
+    expect(container.querySelector('[data-item-kind="image"]')).toBeNull();
+  });
+
+  it("keeps a failed read without an error static", () => {
+    const failed: ViewedImageItem = { ...viewed, status: "failed" };
+    const { container } = render(<ViewedImageGroup item={failed} />);
+    const row = screen.getByTestId("viewed-image-group");
+    expect(row).toHaveAttribute("data-viewed-image-status", "failed");
+    expect(row).toHaveTextContent(/^Viewed image · screen\.png · Failed$/);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(container.querySelector(".viewed-image-chevron-space")).not.toBeNull();
+  });
+
+  it("marks an interrupted read, disclosing an image that already exists", () => {
+    const interrupted: ViewedImageItem = { ...viewed, status: "interrupted" };
+    const { container, rerender } = render(<ViewedImageGroup item={interrupted} />);
+    const row = screen.getByTestId("viewed-image-group");
+    expect(row).toHaveAttribute("data-viewed-image-status", "interrupted");
+    expect(row).toHaveTextContent(/^Viewed image · screen\.png · Interrupted$/);
+    expect(screen.queryByRole("button")).toBeNull();
+
+    stubIntersectionObserver();
+    rerender(<ViewedImageGroup item={interrupted} image={image} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Viewed image · screen.png · Interrupted" }),
+    );
+    expect(container.querySelector('[data-item-kind="image"]')).not.toBeNull();
+    expect(container.querySelector(".op-error")).toBeNull();
+  });
+
+  it("keeps a completed read's label free of status", () => {
+    const { rerender } = render(<ViewedImageGroup item={viewed} />);
+    const row = screen.getByTestId("viewed-image-group");
+    expect(row).toHaveAttribute("data-viewed-image-status", "completed");
+    expect(row).toHaveTextContent(/^Viewed image · screen\.png$/);
+
+    rerender(<ViewedImageGroup item={viewed} image={image} />);
+    expect(
+      screen.getByRole("button", { name: "Viewed image · screen.png" }),
+    ).not.toHaveAccessibleDescription();
+  });
+
+  it("renders the viewed item's provider features like any conversation item", () => {
+    const ref = { featureId: "example.viewer", schemaVersion: 1 };
+    render(
+      <ViewedImageGroup
+        item={{ ...viewed, providerFeatures: [{ ref, payload: null }] }}
+        context={{
+          assistantLabel: "Assistant",
+          providerFeatureCapabilities: [
+            {
+              ref,
+              revision: 1,
+              label: { text: "Viewer" },
+              availability: "available",
+              operations: [],
+              presentationSlots: ["conversation_item"],
+            },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByTestId("viewed-image-group")).toContainElement(
+      screen.getByText("Viewer is unavailable in this client version."),
+    );
+  });
 });
+
+function stubIntersectionObserver(): void {
+  vi.stubGlobal("IntersectionObserver", class {
+    observe() {}
+    disconnect() {}
+  });
+}

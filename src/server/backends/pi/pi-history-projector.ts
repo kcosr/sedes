@@ -63,6 +63,15 @@ import {
 import { readPiBranchMarker } from "./pi-branch-marker.js";
 import { USER_FORK_CONTEXT_BOUNDARY } from "../fork-context-boundary.js";
 import { piAssistantResponseEvidence } from "./pi-assistant-response-phase.js";
+import {
+  classifyPiViewedImage,
+  PI_TOOL_RESULT_MISSING,
+  piViewedImageItem,
+  settlePiViewedImage,
+  type PiUnresolvedViewedImage,
+  type PiViewedImageCandidate,
+  type PiViewedImageClassification,
+} from "./pi-viewed-image.js";
 
 interface MutableTurn {
   backendTurnId: string;
@@ -102,6 +111,8 @@ interface PendingHistoryTool {
     BackendItem,
     { semanticKind: "tool" }
   >["agentToolInvocation"];
+  readonly assistantEntryId: string;
+  readonly viewedImage?: PiViewedImageClassification;
 }
 
 export interface PiHistoryDiagnostic {
@@ -141,6 +152,17 @@ export interface PiHistoryProjection {
   readonly backendTurnIdByEntryId: ReadonlyMap<string, string>;
   readonly snapshot: BackendConversationSnapshot;
   readonly diagnostics: readonly PiHistoryDiagnostic[];
+  /**
+   * Completed image reads whose child image is not in `snapshot`. Each child
+   * owns the source order reserved directly after its viewed item. The
+   * projector never reads or publishes artifacts; its owner decides that.
+   */
+  readonly viewedImages: readonly PiViewedImageCandidate[];
+  /**
+   * Image reads of the running turn that have no result yet, and so remain
+   * `streaming`. Their owner settles them once Pi persists the result.
+   */
+  readonly unresolvedViewedImages: readonly PiUnresolvedViewedImage[];
 }
 
 export interface PiHistoryProjectorOptions {
@@ -300,6 +322,8 @@ export class PiHistoryProjector {
     const itemIndex = new Map<string, number>();
     const pendingTools = new Map<string, PendingHistoryTool[]>();
     const diagnostics: PiHistoryDiagnostic[] = [];
+    const viewedImages: PiViewedImageCandidate[] = [];
+    const unresolvedViewedImages: PiUnresolvedViewedImage[] = [];
     const identityMarkers = new Map<
       string,
       Array<{
@@ -917,18 +941,37 @@ export class PiHistoryProjector {
                 toolName,
                 identity,
               );
-              const item = this.#mapper.map({
-                backendItemId: itemId,
-                backendTurnId: turn.backendTurnId,
-                sourceOrder,
-                status: "streaming",
-                phase: "arguments_complete",
-                startedAt: entry.timestamp,
+              const viewedImage = classifyPiViewedImage(
                 identity,
-                ...(agentToolInvocation ? { agentToolInvocation } : {}),
-                arguments: own(part, "arguments"),
-              });
+                own(part, "arguments"),
+              );
+              const item = viewedImage
+                ? piViewedImageItem({
+                    backendItemId: itemId,
+                    backendTurnId: turn.backendTurnId,
+                    sourceOrder,
+                    status: "streaming",
+                    startedAt: entry.timestamp,
+                    ...(viewedImage.fileName
+                      ? { fileName: viewedImage.fileName }
+                      : {}),
+                  })
+                : this.#mapper.map({
+                    backendItemId: itemId,
+                    backendTurnId: turn.backendTurnId,
+                    sourceOrder,
+                    status: "streaming",
+                    phase: "arguments_complete",
+                    startedAt: entry.timestamp,
+                    identity,
+                    ...(agentToolInvocation ? { agentToolInvocation } : {}),
+                    arguments: own(part, "arguments"),
+                  });
               pushItem(turn, item);
+              if (viewedImage) {
+                // Reserve the next position for the image child.
+                sourceOrder += 1;
+              }
               const candidates = pendingTools.get(toolCallId) ?? [];
               candidates.push({
                 itemId,
@@ -938,6 +981,8 @@ export class PiHistoryProjector {
                 identity,
                 arguments: own(part, "arguments"),
                 ...(agentToolInvocation ? { agentToolInvocation } : {}),
+                assistantEntryId: entry.id,
+                ...(viewedImage ? { viewedImage } : {}),
               });
               pendingTools.set(toolCallId, candidates);
             }
@@ -995,6 +1040,19 @@ export class PiHistoryProjector {
           }
           const prior = items[itemIndex.get(match.itemId)!]!;
           const phase = terminalPhase(message);
+          if (match.viewedImage && prior.semanticKind === "viewed_image") {
+            const settled = settlePiViewedImage({
+              viewed: prior,
+              assistantEntryId: match.assistantEntryId,
+              toolCallId: match.toolCallId,
+              toolResultEntryId: entry.id,
+              result: message,
+              completedAt: entry.timestamp,
+            });
+            replaceItem(settled.item);
+            if (settled.candidate) viewedImages.push(settled.candidate);
+            continue;
+          }
           replaceItem(
             this.#mapper.map({
               backendItemId: prior.backendItemId,
@@ -1129,15 +1187,30 @@ export class PiHistoryProjector {
           this.#runState === "running" &&
           current?.backendTurnId === prior.backendTurnId;
         if (active) {
+          if (prior.semanticKind === "viewed_image") {
+            unresolvedViewedImages.push({
+              viewedItemId: prior.backendItemId,
+              assistantEntryId: pending.assistantEntryId,
+              toolCallId: pending.toolCallId,
+            });
+          }
           continue;
         }
-        if (!("phase" in prior)) {
+        if (!("phase" in prior) && prior.semanticKind !== "viewed_image") {
           throw new Error("pi_history_pending_tool_item_invalid");
         }
         diagnostics.push({
           code: "tool_result_missing",
           entryId: pending.itemId.split(":")[0] ?? pending.itemId,
         });
+        if (!("phase" in prior)) {
+          replaceItem({
+            ...prior,
+            status: "interrupted",
+            error: PI_TOOL_RESULT_MISSING,
+          });
+          continue;
+        }
         const interrupted: BackendOperationItem = {
           ...prior,
           status: "interrupted",
@@ -1230,6 +1303,8 @@ export class PiHistoryProjector {
       },
       diagnostics,
       backendTurnIdByEntryId,
+      viewedImages,
+      unresolvedViewedImages,
     };
   }
 }

@@ -185,7 +185,9 @@ The current driver supports:
 - choice, confirmation, text-input, editor, and Sedes-managed decision
   interactions;
 - context, token, cost, and counter usage;
-- shared staged file attachments and model-conditional native image input; and
+- shared staged file attachments and model-conditional native image input;
+- images the model viewed with the built-in `read` tool, shown as a row with
+  the file name that expands to the exact image Pi sent; and
 - provider-native forks at the latest completed turn or a selected completed
   turn, except for isolated workspaces.
 
@@ -218,6 +220,19 @@ Pi intentionally does not advertise structured questionnaires, a managed
 provider terminal/TUI, provider-output native image artifacts, or
 `latest_provider_snapshot`. Generic extension prompts retain their primitive
 interaction kind instead of being inferred as approvals or questionnaires.
+
+A built-in `read` of a path ending in `png`, `jpg`, `jpeg`, `gif`, `webp`, or
+`bmp` (any case) appears as a viewed-image row in every topology. Its image is
+stored as a thread output artifact when Pi returned one the model could see.
+A failed read shows a generic error without the path; an unprocessable image,
+a model without image input, or a non-image file under an image name shows the
+row without an image. Pi's `blockImages` setting is not visible to Sedes, so
+the image is still shown when that setting withheld it from the model. Images
+returned by MCP servers, extensions, or other tools are not shown this way.
+Older and forked threads gain their images in the background when opened. An
+older history page or a linked turn waits up to two seconds for its four
+newest images; the rest appear when it is loaded again or, for recent turns,
+as they finish.
 
 ## Operational boundaries
 

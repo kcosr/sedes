@@ -8,6 +8,8 @@ import {
   boundValue,
   DEFAULT_PAYLOAD_LIMITS,
 } from "../../conversations/payload-policy.js";
+import { displayFileName } from "../../output-artifacts/display-file-name.js";
+import { isClaudeImageReadPath } from "./claude-viewed-images.js";
 
 const MAXIMUM_FILE_CHANGE_TEXT_BYTES = PAYLOAD_LIMITS.textCharacters;
 const MAXIMUM_EDIT_SOURCE_BYTES = MAXIMUM_FILE_CHANGE_TEXT_BYTES / 2;
@@ -47,7 +49,14 @@ export function projectClaudeTool(
       };
     }
     case "Read": {
-      const path = safeAbsolutePath(ownString(input, "file_path"));
+      // Claude Code answers these with the image itself, which Sedes shows
+      // as a view; only the file name leaves the server.
+      const filePath = ownString(input, "file_path");
+      if (filePath !== undefined && isClaudeImageReadPath(filePath)) {
+        const fileName = displayFileName(filePath);
+        return { semanticKind: "viewed_image", ...(fileName ? { fileName } : {}) };
+      }
+      const path = safeAbsolutePath(filePath);
       if (path === undefined) return genericTool(name, input, "filesystem");
       const offset = ownOptionalPositiveSafeInteger(input, "offset");
       const limit = ownOptionalPositiveSafeInteger(input, "limit");
@@ -157,15 +166,15 @@ export function completeClaudeTool(
   isError: boolean,
 ): BackendItem {
   const status = isError ? ("failed" as const) : ("completed" as const);
-  const result = boundToolResult(
+  const result = () => boundToolResult(
     Array.isArray(content) ? { content } : content,
     isError,
   );
   switch (existing.semanticKind) {
     case "tool":
-      return { ...existing, status, phase: status, result };
+      return { ...existing, status, phase: status, result: result() };
     case "command": {
-      const output = boundedResultText(result);
+      const output = boundedResultText(result());
       return {
         ...existing,
         status,
@@ -174,7 +183,7 @@ export function completeClaudeTool(
       };
     }
     case "file_read": {
-      const contentPreview = isError ? undefined : boundedResultText(result);
+      const contentPreview = isError ? undefined : boundedResultText(result());
       return {
         ...existing,
         status,
@@ -191,7 +200,17 @@ export function completeClaudeTool(
       };
     case "mcp":
     case "web_search":
-      return { ...existing, status, phase: status, result };
+      return { ...existing, status, phase: status, result: result() };
+    case "viewed_image":
+      // The result is never copied: its image, if any, becomes its own item,
+      // and Claude's error text names absolute paths.
+      return isError
+        ? { ...existing, status, error: {
+          category: "unavailable" as const,
+          message: boundDisplayText("Claude could not read this image."),
+          code: "claude_viewed_image_read_failed",
+        } }
+        : { ...existing, status };
     case "collaboration":
       // The tool result settles the spawning call. In particular, a successful
       // async acknowledgement does not prove that the child has finished.
@@ -223,7 +242,7 @@ export function interruptClaudeToolResult(
   content: unknown,
   completedAt: string,
 ): BackendItem {
-  if (existing.semanticKind === "collaboration") {
+  if (existing.semanticKind === "collaboration" || existing.semanticKind === "viewed_image") {
     return settleInterruptedClaudeTool(existing, "interrupted", completedAt);
   }
   const settled = completeClaudeTool(existing, content, true);
@@ -256,6 +275,9 @@ export function settleInterruptedClaudeTool(
       };
     case "collaboration":
       return { ...item, status, action: "status", completedAt };
+    case "viewed_image":
+      // A read without a result never completed, whatever ended its turn.
+      return { ...item, status: "interrupted", completedAt };
     default:
       return { ...item, status, completedAt };
   }

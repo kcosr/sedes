@@ -4301,7 +4301,7 @@ describe("Transcript viewed images", () => {
     const snapshot = makeSnapshot(["turn-1"], false);
     snapshot.turnsById["turn-1"] = {
       ...snapshot.turnsById["turn-1"]!,
-      orderedItemIds: ["command-1", "viewed-1", "image-1", "command-2", "viewed-2"],
+      orderedItemIds: ["command-1", "viewed-1", "image-1", "command-2", "viewed-2", "generated-1"],
     };
     const command = (id: string) => ({
       id,
@@ -4328,6 +4328,7 @@ describe("Transcript viewed images", () => {
         kind: "image",
         status: "completed",
         revision: 1,
+        origin: { kind: "viewed", capture: "file_snapshot" },
         image: {
           representation: "artifact",
           artifactId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -4346,6 +4347,23 @@ describe("Transcript viewed images", () => {
         revision: 1,
         fileName: { text: "unavailable.png" },
       },
+      // Pairing keys on origin, so a generated image is never disclosed by a view.
+      "generated-1": {
+        id: "generated-1",
+        turnId: "turn-1",
+        kind: "image",
+        status: "completed",
+        revision: 1,
+        origin: { kind: "generated" },
+        image: {
+          representation: "artifact",
+          artifactId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          mimeType: "image/png",
+          byteSize: 24,
+          sha256: "b".repeat(64),
+          alt: { text: "Generated chart" },
+        },
+      },
     };
     const { container } = render(
       <Transcript
@@ -4356,7 +4374,10 @@ describe("Transcript viewed images", () => {
     const rows = screen.getAllByTestId("viewed-image-group");
     expect(rows).toHaveLength(2);
     expect(screen.getAllByTestId("activity-group")).toHaveLength(2);
-    expect(container.querySelector('[data-item-kind="image"]')).toBeNull();
+    const standalone = container.querySelectorAll('[data-item-kind="image"]');
+    expect(standalone).toHaveLength(1);
+    expect(standalone[0]).toHaveAttribute("data-item-id", "generated-1");
+    expect(rows[1]).not.toContainElement(standalone[0] as HTMLElement);
     const captured = screen.getByRole("button", { name: "Viewed image · captured.png" });
     expect(captured).toHaveAttribute("aria-expanded", "false");
     expect(rows[1]).toHaveTextContent("Viewed image · unavailable.png");
@@ -4364,7 +4385,154 @@ describe("Transcript viewed images", () => {
 
     fireEvent.click(captured);
     const images = container.querySelectorAll('[data-item-kind="image"]');
-    expect(images).toHaveLength(1);
+    expect(images).toHaveLength(2);
     expect(rows[0]).toContainElement(images[0] as HTMLElement);
+  });
+
+  it("keeps a failed view its own row between activity groups and discloses its error", () => {
+    const snapshot = makeSnapshot(["turn-1"], false);
+    snapshot.turnsById["turn-1"] = {
+      ...snapshot.turnsById["turn-1"]!,
+      orderedItemIds: ["command-1", "viewed-1", "command-2"],
+    };
+    const command = (id: string) => ({
+      id,
+      turnId: "turn-1",
+      kind: "command" as const,
+      status: "completed" as const,
+      revision: 1,
+      phase: "completed" as const,
+      command: { text: `echo ${id}` },
+    });
+    snapshot.itemsById = {
+      "command-1": command("command-1"),
+      "viewed-1": {
+        id: "viewed-1",
+        turnId: "turn-1",
+        kind: "viewed_image",
+        status: "failed",
+        revision: 2,
+        fileName: { text: "missing.png" },
+        error: {
+          category: "not_found",
+          message: { text: "File does not exist." },
+        },
+      },
+      "command-2": command("command-2"),
+    };
+    const { container } = render(
+      <Transcript
+        store={new FakeTranscriptStore(snapshot) as unknown as ThreadClientStore}
+      />,
+    );
+
+    const groups = screen.getAllByTestId("activity-group");
+    expect(groups).toHaveLength(2);
+    for (const group of groups) {
+      expect(group).toHaveAttribute("data-activity-member-count", "1");
+    }
+    const row = screen.getByTestId("viewed-image-group");
+    expect(
+      groups[0]!.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      row.compareDocumentPosition(groups[1]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(row).toHaveAttribute("data-item-id", "viewed-1");
+    expect(row).toHaveAttribute("data-viewed-image-status", "failed");
+    expect(row.closest(".conversation-item")).toBeNull();
+
+    const disclosure = within(row).getByRole("button", {
+      name: "Viewed image · missing.png · Failed",
+    });
+    expect(disclosure).toHaveAccessibleDescription("File does not exist.");
+    expect(container.querySelector(".op-error")).toBeNull();
+    fireEvent.click(disclosure);
+    expect(within(row).getByText("File does not exist.", { selector: ".op-error" }))
+      .toBeVisible();
+    expect(container.querySelector('[data-item-kind="image"]')).toBeNull();
+  });
+
+  it("anchors an expanded viewed image by its row rather than the disappearing image", () => {
+    const viewedSnapshot = () => {
+      const snapshot = makeSnapshot(["turn-1"], false);
+      snapshot.turnsById["turn-1"] = {
+        ...snapshot.turnsById["turn-1"]!,
+        orderedItemIds: ["viewed-1", "image-1"],
+      };
+      snapshot.itemsById = {
+        "viewed-1": {
+          id: "viewed-1",
+          turnId: "turn-1",
+          kind: "viewed_image",
+          status: "completed",
+          revision: 1,
+          fileName: { text: "captured.png" },
+        },
+        "image-1": {
+          id: "image-1",
+          turnId: "turn-1",
+          kind: "image",
+          status: "completed",
+          revision: 1,
+          origin: { kind: "viewed", capture: "file_snapshot" },
+          image: {
+            representation: "artifact",
+            artifactId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            mimeType: "image/png",
+            byteSize: 24,
+            sha256: "a".repeat(64),
+            fileName: { text: "captured.png" },
+          },
+        },
+      };
+      return snapshot;
+    };
+    vi.stubGlobal("IntersectionObserver", class {
+      observe() {}
+      disconnect() {}
+    });
+    const fake = new FakeTranscriptStore(viewedSnapshot());
+    let replaced = false;
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains("message-viewport")) {
+          return { top: 0 } as DOMRect;
+        }
+        if (this.dataset.itemKind === "viewed_image") {
+          return { top: replaced ? 250 : -120 } as DOMRect;
+        }
+        if (this.dataset.itemKind === "image") {
+          return { top: 20 } as DOMRect;
+        }
+        return { top: -300 } as DOMRect;
+      });
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Viewed image · captured.png" }),
+    );
+    expect(document.querySelector('[data-item-kind="image"]')).not.toBeNull();
+    const originalViewport = screen.getByRole("region", { name: "Messages" });
+    Object.defineProperties(originalViewport, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 1_000 },
+    });
+    originalViewport.scrollTop = 400;
+    fireEvent.scroll(originalViewport);
+    fireEvent.scroll(originalViewport);
+
+    act(() => fake.replaceProjection("summary"));
+    replaced = true;
+    act(() => fake.replaceProjection("summary", viewedSnapshot()));
+
+    const replacementViewport = screen.getByRole("region", {
+      name: "Messages",
+    });
+    expect(replacementViewport).not.toBe(originalViewport);
+    expect(document.querySelector('[data-item-kind="image"]')).toBeNull();
+    expect(replacementViewport.scrollTop).toBe(250);
+    rect.mockRestore();
+    vi.unstubAllGlobals();
   });
 });

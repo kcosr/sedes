@@ -2278,9 +2278,17 @@ fetch or an implicit artifact fallback.
 
 Every backend capability document must state
 `providerOutputArtifacts.nativeImage` explicitly. Advertise it only when the
-selected backend/profile can project a reviewed native image item through this
-durable contract. Backends that only accept image input, expose bounded
-tool-result image metadata, or have no reviewed output path report `false`.
+selected backend/profile can project a reviewed provider-generated image item
+through this durable contract. Backends that only accept image input, expose
+bounded tool-result image metadata, publish only viewed images, or have no
+reviewed output path report `false`. The flag describes provider-generated
+output and does not flip for viewed images.
+
+Every image item declares its `origin`: `generated` for provider-generated
+output, or `viewed` with `capture: "provider_input"` for the exact in-band
+bytes the model received or `capture: "file_snapshot"` for a later read of the
+named file. Choose the capture from the actual byte source; never label a
+snapshot as provider input.
 
 History replacement, pagination, replay, reconnect, and repeated live/history
 observation must resolve the same artifact rather than write another copy or
@@ -2308,24 +2316,49 @@ workspace and environment, reads only through that exact environment's Files
 provider, and rechecks binding and environment authority inside the publication
 transaction. A retained association wins over rereading on every observation,
 even after the source changes or disappears, and it is presented as a snapshot
-at capture time rather than provider-byte identity. Project the view as a
-terminal `viewed_image` item carrying only the path's final component as
-`fileName`, add the image as a separate child in the next reserved source-order
-position, and deliver a late child as a new item before its turn update rather
-than mutating a terminal item or forcing a resnapshot. `viewed_image` is a
-standalone, non-activity kind: summary mode passes it through unchanged, and
-the browser discloses the image that directly follows it. When the native item
+at capture time rather than provider-byte identity. When the native item
 cannot attribute a path to the configured execution host, document that
 topology limit instead of guessing.
 
-The current reviewed dispositions are: Codex supports completed native
-`imageGeneration` PNG results and captures completed `imageView` paths on the
-thread's configured execution host; owned-local Grok supports exact completed
-`ImageGen` and `ImageEdit` JPEG results. Codex and Grok generated-image paths
-are unchanged by viewed-image capture. Pi and Claude intentionally report
-unsupported and gain no image-view capture. `providerOutputArtifacts.nativeImage`
-describes supported output images only; it is not proof of Files availability
-or native-executor attribution. The complete byte and topology contract is in
+In-band viewed-image bytes, returned inside a provider tool result, go through
+`OutputArtifactService` directly with an opaque publication key derived from
+native coordinates, never through the Files-based capture service, which would
+reread the file instead of keeping the bytes the model received. Decode
+strictly and bound the bytes before publication. A synchronous history
+projector must not decode or publish; it looks up retained associations and
+lists the missing ones for the handle or an async caller to publish before
+reprojecting. Decide recognition from complete tool arguments: a backend that
+streams arguments holds the item until they are complete, because an emitted
+item cannot change kind.
+
+Project a view as a `viewed_image` item carrying only the path's final
+component as `fileName`. Where the provider reports the read in progress, the
+item may be `streaming` and then settle as `completed`, `failed`, or
+`interrupted` with its tool call; otherwise project it terminal. A failed
+item's error is Sedes-written and path-free: provider error text that may
+contain paths is never copied into a viewed-image error. Add the image as a
+separate child in the next reserved source-order position, and deliver a late
+child as a new item, before any turn update that follows it, rather than
+mutating a terminal item, reopening a completed turn, or forcing a resnapshot.
+`viewed_image` is a standalone, non-activity kind: summary mode passes it
+through unchanged, and the browser discloses the directly following image only
+when its origin is `viewed`, so a generated image is never disclosed by a view.
+
+The current reviewed dispositions are:
+
+- Codex: completed native `imageGeneration` PNG results (`generated`), and
+  path capture of completed `imageView` items on the thread's configured
+  execution host (`file_snapshot`).
+- Claude and Pi: in-band provider input from their built-in read tool
+  (`provider_input`), for Claude's `Read` of PNG, JPEG, GIF, or WebP paths and
+  Pi's `read` of those or BMP paths. Neither has a generated-output path.
+- Grok: generated only, from exact completed owned-local `ImageGen` and
+  `ImageEdit` JPEG results (`generated`). Image reads intentionally stay tool
+  cards.
+
+`providerOutputArtifacts.nativeImage` is `true` only for Codex and owned-local
+Grok. It is not proof of Files availability or native-executor attribution.
+The complete byte and topology contract is in
 [Provider output artifacts](output-artifacts.md).
 
 ## Creation, binding, and forks
@@ -3211,7 +3244,7 @@ surfaces that apply:
 | History and streaming              | Are snapshot bounds, ordering, correlation, reconnect, duplicates, and stale events covered?                                                                                                                                                                                                                                                                         |
 | Input lifecycle                    | Are send, steer, queue, stop, attachments, Task references, immutable acceptance snapshots, and active-turn races explicit? Does Stop return every accepted, unstarted Steer as not sent on exact per-input evidence, per the Stop rule? Can several Steers await materialization at once, each resolved on its own evidence, with serial provider calls and Submit never passing them?                                                                                                                                  |
 | Completion consumers               | Does each obligation bind one exact operation, register atomically, consume one immutable normalized terminal snapshot, materialize idempotently, recover after restart, retain authenticated provenance, and give Pi, Codex, Claude, and Grok an explicit Steer, Queue, or unsupported disposition without provider-native leakage?                                 |
-| Provider output artifacts          | Are exact native completion and byte authority, immutable scoped storage, duplicate live/history observation, normalized metadata, content retrieval, bounds, unavailable projection, topology, path-capture authority and host attribution, and input/tool-result separation explicit?                                                                              |
+| Provider output artifacts          | Are exact native completion and byte authority, image origin, immutable scoped storage, duplicate live/history observation, normalized metadata, content retrieval, bounds, unavailable projection, topology, path-capture authority and host attribution, in-band viewed-image publication, path-free view errors, and input/tool-result separation explicit?       |
 | Settings and provider features     | Are policy, desired/effective evidence, generation, turn-boundary application, persistence, native mapping, revisions, receipts, Saved Agents, and unsupported paths covered?                                                                                                                                                                                        |
 | Model policy                       | Is it backend-owned and fingerprinted? Are native provider/model/effort matcher dispositions, catalog intersection, defaults, every new provider-effect boundary, stale stored selections, empty intersections, denylist future admission, and receipt/reconciliation ordering covered?                                                                              |
 | Interactions                       | Are kinds, answers, interruption, force-reset cancellation, reconnect, and sensitive data covered?                                                                                                                                                                                                                                                                   |

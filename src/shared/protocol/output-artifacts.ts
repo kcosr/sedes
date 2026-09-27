@@ -28,3 +28,17 @@ export const normalizedImageSchema = z.discriminatedUnion("representation", [
   }),
 ]);
 export type NormalizedImage = z.infer<typeof normalizedImageSchema>;
+
+/**
+ * Why an image item exists. Display filters and viewed-image pairing key on
+ * `kind`; `capture` says whether a viewed image is the exact provider input
+ * or a later snapshot of the file.
+ */
+export const imageItemOriginSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("generated") }),
+  z.strictObject({
+    kind: z.literal("viewed"),
+    capture: z.enum(["provider_input", "file_snapshot"]),
+  }),
+]);
+export type ImageItemOrigin = z.infer<typeof imageItemOriginSchema>;

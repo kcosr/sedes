@@ -187,6 +187,47 @@ describe("normalized conversation renderers", () => {
     );
   });
 
+  it("renders a standalone viewed image row with its read status", () => {
+    const viewed = {
+      ...common,
+      kind: "viewed_image" as const,
+      fileName: { text: "screen.png" },
+    };
+    const { container, rerender } = render(
+      <ConversationItemView item={{ ...viewed, status: "streaming" }} />,
+    );
+    const item = container.querySelector(".conversation-item");
+    expect(item).toHaveAttribute("data-item-kind", "viewed_image");
+    expect(container.querySelectorAll("[data-item-id]")).toHaveLength(1);
+    expect(
+      container.querySelector("[data-viewed-image-status]"),
+    ).toHaveAttribute("data-viewed-image-status", "working");
+    expect(item).toHaveTextContent(/^Viewed image · screen\.png · Working…$/);
+    expect(screen.queryByRole("button")).toBeNull();
+
+    rerender(
+      <ConversationItemView
+        item={{
+          ...viewed,
+          status: "failed",
+          error: { category: "permission_denied", message: { text: "Read denied." } },
+        }}
+      />,
+    );
+    const disclosure = screen.getByRole("button", {
+      name: "Viewed image · screen.png · Failed",
+    });
+    expect(disclosure).toHaveAccessibleDescription("Read denied.");
+    fireEvent.click(disclosure);
+    expect(document.querySelector(".op-error")).toHaveTextContent("Read denied.");
+
+    rerender(
+      <ConversationItemView item={{ ...viewed, status: "interrupted" }} />,
+    );
+    expect(item).toHaveTextContent(/^Viewed image · screen\.png · Interrupted$/);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
   it("expands only compactions that include a genuine summary", () => {
     const { rerender } = render(
       <ConversationItemView
@@ -274,6 +315,7 @@ describe("normalized conversation renderers", () => {
         item={{
           ...common,
           kind: "image",
+          origin: { kind: "generated" },
           image: {
             representation: "artifact",
             artifactId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -351,7 +393,7 @@ describe("normalized conversation renderers", () => {
           assistantLabel: "Assistant",
           loadOutputArtifactContent: async () => content,
         }}
-        item={{ ...common, kind: "image", image: artifact }}
+        item={{ ...common, kind: "image", origin: { kind: "generated" }, image: artifact }}
       />,
     );
     act(() => intersection.intersect());
@@ -411,6 +453,7 @@ describe("normalized conversation renderers", () => {
         item={{
           ...common,
           kind: "image",
+          origin: { kind: "generated" },
           image: {
             representation: "artifact",
             artifactId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
@@ -449,6 +492,7 @@ describe("normalized conversation renderers", () => {
     const item = {
       ...common,
       kind: "image" as const,
+      origin: { kind: "generated" as const },
       image: {
         representation: "artifact" as const,
         artifactId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
@@ -491,6 +535,7 @@ describe("normalized conversation renderers", () => {
         item={{
           ...common,
           kind: "image",
+          origin: { kind: "generated" },
           image: {
             representation: "artifact",
             artifactId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
@@ -520,6 +565,7 @@ describe("normalized conversation renderers", () => {
         item={{
           ...common,
           kind: "image",
+          origin: { kind: "generated" },
           image: {
             representation: "artifact",
             artifactId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -539,6 +585,7 @@ describe("normalized conversation renderers", () => {
         item={{
           ...common,
           kind: "image",
+          origin: { kind: "generated" },
           image: {
             representation: "omitted",
             mimeType: "image/png",
