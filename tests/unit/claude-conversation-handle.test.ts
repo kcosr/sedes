@@ -5917,3 +5917,82 @@ describe("Claude compaction, lost processes, and bounded Stop", () => {
 });
 
 const STOP_BOUND = 30_000;
+
+describe("Claude image reads and meta rows", () => {
+  const PROMPT_ID = "b1000000-0000-4000-8000-000000000001";
+  const RESIZE_NOTE = "[Image: original 1440x2400, displayed at 1200x2000. Multiply coordinates by 1.20 to map to original image.]";
+  const submitInput = (text: string) => ({
+    applicationOperationId: PROMPT_ID, mutationId: "mutation-image-read", source: { kind: "user" as const },
+    reconciliationToken: "reconcile-image-read", text, contextExcerpts: [], attachments: [], taskContexts: [],
+  });
+  /** The identity-bearing shape the application compares across live and reload. */
+  const identities = (value: Awaited<ReturnType<typeof projectionSnapshot>>) => value.orderedBackendTurnIds.map(id => ({
+    id, status: value.turnsById[id]!.status,
+    items: value.turnsById[id]!.orderedBackendItemIds.map(itemId => {
+      const { backendItemId, backendTurnId, sourceOrder, semanticKind } = value.itemsById[itemId]!;
+      return { backendItemId, backendTurnId, sourceOrder, semanticKind };
+    }),
+  }));
+  const kinds = (value: Awaited<ReturnType<typeof projectionSnapshot>>, turnId: string) =>
+    value.turnsById[turnId]!.orderedBackendItemIds.map(id => value.itemsById[id]!.semanticKind);
+  /** Provider history for a transcript, read the way Sedes reads it. */
+  const history = async (transcript: ClaudeTranscriptFixture) =>
+    (await resolveClaudeSessionMessages(await parseClaudeTranscript(
+      Buffer.from(transcript.jsonl().replaceAll(transcript.sessionId, SESSION_ID)))))
+      .map(message => ({ ...message, parent_agent_id: null }));
+  /** A transcript row as Claude streams it live; meta rows arrive synthetic. */
+  const live = (transcript: ClaudeTranscriptFixture, uuid: string) => {
+    const row = transcript.rows.find(candidate => candidate.uuid === uuid)!;
+    return { type: row.type, uuid, session_id: SESSION_ID, parent_tool_use_id: null, message: row.message,
+      ...(row.isMeta === true ? { isSynthetic: true } : {}) } as unknown as SDKMessage;
+  };
+  const messageId = (transcript: ClaudeTranscriptFixture, uuid: string) =>
+    String((transcript.rows.find(candidate => candidate.uuid === uuid)!.message as { id: string }).id);
+
+  /** A local turn this attachment submitted, which Claude has started. */
+  async function startedTurn(options: Parameters<typeof createHandle>[2] = {}) {
+    const provider = fixture();
+    const created = createHandle(provider, vi.fn(), options);
+    const established = await created.handle.establishProjection({ signal: new AbortController().signal });
+    const events: import("../../src/shared/protocol/backend.js").SequencedBackendEvent[] = [];
+    established.subscribeFromNext(event => events.push(event));
+    const submitted = created.handle.submit(submitInput("Look at the screenshot"));
+    await provider.prompt()[Symbol.asyncIterator]().next();
+    provider.messages.push(nativeFrames.state("running"));
+    provider.messages.push(nativeFrames.lifecycle(PROMPT_ID, "started"));
+    await submitted;
+    const turnId = (await projectionSnapshot(created.handle)).activeBackendTurnId!;
+    return { ...created, provider, established, events, turnId };
+  }
+
+  it("omits a synthetic meta row live, as provider history does, instead of opening a turn", async () => {
+    const transcript = new ClaudeTranscriptFixture();
+    transcript.prompt("Look at the screenshot", { uuid: PROMPT_ID });
+    const [call] = transcript.reply([{ type: "tool_use", id: "toolu-notes", name: "Read",
+      input: { file_path: "/workspace/notes.txt" } }], { stopReason: "tool_use" });
+    const resultRow = transcript.toolResult("toolu-notes", call!, "notes");
+    const note = transcript.companion(RESIZE_NOTE);
+    const answer = transcript.answer("The notes are short.");
+    const reloadedMessages = await history(transcript);
+    expect(reloadedMessages.some(message => message.uuid === note)).toBe(false);
+
+    const { handle, settings, provider, events, turnId } = await startedTurn();
+    provider.messages.push(live(transcript, call!));
+    provider.messages.push(live(transcript, resultRow));
+    provider.messages.push(live(transcript, note));
+    provider.messages.push(nativeFrames.start(messageId(transcript, answer)));
+    provider.messages.push(live(transcript, answer));
+    provider.messages.push(nativeFrames.result([PROMPT_ID]));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    const liveSnapshot = await projectionSnapshot(handle);
+    expect(liveSnapshot.orderedBackendTurnIds).toEqual([turnId]);
+    expect(kinds(liveSnapshot, turnId)).toEqual(["user_message", "file_read", "assistant_message"]);
+    expect(JSON.stringify(liveSnapshot)).not.toContain("displayed at");
+    expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
+    await handle.close();
+
+    const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: reloadedMessages, resumeSession: true }).handle;
+    expect(identities(await projectionSnapshot(reloaded))).toEqual(identities(liveSnapshot));
+    await reloaded.close();
+  });
+});

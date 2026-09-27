@@ -1615,6 +1615,12 @@ export class ClaudeConversationHandle implements ConversationHandle {
       return;
     }
     if (message.type !== "user" && message.type !== "assistant") return;
+    // Claude Code streams its meta rows, such as the dimension note after a
+    // resized image read, as synthetic user rows. Provider history omits meta
+    // rows, so they are neither a prompt nor a turn boundary here either. The
+    // one synthetic row history keeps is a compaction summary, which follows
+    // its boundary.
+    if (message.type === "user" && message.isSynthetic === true && this.#liveCompaction === undefined) return;
     // Claude Code streams a compaction's summary right after its boundary, as
     // a synthetic user row; history marks the same row as the summary.
     const compaction = this.#liveCompaction;
