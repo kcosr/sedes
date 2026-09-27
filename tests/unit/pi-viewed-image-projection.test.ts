@@ -283,6 +283,34 @@ describe("Pi live viewed-image projection", () => {
     ]);
   });
 
+  it("places execution-only calls at their position in the ended message", () => {
+    const projector = live();
+    projector.consume({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Looking" },
+          { type: "toolCall", id: "late", name: "read", arguments: { path: "late.png" } },
+          { type: "text", text: "After" },
+        ],
+      },
+    } as unknown as AgentSessionEvent);
+    const late = items(
+      projector.consume(
+        execution({ type: "tool_execution_start", toolCallId: "late", toolName: "read", args: { path: "late.png" } }),
+      ),
+    );
+    const unknown = items(
+      projector.consume(
+        execution({ type: "tool_execution_start", toolCallId: "other", toolName: "read", args: { path: "other.png" } }),
+      ),
+    );
+    // Counting tool blocks alone would give index 0, the text block's position.
+    expect(late[0]?.item).toMatchObject({ backendItemId: "live:epoch:1", sourceOrder: 3 });
+    expect(unknown[0]?.item).toMatchObject({ backendItemId: "live:epoch:3", sourceOrder: 7 });
+  });
+
   it("orders several reads in one message two positions apart with reserved children", () => {
     const projector = live();
     const first = readToCompletion(projector, 1, "first", "one.png", imageResult());
