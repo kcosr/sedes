@@ -207,10 +207,11 @@ SEDES_RUN_REAL_OPENCODE=1 \
   env -u NODE_ENV npm run test:real-opencode
 ```
 
-The process fixtures require POSIX; the MCP process-environment exposure test
-additionally requires Linux procfs. These are characterization tests: passing
+The process fixtures require Linux procfs to identify and clean up marked
+descendants, including children in detached process groups. These are characterization tests: passing
 includes reproducing missing idle filtering, MCP catalog readiness races, and
-synthetic bootstrap exposure. A passing suite does **not** qualify a production
+synthetic credential environment exposure. These are accepted native limitations,
+not prerequisites for a patched OpenCode release. A passing suite does **not** qualify a production
 OpenCode backend. No OpenCode module is currently registered, and the compiled
 Pi, Codex, Claude, and Grok paths remain unchanged. The fixture version pin
 records the release under investigation, not a production compatibility policy.

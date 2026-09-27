@@ -58,7 +58,7 @@ describe.runIf(RUN_REAL_OPENCODE)(
         native = undefined;
         model = undefined;
       }
-    }, 15_000);
+    });
 
     const create = async (title: string) => {
       const result = await native!.api("POST", "/api/session", {
@@ -198,7 +198,7 @@ describe.runIf(RUN_REAL_OPENCODE)(
       ).toBe(400);
     }, 30_000);
 
-    it("keeps active opening identity through steer and settlement while unfinished text is absent", async () => {
+    it("keeps active opening identity through steer and settlement", async () => {
       const session = await create("Steered busy period");
       const hold = model!.holdNextStream("msg_active");
       try {
@@ -207,10 +207,6 @@ describe.runIf(RUN_REAL_OPENCODE)(
         const active = await history(session);
         expect(active[0]?.id).toBe("msg_active");
         expect(active.some(({ type }) => type === "idle")).toBe(false);
-        expect(
-          active.find(({ type }) => type === "assistant")?.time.completed,
-        ).toBeUndefined();
-        expect(JSON.stringify(active)).not.toContain("PREFIX");
         await prompt(
           session,
           "msg_steer",

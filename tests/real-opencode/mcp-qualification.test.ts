@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { RUN_REAL_OPENCODE, startOpencodeNativeFixture, type OpenCodeNativeFixture } from "../support/opencode-native-fixture";
 
-// This suite records release-blocking native limitations, not Sedes support.
+// This suite characterizes accepted native limitations, not Sedes support.
+// Its older bootstrap canary demonstrates the same-account environment exposure
+// also accepted for the planned direct channel credential; no bootstrap is required.
 // It runs no authenticated/live model provider. All model and MCP responses are
 // local fixtures and each native process receives a disposable private HOME.
 const enabled = RUN_REAL_OPENCODE;
@@ -151,7 +153,7 @@ async function startFixture(initialMcp: boolean, profile: RecordValue = {}) {
   }
 }
 
-it.skipIf(!enabled)("owned initial MCP config admits a model request before required MCP catalog connection; config exposes its bootstrap canary", async () => {
+it.skipIf(!enabled)("characterizes the accepted initial MCP catalog race and persisted config canary exposure", async () => {
   const fixture = await startFixture(true);
   try {
     const firstPrompt = fixture.prompt();
@@ -166,7 +168,7 @@ it.skipIf(!enabled)("owned initial MCP config admits a model request before requ
   } finally { await fixture.close(); }
 }, 90_000);
 
-it.skipIf(!enabled)("owned profile can remove the stock shell, subagent and command plugins, at the cost of losing those features", async () => {
+it.skipIf(!enabled)("characterizes plugin removal and its loss of shell, subagent and command features", async () => {
   const removed = ["opencode.tool.shell", "opencode.tool.subagent", "opencode.config.command"];
   const fixture = await startFixture(false, { plugins: removed.map((id) => `-${id}`) });
   try {
@@ -185,7 +187,7 @@ it.skipIf(!enabled)("owned profile can remove the stock shell, subagent and comm
   } finally { await fixture.close(); }
 }, 90_000);
 
-it.skipIf(!enabled || process.platform !== "linux")("external runtime MCP keeps config reads clean but exposes an unredeemed environment bootstrap to the native shell", async () => {
+it.skipIf(!enabled || process.platform !== "linux")("characterizes accepted same-account MCP environment exposure while runtime config reads remain clean", async () => {
   const fixture = await startFixture(false);
   try {
     const addition = fixture.request("PUT", `/api/experimental/mcp/qualification${fixture.location}`, { config: fixture.mcp });

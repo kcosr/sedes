@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { startOpencodeModelFixture } from "../support/opencode-model-fixture.js";
 import { RUN_REAL_OPENCODE, startOpencodeNativeFixture } from "../support/opencode-native-fixture.js";
 
@@ -86,15 +86,22 @@ describe.skipIf(!RUN_REAL_OPENCODE)("OpenCode v2 native acceptance qualification
 
       const interrupted = await native.api("POST", `${route}/interrupt`);
       expect(interrupted.body).toMatchObject({ interrupted: true });
+      // The acknowledgment precedes runner cleanup. Observe settlement in this
+      // same live native process before checking that the steer stayed pending.
+      await vi.waitFor(async () => {
+        const active = await native.api("GET", "/api/session/active");
+        expect(active.status).toBe(200);
+        expect(created.body.data.id in active.body.data).toBe(false);
+      }, { timeout: 20_000, interval: 25 });
       const stillPending = await native.api("GET", `${route}/inbox`);
       expect(stillPending.body.data.map((entry: any) => entry.id)).toEqual(["msg_steer"]);
-      expect((await native.api("DELETE", `${route}/inbox/msg_steer`)).status).toBe(204);
-      expect((await native.api("GET", `${route}/inbox`)).body.data).toEqual([]);
-      expect((await native.api("GET", `${route}/message/msg_steer`)).status).toBe(404);
+      expect(model.streamRequestCount).toBe(1);
       // 204 acknowledges the cancellation request, including a native no-op.
       // This held fixture proves absence after Stop; a production promotion race
       // still needs exact terminal/history evidence, never the status alone.
-      expect(model.streamRequestCount).toBe(1);
+      expect((await native.api("DELETE", `${route}/inbox/msg_steer`)).status).toBe(204);
+      expect((await native.api("GET", `${route}/inbox`)).body.data).toEqual([]);
+      expect((await native.api("GET", `${route}/message/msg_steer`)).status).toBe(404);
     } finally {
       hold.release();
       try { await native.stop(); } finally { await model.stop(); }
