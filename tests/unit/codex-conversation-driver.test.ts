@@ -16804,7 +16804,7 @@ describe("Codex provider residency release for tool changes", () => {
     });
   });
 
-  it.each(["idle", "notLoaded"] as const)("unsubscribes an %s thread without attaching or changing sibling sessions", async status => {
+  it.each(["idle", "notLoaded", "systemError"] as const)("unsubscribes an %s thread without attaching or changing sibling sessions", async status => {
     const persistent = { reattachThread: vi.fn(), detachThread: vi.fn() };
     const harness = new RpcHarness(persistent);
     harness.enqueue("thread/read", { thread: nativeThread({ status: { type: status } }) }, { thread: nativeThread({ status: { type: status } }) });
@@ -16827,6 +16827,25 @@ describe("Codex provider residency release for tool changes", () => {
     harness.enqueue("thread/read", { thread: nativeThread({ status: { type: "active", activeFlags: [] } }) });
     await expect(driver(harness).releaseConversationResidency(attachInput())).resolves.toBe("busy");
     expect(harness.calls.map(call => call.method)).toEqual(["thread/read"]);
+  });
+
+  it("refuses a managed TUI that outlives the local conversation handle", async () => {
+    const harness = new RpcHarness();
+    const managedTui = new CodexManagedTuiController({ client: harness.facade });
+    const runningAuthority = vi.spyOn(managedTui.registry, "runningAuthority").mockReturnValue({
+      scope, applicationThreadId: binding().applicationThreadId,
+      backendInstanceId: binding().backendInstanceId, connectionProfileId: binding().connectionProfileId,
+      executionEnvironmentId: binding().executionEnvironmentId, backendConversationId: binding().backendConversationId,
+      workspaceId: workspace.summary.id, canonicalWorkspacePath: workspace.canonicalPath,
+      opaqueBindingDetail: attachInput().opaqueBindingDetail, runtimeLeaseId: "retired-local-runtime", appServerGeneration: 1,
+    });
+    try {
+      const selected = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy,
+        executionSettingsProvider(), undefined, managedTui);
+      await expect(selected.releaseConversationResidency(attachInput())).resolves.toBe("busy");
+      expect(runningAuthority).toHaveBeenCalledExactlyOnceWith(scope, binding().applicationThreadId);
+      expect(harness.calls).toEqual([]);
+    } finally { runningAuthority.mockRestore(); await managedTui.close(); }
   });
 
   it("refuses an active native goal between turns", async () => {

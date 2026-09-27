@@ -120,6 +120,12 @@
 
 ### Changed
 
+- Codex archives now unsubscribe Sedes from the native conversation and refuse
+  while a native turn or goal is active. Archiving or changing tools also
+  requires a closed managed Codex TUI. A bound Codex conversation whose history is not yet
+  materialized requires its first message before changing tools, so a refresh
+  cannot discard an empty native session.
+
 - A Claude tool call that **Stop** aborted now reads as interrupted
   (**Activity · 1 tool call · Interrupted**) instead of failed, live and after
   a reload. Only the calls Stop itself stopped change: a parallel call that
@@ -193,7 +199,13 @@
   Upgrade sidecars together with the server: the sidecar build changes and
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
-### Fixed (#12)
+### Fixed
+
+- Refresh Native agent tools and CLI presentation settings when an idle
+  Codex or Claude thread already has a persistent SSH session, including
+  after the server reconnects. Provider release failures leave the saved
+  policy unchanged; disabled or unavailable bound targets must be enabled or
+  reconnected before Native/presentation edits. CLI access edits still apply live.
 
 - Claude's note after a resized image read (`[Image: original …]`) no longer
   opens a running turn that exists only live and disappears on reload. Sedes
@@ -470,11 +482,6 @@
   ([#51](https://github.com/kcosr/sedes/pull/51))
 
 ### Fixed
-
-- Refresh Native agent tools and CLI presentation settings when an idle
-  Codex or Claude thread already has a persistent SSH session, including
-  after the server reconnects. Provider release failures leave the saved
-  policy unchanged. CLI access edits still apply live.
 
 - Keep pending messages queued and retry unavailable backends during startup,
   instead of preventing the server from starting.

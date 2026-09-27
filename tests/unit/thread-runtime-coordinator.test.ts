@@ -3,6 +3,7 @@ import type { ConversationEventBridge } from "../../src/server/events/conversati
 import {
   ScopedThreadEventHubRegistry,
   ThreadProviderOutputUndeliveredError,
+  ThreadProviderReleaseFailedError,
   ThreadRuntimeNotIdleError,
   ThreadRuntimeRetirementUnprovenError,
   ThreadRuntimeCoordinator,
@@ -977,7 +978,7 @@ describe("ThreadRuntimeCoordinator", () => {
     const release = vi.fn(async (input: { binding: { applicationThreadId: string } }) => {
       switch (input.binding.applicationThreadId) {
         case "unavailable": throw unavailable;
-        case "unproven": throw new Error("release_response_lost");
+        case "release-failed": throw new Error("release_response_lost");
         case "busy": return "busy";
         case "undelivered": return "undelivered";
         default: return "released";
@@ -992,9 +993,30 @@ describe("ThreadRuntimeCoordinator", () => {
       await expect(coordinator.releaseProviderResidency(scope, "released", options)).resolves.toBeUndefined();
       await expect(coordinator.releaseProviderResidency(scope, "unresolved", options)).rejects.toBe(resolutionError);
       await expect(coordinator.releaseProviderResidency(scope, "unavailable", options)).rejects.toBe(unavailable);
-      await expect(coordinator.releaseProviderResidency(scope, "unproven", options)).rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+      await expect(coordinator.releaseProviderResidency(scope, "release-failed", options)).rejects.toBeInstanceOf(ThreadProviderReleaseFailedError);
       await expect(coordinator.releaseProviderResidency(scope, "busy", options)).rejects.toBeInstanceOf(ThreadRuntimeNotIdleError);
       await expect(coordinator.releaseProviderResidency(scope, "undelivered", options)).rejects.toBeInstanceOf(ThreadProviderOutputUndeliveredError);
+    } finally { await coordinator.close(); }
+  });
+
+  it("keeps bound policy refresh closed when a disabled target cannot resolve its residency contract", async () => {
+    let enabled = false;
+    const disabled = new DomainError("invalid_transition", "The selected backend connection is disabled.");
+    const { coordinator } = resetCoordinator([], 60_000, threadId => {
+      if (!enabled) throw disabled;
+      return { ...runtimeTarget(threadId), driver: {} } as unknown as AcquireConversationActorInput;
+    });
+    const updatePolicy = vi.fn(async () => undefined);
+    const refresh = () => coordinator.runWithRuntimeRetired(scope, "bound-thread", async () => {
+      await coordinator.releaseProviderResidency(scope, "bound-thread", { failurePolicy: "propagate" });
+      await updatePolicy();
+    });
+    try {
+      await expect(refresh()).rejects.toBe(disabled);
+      expect(updatePolicy).not.toHaveBeenCalled();
+      enabled = true;
+      await expect(refresh()).resolves.toBeUndefined();
+      expect(updatePolicy).toHaveBeenCalledOnce();
     } finally { await coordinator.close(); }
   });
 

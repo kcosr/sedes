@@ -42,6 +42,7 @@ import type { ToolInitiator } from "../agent-tools/contracts/tool-initiator.js";
 import { ThreadCompletionCallbackRepository } from "../db/repositories/thread-completion-callback-repository.js";
 import {
   ThreadProviderOutputUndeliveredError,
+  ThreadProviderReleaseFailedError,
   ThreadRuntimeNotIdleError,
   ThreadRuntimeRetirementUnprovenError,
 } from "../events/thread-runtime-coordinator.js";
@@ -2863,6 +2864,14 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
             "invalid_transition",
             "Agent tool exposure can change only while the thread is idle.",
             false,
+            { cause: error },
+          );
+        }
+        if (error instanceof ThreadProviderReleaseFailedError) {
+          throw new DomainError(
+            "runtime_unavailable",
+            "Sedes could not refresh the provider session. The agent tool policy was not changed. Try again when the provider is available.",
+            true,
             { cause: error },
           );
         }

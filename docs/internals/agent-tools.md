@@ -57,7 +57,11 @@ Native-tool policy and all surface/mode changes require an idle thread and
 runtime retirement. Before saving a bound thread's policy, Sedes also releases
 its provider residency, even when no local runtime is attached. Resolution or
 provider-release failures leave the policy unchanged; busy work or unapplied
-provider output blocks the change. Native presentation keeps its tool list for
+provider output blocks the change. This includes a disabled or unavailable bound
+target on any backend: enable or reconnect it before a Native/presentation
+edit. Sedes does not infer release support from a backend name or bypass a
+failed binding/configuration check. Same-surface CLI access edits still apply
+without resolving the provider. Native presentation keeps its tool list for
 the Pi turn or the Codex or Claude provider session; every invocation still
 rechecks policy.
 

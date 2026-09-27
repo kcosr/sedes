@@ -10,6 +10,7 @@ import { DomainError } from "../../src/server/domain/errors.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 import {
   ThreadProviderOutputUndeliveredError,
+  ThreadProviderReleaseFailedError,
   ThreadRuntimeNotIdleError,
   ThreadRuntimeRetirementUnprovenError,
 } from "../../src/server/events/thread-runtime-coordinator.js";
@@ -5227,7 +5228,8 @@ describe("ThreadMutationGateway agent-tool policy", () => {
   it.each([
     { error: new ThreadRuntimeNotIdleError(), code: "invalid_transition" },
     { error: new ThreadProviderOutputUndeliveredError(), code: "invalid_transition" },
-    { error: new ThreadRuntimeRetirementUnprovenError(new Error("lost acknowledgement")), code: "operation_outcome_uncertain" },
+    { error: new ThreadRuntimeRetirementUnprovenError(new Error("local handle close failed")), code: "operation_outcome_uncertain" },
+    { error: new ThreadProviderReleaseFailedError(new Error("lost release response")), code: "runtime_unavailable" },
     { error: new DomainError("runtime_unavailable", "Provider unavailable."), code: "runtime_unavailable" },
   ])("leaves policy unchanged when provider release fails with $code", async ({ error, code }) => {
     const subject = agentToolPolicyMutationFixture({ providerReleaseError: error });
@@ -5235,6 +5237,17 @@ describe("ThreadMutationGateway agent-tool policy", () => {
     expect(subject.releaseProviderResidency).toHaveBeenCalledExactlyOnceWith(scope, "thread-1", { failurePolicy: "propagate" });
     expect(subject.update).not.toHaveBeenCalled();
     expect(subject.publishThreadSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("reports provider release failure as retryable with an unchanged tool policy", async () => {
+    const subject = agentToolPolicyMutationFixture({
+      providerReleaseError: new ThreadProviderReleaseFailedError(new Error("sidecar unavailable")),
+    });
+    await expect(subject.gateway.mutate(scope, "thread-1", subject.operation)).rejects.toMatchObject({
+      code: "runtime_unavailable", retryable: true,
+      message: expect.stringContaining("policy was not changed"),
+    });
+    expect(subject.update).not.toHaveBeenCalled();
   });
 
   it.each([

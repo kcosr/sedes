@@ -1090,6 +1090,9 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     // The caller retires its actor under the thread maintenance fence first.
     // Do not detach a provider subscription still owned by another actor.
     if (this.#ownership.current(threadId)) return "busy";
+    // A remote managed TUI outlives its presentation handle and holds its own
+    // native subscription, which would prevent Codex from applying new config.
+    if (this.#managedTui?.registry.runningAuthority(input.scope, input.binding.applicationThreadId)) return "busy";
     try {
       const inspected = await this.#client.requestWithReceipt(
         codexThreadReadMethod,
@@ -1107,7 +1110,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       };
       assertGeneration(generation);
       const status = inspected.result.thread.status.type;
-      if (status !== "idle" && status !== "notLoaded") return "busy";
+      if (status === "active") return "busy";
       // A newly created native thread may still exist only in memory. Prove
       // that its history is materialized before dropping the subscription;
       // otherwise the next resume can fail with "no rollout found".

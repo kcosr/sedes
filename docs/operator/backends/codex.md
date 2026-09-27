@@ -309,7 +309,9 @@ next resume rebuilds the tool catalog and shell environment. Remote persistent
 runtimes require Codex runtime protocol 2; upgrade existing sidecars before
 reconnecting. If another external client has the same native thread open,
 close that thread there first: Codex can otherwise keep the old configuration.
-Sibling threads can stay open. CLI access edits within the same surface and
+A running Sedes-managed TUI blocks these changes; close it first. A bound
+conversation without materialized history needs its first message before a
+refresh can safely release it. Sibling threads can stay open. CLI access edits within the same surface and
 mode continue to apply live.
 
 The offline `npm run probe:codex-tool-refresh` regression uses the pinned Codex

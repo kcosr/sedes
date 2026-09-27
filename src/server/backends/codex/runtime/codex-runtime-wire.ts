@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { isCodexClientRequestMethod, isCodexServerRequestMethod, isCodexServerNotificationMethod, decodeCodexServerRequestParams, admitCodexServerNotification, type CodexClientRequestMethod, type CodexServerRequestMethod, type CodexServerNotificationMethod } from "../../../provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import type { CodexRuntimeEvent, CodexRuntimeOutcome, CodexRuntimeSnapshot } from "./codex-runtime-protocol.js";
-import { CODEX_RUNTIME_PROTOCOL_VERSION, codexRuntimeMethod } from "./codex-runtime-protocol.js";
+import { codexRuntimeMethod } from "./codex-runtime-protocol.js";
 
 const identifier = z.string().min(1).max(512);
 const generation = z.number().int().positive();
@@ -27,7 +27,7 @@ const outcomeSchema = z.discriminatedUnion("status", [
 ]);
 export const codexRuntimeOutcomeSchema: z.ZodType<CodexRuntimeOutcome> = outcomeSchema;
 export const codexRuntimeOutcomeReferencesSchema = z.array(z.strictObject({ status: z.enum(["pending", "completed", "failed"]), operationId: identifier, method })).max(128);
-export const codexRuntimeSnapshotSchema: z.ZodType<CodexRuntimeSnapshot> = z.strictObject({ protocolVersion: z.literal(CODEX_RUNTIME_PROTOCOL_VERSION), runtimeId: identifier, lifecycle: lifecycleSchema, runtimeAssessment: assessmentSchema.nullable(), pendingRequests: z.array(pendingRequestSchema).max(128), outcomes: z.array(z.strictObject({ status: z.enum(["pending", "completed", "failed"]), operationId: identifier, method })).max(128) });
+export const codexRuntimeSnapshotSchema: z.ZodType<CodexRuntimeSnapshot> = z.strictObject({ protocolVersion: z.number().int().positive(), runtimeId: identifier, lifecycle: lifecycleSchema, runtimeAssessment: assessmentSchema.nullable(), pendingRequests: z.array(pendingRequestSchema).max(128), outcomes: z.array(z.strictObject({ status: z.enum(["pending", "completed", "failed"]), operationId: identifier, method })).max(128) });
 const notificationSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("decoded_notification"), generation, sequence, method: notificationMethod, params: z.unknown(), emittedAtMs: sequence.optional() }).transform(value => {
     const admission = admitCodexServerNotification(value.method, value.params);

@@ -228,11 +228,20 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const before = { enabled: false, enabledToolIds: [], presentation: { surface: "native", mode: "individual" } } as const;
     const refresh = policyRefreshGateway(replacement, id, before);
     await expect(refresh.mutate({ ...before, enabled: true, enabledToolIds: ["thread.status"] })).rejects.toMatchObject({
-      code: failure === "busy" ? "invalid_transition" : "operation_outcome_uncertain",
+      code: failure === "busy" ? "invalid_transition" : "runtime_unavailable",
+      ...(failure === "failure" ? { retryable: true, message: expect.stringContaining("policy was not changed") } : {}),
     });
     expect(refresh.update).not.toHaveBeenCalled();
     expect(refresh.policy()).toMatchObject({ ...before, revision: 1 });
     expect(f.sessions[0]!.closed).toBe(false);
+    if (failure === "failure") {
+      // Proven local retirement leaves admission usable: retry directly,
+      // without a server restart or changing the expected policy revision.
+      await refresh.mutate({ ...before, enabled: true, enabledToolIds: ["thread.status"] });
+      expect(refresh.update).toHaveBeenCalledOnce();
+      expect(refresh.policy()).toMatchObject({ enabled: true, revision: 2 });
+      expect(f.sessions[0]!.closed).toBe(true);
+    }
   });
 
   it("admits a Native MCP server only through the sidecar's own validator", async () => {

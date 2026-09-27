@@ -3,7 +3,7 @@ import { CodexRuntimeHost } from "../../src/server/backends/codex/runtime/codex-
 import { CodexRuntimeSessions } from "../../src/server/backends/codex/runtime/codex-runtime-sessions.js";
 import { CodexRuntimeClient } from "../../src/server/backends/codex/runtime/codex-runtime-client.js";
 import { CodexSharedClientFacade } from "../../src/server/backends/codex/codex-client-facade.js";
-import { codexRuntimeMethod, type CodexRuntimeAuthority, type CodexRuntimeEvent, type CodexRuntimeSnapshot } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
+import { codexRuntimeMethod, type CodexRuntimeAuthority, type CodexRuntimeEvent } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
 import type { CodexRpcRequestReceipt, CodexInboundServerRequest } from "../../src/server/backends/codex/rpc/codex-rpc-client.js";
 import { decodeCodexServerRequestParams } from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import type { CodexRuntimeReceiptSink } from "../../src/server/backends/codex/runtime/codex-runtime-receipt-store.js";
@@ -32,7 +32,7 @@ describe("persistent Codex runtime ownership", () => {
   it("rejects a retained host predating native unsubscribe configuration invalidation", async () => {
     const f = fixture();
     const snapshot = await f.connect();
-    vi.spyOn(f.host, "attach").mockResolvedValue({ ...snapshot, protocolVersion: 1 as CodexRuntimeSnapshot["protocolVersion"] });
+    vi.spyOn(f.host, "attach").mockResolvedValue({ ...snapshot, protocolVersion: 1 as typeof snapshot.protocolVersion });
     const remote = new CodexRuntimeClient({ connection: f.host, authority, receipts: sink });
     await expect(remote.start()).rejects.toThrow("codex_runtime_protocol_mismatch");
     expect(remote.client.lifecycleSnapshot().state).not.toBe("ready");

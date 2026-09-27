@@ -475,6 +475,8 @@ try {
         itemsView: "notLoaded",
       });
     } catch (error) {
+      assert.equal(error.rpcError?.code, -32600);
+      assert.match(error.rpcError.message, /not materialized yet/);
       return {
         id,
         preflightRejected: true,

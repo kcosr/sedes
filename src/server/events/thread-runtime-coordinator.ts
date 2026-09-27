@@ -191,6 +191,14 @@ export class ThreadProviderOutputUndeliveredError extends Error {
   }
 }
 
+/** Local retirement succeeded, but the provider did not confirm residency release. */
+export class ThreadProviderReleaseFailedError extends Error {
+  constructor(cause: unknown) {
+    super("The provider could not confirm release of the thread session.", { cause });
+    this.name = "ThreadProviderReleaseFailedError";
+  }
+}
+
 export class ThreadRuntimeMaintenanceStaleError extends Error {
   constructor() {
     super("The thread runtime changed after maintenance preview.");
@@ -447,7 +455,7 @@ export class ThreadRuntimeCoordinator {
           error instanceof BackendError || error instanceof DomainError ||
           error instanceof ThreadRuntimeRetirementUnprovenError
         ) throw error;
-        throw new ThreadRuntimeRetirementUnprovenError(error);
+        throw new ThreadProviderReleaseFailedError(error);
       }
       reportBackgroundError(`Release of thread ${applicationThreadId} provider residency`)(error);
       return;
