@@ -1307,7 +1307,9 @@ normalized integration surface:
   `process_lost` on fresh launches and never on reattachment, the Stop
   bound, dropped live meta rows, and image reads live against reload with
   their publication and failure paths. `tests/unit/claude-history-projector.test.ts`
-  covers image-read recognition, pairing, pending reads, and the item cap;
+  covers image-read recognition, pairing, pending reads, and the item cap, and
+  `tests/unit/claude-viewed-images.test.ts` covers strict decoding, scoped
+  associations, and the per-handle publication record;
 - `tests/unit/claude-native-transcript.test.ts` compares the transcript reader
   with the pinned SDK over synthetic native fixtures. The fixtures cover
   startup-message tips, parallel dead ends and tool results linked only by
