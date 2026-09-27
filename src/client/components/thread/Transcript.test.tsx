@@ -4301,7 +4301,7 @@ describe("Transcript viewed images", () => {
     const snapshot = makeSnapshot(["turn-1"], false);
     snapshot.turnsById["turn-1"] = {
       ...snapshot.turnsById["turn-1"]!,
-      orderedItemIds: ["command-1", "viewed-1", "image-1", "command-2", "viewed-2"],
+      orderedItemIds: ["command-1", "viewed-1", "image-1", "command-2", "viewed-2", "generated-1"],
     };
     const command = (id: string) => ({
       id,
@@ -4328,6 +4328,7 @@ describe("Transcript viewed images", () => {
         kind: "image",
         status: "completed",
         revision: 1,
+        origin: { kind: "viewed", capture: "file_snapshot" },
         image: {
           representation: "artifact",
           artifactId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -4346,6 +4347,23 @@ describe("Transcript viewed images", () => {
         revision: 1,
         fileName: { text: "unavailable.png" },
       },
+      // Pairing keys on origin, so a generated image is never disclosed by a view.
+      "generated-1": {
+        id: "generated-1",
+        turnId: "turn-1",
+        kind: "image",
+        status: "completed",
+        revision: 1,
+        origin: { kind: "generated" },
+        image: {
+          representation: "artifact",
+          artifactId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          mimeType: "image/png",
+          byteSize: 24,
+          sha256: "b".repeat(64),
+          alt: { text: "Generated chart" },
+        },
+      },
     };
     const { container } = render(
       <Transcript
@@ -4356,7 +4374,10 @@ describe("Transcript viewed images", () => {
     const rows = screen.getAllByTestId("viewed-image-group");
     expect(rows).toHaveLength(2);
     expect(screen.getAllByTestId("activity-group")).toHaveLength(2);
-    expect(container.querySelector('[data-item-kind="image"]')).toBeNull();
+    const standalone = container.querySelectorAll('[data-item-kind="image"]');
+    expect(standalone).toHaveLength(1);
+    expect(standalone[0]).toHaveAttribute("data-item-id", "generated-1");
+    expect(rows[1]).not.toContainElement(standalone[0] as HTMLElement);
     const captured = screen.getByRole("button", { name: "Viewed image · captured.png" });
     expect(captured).toHaveAttribute("aria-expanded", "false");
     expect(rows[1]).toHaveTextContent("Viewed image · unavailable.png");
@@ -4364,7 +4385,7 @@ describe("Transcript viewed images", () => {
 
     fireEvent.click(captured);
     const images = container.querySelectorAll('[data-item-kind="image"]');
-    expect(images).toHaveLength(1);
+    expect(images).toHaveLength(2);
     expect(rows[0]).toContainElement(images[0] as HTMLElement);
   });
 });

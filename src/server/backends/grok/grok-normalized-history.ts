@@ -1475,6 +1475,7 @@ function generatedImageItem(
     sourceOrder: 0,
     status: "completed",
     semanticKind: "image",
+    origin: { kind: "generated" },
     image: {
       representation: "artifact",
       artifactId: descriptor.artifactId,
@@ -1496,6 +1497,7 @@ function omittedGeneratedImageItem(
     sourceOrder: 0,
     status: "completed",
     semanticKind: "image",
+    origin: { kind: "generated" },
     image: {
       representation: "omitted",
       mimeType: "image/jpeg",

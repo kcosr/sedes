@@ -274,6 +274,7 @@ describe("normalized conversation renderers", () => {
         item={{
           ...common,
           kind: "image",
+          origin: { kind: "generated" },
           image: {
             representation: "artifact",
             artifactId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -351,7 +352,7 @@ describe("normalized conversation renderers", () => {
           assistantLabel: "Assistant",
           loadOutputArtifactContent: async () => content,
         }}
-        item={{ ...common, kind: "image", image: artifact }}
+        item={{ ...common, kind: "image", origin: { kind: "generated" }, image: artifact }}
       />,
     );
     act(() => intersection.intersect());
@@ -411,6 +412,7 @@ describe("normalized conversation renderers", () => {
         item={{
           ...common,
           kind: "image",
+          origin: { kind: "generated" },
           image: {
             representation: "artifact",
             artifactId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
@@ -449,6 +451,7 @@ describe("normalized conversation renderers", () => {
     const item = {
       ...common,
       kind: "image" as const,
+      origin: { kind: "generated" as const },
       image: {
         representation: "artifact" as const,
         artifactId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
@@ -491,6 +494,7 @@ describe("normalized conversation renderers", () => {
         item={{
           ...common,
           kind: "image",
+          origin: { kind: "generated" },
           image: {
             representation: "artifact",
             artifactId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
@@ -520,6 +524,7 @@ describe("normalized conversation renderers", () => {
         item={{
           ...common,
           kind: "image",
+          origin: { kind: "generated" },
           image: {
             representation: "artifact",
             artifactId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -539,6 +544,7 @@ describe("normalized conversation renderers", () => {
         item={{
           ...common,
           kind: "image",
+          origin: { kind: "generated" },
           image: {
             representation: "omitted",
             mimeType: "image/png",

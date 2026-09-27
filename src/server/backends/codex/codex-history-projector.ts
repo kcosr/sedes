@@ -134,6 +134,7 @@ export function codexViewedImageItem(
     ...identity,
     ...terminalItem,
     semanticKind: "image",
+    origin: { kind: "viewed", capture: "file_snapshot" },
     image: {
       representation: "artifact",
       artifactId: descriptor.artifactId,
@@ -182,6 +183,7 @@ function generatedImageItem(
     ...identity,
     ...terminalItem,
     semanticKind: "image",
+    origin: { kind: "generated" },
     image: {
       representation: "artifact",
       artifactId: descriptor.artifactId,
@@ -206,6 +208,7 @@ function omittedGeneratedImageItem(
     ...identity,
     ...terminalItem,
     semanticKind: "image",
+    origin: { kind: "generated" },
     image: {
       representation: "omitted",
       mimeType: "image/png",
@@ -369,6 +372,7 @@ function omitPendingGeneratedImages(
       ...publication.identity,
       ...terminalItem,
       semanticKind: "image",
+      origin: { kind: "generated" },
       image: { representation: "omitted", reason: "unavailable" },
     });
   }

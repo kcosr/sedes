@@ -25,6 +25,7 @@ const image: ImageItem = {
   kind: "image",
   revision: 1,
   status: "completed",
+  origin: { kind: "viewed", capture: "file_snapshot" },
   image: {
     representation: "artifact",
     artifactId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",

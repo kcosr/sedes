@@ -23,7 +23,7 @@ import {
   turnFailureSchema,
   unifiedDiffSchema,
 } from "./payload.js";
-import { normalizedImageSchema } from "./output-artifacts.js";
+import { imageItemOriginSchema, normalizedImageSchema } from "./output-artifacts.js";
 import {
   MAXIMUM_NORMALIZED_ITEMS_PER_TURN,
   MAXIMUM_USER_MESSAGE_CONTENT_PARTS,
@@ -362,6 +362,7 @@ const schemas = [
   z.strictObject({
     ...backendItemBaseShape,
     semanticKind: z.literal("image"),
+    origin: imageItemOriginSchema,
     image: normalizedImageSchema,
   }),
   z.strictObject({

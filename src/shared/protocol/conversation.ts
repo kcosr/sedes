@@ -26,7 +26,7 @@ import {
   truncationInfoSchema,
   unifiedDiffSchema,
 } from "./payload.js";
-import { normalizedImageSchema } from "./output-artifacts.js";
+import { imageItemOriginSchema, normalizedImageSchema } from "./output-artifacts.js";
 import {
   MAXIMUM_PROVIDER_FEATURES_PER_CONVERSATION_ITEM,
   MAXIMUM_PROVIDER_FEATURES_PER_THREAD,
@@ -445,6 +445,7 @@ export const collaborationItemSchema = z.strictObject({
 export const imageItemSchema = z.strictObject({
   ...conversationItemBaseShape,
   kind: z.literal("image"),
+  origin: imageItemOriginSchema,
   image: normalizedImageSchema,
 });
 /** A provider viewed an image file; its captured image, if any, follows it. */

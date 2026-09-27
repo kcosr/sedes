@@ -2013,7 +2013,10 @@ export function Transcript({
                         const next = viewItemsById?.[
                           turn.orderedItemIds[itemIndex + 1] ?? ""
                         ];
-                        const image = next?.kind === "image" ? next : undefined;
+                        const image =
+                          next?.kind === "image" && next.origin.kind === "viewed"
+                            ? next
+                            : undefined;
                         if (image) disclosedImageIds.add(image.id);
                         flushActivity();
                         presentation.push(
