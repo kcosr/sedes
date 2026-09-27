@@ -193,6 +193,21 @@ export function useThreadPeek(options?: {
   return { peekId, position: peek, panelRef, bind, hide };
 }
 
+function threadInventoryStateInWords(
+  thread: NormalizedApplicationThreadSummary,
+): string | undefined {
+  if (thread.inventoryState === "snoozed") {
+    return thread.snoozedUntil !== undefined
+      ? `Snoozed · wakes ${futureTimeLabel(thread.snoozedUntil)}`
+      : "Snoozed";
+  }
+  if (thread.inventoryState === "settled") {
+    const relative = shortRelativeTime(thread.stateChangedAt);
+    return relative === "now" ? "Settled just now" : `Settled ${relative} ago`;
+  }
+  return undefined;
+}
+
 /** The thread's state as one human sentence fragment for the peek panel. */
 export function threadStateInWords(
   thread: NormalizedApplicationThreadSummary,
@@ -229,17 +244,18 @@ export function threadStateInWords(
     glyphKind === "background-agents" ||
     glyphKind === "background-commands"
   ) {
-    return flatRowGlyphLabel(thread, backgroundWorkCurrent);
+    // The leading glyph has one priority, but the peek still explains the
+    // thread's inventory state, connection and pending input underneath it.
+    return [
+      flatRowGlyphLabel(thread, backgroundWorkCurrent),
+      threadInventoryStateInWords(thread),
+      thread.backingState === "unbound" ? "Draft" : undefined,
+      thread.runState === "disconnected" ? "Disconnected" : undefined,
+      thread.queuedInputCount > 0 ? `${thread.queuedInputCount} queued` : undefined,
+    ].filter(Boolean).join(" · ");
   }
-  if (thread.inventoryState === "snoozed") {
-    return thread.snoozedUntil !== undefined
-      ? `Snoozed · wakes ${futureTimeLabel(thread.snoozedUntil)}`
-      : "Snoozed";
-  }
-  if (thread.inventoryState === "settled") {
-    const relative = shortRelativeTime(thread.stateChangedAt);
-    return relative === "now" ? "Settled just now" : `Settled ${relative} ago`;
-  }
+  const inventoryState = threadInventoryStateInWords(thread);
+  if (inventoryState) return inventoryState;
   if (thread.backingState === "unbound") return "Draft";
   if (thread.runState === "disconnected") return "Disconnected";
   return thread.queuedInputCount > 0

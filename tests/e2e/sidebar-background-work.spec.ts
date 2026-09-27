@@ -47,6 +47,13 @@ test("sidebar prioritizes turns, unseen completion, subagents, and background co
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
   await expect(glyph.locator(".comet-spinner")).toHaveCSS("animation-duration", "1.8s");
   await capture(page, testInfo, "sidebar-background-agents.png");
+  await row.getByTestId("thread-row-link").hover();
+  const peek = page.getByTestId("thread-peek");
+  await expect(peek).toContainText("Background work · 1 subagent, 1 command");
+  await expect(peek.locator('.thread-peek-row-icon[data-glyph="background-agents"]')).toBeVisible();
+  await capture(page, testInfo, "sidebar-background-peek.png");
+  await page.mouse.move(900, 100);
+  await expect(peek).toHaveCount(0);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(glyph.locator(".comet-spinner")).toHaveCSS("animation-name", "none");
   await capture(page, testInfo, "sidebar-background-reduced-motion.png");

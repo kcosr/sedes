@@ -64,6 +64,8 @@
   completions take priority; acknowledging completion reveals ongoing work
   without changing Send, Steer, Queue, or Stop behavior. Claude supplies this
   live inventory today; stale or unavailable activity is not shown as live.
+  Unacknowledged completion dots now also take priority over draft, snoozed,
+  automation, settled, and disconnected glyphs until acknowledged.
 
 - Show a collapsed **Viewed image** row when Claude or Pi opens an image file
   with its built-in read tool: PNG, JPEG, GIF, or WebP, and BMP on Pi. Expand

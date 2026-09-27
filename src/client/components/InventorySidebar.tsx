@@ -4304,7 +4304,6 @@ function ThreadRow({
    */
   const restoreRowFocus = useRef(false);
   const automation = thread.automation ?? undefined;
-  const unseen = thread.attention.unseenCompletion;
   const glyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
   const glyphLabel = flatRowGlyphLabel(thread, backgroundWorkCurrent);
   const unseenOwnsGlyph = glyphKind === "unseen";
