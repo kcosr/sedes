@@ -15,6 +15,12 @@ export type OutputImageMediaType = (typeof OUTPUT_IMAGE_MEDIA_TYPES)[number];
 
 export const MAXIMUM_OUTPUT_ARTIFACT_PUBLICATION_KEY_BYTES = 512;
 
+/**
+ * Serialized bytes a projection counts for one viewed-image child: its bounded
+ * descriptor with display file name, its record key, and its turn reference.
+ */
+export const VIEWED_IMAGE_CHILD_RESERVATION_BYTES = 2_048;
+
 export type OutputImageArtifactDescriptor = Readonly<{
   artifactId: string;
   mediaType: OutputImageMediaType;

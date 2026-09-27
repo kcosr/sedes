@@ -255,9 +255,10 @@ runs. Its result settles it:
   uses the first image part. The media type follows the bytes and may differ
   from the extension.
 - An error fails the row with category `unavailable` and a Sedes-written
-  message: `claude_image_read_failed` ("Claude could not read this image.") or
-  `pi_viewed_image_read_failed` ("Pi could not read this image."). Provider
-  error text can name absolute paths and is never copied.
+  message: `claude_viewed_image_read_failed` ("Claude could not read this
+  image.") or `pi_viewed_image_read_failed` ("Pi could not read this image.").
+  Provider error text can name absolute paths and is never copied. A read still
+  without a result when its turn ends is `interrupted`.
 - A text-only result, or bytes that are not a supported image within 16 MiB,
   complete the row with no image. Pi also adds none when its non-vision-model
   note shows the model did not see the image. Pi's `blockImages` setting
@@ -277,26 +278,29 @@ never change which turns a window or page selects: Claude counts a fixed 2 KiB
 for every completed image read, and Pi measures turns without their image
 children.
 
-For Claude, the first snapshot, `history()`, `locateTurn()`, and `read()` each
-wait at most two seconds for their four newest missing images. The rest publish
-in the background, two at a time, and arrive as ordinary live updates inside
-the live window or on the next fetch. A new live result publishes its image
-before its delta, so the row and image arrive together. A shown image keeps its
-slot in the turn, so a turn with k images reaches the per-turn item limit k
-items earlier. A failed key only suppresses publish retries; a lookup still
-finds an image another reader published.
+Readers share one budget on every backend: `history()` and `locateTurn()` wait
+at most two seconds for the four newest missing images of what they return, as
+do Claude's first snapshot and `read()`. Pi's first snapshot and unattached
+`read()` only look images up, and Pi backfills the snapshot in the background.
+The rest publish in the background and arrive as ordinary live updates inside
+the live window, or on the next fetch. Claude publishes two at a time with at
+most 256 queued; Pi publishes serially, newest first, at most 32 per seed or
+call and 256 queued per handle. Anything beyond a queue waits for a later read
+or message.
 
-For Pi, only the conversation handle publishes: a late live child is delivered
-as `item_completed` only, each projection seed backfills at most 32 missing
-children in the background, `history()` publishes at most 16 per page, and
-`read()` and `locateTurn()` only look images up. A row seeded before its result
-persists completes when the result is saved, or becomes `interrupted`
+A new Claude live result publishes its image before its delta, so the row and
+image arrive together. A shown Claude image keeps its slot in the turn, so a
+turn with k images reaches the per-turn item limit k items earlier. A late Pi
+live child is delivered as `item_completed` only. A Pi row seeded before its
+result persists completes when the result is saved, or becomes `interrupted`
 (`pi_tool_result_missing`) when its turn settles.
 
-Each handle remembers up to 4096 failed keys, so a failed publication is
-retried only after the thread is reattached. Closing a handle stops further
-publication; Pi also waits for publications already started before disposing
-its session. Details are in [Claude
+An attached handle remembers up to 4096 failed keys and does not retry them
+until the thread is reattached; Claude's unattached `read()` starts fresh each
+time. A failed key only suppresses publish retries, so a lookup still finds an
+image another reader published. Closing a handle stops further publication; Pi
+also waits for publications already started before disposing its session.
+Details are in [Claude
 internals](backends/claude.md#semantic-projection-and-terminal-receipts) and
 [Pi internals](backends/pi.md#viewed-images).
 

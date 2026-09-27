@@ -42,6 +42,7 @@ import type {
   ClaudeTerminalStatus,
 } from "./claude-thread-repository.js";
 import { USER_FORK_CONTEXT_BOUNDARY } from "../fork-context-boundary.js";
+import { VIEWED_IMAGE_CHILD_RESERVATION_BYTES } from "../../output-artifacts/contracts.js";
 import {
   inspectClaudeForkContextBoundary,
   type ClaudeForkBoundaryAuthentication,
@@ -1229,12 +1230,6 @@ interface CompletedImageRead {
   readonly image: ClaudeReadResultImage;
 }
 
-/**
- * Covers one image item with its display file name, its record key, and its
- * turn reference. Selection counts it for every completed image read whether
- * or not the image is published yet, so a window never moves when it is.
- */
-const CLAUDE_VIEWED_IMAGE_RESERVATION_BYTES = 2_048;
 
 type SelectedTimeline = Pick<
   BackendConversationSnapshot,
@@ -1257,7 +1252,7 @@ function selectionBytes(
   selected: SelectedTimeline & Partial<Pick<BackendConversationSnapshot, "runState" | "activeBackendTurnId">>,
 ): number {
   return serializedUtf8Bytes(selected) +
-    imageReadsIn(timeline, selected.itemsById).length * CLAUDE_VIEWED_IMAGE_RESERVATION_BYTES;
+    imageReadsIn(timeline, selected.itemsById).length * VIEWED_IMAGE_CHILD_RESERVATION_BYTES;
 }
 
 /**

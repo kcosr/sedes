@@ -51,7 +51,10 @@ import type {
 } from "../contracts.js";
 import { BackendError } from "../contracts.js";
 import type { ExecutionScope } from "../../execution/contracts.js";
-import type { OutputArtifactPublisher } from "../../output-artifacts/contracts.js";
+import {
+  VIEWED_IMAGE_CHILD_RESERVATION_BYTES,
+  type OutputArtifactPublisher,
+} from "../../output-artifacts/contracts.js";
 import type {
   CodexClientLifecycleSnapshot,
   CodexLifecycleListener,
@@ -105,7 +108,6 @@ import {
 } from "../staged-attachment-manifest.js";
 import {
   CodexHistoryProjectionError,
-  CODEX_VIEWED_IMAGE_RESERVATION_BYTES,
   codexNativeItemCoordinate,
   codexBackendTurnId,
   materializeCodexGeneratedImagePublications,
@@ -3554,7 +3556,7 @@ export class CodexConversationHandle implements ConversationHandle {
       const turnAdditions = additionsByTurn.get(image.backendTurnId) ?? 0;
       if (existingTurn.orderedBackendItemIds.length >= CODEX_C1_MAX_ITEMS_PER_TURN ||
           (this.#reservedViewedImagesByTurn.get(image.backendTurnId) ?? 0) <= turnAdditions ||
-          this.#reservedViewedImageBytes < (additions.length + 1) * CODEX_VIEWED_IMAGE_RESERVATION_BYTES) continue;
+          this.#reservedViewedImageBytes < (additions.length + 1) * VIEWED_IMAGE_CHILD_RESERVATION_BYTES) continue;
       additionsByTurn.set(image.backendTurnId, turnAdditions + 1);
       itemsById[image.backendItemId] = image;
       additions.push(image);
@@ -3573,7 +3575,7 @@ export class CodexConversationHandle implements ConversationHandle {
     this.#snapshotWindow = parsed.data;
     this.#projectionSerializedBytes = bytes;
     this.#projectedItemCount += additions.length;
-    this.#reservedViewedImageBytes = Math.max(0, this.#reservedViewedImageBytes - additions.length * CODEX_VIEWED_IMAGE_RESERVATION_BYTES);
+    this.#reservedViewedImageBytes = Math.max(0, this.#reservedViewedImageBytes - additions.length * VIEWED_IMAGE_CHILD_RESERVATION_BYTES);
     for (const { backendTurnId } of additions) {
       const reserved = (this.#reservedViewedImagesByTurn.get(backendTurnId) ?? 0) - 1;
       if (reserved > 0) this.#reservedViewedImagesByTurn.set(backendTurnId, reserved);
@@ -3960,7 +3962,7 @@ export class CodexConversationHandle implements ConversationHandle {
         const released = this.#reservedViewedImagesByTurn.get(backendTurnId) ?? 0;
         this.#reservedViewedImagesByTurn.delete(backendTurnId);
         this.#reservedViewedImageBytes = Math.max(0,
-          this.#reservedViewedImageBytes - released * CODEX_VIEWED_IMAGE_RESERVATION_BYTES);
+          this.#reservedViewedImageBytes - released * VIEWED_IMAGE_CHILD_RESERVATION_BYTES);
       }
       for (const { newItem } of replacements) {
         snapshot.itemsById[newItem.backendItemId] = newItem;

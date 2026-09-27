@@ -53,9 +53,10 @@ import { USER_FORK_CONTEXT_BOUNDARY_TEXT } from "../fork-context-boundary.js";
 import { MAXIMUM_PROVIDER_FRAME_BYTES } from "../../provider-protocol/transport/framed-message-limits.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import { DomainError } from "../../domain/errors.js";
-import type {
-  OutputArtifactPublisher,
-  OutputImageArtifactDescriptor,
+import {
+  VIEWED_IMAGE_CHILD_RESERVATION_BYTES,
+  type OutputArtifactPublisher,
+  type OutputImageArtifactDescriptor,
 } from "../../output-artifacts/contracts.js";
 import {
   CODEX_MAXIMUM_GENERATED_IMAGE_BYTES,
@@ -105,10 +106,6 @@ export interface CodexProjectedItemCoordinate {
   readonly orderedBackendItemIds: readonly string[];
 }
 
-// Covers a final bounded descriptor with its display file name, its record key
-// and its turn reference. Empty reserved order positions never appear as
-// browser items.
-export const CODEX_VIEWED_IMAGE_RESERVATION_BYTES = 2_048;
 
 export interface CodexViewedImageCandidate {
   readonly nativeTurnId: string;
@@ -712,11 +709,11 @@ export function projectCodexHistory(
   // Reserve each eventual child's bounded bytes before admitting a capture.
   // Previews never shrink or fail a projection; without capacity for every
   // eventual child, this pass admits no capture and keeps the notices.
-  if (provisionalSnapshotBytes + pendingViewedImages.length * CODEX_VIEWED_IMAGE_RESERVATION_BYTES >
+  if (provisionalSnapshotBytes + pendingViewedImages.length * VIEWED_IMAGE_CHILD_RESERVATION_BYTES >
       MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES) {
     pendingViewedImages.length = 0;
   }
-  const reservedViewedImageBytes = pendingViewedImages.length * CODEX_VIEWED_IMAGE_RESERVATION_BYTES;
+  const reservedViewedImageBytes = pendingViewedImages.length * VIEWED_IMAGE_CHILD_RESERVATION_BYTES;
   try {
     const validatedCandidate =
       backendConversationSnapshotSchema.parse(candidate);
