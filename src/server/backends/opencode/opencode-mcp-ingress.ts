@@ -15,10 +15,11 @@ interface Stream { readonly id: string; readonly response: ServerResponse; reado
 export interface OpenCodeMcpChannel {
   readonly environment: Readonly<Record<string, string>>;
   readonly revoked: boolean;
+  readonly revokedAt: number | undefined;
   readonly connected: boolean;
   revoke(): void;
 }
-interface ChannelState { readonly credential: string; readonly input: ChannelInput; revoked: boolean;
+interface ChannelState { readonly credential: string; readonly input: ChannelInput; revoked: boolean; revokedAt?: number;
   stream?: Stream; expiration?: ReturnType<typeof setTimeout>; calls: number; }
 
 /** Loopback-only provider-private audience. Native session IDs are routing, never credentials. */
@@ -38,6 +39,7 @@ export class OpenCodeMcpIngress {
     this.#channels.set(credential, state); this.#expire(state);
     return { environment: Object.freeze({ [OPENCODE_MCP_ENDPOINT]: endpoint, [OPENCODE_MCP_CREDENTIAL]: credential }),
       get revoked() { return state.revoked; },
+      get revokedAt() { return state.revokedAt; },
       get connected() { return !!state.stream && !state.stream.controller.signal.aborted && !state.revoked; }, revoke: () => this.#revoke(state) };
   }
   async close(): Promise<void> {
@@ -68,7 +70,7 @@ export class OpenCodeMcpIngress {
   }
   #revoke(state: ChannelState): void {
     if (state.revoked) return;
-    state.revoked = true; clearTimeout(state.expiration); this.#endStream(state);
+    state.revoked = true; state.revokedAt = Date.now(); clearTimeout(state.expiration); this.#endStream(state);
     this.#channels.delete(state.credential);
   }
   #endStream(state: ChannelState): void {

@@ -36,6 +36,18 @@ function textOf(events: SequencedBackendEvent[], kind: "assistant_message" | "re
 }
 
 describe("OpenCode conversation authority and finite discovery", () => {
+  it("publishes an actionable unavailable CLI diagnostic without replacing ordinary conversation controls", async () => {
+    const current = await attached();
+    vi.spyOn(current.context.executionEnvironment, "diagnostic").mockReturnValue("Sedes CLI tools are unavailable; messages remain available.");
+    const events: BackendConversationEvent[] = [];
+    const projection = await current.handle.establishProjection({ signal: signal() });
+    const unsubscribe = projection.subscribeFromNext(value => events.push(value.event));
+    expect(events).toContainEqual(expect.objectContaining({ type: "notice", notice: expect.objectContaining({
+      id: "opencode-tools-unavailable", tone: "warning", message: expect.objectContaining({ text: "Sedes CLI tools are unavailable; messages remain available." }),
+    }) }));
+    await current.handle.interrupt({ applicationOperationId: "cli-diagnostic-stop", deadlineAt: Date.now() + 1_000 });
+    expect(current.interrupts()).toHaveLength(1); unsubscribe();
+  });
   it("keeps an accepted Stop private receipt across handle replacement without interrupting later work", async () => {
     const current = await attached();
     const operation = { applicationOperationId: "stop-private-replay", deadlineAt: Date.now() + 30_000 };

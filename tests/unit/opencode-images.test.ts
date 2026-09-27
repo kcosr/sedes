@@ -76,6 +76,27 @@ describe("OpenCode canonical composer attachments", () => {
     const result = await prepareOpenCodeAttachments(input, { key, operationId, text: "Work", acceptsImages: false });
     expect(result.files).toBeUndefined(); expect(input.attachmentBytes!.read).not.toHaveBeenCalled();
   });
+  it("rejects several individually valid images before reading bytes or producing an unreadable native record", async () => {
+    const original = attachmentInput();
+    const attachments = Array.from({ length: 3 }, () => ({ ...original.attachments[0]!, id: randomUUID(), byteSize: 9 * 1_024 * 1_024 }));
+    const input = { ...original, attachments, attachmentEvidence: { resolve: () => attachments.map(({ agentPath: _path, ...fact }) => fact) } };
+    await expect(prepareOpenCodeAttachments(input, { key, operationId, text: "Look", acceptsImages: true })).rejects.toMatchObject({
+      crossedSubmissionBoundary: false, backendCode: "opencode_attachments_unavailable", safeMessage: expect.stringContaining("16 MiB"),
+    });
+    expect(input.attachmentBytes!.read).not.toHaveBeenCalled();
+  });
+  it("allows multiple images totaling 16 MiB without charging ordinary staged file bytes to the image bound", async () => {
+    const original = attachmentInput(), bytes = Buffer.concat([png, Buffer.alloc(4 * 1_024 * 1_024 - png.length)]);
+    const images = Array.from({ length: 4 }, () => ({ ...original.attachments[0]!, id: randomUUID(), byteSize: bytes.length, sha256: digest(bytes) }));
+    const file = { ...original.attachments[0]!, id: randomUUID(), kind: "file" as const, mediaType: "application/octet-stream" as const, byteSize: 25 * 1_024 * 1_024 };
+    const attachments = [...images, file];
+    const input = { ...original, attachments, attachmentEvidence: { resolve: () => attachments.map(({ agentPath: _path, ...fact }) => fact) },
+      attachmentBytes: { read: vi.fn(async () => bytes) } };
+    const result = await prepareOpenCodeAttachments(input, { key, operationId, text: "Look", acceptsImages: true });
+    expect(result.files).toHaveLength(4);
+    expect(input.attachmentBytes.read).toHaveBeenCalledTimes(4);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(24 * 1_024 * 1_024);
+  });
 });
 describe("OpenCode viewed native images", () => {
   it("recognizes exact read contract while keeping paths and inline bytes private", async () => {

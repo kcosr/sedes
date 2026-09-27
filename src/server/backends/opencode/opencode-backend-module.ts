@@ -120,7 +120,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
       readDefinitions: threadId => {
         if (!context.executionEnvironmentVariables) throw new Error("opencode_environment_snapshot_unavailable");
         return context.executionEnvironmentVariables(threadId);
-      }, resolve: createThreadEnvironmentResolver(context), cli: new OpenCodeCliEnvironment({ availability: context.agentToolCli,
+      }, resolve: createThreadEnvironmentResolver(context), cli: new OpenCodeCliEnvironment({ ownership: configuration.connection.ownership, availability: context.agentToolCli,
         sourceCapabilities: context.agentToolSourceCapabilities, tools: context.agentTools }) });
     const repository = new OpenCodeThreadRepository({ database: context.database, scope: context.scope,
       backendInstanceId: context.instance.id, nativeNamespaceKey: namespace });

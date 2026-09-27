@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { composerAttachmentArraySchema, type ComposerAttachmentDescriptor } from "../../../shared/protocol/composer-attachments.js";
+import { composerAttachmentArraySchema, MAXIMUM_COMPOSER_ATTACHMENT_IMAGE_BYTES, type ComposerAttachmentDescriptor } from "../../../shared/protocol/composer-attachments.js";
 import { inspectSupportedRasterImage } from "../../images/raster-image-inspector.js";
 import { stagedComposerAttachmentSchema, type CanonicalComposerAttachmentEvidence, type SteerTurnInput, type SubmitTurnInput } from "../contracts.js";
 import { inspectStagedAttachmentManifest, stagedAttachmentManifest } from "../staged-attachment-manifest.js";
@@ -30,6 +30,12 @@ export async function prepareOpenCodeAttachments(input: SubmitTurnInput | SteerT
     readonly acceptsImages: boolean; readonly signal?: AbortSignal }): Promise<{ text: string; files?: OpenCodeNativePromptInput["files"] }> {
   if (!input.attachments.length) return { text: options.text };
   const facts = openCodeAttachmentEvidence(input);
+  // Native admission, events and history inline all images in one record. Keep
+  // their combined decoded size within one maximal image, which also fits the
+  // cumulative head/page/anchor/event acquisition budget after base64 encoding.
+  if (facts.reduce((total, item) => total + (item.kind === "image" ? item.byteSize : 0), 0) > MAXIMUM_COMPOSER_ATTACHMENT_IMAGE_BYTES) {
+    throw unavailable("OpenCode image attachments must total 16 MiB or less per message.");
+  }
   const files: NonNullable<OpenCodeNativePromptInput["files"]>[number][] = [];
   try {
     for (const [index, attachment] of input.attachments.entries()) {
@@ -58,5 +64,6 @@ export function inspectOpenCodeAttachmentEnvelope(text: string, key: Uint8Array 
   const result = inspectStagedAttachmentManifest(lines.slice(0, 4).join("\n"), { key, correlation: operationId });
   return result.type === "authenticated" ? { text: prompt, attachments: result.attachments } : { text: prompt };
 }
-function unavailable() { return openCodeConversationError("opencode_attachments_unavailable",
-  "The OpenCode attachments are unavailable or incompatible with the selected model.", "invalid_state"); }
+function unavailable(message = "The OpenCode attachments are unavailable or incompatible with the selected model.") {
+  return openCodeConversationError("opencode_attachments_unavailable", message, "invalid_state");
+}

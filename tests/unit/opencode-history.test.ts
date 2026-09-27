@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import { backendConversationSnapshotSchema, backendHistoryPageSchema } from "../../src/shared/protocol/backend.js";
 import { MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES } from "../../src/shared/protocol/payload.js";
 import { OpenCodeHistoryProjection, openCodeHistoryItemId, openCodeHistoryPartKey, openCodeHistoryTurnId, type OpenCodeHistoryProjectionInput } from "../../src/server/backends/opencode/opencode-history-projection.js";
@@ -6,6 +7,9 @@ import { OPENCODE_HISTORY_LIMITS, openCodeHistoryFingerprint, readOpenCodeHistor
 import { OpenCodeNativeProtocolError, OpenCodeNativeReadLimitError, parseOpenCodeNativeMessage,
   type OpenCodeNativeApi, type OpenCodeNativeMessage } from "../../src/server/backends/opencode/opencode-native-api.js";
 import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
+import { OPENCODE_MAXIMUM_SERIALIZED_PROMPT_BYTES } from "../../src/server/backends/opencode/opencode-delivery.js";
+import { stagedAttachmentManifest } from "../../src/server/backends/staged-attachment-manifest.js";
+import type { StagedComposerAttachment } from "../../src/server/backends/contracts.js";
 
 afterEach(() => vi.useRealTimers());
 const sessionId = "ses_history";
@@ -138,6 +142,51 @@ describe("OpenCode complete retained native history acquisition", () => {
     expect(refreshed.messages.map(message => message.id)).toEqual([head.id]);
     expect(refreshed.decodedBytes).toBeGreaterThan(64 * 1024 * 1024);
     expect(refreshed.decodedBytes).toBeLessThan(OPENCODE_HISTORY_LIMITS.decodedBytes);
+  });
+
+  it("fits a near-22 MiB prompt through four native charges plus 6 MiB of projected escaped text", async () => {
+    const text = "\u0001".repeat(1_024 * 1_024), key = Buffer.alloc(32, 1), operationId = "near-bound-send";
+    // Maximal descriptor counts, names and staging paths are included in the
+    // encoded prompt. The signed paths disappear from normalized projection.
+    const attachments: StagedComposerAttachment[] = Array.from({ length: 8 }, (_, index) => ({ id: randomUUID(),
+      fileName: `${'"'.repeat(251)}.png`, agentPath: `/${"\\".repeat(4_095)}`, sha256: "a".repeat(64),
+      ...(index < 4 ? { kind: "image" as const, mediaType: "image/png" as const, byteSize: 3 * 1_024 * 1_024 }
+        : { kind: "file" as const, mediaType: "application/octet-stream" as const, byteSize: 1 }) }));
+    const nativeInputId = `msg_${"a".repeat(64)}`;
+    const prompt = (data: string) => ({ sessionID: sessionId, id: nativeInputId,
+      text: `${stagedAttachmentManifest({ key, correlation: operationId, attachments })}\n${text}`,
+      files: attachments.slice(0, 4).map(item => ({ uri: `data:image/png;base64,${data}`, name: item.fileName })),
+      skills: [{ id: "skill_manual" }], delivery: "queue", resume: true });
+    const encodedPerImage = Math.floor((OPENCODE_MAXIMUM_SERIALIZED_PROMPT_BYTES - Buffer.byteLength(JSON.stringify(prompt("")))) / 16) * 4;
+    for (const item of attachments.slice(0, 4)) Object.assign(item, { byteSize: encodedPerImage / 4 * 3 });
+    const data = "A".repeat(encodedPerImage), payload = prompt(data), promptBytes = Buffer.byteLength(JSON.stringify(payload));
+    expect(OPENCODE_MAXIMUM_SERIALIZED_PROMPT_BYTES - promptBytes).toBeGreaterThanOrEqual(0);
+    expect(OPENCODE_MAXIMUM_SERIALIZED_PROMPT_BYTES - promptBytes).toBeLessThan(16);
+    const head = parseOpenCodeNativeMessage({ id: nativeInputId, type: "user", text: payload.text, time: { created: 200 },
+      files: payload.files.map(file => ({ mime: "image/png", data, name: file.name, source: { type: "inline" } })),
+      skills: [{ id: "skill_manual", name: "Manual skill", text: "" }] });
+    const { api } = apiFixture([head]), eventBytes = Buffer.byteLength(JSON.stringify(head)) + 1_024;
+    let drainedBytes = 0;
+    const original = api.getHistoryPage.getMockImplementation()!;
+    api.getHistoryPage.mockImplementation(async (...args) => {
+      const page = await original(...args); drainedBytes = eventBytes; return page;
+    });
+    const input = { sessionId, additionalUsage: () => ({ decodedBytes: drainedBytes, records: drainedBytes ? 1 : 0 }) };
+    const acquired = await readOpenCodeHistory(api, input);
+    drainedBytes = 0;
+    const refreshed = await refreshOpenCodeHistory(api, restartOpenCodeHistoryAcquisition(acquired), input);
+    for (const history of [acquired, refreshed]) {
+      const result = new OpenCodeHistoryProjection(history, { ...identity, activity: "running",
+        attachmentProvenanceKey: key, deliveryCorrelations: new Map([[head.id, operationId]]) });
+      expect(history.decodedBytes).toBeGreaterThan(4 * promptBytes);
+      expect(result.decodedBytes - history.decodedBytes).toBeGreaterThan(6 * 1_024 * 1_024);
+      expect(OPENCODE_HISTORY_LIMITS.decodedBytes - result.decodedBytes).toBeGreaterThan(1.98 * 1_024 * 1_024);
+      expect(OPENCODE_HISTORY_LIMITS.decodedBytes - result.decodedBytes).toBeLessThan(2 * 1_024 * 1_024);
+      const item = result.itemsById[openCodeHistoryItemId(head.id)]!;
+      expect(item).toMatchObject({ content: [{ kind: "text", text: { text } }, ...attachments.map(({ agentPath: _path, sha256: _digest, ...attachment }) =>
+        ({ kind: "attachment", attachment })), { kind: "skill", name: { text: "Manual skill" } }] });
+      expect(backendConversationSnapshotSchema.parse(result.snapshot().snapshot).itemsById).toEqual(result.itemsById);
+    }
   });
 
   it.each([50, 1_000])("refreshes only mutable records and the head in an open period with %i settled steps", async steps => {

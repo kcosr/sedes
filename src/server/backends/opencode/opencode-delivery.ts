@@ -7,10 +7,16 @@ import type { OpenCodeExecutionSettings } from "./opencode-execution-settings.js
 import { OpenCodeInputEvidenceRepository, openCodeOperationFingerprint, type OpenCodeInputKind } from "./opencode-input-evidence.js";
 import type { OpenCodeInputObserver } from "./opencode-input-observer.js";
 import { OpenCodeNativeApi } from "./opencode-native-api.js";
-import { OpenCodeNativeMutations, OpenCodeNativeMutationInputError } from "./opencode-native-mutations.js";
+import { OpenCodeNativeMutations, OpenCodeNativeMutationInputError, type OpenCodeNativePromptInput } from "./opencode-native-mutations.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import { openCodeAttachmentEvidence, prepareOpenCodeAttachments } from "./opencode-attachments.js";
 import { qualifiedOpenCodeModelId } from "./opencode-model-selection.js";
+
+// Four native head/page/anchor/event charges plus at most 6 MiB of escaped
+// projected user text leave 2 MiB for native envelopes and projection metadata.
+// Native hooks/skills and later generated or external records remain bounded
+// independently; this admission bound covers the exact input Sedes sends.
+export const OPENCODE_MAXIMUM_SERIALIZED_PROMPT_BYTES = 22 * 1_024 * 1_024;
 
 /** One HTTP prompt per immutable operation. Admission alone is never Submit acceptance. */
 export class OpenCodeDelivery {
@@ -78,9 +84,16 @@ export class OpenCodeDelivery {
     const prepared = await prepareOpenCodeAttachments(input, { key: this.context.attachmentProvenanceKey, operationId,
       text, acceptsImages: attachmentCatalog?.modelsById.get(qualifiedOpenCodeModelId(snapshot!.selection))?.capabilities.input.includes("image") ?? false,
       signal: this.settings.lifetime });
-    await this.observer.start();
     const nativeInputId = `msg_${openCodeOperationFingerprint({ scope, namespace: this.context.nativeNamespaceKey,
       threadId: binding.applicationThreadId, sessionId: binding.backendConversationId, operationId, kind })}`;
+    const nativePrompt: OpenCodeNativePromptInput = { sessionID: binding.backendConversationId, id: nativeInputId,
+      ...prepared, ...(skill ? { skills: [{ id: skill }] } : {}), delivery: kind === "submit" ? "queue" : "steer", resume: true };
+    // Count JSON escaping, base64, signed staging metadata and selected skill
+    // identities together, before creating observer or private receipt state.
+    if (Buffer.byteLength(JSON.stringify(nativePrompt)) > OPENCODE_MAXIMUM_SERIALIZED_PROMPT_BYTES) {
+      throw invalid("The combined OpenCode input exceeds 22 MiB after encoding. Reduce its text or image attachments.");
+    }
+    await this.observer.start();
     this.context.repository.reserveOperation(scope, {
       applicationThreadId: binding.applicationThreadId, connectionProfileId: binding.connectionProfileId,
       executionEnvironmentId: binding.executionEnvironmentId, nativeSessionId: binding.backendConversationId,
@@ -116,8 +129,7 @@ export class OpenCodeDelivery {
       return this.observer.reconcile(operationId, kind);
     }
     try {
-      const admitted = await this.#native.prompt({ sessionID: binding.backendConversationId, id: nativeInputId,
-        ...prepared, ...(skill ? { skills: [{ id: skill }] } : {}), delivery: kind === "submit" ? "queue" : "steer", resume: true }, this.settings.lifetime);
+      const admitted = await this.#native.prompt(nativePrompt, this.settings.lifetime);
       await this.settings.assertCurrent();
       this.observer.recordAdmission(operationId, kind, admitted);
     } catch (error) {

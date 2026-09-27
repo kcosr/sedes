@@ -302,11 +302,19 @@ then validates current scope, binding, runtime generation, native location and
 policy. It fixes the adapter to MCP; ordinary CLI source references retain
 their existing audience and adapter.
 
+Routing admission retains neither a runtime lease nor an input observer. Live
+conversation handles share the exact session's input observer; closing the last
+handle releases it. Admission and per-call identity checks borrow a runtime lease
+only for their bounded validation. Thus idle actor eviction preserves bridge
+routing without leaving one daemon-wide event stream per admitted thread.
+
 The stdio helper is bundled as `sedes opencode-mcp`. An authenticated lifetime
 stream fences child invocations with a current stream ID, emits heartbeats every
 500 ms, and uses a 3-second child watchdog. Replacing or losing that stream
 cancels outstanding calls/approvals. A disconnected channel can be reclaimed
 within its 10-second startup window; expiry revokes it. A fresh registration
+waits only until three seconds after the actual revocation, rather than starting
+another watchdog interval when a later admission notices it. The registration
 uses a new high-entropy name and an absence inventory preflight. Stock PUT is
 unconditional and native GET has no ownership token, so no existing entry is
 replaced, removed, connected or disconnected. Unknown PUT acknowledgment does
@@ -319,6 +327,10 @@ catalog, transport and lifetime checks. No MCP readiness sleep gates messages.
 `SedesMcpServer` resolves one source client per request and passes it explicitly
 through catalog, description and invocation. Framing, cancellation, schemas,
 gateway effects and output projection are shared with existing providers.
+The private request/reply transport and child decoder use the canonical 4 MiB
+plus 64 KiB envelope limit (4,259,840 bytes), so the bridge preserves a completed
+canonical-size result. Shared JSON structure, node and individual-string bounds
+still apply independently; this does not make every JSON shape below 4 MiB valid.
 There is no generic route accepting the OpenCode channel credential. Only the
 child receives it; native session environment injection carries CLI references,
 not the shared channel credential.
@@ -331,9 +343,19 @@ terminal execution, revert, deletion, event gaps, disconnect and binding/runtime
 loss invalidate pending approval leases. Cold history proves delivery, but does
 not by itself prove which input is current. The generic source service checks
 this optional lease before and after approval; boundary-free calls do not need
-it. CLI ingress resolves the hook from the current server-owned backend module
-on every call, including stateless references issued before a main restart.
+it. With no live handle observer, access-boundary approval fails closed; after
+reattachment, a newly observed user input must establish fresh authority. Routing
+alone never starts an observer. CLI ingress resolves the hook from the current
+server-owned backend module on every call, including stateless references issued
+before a main restart.
 Pi, Codex, Claude and Grok keep their existing approval authority behavior.
+
+A pending access decision also holds the shared `ThreadRuntimeCoordinator`
+approval borrow through the approved invocation's completion. This existing
+canonical-operation reference blocks both retention and pressure eviction, even
+when the native timeline is idle. An explicit actor close aborts the approval
+and observer authority, returns typed `cancelled` through the bridge, and never
+replays the invocation. Idle routing admission alone holds no such borrow.
 
 Native permission responses retain the complete native action fingerprint;
 only an exact known Sedes registration/gateway receives a readable Sedes title.
@@ -354,6 +376,17 @@ launch baseline, thread overrides and generated CLI values last. PATH uses that
 same applied baseline, with the helper directory prepended for CLI. Values are
 not stored in operation receipts or environment fingerprints. Module close and
 session release invalidate pending preparation, including delayed secret reads.
+Compaction calls this preparation before its final native settings/control
+checks and dispatch. Replaying an already admitted compaction does not rotate
+secrets or send another request.
+
+The shared presentation catalog is a backend/environment capability ceiling;
+it does not qualify a particular native root. A stored CLI selection on an
+external/imported root, or with an unavailable local CLI endpoint, yields no
+generated credential or environment injection and publishes an actionable
+unavailable-tools notice. Ordinary Submit/Steer and controls continue. Nonempty
+user execution definitions on external runtimes still fail before secret
+resolution; withholding an unsupported tool surface never drops those variables.
 
 A Steer cannot rotate that map during work: it requires the already installed
 current incarnation. Native children do not inherit the session map and cannot
@@ -387,6 +420,26 @@ manifest remains in the native prompt for filesystem operations. History strips
 that carrier and emits public attachment descriptors only with the exact private
 consumed-input correlation. Native-only or invalid carriers do not disclose
 staging paths. Selected native model capability gates image admission.
+The combined decoded image bytes in one input are capped at 16 MiB before
+reading bytes, reserving its input receipt or dispatching. Multiple smaller
+images may share that budget; ordinary staged-file bytes do not consume it.
+Stock admission responses, events and user records inline every image, so the
+generic composer's 64 MiB aggregate alone would permit an unreadable native
+record. After byte validation and manifest construction, delivery also checks
+the exact final native prompt's serialized UTF-8 JSON against 22 MiB before
+reserving or tracking this input, or dispatching it.
+This includes the 1 MiB raw prompt after JSON escaping, base64 images and data
+URI prefixes, signed staging metadata, selected skill IDs and request fields;
+the same bounded object is passed to the native mutation. A large escaped
+prompt can therefore reduce the available image capacity below 16 MiB.
+Four 22 MiB native charges plus up to 6 MiB of escaped projected user text
+leave 2 MiB of the 96 MiB acquisition/projection budget for native envelopes
+and normalized descriptors. The near-bound regression includes maximal
+attachment metadata, one drained event, and both initial acquisition and
+refresh. Each native response still has its independent 32 MiB bound.
+The admission cap covers what Sedes sends: native skill/plugin expansion,
+generated records and external inputs remain independently bounded and can
+fail history acquisition explicitly.
 
 Viewed-image recognition requires the exact `read` argument contract and raster
 result grammar. It never rereads the path. The completed in-band bytes qualify
@@ -415,8 +468,9 @@ raster's base64 expansion. Total acquisition still charges repeated reads and
 projection against 96 MiB, so large or repeated native images can produce an
 explicit history-limit error rather than a truncated transcript.
 
-The acquisition increase from 64 to 96 MiB allows a maximal image as the head
-through head/page/anchor reads plus one same-size drained event, without adding
+The acquisition increase from 64 to 96 MiB allows an admitted bounded image
+input as the head through head/page/anchor reads plus one same-size drained
+event and normalized projection, without adding
 deduplication to cumulative work accounting. Two maximal-image events in one
 undrained 32 MiB queue overflow and force resnapshot, even for the same image.
 Additional history and repeated live evidence can still reach the finite bound.

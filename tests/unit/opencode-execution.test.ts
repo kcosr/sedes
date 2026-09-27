@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHash, randomUUID } from "node:crypto";
 import type { ModelInfo, SessionInboxUser } from "@opencode/client";
 import type { RegisteredBackendActionInput, SteerTurnInput, SubmitTurnInput } from "../../src/server/backends/contracts.js";
 import { OpenCodeActions } from "../../src/server/backends/opencode/opencode-actions.js";
-import { OpenCodeDelivery } from "../../src/server/backends/opencode/opencode-delivery.js";
+import { OpenCodeCliEnvironment } from "../../src/server/backends/opencode/opencode-cli-environment.js";
+import { OpenCodeExecutionEnvironment } from "../../src/server/backends/opencode/opencode-execution-environment.js";
+import { OpenCodeDelivery, OPENCODE_MAXIMUM_SERIALIZED_PROMPT_BYTES } from "../../src/server/backends/opencode/opencode-delivery.js";
 import { OpenCodeExecutionSettings } from "../../src/server/backends/opencode/opencode-execution-settings.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
 import { OpenCodeInputObserver } from "../../src/server/backends/opencode/opencode-input-observer.js";
@@ -52,11 +55,15 @@ function fixture(input: { desired?: OpenCodeSelection | null; native?: OpenCodeS
     if (path === `/api/session/${wire.sessionID}/prompt` && method === "POST") {
       const text = state.preparedText ?? body.text;
       const skills = body.skills?.map((skill: { id: string }) => ({ id: skill.id, name: "Manual skill", text: "private prepared skill source" }));
+      const files = body.files?.map((file: { uri: string; name?: string }) => ({
+        mime: file.uri.slice(5, file.uri.indexOf(";")), data: file.uri.slice(file.uri.indexOf(",") + 1),
+        ...(file.name ? { name: file.name } : {}), source: { type: "inline" as const },
+      }));
       const admitted: SessionInboxUser = { id: body.id, sessionID: wire.sessionID, type: "user",
-        payload: { text, ...(skills ? { skills } : {}) }, delivery: body.delivery, time: { created: 10 } };
+        payload: { text, ...(skills ? { skills } : {}), ...(files ? { files } : {}) }, delivery: body.delivery, time: { created: 10 } };
       if (state.admission) state.pending.push(admitted);
       if (state.consume) { state.pending = state.pending.filter(item => item.id !== body.id);
-        wire.messages.push({ id: body.id, type: "user", text, ...(skills ? { skills } : {}), time: { created: 10 } }); }
+        wire.messages.push({ id: body.id, type: "user", text, ...(skills ? { skills } : {}), ...(files ? { files } : {}), time: { created: 10 } }); }
       if (state.postGate) await state.postGate;
       if (state.dropPromptAck) throw new Error("lost prompt acknowledgment");
       return json({ data: admitted });
@@ -88,7 +95,64 @@ function fixture(input: { desired?: OpenCodeSelection | null; native?: OpenCodeS
   return { ...base, wire, client, attach, calls, state, settings, observer, actions, delivery, evidence, submit, steer, action, posts };
 }
 
+function withImages(input: SubmitTurnInput, count: number, imageBytes: number) {
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+  const bytes = Buffer.concat([png, Buffer.alloc(imageBytes - png.length)]);
+  const attachments = Array.from({ length: count }, (_, index) => ({ id: randomUUID(), kind: "image" as const,
+    mediaType: "image/png" as const, fileName: `image-${index}.png`, byteSize: bytes.length,
+    sha256: createHash("sha256").update(bytes).digest("hex"), agentPath: `/private/staging/image-${index}.png` }));
+  return { ...input, attachments, attachmentBytes: { read: vi.fn(async () => bytes) },
+    attachmentEvidence: { resolve: () => attachments.map(({ agentPath: _path, ...fact }) => fact) } };
+}
+
 describe("OpenCode execution settings and explicit actions", () => {
+  it("rejects an excessive combined image payload before reading bytes, reserving a send or posting", async () => {
+    const f = fixture(); f.state.models[0]!.capabilities.input.push("image");
+    const attachments = Array.from({ length: 2 }, (_, index) => ({ id: randomUUID(), kind: "image" as const,
+      mediaType: "image/png" as const, fileName: `image-${index}.png`, byteSize: 9 * 1_024 * 1_024,
+      sha256: "a".repeat(64), agentPath: `/private/staging/image-${index}.png` }));
+    const read = vi.fn(async () => Buffer.alloc(0));
+    const input = { ...f.submit("excessive-images"), attachments, attachmentBytes: { read },
+      attachmentEvidence: { resolve: () => attachments.map(({ agentPath: _path, ...fact }) => fact) } };
+    await expect(f.delivery.submit(input)).rejects.toMatchObject({ backendCode: "opencode_attachments_unavailable", crossedSubmissionBoundary: false });
+    expect(read).not.toHaveBeenCalled(); expect(f.posts("/prompt")).toEqual([]);
+    expect(f.repository.readOperation(scope, threadID, input.applicationOperationId, "submit")).toBeUndefined();
+  });
+  it("rejects 16 MiB of images plus maximally escaped 1 MiB text before observer, receipt or native send", async () => {
+    const f = fixture(); f.state.models[0]!.capabilities.input.push("image");
+    const input = withImages(f.submit("encoded-input-too-large", "\u0001".repeat(1_024 * 1_024)), 4, 4 * 1_024 * 1_024);
+    const start = vi.spyOn(f.observer, "start");
+    await expect(f.delivery.submit(input)).rejects.toMatchObject({ backendCode: "opencode_input_invalid",
+      crossedSubmissionBoundary: false, safeMessage: expect.stringContaining("22 MiB") });
+    expect(input.attachmentBytes.read).toHaveBeenCalledTimes(4);
+    expect(start).not.toHaveBeenCalled(); expect(f.posts("/prompt")).toEqual([]);
+    expect(f.repository.readOperation(scope, threadID, input.applicationOperationId, "submit")).toBeUndefined();
+  });
+  it("accepts an ordinary maximal image within the final encoded prompt bound", async () => {
+    const f = fixture(); f.state.models[0]!.capabilities.input.push("image");
+    const input = withImages(f.submit("maximal-image", "Inspect this image."), 1, 16 * 1_024 * 1_024);
+    await expect(f.delivery.submit(input)).resolves.toMatchObject({ accepted: true });
+    const posts = f.posts("/prompt"); expect(posts).toHaveLength(1);
+    expect(Buffer.byteLength(JSON.stringify(posts[0]!.body))).toBeLessThan(OPENCODE_MAXIMUM_SERIALIZED_PROMPT_BYTES);
+    expect(f.repository.readOperation(scope, threadID, input.applicationOperationId, "submit")).toMatchObject({ disposition: "accepted" });
+    expect(f.wire.messages.at(-1)).toMatchObject({ type: "user", files: [{ mime: "image/png", source: { type: "inline" } }] });
+  });
+  it.each(["external", "imported"] as const)("keeps ordinary Send and Steer usable while withholding %s CLI authority", async kind => {
+    const f = fixture(), issue = vi.fn(() => "must-not-issue"), resolve = vi.fn(async () => ({}));
+    const ownership = kind === "external" ? "external" : "owned";
+    vi.spyOn(f.repository, "hasCreatedRoot").mockReturnValue(kind === "external");
+    const cli = new OpenCodeCliEnvironment({ ownership,
+      availability: { availability: "available", endpoint: "http://127.0.0.1:4784", executableDirectory: "/fixture/bin", inheritedPath: "/bin" },
+      sourceCapabilities: { issue }, tools: { readPolicy: () => ({ enabled: true, presentation: { surface: "cli", mode: "progressive" },
+        accessBoundary: "thread", enabledToolIds: ["agent.context"] }) } });
+    f.context.executionEnvironment = new OpenCodeExecutionEnvironment({ scope, ownership, readDefinitions: () => ({}), resolve, cli });
+    await expect(f.delivery.submit(f.submit())).resolves.toMatchObject({ accepted: true });
+    await expect(f.delivery.steer(f.steer())).resolves.toMatchObject({ status: "pending_materialization" });
+    expect(f.posts("/prompt")).toHaveLength(2);
+    expect(f.context.executionEnvironment.diagnostic(threadID)).toContain("messages and conversation controls remain available");
+    expect(issue).not.toHaveBeenCalled(); expect(resolve).not.toHaveBeenCalled();
+    expect(f.runtime.installSessionEnvironment).not.toHaveBeenCalled();
+  });
   it("reapplies desired A over recognized external B for ordinary input without changing desired revision", async () => {
     const f = fixture({ native: modelB });
     const before = f.context.settings.get(scope, threadID);

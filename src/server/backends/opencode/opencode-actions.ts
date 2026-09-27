@@ -90,6 +90,8 @@ export class OpenCodeActions {
           "opencode_compact_settings_unavailable", "Choose matching supported OpenCode settings before compacting.", "invalid_state");
         resolveOpenCodeSelection({ connection: this.context.connection, catalog: read.catalog.catalog,
           modelId: qualifiedOpenCodeModelId(read.settings.desired), variant: read.settings.desired.variant, modelPolicy: this.context.modelPolicy });
+        await this.context.executionEnvironment.prepare({ context: this.context, input: this.input, runtime: this.settings.runtime,
+          operation: "compact", signal: this.settings.lifetime });
         const [session, pending] = await Promise.all([this.#api.getSession(binding.backendConversationId, this.settings.lifetime),
           this.#api.getPending(binding.backendConversationId, this.settings.lifetime)]);
         if (session.location.directory !== this.input.workspace.canonicalPath || session.revert ||

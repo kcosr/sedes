@@ -2,7 +2,9 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenCodeMcpIngress } from "../../src/server/backends/opencode/opencode-mcp-ingress.js";
 import { runSedesOpenCodeMcp } from "../../src/cli/sedes-opencode-mcp.js";
-import { OPENCODE_MCP_CREDENTIAL, OPENCODE_MCP_ENDPOINT } from "../../src/internal/opencode-mcp/contracts.js";
+import { OPENCODE_MCP_CREDENTIAL, OPENCODE_MCP_ENDPOINT, OPENCODE_MCP_MAXIMUM_BYTES } from "../../src/internal/opencode-mcp/contracts.js";
+import { SEDES_MCP_MAXIMUM_INBOUND_LINE_BYTES } from "../../src/internal/agent-tool-mcp/mcp-protocol.js";
+import { AGENT_TOOL_MAXIMUM_RESPONSE_BYTES } from "../../src/server/agent-tools/contracts/agent-tool-transport-limits.js";
 import { BackendAgentToolRequestError } from "../../src/server/agent-tools/adapters/backend-facade.js";
 import { CanonicalInlineAgentToolService } from "../../src/server/agent-tools/invocation/canonical-inline-agent-tool-service.js";
 
@@ -27,6 +29,59 @@ const call = (sessionID?: string) => ({ name: "sedes_catalog", arguments: { acti
   ...(sessionID ? { _meta: { "ai.opencode/sessionID": sessionID } } : {}) });
 
 describe("OpenCode per-call MCP bridge", () => {
+  it("preserves a completed act invocation and near-4 MiB result through both bridge transports", async () => {
+    // Exercise aggregate transport size while retaining the canonical JSON
+    // codec's independent per-string/depth/node limits.
+    const chunks = Array.from({ length: 63 }, () => "x".repeat(65_536));
+    const output = { chunks, committed: true };
+    const completed = { invocationId: "large-completed-write", state: "completed", output };
+    expect(Buffer.byteLength(JSON.stringify(completed))).toBeGreaterThan(4_000_000);
+    expect(Buffer.byteLength(JSON.stringify(completed))).toBeLessThan(AGENT_TOOL_MAXIMUM_RESPONSE_BYTES);
+    expect(OPENCODE_MCP_MAXIMUM_BYTES).toBe(SEDES_MCP_MAXIMUM_INBOUND_LINE_BYTES);
+    const ordinary = tools.describeMany("mcp", "thread_agent", ["thread.status"])[0]!;
+    const description = { ...ordinary, id: "fixture.write", effects: { application: "write", modelUsage: "none", external: "durable_side_effect" },
+      inputSchema: { $schema: ordinary.inputSchema.$schema, type: "object", additionalProperties: false,
+        required: ["chunks"], maxProperties: 1, properties: { chunks: { type: "array", minItems: 63, maxItems: 63,
+          items: { type: "string", maxLength: 65_536 } } } },
+      execution: { ...ordinary.execution, maximumInputBytes: AGENT_TOOL_MAXIMUM_RESPONSE_BYTES,
+        maximumOutputBytes: AGENT_TOOL_MAXIMUM_RESPONSE_BYTES, uncertainExternalOutcome: true } };
+    let mutations = 0;
+    const f = await fixture(async request => {
+      if (request.operation === "describe") return { tools: [description] };
+      if (request.operation !== "invoke") throw new Error("unexpected request");
+      expect(request.request.toolId).toBe("fixture.write");
+      expect(request.request.input).toEqual({ chunks });
+      mutations++;
+      return completed;
+    });
+    f.send(2, "tools/call", { name: "sedes_act", arguments: {
+      toolId: "fixture.write", schemaVersion: description.schemaVersion, input: { chunks },
+    }, _meta: { "ai.opencode/sessionID": "ses_a" } });
+    const response = await f.reply(2);
+    expect(response.result.isError).toBeUndefined();
+    expect(response.result.structuredContent).toEqual(output);
+    expect(mutations).toBe(1);
+    expect(f.stderr()).toBe("");
+  });
+  it("rejects an over-bound private request before invocation", async () => {
+    const invoke = vi.fn(); const f = await fixture(invoke);
+    const endpoint = f.channel.environment[OPENCODE_MCP_ENDPOINT]!;
+    const authorization = `Bearer ${f.channel.environment[OPENCODE_MCP_CREDENTIAL]}`;
+    const lifetime = new AbortController();
+    const response = await fetch(`${endpoint}/lifetime`, { headers: { authorization }, signal: lifetime.signal });
+    const reader = response.body!.getReader();
+    const hello = JSON.parse(Buffer.from((await reader.read()).value!).toString().trim());
+    try {
+      const oversized = await fetch(`${endpoint}/tools`, { method: "POST", headers: {
+        authorization, "content-type": "application/json", "x-sedes-stream": hello.streamID,
+      }, body: JSON.stringify({ operation: "invoke", sessionID: "ses_a", request: {
+        toolId: "fixture.write", schemaVersion: 1, requestId: "oversized",
+        input: { chunks: Array.from({ length: 65 }, () => "x".repeat(65_536)) },
+      } }) });
+      expect(oversized.status).toBe(503); await oversized.body?.cancel();
+      expect(invoke).not.toHaveBeenCalled();
+    } finally { lifetime.abort(); await reader.cancel().catch(() => undefined); }
+  });
   it("discovers three fixed gateways without a session and routes each concurrent call independently", async () => {
     const invoke = vi.fn(async request => {
       if (request.sessionID === "ses_a") { await new Promise(resolve => setTimeout(resolve, 25)); return { tools: catalog.filter(tool => tool.id === "thread.status") }; }

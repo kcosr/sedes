@@ -102,12 +102,15 @@ authenticated call; it is not the credential. Native permission rules remain
 in force and may ask before a gateway call or deny it. Sedes access-boundary
 approvals are a separate check. Those approvals require a currently observed
 Sedes user input; a native-only or automated input cannot borrow an older
-user message's approval authority. Following a lost observation stream, send a
-new user message before requesting an operation requiring that approval.
+user message's approval authority. Following a lost observation stream or idle
+handle eviction, send a new user message before requesting an operation requiring
+that approval.
 Operations already within the configured boundary remain available.
 
 The bridge exits when Sedes closes its authenticated lifetime channel or its
-heartbeat expires. It can survive ordinary idle conversation-handle eviction.
+heartbeat expires. It can survive ordinary idle conversation-handle eviction,
+which releases the thread's event observer and runtime lease while retaining
+routing for operations already within the configured access boundary.
 Stock OpenCode has no conditional registration ownership check, so Sedes never
 deletes or overwrites an existing entry during cleanup. Failed entries can
 remain in the native MCP inventory until the native workspace/runtime restarts.
@@ -117,6 +120,11 @@ MCP discovery can race the first prompt; Sedes does not delay all messages to
 wait for native catalog readiness.
 
 **CLI** tools are available for owned, local Sedes-created root sessions.
+The generic tool settings can retain a CLI selection on other sessions. For
+external or imported sessions, or an unavailable local CLI endpoint, Sedes
+withholds CLI credentials and shows an unavailable-tools notice; Send, Steer
+and conversation controls remain usable. Choose Native where supported or
+disable Sedes tools. This does not relax the external execution-variable rule.
 Thread environment definitions are supported only for owned runtimes. They
 replace the complete native session shell environment before explicit work,
 using the immutable owned launch baseline, the thread's frozen definitions,
@@ -128,6 +136,9 @@ is denied when it would lose required execution variables or CLI authority.
 An external runtime rejects nonempty Sedes execution-variable definitions.
 Native environment maps are volatile and are reinstalled after an owned restart.
 Imported sessions with an empty Sedes definition preserve their native map.
+Explicit compaction prepares the same frozen map before dispatch. When variables
+or CLI authority require installation, the root must be idle with no pending
+input, approval, running child or shell; compaction does not bypass that check.
 
 A selected skill is attached to an ordinary prompt and frozen in the native
 inbox with that exact input. This is an explicit manual selection, including
@@ -137,7 +148,12 @@ because they can change the model or spawn work outside this submission path.
 ## Images and compaction
 
 Composer files use authenticated Sedes staging. Models advertising vision can
-receive validated native image bytes. A completed native image read can show
+receive validated native image bytes. Images in one OpenCode message must total
+16 MiB or less. The complete encoded native prompt is also limited to 22 MiB,
+including escaped text, image encoding, staging metadata and selected skill IDs.
+Large text can therefore reduce the available image capacity. Inputs exceeding
+either bound are rejected before sending. Ordinary staged files retain the
+general composer limits. A completed native image read can show
 **Viewed image** with the actual retained bytes when subsequent provider work
 proves that image's inclusion. If context pruning, a checkpoint, missing bytes,
 or another proof gap prevents that conclusion, the child image is unavailable;
@@ -146,8 +162,9 @@ Operator plugins can replace native tools, so this relies on the admitted
 stock runtime and trusted local configuration, rather than cryptographic tool
 producer attestation. Native generated-image artifacts are unavailable.
 Native reads and event frames are bounded to 32 MiB; complete history acquisition
-is bounded to 96 MiB including repeated reads. Large image histories can
-therefore return an explicit size-limit error. The adapter also avoids an
+is bounded to 96 MiB including repeated reads and projection. Native skill or
+plugin expansion, generated records, external inputs, and large accumulated
+histories can still return an explicit size-limit error. The adapter also avoids an
 upstream Base64-validation stack overflow for large images without requiring a
 patched OpenCode build.
 

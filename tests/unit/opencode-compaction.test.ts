@@ -1,16 +1,18 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionInboxCompaction } from "@opencode/client";
 import { OpenCodeActions } from "../../src/server/backends/opencode/opencode-actions.js";
 import { OpenCodeExecutionSettings } from "../../src/server/backends/opencode/opencode-execution-settings.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
+import { OpenCodeExecutionEnvironment } from "../../src/server/backends/opencode/opencode-execution-environment.js";
+import { OpenCodeNativeMutations } from "../../src/server/backends/opencode/opencode-native-mutations.js";
 import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 import { createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
-function fixture() {
+function fixture(environment?: "owned" | "external") {
   const wire = createOpenCodeApiFixture();
   const model = { providerID: "provider", id: "model-a" }; wire.session.model = model;
-  const state = { pending: [] as SessionInboxCompaction[], ack: "exact" as "exact" | "lost" | "foreign", admit: true };
+  const state = { pending: [] as SessionInboxCompaction[], ack: "exact" as "exact" | "lost" | "foreign", admit: true, secret: "first-value" };
   const calls: { path: string; method: string; body: any }[] = [];
   const json = (data: unknown) => new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
   const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture", fetch: async (value, init) => {
@@ -20,6 +22,10 @@ function fixture() {
       capabilities: { tools: true, input: ["text"], output: ["text"] }, variants: [], time: { released: 0 }, cost: [], limit: { context: 100, output: 10 } };
     if (path === "/api/model") return json({ location: { directory: wire.directory }, data: [nativeModel] });
     if (path === "/api/model/default") return json({ location: { directory: wire.directory }, data: nativeModel });
+    if (path === `/api/session/${wire.sessionID}` && method === "PATCH") {
+      wire.session.permissions = body.permissions; return new Response(null, { status: 204 });
+    }
+    if (path.endsWith("/environment") && method === "PUT") return new Response(null, { status: 204 });
     if (path.endsWith("/compact") && method === "POST") {
       const item: SessionInboxCompaction = { ...body, id: state.ack === "foreign" ? "msg_foreign" : body.id,
         sessionID: wire.sessionID, type: "compaction", payload: {}, time: { created: 2 } };
@@ -35,6 +41,15 @@ function fixture() {
     return wire.fetch(value, init);
   } });
   const base = createOpenCodeConversationFixture({ native: { client, sessionID: wire.sessionID, directory: wire.directory } });
+  const resolve = vi.fn(async () => ({ TEST_VALUE: state.secret }));
+  if (environment) {
+    base.context.executionEnvironment = new OpenCodeExecutionEnvironment({ scope, ownership: environment,
+      readDefinitions: () => ({ TEST_VALUE: { kind: "secret", source: { kind: "environment", name: "SOURCE_VALUE" } } }), resolve });
+    base.runtime.installSessionEnvironment = vi.fn(async input => {
+      await new OpenCodeNativeMutations(client).setEnvironment({ sessionID: input.sessionID,
+        variables: Object.fromEntries(Object.entries(input.overrides).filter((entry): entry is [string, string] => entry[1] !== null)) }, input.signal);
+    });
+  }
   base.context.settings.updateDesired(scope, threadID, { expectedRevision: 0, desired: model, now: 1 });
   const lifetime = new AbortController();
   const settings = new OpenCodeExecutionSettings(base.context, base.target, base.runtime, client, "compact-generation", lifetime.signal);
@@ -43,9 +58,30 @@ function fixture() {
   const posts = () => calls.filter(call => call.method === "POST");
   const receipt = () => base.repository.requireOperation(scope, threadID, input.applicationOperationId, "action");
   cleanup.push(async () => { lifetime.abort(); await base.dispose(); });
-  return { ...base, wire, state, calls, actions, input, posts, receipt, lifetime };
+  return { ...base, wire, state, calls, actions, input, posts, receipt, lifetime, resolve };
 }
 describe("OpenCode manual compaction", () => {
+  it("prepares and reinstalls the volatile frozen shell environment before each new explicit compaction", async () => {
+    const f = fixture("owned");
+    await f.actions.perform(f.input);
+    expect(f.resolve).toHaveBeenCalledOnce();
+    const effects = f.calls.filter(call => call.method === "PATCH" || call.method === "PUT" || call.path.endsWith("/compact"));
+    expect(effects.map(call => call.method)).toEqual(["PATCH", "PUT", "POST"]);
+    expect(effects[1]!.body).toEqual({ variables: { TEST_VALUE: "first-value" } });
+    f.state.pending = []; f.state.secret = "rotated-value"; f.context.executionEnvironment.release(threadID);
+    await f.actions.perform({ ...f.input, applicationOperationId: "compact-after-release" });
+    expect(f.resolve).toHaveBeenCalledTimes(2);
+    expect(f.calls.filter(call => call.method === "PUT").at(-1)!.body).toEqual({ variables: { TEST_VALUE: "rotated-value" } });
+    await f.actions.perform(f.input); expect(f.resolve).toHaveBeenCalledTimes(2);
+  });
+  it.each(["external", "child", "active"])("refuses %s scoped-environment compaction before secret resolution and POST", async kind => {
+    const f = fixture(kind === "external" ? "external" : "owned");
+    if (kind === "child") f.wire.session.parentID = "ses_parent";
+    if (kind === "active") f.wire.setResponse("/api/session/active", 200, { data: { [f.wire.sessionID]: { type: "running" } } });
+    await expect(f.actions.perform(f.input)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(f.resolve).not.toHaveBeenCalled(); expect(f.posts()).toEqual([]);
+    expect(f.receipt().disposition).toBe("not_applied");
+  });
   it("reserves exact native control and treats acknowledgment as admission without waiting for inference", async () => {
     const f = fixture();
     await expect(f.actions.perform(f.input)).resolves.toEqual({ accepted: true });

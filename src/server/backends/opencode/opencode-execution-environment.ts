@@ -74,12 +74,14 @@ export class OpenCodeExecutionEnvironment {
   }
 
   release(applicationThreadId: string): void {
+    this.options.cli?.release(applicationThreadId);
     this.#preparations.get(applicationThreadId)?.abort();
     this.#preparations.delete(applicationThreadId);
     const prior = this.#installed.get(applicationThreadId);
     if (prior) this.#installed.set(applicationThreadId, { ...prior, released: true });
   }
-  close(): void { this.#lifetime.abort(); this.#preparations.clear(); this.#installed.clear(); }
+  diagnostic(applicationThreadId: string): string | undefined { return this.options.cli?.diagnostic(applicationThreadId); }
+  close(): void { this.#lifetime.abort(); this.#preparations.clear(); this.#installed.clear(); this.options.cli?.close(); }
 
   async #prepare(request: OpenCodeEnvironmentPreparation, definitions: EnvironmentVariableOverrides, binding: string, cli: OpenCodeCliPlan | undefined): Promise<void> {
     const { input, runtime, signal, operation } = request;

@@ -14,7 +14,7 @@ function fixture(availability: AgentToolCliAvailability = { availability: "avail
   const issue = vi.fn(() => "exact-thread-reference");
   const policy = { enabled: true, presentation: { surface: "cli" as "cli" | "native", mode: "progressive" as "progressive" | "individual" },
     accessBoundary: "thread" as const, enabledToolIds: ["agent.context"] };
-  const cli = new OpenCodeCliEnvironment({ availability, sourceCapabilities: { issue }, tools: { readPolicy: () => policy } });
+  const cli = new OpenCodeCliEnvironment({ ownership: "owned", availability, sourceCapabilities: { issue }, tools: { readPolicy: () => policy } });
   const seed = () => {
     f.context.settings.updateDesired(scope, threadID, { desired: { providerID: "provider", id: "model" }, expectedRevision: 0, now: 1 });
     f.context.settings.captureOperation(scope, { applicationThreadId: threadID, applicationOperationId: "creation", operationKind: "create", expectedRevision: 1, now: 1 });
@@ -33,9 +33,11 @@ describe("OpenCode CLI source admission and reusable creation provenance", () =>
   it("does not issue CLI authority for an imported root; Native/Progressive needs no thread shell credential", () => {
     const f = fixture();
     expect(f.repository.hasCreatedRoot(scope, threadID, f.target.binding.backendConversationId)).toBe(false);
-    expect(() => f.cli.plan(f.context, f.target)).toThrow(); expect(f.issue).not.toHaveBeenCalled();
+    expect(f.cli.plan(f.context, f.target)).toBeUndefined(); expect(f.issue).not.toHaveBeenCalled();
+    expect(f.cli.diagnostic(threadID)).toContain("messages and conversation controls remain available");
     f.policy.presentation.surface = "native";
     expect(f.cli.plan(f.context, f.target)).toBeUndefined(); expect(f.issue).not.toHaveBeenCalled();
+    expect(f.cli.diagnostic(threadID)).toBeUndefined();
   });
   it("issues only a CLI audience for exact accepted created-root authority", () => {
     const f = fixture(); f.seed();
@@ -55,12 +57,21 @@ describe("OpenCode CLI source admission and reusable creation provenance", () =>
     if (mutation === "snapshot") f.database.exec("DELETE FROM opencode_operation_settings_snapshots");
     if (mutation === "receipt_namespace") f.database.exec("UPDATE opencode_operation_receipts SET native_namespace_key='foreign'");
     expect(f.repository.hasCreatedRoot(scope, threadID, f.target.binding.backendConversationId)).toBe(false);
-    expect(() => f.cli.plan(f.context, f.target)).toThrow(); expect(f.issue).not.toHaveBeenCalled();
+    expect(f.cli.plan(f.context, f.target)).toBeUndefined(); expect(f.issue).not.toHaveBeenCalled();
+    expect(f.cli.diagnostic(threadID)).toBeDefined();
   });
   it("rejects wrong scope or session and does not use a managed remote CLI provider", () => {
     const acquire = vi.fn(); const f = fixture({ availability: "managed", provider: { acquire } }); f.seed();
     expect(() => f.repository.hasCreatedRoot({ ...scope, principalId: "foreign" }, threadID, f.target.binding.backendConversationId)).toThrow();
     expect(f.repository.hasCreatedRoot(scope, threadID, "ses_foreign")).toBe(false);
-    expect(() => f.cli.plan(f.context, f.target)).toThrow(); expect(acquire).not.toHaveBeenCalled(); expect(f.issue).not.toHaveBeenCalled();
+    expect(f.cli.plan(f.context, f.target)).toBeUndefined(); expect(acquire).not.toHaveBeenCalled(); expect(f.issue).not.toHaveBeenCalled();
+    expect(f.cli.diagnostic(threadID)).toBeDefined();
+  });
+  it("withholds CLI on an external server even for a Sedes-created root", () => {
+    const f = fixture(); f.seed();
+    const cli = new OpenCodeCliEnvironment({ ...f.cli.options, ownership: "external" });
+    expect(cli.plan(f.context, f.target)).toBeUndefined(); expect(f.issue).not.toHaveBeenCalled();
+    expect(cli.diagnostic(threadID)).toContain("owned local server");
+    cli.release(threadID); expect(cli.diagnostic(threadID)).toBeUndefined();
   });
 });

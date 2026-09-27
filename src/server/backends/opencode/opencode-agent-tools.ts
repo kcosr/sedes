@@ -6,9 +6,8 @@ import type { AgentToolCliAvailability } from "../module.js";
 import { BackendAgentToolRequestError, type BackendAgentToolAccessDecisionAuthority,
   type BackendAgentToolFacade, type TrustedAgentToolSource } from "../../agent-tools/adapters/backend-facade.js";
 import { requireOpenCodeBinding, type OpenCodeConversationRuntime, type OpenCodeDriverContext } from "./opencode-conversation-context.js";
-import { acquireOpenCodeInputObserver } from "./opencode-input-observer.js";
+import { findOpenCodeInputObserver } from "./opencode-input-observer.js";
 import type { OpenCodeHttpClient } from "./opencode-http-client.js";
-import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
 import { OpenCodeNativeApi } from "./opencode-native-api.js";
 import { OpenCodeMcpIngress, type OpenCodeMcpChannel } from "./opencode-mcp-ingress.js";
 import { OPENCODE_MCP_STARTUP_MS, OPENCODE_MCP_WATCHDOG_MS, type OpenCodeMcpRequest } from "../../../internal/opencode-mcp/contracts.js";
@@ -16,14 +15,14 @@ import { OPENCODE_MCP_STARTUP_MS, OPENCODE_MCP_WATCHDOG_MS, type OpenCodeMcpRequ
 const inventorySchema = z.object({ location: z.object({ directory: z.string().optional() }).strict(),
   data: z.array(z.object({ name: z.string().max(256), status: z.object({ status: z.enum(["connected", "pending", "disabled", "failed", "needs_auth"]), error: z.string().max(65_536).optional() }).strict(), integrationID: z.string().max(256).optional() }).passthrough()).max(256) }).strict();
 interface Admission { readonly context: OpenCodeDriverContext; readonly input: AttachConversationInput;
-  readonly runtime: OpenCodeConversationRuntime; readonly lease: OpenCodeRuntimeLease;
-  readonly observation: ReturnType<typeof acquireOpenCodeInputObserver>; readonly owner: AbortController;
+  readonly runtime: OpenCodeConversationRuntime; readonly client: OpenCodeHttpClient; readonly generation: string;
+  readonly owner: AbortController;
   readonly source: TrustedAgentToolSource; readonly onOwnerLost: () => void; diagnostic?: string; }
 interface Registration { readonly name: string; readonly channel: OpenCodeMcpChannel;
   readonly ready: Promise<void>; readonly createdAt: number; }
 interface LocationState { admissionCount: number; registration?: Registration; retryAfter: number; }
 
-/** Provider-owned routing/observation survives idle actor eviction, but never residency release. */
+/** Routing survives idle eviction; only live handles own native input observation. */
 export class OpenCodeAgentTools {
   readonly #ingress = new OpenCodeMcpIngress();
   readonly #sessions = new Map<string, Admission>();
@@ -56,7 +55,7 @@ export class OpenCodeAgentTools {
     // Imports/children are not assigned another root's privileges by native metadata.
     if (!context.repository.hasCreatedRoot(input.scope, input.binding.applicationThreadId, input.binding.backendConversationId)) return;
     let admission = this.#sessions.get(source.sourceThreadId);
-    if (admission && (admission.lease.generation !== runtime.snapshot().generation || admission.lease.client.lifetime.aborted ||
+    if (admission && (admission.generation !== runtime.snapshot().generation || admission.client.lifetime.aborted ||
         admission.input.opaqueBindingDetail !== input.opaqueBindingDetail)) { this.#releaseSession(source.sourceThreadId); admission = undefined; }
     if (!admission) {
       if (this.#sessions.size >= 1_000) return;
@@ -65,19 +64,17 @@ export class OpenCodeAgentTools {
         const session = await new OpenCodeNativeApi(lease.client).getSession(input.binding.backendConversationId, signal);
         await runtime.assertCurrent(signal); requireOpenCodeBinding(context, input);
         signal?.throwIfAborted();
-        if (this.#closed || session.parentID || session.location.directory !== input.workspace.canonicalPath) { lease.release(); return; }
-        const observation = acquireOpenCodeInputObserver(context, input, runtime, lease, owner.signal);
-        const onOwnerLost = () => { if (this.#sessions.get(source.sourceThreadId)?.lease === lease) this.release(source.sourceThreadId); };
-        admission = { context, input, runtime, lease, owner, observation, source, onOwnerLost };
+        if (this.#closed || session.parentID || session.location.directory !== input.workspace.canonicalPath) return;
+        const onOwnerLost = () => { if (this.#sessions.get(source.sourceThreadId) === admission) this.release(source.sourceThreadId); };
+        admission = { context, input, runtime, client: lease.client, generation: lease.generation, owner, source, onOwnerLost };
         this.#sessions.set(source.sourceThreadId, admission);
         lease.client.lifetime.addEventListener("abort", onOwnerLost, { once: true });
-        await observation.observer.start(AbortSignal.any([AbortSignal.timeout(OPENCODE_MCP_STARTUP_MS), ...(signal ? [signal] : [])]));
       } catch {
         // Tool startup does not take conversation controls down with it.
-        if (admission) admission.diagnostic = "Sedes OpenCode tools could not establish current input tracking. Send a later message to retry.";
-        else { owner.abort(); lease.release(); }
+        if (admission) admission.diagnostic = "Sedes OpenCode tools could not establish session authority. Send a later message to retry.";
+        else owner.abort();
         return;
-      }
+      } finally { lease.release(); }
     }
     const policy = this.options.facade.readPolicy(source);
     if (!policy.enabled || policy.presentation.surface !== "native") return;
@@ -92,12 +89,12 @@ export class OpenCodeAgentTools {
   }
   #releaseSession(threadId: string): void {
     const entry = this.#sessions.get(threadId); if (!entry) return;
-    this.#sessions.delete(threadId); entry.lease.client.lifetime.removeEventListener("abort", entry.onOwnerLost); entry.owner.abort(); entry.observation.release(); entry.lease.release();
+    this.#sessions.delete(threadId); entry.client.lifetime.removeEventListener("abort", entry.onOwnerLost); entry.owner.abort();
   }
   diagnostic(threadId: string): string | undefined { return this.#sessions.get(threadId)?.diagnostic; }
   gatewayAction(threadId: string, action: string): string | undefined {
     const entry = this.#sessions.get(threadId); if (!entry) return undefined;
-    const registration = this.#locations.get(entry.lease.client)?.get(entry.input.workspace.canonicalPath)?.registration;
+    const registration = this.#locations.get(entry.client)?.get(entry.input.workspace.canonicalPath)?.registration;
     if (!registration || registration.channel.revoked) return undefined;
     const names = { sedes_catalog: "Sedes tool catalog", sedes_read: "Sedes read", sedes_act: "Sedes action" };
     for (const [gateway, title] of Object.entries(names)) if (action === `${registration.name}_${gateway}`) return title;
@@ -108,7 +105,11 @@ export class OpenCodeAgentTools {
       const entry = this.#sessions.get(source.sourceThreadId);
       if (!entry || !sameSource(entry.source, source)) throw denied();
       await this.#assertCurrent(entry, signal);
-      return entry.observation.observer.accessDecisionAuthority().acquire(signal);
+      // A routing admission must not keep a daemon-wide event subscription alive.
+      // Reattachment's fresh observer cannot authorize an old, unobserved input.
+      const observer = findOpenCodeInputObserver(entry.client, entry.input);
+      if (!observer) throw denied();
+      return observer.accessDecisionAuthority().acquire(signal);
     } };
   }
   async close(): Promise<void> {
@@ -124,18 +125,22 @@ export class OpenCodeAgentTools {
   async #assertCurrent(entry: Admission, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
     if (this.#closed || this.#sessions.get(entry.source.sourceThreadId) !== entry || entry.owner.signal.aborted ||
-        entry.lease.client.lifetime.aborted || entry.runtime.snapshot().generation !== entry.lease.generation) throw denied();
-    requireOpenCodeBinding(entry.context, entry.input);
-    await entry.runtime.assertCurrent(signal);
-    const session = await new OpenCodeNativeApi(entry.lease.client).getSession(entry.input.binding.backendConversationId, signal);
-    await entry.runtime.assertCurrent(signal);
-    if (session.parentID || session.location.directory !== entry.input.workspace.canonicalPath) throw denied();
-    signal.throwIfAborted(); requireOpenCodeBinding(entry.context, entry.input);
-    if (this.#sessions.get(entry.source.sourceThreadId) !== entry || entry.owner.signal.aborted || entry.lease.client.lifetime.aborted ||
-        entry.runtime.snapshot().generation !== entry.lease.generation) throw denied();
+        entry.client.lifetime.aborted || entry.runtime.snapshot().generation !== entry.generation) throw denied();
+    const lease = entry.runtime.acquire();
+    try {
+      if (lease.client !== entry.client || lease.generation !== entry.generation) throw denied();
+      requireOpenCodeBinding(entry.context, entry.input);
+      await entry.runtime.assertCurrent(signal);
+      const session = await new OpenCodeNativeApi(entry.client).getSession(entry.input.binding.backendConversationId, signal);
+      await entry.runtime.assertCurrent(signal);
+      if (session.parentID || session.location.directory !== entry.input.workspace.canonicalPath) throw denied();
+      signal.throwIfAborted(); requireOpenCodeBinding(entry.context, entry.input);
+      if (this.#sessions.get(entry.source.sourceThreadId) !== entry || entry.owner.signal.aborted || entry.client.lifetime.aborted ||
+          entry.runtime.snapshot().generation !== entry.generation) throw denied();
+    } finally { lease.release(); }
   }
   async #call(client: OpenCodeHttpClient, directory: string, request: OpenCodeMcpRequest, signal: AbortSignal): Promise<unknown> {
-    const entries = [...this.#sessions.values()].filter(entry => entry.lease.client === client &&
+    const entries = [...this.#sessions.values()].filter(entry => entry.client === client &&
       entry.input.workspace.canonicalPath === directory && entry.input.binding.backendConversationId === request.sessionID);
     if (entries.length !== 1) throw denied();
     const entry = entries[0]!;
@@ -148,14 +153,14 @@ export class OpenCodeAgentTools {
     }
   }
   #register(entry: Admission, signal?: AbortSignal): Promise<void> {
-    const client = entry.lease.client; const directory = entry.input.workspace.canonicalPath;
+    const client = entry.client; const directory = entry.input.workspace.canonicalPath;
     let tasks = this.#registrationTasks.get(client); if (!tasks) { tasks = new Map(); this.#registrationTasks.set(client, tasks); }
     const existing = tasks.get(directory); if (existing) return existing;
     const task = this.#createRegistration(entry, signal).finally(() => { if (tasks!.get(directory) === task) tasks!.delete(directory); });
     tasks.set(directory, task); return task;
   }
   async #createRegistration(entry: Admission, signal?: AbortSignal): Promise<void> {
-    const client = entry.lease.client; const directory = entry.input.workspace.canonicalPath;
+    const client = entry.client; const directory = entry.input.workspace.canonicalPath;
     let locations = this.#locations.get(client); if (!locations) { locations = new Map(); this.#locations.set(client, locations); }
     let location = locations.get(directory);
     if (!location) { if (locations.size >= 64) throw denied(); location = { admissionCount: 0, retryAfter: 0 }; locations.set(directory, location); }
@@ -165,7 +170,7 @@ export class OpenCodeAgentTools {
       return;
     }
     if (location.registration) {
-      location.retryAfter = Math.max(location.retryAfter, Date.now() + OPENCODE_MCP_WATCHDOG_MS);
+      location.retryAfter = Math.max(location.retryAfter, location.registration.channel.revokedAt! + OPENCODE_MCP_WATCHDOG_MS);
       this.#registrations.delete(location.registration); location.registration = undefined;
     }
     if (Date.now() < location.retryAfter || location.admissionCount >= 8 || this.#admissions >= 64) throw denied();

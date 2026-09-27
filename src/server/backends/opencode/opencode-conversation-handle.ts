@@ -215,7 +215,8 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     });
   }
   #toolDiagnostic(): void {
-    const message = this.context.tools.diagnostic(this.binding.applicationThreadId);
+    const message = [this.context.executionEnvironment.diagnostic(this.binding.applicationThreadId),
+      this.context.tools.diagnostic(this.binding.applicationThreadId)].filter(Boolean).join(" ");
     if (message && !this.#closed) this.#emit({ type: "notice", notice: { id: "opencode-tools-unavailable", tone: "warning",
       message: boundDisplayText(message), createdAt: new Date().toISOString() } });
   }
@@ -234,6 +235,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     try { const result = await this.#actions.perform(input); await this.#refreshSettings();
       this.#emit({ type: "capabilities_changed", capabilities: this.#capabilities() }); return result;
     } catch (error) { throw mapOpenCodeConversationError(error); }
+    finally { this.#toolDiagnostic(); }
   }
   async reconcileAction(input: Parameters<ConversationHandle["reconcileAction"]>[0]) {
     this.#assertOpen(); return this.#actions.reconcile(input);
