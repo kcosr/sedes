@@ -550,5 +550,9 @@ describe("Pi historical viewed-image projection", () => {
       semanticKind: "viewed_image",
       status: "streaming",
     });
+    expect(settled.unresolvedViewedImages).toEqual([]);
+    expect(running.unresolvedViewedImages).toEqual([
+      { viewedItemId: "assistant:0", assistantEntryId: "assistant", toolCallId: "call" },
+    ]);
   });
 });

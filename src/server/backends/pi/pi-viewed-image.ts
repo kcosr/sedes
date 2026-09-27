@@ -46,6 +46,13 @@ export const PI_VIEWED_IMAGE_READ_FAILED: SafeItemError = {
   code: "pi_viewed_image_read_failed",
 };
 
+/** The same outcome history gives any tool call without a result. */
+export const PI_TOOL_RESULT_MISSING: SafeItemError = {
+  category: "interrupted",
+  message: { text: "Pi history did not contain a matching tool result." },
+  code: "pi_tool_result_missing",
+};
+
 export interface PiViewedImageClassification {
   readonly fileName?: BoundedDisplayText;
 }
@@ -59,6 +66,13 @@ export interface PiViewedImageChildTarget {
   readonly startedAt?: string;
   readonly completedAt?: string;
   readonly fileName?: BoundedDisplayText;
+}
+
+/** A persisted image read that had no result when it was projected. */
+export interface PiUnresolvedViewedImage {
+  readonly viewedItemId: string;
+  readonly assistantEntryId: string;
+  readonly toolCallId: string;
 }
 
 /** A persisted image read whose child still needs its artifact. */
@@ -248,6 +262,58 @@ export function piViewedImageChildItem(
       sha256: descriptor.sha256,
       ...(target.fileName ? { fileName: target.fileName } : {}),
     },
+  };
+}
+
+/**
+ * Completes a viewed row from its persisted tool result, exactly as history
+ * projects it, with the child candidate when the result has one.
+ */
+export function settlePiViewedImage(input: {
+  readonly viewed: Extract<BackendItem, { semanticKind: "viewed_image" }>;
+  readonly assistantEntryId: string;
+  readonly toolCallId: string;
+  readonly toolResultEntryId: string;
+  readonly result: unknown;
+  readonly completedAt: string;
+}): {
+  readonly item: BackendItem;
+  readonly candidate?: PiViewedImageCandidate;
+} {
+  const { viewed } = input;
+  const failed = own(input.result, "isError") === true;
+  const item = piViewedImageItem({
+    backendItemId: viewed.backendItemId,
+    backendTurnId: viewed.backendTurnId,
+    sourceOrder: viewed.sourceOrder,
+    status: failed ? "failed" : "completed",
+    ...(viewed.startedAt ? { startedAt: viewed.startedAt } : {}),
+    completedAt: input.completedAt,
+    ...(viewed.fileName ? { fileName: viewed.fileName } : {}),
+    ...(failed ? { error: PI_VIEWED_IMAGE_READ_FAILED } : {}),
+  });
+  const image = failed ? undefined : piViewedImageResultPart(input.result);
+  return {
+    item,
+    ...(image
+      ? {
+          candidate: {
+            child: {
+              backendItemId: `${viewed.backendItemId}:image`,
+              backendTurnId: viewed.backendTurnId,
+              sourceOrder: viewed.sourceOrder + 1,
+              viewedItemId: viewed.backendItemId,
+              startedAt: input.completedAt,
+              completedAt: input.completedAt,
+              ...(viewed.fileName ? { fileName: viewed.fileName } : {}),
+            },
+            assistantEntryId: input.assistantEntryId,
+            toolCallId: input.toolCallId,
+            toolResultEntryId: input.toolResultEntryId,
+            imageIndex: image.imageIndex,
+          },
+        }
+      : {}),
   };
 }
 

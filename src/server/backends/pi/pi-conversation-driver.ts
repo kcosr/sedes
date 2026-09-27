@@ -95,9 +95,12 @@ import {
 import {
   decodePiViewedImage,
   fillPiViewedImageChildren,
+  PI_TOOL_RESULT_MISSING,
   piViewedImageChildItem,
   piViewedImagePublicationKey,
   piViewedImageResultPart,
+  settlePiViewedImage,
+  type PiUnresolvedViewedImage,
   type PiViewedImageCandidate,
   type PiViewedImageChildTarget,
   type PiViewedImagePart,
@@ -2610,6 +2613,11 @@ class PiConversationHandle implements ConversationHandle {
   #viewedImageBackfill: Promise<void> = Promise.resolve();
   /** Keys whose image could not be published; this handle does not retry them. */
   readonly #failedViewedImageKeys = new Set<string>();
+  /**
+   * Seeded image reads of the running turn still waiting for their result,
+   * by assistant entry and tool call. The live projector does not own them.
+   */
+  #unresolvedViewedImages = new Map<string, PiUnresolvedViewedImage>();
   readonly #unsubscribeSession: Unsubscribe;
   #activeTurnId?: string;
   #runState: BackendConversationSnapshot["runState"];
@@ -4118,6 +4126,7 @@ class PiConversationHandle implements ConversationHandle {
       for (const projected of this.#liveTools.settlementCheck()) {
         this.#emit(projected);
       }
+      this.#settleUnresolvedViewedImages();
       if (!this.#terminalOutcome && this.#terminalAssistantItemIds.size > 0) {
         // Settle every block in the native terminal message before publishing
         // completion. A text block finishing is not itself an agent settlement.
@@ -4618,7 +4627,84 @@ class PiConversationHandle implements ConversationHandle {
       // Tool-call assistant entries persist before their tools finish.
       // This attached generation deliberately retains its live item identity;
       // persisted entry IDs seed only a later attached runtime.
+    } else if (entry.message.role === "toolResult") {
+      const assistantEntryId = findPiToolCallAssistantEntryId(
+        this.#session.sessionManager.getBranch(),
+        entry.message.toolCallId,
+        entry.message.toolName,
+      );
+      const key = assistantEntryId
+        ? JSON.stringify([assistantEntryId, entry.message.toolCallId])
+        : undefined;
+      const unresolved = key ? this.#unresolvedViewedImages.get(key) : undefined;
+      if (key && unresolved) {
+        this.#unresolvedViewedImages.delete(key);
+        this.#settleViewedImage(unresolved, entry);
+      }
     }
+  }
+
+  /**
+   * Completes a seeded image read from its persisted result, as history
+   * would, and publishes its child. Only a row still streaming changes.
+   */
+  #settleViewedImage(
+    unresolved: PiUnresolvedViewedImage,
+    result: SessionEntry | undefined,
+  ): void {
+    const viewed = this.#emittedItems.get(unresolved.viewedItemId);
+    if (viewed?.semanticKind !== "viewed_image" || viewed.status !== "streaming") {
+      return;
+    }
+    if (result?.type !== "message" || result.message.role !== "toolResult") {
+      this.#emit({
+        type: "item_completed",
+        item: { ...viewed, status: "interrupted", error: PI_TOOL_RESULT_MISSING },
+      });
+      return;
+    }
+    const settled = settlePiViewedImage({
+      viewed,
+      assistantEntryId: unresolved.assistantEntryId,
+      toolCallId: unresolved.toolCallId,
+      toolResultEntryId: result.id,
+      result: result.message,
+      completedAt: result.timestamp,
+    });
+    this.#emit({ type: "item_completed", item: settled.item });
+    const candidate = settled.candidate;
+    if (candidate) {
+      const key = this.#viewedImageKey(candidate);
+      this.#viewedImageTargets.set(key, candidate.child);
+      void this.#publishViewedImage(key, () =>
+        this.#persistedViewedImagePart(candidate),
+      );
+    }
+  }
+
+  /**
+   * At settlement Pi has persisted every result it will write, so a seeded
+   * image read still waiting completes from its result or, without one, is
+   * interrupted as history shows it. No viewed row stays streaming.
+   */
+  #settleUnresolvedViewedImages(): void {
+    if (this.#unresolvedViewedImages.size === 0) return;
+    const branch = this.#session.sessionManager.getBranch();
+    for (const unresolved of this.#unresolvedViewedImages.values()) {
+      const start = branch.findIndex(
+        ({ id }) => id === unresolved.assistantEntryId,
+      );
+      const result = branch
+        .slice(start < 0 ? branch.length : start + 1)
+        .find(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message.role === "toolResult" &&
+            entry.message.toolCallId === unresolved.toolCallId,
+        );
+      this.#settleViewedImage(unresolved, result);
+    }
+    this.#unresolvedViewedImages.clear();
   }
 
   #trackedTurnUpdate(
@@ -4693,6 +4779,14 @@ class PiConversationHandle implements ConversationHandle {
       filled.missing.filter(({ child }) =>
         this.#emittedTurns.has(child.backendTurnId),
       ),
+    );
+    this.#unresolvedViewedImages = new Map(
+      projected.unresolvedViewedImages
+        .filter(({ viewedItemId }) => this.#emittedItems.has(viewedItemId))
+        .map((unresolved) => [
+          JSON.stringify([unresolved.assistantEntryId, unresolved.toolCallId]),
+          unresolved,
+        ]),
     );
     return seed;
   }

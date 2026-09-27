@@ -198,6 +198,8 @@ interface PromptScript {
     messageIndex: number,
     emit: (event: unknown) => void,
   ) => void | Promise<void>;
+  /** Ends the run after the hook without persisting results or answering. */
+  readonly settleWithoutResults?: boolean;
 }
 
 /** Wraps one tool-read message as a prompt script. */
@@ -315,6 +317,11 @@ function scriptedSessionFactory(
             });
           }
           await prompt.beforeResults?.(messageIndex, emit);
+          if (prompt.settleWithoutResults) {
+            idle = true;
+            emit({ type: "agent_settled" });
+            return;
+          }
           for (const result of results) {
             manager.appendMessage(result as never);
             emit({ type: "message_end", message: result });
@@ -981,6 +988,127 @@ async function prepublish(
     bytes: Buffer.from(pixel, "base64"),
   });
 }
+
+/** A before-results hook that forces a resnapshot and waits for the test. */
+function pauseWithResnapshot() {
+  let reached!: () => void;
+  let resume!: () => void;
+  const atHook = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const paused = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  return {
+    atHook,
+    resume: () => resume(),
+    async beforeResults(_messageIndex: number, emit: (event: unknown) => void) {
+      // An execution update for an unknown call invalidates the live projection.
+      emit({ type: "tool_execution_update", toolCallId: "unknown", toolName: "read", args: {}, partialResult: {} });
+      reached();
+      await paused;
+    },
+  };
+}
+
+describe("Pi viewed images seeded before their results persist", () => {
+  const blocks: Block[] = [
+    { read: { id: "shown", path: "shown.png" } },
+    {
+      read: {
+        id: "broken",
+        path: "broken.png",
+        isError: true,
+        content: [{ type: "text", text: "EACCES: permission denied, open '/private/broken.png'" }],
+      },
+    },
+  ];
+
+  it("completes the seeded rows and adds the child once Pi persists the results", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const pause = pauseWithResnapshot();
+    const driver = driverWith(fixture, recorder.publisher, [
+      { messages: [blocks], beforeResults: pause.beforeResults },
+    ]);
+    const conversation = await created(driver, fixture);
+    const handle = await driver.attach(conversation.attach);
+    const first = await follow(handle, conversation.backendConversationId);
+    const submitted = await submit(handle, "look");
+    await pause.atHook;
+    expect(first.events.at(-1)?.event).toMatchObject({ type: "resnapshot_required" });
+    first.unsubscribe();
+
+    const second = await follow(handle, conversation.backendConversationId);
+    const seeded = Object.values(second.projection.snapshot.itemsById).filter(
+      (item) => item.semanticKind === "viewed_image",
+    );
+    expect(seeded.map(({ status }) => status)).toEqual(["streaming", "streaming"]);
+    expect(seeded.every(({ backendItemId }) => !backendItemId.startsWith("live:"))).toBe(true);
+    pause.resume();
+    await vi.waitFor(() =>
+      expect(second.events.some(({ event }) => event.type === "turn_completed")).toBe(true),
+    );
+    await vi.waitFor(async () =>
+      expect(childImages((await driver.read(conversation.attach)).snapshot.itemsById)).toHaveLength(1),
+    );
+
+    expect(second.results.filter(({ kind }) => kind === "resnapshot_required")).toEqual([]);
+    const current = (await driver.read(conversation.attach)).snapshot;
+    expect(turnShape(current, submitted.backendTurnId!)).toEqual([
+      "user_message",
+      "viewed:completed:shown.png",
+      "image:provider_input",
+      "viewed:failed:broken.png",
+      "assistant_message",
+    ]);
+    expect(JSON.stringify(current)).not.toContain("/private");
+    const timeline = second.normalized.timeline();
+    const turn = timeline.turnsById[timeline.orderedTurnIds.at(-1)!]!;
+    expect(turn.orderedItemIds.map((id) => [timeline.itemsById[id]!.kind, timeline.itemsById[id]!.status])).toEqual([
+      ["user_message", "completed"],
+      ["viewed_image", "completed"],
+      ["image", "completed"],
+      ["viewed_image", "failed"],
+      ["assistant_message", "completed"],
+    ]);
+    second.unsubscribe();
+    await handle.close();
+  });
+
+  it("interrupts a seeded row whose result never persists before settlement", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const pause = pauseWithResnapshot();
+    const driver = driverWith(fixture, recorder.publisher, [
+      { messages: [blocks], beforeResults: pause.beforeResults, settleWithoutResults: true },
+    ]);
+    const conversation = await created(driver, fixture);
+    const handle = await driver.attach(conversation.attach);
+    const first = await follow(handle, conversation.backendConversationId);
+    const submitted = await submit(handle, "look");
+    await pause.atHook;
+    first.unsubscribe();
+    const second = await follow(handle, conversation.backendConversationId);
+    pause.resume();
+    await vi.waitFor(() =>
+      expect(second.events.some(({ event }) => event.type === "turn_completed")).toBe(true),
+    );
+    expect(second.results.filter(({ kind }) => kind === "resnapshot_required")).toEqual([]);
+    const current = (await driver.read(conversation.attach)).snapshot;
+    const rows = current.turnsById[submitted.backendTurnId!]!.orderedBackendItemIds
+      .map((id) => current.itemsById[id]!)
+      .filter((item) => item.semanticKind === "viewed_image");
+    expect(rows.map(({ status, error }) => [status, error?.code])).toEqual([
+      ["interrupted", "pi_tool_result_missing"],
+      ["interrupted", "pi_tool_result_missing"],
+    ]);
+    // The earlier generation published the image live; this one has no result to pair it with.
+    expect(childImages(current.itemsById)).toEqual([]);
+    second.unsubscribe();
+    await handle.close();
+  });
+});
 
 describe("Pi viewed-image publication and close", () => {
   it("waits for a started publication, starts no other, and delivers nothing after close", async () => {
