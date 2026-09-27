@@ -6326,6 +6326,34 @@ describe("Claude image reads and meta rows", () => {
     expect(events.filter(event => event.type.startsWith("item_"))).toEqual([]);
   });
 
+  it("reports a located turn not found when history drops it while its images publish", async () => {
+    const transcript = new ClaudeTranscriptFixture();
+    const promptUuid = imageTurn(transcript, ["a.png"]);
+    for (let index = 0; index < 11; index += 1) {
+      transcript.prompt(`Later ${index}`);
+      transcript.answer(`Answer ${index}.`);
+    }
+    const { publisher, started, release } = heldPublisher(() => true);
+    const provider = fixture();
+    const messages = await history(transcript);
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: messages, resumeSession: true, outputArtifacts: publisher });
+    await projectionSnapshot(handle);
+    expect(started).toHaveLength(0);
+    const target = projectClaudeHistory(messages).usageTurns[0]!.backendTurnId;
+    const located = handle.locateTurn({ maximumTurnCandidates: 20, matchesBackendTurnId: (candidate) => candidate === target });
+    await vi.waitFor(() => expect(started).toHaveLength(1));
+    // Claude retracts the turn's prompt while its image is publishing.
+    provider.messages.push({ type: "assistant", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+      supersedes: [promptUuid], message: { id: "msg-retraction", type: "message", role: "assistant", model: "claude-sonnet-5",
+        content: [{ type: "text", text: "Retried." }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } },
+    } as unknown as SDKMessage);
+    await vi.waitFor(async () => expect((await handle.history({ limit: 20 })).orderedBackendTurnIds).not.toContain(target));
+    expect(started).toHaveLength(1);
+    release();
+    await expect(located).resolves.toEqual({ status: "not_found" });
+    await handle.close();
+  });
+
   it("projects the window ahead of a result only for a built-in image read", async () => {
     const transcript = new ClaudeTranscriptFixture();
     transcript.prompt("Look at the screenshot", { uuid: PROMPT_ID });

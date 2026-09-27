@@ -750,15 +750,17 @@ export class ClaudeConversationHandle implements ConversationHandle {
           ...(terminalReceipts.length === 0 ? {} : { terminalReceipts }),
         });
         input.signal?.throwIfAborted();
-        if (selected.status !== "found") {
-          throw new ClaudeHistoryProjectionError("claude_history_invalid");
-        }
         return selected;
       };
       let selected = this.#terminalReceipts([backendTurnId]).length === 0 ? preliminary : select();
+      if (selected.status !== "found") {
+        throw new ClaudeHistoryProjectionError("claude_history_invalid");
+      }
       if (await this.#viewedImages.publish(selected.pendingViewedImages, CLAUDE_VIEWED_IMAGE_INLINE_BUDGET, input.signal)) {
         this.#assertOpen();
         selected = select();
+        // History changed while images were published.
+        if (selected.status !== "found") return { status: "not_found" };
       }
       input.signal?.throwIfAborted();
       return { status: "found", page: selected.page };
