@@ -212,6 +212,9 @@
 
 ### Fixed
 
+- Show repeated runtime notices with identical text and severity only once in
+  the client, including notices restored after reconnecting.
+
 - Refresh Native agent tools and CLI presentation settings when an idle
   Codex or Claude thread already has a persistent SSH session, including
   after the server reconnects. Provider release failures leave the saved
