@@ -327,6 +327,21 @@ describe("Pi live viewed-image projection", () => {
     expect(projector.takeViewedImageResults()).toEqual([]);
   });
 
+  it("lists no child for an image part that could never be published", () => {
+    const projector = live();
+    for (const [index, part] of [
+      { type: "image", data: pixel, mimeType: "image/svg+xml" },
+      { type: "image", data: "", mimeType: "image/png" },
+      { type: "image", mimeType: "image/png" },
+    ].entries()) {
+      const events = readToCompletion(projector, index, `call-${index}`, `x-${index}.png`, {
+        content: [{ type: "text", text: "Read image file" }, part],
+      });
+      expect(events.at(-1)?.item).toMatchObject({ semanticKind: "viewed_image", status: "completed" });
+    }
+    expect(projector.takeViewedImageResults()).toEqual([]);
+  });
+
   it("completes a text-only or non-vision read without a child", () => {
     const projector = live();
     const textOnly = readToCompletion(projector, 0, "text", "big.png", {
@@ -458,6 +473,23 @@ describe("Pi historical viewed-image projection", () => {
         imageIndex: 1,
       },
     ]);
+  });
+
+  it("lists no candidate for an unsupported image part", () => {
+    const projection = project([
+      message("user", { role: "user", content: "look" }),
+      message("assistant", assistant([{ type: "toolCall", id: "call", name: "read", arguments: { path: "a.png" } }])),
+      marker("marker", "assistant", "call"),
+      message(
+        "result",
+        toolResult("call", [
+          { type: "text", text: "Read image file [image/tiff]" },
+          { type: "image", data: pixel, mimeType: "image/tiff" },
+        ]),
+      ),
+    ]);
+    expect(projection.snapshot.itemsById["assistant:0"]).toMatchObject({ semanticKind: "viewed_image", status: "completed" });
+    expect(projection.viewedImages).toEqual([]);
   });
 
   it("keeps an unmarked read a generic tool", () => {

@@ -113,7 +113,8 @@ export function classifyPiViewedImage(
 
 /**
  * The first image part of a read result, unless Pi noted that the current
- * model will not receive it.
+ * model will not receive it, or the part is not data of a supported media
+ * type and so could never be published.
  */
 export function piViewedImageResultPart(
   result: unknown,
@@ -140,7 +141,13 @@ export function piViewedImageResultPart(
       };
     }
   }
-  return image;
+  return image &&
+    typeof image.mimeType === "string" &&
+    (OUTPUT_IMAGE_MEDIA_TYPES as readonly string[]).includes(image.mimeType) &&
+    typeof image.data === "string" &&
+    image.data.length > 0
+    ? image
+    : undefined;
 }
 
 const base64Pattern = /^[A-Za-z0-9+/]+={0,2}$/u;

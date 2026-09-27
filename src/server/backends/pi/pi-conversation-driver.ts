@@ -208,6 +208,8 @@ const readSnapshotTurns = 10;
 const viewedImageSeedPublicationBudget = 32;
 /** Child-image publications one older-history page waits for. */
 const viewedImagePagePublicationBudget = 16;
+/** Publication keys one handle remembers as failed, oldest dropped first. */
+const maximumRememberedViewedImageFailures = 4_096;
 const targetPiTimelinePayloadBytes = 256 * 1_024;
 const maximumPiItemsPerTurn = 1_000;
 const maximumPiSnapshotOrPageBytes = 4 * 1_024 * 1_024;
@@ -2606,6 +2608,8 @@ class PiConversationHandle implements ConversationHandle {
     Promise<OutputImageArtifactDescriptor | undefined>
   >();
   #viewedImageBackfill: Promise<void> = Promise.resolve();
+  /** Keys whose image could not be published; this handle does not retry them. */
+  readonly #failedViewedImageKeys = new Set<string>();
   readonly #unsubscribeSession: Unsubscribe;
   #activeTurnId?: string;
   #runState: BackendConversationSnapshot["runState"];
@@ -2816,7 +2820,10 @@ class PiConversationHandle implements ConversationHandle {
       ),
     );
     // Forks and sessions from before image capture have no artifacts yet.
-    const missing = this.#fillViewedImages(projected, pageTurnIds).missing;
+    const missing = this.#fillViewedImages(projected, pageTurnIds).missing.filter(
+      (candidate) =>
+        !this.#failedViewedImageKeys.has(this.#viewedImageKey(candidate)),
+    );
     for (const candidate of missing
       .slice(-viewedImagePagePublicationBudget)
       .reverse()) {
@@ -4740,6 +4747,7 @@ class PiConversationHandle implements ConversationHandle {
       keyed.map(({ key, candidate }) => [key, candidate.child]),
     );
     for (const { key, candidate } of keyed
+      .filter(({ key }) => !this.#failedViewedImageKeys.has(key))
       .slice(-viewedImageSeedPublicationBudget)
       .reverse()) {
       this.#viewedImageBackfill = this.#viewedImageBackfill.then(async () => {
@@ -4782,6 +4790,7 @@ class PiConversationHandle implements ConversationHandle {
   ): Promise<OutputImageArtifactDescriptor | undefined> {
     const active = this.#viewedImagePublications.get(key);
     if (active) return active;
+    if (this.#failedViewedImageKeys.has(key)) return Promise.resolve(undefined);
     const scope = {
       tenantId: this.binding.tenantId,
       principalId: this.binding.ownerPrincipalId,
@@ -4804,7 +4813,20 @@ class PiConversationHandle implements ConversationHandle {
       .catch(() => undefined)
       .then((descriptor) => {
         this.#viewedImagePublications.delete(key);
-        if (descriptor) this.#deliverViewedImage(key, descriptor);
+        if (descriptor) {
+          this.#failedViewedImageKeys.delete(key);
+          this.#deliverViewedImage(key, descriptor);
+        } else {
+          this.#failedViewedImageKeys.add(key);
+          if (
+            this.#failedViewedImageKeys.size >
+            maximumRememberedViewedImageFailures
+          ) {
+            this.#failedViewedImageKeys.delete(
+              this.#failedViewedImageKeys.values().next().value!,
+            );
+          }
+        }
         return descriptor;
       });
     this.#viewedImagePublications.set(key, publication);

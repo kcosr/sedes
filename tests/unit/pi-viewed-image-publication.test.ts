@@ -398,17 +398,22 @@ function recordingPublisher() {
   const published: PublishOutputImageInput[] = [];
   let gate: Promise<void> | undefined;
   let open: (() => void) | undefined;
+  let failing = false;
   const publisher: OutputArtifactPublisher = {
     findImage: (...args) => base.findImage(...args),
     publishImage: async (input) => {
       published.push(input);
       await gate;
+      if (failing) throw new Error("test_publication_failed");
       return await base.publishImage(input);
     },
   };
   return {
     publisher,
     published,
+    fail(value = true) {
+      failing = value;
+    },
     hold() {
       gate = new Promise((resolve) => {
         open = resolve;
@@ -926,6 +931,39 @@ describe("Pi viewed-image publication", () => {
     const published = await driver.read(conversation.attach);
     expect(childImages(published.snapshot.itemsById)).toHaveLength(1);
     expect(recorder.published).toHaveLength(1);
+  });
+});
+
+describe("Pi viewed-image publication failures", () => {
+  it("does not retry a key whose publication failed on later seeds or pages", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    recorder.fail();
+    const driver = driverWith(fixture, recorder.publisher);
+    const conversation = await created(driver, fixture);
+    const manager = await persisted(fixture, conversation.backendConversationId);
+    appendImageReadTurn(manager, conversation.backendConversationId, 1);
+    const handle = await driver.attach(conversation.attach);
+    await handle.establishProjection({ signal: new AbortController().signal });
+    await vi.waitFor(() => expect(recorder.published).toHaveLength(1));
+
+    const page = await handle.history({ limit: 5 });
+    expect(childImages(page.itemsById)).toEqual([]);
+    await handle.perform({ applicationOperationId: "compact", action: "compact" });
+    const reseeded = await handle.establishProjection({ signal: new AbortController().signal });
+    expect(childImages(reseeded.snapshot.itemsById)).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(recorder.published).toHaveLength(1);
+    await handle.close();
+
+    // A new attachment tries again.
+    recorder.fail(false);
+    const reopened = await driver.attach(conversation.attach);
+    await vi.waitFor(async () =>
+      expect(childImages((await driver.read(conversation.attach)).snapshot.itemsById)).toHaveLength(1),
+    );
+    expect(recorder.published).toHaveLength(2);
+    await reopened.close();
   });
 });
 
