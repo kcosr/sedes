@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { ConversationEventBridge } from "../../src/server/events/conversation-event-bridge.js";
 import {
   ScopedThreadEventHubRegistry,
+  ThreadProviderOutputUndeliveredError,
+  ThreadProviderReleaseFailedError,
   ThreadRuntimeNotIdleError,
   ThreadRuntimeRetirementUnprovenError,
   ThreadRuntimeCoordinator,
@@ -15,6 +17,9 @@ import {
   type ConversationActorManager,
 } from "../../src/server/conversations/conversation-actor-manager.js";
 import type { NormalizedThreadSnapshot } from "../../src/shared/protocol/conversation.js";
+import { BackendError } from "../../src/server/backends/contracts.js";
+import { PiConversationBackendDriver } from "../../src/server/backends/pi/pi-conversation-driver.js";
+import { GrokConversationBackendDriver } from "../../src/server/backends/grok/grok-conversation-driver.js";
 import { DomainError } from "../../src/server/domain/errors.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" };
@@ -966,6 +971,65 @@ describe("ThreadRuntimeCoordinator", () => {
     }
   });
 
+  it("requires proven provider release for policy refresh, even without a local runtime", async () => {
+    const unavailable = new BackendError({ category: "unavailable", retryable: true,
+      crossedSubmissionBoundary: false, safeMessage: "Provider unavailable." });
+    const resolutionError = new DomainError("runtime_unavailable", "Target unavailable.");
+    const release = vi.fn(async (input: { binding: { applicationThreadId: string } }) => {
+      switch (input.binding.applicationThreadId) {
+        case "unavailable": throw unavailable;
+        case "release-failed": throw new Error("release_response_lost");
+        case "busy": return "busy";
+        case "undelivered": return "undelivered";
+        default: return "released";
+      }
+    });
+    const { coordinator } = resetCoordinator([], 60_000, threadId => {
+      if (threadId === "unresolved") throw resolutionError;
+      return { ...runtimeTarget(threadId), driver: { releaseConversationResidency: release } } as unknown as AcquireConversationActorInput;
+    });
+    const options = { failurePolicy: "propagate" } as const;
+    try {
+      await expect(coordinator.releaseProviderResidency(scope, "released", options)).resolves.toBeUndefined();
+      await expect(coordinator.releaseProviderResidency(scope, "unresolved", options)).rejects.toBe(resolutionError);
+      await expect(coordinator.releaseProviderResidency(scope, "unavailable", options)).rejects.toBe(unavailable);
+      await expect(coordinator.releaseProviderResidency(scope, "release-failed", options)).rejects.toBeInstanceOf(ThreadProviderReleaseFailedError);
+      await expect(coordinator.releaseProviderResidency(scope, "busy", options)).rejects.toBeInstanceOf(ThreadRuntimeNotIdleError);
+      await expect(coordinator.releaseProviderResidency(scope, "undelivered", options)).rejects.toBeInstanceOf(ThreadProviderOutputUndeliveredError);
+    } finally { await coordinator.close(); }
+  });
+
+  it("keeps bound policy refresh closed when a disabled target cannot resolve its residency contract", async () => {
+    let enabled = false;
+    const disabled = new DomainError("invalid_transition", "The selected backend connection is disabled.");
+    const { coordinator } = resetCoordinator([], 60_000, threadId => {
+      if (!enabled) throw disabled;
+      return { ...runtimeTarget(threadId), driver: {} } as unknown as AcquireConversationActorInput;
+    });
+    const updatePolicy = vi.fn(async () => undefined);
+    const refresh = () => coordinator.runWithRuntimeRetired(scope, "bound-thread", async () => {
+      await coordinator.releaseProviderResidency(scope, "bound-thread", { failurePolicy: "propagate" });
+      await updatePolicy();
+    });
+    try {
+      await expect(refresh()).rejects.toBe(disabled);
+      expect(updatePolicy).not.toHaveBeenCalled();
+      enabled = true;
+      await expect(refresh()).resolves.toBeUndefined();
+      expect(updatePolicy).toHaveBeenCalledOnce();
+    } finally { await coordinator.close(); }
+  });
+
+  it.each([["pi", PiConversationBackendDriver.prototype], ["grok", GrokConversationBackendDriver.prototype]] as const)("allows %s policy refresh when no provider residency outlives its handle", async (_backendKind, driver) => {
+    expect(driver).not.toHaveProperty("releaseConversationResidency");
+    const { coordinator } = resetCoordinator([], 60_000, threadId => ({
+      ...runtimeTarget(threadId), driver,
+    }) as unknown as AcquireConversationActorInput);
+    try {
+      await expect(coordinator.releaseProviderResidency(scope, "thread", { failurePolicy: "propagate" })).resolves.toBeUndefined();
+    } finally { await coordinator.close(); }
+  });
+
   it("refuses an archive fence whose provider work is outstanding and leaves later retirement usable", async () => {
     const release = vi.fn(async (input: { binding: { applicationThreadId: string } }) =>
       input.binding.applicationThreadId === "thread-remote-busy" ? "busy" as const : "released" as const);
@@ -981,7 +1045,10 @@ describe("ThreadRuntimeCoordinator", () => {
         runtimes: coordinator,
         operation,
       }),
-    ).rejects.toMatchObject({ code: "invalid_transition" });
+    ).rejects.toMatchObject({
+      code: "invalid_transition",
+      message: expect.stringContaining("close the affected thread's agent terminal"),
+    });
     expect(operation).not.toHaveBeenCalled();
     await expect(
       runWithArchivedThreadRuntimesRetired({

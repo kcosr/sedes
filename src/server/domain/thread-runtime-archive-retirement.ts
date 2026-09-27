@@ -55,7 +55,7 @@ export async function runWithArchivedThreadRuntimesRetired<Result>(input: {
       if (error instanceof ThreadRuntimeNotIdleError) {
         throw new DomainError(
           "invalid_transition",
-          "A thread became active before the inventory change could commit. Wait for it to finish, then try again.",
+          "The inventory change is blocked by active work or an open agent terminal. Wait for the work to finish and close the affected thread's agent terminal, then try again.",
           false,
           { cause: error },
         );

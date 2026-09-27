@@ -28,6 +28,7 @@ import {
   type DiscoveredConversationPage,
   type ReadConversationInput,
   type ReconcileSubmissionInput,
+  type ReleaseConversationResidencyInput,
   type ResolveBranchCheckpointInput,
   type SubmissionReconciliation,
 } from "../contracts.js";
@@ -39,10 +40,13 @@ import type { CodexServerRequestRouter } from "./codex-server-request-router.js"
 import {
   codexThreadListMethod,
   codexThreadReadMethod,
+  codexThreadTurnsListMethod,
+  codexThreadUnsubscribeMethod,
   CODEX_C1_MAX_LIST_THREADS,
   type CodexThread,
   type CodexTurn,
 } from "./codex-c1-protocol.js";
+import { codexThreadGoalGetMethod } from "./codex-goal-protocol.js";
 import {
   CODEX_C2_MAX_CATALOG_ITEMS,
   codexModelListMethod,
@@ -1075,6 +1079,100 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     } finally {
       unsubscribe();
       releaseAgentToolCliEnvironment(cliEnvironment);
+    }
+  }
+
+  async releaseConversationResidency(
+    input: ReleaseConversationResidencyInput,
+  ): Promise<"released" | "busy" | "undelivered"> {
+    this.#assertAttach(input);
+    const threadId = input.binding.backendConversationId;
+    // The caller retires its actor under the thread maintenance fence first.
+    // Do not detach a provider subscription still owned by another actor.
+    if (this.#ownership.current(threadId)) return "busy";
+    // A remote managed TUI outlives its presentation handle and holds its own
+    // native subscription, which would prevent Codex from applying new config.
+    if (this.#managedTui) {
+      try {
+        // The remote registry's synchronous cache is empty before attachment.
+        // Await its authoritative snapshot rather than interpreting that gap
+        // as proof that no managed native subscriber exists.
+        await this.#managedTui.consumeLifecycle();
+      } catch (error) {
+        throw codexError("unavailable", "Codex could not verify managed terminal state. Reconnect the backend and retry.",
+          "codex_residency_tui_state_unavailable", true, error);
+      }
+      const lifecycle = this.#managedTui.registry.projection(input.scope, input.binding.applicationThreadId).state.lifecycle;
+      if (["starting", "running", "stopping"].includes(lifecycle) ||
+        this.#managedTui.registry.runningAuthority(input.scope, input.binding.applicationThreadId)) return "busy";
+    }
+    try {
+      const inspected = await this.#client.requestWithReceipt(
+        codexThreadReadMethod,
+        { threadId, includeTurns: false },
+        { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS },
+      );
+      assertThreadBinding(inspected.result.thread, threadId, input.workspace.canonicalPath);
+      const generation = inspected.generation;
+      const assertGeneration = (received: number) => {
+        const current = this.#client.lifecycleSnapshot();
+        if (received !== generation || current.generation !== generation || current.state !== "ready") {
+          throw codexError("unavailable", "Codex changed connection while releasing the thread's tool configuration.",
+            "codex_residency_release_generation_changed", true);
+        }
+      };
+      assertGeneration(generation);
+      const status = inspected.result.thread.status.type;
+      if (status === "active") return "busy";
+      // A newly created native thread may still exist only in memory. Prove
+      // that its history is materialized before dropping the subscription;
+      // otherwise the next resume can fail with "no rollout found".
+      try {
+        if (inspected.result.thread.historyMode === "paginated") {
+          const history = await this.#client.requestWithReceipt(
+            codexThreadTurnsListMethod,
+            { threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" },
+            { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS },
+          );
+          assertGeneration(history.generation);
+        } else {
+          const history = await this.#client.requestWithReceipt(
+            codexThreadReadMethod,
+            { threadId, includeTurns: true },
+            { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS },
+          );
+          assertGeneration(history.generation);
+          assertThreadBinding(history.result.thread, threadId, input.workspace.canonicalPath);
+          if (history.result.thread.status.type === "active") return "busy";
+        }
+      } catch (error) {
+        if (error instanceof CodexRpcRemoteError && /(?:not materialized yet|no rollout found)/iu.test(error.message)) {
+          throw codexError("invalid_state", "Send the first message before changing tools on this Codex conversation.",
+            "codex_residency_history_unmaterialized", false, error);
+        }
+        throw error;
+      }
+      const goal = await this.#client.requestWithReceipt(
+        codexThreadGoalGetMethod,
+        { threadId },
+        { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS },
+      );
+      assertGeneration(goal.generation);
+      if (goal.result.goal && goal.result.goal.threadId !== threadId) throw bindingMismatch();
+      if (goal.result.goal?.status === "active") return "busy";
+      const unsubscribed = await this.#client.requestWithReceipt(
+        codexThreadUnsubscribeMethod,
+        { threadId },
+        { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS },
+      );
+      assertGeneration(unsubscribed.generation);
+      // This releases Sedes's subscription only. Codex can retain an idle
+      // thread after unsubscribe; the next native resume rebuilds its config
+      // unless a separate native client is still subscribed to the same thread.
+      // Persistent hosts invalidate their cached configuration on this receipt.
+      return "released";
+    } catch (error) {
+      throw mapCodexReadError(error);
     }
   }
 

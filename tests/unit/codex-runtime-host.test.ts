@@ -29,6 +29,31 @@ function fixture() {
 const sink: CodexRuntimeReceiptSink = { reserve: () => { throw new Error("not used"); }, recordOutcome: () => "untracked", pending: () => [], reconcileRecordedApplicationState: () => 0, releaseRejected: () => false, compactRetiredRuntime: () => 0 };
 
 describe("persistent Codex runtime ownership", () => {
+  it("rejects a retained host predating native unsubscribe configuration invalidation", async () => {
+    const f = fixture();
+    const snapshot = await f.connect();
+    vi.spyOn(f.host, "attach").mockResolvedValue({ ...snapshot, protocolVersion: 1 as typeof snapshot.protocolVersion });
+    const remote = new CodexRuntimeClient({ connection: f.host, authority, receipts: sink });
+    await expect(remote.start()).rejects.toThrow("codex_runtime_protocol_mismatch");
+    expect(remote.client.lifecycleSnapshot().state).not.toBe("ready");
+    expect(f.dispatch).not.toHaveBeenCalled();
+    await remote.close();
+  });
+
+  it("invalidates the retained configuration only after native unsubscribe succeeds", async () => {
+    const f = fixture();
+    await f.connect();
+    const invalidate = vi.spyOn(CodexRuntimeSessions.prototype, "unsubscribe");
+    try {
+      await f.host.submit(authority, { ...request, method: "thread/unsubscribe", params: { threadId: "thread" } });
+      expect(invalidate).not.toHaveBeenCalled();
+      f.settle({ result: { status: "unsubscribed" }, generation: 1, inboundSequence: 1 });
+      await vi.waitFor(() => expect(f.host.readRetainedOutcome(request.operationId).status).toBe("completed"));
+      expect(invalidate).toHaveBeenCalledExactlyOnceWith("thread", 1);
+      await f.host.acknowledge(authority, request.operationId);
+    } finally { invalidate.mockRestore(); }
+  });
+
   it("reports a refused resume tracker allocation as not sent without dispatching native work", async () => {
     const f = fixture();
     await f.connect();

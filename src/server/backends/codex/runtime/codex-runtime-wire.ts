@@ -27,7 +27,7 @@ const outcomeSchema = z.discriminatedUnion("status", [
 ]);
 export const codexRuntimeOutcomeSchema: z.ZodType<CodexRuntimeOutcome> = outcomeSchema;
 export const codexRuntimeOutcomeReferencesSchema = z.array(z.strictObject({ status: z.enum(["pending", "completed", "failed"]), operationId: identifier, method })).max(128);
-export const codexRuntimeSnapshotSchema: z.ZodType<CodexRuntimeSnapshot> = z.strictObject({ protocolVersion: z.literal(1), runtimeId: identifier, lifecycle: lifecycleSchema, runtimeAssessment: assessmentSchema.nullable(), pendingRequests: z.array(pendingRequestSchema).max(128), outcomes: z.array(z.strictObject({ status: z.enum(["pending", "completed", "failed"]), operationId: identifier, method })).max(128) });
+export const codexRuntimeSnapshotSchema: z.ZodType<CodexRuntimeSnapshot> = z.strictObject({ protocolVersion: z.number().int().positive(), runtimeId: identifier, lifecycle: lifecycleSchema, runtimeAssessment: assessmentSchema.nullable(), pendingRequests: z.array(pendingRequestSchema).max(128), outcomes: z.array(z.strictObject({ status: z.enum(["pending", "completed", "failed"]), operationId: identifier, method })).max(128) });
 const notificationSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("decoded_notification"), generation, sequence, method: notificationMethod, params: z.unknown(), emittedAtMs: sequence.optional() }).transform(value => {
     const admission = admitCodexServerNotification(value.method, value.params);

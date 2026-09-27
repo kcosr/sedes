@@ -304,6 +304,23 @@ or contexts whose isolation cannot be proven receive no tools. For SSH,
 `agent_tools_cli` must be enabled on the managed sidecar. Neither surface falls
 back to the other.
 
+Idle Native tool-policy and presentation changes unsubscribe Sedes before the
+next resume rebuilds the tool catalog and shell environment. Remote persistent
+runtimes require Codex runtime protocol 2; upgrade existing sidecars before
+reconnecting. If another external client has the same native thread open,
+close that thread there first: Codex can otherwise keep the old configuration.
+A running Sedes-managed TUI blocks these changes; close it first. A bound
+conversation without materialized history needs its first message before a
+refresh can safely release it. Sibling threads can stay open. CLI access edits within the same surface and
+mode continue to apply live.
+
+The offline `npm run probe:codex-tool-refresh` regression uses the pinned Codex
+binary with isolated UDS, MCP, and mock model servers. It checks catalog and
+environment refresh, unchanged launch configuration, empty threads, presentation
+switches, retained subscribers, active turns, and sibling isolation without
+calling a live provider. Results are written to
+`test-results/codex-tool-refresh.json`.
+
 The MCP server entry is per thread: Sedes never edits the Codex configuration
 file or starts daemon-wide servers. Codex keeps the server running while the
 thread stays loaded, and unloads idle threads after its own delay. Codex's

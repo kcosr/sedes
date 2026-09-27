@@ -448,6 +448,7 @@ export class CodexRuntimeManagedTuiRegistry implements CodexManagedTuiRegistryAu
       for (const resource of snapshot.resources) this.#state(attachment, resource);
       if (snapshot.version) this.input.onRuntimeVersionAssessment?.(verifyCodexRuntimeVersion(snapshot.version));
       await eventTail;
+      if (this.#attachment !== attachment) throw new Error("codex_tui_attachment_detached");
       installing = false;
       for (const event of buffered) this.#event(attachment, event);
     } catch (error) { this.#lost(attachment); throw error; }

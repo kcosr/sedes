@@ -41,6 +41,8 @@ import type { ThreadAgentToolPolicyRepository } from "../db/repositories/thread-
 import type { ToolInitiator } from "../agent-tools/contracts/tool-initiator.js";
 import { ThreadCompletionCallbackRepository } from "../db/repositories/thread-completion-callback-repository.js";
 import {
+  ThreadProviderOutputUndeliveredError,
+  ThreadProviderReleaseFailedError,
   ThreadRuntimeNotIdleError,
   ThreadRuntimeRetirementUnprovenError,
 } from "../events/thread-runtime-coordinator.js";
@@ -2839,6 +2841,9 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           scope,
           applicationThreadId,
           async () => {
+            await this.input.runtimes.releaseProviderResidency(
+              scope, applicationThreadId, { failurePolicy: "propagate" },
+            );
             return this.input.agentToolPolicies.update(
               scope,
               applicationThreadId,
@@ -2857,7 +2862,23 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         if (error instanceof ThreadRuntimeNotIdleError) {
           throw new DomainError(
             "invalid_transition",
-            "Agent tool exposure can change only while the thread is idle.",
+            "Wait for active work to finish and close any open agent terminal for this thread before changing agent tools.",
+            false,
+            { cause: error },
+          );
+        }
+        if (error instanceof ThreadProviderReleaseFailedError) {
+          throw new DomainError(
+            "runtime_unavailable",
+            "Sedes could not refresh the provider session. The agent tool policy was not changed. Try again when the provider is available.",
+            true,
+            { cause: error },
+          );
+        }
+        if (error instanceof ThreadProviderOutputUndeliveredError) {
+          throw new DomainError(
+            "invalid_transition",
+            "The thread has agent output that Sedes could not apply yet. Open the thread so its output is applied, then change agent tool exposure.",
             false,
             { cause: error },
           );

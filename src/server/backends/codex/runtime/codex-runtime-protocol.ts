@@ -11,7 +11,9 @@ import type {
 } from "../rpc/codex-rpc-client.js";
 
 /** Provider-private payload; the sidecar carrier never interprets native methods. */
-export const CODEX_RUNTIME_PROTOCOL_VERSION = 1;
+// Version 2 requires native unsubscribe to invalidate retained session
+// configuration, so a new main cannot refresh tools through an older host.
+export const CODEX_RUNTIME_PROTOCOL_VERSION = 2;
 export type CodexRuntimeAuthority = Readonly<{
   scope: ProviderTransportScope;
   runtimeId: string;
@@ -26,7 +28,9 @@ export type CodexRuntimeOutcome =
   | Readonly<{ status: "completed"; operationId: string; method: CodexClientRequestMethod; receipt: CodexRpcRequestReceipt<unknown> }>
   | Readonly<{ status: "failed"; operationId: string; method: CodexClientRequestMethod; failure: CodexRuntimeFailure }>;
 export type CodexRuntimeSnapshot = Readonly<{
-  protocolVersion: typeof CODEX_RUNTIME_PROTOCOL_VERSION;
+  // Admit the peer's version so the client can report an explicit version
+  // mismatch before installing a runtime with unsupported semantics.
+  protocolVersion: number;
   runtimeId: string;
   lifecycle: CodexClientLifecycleSnapshot;
   runtimeAssessment: VerifiedCodexRuntimeVersion | null;

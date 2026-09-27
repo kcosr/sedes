@@ -138,6 +138,15 @@ export class CodexRuntimeSessions {
     const session = this.#sessions.get(threadId);
     if (session?.generation === generation) this.#evicted.add(threadId);
   }
+  /** A native unsubscribe invalidates the configuration snapshot even when
+   * another native client keeps the thread loaded. The next owner must resume
+   * with its current configuration instead of reusing our former subscription. */
+  unsubscribe(threadId: string, generation: number): void {
+    if (this.#sessions.get(threadId)?.generation !== generation) return;
+    this.#sessions.delete(threadId);
+    this.#evicted.delete(threadId);
+    this.#inventoryKnown = false;
+  }
   canIdle(): boolean {
     return !this.#trackingFailed && [...this.#sessions].every(([id, session]) =>
       this.#evicted.has(id) && session.known && !session.active && !session.activeGoal);

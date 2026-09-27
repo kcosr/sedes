@@ -24,6 +24,21 @@ const scope = { tenantId: "tenant", principalId: "principal", executionEnvironme
 const configuration = { environmentRevision: 1, operationsRevision: 1 };
 const request = { operationId: "operation", generation: 1, method: "thread/name/set" as const, params: { threadId: "thread", name: "renamed" }, timeoutMilliseconds: 1000 };
 
+it("reports a protocol mismatch for an older runtime snapshot through the actual sidecar wire path", async () => {
+  const f = await threadFixture();
+  const attach = f.host.attach.bind(f.host);
+  vi.spyOn(f.host, "attach").mockImplementationOnce(async (...args) => {
+    const snapshot = await attach(...args);
+    return { ...snapshot, protocolVersion: 1 as typeof snapshot.protocolVersion };
+  });
+  const proxy = new CodexRuntimeClient({ connection: f.connection, authority: f.authority,
+    receipts: { reserve: () => { throw new Error("unused"); }, recordOutcome: () => "untracked", pending: () => [], reconcileRecordedApplicationState: () => 0, compactRetiredRuntime: () => 0, releaseRejected: () => false } });
+  try {
+    await expect(proxy.start()).rejects.toThrow("codex_runtime_protocol_mismatch");
+    expect(proxy.client.lifecycleSnapshot().state).not.toBe("ready");
+  } finally { await proxy.close(); await f.close(); }
+});
+
 it.each((["mcp", "command"] as const).flatMap(kind =>
   (["confirmed", "disconnected", "timed_out", "unanswered"] as const).map(ending => ({ kind, ending })),
 ))("handles $ending after remote $kind response settlement", async ({ kind, ending }) => {

@@ -356,8 +356,17 @@ also refuses the archive, with a message to open the thread so its output is
 applied, rather than one claiming the thread is active. An unreachable provider is logged
 and left to the provider's own residency limit. Claude implements it through
 the persistent `retire` command, and its local worker owns no residency beyond
-the handle. Pi, Codex, and Grok omit it; retiring their handles already
-releases what they hold for the thread.
+the handle. Codex implements it by validating native idle state, unsubscribing,
+and invalidating persistent attach metadata. Its native thread may stay loaded
+until the next configuration-bearing resume; this releases Sedes' subscription,
+not another external client's subscription. Pi and Grok omit the method because
+retiring their handles releases what they hold for the thread.
+
+Native agent-tool edits and presentation changes call the same residency seam
+inside the retirement fence, including when no local actor exists. Unlike
+archive cleanup, this path propagates target-resolution and provider-release
+errors and leaves the saved policy unchanged. With an unchanged CLI surface
+and mode, access edits continue to use live admission without retirement.
 
 If policy and preference meet, document precedence explicitly. Installation
 policy is a ceiling; principal or thread state may select only admitted values.

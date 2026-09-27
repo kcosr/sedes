@@ -103,6 +103,38 @@ function fixture() {
 }
 
 describe("persistent Codex managed TUI", () => {
+  it("rejects attachment lost while buffered events decode after the initial snapshot", async () => {
+    const decodeEvent = deferred<void>();
+    let receive!: (event: unknown) => void;
+    const invalidEvent = { type: "inline", value: { invalid: true } } as const;
+    const channel = {
+      supportsOperation: () => true,
+      onEvent: ({ listener }: { listener(event: unknown): void }) => { receive = listener; return () => {}; },
+      encodeBody: async (value: unknown): Promise<SidecarRuntimeBody> => ({ type: "inline", value }),
+      decodeBody: async (body: SidecarRuntimeBody) => {
+        if (body === invalidEvent) await decodeEvent.promise;
+        if (body.type !== "inline") throw new Error("test_body_type");
+        return body.value;
+      },
+      call: async (): Promise<SidecarRuntimeBody> => {
+        receive({ runtimeId: "incarnation", body: invalidEvent });
+        return { type: "inline", value: { resources: [{ authority, revision: 1,
+          state: { lifecycle: "running", resourceGeneration: 1, streamAvailable: true } }] } };
+      },
+    } as unknown as SidecarRuntimeChannel;
+    const registry = new CodexRuntimeManagedTuiRegistry({ connect: async () => ({
+      channel, runtimeId: "incarnation", controllerEpoch: 1, providerGeneration: 3, generationOffset: 0, closed: new Promise(() => {}),
+    }) });
+    const connecting = registry.connect();
+    const rejected = expect(connecting).rejects.toThrow("codex_tui_attachment_detached");
+    try {
+      await vi.waitFor(() => expect(registry.snapshot()).toHaveLength(1));
+      decodeEvent.resolve();
+      await rejected;
+      expect(registry.runningAuthority(scope, authority.applicationThreadId)).toBeUndefined();
+    } finally { decodeEvent.resolve(); await registry.close(); }
+  });
+
   it("does not let idle cleanup release a later operator Stop fence", () => {
     const host = fixture();
     const releaseIdleFence = host.hosts.freezeAdmission("incarnation");

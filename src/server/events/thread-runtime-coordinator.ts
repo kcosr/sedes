@@ -21,6 +21,7 @@ import type {
 } from "../../shared/protocol/conversation.js";
 import type { ThreadApplicationActorTargetResolver } from "../conversations/thread-application-service.js";
 import { DomainError } from "../domain/errors.js";
+import { BackendError } from "../backends/contracts.js";
 import { reportBackgroundError } from "../report-background-error.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import type {
@@ -187,6 +188,14 @@ export class ThreadProviderOutputUndeliveredError extends Error {
   constructor() {
     super("The thread has provider output that has not been applied.");
     this.name = "ThreadProviderOutputUndeliveredError";
+  }
+}
+
+/** Local retirement succeeded, but the provider did not confirm residency release. */
+export class ThreadProviderReleaseFailedError extends Error {
+  constructor(cause: unknown) {
+    super("The provider could not confirm release of the thread session.", { cause });
+    this.name = "ThreadProviderReleaseFailedError";
   }
 }
 
@@ -415,17 +424,19 @@ export class ThreadRuntimeCoordinator {
    * enabled provider conversation have none. Outstanding provider work makes
    * the thread busy, and provider output that could not be applied is
    * reported as such; an unreachable provider is reported and left to the
-   * provider's own residency limit.
+   * provider's own residency limit. Policy refresh requires confirmed release
+   * and propagates resolution/provider failures instead of accepting that limit.
    */
   async releaseProviderResidency(
     scope: RequestScope,
     applicationThreadId: string,
+    options?: { readonly failurePolicy: "propagate" },
   ): Promise<void> {
     let target: Awaited<ReturnType<ThreadApplicationActorTargetResolver["resolve"]>>;
     try {
       target = await this.#targets.resolve(scope, applicationThreadId);
     } catch (error) {
-      if (error instanceof DomainError) return;
+      if (!options && error instanceof DomainError) return;
       throw error;
     }
     const release = target.driver.releaseConversationResidency;
@@ -439,6 +450,13 @@ export class ThreadRuntimeCoordinator {
         opaqueBindingDetail: target.opaqueBindingDetail,
       });
     } catch (error) {
+      if (options?.failurePolicy === "propagate") {
+        if (
+          error instanceof BackendError || error instanceof DomainError ||
+          error instanceof ThreadRuntimeRetirementUnprovenError
+        ) throw error;
+        throw new ThreadProviderReleaseFailedError(error);
+      }
       reportBackgroundError(`Release of thread ${applicationThreadId} provider residency`)(error);
       return;
     }
