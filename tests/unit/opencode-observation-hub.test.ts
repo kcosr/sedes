@@ -64,6 +64,30 @@ describe("resident OpenCode native observation journal", () => {
     await vi.waitFor(() => expect(port.lifetime.aborted).toBe(true));
   });
 
+  it.each(["unrelated", "scope-race"] as const)("does not spend owner read-failure budget on %s settlements", async kind => {
+    let probes = 0, races = 0;
+    const f = setup({ assertCurrent: async () => {
+      if (++probes % 2 || races >= 12) return;
+      races++;
+      const before = f.hub.retentionSnapshot().revision;
+      for (let i = 0; i < (kind === "unrelated" ? 12 : 1); i++) f.wire.send({ id: `evt_race_${races}_${i}`, created: 1,
+        type: "permission.replied", data: { sessionID: kind === "unrelated" ? `ses_unrelated_${i}` : "ses_fixture",
+          requestID: `per_missing_${races}_${i}`, reply: "once" } });
+      for (let i = 0; i < 100 && f.hub.retentionSnapshot().revision === before; i++) await new Promise<void>(resolve => setImmediate(resolve));
+      expect(f.hub.retentionSnapshot().revision).not.toBe(before);
+    } });
+    const observation = f.hub.subscribe(authority(), { purpose: "evidence" }); await observation.ready;
+    f.wire.send({ id: "evt_permission", created: 1, type: "permission.asked",
+      data: { sessionID: "ses_fixture", id: "per_known", action: "write", resources: [] } }); await observation.wait();
+    f.wire.disconnect();
+    await vi.waitFor(() => expect(probes).toBeGreaterThanOrEqual(kind === "unrelated" ? 2 : 26), { timeout: 20_000, interval: 20 });
+    expect(f.wire.requests.filter(request => request.pathname.endsWith("/permission"))).toHaveLength(kind === "unrelated" ? 1 : 13);
+    const recovered = f.hub.subscribe(authority(), { purpose: "evidence" }), boundary = await recovered.ready;
+    const records = recovered.drain(); await recovered.acknowledge({ journalId: boundary.journalId, sequence: records.at(-1)!.sequence });
+    await recovered.close(); await observation.close(); f.hub.releaseScope(authority());
+    await vi.waitFor(() => expect(f.hub.hasRetainedAuthority(authority())).toBe(false));
+  }, 25_000);
+
   it("backs off permanent inventory failures, caps attempts and retains proof until a fresh retry cycle", async () => {
     const { wire, hub } = setup(); const first = hub.subscribe(authority(), { purpose: "evidence" }); await first.ready;
     wire.send({ ...event(1), type: "session.inbox.enqueued", data: { sessionID: "ses_fixture", inboxID: "msg_known",

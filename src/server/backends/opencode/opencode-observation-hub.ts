@@ -15,8 +15,15 @@ const CRITICAL_BYTES = 64 * 1_024 * 1_024;
 const RECONCILIATION_INITIAL_RETRY_MS = 1_000;
 const RECONCILIATION_MAXIMUM_RETRY_MS = 120_000;
 const RECONCILIATION_MAXIMUM_FAILURES = 10;
-const settlementEvents = new Set(["permission.replied", "form.replied", "form.cancelled", "shell.exited", "shell.deleted",
-  "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "session.deleted"]);
+function settledWorkId(event: OpenCodeNativeEvent): string | undefined {
+  switch (event.type) {
+    case "permission.replied": return `permission:${event.data.requestID}`;
+    case "form.replied": case "form.cancelled": return `form:${event.data.id}`;
+    case "shell.exited": case "shell.deleted": return `shell:${event.data.id}`;
+    case "session.execution.succeeded": case "session.execution.failed": case "session.execution.interrupted": case "session.deleted":
+      return `execution:${event.data.sessionID}`;
+  }
+}
 interface ReconciliationRetry { failures: number; nextAttemptAt: number; }
 interface Scope {
   readonly authority: OpenCodeNativeAuthority; readonly journalId: string;
@@ -40,6 +47,8 @@ export class OpenCodeObservationHub {
   readonly #reconcileWaiters = new Set<() => void>();
   #reconciling = false;
   #settlementRevision = 0n;
+  #settlementFloor = 0n;
+  readonly #settlements = new Map<string, bigint>();
   readonly #running: Promise<void>;
   #native?: OpenCodeHttpObservation;
   #connected = false;
@@ -302,7 +311,14 @@ export class OpenCodeObservationHub {
   #capture(event: OpenCodeNativeEvent, nativeBytes: number): void {
     // A gap-born child/shell can settle before its parent route is seeded by
     // inventory. Fence all in-flight inventories before applying that filter.
-    if (settlementEvents.has(event.type)) this.#settlementRevision++;
+    const settled = settledWorkId(event);
+    if (settled) {
+      this.#settlements.delete(settled); this.#settlements.set(settled, ++this.#settlementRevision);
+      if (this.#settlements.size > 4_096) {
+        const oldest = this.#settlements.entries().next().value!;
+        this.#settlementFloor = oldest[1]; this.#settlements.delete(oldest[0]);
+      }
+    }
     for (const scope of this.#scopes.values()) {
       const matches = this.options.route ? this.options.route(scope.authority, event) : rootEvent(scope.authority, event);
       if (!matches || scope.proof.isDuplicate(event)) continue;
@@ -388,6 +404,7 @@ export class OpenCodeObservationHub {
     const sessionID = scope.authority.session!.nativeSessionID;
     const selected = new Map([...owners].filter(([, retry]) => retry.nextAttemptAt <= Date.now()).slice(0, 4));
     const signal = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(5_000)]);
+    let raced = false; const completedReads = new Set<string>();
     try {
       await this.options.assertCurrent?.(signal);
       // Inbox removal may mean promotion into execution. Read activity and
@@ -405,8 +422,9 @@ export class OpenCodeObservationHub {
       const inventories = results.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
       if (!inventories.length) throw unavailable("opencode_request_failed");
       const checkedOwners = new Set(inventories.map(item => item.owner));
+      for (const owner of checkedOwners) completedReads.add(owner);
       await this.options.assertCurrent?.(signal); signal.throwIfAborted();
-      if (!this.#connected || continuity !== scope.continuity || settlementRevision !== this.#settlementRevision) throw unavailable("opencode_observation_continuity_lost");
+      if (!this.#connected || continuity !== scope.continuity) { raced = true; throw unavailable("opencode_observation_continuity_lost"); }
       const work = new Map<string, string>();
       for (const { owner, activity, interactions } of inventories) {
         if (activity.active) work.set(`execution:${owner}`, owner);
@@ -414,10 +432,18 @@ export class OpenCodeObservationHub {
         for (const shell of activity.shells) if (shell.status === "running") work.set(`shell:${shell.id}`, owner);
         for (const item of interactions.permissions) work.set(`permission:${item.id}`, owner);
         for (const item of interactions.forms) work.set(`form:${item.id}`, owner);
-        this.options.onActivity?.(scope.authority, activity);
       }
+      // Only settlements matching this inventory can invalidate it. A bounded
+      // overflow loses precision and retries; unrelated daemon activity does not
+      // spend this owner's failure budget or strand its lifecycle markers.
+      if (this.#settlementFloor > settlementRevision || [...work].some(([id, owner]) =>
+          (this.#settlements.get(id) ?? 0n) > settlementRevision ||
+          (this.#settlements.get(`execution:${owner}`) ?? 0n) > settlementRevision)) {
+        raced = true; throw unavailable("opencode_observation_continuity_lost");
+      }
+      for (const { activity } of inventories) this.options.onActivity?.(scope.authority, activity);
       if (!scope.proof.reconcileRetention(cut, { pending: new Set(inventories.find(item => item.owner === sessionID)?.pending?.map(item => item.id)), checkedOwners, work })) {
-        throw unavailable("opencode_observation_continuity_lost");
+        raced = true; throw unavailable("opencode_observation_continuity_lost");
       }
       scope.proofTouched = ++this.#proofClock; this.#reclaimProofSpace(0);
       const others = this.#proofBytes() - scope.proof.bytes;
@@ -431,9 +457,11 @@ export class OpenCodeObservationHub {
     if (this.#reconcileScopes.get(scope) !== owners) return;
     this.#reconcileScopes.delete(scope);
     for (const [owner, retry] of selected) if (owners.delete(owner)) {
-      const failures = retry.failures + 1;
+      const fenceRace = raced && completedReads.has(owner);
+      const failures = retry.failures + Number(!fenceRace);
       if (failures < RECONCILIATION_MAXIMUM_FAILURES) owners.set(owner, { failures,
-        nextAttemptAt: Date.now() + Math.min(RECONCILIATION_MAXIMUM_RETRY_MS, RECONCILIATION_INITIAL_RETRY_MS * 2 ** (failures - 1)) });
+        nextAttemptAt: Date.now() + (fenceRace ? RECONCILIATION_INITIAL_RETRY_MS
+          : Math.min(RECONCILIATION_MAXIMUM_RETRY_MS, RECONCILIATION_INITIAL_RETRY_MS * 2 ** (failures - 1))) });
     }
     if (owners.size && !this.#lifetime.signal.aborted && this.#scopes.get(configurationFingerprint(scope.authority)) === scope) {
       this.#reconcileScopes.set(scope, owners);
