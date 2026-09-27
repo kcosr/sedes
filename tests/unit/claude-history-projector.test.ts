@@ -2563,6 +2563,37 @@ describe("Claude image reads", () => {
     expect(located.pendingViewedImages.map(({ identity }) => identity.backendTurnId)).toEqual([oldTurn]);
   });
 
+  it("never separates a read from its image when trimming an oversized current turn", () => {
+    const build = (finalCharacters: number) => [prompt,
+      { ...assistant(uuid(2), [{ type: "text", text: "x".repeat(2_000_000) }]),
+        message: { role: "assistant", id: "msg-1", content: [{ type: "text", text: "x".repeat(2_000_000) }], stop_reason: "tool_use" } },
+      { ...read(3, "msg-1", "toolu-1", "/workspace/shot.png") }, result(4, "toolu-1", imageContent()),
+      { ...assistant(uuid(5), [{ type: "text", text: "y".repeat(finalCharacters) }]),
+        message: { role: "assistant", id: "msg-2", content: [{ type: "text", text: "y".repeat(finalCharacters) }], stop_reason: "end_turn" } }];
+    const [pending] = projectClaudeHistory(build(1)).pendingViewedImages;
+    const authentication = { ...historyAuthentication,
+      viewedImages: retained(new Map([[pending!.publicationKey, descriptor(1)]])).viewedImages };
+    const shapes = new Set<string>();
+    // Across the sizes where the trim reaches the read, the read and its
+    // image are kept or omitted together.
+    for (let headroom = 5_200; headroom >= 2_000; headroom -= 400) {
+      const snapshot = projectClaudeHistory(build(MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES - headroom), [], authentication).snapshot;
+      expect(serializedUtf8Bytes(snapshot)).toBeLessThanOrEqual(MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES);
+      const items = ordered(snapshot);
+      const shape = items.map(item => item.semanticKind).join(",");
+      shapes.add(shape);
+      for (const [index, item] of items.entries()) {
+        if (item.semanticKind !== "image") continue;
+        expect(items[index - 1]).toMatchObject({ semanticKind: "viewed_image", backendItemId: pending!.viewedBackendItemId });
+        expect(item.backendItemId).toBe(pending!.identity.backendItemId);
+      }
+    }
+    expect(shapes).toEqual(new Set([
+      "user_message,notice,viewed_image,image,assistant_message",
+      "user_message,notice,assistant_message",
+    ]));
+  });
+
   it("keeps transcript items ahead of an image at the per-turn item cap", () => {
     const texts = (count: number) => Array.from({ length: Math.ceil(count / 2_000) }, (_, row) =>
       assistant(uuid(10_000 + row), Array.from({ length: Math.min(2_000, count - row * 2_000) }, () => ({ type: "text", text: "x" }))));
@@ -2571,7 +2602,7 @@ describe("Claude image reads", () => {
       const pending = projectClaudeHistory(messages).pendingViewedImages;
       const associated = projectClaudeHistory(messages, [], { ...historyAuthentication, viewedImages: retained(
         new Map(pending.map(({ publicationKey }) => [publicationKey, descriptor(1)]))).viewedImages });
-      const turn = associated.usageTurns[0]!;
+      const turn = associated.snapshot.turnsById[associated.snapshot.orderedBackendTurnIds[0]!]!;
       return { pending: pending.length, items: turn.orderedBackendItemIds.length };
     };
     // A user message, the texts, and the read.

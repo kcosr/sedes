@@ -269,7 +269,8 @@ interface ProjectedTimeline {
   readonly terminalCheckpointUuidByBackendTurnId: ReadonlyMap<string, string>;
   readonly authenticatedForkContextBoundaryOperationIds: ReadonlySet<string>;
   readonly authenticatedTaskContextOperationIds: ReadonlySet<string>;
-  readonly pendingViewedImages: readonly ClaudeViewedImageCandidate[];
+  /** Completed image reads whose image is shown once their turn is selected. */
+  readonly imageReads: readonly CompletedImageRead[];
   readonly fingerprint: string;
   readonly nativeMessageStartIndexByBackendTurnId: ReadonlyMap<string, number>;
   readonly userMessageOrdinalByBackendTurnId: ReadonlyMap<string, number>;
@@ -403,8 +404,9 @@ export function projectClaudeLatestSnapshot(
     );
   }
   const turnIds = timeline.orderedBackendTurnIds.slice(start);
+  const shown = withViewedImages(timeline, selected, authentication?.viewedImages);
   const snapshot = backendConversationSnapshotSchema.parse({
-    ...selected,
+    ...shown.selected,
     runState: inferRunState(timeline, turnIds.at(-1)),
     ...(inferRunState(timeline, turnIds.at(-1)) === "running" && turnIds.at(-1)
       ? { activeBackendTurnId: turnIds.at(-1) }
@@ -435,7 +437,7 @@ export function projectClaudeLatestSnapshot(
       timeline.authenticatedForkContextBoundaryOperationIds,
     authenticatedTaskContextOperationIds:
       timeline.authenticatedTaskContextOperationIds,
-    pendingViewedImages: pendingViewedImagesIn(timeline, snapshot.itemsById),
+    pendingViewedImages: shown.pending,
     window: {
       sourceTurnCount:
         coordinates.turnOffset + timeline.orderedBackendTurnIds.length,
@@ -490,7 +492,7 @@ export function projectClaudeHistoryPage(
           timeline.fingerprint,
           timeline.orderedBackendTurnIds.length,
         );
-  const selection = selectHistoryPage(timeline, before, input.limit);
+  const selection = selectHistoryPage(timeline, before, input.limit, input.authentication);
   return backendHistoryPageSchema.parse({
     ...selection.page,
     ...(selection.previousTurnIndex !== undefined
@@ -535,7 +537,7 @@ export function projectClaudeHistoryPageAtIndex(
   ) {
     throw new ClaudeHistoryProjectionError("claude_history_cursor_invalid");
   }
-  return selectHistoryPage(timeline, before, input.limit);
+  return selectHistoryPage(timeline, before, input.limit, input.authentication);
 }
 
 /** Locate one turn in retained native history without exposing its identity. */
@@ -570,13 +572,15 @@ export function locateClaudeHistoryTurn(
   ) {
     const backendTurnId = timeline.orderedBackendTurnIds[index]!;
     if (!input.matchesBackendTurnId(backendTurnId)) continue;
-    const page = backendHistoryPageSchema.parse(
+    const shown = withViewedImages(
+      timeline,
       pickTimeline(timeline, [backendTurnId]),
+      input.authentication?.viewedImages,
     );
     return {
       status: "found",
-      page,
-      pendingViewedImages: pendingViewedImagesIn(timeline, page.itemsById),
+      page: backendHistoryPageSchema.parse(shown.selected),
+      pendingViewedImages: shown.pending,
     };
   }
   return firstCandidateIndex > 0
@@ -588,26 +592,21 @@ function selectHistoryPage(
   timeline: ProjectedTimeline,
   before: number,
   limit: number,
+  authentication: ClaudeHistoryAuthentication | undefined,
 ): ClaudeHistoryPageSelection {
   const earliestByCount = Math.max(0, before - limit);
   const start = earliestStartWithinBytes(timeline, earliestByCount, before);
   const turnIds = timeline.orderedBackendTurnIds.slice(start, before);
-  const page = backendHistoryPageSchema.parse(pickTimeline(timeline, turnIds));
-  return {
-    page,
-    ...(start > 0 ? { previousTurnIndex: start } : {}),
-    pendingViewedImages: pendingViewedImagesIn(timeline, page.itemsById),
-  };
-}
-
-/** Pending image reads whose read is part of a returned window or page. */
-function pendingViewedImagesIn(
-  timeline: ProjectedTimeline,
-  itemsById: Readonly<Record<string, BackendItem>>,
-): readonly ClaudeViewedImageCandidate[] {
-  return timeline.pendingViewedImages.filter(
-    ({ viewedBackendItemId }) => itemsById[viewedBackendItemId] !== undefined,
+  const shown = withViewedImages(
+    timeline,
+    pickTimeline(timeline, turnIds),
+    authentication?.viewedImages,
   );
+  return {
+    page: backendHistoryPageSchema.parse(shown.selected),
+    ...(start > 0 ? { previousTurnIndex: start } : {}),
+    pendingViewedImages: shown.pending,
+  };
 }
 
 function buildTimeline(
@@ -1110,14 +1109,6 @@ function buildTimeline(
     )
     .digest("base64url")
     .slice(0, 32);
-  // After the fingerprint: publishing an image never changes turn positions,
-  // so it must not invalidate a history cursor either.
-  const pendingViewedImages = applyViewedImages(
-    completedImageReads,
-    turnsById,
-    itemsById,
-    authentication?.viewedImages,
-  );
   return {
     orderedBackendTurnIds,
     turnsById,
@@ -1131,7 +1122,9 @@ function buildTimeline(
     terminalCheckpointUuidByBackendTurnId,
     authenticatedForkContextBoundaryOperationIds,
     authenticatedTaskContextOperationIds,
-    pendingViewedImages,
+    // Images are shown only in a selected window, after the fingerprint:
+    // publishing one never moves a turn or invalidates a history cursor.
+    imageReads: completedImageReads,
     fingerprint,
     nativeMessageStartIndexByBackendTurnId,
     userMessageOrdinalByBackendTurnId,
@@ -1215,18 +1208,55 @@ interface CompletedImageRead {
 }
 
 /**
- * Show the image Claude received after each completed image read that has a
- * retained association, in the odd slot after the read (Claude items use even
- * slots). A read without one is reported pending; this never decodes or
- * publishes. Transcript items take precedence at the per-turn item cap.
+ * Covers one image item with its display file name, its record key, and its
+ * turn reference. Selection counts it for every completed image read whether
+ * or not the image is published yet, so a window never moves when it is.
  */
-function applyViewedImages(
-  reads: readonly CompletedImageRead[],
-  turnsById: Record<string, BackendTurn>,
-  itemsById: Record<string, BackendItem>,
+const CLAUDE_VIEWED_IMAGE_RESERVATION_BYTES = 2_048;
+
+type SelectedTimeline = Pick<
+  BackendConversationSnapshot,
+  "orderedBackendTurnIds" | "turnsById" | "itemsById"
+>;
+
+/** Completed image reads whose read is part of a selection. */
+function imageReadsIn(
+  timeline: ProjectedTimeline,
+  itemsById: Readonly<Record<string, BackendItem>>,
+): CompletedImageRead[] {
+  return timeline.imageReads.filter(
+    ({ viewedBackendItemId }) => itemsById[viewedBackendItemId] !== undefined,
+  );
+}
+
+/** Serialized bytes of a selection, with room for each of its images. */
+function selectionBytes(
+  timeline: ProjectedTimeline,
+  selected: SelectedTimeline & Partial<Pick<BackendConversationSnapshot, "runState" | "activeBackendTurnId">>,
+): number {
+  return serializedUtf8Bytes(selected) +
+    imageReadsIn(timeline, selected.itemsById).length * CLAUDE_VIEWED_IMAGE_RESERVATION_BYTES;
+}
+
+/**
+ * Show the image Claude received after each completed image read of a
+ * selected window, page, or turn that has a retained association, in the odd
+ * slot after the read (Claude items use even slots). A read without one is
+ * reported pending; this never decodes or publishes, and it looks up only the
+ * selected reads. An image is added only after its own read, so trimming a
+ * turn can never leave one without it. Transcript items take precedence at
+ * the per-turn item cap.
+ */
+function withViewedImages(
+  timeline: ProjectedTimeline,
+  selected: SelectedTimeline,
   associations: ClaudeViewedImageAssociations | undefined,
-): ClaudeViewedImageCandidate[] {
+): { readonly selected: SelectedTimeline; readonly pending: ClaudeViewedImageCandidate[] } {
+  const reads = imageReadsIn(timeline, selected.itemsById);
   const pending: ClaudeViewedImageCandidate[] = [];
+  if (reads.length === 0) return { selected, pending };
+  const turnsById = { ...selected.turnsById };
+  const itemsById = { ...selected.itemsById };
   const reservedByTurn = new Map<string, number>();
   for (const { viewedBackendItemId, image } of reads) {
     const viewed = itemsById[viewedBackendItemId];
@@ -1265,7 +1295,10 @@ function applyViewedImages(
     orderedBackendItemIds.splice(orderedBackendItemIds.indexOf(viewedBackendItemId) + 1, 0, identity.backendItemId);
     turnsById[turn.backendTurnId] = { ...turn, orderedBackendItemIds };
   }
-  return pending;
+  return {
+    selected: { orderedBackendTurnIds: selected.orderedBackendTurnIds, turnsById, itemsById },
+    pending,
+  };
 }
 
 function applyTerminalReceipts(
@@ -1909,7 +1942,7 @@ function pickTimeline(
   "orderedBackendTurnIds" | "turnsById" | "itemsById"
 > {
   const selected = pickTimelineUnchecked(timeline, turnIds);
-  if (serializedUtf8Bytes(selected) > MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES) {
+  if (selectionBytes(timeline, selected) > MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES) {
     throw new ClaudeHistoryProjectionError("history_too_large");
   }
   return selected;
@@ -1979,7 +2012,7 @@ function compactOversizedLatestTurn(
   };
   const runState = inferRunState(timeline, turnId);
   const fits = (suffixCount: number): boolean =>
-    serializedUtf8Bytes({
+    selectionBytes(timeline, {
       ...candidate(suffixCount),
       runState,
       ...(runState === "running" ? { activeBackendTurnId: turnId } : {}),
@@ -2004,7 +2037,8 @@ function earliestStartWithinBytes(
 ): number {
   if (end <= 0) return 0;
   const bytesAt = (start: number): number =>
-    serializedUtf8Bytes(
+    selectionBytes(
+      timeline,
       pickTimelineUnchecked(
         timeline,
         timeline.orderedBackendTurnIds.slice(start, end),
