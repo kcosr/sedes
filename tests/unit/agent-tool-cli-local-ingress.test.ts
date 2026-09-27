@@ -64,7 +64,7 @@ describe("agent-tool CLI Unix socket ingress", () => {
 
   it.each([
     { error: new BackendAgentToolRequestError({ code: "permission_denied", message: "The source was revoked.", retryable: false }), code: "permission_denied", retryable: false },
-    { error: new OpenCodeRuntimeError("configuration_scope_denied"), code: "permission_denied", retryable: false },
+    { error: new OpenCodeRuntimeError("opencode_runtime_configuration_scope_denied"), code: "permission_denied", retryable: false },
     { error: new OpenCodeRuntimeError("opencode_request_authority_mismatch"), code: "permission_denied", retryable: false },
     { error: new OpenCodeRuntimeError("opencode_runtime_unavailable"), code: "unavailable", retryable: true },
   ])("classifies native CLI capture refusal $error.message as $code without relaying", async ({ error, code, retryable }) => {

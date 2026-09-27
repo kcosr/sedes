@@ -22,7 +22,7 @@ export async function relayAgentToolCliRequest(
   } catch (error) {
     if (error instanceof BackendAgentToolRequestError) throw new AgentToolCliIngressError(error.toolError);
     if (error instanceof OpenCodeRuntimeError) {
-      if (error.code === "configuration_scope_denied" || error.code === "opencode_request_authority_mismatch") {
+      if (error.code === "opencode_runtime_configuration_scope_denied" || error.code === "opencode_request_authority_mismatch") {
         throw new AgentToolCliIngressError({ code: "permission_denied", message: "This OpenCode session is not admitted to Sedes tools.", retryable: false });
       }
       if (error.code === "opencode_runtime_unavailable") {

@@ -10,6 +10,8 @@ import { OpenCodeNativeHost } from "../../src/server/backends/opencode/opencode-
 import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 import { openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
 import type { OpenCodeToolInvocationStamp } from "../../src/server/backends/opencode/opencode-tool-invocation.js";
+import { relayAgentToolCliRequest } from "../../src/server/sidecar/agent-tool-request-relay.js";
+import { SidecarRuntimeAttachment } from "../../src/server/sidecar/sidecar-runtime-attachment.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" }, executionEnvironmentId = "environment";
 const serviceConfiguration = { environmentRevision: 1, operationsRevision: 1 };
@@ -99,7 +101,13 @@ describe("resident OpenCode runtime registry", () => {
     await f.hosts.ensure({ ...configuration, instance: { ...configuration.instance, id: "other-backend" },
       connections: [{ ...configuration.connections[0]!, backendInstanceId: "other-backend" }], nativeStorePath: "/native/other.db" }, f.epoch);
     for (const owner of f.owners) owner.cliCapabilities.set("duplicate-capability", {} as OpenCodeToolInvocationStamp);
-    expect(() => f.hosts.captureCliInvocation("duplicate-capability")).toThrow("scope_denied");
+    expect(() => f.hosts.captureCliInvocation("duplicate-capability")).toThrow("opencode_runtime_configuration_scope_denied");
+    const attachment = new SidecarRuntimeAttachment(), send = vi.spyOn(attachment, "call");
+    await expect(relayAgentToolCliRequest(attachment, { protocolVersion: 3, requestId: randomUUID(), sourceCapability: "duplicate-capability",
+      operation: { type: "invoke", request: { toolId: "agent.context", schemaVersion: 2, requestId: randomUUID(), input: {} } } },
+      new AbortController().signal, capability => f.hosts.captureCliInvocation(capability)))
+      .rejects.toMatchObject({ toolError: { code: "permission_denied", retryable: false } });
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("shares startup, makes lookup existing-only and preserves startup definitions until retirement", async () => {
