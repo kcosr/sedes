@@ -4,6 +4,36 @@ import { parseOpenCodeNativeEvent } from "../../src/server/backends/opencode/ope
 const event = (seq: number, type: string, data: Record<string, unknown>) => parseOpenCodeNativeEvent({ id: `evt_${seq}`,
   created: 1, type, durable: { aggregateID: "ses_owned", seq, version: 1 }, data: { sessionID: "ses_owned", ...data } });
 describe("OpenCode compact native proof", () => {
+  it("settles execution uncertainty after a native break using positive terminal evidence", () => {
+    const proof = new OpenCodeNativeObservationProof("ses_owned");
+    proof.accept(event(1, "session.inbox.delivered", { inboxID: "msg_owned" }));
+    proof.accept(event(2, "session.execution.started", {}));
+    proof.discontinuity(); expect(proof.hasWork).toBe(true);
+    proof.accept(event(3, "session.execution.succeeded", {})); expect(proof.hasWork).toBe(false);
+  });
+  it("settles an exact queued cancellation after a break without requiring a nonexistent execution", () => {
+    const proof = new OpenCodeNativeObservationProof("ses_owned");
+    proof.prepareInput("msg_queued", 4_096); proof.discontinuity();
+    expect(proof.hasWork).toBe(true);
+    proof.accept(event(1, "session.inbox.cancelled", { inboxID: "msg_queued" })); expect(proof.hasWork).toBe(false);
+  });
+  it("keeps unknown dispatch pins and collapsed inventories after an unrelated execution ends", () => {
+    const proof = new OpenCodeNativeObservationProof("ses_owned");
+    proof.prepareInput("msg_unknown", 4_096); proof.discontinuity();
+    proof.accept(event(1, "session.execution.succeeded", {})); expect(proof.hasWork).toBe(true);
+    expect(proof.trim(1_024)).toBe(false);
+    proof.accept(event(2, "session.execution.succeeded", {})); expect(proof.hasWork).toBe(true);
+  });
+  it("reclaims only cached density proofs while preserving current and pending input authority", () => {
+    const proof = new OpenCodeNativeObservationProof("ses_owned");
+    proof.prepareInput("msg_queued", 4_096);
+    proof.accept(event(1, "session.inbox.delivered", { inboxID: "msg_owned" }));
+    const before = proof.snapshot();
+    expect(proof.reclaimCachedProofBytes(4_096)).toBeGreaterThan(0);
+    expect(proof.snapshot()).toMatchObject({ nativeFrontier: before.nativeFrontier, authorityEpoch: before.authorityEpoch, currentInputId: "msg_owned", proofs: [] });
+    proof.accept(event(2, "session.execution.succeeded", {})); expect(proof.hasWork).toBe(true);
+    proof.refuseInput("msg_queued"); expect(proof.hasWork).toBe(false);
+  });
   it("retains current input independently from payload trimming but revokes it on native loss", () => {
     const proof = new OpenCodeNativeObservationProof("ses_owned");
     proof.accept(event(1, "session.inbox.delivered", { inboxID: "msg_owned" }));

@@ -57,7 +57,7 @@ export class OpenCodeNativeHost {
     Object.freeze(authority.session); Object.freeze(authority);
     const key = configurationFingerprint(authority);
     const existing = this.#scopes.get(key);
-    if (existing) { existing.references++; return existing.port; }
+    if (existing) { this.#hub.admitScope(existing.port.authority); existing.references++; return existing.port; }
     if (this.#frozen) throw new OpenCodeRuntimeError("opencode_mutation_admission_closed");
     if (this.#scopes.size >= 4_096) throw new OpenCodeRuntimeError("opencode_native_scope_capacity");
     const lifetime = new AbortController();
@@ -97,6 +97,7 @@ export class OpenCodeNativeHost {
     catch { throw denied(); }
     const existing = this.#scopes.get(configurationFingerprint(authority));
     if (!authority.session || !existing || existing.port.lifetime.aborted) throw denied();
+    this.#hub.admitScope(existing.port.authority);
     existing.references++; return existing.port;
   }
 

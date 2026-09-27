@@ -147,8 +147,11 @@ export class OpenCodeRuntimeHostRegistry {
     if ((retained?.pendingInteractionCount ?? 0) > 0) blockers.push("pending_interaction");
     if ((retained?.retainedMutationCount ?? 0) > 0 || (retained?.observation.pendingEvidenceCount ?? 0) > 0) blockers.push("unsettled_outcome");
     if (native.state === "cleanup_unproved") blockers.push("cleanup_unproven");
+    // Confirmation authorizes retiring this exact native owner. Streaming deltas,
+    // evidence ACKs and newly observed work must not make a confirmed force Stop
+    // impossible; current blockers still govern every non-forced retirement.
     const revision = configurationFingerprint({ runtimeId: resident.runtime.runtimeId,
-      state: native.state, generation: native.generation ?? null, retained: retained ?? null });
+      state: native.state, generation: native.generation ?? null, ownership: native.ownership });
     return { state, incarnation: resident.runtime.runtimeId, revision, blockers,
       startupEnvironmentFingerprint: resident.startupEnvironmentFingerprint,
       retainedThreadIds: retained?.threadIds ?? [] };

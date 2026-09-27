@@ -11,6 +11,7 @@ export class OpenCodeNativeObservationProof {
   readonly #pending = new Map<string, number | null>();
   readonly #work = new Set<string>();
   #unknownWork = false;
+  #unknownExecution = false;
   #workBytes = 0;
   #frontier: number | null = null;
   #highestSeen = -1;
@@ -19,7 +20,7 @@ export class OpenCodeNativeObservationProof {
   #bytes = 0;
   constructor(readonly sessionID: string) {}
   get bytes(): number { return this.#bytes + 1_024 + this.#workBytes; }
-  get hasWork(): boolean { return this.#unknownWork || this.#current !== null || this.#pending.size !== 0 || this.#work.size !== 0; }
+  get hasWork(): boolean { return this.#unknownWork || this.#unknownExecution || this.#current !== null || this.#pending.size !== 0 || this.#work.size !== 0; }
   get currentInputId(): string | null { return this.#current; }
   prepareInput(id: string, maximumBytes: number): boolean {
     if (this.#pending.has(id)) return true;
@@ -29,7 +30,12 @@ export class OpenCodeNativeObservationProof {
     this.#addPending(id, null); return true;
   }
   refuseInput(id: string): void { if (this.#pending.get(id) === null) this.#removePending(id); }
-  discontinuity(): void { this.#unknownWork ||= this.hasWork; this.#epoch++; this.#current = null; this.#frontier = null; }
+  discontinuity(): void {
+    // Known pending inputs and work IDs survive the break and can be settled by
+    // their exact later events. Only the current input loses its execution fence.
+    this.#unknownExecution ||= this.#current !== null;
+    this.#epoch++; this.#current = null; this.#frontier = null;
+  }
   isDuplicate(event: OpenCodeNativeEvent): boolean {
     return "durable" in event && !!event.durable && event.durable.aggregateID === this.sessionID &&
       this.#proofs.get(event.durable.seq)?.fingerprint === openCodeNativeFactFingerprint(event);
@@ -72,9 +78,18 @@ export class OpenCodeNativeObservationProof {
     } else if (["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted",
       "session.revert.committed", "session.revert.staged", "session.deleted"].includes(event.type)) {
       this.#current = null; this.#epoch++;
-      if (event.type === "session.deleted") { for (const id of this.#pending.keys()) this.#removePending(id); this.#unknownWork = false; }
+      if (event.type === "session.deleted") { for (const id of this.#pending.keys()) this.#removePending(id); this.#unknownWork = false; this.#unknownExecution = false; }
       if (event.type === "session.revert.committed") this.#revert(event.data.to, nativeSequence);
+      // A root terminal settles the lost current execution. Other pending input
+      // and child/shell/interaction markers independently continue retaining it.
+      if (["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"].includes(event.type)) this.#unknownExecution = false;
     }
+  }
+  /** Density fingerprints are reconstructible; lifecycle markers are not. */
+  reclaimCachedProofBytes(bytes: number): number {
+    const before = this.#bytes;
+    while (this.#proofs.size && before - this.#bytes < bytes) this.#dropFirstProof();
+    return before - this.#bytes;
   }
   trim(maximumBytes: number): boolean {
     while (this.#proofs.size && (this.#proofs.size > OPENCODE_NATIVE_PROOF_RECORDS || this.bytes > maximumBytes)) {

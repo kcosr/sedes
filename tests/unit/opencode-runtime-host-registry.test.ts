@@ -127,10 +127,13 @@ describe("resident OpenCode runtime registry", () => {
     const inspected = await f.hosts.inspect(runtime.runtimeId); expect(inspected.blockers).toContain("unknown_state");
     await expect(f.hosts.stop(runtime.runtimeId, inspected.revision, false)).rejects.toThrow("restart_blocked");
     expect(f.owners[0]!.frozen).toBe(false);
-    f.owners[0]!.revision++;
-    await expect(f.hosts.stop(runtime.runtimeId, inspected.revision, true)).rejects.toThrow("confirmation_stale");
+    await expect(f.hosts.stop(runtime.runtimeId, "another-runtime-confirmation", true)).rejects.toThrow("confirmation_stale");
     expect(f.controls.signals).not.toHaveBeenCalled(); expect(f.archive).not.toHaveBeenCalled();
-    await f.hosts.stop(runtime.runtimeId, (await f.hosts.inspect(runtime.runtimeId)).revision, true);
+    // Live evidence continues changing while the user's confirmation crosses
+    // the carrier. It does not replace the inspected native owner.
+    f.owners[0]!.revision += 100; f.owners[0]!.retained = 5; f.owners[0]!.active = 1;
+    expect((await f.hosts.inspect(runtime.runtimeId)).revision).toBe(inspected.revision);
+    await f.hosts.stop(runtime.runtimeId, inspected.revision, true);
     expect(f.controls.signals).toHaveBeenCalledOnce(); expect(f.services.status().resources).toEqual([]);
   });
 
