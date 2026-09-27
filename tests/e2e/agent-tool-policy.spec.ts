@@ -260,7 +260,7 @@ test.describe.serial("agent tool policy", () => {
       error: {
         code: "invalid_transition",
         message:
-          "Agent tool exposure can change only while the thread is idle.",
+          "Wait for active work to finish and close any open agent terminal for this thread before changing agent tools.",
         retryable: false,
       },
     });

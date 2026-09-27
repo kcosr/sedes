@@ -382,7 +382,7 @@ export class CodexManagedTuiController implements ManagedTerminalResourceAuthori
   async consumeLifecycle(): Promise<void> {
     const lifecycle = this.#client.lifecycleSnapshot();
     await this.registry.fenceAppServerGeneration(
-      lifecycle.state === "ready" ? lifecycle.generation : 0,
+      lifecycle.state === "ready" && this.#isRuntimeSupported() ? lifecycle.generation : 0,
     );
   }
 

@@ -65,6 +65,9 @@ import { CodexServerRequestRouter } from "../../src/server/backends/codex/codex-
 import { CodexGoalSessionRegistry } from "../../src/server/backends/codex/codex-goal-session.js";
 import { CodexFastModeSessionRegistry } from "../../src/server/backends/codex/codex-fast-mode-session.js";
 import { CodexManagedTuiController } from "../../src/server/backends/codex/codex-managed-tui-controller.js";
+import { CodexRuntimeManagedTuiRegistry } from "../../src/server/backends/codex/runtime/codex-runtime-managed-tui.js";
+import type { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.js";
+import type { SidecarRuntimeBody } from "../../src/server/sidecar/runtime-body-channel.js";
 import {
   codexSkillId,
   type CodexComposerSkillPreferenceReader,
@@ -16780,6 +16783,72 @@ describe("CodexBackendDriverFactory", () => {
 });
 
 describe("Codex provider residency release for tool changes", () => {
+  it.each(["starting", "running", "stopping"] as const)("attaches the initially empty remote TUI cache before refusing a retained %s terminal", async lifecycle => {
+    const harness = new RpcHarness();
+    const retained = {
+      authority: {
+        scope, applicationThreadId: binding().applicationThreadId,
+        backendInstanceId: binding().backendInstanceId, connectionProfileId: binding().connectionProfileId,
+        executionEnvironmentId: binding().executionEnvironmentId, backendConversationId: binding().backendConversationId,
+        workspaceId: workspace.summary.id, canonicalWorkspacePath: workspace.canonicalPath,
+        opaqueBindingDetail: attachInput().opaqueBindingDetail, runtimeLeaseId: "retained-remote-runtime", appServerGeneration: 1,
+      },
+      revision: 1, state: { lifecycle, resourceGeneration: 1, streamAvailable: lifecycle === "running" },
+    };
+    const channel = {
+      supportsOperation: () => true,
+      onEvent: () => () => {},
+      encodeBody: async (value: unknown): Promise<SidecarRuntimeBody> => ({ type: "inline", value }),
+      decodeBody: async (body: SidecarRuntimeBody) => { if (body.type !== "inline") throw new Error("test_body_invalid"); return body.value; },
+      call: vi.fn(async (_operation: unknown, request: SidecarRuntimeBody): Promise<SidecarRuntimeBody> => {
+        const command = request.type === "inline" ? request.value as { action: string } : undefined;
+        return { type: "inline", value: command?.action === "attach" ? { resources: [retained] } : { ok: true } };
+      }),
+    } as unknown as SidecarRuntimeChannel;
+    let allowAttachment!: () => void;
+    const ready = new Promise<void>(resolve => { allowAttachment = resolve; });
+    const connect = vi.fn(async () => { await ready; return {
+      channel, runtimeId: "retained-remote-runtime", controllerEpoch: 1, providerGeneration: 1, generationOffset: 0, closed: new Promise(() => {}),
+    }; });
+    const registry = new CodexRuntimeManagedTuiRegistry({ connect });
+    const managedTui = new CodexManagedTuiController({ client: harness.facade, registry });
+    const selected = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy,
+      executionSettingsProvider(), undefined, managedTui);
+    try {
+      expect(registry.runningAuthority(scope, binding().applicationThreadId)).toBeUndefined();
+      const release = selected.releaseConversationResidency(attachInput());
+      expect(connect).toHaveBeenCalledOnce();
+      expect(harness.calls).toEqual([]);
+      allowAttachment();
+      await expect(release).resolves.toBe("busy");
+      expect(registry.projection(scope, binding().applicationThreadId).state.lifecycle).toBe(lifecycle);
+      expect(harness.calls).toEqual([]);
+    } finally { allowAttachment(); await managedTui.close(); }
+  });
+
+  it.each([true, false])("treats remote TUI attachment failure as unavailable only for supported topology (%s)", async supported => {
+    const harness = new RpcHarness();
+    const connect = vi.fn(async (): Promise<never> => { throw new Error("sidecar_disconnected"); });
+    const registry = new CodexRuntimeManagedTuiRegistry({ connect });
+    const managedTui = new CodexManagedTuiController({ client: harness.facade, registry, isRuntimeSupported: () => supported });
+    const selected = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy,
+      executionSettingsProvider(), undefined, managedTui);
+    try {
+      if (supported) {
+        await expect(selected.releaseConversationResidency(attachInput())).rejects.toMatchObject({
+          category: "unavailable", retryable: true, backendCode: "codex_residency_tui_state_unavailable",
+        });
+        expect(harness.calls).toEqual([]);
+      } else {
+        harness.enqueue("thread/read", { thread: nativeThread() }, { thread: nativeThread() });
+        harness.enqueue("thread/goal/get", { goal: null });
+        harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+        await expect(selected.releaseConversationResidency(attachInput())).resolves.toBe("released");
+        expect(connect).not.toHaveBeenCalled();
+      }
+    } finally { await managedTui.close(); }
+  });
+
   it.each(["legacy", "paginated"] as const)("preserves an unmaterialized %s thread instead of dropping its only subscription", async historyMode => {
     const harness = new RpcHarness();
     harness.enqueue("thread/read", { thread: nativeThread({ historyMode, turns: [] }) });
