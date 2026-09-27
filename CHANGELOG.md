@@ -5,12 +5,12 @@
 ### Breaking Changes
 
 - Browser and packaged clients now require client protocol 128 for the OpenCode
-  v2 backend identity and terminal Stop diagnostics.
+  v2 backend identity and terminal Stop diagnostics. (#17)
 
 - Claude worker and persistent runtime capabilities now require major 2 for
   bounded, recoverable conversation Stop. Rebuild local helpers and upgrade
   Claude sidecars with this server. Migration 119 closes old unconfirmed Stop
-  receipts without sending a new cancellation.
+  receipts without sending a new cancellation. (#17)
 
 - Browser and packaged clients must use client protocol 127, which adds
   confirmed live background-work counts to sidebar thread summaries. (#16)
@@ -72,7 +72,8 @@
   Send, Steer, Queue, Stop, model selection, saved Agents, native
   approvals/forms, staged files/images, viewed images, skills and manual compact.
   Native Progressive tools use a bundled per-call MCP bridge; owned roots can
-  use CLI tools and scoped execution variables. Reconnect never automatically resends an uncertain input.
+  use CLI tools and scoped execution variables. Reconnect never automatically
+  resends an uncertain input. (#17)
 
 - Sidebar thread rows and previews show a slow grey spinner for live subagents
   and a grey dot for remaining background commands. Active turns and unseen
@@ -148,7 +149,7 @@
 
 - Stop uses the existing native conversation control independently of history
   loading, with a fixed 30-second deadline. Unconfirmed Stop requests no longer
-  block the Queue indefinitely, and retrying one does not cancel newer work.
+  block the Queue indefinitely, and retrying one does not cancel newer work. (#17)
 
 - Codex archives now unsubscribe Sedes from the native conversation and refuse
   while a native turn or goal is active. Archiving or changing tools also
