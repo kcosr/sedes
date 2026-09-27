@@ -1738,7 +1738,8 @@ This is volatile thread/runtime-generation state delivered through the existing
 tenant/principal-scoped application stream; it adds no configuration, durable
 state, controls, or provider side effects. Only a loaded, current runtime with
 known positive inventory may contribute counts. Unknown, disconnected,
-reconciling, unavailable, closed, or retiring runtimes contribute no live claim.
+reconciling, unavailable, closed, retiring, or failed-projection-recovery runtimes
+contribute no live claim; an authoritative replacement can restore the observation.
 Full snapshots and thread upserts must agree, without attaching dormant
 conversations. Publish inventory changes independently of main-turn state,
 including runtime establishment and retirement, and fence obsolete generations.

@@ -4047,7 +4047,14 @@ describe("ConversationActorManager", () => {
       .mockRejectedValueOnce(new Error("replacement-failed-2"))
       .mockRejectedValueOnce(new Error("replacement-failed-3"));
     const received: ConversationActorEvent[] = [];
-    acquired.actor.subscribe((event) => received.push(event));
+    const recoveryStateAtNotice: boolean[] = [];
+    expect(acquired.actor.projectionRecoveryRequired).toBe(false);
+    acquired.actor.subscribe((event) => {
+      received.push(event);
+      if (event.type === "backend_event" && event.event.type === "notice") {
+        recoveryStateAtNotice.push(acquired.actor.projectionRecoveryRequired);
+      }
+    });
 
     handle.emit(0, {
       type: "resnapshot_required",
@@ -4071,6 +4078,8 @@ describe("ConversationActorManager", () => {
         }),
       ),
     );
+    expect(acquired.actor.projectionRecoveryRequired).toBe(true);
+    expect(recoveryStateAtNotice).toEqual([true]);
     const failedGeneration = acquired.actor.timeline.generation;
     handle.establishmentSnapshots[1] = snapshot("idle", "recovered");
     const reopened = await manager.acquire({
@@ -4082,6 +4091,7 @@ describe("ConversationActorManager", () => {
     });
     expect(establishment).toHaveBeenCalledTimes(4);
     expect(handle.establishCount).toBe(2);
+    expect(reopened.actor.projectionRecoveryRequired).toBe(false);
     expect(reopened.actor.timeline.generation).not.toBe(failedGeneration);
     reopened.release();
     acquired.release();

@@ -542,6 +542,7 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
       const promptText = claudePromptText(prompt);
       const parityScenario = promptText.includes("CLAUDE_PARITY_NATIVE_IMAGE");
       const skillScenario = promptText.trimStart().startsWith("/review");
+      const sidebarBackgroundScenario = promptText === "Start sidebar background fixture";
       const backgroundScenario = promptText === "Start background fixture" ||
         promptText === "Complete the background fixture";
       const user = {
@@ -637,7 +638,7 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
         });
         continue;
       }
-      if (options.canUseTool && !parityScenario && !skillScenario && !backgroundScenario) {
+      if (options.canUseTool && !parityScenario && !skillScenario && !backgroundScenario && !sidebarBackgroundScenario) {
         // Let the normalized submit receipt and runtime subscription settle
         // before the provider opens its blocking permission callback.
         await new Promise((resolve) => setTimeout(resolve, 200));
@@ -813,7 +814,7 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
           },
         },
       } as unknown as ClaudeMessage);
-      if (promptText === "Start sidebar background fixture") {
+      if (sidebarBackgroundScenario) {
         await new Promise<void>((finish) => {
           this.#sidebarBackground = { sessionId, queue, finish };
           queue.push({ type: "system", subtype: "background_tasks_changed",

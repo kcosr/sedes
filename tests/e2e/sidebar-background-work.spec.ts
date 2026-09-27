@@ -3,6 +3,7 @@ import { capture, openSedesWorkspace, selectCustomNewThreadTarget } from "./help
 
 test("sidebar prioritizes turns, unseen completion, subagents, and background commands", async ({ page }, testInfo) => {
   await openSedesWorkspace(page);
+  await page.getByRole("button", { name: "Switch to Timeline", exact: true }).click();
   await page.getByTestId("desktop-sidebar").getByTestId("new-thread-trigger").click();
   await page.getByRole("textbox", { name: "Thread name" }).fill("Background work priority");
   await selectCustomNewThreadTarget(page, "Claude subscription · Claude");
@@ -40,6 +41,7 @@ test("sidebar prioritizes turns, unseen completion, subagents, and background co
   await advance("agents");
   await expect(glyph).toHaveAttribute("title", /1 subagent, 1 command/);
   await row.getByTestId("thread-row-link").click();
+  await page.mouse.move(900, 100);
   await expect(glyph).toHaveAttribute("data-glyph", "background-agents");
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);

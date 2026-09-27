@@ -2571,7 +2571,9 @@ describe("loaded sidebar background work", () => {
       runState: "idle" as const,
       backgroundActivity: { state: "known" as const, agents: 2, commands: 1, other: 0 },
     };
+    let projectionRecoveryRequired = false;
     const actor = {
+      get projectionRecoveryRequired() { return projectionRecoveryRequired; },
       timeline, canEvict: true, closed: false, replacementSafe: true,
       ensureProjectionCurrent: vi.fn(async () => undefined),
       subscribe: () => () => undefined,
@@ -2583,7 +2585,7 @@ describe("loaded sidebar background work", () => {
     let summaryListener!: (event: ThreadEventEnvelope) => void;
     vi.spyOn(hub, "subscribeInternal").mockImplementation((listener) => {
       summaryListener = listener;
-      return { close: vi.fn() } as ReturnType<typeof hub.subscribeInternal>;
+      return { watermark: 0, replay: [], close: vi.fn() };
     });
     const { coordinator } = resetCoordinator([actor], 60_000, runtimeTarget,
       hubs, Promise.resolve(), async (eventScope, threadId) => {
@@ -2606,10 +2608,20 @@ describe("loaded sidebar background work", () => {
         ...(counts.agents + counts.commands > 0 ? { backgroundWork: counts } : {}),
       }));
     }
+    projectionRecoveryRequired = true;
+    summaryListener({ event: { type: "notice", generation: timeline.generation,
+      notice: { id: "recovery-failure", tone: "error", message: { text: "Synchronization failed" }, createdAt: "2026-08-04T00:00:00.000Z" },
+    } } as ThreadEventEnvelope);
+    await vi.waitFor(() => expect(observed.at(-1)).toEqual({ runState: "idle" }));
+    projectionRecoveryRequired = false;
+    summaryListener({ event: { type: "snapshot", generation: timeline.generation,
+      snapshot: { runState: "idle" },
+    } } as ThreadEventEnvelope);
+    await vi.waitFor(() => expect(observed.at(-1)).toEqual({ runState: "idle", backgroundWork: { agents: 0, commands: 1, other: 0 } }));
     runtime.release();
     await coordinator.runWithRuntimeRetired(scope, "background-thread", async () => undefined);
     await vi.waitFor(() => expect(observed.at(-1)).toBeUndefined());
-    expect(observed).toHaveLength(5);
+    expect(observed).toHaveLength(7);
     await coordinator.close();
   });
 

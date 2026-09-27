@@ -401,6 +401,7 @@ describe("ApplicationSnapshotService", () => {
 
 it("keeps scoped background counts equivalent in full snapshots and incremental upserts", async () => {
   const durable = thread("background-thread", "workspace-local", "2026-08-04T00:00:00.000Z");
+  durable.backend = { label: { text: "Claude" }, brand: "claude" };
   let loaded: { runState: "idle"; backgroundWork?: NormalizedApplicationThreadSummary["backgroundWork"] } | undefined;
   const assertScope = (requested: RequestScope) => expect(requested).toEqual(scope);
   const inventory = {

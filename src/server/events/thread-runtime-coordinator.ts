@@ -924,6 +924,7 @@ export class ThreadRuntimeCoordinator {
       const backgroundWork =
         entry.applicationOverlayReady &&
         !runtime.actor.replacementRequired &&
+        !runtime.actor.projectionRecoveryRequired &&
         runState !== "disconnected" &&
         runState !== "reconciling" &&
         backgroundActivity?.state === "known" &&
@@ -1235,7 +1236,9 @@ export class ThreadRuntimeCoordinator {
           event.type === "queue_changed" ||
           event.type === "thread_changed" ||
           event.type === "attention_changed" ||
-          event.type === "background_activity_changed"
+          event.type === "background_activity_changed" ||
+          // Projection-recovery failure reports its stale boundary via a notice.
+          event.type === "notice"
         ) {
           try {
             const publication = this.#onThreadChanged?.(
