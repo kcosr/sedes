@@ -6,7 +6,7 @@ import type { OpenCodeRuntimeHostRegistry } from "./opencode-runtime-host-regist
 import type { OpenCodeNativeHost } from "./opencode-native-host.js";
 import type { OpenCodeNativePort, OpenCodeObservationEnd, OpenCodePortObservation } from "./opencode-native-port.js";
 import { OPENCODE_CONTROL_MUTATIONS } from "./opencode-native-port.js";
-import { encodeOpenCodeNativeFailure, parseOpenCodeReadInput, parseOpenCodeMutationInput } from "./opencode-native-codecs.js";
+import { encodeOpenCodeNativeFailure, OPENCODE_OBSERVATION_WIRE_BYTES, parseOpenCodeReadInput, parseOpenCodeMutationInput } from "./opencode-native-codecs.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import { openCodeRuntimeCommandSchema, openCodeRuntimeCommandLane, openCodeRuntimeOperations,
   type OpenCodeRuntimeCommand, type OpenCodeRuntimeInfo } from "./opencode-runtime-wire.js";
@@ -47,14 +47,14 @@ export function registerOpenCodeRuntimeHost(input: {
     }
     item.host.release(item.port);
   };
-  const portFor = (command: Extract<OpenCodeRuntimeCommand, { portId: string }>) => {
+  const portFor = (command: { runtimeId: string; nativeGeneration: string; portId: string }) => {
     if (!["attached", "recovery"].includes(runtimes.get(command.runtimeId) ?? "")) throw denied();
     const item = ports.get(command.portId);
     if (!item || item.port.authority.runtimeId !== command.runtimeId ||
         item.port.authority.nativeGeneration !== command.nativeGeneration || item.port.lifetime.aborted) throw denied();
     return item;
   };
-  const observationFor = (command: Extract<OpenCodeRuntimeCommand, { observationId: string }>) => {
+  const observationFor = (command: { runtimeId: string; nativeGeneration: string; portId: string; observationId: string }) => {
     portFor(command);
     const item = observations.get(command.observationId);
     if (!item || item.portId !== command.portId) throw denied();
@@ -81,6 +81,44 @@ export function registerOpenCodeRuntimeHost(input: {
         if (!runtime) return null;
         if (!runtimes.has(runtime.runtimeId)) runtimes.set(runtime.runtimeId, "administration");
         return runtimeInfo(runtime);
+      }
+    }
+    if (command.action === "observe_poll") {
+      // One poll covers every subscribed scope of this purpose on the carrier.
+      // Silent threads therefore cannot consume the peer's request capacity.
+      const ids = new Set<string>();
+      const items = command.targets.map(target => {
+        if (ids.has(target.observationId)) throw denied();
+        ids.add(target.observationId);
+        try {
+          const item = observationFor(target);
+          if (item.purpose !== command.purpose || item.polling) throw denied();
+          return { target, item, failure: undefined };
+        } catch (error) {
+          // A cancelled subscription can close before this batch arrives. Its
+          // refusal is scoped to that entry; healthy threads keep observing.
+          return { target, item: undefined, failure: encodeOpenCodeNativeFailure(error, false) };
+        }
+      });
+      const waiting = new AbortController();
+      const waitSignal = AbortSignal.any([signal, waiting.signal, AbortSignal.timeout(1_000)]);
+      for (const { item } of items) if (item) item.polling = true;
+      try {
+        try { await Promise.race(items.map(({ item }) => !item || item.end ? Promise.resolve() : item.observation.wait(waitSignal))); }
+        catch (error) { if (!items.some(({ item }) => !item || item.end) && !(error instanceof Error && error.name === "TimeoutError")) throw error; }
+        assertController(); signal.throwIfAborted();
+        let remainingBytes = OPENCODE_OBSERVATION_WIRE_BYTES;
+        return items.map(({ target, item, failure }) => {
+          if (!item) return { observationId: target.observationId, result: { status: "ended", reason: "failed", failure } };
+          if (item.end) return { observationId: target.observationId, result: { status: "ended", reason: item.end.reason,
+            ...(item.end.error ? { failure: encodeOpenCodeNativeFailure(item.end.error, false) } : {}) } };
+          const records = remainingBytes >= 2 ? item.observation.drain(remainingBytes) : [];
+          remainingBytes = Math.max(0, remainingBytes - Buffer.byteLength(JSON.stringify(records)));
+          return { observationId: target.observationId, result: { status: "events", records } };
+        });
+      } finally {
+        waiting.abort();
+        for (const { item } of items) if (item) item.polling = false;
       }
     }
     if (!runtimes.has(command.runtimeId)) throw denied();
@@ -133,23 +171,6 @@ export function registerOpenCodeRuntimeHost(input: {
         void observation.ended.then(end => { attachment.end = end; });
         try { const boundary = await observation.ready; assertController(); return { observationId, boundary }; }
         catch (error) { await closeObservation(observationId); throw error; }
-      }
-      case "observe_poll": {
-        const item = observationFor(command);
-        if (item.purpose !== command.purpose) throw denied();
-        if (item.polling) throw denied();
-        item.polling = true;
-        try {
-          if (!item.end) {
-            // Finite polls free ordinary-lane slots even for silent sessions.
-            try { await item.observation.wait(AbortSignal.any([signal, AbortSignal.timeout(1_000)])); }
-            catch (error) { if (!item.end && !(error instanceof Error && error.name === "TimeoutError")) throw error; }
-          }
-          assertController();
-          return item.end ? { status: "ended", reason: item.end.reason,
-            ...(item.end.error ? { failure: encodeOpenCodeNativeFailure(item.end.error, false) } : {}) }
-            : { status: "events", records: item.observation.drain() };
-        } finally { item.polling = false; }
       }
       case "observe_ack": await observationFor(command).observation.acknowledge(command.cursor); return { ok: true };
       case "observe_close": observationFor(command); await closeObservation(command.observationId); return { ok: true };

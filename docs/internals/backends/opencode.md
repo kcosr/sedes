@@ -43,9 +43,20 @@ thread has a bounded evidence journal, dense sequence, continuity token and
 compact native proof baseline. Main commits receipt evidence and its observation
 cursor in one transaction before acknowledging the host. Carrier loss does not
 end native observation; native SSE loss explicitly invalidates continuity.
+Main acknowledges once per committed replay batch. Evidence retains full input,
+execution-terminal, step-boundary, deletion and revert events; other durable
+payloads become compact sequence/fingerprint facts. Native presentation still
+receives the full events. Cached historical proof facts are reclaimable across
+scopes; pending execution and input markers are not. Positive root completion
+can clear uncertainty caused by a native stream break, but an unresolved prompt
+pin remains until exact native evidence settles it. An operation acknowledgment
+alone never proves that native work ended.
+
 Presentation subscribers have separate bounded queues and cannot acknowledge
-operation evidence. Retention exhaustion prevents new ordinary work while
-preserving the independent control path.
+operation evidence. When their shared byte budget fills, the subscriber holding
+the most queued data must resnapshot. Retention exhaustion for unacknowledged
+critical evidence prevents new ordinary work while preserving the independent
+control path.
 
 The persistent sidecar advertises the private `opencode_runtime` capability on
 Linux. Its registry owns the same runtime/host used locally; SSH and outbound
@@ -55,7 +66,12 @@ Existing-only recovery can reopen exact retained thread authority after a
 configuration change, but cannot create scopes or submit new work. Backend
 administration can inspect and explicitly retire the original owner even after
 desired native paths change. Scope acquisition, evidence recovery and controls
-have a separate lane from ordinary history/body requests.
+have a separate lane from ordinary history/body requests. Observations multiplex
+into at most two polling requests per carrier, with bounded aggregate responses
+and separate evidence/presentation purposes. Closing one subscription cannot
+invalidate another thread's poll. Stop confirmation binds the runtime identity,
+generation, ownership and state, so streaming text cannot continually invalidate
+a confirmed Stop.
 
 Remote product admission remains disabled pending tool relay and full remote
 qualification. The host implementation is exercised through test composition;

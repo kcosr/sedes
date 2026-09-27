@@ -14,6 +14,7 @@ const runtime = { ...envelope, runtimeId: id };
 const scope = { ...runtime, nativeGeneration: id, portId: id };
 export const openCodeRuntimeTargetSchema = openCodeNativeAuthoritySchema.pick({ directory: true, session: true });
 const cursor = z.strictObject({ journalId: id, sequence: position });
+export const openCodeObservationPollTargetSchema = z.strictObject({ runtimeId: id, nativeGeneration: id, portId: id, observationId: id });
 const readMethod = z.enum(openCodeReadMethods);
 const mutationMethod = z.enum(openCodeMutationMethods);
 const identity = openCodeMutationControlSchema.shape.identity;
@@ -37,7 +38,7 @@ export const openCodeRuntimeCommandSchema = z.discriminatedUnion("action", [
   z.strictObject({ ...scope, action: z.literal("acknowledge_mutation"), method: mutationMethod, identity }),
   z.strictObject({ ...scope, action: z.literal("acknowledge_operation"), identity: openCodeApplicationOperationIdentitySchema }),
   z.strictObject({ ...scope, action: z.literal("observe_open"), purpose: z.enum(["evidence", "presentation"]), after: cursor.optional() }),
-  z.strictObject({ ...scope, action: z.literal("observe_poll"), observationId: id, purpose: z.enum(["evidence", "presentation"]) }),
+  z.strictObject({ ...envelope, action: z.literal("observe_poll"), targets: z.array(openCodeObservationPollTargetSchema).min(1).max(512), purpose: z.enum(["evidence", "presentation"]) }),
   z.strictObject({ ...scope, action: z.literal("observe_ack"), observationId: id, cursor }),
   z.strictObject({ ...scope, action: z.literal("observe_close"), observationId: id }),
 ]);

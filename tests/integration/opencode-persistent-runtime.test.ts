@@ -4,7 +4,7 @@ import { recoverOpenCodeRuntimeAdministration } from "../../src/server/backends/
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPersistentOpenCodeFixture } from "../helpers/persistent-opencode-fixture.js";
 import { callOpenCodeRemoteRuntime } from "../../src/server/backends/opencode/opencode-remote-runtime.js";
-import { openCodeRuntimeExecuteOperation, openCodeRuntimeResponseSchema, openCodeRuntimeCommandSchema } from "../../src/server/backends/opencode/opencode-runtime-wire.js";
+import { openCodeRuntimeExecuteOperation, openCodeRuntimeResponseSchema, openCodeRuntimeCommandSchema, openCodePortAdmissionSchema } from "../../src/server/backends/opencode/opencode-runtime-wire.js";
 import type { OpenCodeMutationControl, OpenCodeObservationRecord } from "../../src/server/backends/opencode/opencode-native-port.js";
 
 const fixtures: ReturnType<typeof createPersistentOpenCodeFixture>[] = [];
@@ -20,6 +20,73 @@ function nativeEvent(seq: number, type: string, data: Record<string, unknown>) {
 }
 
 describe("OpenCode resident runtime over shared sidecar framing", () => {
+  it("multiplexes 150 idle presentation subscriptions and keeps control capacity available", async () => {
+    const f = fixture(), carrier = await f.attach(), client = f.client(); await client.start();
+    const lease = client.acquire(f.target), observations = [];
+    const call = carrier.mainChannel.call.bind(carrier.mainChannel);
+    let activePolls = 0, maximumPolls = 0;
+    vi.spyOn(carrier.mainChannel, "call").mockImplementation(async (definition, body, options) => {
+      const parsed = sidecarRuntimeBodySchema.safeParse(body);
+      const value = parsed.success && parsed.data.type === "inline" ? openCodeRuntimeCommandSchema.safeParse(parsed.data.value) : undefined;
+      const polling = value?.success && value.data.action === "observe_poll";
+      if (polling) maximumPolls = Math.max(maximumPolls, ++activePolls);
+      try { return await call(definition, body, options); }
+      finally { if (polling) activePolls--; }
+    });
+    for (let index = 0; index < 150; index++) {
+      const observation = lease.client.observe({ purpose: "presentation" }); await observation.ready; observations.push(observation);
+    }
+    const evidence = lease.client.observe({ purpose: "evidence" }); await evidence.ready; observations.push(evidence);
+    await expect(lease.client.mutate("interruptSession", { sessionID: f.wire.sessionID }, control("many-observers-stop", "interrupt")))
+      .resolves.toEqual({ interrupted: true });
+    expect(maximumPolls).toBeLessThanOrEqual(2);
+    f.wire.send(nativeEvent(1, "session.renamed", { title: "delivered to all" }));
+    await Promise.all(observations.map(async observation => {
+      const received: OpenCodeObservationRecord[] = [];
+      await vi.waitFor(() => { received.push(...observation.drain()); expect(received).toHaveLength(1); }, { timeout: 3_000 });
+    }));
+    await Promise.all(observations.map(observation => observation.close()));
+  });
+
+  it.each(["closed", "wrong_port", "wrong_generation"] as const)("isolates a %s poll target from other observations in the batch", async failure => {
+    const f = fixture(), carrier = await f.attach(), client = f.client(); await client.start();
+    const base = { runtimeId: client.runtimeId!, nativeGeneration: f.owners[0]!.generation };
+    const admitted = openCodePortAdmissionSchema.parse(await callOpenCodeRemoteRuntime(carrier.lease, { ...base, action: "acquire", target: f.target }));
+    const port = { ...base, portId: admitted.portId };
+    const open = async () => {
+      const value = await callOpenCodeRemoteRuntime(carrier.lease, { ...port, action: "observe_open", purpose: "presentation" }) as { observationId: string };
+      return { observationId: value.observationId };
+    };
+    const first = await open(), second = await open();
+    if (failure === "closed") await callOpenCodeRemoteRuntime(carrier.lease, { ...port, ...first, action: "observe_close" });
+    const bad = { ...port, ...first, ...(failure === "wrong_port" ? { portId: "foreign" } : {}),
+      ...(failure === "wrong_generation" ? { nativeGeneration: "foreign" } : {}) };
+    f.wire.send(nativeEvent(1, "session.renamed", { title: "healthy" }));
+    await vi.waitFor(() => expect(f.owners[0]!.nativeHost.retentionSnapshot().observation.pendingEvidenceCount).toBe(1));
+    const result = await callOpenCodeRemoteRuntime(carrier.lease, { action: "observe_poll", purpose: "presentation", targets: [bad, { ...port, ...second }] });
+    expect(result).toEqual([
+      { observationId: first.observationId, result: { status: "ended", reason: "failed", failure: expect.objectContaining({ code: "opencode_request_authority_mismatch" }) } },
+      { observationId: second.observationId, result: { status: "events", records: [expect.objectContaining({ kind: "native", event: expect.objectContaining({ type: "session.renamed" }) })] } },
+    ]);
+  });
+
+  it.each(["aborted", "acquire", "unsupported", "encoding", "capacity"] as const)("preserves an earlier effect when an exact retry has a local %s failure", async failure => {
+    const f = fixture(), carrier = await f.attach(), client = f.client(); await client.start();
+    const initial = client.acquire(f.target);
+    const prompt = { sessionID: f.wire.sessionID, id: "msg_prior_effect", text: "held", delivery: "queue" as const, resume: true };
+    await initial.client.mutate("prompt", prompt, control("prior-effect"));
+    const lease = client.acquire(f.target);
+    if (failure !== "acquire") await lease.client.read("getSession", { sessionID: f.wire.sessionID });
+    if (failure === "aborted") await carrier.close();
+    else if (failure === "acquire") vi.spyOn(carrier.mainChannel, "encodeBody").mockRejectedValueOnce(new Error("acquire refused"));
+    else if (failure === "unsupported") vi.spyOn(carrier.mainChannel, "supportsOperation").mockReturnValue(false);
+    else if (failure === "encoding") vi.spyOn(carrier.mainChannel, "encodeBody").mockRejectedValueOnce(new Error("body encoding refused"));
+    else vi.spyOn(carrier.mainChannel, "call").mockRejectedValueOnce(new Error("sidecar_protocol_outbound_request_limit"));
+    await expect(lease.client.mutate("prompt", prompt, control("prior-effect")))
+      .rejects.toMatchObject({ delivery: "sent_outcome_unknown" });
+    expect(f.promptCount()).toBe(1);
+  });
+
   it.each(["disabled", "stale"] as const)("recovers only exact retained thread authority with %s configuration", async kind => {
     const f = fixture(), first = await f.attach(), initial = f.client(); await initial.start();
     const scope = initial.acquire(f.target);

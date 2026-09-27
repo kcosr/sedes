@@ -17,7 +17,7 @@ import { decodeOpenCodeNativeFailure, OpenCodeNativeMutationDeliveryError, openC
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import { openCodeRuntimeExecuteOperation, openCodeRuntimeControlOperation, openCodeRuntimeCommandLane,
   openCodeRuntimeResponseSchema, openCodeRuntimeInfoSchema, openCodeRuntimeTargetSchema,
-  openCodePortAdmissionSchema, openCodeRuntimeSuccessSchema, openCodeRuntimeInspectionSchema,
+  openCodePortAdmissionSchema, openCodeRuntimeSuccessSchema, openCodeRuntimeInspectionSchema, openCodeObservationPollTargetSchema,
   type OpenCodeRuntimeCommandInput, type OpenCodeRuntimeInfo } from "./opencode-runtime-wire.js";
 
 /** Provider-private facade. Carrier choice is entirely in SidecarRuntimeProvider. */
@@ -127,6 +127,10 @@ export class OpenCodeRemoteRuntime {
           return parseOpenCodeMutationOutput(method, captured, result);
         } catch (error) {
           if (error instanceof OpenCodeNativeMutationDeliveryError) throw error;
+          // Controls carry stable step identities, not proof that this is the
+          // first attempt. Even a locally refused retry can follow a prior
+          // effect through another facade; only the host journal may prove it
+          // not sent across the operation's lifetime.
           throw new OpenCodeNativeMutationDeliveryError("sent_outcome_unknown", "opencode_mutation_outcome_unknown");
         }
       },
@@ -145,7 +149,7 @@ export class OpenCodeRemoteRuntime {
           const result = observationAdmissionSchema.parse(await call(attachment, { ...base, action: "observe_open", purpose: options.purpose,
             ...(options.after ? { after: options.after } : {}) }, observationSignal));
           return { boundary: parseOpenCodeObservationBoundary(result.boundary),
-            poll: () => call(attachment, { ...base, action: "observe_poll", observationId: result.observationId, purpose: options.purpose }, observationSignal),
+            poll: () => pollObservations(attachment, options.purpose, { ...base, observationId: result.observationId }, observationSignal),
             acknowledge: async cursor => { openCodeRuntimeSuccessSchema.parse(await call(attachment, {
               ...base, action: "observe_ack", observationId: result.observationId, cursor })); },
             close: async () => { await call(attachment, { ...base, action: "observe_close", observationId: result.observationId }); },
@@ -209,6 +213,60 @@ const observationPollSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("ended"), reason: z.enum(["closed", "aborted", "disconnected", "malformed", "overflow", "failed", "resnapshot_required", "superseded"]),
     failure: openCodeNativeFailureSchema.optional() }),
 ]);
+type PollTarget = z.infer<typeof openCodeObservationPollTargetSchema>;
+type PollPurpose = "evidence" | "presentation";
+const observationBatchSchema = z.array(z.strictObject({ observationId: z.string().min(1).max(256), result: observationPollSchema })).max(512);
+interface PendingPoll {
+  readonly target: PollTarget;
+  readonly signal: AbortSignal;
+  resolve(value: unknown): void;
+  reject(error: unknown): void;
+  abort(): void;
+}
+// The channel is the authenticated carrier boundary, shared by every OpenCode
+// facade. At most two long-polls (one per purpose) occupy its request slots.
+const observationPollers = new WeakMap<SidecarRuntimeLease["channel"], Map<PollPurpose, {
+  readonly pending: Set<PendingPoll>; running: boolean;
+}>>();
+function pollObservations(attachment: SidecarRuntimeLease, purpose: PollPurpose, target: PollTarget, signal: AbortSignal): Promise<unknown> {
+  signal.throwIfAborted();
+  let purposes = observationPollers.get(attachment.channel);
+  if (!purposes) { purposes = new Map(); observationPollers.set(attachment.channel, purposes); }
+  let state = purposes.get(purpose);
+  if (!state) { state = { pending: new Set(), running: false }; purposes.set(purpose, state); }
+  const poller = state;
+  const response = new Promise<unknown>((resolve, reject) => {
+    const pending: PendingPoll = { target, signal, resolve, reject, abort: () => { poller.pending.delete(pending); reject(signal.reason); } };
+    poller.pending.add(pending); signal.addEventListener("abort", pending.abort, { once: true });
+  });
+  if (!poller.running) {
+    poller.running = true;
+    queueMicrotask(() => { void (async () => {
+      try {
+        while (poller.pending.size) {
+          const batch = [...poller.pending].slice(0, 512);
+          // Caller cancellation ends only that subscriber. Cancelling the last
+          // in-flight subscriber may cancel this read-only batch safely.
+          const controller = new AbortController();
+          const cancel = () => { if (batch.every(item => item.signal.aborted)) controller.abort(); };
+          for (const item of batch) item.signal.addEventListener("abort", cancel, { once: true });
+          try {
+            const result = observationBatchSchema.parse(await call(attachment, { action: "observe_poll", purpose, targets: batch.map(item => item.target) }, controller.signal));
+            const byId = new Map(result.map(item => [item.observationId, item.result]));
+            if (byId.size !== batch.length || result.length !== batch.length || batch.some(item => !byId.has(item.target.observationId))) throw unavailable();
+            for (const item of batch) item.resolve(byId.get(item.target.observationId));
+          } catch (error) { for (const item of batch) item.reject(error); }
+          finally {
+            for (const item of batch) {
+              poller.pending.delete(item); item.signal.removeEventListener("abort", item.abort); item.signal.removeEventListener("abort", cancel);
+            }
+          }
+        }
+      } finally { poller.running = false; }
+    })(); });
+  }
+  return response;
+}
 type RemoteObservationConnection = { boundary: Awaited<OpenCodePortObservation["ready"]>; poll(): Promise<unknown>;
   acknowledge: OpenCodePortObservation["acknowledge"]; close(): Promise<void> };
 function remoteObservation(input: { signal: AbortSignal; open(signal: AbortSignal): Promise<RemoteObservationConnection> }): OpenCodePortObservation {
