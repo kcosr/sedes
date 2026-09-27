@@ -30,6 +30,16 @@ import {
   readPiToolIdentityMarker,
   type PiToolIdentityAuthentication,
 } from "./pi-tool-identity-marker.js";
+import {
+  classifyPiViewedImage,
+  isPiBuiltinRead,
+  PI_VIEWED_IMAGE_READ_FAILED,
+  piViewedImageItem,
+  piViewedImageResultPart,
+  type PiViewedImageChildTarget,
+  type PiViewedImageClassification,
+  type PiViewedImagePart,
+} from "./pi-viewed-image.js";
 
 interface ActiveAssistantStream {
   readonly epoch: string;
@@ -53,6 +63,11 @@ interface PendingPiToolCall {
   partialResult?: unknown;
   finalResult?: unknown;
   agentToolInvocation?: AgentToolInvocationCorrelation;
+  /**
+   * Decided once, when the item is first published; `null` means an ordinary
+   * tool. An item's kind cannot change after emission.
+   */
+  viewedImage?: PiViewedImageClassification | null;
   phase:
     | "arguments_streaming"
     | "arguments_complete"
@@ -71,6 +86,13 @@ export interface PiAssistantStreamStart {
   readonly backendTurnId: string;
   readonly sourceOrderBase?: number;
   readonly startedAt?: string;
+}
+
+/** A completed image read whose child image the handle may publish. */
+export interface PiLiveViewedImageResult {
+  readonly toolCallId: string;
+  readonly part: PiViewedImagePart;
+  readonly child: PiViewedImageChildTarget;
 }
 
 export interface PiLiveToolProjectorOptions {
@@ -169,6 +191,7 @@ export class PiLiveToolProjector {
   readonly #maximumPendingCalls: number;
   readonly #byContentIndex = new Map<number, PendingPiToolCall>();
   readonly #byCallId = new Map<string, PendingPiToolCall>();
+  readonly #viewedImageResults: PiLiveViewedImageResult[] = [];
   #stream?: ActiveAssistantStream;
   #invalidated = false;
 
@@ -390,16 +413,19 @@ export class PiLiveToolProjector {
       if (terminal(pending.phase)) {
         continue;
       }
-      pending.phase = "interrupted";
-      pending.completedAt = this.#now();
       if (!pending.identity) {
+        pending.phase = "interrupted";
         return this.#invalidate("ambiguous_correlation");
       }
-      const item = this.#map(pending, "interrupted");
+      // A held or delayed item still starts as streaming, from its partial
+      // arguments, before it completes.
       if (!pending.published) {
         pending.published = true;
-        events.push({ type: "item_started", item });
+        events.push({ type: "item_started", item: this.#map(pending, "streaming") });
       }
+      pending.phase = "interrupted";
+      pending.completedAt = this.#now();
+      const item = this.#map(pending, "interrupted");
       events.push({
         type: "item_completed",
         item: {
@@ -426,9 +452,15 @@ export class PiLiveToolProjector {
       : [];
   }
 
+  /** Drains the image reads completed since the last call. */
+  takeViewedImageResults(): readonly PiLiveViewedImageResult[] {
+    return this.#viewedImageResults.splice(0);
+  }
+
   reset(): void {
     this.#byContentIndex.clear();
     this.#byCallId.clear();
+    this.#viewedImageResults.length = 0;
     this.#stream = undefined;
     this.#invalidated = false;
   }
@@ -598,6 +630,11 @@ export class PiLiveToolProjector {
     if (!pending || pending.toolName !== toolName || terminal(pending.phase)) {
       return this.#invalidate("contradictory_state");
     }
+    const events: BackendConversationEvent[] = [];
+    if (!pending.published && pending.identity) {
+      pending.published = true;
+      events.push({ type: "item_started", item: this.#map(pending, "streaming") });
+    }
     pending.finalResult = result;
     pending.partialResult = result;
     pending.phase = isError ? "failed" : "completed";
@@ -606,21 +643,47 @@ export class PiLiveToolProjector {
     if (isError) {
       item = {
         ...item,
-        error: {
-          category: "internal",
-          message: {
-            text: "The tool did not complete successfully.",
-          },
-          code: "pi_tool_failed",
-        },
+        error: pending.viewedImage
+          ? PI_VIEWED_IMAGE_READ_FAILED
+          : {
+              category: "internal",
+              message: {
+                text: "The tool did not complete successfully.",
+              },
+              code: "pi_tool_failed",
+            },
       };
     }
-    const events: BackendConversationEvent[] = [];
     if (!pending.published) {
       pending.published = true;
       events.push({ type: "item_started", item });
     }
     events.push({ type: "item_completed", item });
+    const part =
+      !isError && pending.viewedImage
+        ? piViewedImageResultPart(result)
+        : undefined;
+    if (part) {
+      this.#viewedImageResults.push({
+        toolCallId: callId,
+        part,
+        child: {
+          backendItemId: `${pending.provisionalItemId}:image`,
+          backendTurnId: item.backendTurnId,
+          sourceOrder: pending.sourceOrder + 1,
+          viewedItemId: pending.provisionalItemId,
+          ...(pending.completedAt
+            ? {
+                startedAt: pending.completedAt,
+                completedAt: pending.completedAt,
+              }
+            : {}),
+          ...(pending.viewedImage?.fileName
+            ? { fileName: pending.viewedImage.fileName }
+            : {}),
+        },
+      });
+    }
     return events;
   }
 
@@ -689,12 +752,44 @@ export class PiLiveToolProjector {
     if (!pending.identity) {
       return [];
     }
+    // A built-in read becomes a viewed image or a file read from its final
+    // path, so its item waits for complete arguments.
+    if (
+      isPiBuiltinRead(pending.identity) &&
+      pending.phase === "arguments_streaming"
+    ) {
+      return [];
+    }
+    // A viewed image row shows nothing that changes before completion.
+    if (pending.published && pending.viewedImage) {
+      return [];
+    }
     const item = this.#map(pending, "streaming");
     pending.published = true;
     return [{ type, item }];
   }
 
   #map(pending: PendingPiToolCall, status: BackendItem["status"]): BackendItem {
+    if (pending.viewedImage === undefined) {
+      pending.viewedImage =
+        classifyPiViewedImage(
+          pending.identity,
+          pending.completeArguments ?? pending.partialArguments,
+        ) ?? null;
+    }
+    if (pending.viewedImage) {
+      return piViewedImageItem({
+        backendItemId: pending.provisionalItemId,
+        backendTurnId: this.#stream!.backendTurnId,
+        sourceOrder: pending.sourceOrder,
+        status,
+        startedAt: pending.startedAt,
+        ...(pending.completedAt ? { completedAt: pending.completedAt } : {}),
+        ...(pending.viewedImage.fileName
+          ? { fileName: pending.viewedImage.fileName }
+          : {}),
+      });
+    }
     return this.#mapper.map({
       backendItemId: pending.provisionalItemId,
       backendTurnId: this.#stream!.backendTurnId,

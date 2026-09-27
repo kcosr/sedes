@@ -449,15 +449,9 @@ describe("Pi live tool projection", () => {
       ...readEnd,
     ];
     expectCanonical(all);
-    expect(itemEvent(readStart)).toMatchObject({
-      type: "item_started",
-      item: {
-        backendItemId: "live:ea12301c61458a7483a8db05c3b05d2e:2",
-        backendTurnId: "turn-1",
-        sourceOrder: 14,
-        phase: "arguments_streaming",
-      },
-    });
+    // A built-in read waits for its final path before choosing its kind.
+    expect(readStart).toEqual([]);
+    expect(readDelta).toEqual([]);
     expect(itemEvent(bashStart).item).toMatchObject({
       backendItemId: "live:ea12301c61458a7483a8db05c3b05d2e:4",
       sourceOrder: 18,
@@ -469,13 +463,16 @@ describe("Pi live tool projection", () => {
         command: { text: "printf hello" },
       },
     });
-    expect(itemEvent(readDelta).item).toMatchObject({
-      semanticKind: "file_read",
-      path: { text: "README.md" },
-    });
-    expect(itemEvent(readEnd).item).toMatchObject({
-      phase: "arguments_complete",
-      sourceOrder: 14,
+    expect(itemEvent(readEnd)).toMatchObject({
+      type: "item_started",
+      item: {
+        backendItemId: "live:ea12301c61458a7483a8db05c3b05d2e:2",
+        backendTurnId: "turn-1",
+        semanticKind: "file_read",
+        path: { text: "README.md" },
+        phase: "arguments_complete",
+        sourceOrder: 14,
+      },
     });
   });
 
@@ -708,7 +705,7 @@ describe("Pi live tool projection", () => {
   });
 
   it("publishes only after delayed tool identity becomes available", () => {
-    const live = projector(["read"]);
+    const live = projector(["bash"]);
     live.beginAssistantStream({
       streamEpoch: "epoch-3",
       backendTurnId: "turn-3",
@@ -726,8 +723,8 @@ describe("Pi live tool projection", () => {
       toolCallUpdate("toolcall_delta", 0, {
         type: "toolCall",
         id: "delayed-call",
-        name: "read",
-        arguments: { path: "src/index.ts" },
+        name: "bash",
+        arguments: { command: "pwd" },
       }),
     );
 
@@ -735,8 +732,8 @@ describe("Pi live tool projection", () => {
     expect(itemEvent(events)).toMatchObject({
       type: "item_started",
       item: {
-        semanticKind: "file_read",
-        path: { text: "src/index.ts" },
+        semanticKind: "command",
+        command: { text: "pwd" },
       },
     });
   });
