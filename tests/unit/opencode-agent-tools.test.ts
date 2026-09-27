@@ -331,6 +331,26 @@ describe("OpenCode MCP runtime admission", () => {
     await connect(f.registrations[0]!.config.environment); await f.admit();
     expect(f.registrations).toHaveLength(1); expect(f.tools.diagnostic(f.target.binding.applicationThreadId)).toBeUndefined();
   });
+  it("keeps CLI admission independent of the native MCP workspace and catalog limits", async () => {
+    const f = fixture({ cli: true });
+    vi.spyOn(f.facade, "eligibleCatalog").mockImplementation(() => { throw new Error("CLI must not read the MCP catalog"); });
+    await f.admit(); expect(f.tools.cliAdmission(f.target.binding.applicationThreadId)).toBeTruthy();
+    let directory = f.wire.directory;
+    vi.spyOn(f.adapter, "read").mockImplementation(async () => ({ ...f.wire.session, location: { directory } }) as any);
+    const target = openCodeRuntimeTarget(f.target);
+    for (let index = 0; index < 64; index++) {
+      directory = `/workspace/mcp-${index}`;
+      await f.hostTools.admit({ directory, session: { ...target.session, applicationThreadId: `mcp-${index}` } },
+        { sourceCapability: "mcp-source", catalog: [] });
+    }
+    directory = "/workspace/cli-only";
+    const cliTarget = { directory, session: { ...target.session, applicationThreadId: "cli-only" } };
+    const result = await f.hostTools.admit(cliTarget, { sourceCapability: "source", catalog: [],
+      cli: { sourceCapability: "cli-source", mode: "progressive" } });
+    expect(f.hostTools.cliEnvironment(cliTarget, result.cliAdmissionId!).generated.SEDES_AGENT_TOOL_SOURCE_CAPABILITY).toBe("cli-source");
+    expect(f.registrations).toHaveLength(0);
+  });
+
   it("admits CLI provenance without registering MCP and rejects access decisions without current user proof", async () => {
     const f = fixture({ cli: true });
     const admit = vi.spyOn(f.runtime, "admitToolSession");

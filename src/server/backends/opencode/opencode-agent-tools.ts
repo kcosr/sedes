@@ -64,7 +64,7 @@ export class OpenCodeAgentTools {
     const policy = this.options.facade.readPolicy(source);
     if (!policy.enabled) return;
     try {
-      const catalog = this.options.facade.eligibleCatalog("mcp").map(({ id, schemaVersion, catalog, description, effects }) =>
+      const catalog = policy.presentation.surface === "cli" ? [] : this.options.facade.eligibleCatalog("mcp").map(({ id, schemaVersion, catalog, description, effects }) =>
         ({ id, schemaVersion, label: catalog.label, description, group: { id: catalog.groupId, order: catalog.order }, effects }));
       const cli = policy.presentation.surface === "cli" ? {
         sourceCapability: this.options.sourceCapabilities.issue(source, this.options.sourceCapabilityTransport, "cli"), mode: policy.presentation.mode,

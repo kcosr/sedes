@@ -32,6 +32,9 @@ export class OpenCodeCliEnvironment {
     return { source, mode: policy.presentation.mode };
   }
 
+  unavailable(threadId: string): void {
+    this.#diagnostics.set(threadId, "Sedes CLI tools are unavailable for this message. Messages and conversation controls remain available; tool admission will be retried on a later message.");
+  }
   diagnostic(threadId: string): string | undefined { return this.#diagnostics.get(threadId); }
   release(threadId: string): void { this.#diagnostics.delete(threadId); }
   close(): void { this.#diagnostics.clear(); }

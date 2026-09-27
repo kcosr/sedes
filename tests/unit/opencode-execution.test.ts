@@ -35,7 +35,7 @@ function fixture(input: { desired?: OpenCodeSelection | null; native?: OpenCodeS
   const state = {
     models: [nativeModel(modelA), nativeModel(modelB)], modelUpdate: true, dropModelAck: false, dropRenameAck: false,
     admission: true, consume: true, dropPromptAck: false, preparedText: undefined as string | undefined,
-    pending: [] as SessionInboxUser[], postGate: undefined as Promise<void> | undefined,
+    pendingReadFailures: 0, pending: [] as SessionInboxUser[], postGate: undefined as Promise<void> | undefined,
   };
   const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
   const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture", fetch: async (value, init) => {
@@ -70,7 +70,10 @@ function fixture(input: { desired?: OpenCodeSelection | null; native?: OpenCodeS
       if (state.dropPromptAck) throw new Error("lost prompt acknowledgment");
       return json({ data: admitted });
     }
-    if (path === `/api/session/${wire.sessionID}/inbox`) return json({ data: state.pending });
+    if (path === `/api/session/${wire.sessionID}/inbox`) {
+      if (state.pendingReadFailures > 0) { state.pendingReadFailures--; throw new Error("transient pending read"); }
+      return json({ data: state.pending });
+    }
     return wire.fetch(value, init);
   } });
   const base = createOpenCodeConversationFixture({ native: { client, sessionID: wire.sessionID, directory: wire.directory } });
@@ -132,11 +135,49 @@ describe("OpenCode execution settings and explicit actions", () => {
     expect(f.posts("/prompt")).toHaveLength(1);
   });
 
+  it("retries a transient preflight read with the Queue's same mutation identity and delivers once", async () => {
+    const f = fixture(), input = f.submit("retryable-preflight");
+    // Start the observer first so the failure belongs to delivery's admission read.
+    await f.observer.start(); f.state.pendingReadFailures = 1;
+    const failure = await f.delivery.submit(input).catch(error => mapOpenCodeConversationError(error));
+    expect(failure).toMatchObject({ retryable: true, crossedSubmissionBoundary: false });
+    expect(f.repository.requireOperation(scope, threadID, input.applicationOperationId, "submit").disposition).toBe("prepared");
+    await expect(f.delivery.submit(input)).resolves.toMatchObject({ accepted: true });
+    expect(f.posts("/prompt")).toHaveLength(1);
+  });
+
+  it("keeps positive reserved-ID collisions unknown instead of proving no dispatch", async () => {
+    const f = fixture(), input = f.submit("native-collision");
+    await f.observer.start(); f.state.pendingReadFailures = 1;
+    await expect(f.delivery.submit(input)).rejects.toBeDefined();
+    const receipt = f.repository.requireOperation(scope, threadID, input.applicationOperationId, "submit");
+    f.wire.messages.push({ id: receipt.nativeInputId!, type: "user", text: "foreign", time: { created: 10 } });
+    await expect(f.delivery.submit(input)).rejects.toMatchObject({ category: "submission_unknown", retryable: false });
+    expect(f.repository.requireOperation(scope, threadID, input.applicationOperationId, "submit").disposition).toBe("unknown");
+    expect(f.posts("/prompt")).toHaveLength(0);
+  });
+
+  it("delivers a CLI-surface Send with an unavailable diagnostic when host tool admission fails", async () => {
+    const f = fixture();
+    const cli = new OpenCodeCliEnvironment({ ownership: "owned", availability: { availability: "unavailable", reason: "cli_unavailable" },
+      tools: { readPolicy: () => ({ enabled: false, presentation: { surface: "cli", mode: "progressive" }, accessBoundary: "thread", enabledToolIds: [] }) } });
+    vi.spyOn(cli, "plan").mockReturnValue({ source: { scope, sourceThreadId: threadID, sourceWorkspaceId: f.target.workspace.summary.id,
+      sourceEnvironmentId: f.target.binding.executionEnvironmentId, backendKind: "opencode" }, mode: "progressive" });
+    vi.spyOn(f.context.tools, "cliAdmission").mockReturnValue(null);
+    f.wire.session.permissions = [{ action: "subagent", resource: "*", effect: "deny" }];
+    f.context.executionEnvironment = new OpenCodeExecutionEnvironment({ scope, ownership: "owned", readDefinitions: () => ({}), cli });
+    const install = vi.spyOn(f.hostHooks, "installSessionEnvironment").mockResolvedValue();
+    await expect(f.delivery.submit(f.submit("cli-unavailable"))).resolves.toMatchObject({ accepted: true });
+    expect(install).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ cliAdmissionId: null }), expect.anything());
+    expect(f.context.executionEnvironment.diagnostic(threadID)).toContain("tools are unavailable");
+    expect(f.posts("/prompt")).toHaveLength(1);
+  });
+
   it("finishes failed preparation as not applied, keeps applied settings, and allows a fresh Send", async () => {
     const f = fixture({ native: modelB });
     vi.spyOn(f.context.executionEnvironment, "prepare").mockRejectedValueOnce(new Error("preparation unavailable"));
     const input = f.submit("failed-preparation");
-    await expect(f.delivery.submit(input)).rejects.toThrow();
+    await expect(f.delivery.submit(input)).rejects.toMatchObject({ retryable: false, crossedSubmissionBoundary: false });
     expect(f.repository.requireOperation(scope, threadID, input.applicationOperationId, "submit").disposition).toBe("not_applied");
     expect(f.wire.session.model).toEqual(modelA); expect(f.posts("/model")).toHaveLength(1);
     expect(f.posts("/prompt")).toHaveLength(0); expect(f.host.snapshot().operations).toEqual([]);

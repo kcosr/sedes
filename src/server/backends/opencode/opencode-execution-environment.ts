@@ -97,7 +97,11 @@ export class OpenCodeExecutionEnvironment {
       const session = await api.getSession(sessionID, signal);
       assertRoot(session, input.workspace.canonicalPath);
       const definition = configurationFingerprint(definitions);
-      const cliIdentity = cli ? createHash("sha256").update(JSON.stringify(cli)).digest("hex") : null;
+      if (cli) await request.context.tools.admit(request.context, input, runtime, signal);
+      signal.throwIfAborted();
+      const cliAdmissionId = cli ? request.context.tools.cliAdmission(thread) : null;
+      if (cli && !cliAdmissionId) this.options.cli?.unavailable(thread);
+      const cliIdentity = cli && cliAdmissionId ? createHash("sha256").update(JSON.stringify(cli)).digest("hex") : null;
       const installed = this.#installed.get(thread);
       if (operation === "steer") {
         if (!installed || installed.released || installed.generation !== generation || installed.definition !== definition || installed.binding !== binding ||
@@ -117,10 +121,6 @@ export class OpenCodeExecutionEnvironment {
       }
       // Frozen definitions cross the port; secret references resolve only on the execution host.
       signal.throwIfAborted();
-      if (cli) await request.context.tools.admit(request.context, input, runtime, signal);
-      signal.throwIfAborted();
-      const cliAdmissionId = cli ? request.context.tools.cliAdmission(thread) : null;
-      if (cli && !cliAdmissionId) throw unavailable();
       await assertIdle(api, sessionID, input.workspace.canonicalPath, signal);
       await runtime.assertCurrent(signal); requireOpenCodeBinding(request.context, input); signal.throwIfAborted();
       if (runtime.snapshot().generation !== generation) throw unavailable();

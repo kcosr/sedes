@@ -59,6 +59,19 @@ export class OpenCodeHostAgentTools {
   async admit(target: OpenCodeHostToolTarget, value: OpenCodeHostToolAdmission, signal?: AbortSignal): Promise<OpenCodeHostToolAdmissionResult> {
     const admission = admissionSchema.parse(value);
     await this.#assertTarget(target, signal);
+    if (admission.cli) {
+      // CLI authority needs no native MCP registration, catalogue or workspace
+      // slot. Keep its exact session bound and subject to the same live limit.
+      const key = target.session.applicationThreadId, previous = this.#sessions.get(key);
+      if (previous && sameTarget(previous.target, target) && JSON.stringify(previous.admission) === JSON.stringify(admission)) return previous.result;
+      if (!previous && this.#sessions.size >= 1_000) throw denied();
+      previous?.owner.abort();
+      const result = Object.freeze({ registrationAdmissionId: randomBytes(32).toString("base64url"),
+        registrationName: registrationName(), registrationControl: registrationControl(randomBytes(32).toString("base64url")),
+        cliAdmissionId: randomBytes(32).toString("base64url") });
+      this.#sessions.set(key, { target: structuredClone(target), admission, result, owner: new AbortController() });
+      return result;
+    }
     let location = this.#locations.get(target.directory);
     if (!location) {
       if (this.#locations.size >= 64) throw denied();

@@ -103,7 +103,6 @@ export class OpenCodeDelivery {
       executionEnvironmentId: binding.executionEnvironmentId, nativeSessionId: binding.backendConversationId,
       applicationOperationId: operationId, operationKind: kind, nativeInputId, requestFingerprint, requestSource: source, deadlineAt: null,
     }, Date.now());
-    attempt.preparing = true;
     const evidence = this.#evidence.begin(scope, binding.applicationThreadId, operationId, kind, this.observer.trackerId, kind === "submit" ? "queue" : "steer");
     this.observer.track(evidence);
     // Existing foreign native IDs cannot be adopted as a Sedes send. These
@@ -118,8 +117,16 @@ export class OpenCodeDelivery {
     if (!absent || pending.some(item => item.id === nativeInputId)) {
       const current = this.context.repository.requireOperation(scope, binding.applicationThreadId, operationId, kind);
       if (current.disposition !== "prepared") return this.observer.reconcile(operationId, kind);
-      throw invalid("The reserved OpenCode input identity is already in use.");
+      // A native collision is positive presence, not evidence of non-dispatch.
+      // Keep it unresolved; never authorize an automatic resend under this ID.
+      this.context.repository.recordOutcome(scope, binding.applicationThreadId, operationId, kind, {
+        expected: "prepared", disposition: "unknown", nativeEvidenceFingerprint: null, now: Date.now(),
+      });
+      throw uncertain();
     }
+    // Only native preparation can retain mutation receipts that require a terminal
+    // release. Read-only admission failures keep this immutable input retryable.
+    attempt.preparing = true;
     // A prepared replay rechecks the latest desired/current selection before work.
     await this.settings.prepare(operationId, kind);
     await this.context.tools.admit(this.context, this.input, this.settings.runtime, this.settings.lifetime);
@@ -173,6 +180,12 @@ export class OpenCodeDelivery {
         });
       }
       if (receipt && receipt.disposition !== "prepared" && receipt.disposition !== "not_applied") throw uncertain(error);
+      if (attempt.admitted && receipt?.disposition === "prepared" && preparing.failedPreparation) {
+        // This operation is terminal when its final concurrent caller leaves.
+        // Queue must offer an explicit new Send, never automatically retry its
+        // now-released native preparation identities.
+        throw invalid("The OpenCode input could not be prepared. Retry it as a new Send.");
+      }
       throw error;
     } finally {
       if (--preparing.active === 0) {
