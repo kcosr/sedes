@@ -207,10 +207,22 @@ const submissionPersistenceWaitMilliseconds = 5_000;
 // requested through ConversationHandle.history rather than embedded in every
 // authoritative projection.
 const readSnapshotTurns = 10;
-/** Background child-image publications one projection seed schedules. */
-const viewedImageSeedPublicationBudget = 32;
-/** Child-image publications one older-history page waits for. */
-const viewedImagePagePublicationBudget = 16;
+/**
+ * Background child-image publications one projection seed, history page, or
+ * located turn schedules, newest first.
+ */
+const viewedImageBackgroundPublicationBudget = 32;
+/** Background child-image publications waiting at once, per handle. */
+const maximumQueuedViewedImagePublications = 256;
+/**
+ * A history page or located turn waits for at most its four newest missing
+ * children, for at most two seconds, as Codex and Claude readers do. The rest
+ * publish in the background and show on the next fetch or as a live child.
+ */
+const viewedImageInlineBudget = Object.freeze({
+  maximumImages: 4,
+  timeoutMs: 2_000,
+});
 /** Publication keys one handle remembers as failed, oldest dropped first. */
 const maximumRememberedViewedImageFailures = 4_096;
 const targetPiTimelinePayloadBytes = 256 * 1_024;
@@ -2611,6 +2623,7 @@ class PiConversationHandle implements ConversationHandle {
     Promise<OutputImageArtifactDescriptor | undefined>
   >();
   #viewedImageBackfill: Promise<void> = Promise.resolve();
+  #queuedViewedImagePublications = 0;
   /** Keys whose image could not be published; this handle does not retry them. */
   readonly #failedViewedImageKeys = new Set<string>();
   /**
@@ -2828,21 +2841,10 @@ class PiConversationHandle implements ConversationHandle {
       ),
     );
     // Forks and sessions from before image capture have no artifacts yet.
-    const missing = this.#fillViewedImages(projected, pageTurnIds).missing.filter(
-      (candidate) =>
-        !this.#failedViewedImageKeys.has(this.#viewedImageKey(candidate)),
+    await this.#publishForReader(
+      this.#fillViewedImages(projected, pageTurnIds).missing,
+      input.signal,
     );
-    for (const candidate of missing
-      .slice(-viewedImagePagePublicationBudget)
-      .reverse()) {
-      input.signal?.throwIfAborted();
-      this.#assertOpen();
-      await this.#publishViewedImage(this.#viewedImageKey(candidate), () =>
-        this.#persistedViewedImagePart(candidate),
-      );
-    }
-    input.signal?.throwIfAborted();
-    this.#assertOpen();
     return selectPiHistoryPage(
       this.#fillViewedImages(projected, pageTurnIds).snapshot,
       this.#session.sessionId,
@@ -2877,8 +2879,13 @@ class PiConversationHandle implements ConversationHandle {
       const matched = input.matchesBackendTurnId(backendTurnId);
       input.signal?.throwIfAborted();
       if (!matched) continue;
+      const turnIds = new Set([backendTurnId]);
+      await this.#publishForReader(
+        this.#fillViewedImages(projected, turnIds).missing,
+        input.signal,
+      );
       const selected = selectPiHistoryPage(
-        this.#fillViewedImages(projected, new Set([backendTurnId])).snapshot,
+        this.#fillViewedImages(projected, turnIds).snapshot,
         this.#session.sessionId,
         index + 1,
         1,
@@ -4865,17 +4872,94 @@ class PiConversationHandle implements ConversationHandle {
     this.#viewedImageTargets = new Map(
       keyed.map(({ key, candidate }) => [key, candidate.child]),
     );
-    for (const { key, candidate } of keyed
+    // A later seed that no longer targets a key skips it.
+    this.#enqueueViewedImagePublications(candidates, (key) =>
+      this.#viewedImageTargets.has(key),
+    );
+  }
+
+  /**
+   * Publishes candidates in the background, serially, newest first, and at
+   * most the background budget of them, skipping known failures.
+   */
+  #enqueueViewedImagePublications(
+    candidates: readonly PiViewedImageCandidate[],
+    stillWanted: (key: string) => boolean = () => true,
+  ): void {
+    const keyed = candidates
+      .map((candidate) => ({ key: this.#viewedImageKey(candidate), candidate }))
       .filter(({ key }) => !this.#failedViewedImageKeys.has(key))
-      .slice(-viewedImageSeedPublicationBudget)
-      .reverse()) {
+      .slice(-viewedImageBackgroundPublicationBudget)
+      .reverse();
+    for (const { key, candidate } of keyed) {
+      if (
+        this.#closed ||
+        this.#queuedViewedImagePublications >=
+          maximumQueuedViewedImagePublications
+      ) {
+        return;
+      }
+      this.#queuedViewedImagePublications += 1;
       this.#viewedImageBackfill = this.#viewedImageBackfill.then(async () => {
-        if (!this.#viewedImageTargets.has(key)) return;
-        await this.#publishViewedImage(key, () =>
-          this.#persistedViewedImagePart(candidate),
-        );
+        try {
+          if (!stillWanted(key)) return;
+          await this.#publishViewedImage(key, () =>
+            this.#persistedViewedImagePart(candidate),
+          );
+        } finally {
+          this.#queuedViewedImagePublications -= 1;
+        }
       });
     }
+  }
+
+  /**
+   * A reader waits for its newest missing children within the inline budget
+   * and leaves the rest, and any still running at the deadline, to publish
+   * in the background. Fails with pi_handle_closed if the handle closes.
+   */
+  async #publishForReader(
+    missing: readonly PiViewedImageCandidate[],
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    const candidates = missing.filter(
+      (candidate) =>
+        !this.#failedViewedImageKeys.has(this.#viewedImageKey(candidate)),
+    );
+    if (candidates.length === 0) return;
+    signal?.throwIfAborted();
+    this.#assertOpen();
+    const inline = candidates.slice(-viewedImageInlineBudget.maximumImages);
+    const attempts = [...inline]
+      .reverse()
+      .map((candidate) =>
+        this.#publishViewedImage(this.#viewedImageKey(candidate), () =>
+          this.#persistedViewedImagePart(candidate),
+        ),
+      );
+    this.#enqueueViewedImagePublications(
+      candidates.slice(0, candidates.length - inline.length),
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort: (() => void) | undefined;
+    try {
+      await Promise.race([
+        Promise.all(attempts),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, viewedImageInlineBudget.timeoutMs);
+        }),
+        new Promise<void>((_resolve, reject) => {
+          if (!signal) return;
+          abort = () => reject(signal.reason);
+          signal.addEventListener("abort", abort, { once: true });
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      if (abort) signal?.removeEventListener("abort", abort);
+    }
+    signal?.throwIfAborted();
+    this.#assertOpen();
   }
 
   #publishLiveViewedImages(): void {

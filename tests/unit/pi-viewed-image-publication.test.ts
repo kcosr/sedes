@@ -817,7 +817,7 @@ describe("Pi viewed-image publication", () => {
     await fork.close();
   });
 
-  it("publishes an older page's missing children within its budget before returning it", async () => {
+  it("waits for a page's four newest missing children and publishes the rest in the background", async () => {
     const fixture = await workspace();
     const recorder = recordingPublisher();
     const driver = driverWith(fixture, recorder.publisher);
@@ -843,19 +843,17 @@ describe("Pi viewed-image publication", () => {
       limit: 20,
     });
     expect(page.orderedBackendTurnIds).toHaveLength(20);
-    expect(recorder.published).toHaveLength(26);
-    // Newest first: turns 19 down to 4 of the page's 0 to 19.
-    expect(recorder.published.slice(10).map(({ publicationKey }) => publicationKey)).toEqual(
-      keys.slice(4, 20).reverse(),
-    );
-    const pageChildren = childImages(page.itemsById);
-    expect(pageChildren).toHaveLength(16);
-    // The budget favours the newest turns of the page.
+    // The page waited for its newest four; the rest may still be running.
     const withChild = page.orderedBackendTurnIds.map((turnId) =>
       page.turnsById[turnId]!.orderedBackendItemIds.some((id) => page.itemsById[id]!.semanticKind === "image"),
     );
-    expect(withChild).toEqual([...Array(4).fill(false), ...Array(16).fill(true)]);
-    for (const turnId of page.orderedBackendTurnIds.slice(4)) {
+    expect(withChild.slice(16)).toEqual([true, true, true, true]);
+    await vi.waitFor(() => expect(recorder.published).toHaveLength(30));
+    // Newest first: turns 19 to 16 inline, then 15 down to 0 in the background.
+    expect(recorder.published.slice(10).map(({ publicationKey }) => publicationKey)).toEqual(
+      keys.slice(0, 20).reverse(),
+    );
+    for (const turnId of page.orderedBackendTurnIds.slice(16)) {
       expect(turnShape(page as BackendConversationSnapshot, turnId)).toEqual([
         "user_message",
         expect.stringMatching(/^viewed:completed:turn-\d+\.png$/u),
@@ -866,6 +864,104 @@ describe("Pi viewed-image publication", () => {
     const again = await handle.history({ cursor: established.history.previousCursor!, limit: 20 });
     expect(childImages(again.itemsById)).toHaveLength(20);
     expect(recorder.published).toHaveLength(30);
+    await handle.close();
+  });
+
+  it("returns a page within two seconds and shows its held children on the next fetch", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const driver = driverWith(fixture, recorder.publisher);
+    const conversation = await created(driver, fixture);
+    const manager = await persisted(fixture, conversation.backendConversationId);
+    for (let index = 0; index < 16; index += 1) {
+      const coordinates = appendImageReadTurn(manager, conversation.backendConversationId, index);
+      if (index >= 6) {
+        await prepublish(recorder.publisher, conversation.backendConversationId, coordinates);
+      }
+    }
+    const prepublished = recorder.published.length;
+    const handle = await driver.attach(conversation.attach);
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    recorder.hold();
+    const started = performance.now();
+    const page = await handle.history({ cursor: established.history.previousCursor!, limit: 20 });
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(1_900);
+    expect(elapsed).toBeLessThan(4_000);
+    expect(page.orderedBackendTurnIds).toHaveLength(6);
+    expect(childImages(page.itemsById)).toEqual([]);
+    // Four waited on inline and the first background one are held.
+    expect(recorder.published).toHaveLength(prepublished + 5);
+
+    recorder.release();
+    await vi.waitFor(() => expect(recorder.published).toHaveLength(prepublished + 6));
+    await vi.waitFor(async () => {
+      const next = await handle.history({ cursor: established.history.previousCursor!, limit: 20 });
+      expect(childImages(next.itemsById)).toHaveLength(6);
+    });
+    expect(recorder.published).toHaveLength(prepublished + 6);
+    await handle.close();
+  });
+
+  it("publishes a located turn's missing children within the same budget", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const driver = driverWith(fixture, recorder.publisher);
+    const conversation = await created(driver, fixture);
+    const manager = await persisted(fixture, conversation.backendConversationId);
+    // The oldest turn, outside the attached window, views six images.
+    const calls = Array.from({ length: 6 }, (_, index) => `old-${index}`);
+    const oldTurnId = manager.appendMessage({ role: "user", content: [{ type: "text", text: "old" }], timestamp: Date.now() });
+    const assistantEntryId = manager.appendMessage(
+      assistantMessage(
+        calls.map((id) => ({ type: "toolCall", id, name: "read", arguments: { path: `${id}.png` } })),
+        "toolUse",
+      ) as never,
+    );
+    for (const toolCallId of calls) {
+      manager.appendCustomEntry(
+        piToolIdentityMarkerType,
+        createPiToolIdentityMarker(
+          { assistantEntryId, toolCallId, toolName: "read", identity: readIdentity },
+          { conversationId: conversation.backendConversationId, installationKey: toolProvenanceKey },
+        ),
+      );
+      manager.appendMessage({ role: "toolResult", toolCallId, toolName: "read", content: imageContent(), isError: false, timestamp: Date.now() } as never);
+    }
+    manager.appendMessage(assistantMessage([{ type: "text", text: "old done" }], "stop") as never);
+    for (let index = 0; index < 10; index += 1) {
+      const coordinates = appendImageReadTurn(manager, conversation.backendConversationId, index);
+      await prepublish(recorder.publisher, conversation.backendConversationId, coordinates);
+    }
+    const prepublished = recorder.published.length;
+    const handle = await driver.attach(conversation.attach);
+    const located = await handle.locateTurn({
+      maximumTurnCandidates: 11,
+      matchesBackendTurnId: (candidate) => candidate === oldTurnId,
+    });
+    if (located.status !== "found") throw new Error("expected_found");
+    const keyOf = (toolCallId: string) =>
+      piViewedImagePublicationKey({
+        sessionId: conversation.backendConversationId,
+        assistantEntryId,
+        toolCallId,
+        imageIndex: 1,
+      });
+    // The four newest of the turn were waited for; the rest follow.
+    const locatedChildren = childImages(located.page.itemsById).map(({ backendItemId }) => backendItemId);
+    for (const index of [2, 3, 4, 5]) {
+      expect(locatedChildren).toContain(`${assistantEntryId}:${index}:image`);
+    }
+    await vi.waitFor(() => expect(recorder.published).toHaveLength(prepublished + 6));
+    expect(recorder.published.slice(prepublished).map(({ publicationKey }) => publicationKey)).toEqual(
+      [...calls].reverse().map(keyOf),
+    );
+    const again = await handle.locateTurn({
+      maximumTurnCandidates: 11,
+      matchesBackendTurnId: (candidate) => candidate === oldTurnId,
+    });
+    if (again.status !== "found") throw new Error("expected_found");
+    expect(childImages(again.page.itemsById)).toHaveLength(6);
     await handle.close();
   });
 
@@ -1285,9 +1381,9 @@ describe("Pi viewed-image publication and close", () => {
     const driver = driverWith(fixture, recorder.publisher);
     const conversation = await created(driver, fixture);
     const manager = await persisted(fixture, conversation.backendConversationId);
-    for (let index = 0; index < 13; index += 1) {
+    for (let index = 0; index < 16; index += 1) {
       const coordinates = appendImageReadTurn(manager, conversation.backendConversationId, index);
-      if (index >= 3) {
+      if (index >= 6) {
         await prepublish(recorder.publisher, conversation.backendConversationId, coordinates);
       }
     }
@@ -1297,12 +1393,13 @@ describe("Pi viewed-image publication and close", () => {
     expect(established.history.previousCursor).toBeDefined();
     recorder.hold();
     const page = handle.history({ cursor: established.history.previousCursor!, limit: 20 });
-    await vi.waitFor(() => expect(recorder.published).toHaveLength(prepublished + 1));
+    // Four inline and the first of two background publications are held.
+    await vi.waitFor(() => expect(recorder.published).toHaveLength(prepublished + 5));
     const closing = handle.close();
     recorder.release();
     await expect(page).rejects.toMatchObject({ backendCode: "pi_handle_closed" });
     await closing;
-    expect(recorder.published).toHaveLength(prepublished + 1);
+    expect(recorder.published).toHaveLength(prepublished + 5);
   });
 });
 
