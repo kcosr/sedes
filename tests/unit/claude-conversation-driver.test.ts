@@ -374,6 +374,43 @@ describe("ClaudeConversationBackendDriver", () => {
     expect(publishImage).toHaveBeenCalledTimes(1);
   });
 
+  it("stops a read's queued image publication when the driver closes during its inline wait", async () => {
+    const sdk = fakeSdk();
+    sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1]);
+    const reads = Array.from({ length: 8 }, (_, index) => ({ type: "tool_use", id: `toolu-shot-${index}`, name: "Read",
+      input: { file_path: `/workspace/shot-${index}.png` } }));
+    exposeSessionMessages(sdk, [
+      user(operationId, "Look at the screenshots"),
+      { ...assistant("33333333-3333-4333-8333-333333333333", ""),
+        message: { id: "msg-read", role: "assistant", content: reads, stop_reason: "tool_use" } } as SessionMessage,
+      { ...user("44444444-4444-4444-8444-444444444444", ""), message: { role: "user", content: reads.map(({ id }) => ({
+        type: "tool_result", tool_use_id: id, content: [{ type: "image", source: { type: "base64",
+          data: png.toString("base64"), media_type: "image/png" } }] })) } } as SessionMessage,
+      assistant("55555555-5555-4555-8555-555555555555", "Eight settings pages."),
+    ]);
+    const retained = createInMemoryOutputArtifactPublisher();
+    const releases: Array<() => void> = [];
+    const publishImage = vi.fn(async (publication: Parameters<typeof retained.publishImage>[0]) => {
+      await new Promise<void>((resolve) => releases.push(resolve));
+      return retained.publishImage(publication);
+    });
+    const driver = createDriver(sdk, { outputArtifacts: { findImage: retained.findImage, publishImage } });
+    const reading = driver.read({ scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) });
+    // Four inline and two background stores start; two stay queued.
+    await vi.waitFor(() => expect(publishImage).toHaveBeenCalledTimes(6));
+    await driver.close();
+    for (const release of releases) release();
+    await reading;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(publishImage).toHaveBeenCalledTimes(6);
+    await expect(driver.read({ scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) }))
+      .rejects.toMatchObject({ backendCode: "claude_driver_closed" });
+    expect(publishImage).toHaveBeenCalledTimes(6);
+  });
+
   it("only retries an absent submission against an unchanged strict retry anchor", async () => {
     const sdk = fakeSdk();
     const messages = [

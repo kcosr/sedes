@@ -203,6 +203,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
   readonly #handles = new Set<ClaudeConversationHandle>();
   /** Reads whose remaining images still publish in the background. */
   readonly #readPublications = new Set<ClaudeViewedImagePublications>();
+  #closed = false;
   #nextQueryGeneration = 0;
 
   constructor(input: ClaudeConversationDriverInput) {
@@ -668,11 +669,22 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         input.binding.backendConversationId,
         input.workspace,
       );
+      if (this.#closed) {
+        throw claudeError(
+          "unavailable",
+          "Claude is shutting down.",
+          "claude_driver_closed",
+          true,
+        );
+      }
       const viewedImages = new ClaudeViewedImagePublications({
         outputArtifacts: this.#outputArtifacts,
         scope: input.scope,
         applicationThreadId: input.binding.applicationThreadId,
       });
+      // Registered before any publication, so close() stops inline and
+      // queued work alike; the rest publish in the background.
+      this.#readPublications.add(viewedImages);
       const project = () => projectClaudeHistory(
         messages,
         this.#settings.listTerminalReceipts(
@@ -688,13 +700,15 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
           viewedImages,
         },
       );
-      let projection = project();
-      if (await viewedImages.publish(projection.pendingViewedImages, CLAUDE_VIEWED_IMAGE_INLINE_BUDGET)) {
+      let projection;
+      try {
         projection = project();
+        if (await viewedImages.publish(projection.pendingViewedImages, CLAUDE_VIEWED_IMAGE_INLINE_BUDGET)) {
+          projection = project();
+        }
+      } finally {
+        void viewedImages.idle().finally(() => this.#readPublications.delete(viewedImages));
       }
-      // The rest publish in the background and show on a later read.
-      this.#readPublications.add(viewedImages);
-      void viewedImages.idle().finally(() => this.#readPublications.delete(viewedImages));
       return { snapshot: projection.snapshot, usage: projection.usage ?? {} };
     } catch (error) {
       throw mapClaudeReadError(error);
@@ -1246,6 +1260,7 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
   }
 
   async close(): Promise<void> {
+    this.#closed = true;
     for (const publications of this.#readPublications) publications.close();
     this.#readPublications.clear();
     const handles = [...this.#handles];
