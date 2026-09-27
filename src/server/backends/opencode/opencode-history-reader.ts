@@ -137,14 +137,14 @@ async function acquireOpenCodeHistory(api: OpenCodeHistoryApi, input: OpenCodeHi
     const messages: OpenCodeNativeMessage[] = prior ? [...prior.messages] : [];
     if (prior?.headId) {
       if (!head || messages.at(-1)?.id !== prior.headId || !prior.forwardCursor) throw new OpenCodeHistoryError("invalidated");
-      // Mutable background shells may occur before an idle boundary. Re-read
-      // them as well as the open suffix, without replaying the completed prefix.
-      const lastIdle = messages.findLastIndex(message => message.type === "idle");
+      // Match the pinned session fork projector's settled-history predicate: completed
+      // assistant messages and non-running shell/compaction records are stable,
+      // including within the open period. Mutable records can precede an idle.
       for (let index = 0; index < messages.length; index++) {
         const message = messages[index]!;
         const mutable = message.type === "assistant" && message.time.completed === undefined ||
           message.type === "shell" && message.status === "running" || message.type === "compaction" && message.status === "running";
-        if (index > lastIdle || mutable || index === messages.length - 1) messages[index] = await anchor(message);
+        if (mutable || index === messages.length - 1) messages[index] = await anchor(message);
       }
       if (head.id !== prior.headId) {
         const seen = new Set(messages.map(message => message.id));

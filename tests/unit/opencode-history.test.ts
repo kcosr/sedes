@@ -107,6 +107,43 @@ describe("OpenCode complete retained native history acquisition", () => {
     expect(refreshed.retainedDecodedBytes).toBe(first.retainedDecodedBytes);
   });
 
+  it.each([50, 1_000])("refreshes only mutable records and the head in an open period with %i settled steps", async steps => {
+    const shell = parseOpenCodeNativeMessage({ id: "msg_background", type: "shell", shellID: "sh_background", status: "running", command: "background", time: { created: 200 } });
+    const compaction = parseOpenCodeNativeMessage({ id: "msg_compaction", type: "compaction", status: "running", reason: "manual", summary: "", recent: "", time: { created: 200 } });
+    const settled = Array.from({ length: steps }, (_, index) => [
+      user(`msg_user_${index}`),
+      assistant(`msg_answer_${index}`, { time: { created: 200, streamed: 220, completed: 250 }, content: [
+        { type: "tool", id: `tool_${index}`, name: "read", state: { status: "completed", input: {}, content: [{ type: "text", text: "large tool result ".repeat(100) }] }, time: { created: 210, completed: 220 } },
+        { type: "text", text: "completed step" },
+      ] }),
+    ]).flat();
+    const head = parseOpenCodeNativeMessage({ id: "msg_setting_head", type: "model-switched", model: { providerID: "probe", id: "next" }, time: { created: 400 } });
+    const { api, state } = apiFixture([shell, idle("msg_old_idle"), ...settled, assistant("msg_mutable"), compaction, head]);
+    const before = await readOpenCodeHistory(api, { sessionId });
+    api.getHistoryPage.mockClear(); api.getMessage.mockClear();
+    state.messages[0] = parseOpenCodeNativeMessage({ ...shell, status: "exited", exit: 0, time: { created: 200, completed: 500 } });
+    state.messages[state.messages.length - 3] = assistant("msg_mutable", { content: [{ type: "text", text: "full answer" }], time: { created: 200, completed: 500 } });
+    state.messages[state.messages.length - 2] = parseOpenCodeNativeMessage({ ...compaction, status: "completed", summary: "summary", recent: "recent" });
+    const refreshed = await refreshOpenCodeHistory(api, restartOpenCodeHistoryAcquisition(before), { sessionId });
+    expect(refreshed.messages).toEqual(state.messages);
+    expect(api.getHistoryPage.mock.calls.map(([, options]) => ({ order: options?.order, limit: options?.limit }))).toEqual([{ order: "desc", limit: 1 }]);
+    expect(api.getMessage.mock.calls.map(([, id]) => id)).toEqual(["msg_background", "msg_mutable", "msg_compaction", "msg_setting_head"]);
+    for (let index = 1; index < settled.length + 2; index++) expect(refreshed.messages[index]).toBe(before.messages[index]);
+
+    // Their settlement removes them from later refresh work, even though this
+    // busy period remains open and its completed steps are still retained.
+    api.getHistoryPage.mockClear(); api.getMessage.mockClear();
+    state.messages.push(assistant("msg_new_head"));
+    const appended = await refreshOpenCodeHistory(api, restartOpenCodeHistoryAcquisition(refreshed), { sessionId });
+    expect(appended.messages).toEqual(state.messages);
+    expect(api.getHistoryPage).toHaveBeenCalledTimes(2);
+    expect(api.getMessage.mock.calls.map(([, id]) => id)).toEqual(["msg_setting_head", "msg_new_head"]);
+    api.getHistoryPage.mockClear(); api.getMessage.mockClear();
+    await refreshOpenCodeHistory(api, restartOpenCodeHistoryAcquisition(appended), { sessionId });
+    expect(api.getHistoryPage).toHaveBeenCalledOnce();
+    expect(api.getMessage.mock.calls.map(([, id]) => id)).toEqual(["msg_new_head"]);
+  });
+
   it("refreshes mutable background records before the old idle and fails if rewind removed its head", async () => {
     const shell = parseOpenCodeNativeMessage({ id: "msg_shell", type: "shell", shellID: "sh_test", status: "running", command: "background", time: { created: 200 } });
     const { api, state } = apiFixture([shell, idle("msg_idle")]);
@@ -340,6 +377,44 @@ describe("OpenCode normalized retained history", () => {
     expect(next.turnsById[value.orderedBackendTurnIds[0]!]).toBe(value.turnsById[value.orderedBackendTurnIds[0]!]);
     value.updateRuntimeState({ activity: "unknown", backgroundActivity: { state: "known", agents: 1, commands: 2, other: 0 } });
     expect(value.snapshot().snapshot).toMatchObject({ runState: "disconnected", backgroundActivity: { agents: 1, commands: 2 } });
+  });
+
+  it("reuses settled message items inside an open period while refreshing mutable work and settlement", () => {
+    const settled = [user("msg_user"), assistant("msg_finished", {
+      time: { created: 200, streamed: 220, completed: 250 }, content: [
+        { type: "tool", id: "tool_finished", name: "read", state: { status: "completed", input: {}, content: [{ type: "text", text: "settled tool output ".repeat(1_000) }] }, time: { created: 210, completed: 220 } },
+        { type: "text", text: "finished answer" },
+      ],
+    })];
+    const mutable = (path: string) => assistant("msg_live", { content: [
+      { type: "text", text: "" },
+      { type: "tool", id: "tool_live", name: "read", state: { status: "running", input: { path }, metadata: {} }, time: { created: 260 } },
+    ] });
+    const key = openCodeHistoryPartKey("msg_live", "text", 0);
+    const before = projection([...settled, mutable("old")], { activity: "running", observedParts: new Map([[key, { text: "old prefix", completed: false }]]) });
+    const messages = [...settled, mutable("new")];
+    const options = { ...identity, activity: "running" as const, observedParts: new Map([[key, { text: "new prefix", completed: false }]]) };
+    const next = new OpenCodeHistoryProjection(retained(messages), { ...options, previous: before });
+    const fresh = new OpenCodeHistoryProjection(retained(messages), options);
+    for (const id of [openCodeHistoryItemId("msg_user"), openCodeHistoryItemId("msg_finished", 0), openCodeHistoryItemId("msg_finished", 1)]) {
+      expect(next.itemsById[id]).toBe(before.itemsById[id]);
+    }
+    expect(next.itemsById[openCodeHistoryItemId("msg_live", 0)]).not.toBe(before.itemsById[openCodeHistoryItemId("msg_live", 0)]);
+    expect(next.itemsById[openCodeHistoryItemId("msg_live", 0)]).toMatchObject({ status: "streaming", markdown: { text: "new prefix" } });
+    expect(next.snapshot()).toEqual(fresh.snapshot());
+
+    // A mutable message must also reproject when only its observed overlay
+    // changes, even if the native DTO instance itself has not changed.
+    const observations = new Map([[key, { text: "latest prefix", completed: false }]]);
+    const observed = new OpenCodeHistoryProjection(retained(messages), { ...options, observedParts: observations, previous: next });
+    expect(observed.itemsById[openCodeHistoryItemId("msg_live", 0)]).toMatchObject({ markdown: { text: "latest prefix" } });
+    const endedMessages = [...messages, idle("msg_interrupted", "interrupted")];
+    const endedOptions = { ...identity, observedParts: observations };
+    const ended = new OpenCodeHistoryProjection(retained(endedMessages), { ...endedOptions, previous: observed });
+    expect(ended.snapshot()).toEqual(new OpenCodeHistoryProjection(retained(endedMessages), endedOptions).snapshot());
+    expect(ended.turnsById[ended.orderedBackendTurnIds[0]!]!.status).toBe("interrupted");
+    expect(ended.itemsById[openCodeHistoryItemId("msg_finished", 0)]!.status).toBe("completed");
+    for (const index of [0, 1]) expect(ended.itemsById[openCodeHistoryItemId("msg_live", index)]!.status).toBe("interrupted");
   });
 
   it("rejects an oversized overlay atomically and distinguishes invalid schema from byte overflow", () => {

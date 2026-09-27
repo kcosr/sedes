@@ -76,6 +76,21 @@ interface CachedPeriod {
   readonly fingerprint: string;
 }
 
+interface CachedMessage {
+  readonly native: OpenCodeNativeMessage;
+  readonly turnId: string;
+  readonly turnStatus: BackendTurn["status"];
+  readonly sourceOrder: number;
+  readonly items: readonly BackendItem[];
+  readonly bytes: number;
+}
+function immutableMessage(message: OpenCodeNativeMessage): boolean {
+  if (message.type === "assistant") return message.time.completed !== undefined && message.content.every(part =>
+    part.type === "tool" ? part.state.status === "completed" || part.state.status === "error" : openCodeNativePartEnded(message, part));
+  if (message.type === "shell" || message.type === "compaction") return message.status !== "running";
+  return true;
+}
+
 function messageText(value: string) {
   try { return preserveMessageText(value); } catch { throw new OpenCodeHistoryError("turn_bytes"); }
 }
@@ -102,6 +117,7 @@ export class OpenCodeHistoryProjection {
   readonly #turnBytes = new Map<string, number>();
   readonly #turnIndex = new Map<string, number>();
   readonly #periods = new Map<string, CachedPeriod>();
+  readonly #messages = new Map<string, CachedMessage>();
   readonly #partSources = new Map<string, { message: Extract<OpenCodeNativeMessage, { type: "assistant" }>; turnId: string; contentIndex: number }>();
   readonly #limits: OpenCodeHistoryLimits;
 
@@ -140,7 +156,8 @@ export class OpenCodeHistoryProjection {
       let selectedItems: Readonly<Record<string, BackendItem>>;
       let fingerprint: string;
       let wholeBytes: number;
-      const previous = input.previous;
+      const previous = input.previous && input.previous.#scope === this.#scope && input.previous.#generation === this.#generation
+        ? input.previous : undefined;
       const cached = boundary && previous && previous.#scope === this.#scope && previous.#generation === this.#generation
         ? previous.#periods.get(opening.id) : undefined;
       if (cached && cached.boundary === boundary && cached.messages.length === period.length &&
@@ -163,7 +180,21 @@ export class OpenCodeHistoryProjection {
         };
         for (const message of period) {
           check();
-          projectMessage(message, backendTurnId, status, input.observedParts, add, () => orderedBackendItemIds.length);
+          const sourceOrder = orderedBackendItemIds.length;
+          const old = previous ? previous.#messages.get(message.id) : undefined;
+          if (old && old.native === message && old.turnId === backendTurnId && old.turnStatus === status && old.sourceOrder === sourceOrder) {
+            if (orderedBackendItemIds.length + old.items.length > MAXIMUM_BACKEND_ITEMS_PER_TURN) throw new OpenCodeHistoryError("turn_items");
+            for (const item of old.items) {
+              if (items[item.backendItemId] || builtItems[item.backendItemId]) throw new OpenCodeHistoryError("invalid");
+              builtItems[item.backendItemId] = item; orderedBackendItemIds.push(item.backendItemId);
+            }
+            projectedBytes += old.bytes; check(); this.#messages.set(message.id, old);
+          } else {
+            const beforeMessageBytes = projectedBytes;
+            projectMessage(message, backendTurnId, status, input.observedParts, add, () => orderedBackendItemIds.length);
+            if (immutableMessage(message)) this.#messages.set(message.id, { native: message, turnId: backendTurnId, turnStatus: status,
+              sourceOrder, items: orderedBackendItemIds.slice(sourceOrder).map(id => builtItems[id]!), bytes: projectedBytes - beforeMessageBytes });
+          }
         }
         let diagnostic: string | undefined;
         for (let index = period.length - 1; index >= 0; index--) {
@@ -182,8 +213,7 @@ export class OpenCodeHistoryProjection {
         if (wholeBytes > MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES - 1024) throw new OpenCodeHistoryError("turn_bytes");
         fingerprint = openCodeHistoryFingerprint(wholeTurn);
         // A closed turn containing a still-mutable native record must be rebuilt.
-        if (boundary && period.every(message => message.type === "assistant" ? message.time.completed !== undefined && message.content.every(part => part.type === "tool" || openCodeNativePartEnded(message, part))
-          : message.type === "shell" || message.type === "compaction" ? message.status !== "running" : true)) {
+        if (boundary && period.every(immutableMessage)) {
           this.#periods.set(opening.id, { messages: period, boundary, turn, items: selectedItems,
             bytes: projectedBytes - beforeBytes, wholeBytes, fingerprint });
         }
