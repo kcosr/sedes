@@ -1,3 +1,4 @@
+import type { BackendRuntimeDiagnostic } from "./backends/module.js";
 import { backendLifecycleActions } from "./configuration-admin/configuration-backend-lifecycle.js";
 import { UsageService } from "./usage/usage-service.js";
 import { mergeEnvironmentVariableOverrides } from "../shared/protocol/environment-variables.js";
@@ -432,12 +433,7 @@ export async function startProductionApplication(
     const configurationRepository = new ConfigurationRepository(database);
     const environmentVariables = new EnvironmentVariablesService(database, configurationRepository);
     let desiredConfiguration = configurationRepository.get(scope);
-    const configurationProjection = new ConfigurationProjection(database, {
-      pi: compiledBackendModuleCatalog.protocolReleaseForBackendKind("pi"),
-      codex_app_server: compiledBackendModuleCatalog.protocolReleaseForBackendKind("codex_app_server"),
-      claude_agent_sdk: compiledBackendModuleCatalog.protocolReleaseForBackendKind("claude_agent_sdk"),
-      grok_build: compiledBackendModuleCatalog.protocolReleaseForBackendKind("grok_build"),
-    });
+    const configurationProjection = new ConfigurationProjection(database, compiledBackendModuleCatalog.protocolReleases());
     database.transaction(() => configurationProjection.project(scope, desiredConfiguration.configuration))();
     let backendConfigurationFile = resolveDatabaseBackendConfiguration(
       desiredConfiguration.configuration,
@@ -1875,12 +1871,17 @@ export async function startProductionApplication(
     const backendPresence = new Map<string, boolean>();
     const observedBackends = new Map<string, Awaited<ReturnType<NonNullable<BackendModuleRuntime["administration"]>["inspect"]>>>();
     const remoteBackendObservations = new WeakMap<BackendModuleRuntime, { serviceIdentity: string; pending: Promise<void> }>();
-    const observationFailures = new Map<string, "unreachable" | SidecarOwnershipRecoveryCode>();
+    const observationFailures = new Map<string, "unreachable" | SidecarOwnershipRecoveryCode | BackendRuntimeDiagnostic>();
+    const backendDiagnostic = (backendId: string, error: unknown): BackendRuntimeDiagnostic | undefined => {
+      const definition = backendConfigurationFile.backends.find(item => item.id === backendId);
+      return definition ? compiledBackendModuleCatalog.requireModule(definition.kind).runtimeDiagnostic?.(error) : undefined;
+    };
     const requiresOwnershipRecovery = (error: unknown): boolean => sidecarOwnershipRecoveryCode(error) !== undefined;
-    const observationFailure = (error: unknown) => sidecarOwnershipRecoveryCode(error) ?? "unreachable" as const;
+    const observationFailure = (error: unknown, backendId?: string) => sidecarOwnershipRecoveryCode(error) ??
+      (backendId ? backendDiagnostic(backendId, error) : undefined) ?? "unreachable" as const;
     const ownershipRecovery = (key: string, preparationError: unknown): SidecarOwnershipRecoveryCode | undefined => {
       const failure = observationFailures.get(key);
-      return failure && failure !== "unreachable" ? failure : sidecarOwnershipRecoveryCode(preparationError);
+      return typeof failure === "string" && failure !== "unreachable" ? failure : sidecarOwnershipRecoveryCode(preparationError);
     };
     // A host that answered but refused or could not start an attachment is not
     // unreachable. Its management status stays observable and its reason is shown.
@@ -1968,15 +1969,33 @@ export async function startProductionApplication(
     const retainedAttachments = new Set<string>();
     const attachRetainedWork = (backendId: string): void => {
       const threadIds = observedBackends.get(backendId)?.retainedThreadIds ?? [];
-      if (threadIds.length === 0 || retainedAttachments.has(backendId) || !runtimes) return;
+      // Existing-only inspection also runs while Settings has detached the
+      // backend or its environment. Do not create actors without admission:
+      // their transient generations would invalidate the inspection's own
+      // lifecycle confirmation fence and implicitly undo Disconnect.
+      const module = moduleRuntimes.get(backendId);
+      const environmentId = profiles.find(profile => profile.backendInstanceId === backendId)?.executionEnvironmentId;
+      const isAdmitted = () => module !== undefined && moduleRuntimes.get(backendId) === module &&
+        environmentId !== undefined && profiles.some(profile => profile.backendInstanceId === backendId && profile.executionEnvironmentId === environmentId) &&
+        configurationRepository.runtime(scope, "backend", backendId).preference === "automatic" &&
+        configurationRepository.runtime(scope, "environment", environmentId).preference === "automatic";
+      if (threadIds.length === 0 || retainedAttachments.has(backendId) || !runtimes || !isAdmitted()) return;
       const coordinator = runtimes;
       retainedAttachments.add(backendId);
       const admitted = discoveryOperations.admit(async signal => {
-        const result = await attachRetainedThreads({ threadIds, signal,
-          acquire: threadId => coordinator.acquire(scope, threadId),
+        if (!isAdmitted()) return;
+        const detached = new AbortController();
+        const attachmentSignal = AbortSignal.any([signal, detached.signal]);
+        const result = await attachRetainedThreads({ threadIds, signal: attachmentSignal,
+          acquire: threadId => {
+            if (!isAdmitted()) {
+              detached.abort();
+              return Promise.reject(new DOMException("Retained work attachment was detached", "AbortError"));
+            }
+            return coordinator.acquire(scope, threadId);
+          },
           report: (context, error) => reportBackgroundError(`Backend ${backendId}: ${context}`)(error) });
-        const owned = moduleRuntimes.get(backendId);
-        if (!result.complete && owned) remoteBackendObservations.delete(owned);
+        if (!result.complete && isAdmitted()) remoteBackendObservations.delete(module!);
       });
       if (!admitted) { retainedAttachments.delete(backendId); return; }
       void admitted.catch(reportBackgroundError(`Backend ${backendId} retained work attachment`))
@@ -2063,7 +2082,7 @@ export async function startProductionApplication(
               if (administration) { observedBackends.set(id, await administration.inspect()); attachRetainedWork(id); }
               observationFailures.delete(key);
             } catch (error) {
-              observationFailures.set(key, observationFailure(error));
+              observationFailures.set(key, observationFailure(error, id));
               if (owned && remote && remoteBackendObservations.get(owned) === observation) remoteBackendObservations.delete(owned);
             }
             finally { observation.serviceIdentity = serviceIdentity(); }
@@ -2089,19 +2108,22 @@ export async function startProductionApplication(
         if (providerActivity) interruptions.push(`Provider activity: ${providerActivity}.`);
         const intentionallyAbsent = !definition?.enabled || record.preference !== "automatic";
         const recoveryRequired = ownershipRecovery(key, backendPreparationFailures.get(id));
+        const observedFailure = observationFailures.get(key);
+        const diagnostic = owned?.runtimeDiagnostic?.() ?? backendDiagnostic(id, backendPreparationFailures.get(id)) ??
+          (typeof observedFailure === "object" ? observedFailure : undefined);
         const applied = intentionallyAbsent ? !owned && (record.preference !== "stopped" || !remote || backendPresence.get(id) === false) : appliedBackendRevisions.get(id) === record.desiredRevision && Boolean(owned) && !startupEnvironmentPending(id) &&
-          !observationFailures.has(key) && (!owned?.administration || Boolean(backendObservation && backendObservation.state !== "unknown"));
+          !diagnostic && !observationFailures.has(key) && (!owned?.administration || Boolean(backendObservation && backendObservation.state !== "unknown"));
         runtime = {...record,
           effectiveRevision: applied ? record.desiredRevision : record.effectiveRevision,
-          applyState: backendPreparationFailures.has(id) || observationFailures.has(key) ? "unavailable" : applied ? "applied" : "pending",
+          applyState: diagnostic || backendPreparationFailures.has(id) || observationFailures.has(key) ? "unavailable" : applied ? "applied" : "pending",
           startupEnvironmentPending: (Boolean(owned) || Boolean(backendObservation)) && startupEnvironmentPending(id),
-          connectionState: recoveryRequired ? "recovery_required" : observationFailures.has(key) ? "unreachable" : record.preference === "disconnected" && !owned ? "disconnected" : !owned ? remote && backendPresence.get(id) !== false ? backendPresence.get(id) === true ? "disconnected" : "unknown" : "stopped" : owned.administration && !backendObservation ? "unknown" : "connected",
+          connectionState: recoveryRequired ? "recovery_required" : diagnostic?.connectionState ?? (observationFailures.has(key) ? "unreachable" : record.preference === "disconnected" && !owned ? "disconnected" : !owned ? remote && backendPresence.get(id) !== false ? backendPresence.get(id) === true ? "disconnected" : "unknown" : "stopped" : owned.administration && !backendObservation ? "unknown" : "connected"),
           incarnation: backendObservation?.incarnation ?? backendIncarnations.get(id) ?? null,
           softwareVersion: null,
           upgradeState: "current",
           activeResources: Math.max(active.length, backendObservation?.state === "active" || backendObservation?.state === "unknown" ? 1 : 0),
           supportedActions: backendLifecycleActions(definition, remote),
-          lastError: recoveryRequired ? sidecarOwnershipRecoveryMessage(recoveryRequired) : backendPreparationFailures.has(id) ? "This backend could not apply its configuration. Check its settings and execution environment." : observationFailures.has(key) ? "Provider state is unavailable; active work and retained outcomes may still exist." : null,
+          lastError: recoveryRequired ? sidecarOwnershipRecoveryMessage(recoveryRequired) : diagnostic?.message ?? (backendPreparationFailures.has(id) ? "This backend could not apply its configuration. Check its settings and execution environment." : observationFailures.has(key) ? "Provider state is unavailable; active work and retained outcomes may still exist." : null),
         };
       }
       return {runtime, service, backendObservation, administration, interruptions: interruptions.length > 128 ? [...interruptions.slice(0, 127), `${interruptions.length - 127} additional affected resources.`] : interruptions,

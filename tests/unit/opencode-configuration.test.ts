@@ -7,6 +7,7 @@ import { compiledBackendModuleCatalog } from "../../src/server/backends/compiled
 import { configurationIdentities, runtimeConfigurationFingerprint } from "../../src/server/configuration-admin/configuration-identities.js";
 import { validateConfigurationDocument } from "../../src/server/configuration-admin/configuration-validation.js";
 import { backendLifecycleActions } from "../../src/server/configuration-admin/configuration-backend-lifecycle.js";
+import { parseBackendConfiguration } from "../../src/server/config/backend-configuration.js";
 import { backendEditors } from "../../src/client/components/execution-settings/backend-editors.js";
 
 const environmentId = "10000000-0000-4000-8000-000000000001";
@@ -26,6 +27,10 @@ describe("OpenCode v2 operator configuration", () => {
   it.each(["owned", "external"])("validates the checked-in %s module configuration example", ownership => {
     const value = JSON.parse(readFileSync(new URL(`../../config/opencode-${ownership}.example.json`, import.meta.url), "utf8"));
     expect(opencodeModuleConfigurationSchema.parse(value).connection.ownership).toBe(ownership);
+  });
+  it.each(["ssh-owned", "ssh-external", "outbound-owned", "outbound-external"])("validates the strict remote Settings example %s", name => {
+    const value = JSON.parse(readFileSync(new URL(`../../config/opencode-${name}.example.json`, import.meta.url), "utf8"));
+    expect(validateConfigurationDocument(value)).toEqual(value);
   });
   it.each([false, true])("rejects restrictive model policy before runtime admission, external=%s", external => {
     const policies: ConfigurationDocument["backends"][number]["modelPolicy"][] = [
@@ -70,12 +75,10 @@ describe("OpenCode v2 operator configuration", () => {
       connection: { ...external.moduleConfiguration.connection, channel: { ...external.moduleConfiguration.connection.channel, password: "never-store-me" } } }).success).toBe(false);
   });
 
-  it("rejects startup overrides for an external server and every remote environment", () => {
+  it("rejects startup overrides for an external server", () => {
     const external = configuration(true);
     external.backends[0]!.environmentVariables = { execution: {}, startup: { TEST: { kind: "literal", value: "value" } } };
     expect(() => validateConfigurationDocument(external)).toThrow(/cannot receive Sedes startup or execution variables/u);
-    const remote = { ...configuration(), executionEnvironments: [{ id: environmentId, kind: "ssh", label: "Remote", hostAlias: "host", workspaceRoots: ["/workspace"], operations: { kind: "none" } }] };
-    expect(() => validateConfigurationDocument(remote)).toThrow();
   });
 
   it.each(["backend", "environment"])("rejects execution overrides for an external server from %s defaults", source => {
@@ -86,6 +89,65 @@ describe("OpenCode v2 operator configuration", () => {
     expect(() => validateConfigurationDocument(document)).toThrow(/cannot receive Sedes startup or execution variables/u);
     expect(() => parseOpenCodeBackendConfiguration({ backend: { ...document.backends[0]!, protocolRelease: "2.0.18" },
       connections: document.targets, executionEnvironments: document.executionEnvironments, environment: {} })).toThrow(/opencode_external_environment_unsupported/u);
+  });
+
+
+  it.each([false, true].flatMap(external => ["ssh", "outbound"].map(kind => ({ external, kind }))))("admits $kind external=$external with host-relative paths", ({ external, kind }) => {
+    const document = configuration(external);
+    const backend = document.backends[0]!;
+    if (backend.kind === "opencode" && backend.moduleConfiguration.connection.ownership === "external") {
+      backend.moduleConfiguration.connection.channel.authentication.secret = { source: "protected_file", path: "/host-only/opencode-password" };
+    }
+    document.executionEnvironments = [{ id: environmentId, label: "Remote", workspaceRoots: ["/workspace"], operations: { kind: "none" },
+      ...(kind === "ssh" ? { kind: "ssh", hostAlias: "execution-host" } : { kind: "outbound", platform: "linux", pairingId: "20000000-0000-4000-8000-000000000001" }) }];
+    expect(validateConfigurationDocument(document)).toEqual(document);
+    if (kind === "ssh") {
+      const legacy = parseBackendConfiguration({ schemaVersion: 10,
+        executionEnvironments: [{ id: "30000000-0000-4000-8000-000000000001", kind: "local", label: "Main" },
+          ...document.executionEnvironments.map(environment => ({ ...environment, operations: { kind: "none" } }))],
+        backends: document.backends, targets: document.targets, defaultTargetId: document.defaultTargetId });
+      expect(legacy.targets[0]?.executionEnvironmentId).toBe(environmentId);
+    }
+  });
+
+  it.each(["ssh", "outbound"] as const)("rejects unavailable environment-backed passwords on %s hosts before native admission", kind => {
+    const document = configuration(true);
+    document.executionEnvironments = [{ id: environmentId, label: "Remote", workspaceRoots: ["/workspace"], operations: { kind: "none" },
+      ...(kind === "ssh" ? { kind: "ssh", hostAlias: "execution-host" } : { kind: "outbound", platform: "linux", pairingId: "20000000-0000-4000-8000-000000000001" }) }];
+    expect(() => validateConfigurationDocument(document)).toThrow("owner-protected password file on the execution host");
+    expect(() => parseOpenCodeBackendConfiguration({ backend: { ...document.backends[0]!, protocolRelease: "2.0.18" },
+      connections: document.targets, executionEnvironments: document.executionEnvironments, environment: {} })).toThrow("opencode_remote_password_file_required");
+  });
+
+  it.each(["darwin", "win32"] as const)("rejects enabled OpenCode on known outbound %s hosts", platform => {
+    const document = configuration();
+    document.executionEnvironments = [{ id: environmentId, kind: "outbound", platform, label: "Remote",
+      pairingId: "20000000-0000-4000-8000-000000000001", workspaceRoots: ["/workspace"], operations: { kind: "none" } }];
+    expect(() => validateConfigurationDocument(document)).toThrow("OpenCode requires a Linux execution host");
+  });
+
+  it.each([false, true])("preserves remote external variable limits and accepts owned host variables, external=%s", external => {
+    const document = configuration(external);
+    document.executionEnvironments = [{ id: environmentId, kind: "ssh", hostAlias: "execution-host", label: "Remote", workspaceRoots: ["/workspace"], operations: { kind: "none" },
+      environmentVariables: { startup: { HOST_BOOT: { kind: "literal", value: "configured" } }, execution: { HOST_SECRET: { kind: "secret", source: { kind: "protected_file", path: "/host-only/secret" } } } } }];
+    if (external) expect(() => validateConfigurationDocument(document)).toThrow("cannot receive Sedes startup or execution variables");
+    else expect(validateConfigurationDocument(document)).toEqual(document);
+  });
+
+  it.each([false, true])("exposes the complete remote lifecycle and disabled cleanup, external=%s", external => {
+    const backend = configuration(external).backends[0]!;
+    expect(backendLifecycleActions(backend, true)).toEqual(external ? ["connect", "disconnect", "stop"] : ["connect", "disconnect", "start", "stop", "restart"]);
+    backend.enabled = false;
+    expect(backendLifecycleActions(backend, true)).toEqual(["disconnect", "stop"]);
+    expect(backendLifecycleActions(backend, false)).toEqual(external ? ["disconnect"] : ["stop"]);
+  });
+
+  it("reserves an existing backend's execution host independently of its native path", () => {
+    const document = configuration(), before = configurationIdentities(document).find(entry => entry.kind === "backend");
+    const remoteId = "20000000-0000-4000-8000-000000000001";
+    document.executionEnvironments.push({ id: remoteId, kind: "ssh", hostAlias: "execution-host", label: "Remote", workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    document.targets[0]!.executionEnvironmentId = remoteId;
+    expect(configurationIdentities(document).find(entry => entry.kind === "backend")).not.toEqual(before);
   });
 
   it("reserves native store identity separately from mutable transport settings", () => {

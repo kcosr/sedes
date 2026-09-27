@@ -25,6 +25,7 @@ export function BackendEditor({ draft, setDraft, configuration, saving, loading,
   const selectedEditor = backendEditors[draft.backend.kind];
   const environmentId = draft.targets[0]?.executionEnvironmentId ?? "";
   const environment = configuration.executionEnvironments.find(entry => entry.id === environmentId);
+  const backendValidationError = selectedEditor.validationError?.(draft.backend, environment);
   const eligibleKinds = (Object.keys(backendEditors) as BackendDefinition["kind"][]).filter(kind =>
     environment && allowedEnvironments(backendEditors[kind].createBackend("eligibility"), [environment]).length > 0);
   const draftUnsupportedEnvironment = !eligibleKinds.includes(draft.backend.kind);
@@ -47,7 +48,7 @@ export function BackendEditor({ draft, setDraft, configuration, saving, loading,
     // with saving blocked until the user selects a supported type.
     setDraft({ ...draft, targets: draft.targets.map(entry => ({ ...entry, executionEnvironmentId })) });
   };
-  return <section className="execution-settings-editor" aria-label="Backend editor"><form onSubmit={(event) => { event.preventDefault(); void onSave(); }}>
+  return <section className="execution-settings-editor" aria-label="Backend editor"><form onSubmit={(event) => { event.preventDefault(); if (!backendValidationError && !invalidEnvironment) void onSave(); }}>
             <h4>{draft.creating ? "New backend" : `Edit ${draft.backend.label || "backend"}`}</h4>
             <fieldset disabled={saving || loading}><legend>Backend details</legend>
               <TextField autoFocus label="Backend name" value={draft.backend.label} required onChange={(label) => setDraft({ ...draft, backend: { ...draft.backend, label } })} />
@@ -67,7 +68,8 @@ export function BackendEditor({ draft, setDraft, configuration, saving, loading,
                   defaultTargetId: !enabled && ownDefault ? null : draft.defaultTargetId });
               }} />
               <p className="execution-settings-muted">Disabling also disables its connections and clears their new-thread default. Existing history is retained.</p>
-              {selectedEditor.renderBackend({ value: draft.backend, onChange: (backend) => setDraft({ ...draft, backend }) })}
+              {selectedEditor.renderBackend({ value: draft.backend, environment, onChange: (backend) => setDraft({ ...draft, backend }) })}
+              {backendValidationError ? <p role="alert">{backendValidationError}</p> : null}
               <ConfiguredEnvironmentVariableEditor scope="backend" value={draft.backend.environmentVariables} inherited={environment?.environmentVariables}
                 startupUnavailableReason={draft.backend.kind === "pi" ? "Pi runs in the Sedes process and has no owned backend startup environment."
                   : (draft.backend.kind === "codex_app_server" || draft.backend.kind === "opencode") && draft.backend.moduleConfiguration.connection.ownership === "external" ? "Sedes does not start this externally owned process." : undefined}
@@ -101,7 +103,7 @@ export function BackendEditor({ draft, setDraft, configuration, saving, loading,
                   }}>Add connection</Button>
               </fieldset>
             </fieldset>
-            <div className="execution-settings-actions execution-settings-save-bar"><Button type="submit" size="sm" disabled={pending || invalidEnvironment}>Save backend</Button>
+            <div className="execution-settings-actions execution-settings-save-bar"><Button type="submit" size="sm" disabled={pending || invalidEnvironment || Boolean(backendValidationError)}>Save backend</Button>
               <Button type="button" size="sm" variant="outline" disabled={saving} onClick={onCancel}>Cancel</Button></div>
             <p className="execution-settings-muted">Saving does not submit model work. Disruptive changes remain pending until they can safely apply or you explicitly restart.</p>
           </form></section>;

@@ -9,8 +9,9 @@ export function backendLifecycleActions(
   switch (definition.kind) {
     case "opencode":
       return definition.moduleConfiguration.connection.ownership === "external"
-        ? definition.enabled ? ["connect", "disconnect"] : ["disconnect"]
-        : definition.enabled ? ["connect", "start", "stop", "restart"] : ["stop"];
+        ? [...(definition.enabled ? ["connect" as const] : []), "disconnect", ...(remote ? ["stop" as const] : [])]
+        : definition.enabled ? ["connect", ...(remote ? ["disconnect" as const] : []), "start", "stop", "restart"]
+          : [...(remote ? ["disconnect" as const] : []), "stop"];
     case "pi":
     case "codex_app_server":
     case "claude_agent_sdk":

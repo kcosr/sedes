@@ -221,6 +221,13 @@ readiness races, and synthetic credential environment exposure. Production
 checks exercise native codecs, resident ownership, history, delivery, mutation
 recovery, MCP ingress, scoped shell environments, images, compaction and usage. The compiled OpenCode module admits exactly stock 2.0.18;
 these loopback fixtures do not qualify authenticated external model providers.
+The production-carrier job uses built provider/sidecar artifacts and covers
+local, actual OpenSSH and paired outbound connections in both ownership modes.
+Build first; its SSH cells require an executable `/usr/sbin/sshd` plus `ssh`
+and `ssh-keygen`. Fixtures use disposable account homes, host-local password
+files and native stores. Main-side native identity and password resolvers are
+denied during remote cases so sharing a test-machine UID cannot conceal
+incorrect main-side native access.
 See the [OpenCode operator guide](../operator/backends/opencode.md).
 
 After client, Capacitor dependency/configuration, or native Android changes,

@@ -5,7 +5,7 @@ import { Input } from "../ui/input.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
 import type { ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
 import type { HostPairingList } from "../../../shared/protocol/host-pairing.js";
-import { backendEditors } from "./backend-editors.js";
+import { backendEditors, backendStopEffect } from "./backend-editors.js";
 import { presentRuntime, type RuntimePresentationOptions } from "./runtime-presentation.js";
 import type { BackendDefinition, Configuration, ConfigurationSnapshot, EnvironmentDefinition } from "./types.js";
 
@@ -172,7 +172,7 @@ export function BackendInventory({ snapshot, filters, disabled, environmentId, o
                 {targets.some(target => target.id === configuration.defaultTargetId) ? <span className="execution-inventory-default">Default</span> : null}
                 <span className="execution-inventory-description">{targets.length} connection{targets.length === 1 ? "" : "s"}{backend.enabled ? "" : " · Disabled"}{runtime?.applyState === "applied" ? <span className="execution-inventory-applied-compact" aria-hidden="true"> · Config applied</span> : null}</span></td>
               <td role="cell" data-label="Provider">{backendEditors[backend.kind].label}</td>
-              <td role="cell" data-label="Runtime"><RuntimeSummary runtime={runtime} options={{ resourceKind: "backend", sidecar: false, enabled: backend.enabled }} /></td>
+              <td role="cell" data-label="Runtime"><RuntimeSummary runtime={runtime} options={{ resourceKind: "backend", sidecar: false, enabled: backend.enabled, stopEffect: backendStopEffect(backend, runtime) }} /></td>
               <td role="cell" data-label="Configuration" data-applied={runtime?.applyState === "applied"}><span className="execution-inventory-apply" data-attention={runtime && runtime.applyState !== "applied"}><span className="execution-inventory-config-label">Configuration: </span>{runtime ? { applied: "Applied", pending: runtime.startupEnvironmentPending ? "Pending restart" : "Changes pending", rejected: "Rejected", unavailable: "Not applied" }[runtime.applyState] : "Not reported"}</span></td>
               <td role="cell"><ResourceActions label={backend.label} disabled={disabled} onOpen={() => onOpen(backend)} onEdit={() => onEdit(backend)} /></td>
             </tr>;

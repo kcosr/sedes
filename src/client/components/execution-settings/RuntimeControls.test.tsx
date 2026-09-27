@@ -36,6 +36,41 @@ async function chooseDisconnect() {
 const moreActions = () => screen.getByRole("button", { name: "Runtime actions for Build host" });
 
 describe("runtime administration controls", () => {
+  it("connects an external server after its Sedes attachment was retired", async () => {
+    const api = controls();
+    render(<RuntimeControls controls={api} revision={7} resourceKind="backend" resourceId={runtime.resourceId} label="Build host"
+      runtime={{ ...runtime, resourceKind: "backend", connectionState: "stopped", preference: "stopped", supportedActions: ["connect", "disconnect", "stop"] }}
+      stopEffect="attachment" disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
+    expect(screen.getByText("Attachment retired")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await waitFor(() => expect(api.configurationLifecycle).toHaveBeenCalledWith(expect.objectContaining({ action: "connect" })));
+    expect(api.configurationLifecycleImpact).not.toHaveBeenCalled();
+  });
+
+  it.each(["service", "attachment"] as const)("confirms the normalized %s Stop effect without changing the command", async stopEffect => {
+    const api = controls(), user = userEvent.setup();
+    api.configurationLifecycleImpact.mockResolvedValue({ ...impact, action: "stop", interruptions: [], expiresAt: new Date(Date.now() + 120_000).toISOString() });
+    render(<RuntimeControls controls={api} revision={7} resourceKind="backend" resourceId={runtime.resourceId} label="Build host"
+      runtime={{ ...runtime, resourceKind: "backend", upgradeState: "current", applyState: "applied", supportedActions: ["connect", "disconnect", "stop"] }}
+      stopEffect={stopEffect} disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
+    await user.click(moreActions());
+    await user.click(await screen.findByRole("menuitem", { name: "Stop" }));
+    await screen.findByRole("button", { name: "Confirm stop" });
+    if (stopEffect === "attachment") {
+      expect(screen.getByText(/The external server and its running work continue/)).toBeVisible();
+      expect(screen.getByText(/Pending Sedes results may remain unknown/)).toBeVisible();
+      expect(screen.queryByText(/Running work will be interrupted/)).toBeNull();
+      expect(screen.queryByText(/The service stops/)).toBeNull();
+    } else {
+      expect(screen.getByText(/Running work will be interrupted/)).toBeVisible();
+      expect(screen.getByText(/The service stops/)).toBeVisible();
+    }
+    expect(api.configurationLifecycle).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Confirm stop" }));
+    expect(api.configurationLifecycle).toHaveBeenCalledWith(expect.objectContaining({ action: "stop", impactToken: impact.token }));
+  });
+
   it.each(["pending", "unknown"] as const)("restores a %s command after Settings remounts without replaying it", async state => {
     const api = controls();
     const mutationId = "e1d9bfa4-20bc-4903-9763-6117b41a6d70";

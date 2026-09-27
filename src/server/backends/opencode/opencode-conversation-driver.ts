@@ -12,6 +12,7 @@ import { OpenCodeRuntimeError } from "./opencode-release.js";
 import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
 import { acquireOpenCodeInputObserver } from "./opencode-input-observer.js";
 import { createOpenCodeConversation } from "./opencode-conversation-creation.js";
+import { openCodeRuntimeDiagnostic } from "./opencode-runtime-diagnostic.js";
 
 const cursorSchema = z.strictObject({ v: z.literal(1), scope: z.string().length(43), native: z.string().min(1).max(16_384) });
 
@@ -23,8 +24,16 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
     this.instance = input.instance; this.connection = input.connection;
   }
   async health(): Promise<BackendHealth> {
-    try { const runtime = await this.input.runtime(); await runtime.start(); return await runtime.health(); }
-    catch { return { available: false, checkedAt: new Date().toISOString() }; }
+    const observed = this.input.observeHealth?.();
+    try {
+      const runtime = await this.input.runtime(); await runtime.start();
+      const result = await runtime.health(); observed?.(undefined); return result;
+    } catch (error) {
+      observed?.(error);
+      const diagnostic = openCodeRuntimeDiagnostic(error);
+      return { available: false, checkedAt: new Date().toISOString(),
+        ...(diagnostic ? { diagnostic: boundDisplayText(diagnostic.message) } : {}) };
+    }
   }
   async catalog(input: Parameters<ConversationBackendDriver["catalog"]>[0]) {
     try {

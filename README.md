@@ -114,7 +114,7 @@ bounded and is documented in the individual
 | Codex   | Sedes can own a local process or connect to an operator-managed local, authenticated network, or SSH/outbound sidecar endpoint. | Local or persistent-sidecar execution, depending on the configured topology.                                                             |
 | Claude  | Sedes runs a managed Claude Agent SDK worker with an independently authenticated Claude Code CLI.              | Local worker or persistent-sidecar runtime over SSH or outbound on Linux/macOS.                                  |
 | Grok    | Sedes owns a local Grok ACP process using the native installation account.                                     | Local execution environment.                                                                                              |
-| OpenCode v2 | Sedes owns a resident local daemon or connects to an existing local server through authenticated HTTP and SSE. | Local Linux, same OS account; stock `opencode2` 2.0.18. |
+| OpenCode v2 | Sedes owns a resident daemon or connects to an existing server through authenticated HTTP and SSE on the execution host. | Local or persistent SSH/outbound sidecar; Linux host, same host account, stock `opencode2` 2.0.18. |
 
 Remote hosts can also call the server over HTTP or HTTPS through an outbound
 connector. Accept a pending host in Settings, grant roots and operations, then

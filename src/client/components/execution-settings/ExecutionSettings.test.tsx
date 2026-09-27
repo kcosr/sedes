@@ -14,6 +14,7 @@ import { useConfiguration, type ConfigurationControls } from "./useConfiguration
 const localId = "10000000-0000-4000-8000-000000000001";
 const remoteId = "10000000-0000-4000-8000-000000000002";
 const outboundId = "10000000-0000-4000-8000-000000000003";
+const linuxOutboundId = "10000000-0000-4000-8000-000000000005";
 
 function configuration(): ConfigurationDocument {
   return {
@@ -27,6 +28,7 @@ function configuration(): ConfigurationDocument {
 function configurationWithOutbound(): ConfigurationDocument {
   const document = configuration();
   document.executionEnvironments.push({ id: outboundId, kind: "outbound", pairingId: "10000000-0000-4000-8000-000000000004", platform: "darwin", label: "Paired Mac", workspaceRoots: ["/Users/operator/Projects"], operations: { kind: "sidecar", enabledCapabilities: ["directory_browser", "workspace_files"] } });
+  document.executionEnvironments.push({ id: linuxOutboundId, kind: "outbound", pairingId: "10000000-0000-4000-8000-000000000006", platform: "linux", label: "Paired Linux", workspaceRoots: ["/work"], operations: { kind: "sidecar", enabledCapabilities: ["directory_browser", "workspace_files"] } });
   return document;
 }
 
@@ -572,7 +574,7 @@ describe("execution configuration administration", () => {
     expect(api.configurationLifecycle).not.toHaveBeenCalled();
   });
 
-  it("requires an environment before choosing an eligible backend and keeps Grok and OpenCode local", async () => {
+  it("requires an environment and admits OpenCode on Linux hosts while keeping Grok local", async () => {
     render(<ExecutionSettings initialPage="backends" controls={controls(configurationWithOutbound())} />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Add backend" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Add backend" }));
@@ -581,11 +583,11 @@ describe("execution configuration administration", () => {
     expect(environment).toHaveValue("");
     expect(screen.getByRole("button", { name: "Save backend" })).toBeDisabled();
     for (const option of within(provider).getAllByRole("option")) expect(option).toBeDisabled();
-    for (const id of [remoteId, outboundId, localId]) {
+    for (const id of [remoteId, outboundId, linuxOutboundId, localId]) {
       fireEvent.change(environment, { target: { value: id } });
       for (const name of ["Claude", "Codex", "Pi SDK"]) expect(within(provider).getByRole("option", { name })).toBeEnabled();
       expect(within(provider).getByRole("option", { name: "Grok" })).toHaveProperty("disabled", id !== localId);
-      expect(within(provider).getByRole("option", { name: "OpenCode v2" })).toHaveProperty("disabled", id !== localId);
+      expect(within(provider).getByRole("option", { name: "OpenCode v2" })).toHaveProperty("disabled", id === outboundId);
     }
     fireEvent.change(provider, { target: { value: "pi" } });
     expect(screen.getByText(/SDK and model connection run on Sedes/)).toBeVisible();
@@ -599,22 +601,25 @@ describe("execution configuration administration", () => {
     expect(screen.queryByRole("option", { name: "Cursor" })).toBeNull();
   });
 
-  it.each(["process_stdio", "http"] as const)("creates a local OpenCode v2 backend using %s", async (channel) => {
-    const api = controls();
+  it.each([localId, remoteId, linuxOutboundId].flatMap(environmentId => (["process_stdio", "http"] as const).map(channel => ({ environmentId, channel }))))("creates OpenCode v2 on $environmentId using $channel", async ({ environmentId, channel }) => {
+    const api = controls(configurationWithOutbound());
     render(<ExecutionSettings initialPage="backends" controls={api} />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Add backend" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Add backend" }));
-    fireEvent.change(screen.getByLabelText("Execution environment"), { target: { value: localId } });
+    fireEvent.change(screen.getByLabelText("Execution environment"), { target: { value: environmentId } });
     fireEvent.change(screen.getByLabelText("Backend type"), { target: { value: "opencode" } });
     expect(screen.getByRole("option", { name: "OpenCode v2" })).toBeEnabled();
-    fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "Local OpenCode" } });
+    fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "Qualified OpenCode" } });
     fireEvent.change(screen.getByLabelText("Native database path"), { target: { value: "/data/opencode/opencode.db" } });
     if (channel === "process_stdio") {
       expect(screen.getByLabelText("Connection ownership")).toHaveValue("process_stdio");
+      expect(screen.getByLabelText("OpenCode v2 executable path")).toHaveAccessibleDescription(/selected execution host/);
       fireEvent.change(screen.getByLabelText("OpenCode v2 executable path"), { target: { value: "/opt/bin/opencode2" } });
       fireEvent.change(screen.getByLabelText("Working directory"), { target: { value: "/work" } });
     } else {
       fireEvent.change(screen.getByLabelText("Connection ownership"), { target: { value: "http" } });
+      expect(within(screen.getByLabelText("Password source")).getAllByRole("option")).toHaveLength(environmentId === localId ? 2 : 1);
+      expect(screen.getByLabelText("HTTP endpoint")).toHaveAccessibleDescription(/selected execution host, including SSH and outbound hosts/);
       fireEvent.change(screen.getByLabelText("HTTP endpoint"), { target: { value: "http://127.0.0.1:4096" } });
       fireEvent.change(screen.getByLabelText("Password file reference"), { target: { value: "/secrets/opencode-password" } });
     }
@@ -624,28 +629,68 @@ describe("execution configuration administration", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save backend" }));
     await waitFor(() => expect(api.saveConfiguration).toHaveBeenCalledOnce());
     const saved = api.saveConfiguration.mock.calls[0]![0].configuration;
-    expect(saved.backends[0]).toMatchObject({ kind: "opencode", label: "Local OpenCode", enabled: true, moduleConfiguration: {
+    expect(saved.backends[0]).toMatchObject({ kind: "opencode", label: "Qualified OpenCode", enabled: true, moduleConfiguration: {
       nativeStorePath: "/data/opencode/opencode.db", connection: channel === "process_stdio"
         ? { ownership: "owned", channel: { type: channel, executablePath: "/opt/bin/opencode2", workingDirectory: "/work" } }
         : { ownership: "external", channel: { type: channel, url: "http://127.0.0.1:4096", authentication: {
           type: "basic", username: "opencode", secret: { source: "protected_file", path: "/secrets/opencode-password" },
         } } },
     } });
-    expect(saved.targets[0]).toMatchObject({ kind: "opencode_http", backendInstanceId: saved.backends[0].id, executionEnvironmentId: localId, enabled: true });
+    expect(saved.targets[0]).toMatchObject({ kind: "opencode_http", backendInstanceId: saved.backends[0].id, executionEnvironmentId: environmentId, enabled: true });
     expect(saved.defaultTargetId).toBe(saved.targets[0].id);
     expect(api.configurationLifecycle).not.toHaveBeenCalled();
   });
 
-  it("enables a retained local OpenCode backend and connection without changing their identity", async () => {
-    const document = configuration();
+  it.each([localId, remoteId, linuxOutboundId])("preserves an OpenCode password environment reference on %s until explicitly edited", async environmentId => {
+    const document = configurationWithOutbound();
+    const backend = { ...backendEditors.opencode.createBackend("saved-opencode"), label: "Saved OpenCode" };
+    if (backend.kind !== "opencode") throw new Error("Expected OpenCode fixture");
+    backend.moduleConfiguration.nativeStorePath = "/data/opencode/native.db";
+    backend.moduleConfiguration.connection = { ownership: "external", channel: { type: "http", url: "http://127.0.0.1:4096",
+      authentication: { type: "basic", username: "opencode", secret: { source: "environment", variable: "SEDES_OPENCODE_PASSWORD" } } } };
+    document.backends.push(backend);
+    document.targets.push(backendEditors.opencode.createTarget("saved-opencode-target", backend.id, environmentId));
+    const api = controls(document);
+    render(<ExecutionSettings initialPage="backends" controls={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Saved OpenCode details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Saved OpenCode" }));
+    const variable = screen.getByLabelText("Password environment variable");
+    expect(variable).toHaveValue("SEDES_OPENCODE_PASSWORD");
+    expect(screen.getByLabelText("Password source")).toHaveValue("environment");
+    if (environmentId === localId) {
+      expect(variable).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Save backend" })).toBeEnabled();
+    } else {
+      expect(variable).toBeDisabled();
+      expect(screen.getByRole("option", { name: "Environment variable (unavailable on remote hosts)" })).toBeDisabled();
+      expect(screen.getByRole("alert")).toHaveTextContent("Remote OpenCode requires a protected password file on the execution host");
+      expect(screen.getByRole("button", { name: "Save backend" })).toBeDisabled();
+      fireEvent.submit(screen.getByRole("region", { name: "Backend editor" }).querySelector("form")!);
+      expect(api.saveConfiguration).not.toHaveBeenCalled();
+      fireEvent.change(screen.getByLabelText("Password source"), { target: { value: "protected_file" } });
+      expect(screen.getByLabelText("Password file reference")).toHaveValue("");
+      fireEvent.change(screen.getByLabelText("Password file reference"), { target: { value: "/secrets/opencode-password" } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Save backend" }));
+    await waitFor(() => expect(api.saveConfiguration).toHaveBeenCalledOnce());
+    expect(api.saveConfiguration.mock.calls[0]![0].configuration.backends[0]).toMatchObject({
+      moduleConfiguration: { connection: { channel: { authentication: { secret: environmentId === localId
+        ? { source: "environment", variable: "SEDES_OPENCODE_PASSWORD" }
+        : { source: "protected_file", path: "/secrets/opencode-password" } } } } },
+    });
+  });
+
+  it.each([localId, remoteId, linuxOutboundId])("enables retained OpenCode on %s without changing its environment or identity", async environmentId => {
+    const document = configurationWithOutbound();
     const backend = { ...backendEditors.opencode.createBackend("local-opencode"), label: "Local OpenCode", enabled: false };
     document.backends.push(backend);
-    document.targets.push({ ...backendEditors.opencode.createTarget("opencode-target", backend.id, localId), enabled: false });
+    document.targets.push({ ...backendEditors.opencode.createTarget("opencode-target", backend.id, environmentId), enabled: false });
     const api = controls(document);
     render(<ExecutionSettings initialPage="backends" controls={api} />);
     fireEvent.click(await screen.findByRole("button", { name: "Local OpenCode details" }));
     fireEvent.click(screen.getByRole("button", { name: "Edit Local OpenCode" }));
     expect(screen.getByLabelText("Execution environment")).toBeDisabled();
+    expect(screen.getByLabelText("Execution environment")).toHaveValue(environmentId);
     expect(screen.getByLabelText("Backend type")).toBeDisabled();
     expect(screen.getByLabelText("Backend enabled")).toBeEnabled();
     fireEvent.change(screen.getByLabelText("Native database path"), { target: { value: "/data/opencode/opencode.db" } });
@@ -658,12 +703,17 @@ describe("execution configuration administration", () => {
     await waitFor(() => expect(api.saveConfiguration).toHaveBeenCalledOnce());
     const saved = api.saveConfiguration.mock.calls[0]![0].configuration;
     expect(saved.backends[0]).toMatchObject({ id: backend.id, kind: "opencode", enabled: true });
-    expect(saved.targets[0]).toMatchObject({ id: "opencode-target", backendInstanceId: backend.id, executionEnvironmentId: localId, enabled: true });
+    expect(saved.targets[0]).toMatchObject({ id: "opencode-target", backendInstanceId: backend.id, executionEnvironmentId: environmentId, enabled: true });
     expect(api.configurationLifecycle).not.toHaveBeenCalled();
   });
 
-  it.each([remoteId, outboundId])("blocks moving a new OpenCode backend to remote environment %s", async (environmentId) => {
-    const api = controls(configurationWithOutbound());
+  it.each(["darwin", "win32"] as const)("blocks moving a new OpenCode backend to outbound %s", async (platform) => {
+    const document = configurationWithOutbound();
+    const environmentId = outboundId;
+    const environment = document.executionEnvironments.find(value => value.id === environmentId)!;
+    if (environment.kind !== "outbound") throw new Error("expected outbound fixture");
+    environment.platform = platform;
+    const api = controls(document);
     render(<ExecutionSettings initialPage="backends" controls={api} />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Add backend" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Add backend" }));
@@ -680,7 +730,7 @@ describe("execution configuration administration", () => {
     expect(api.saveConfiguration).not.toHaveBeenCalled();
   });
 
-  it.each([remoteId, outboundId])("keeps retained OpenCode bindings disabled on remote environment %s", async (environmentId) => {
+  it.each([outboundId])("keeps retained OpenCode bindings disabled on unsupported host %s", async (environmentId) => {
     const document = configurationWithOutbound();
     const backend = { ...backendEditors.opencode.createBackend("remote-opencode"), label: "Remote OpenCode", enabled: false };
     document.backends.push(backend);
@@ -697,6 +747,39 @@ describe("execution configuration administration", () => {
     expect(screen.getByLabelText("Connection enabled")).not.toBeChecked();
     expect(screen.getByText("This retained remote connection is unsupported and must remain disabled.")).toBeVisible();
     expect(api.saveConfiguration).not.toHaveBeenCalled();
+    expect(api.configurationLifecycle).not.toHaveBeenCalled();
+  });
+
+  it.each((["owned", "external"] as const).flatMap(ownership => (["applied", "pending"] as const).map(applyState => ({ ownership, applyState }))))("presents remote OpenCode $ownership Stop safely with $applyState configuration", async ({ ownership, applyState }) => {
+    const document = configurationWithOutbound(), user = userEvent.setup();
+    const backend = { ...backendEditors.opencode.createBackend("remote-opencode"), label: "Remote OpenCode" };
+    if (backend.kind !== "opencode") throw new Error("Expected OpenCode fixture");
+    if (ownership === "external") backend.moduleConfiguration.connection = { ownership, channel: { type: "http", url: "http://127.0.0.1:4096",
+      authentication: { type: "basic", username: "opencode", secret: { source: "protected_file", path: "/secrets/opencode-password" } } } };
+    document.backends.push(backend);
+    document.targets.push(backendEditors.opencode.createTarget("remote-opencode-target", backend.id, linuxOutboundId));
+    const api = controls(document, [runtime({ resourceKind: "backend", resourceId: backend.id, activeResources: 1, applyState,
+      effectiveRevision: applyState === "pending" ? 3 : 4,
+      supportedActions: ownership === "owned" ? ["connect", "disconnect", "start", "stop", "restart"] : ["connect", "disconnect", "stop"] })]);
+    api.configurationLifecycleImpact.mockResolvedValue({ token: "preview", resourceKind: "backend", resourceId: backend.id, action: "stop",
+      configurationRevision: 4, incarnation: "native-owner", activeResources: 1, interruptions: [], expiresAt: new Date(Date.now() + 120_000).toISOString() });
+    render(<ExecutionSettings initialPage="backends" controls={api} />);
+    await user.click(await screen.findByRole("button", { name: "Remote OpenCode details" }));
+    await user.click(screen.getByRole("button", { name: "Runtime actions for Remote OpenCode" }));
+    if (ownership === "external") {
+      expect(screen.queryByRole("menuitem", { name: "Start" })).toBeNull();
+      expect(screen.queryByRole("menuitem", { name: "Restart" })).toBeNull();
+    }
+    await user.click(await screen.findByRole("menuitem", { name: "Stop" }));
+    if (applyState === "pending") {
+      expect(await screen.findByText(/Stop ends Sedes-owned execution or retires Sedes.s attachment/)).toBeVisible();
+      expect(screen.queryByText(/The external server and its running work continue/)).toBeNull();
+      expect(screen.queryByText(/Running work will be interrupted/)).toBeNull();
+    } else if (ownership === "external") {
+      expect(await screen.findByText(/The external server and its running work continue/)).toBeVisible();
+      expect(screen.queryByText(/Running work will be interrupted/)).toBeNull();
+    } else expect(await screen.findByText(/Running work will be interrupted/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(api.configurationLifecycle).not.toHaveBeenCalled();
   });
 

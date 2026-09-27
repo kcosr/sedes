@@ -1,6 +1,7 @@
 import path from "node:path";
 
 const REQUIRED_SHARED_SOURCES = Object.freeze([
+  "src/cli/opencode-owner-cli.ts",
   "src/cli/sedes-dynamic-tool-command.ts",
   "src/cli/sedes-cli.ts",
   "src/cli/sedes-mcp.ts",
@@ -16,6 +17,7 @@ const REQUIRED_SHARED_SOURCES = Object.freeze([
 ]);
 
 const ALLOWED_REPOSITORY_SOURCES = new Set([
+  "src/cli/opencode-owner-cli.ts",
   // OpenCode execution-host implementation; no main repositories or SQL.
   "src/server/backends/opencode/opencode-release.ts",
   "src/server/backends/opencode/opencode-sse.ts",

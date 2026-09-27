@@ -85,7 +85,7 @@ describe("OpenCode MCP runtime admission", () => {
     const f = fixture();
     vi.spyOn(f.runtime, "admitToolSession").mockRejectedValue(new OpenCodeRuntimeError("opencode_agent_tools_capacity_reached"));
     await f.admit();
-    expect(f.tools.diagnostic(f.target.binding.applicationThreadId)).toContain("Inspect retained work, then explicitly Stop and Connect");
+    expect(f.tools.diagnostic(f.target.binding.applicationThreadId)).toContain("Disconnect and Connect for local external servers, or Stop and Connect for owned and remote runtimes");
     expect(f.tools.diagnostic(f.target.binding.applicationThreadId)).not.toContain("later message");
     expect(f.registrations).toHaveLength(0);
     expect(f.tools.cliAdmission(f.target.binding.applicationThreadId)).toBeNull();

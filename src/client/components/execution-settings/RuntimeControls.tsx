@@ -16,7 +16,7 @@ const confirmationNotes: Partial<Record<RuntimeAction, string>> = {
   stop: "The service stops, and Sedes will not restart it automatically.",
 };
 
-export function RuntimeControls({ controls, revision, resourceKind, resourceId, label, runtime, disabled, disabledReason, enabled = true, onRuntime, onRefresh, showSidecar = resourceKind === "environment" }: {
+export function RuntimeControls({ controls, revision, resourceKind, resourceId, label, runtime, disabled, disabledReason, enabled = true, onRuntime, onRefresh, stopEffect = "service", showSidecar = resourceKind === "environment" }: {
   readonly controls: ConfigurationControls;
   readonly revision: number;
   readonly resourceKind: "environment" | "backend";
@@ -31,6 +31,7 @@ export function RuntimeControls({ controls, revision, resourceKind, resourceId, 
   readonly onRuntime: (runtime: ConfigurationRuntimeState) => void;
   readonly onRefresh: () => Promise<boolean>;
   readonly showSidecar?: boolean;
+  readonly stopEffect?: "service" | "attachment" | "unknown";
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [impact, setImpact] = useState<ConfigurationLifecycleImpact>();
@@ -194,7 +195,7 @@ export function RuntimeControls({ controls, revision, resourceKind, resourceId, 
     setImpact(undefined);
     restoreFocus.current = true;
   };
-  const presentation = presentRuntime(runtime, { resourceKind, sidecar: showSidecar, enabled });
+  const presentation = presentRuntime(runtime, { resourceKind, sidecar: showSidecar, enabled, stopEffect });
   const menuOrder: readonly RuntimeAction[] = ["connect", "start", "restart", "upgrade", "disconnect", "stop"];
   const menuActions = [ ...(presentation.primary ? [presentation.primary] : []), ...presentation.secondary ]
     .sort((a, b) => menuOrder.indexOf(a.action) - menuOrder.indexOf(b.action));
@@ -202,6 +203,8 @@ export function RuntimeControls({ controls, revision, resourceKind, resourceId, 
   const describedBy = disabled && disabledReason ? reasonId : undefined;
   const unconfirmed = runtime?.connectionState === "unknown" || runtime?.connectionState === "unreachable" || runtime?.connectionState === "recovery_required";
   const canStopUnknown = Boolean(unsettledMutationId) && outcomeUnknown && runtime?.supportedActions.includes("stop");
+  const retiresAttachment = impact?.action === "stop" && stopEffect === "attachment";
+  const unknownStopEffect = impact?.action === "stop" && stopEffect === "unknown";
   return <section aria-label={`${label} runtime`} aria-busy={busy || undefined} className="execution-settings-section">
     <div className="execution-settings-status" data-tone={presentation.tone}>
       <div className="execution-settings-status-headline">
@@ -233,10 +236,15 @@ export function RuntimeControls({ controls, revision, resourceKind, resourceId, 
     </div>
     {impact ? <div ref={confirmationRef} tabIndex={-1} className="execution-settings-confirmation" data-tone="attention" role="group" aria-label="Confirm runtime interruption">
       <strong>{actionLabels[impact.action]} {label}?</strong>
-      <p>{impact.activeResources} affected resource{impact.activeResources === 1 ? "" : "s"}. Running work will be interrupted; interrupted work is not restarted automatically.</p>
-      <p>Some retained work may have an unknown outcome. Unrecovered output or results may be lost when its runtime stops; completed external changes are not undone.</p>
+      <p>{impact.activeResources} affected resource{impact.activeResources === 1 ? "" : "s"}. {retiresAttachment
+        ? "Sedes retires its connection and retained recovery state. The external server and its running work continue."
+        : unknownStopEffect ? "Stop ends Sedes-owned execution or retires Sedes's attachment to an external server. External servers are left running."
+        : "Running work will be interrupted; interrupted work is not restarted automatically."}</p>
+      <p>{retiresAttachment
+        ? "Pending Sedes results may remain unknown, and retained output may be lost. Connect again to establish a new Sedes attachment."
+        : "Some retained work may have an unknown outcome. Unrecovered output or results may be lost when its runtime stops; completed external changes are not undone."}</p>
       {impact.interruptions.length ? <ul>{impact.interruptions.map((interruption, index) => <li key={index}>{interruption}</li>)}</ul> : null}
-      {confirmationNotes[impact.action] ? <p>{confirmationNotes[impact.action]}</p> : null}
+      {!retiresAttachment && !unknownStopEffect && confirmationNotes[impact.action] ? <p>{confirmationNotes[impact.action]}</p> : null}
       <p className="execution-settings-muted">This preview expires in about two minutes.</p>
       <div className="execution-settings-actions"><Button type="button" variant="destructive" size="sm" disabled={busy || disabled}
         onClick={() => void execute(impact.action, impact)}>Confirm {actionLabels[impact.action].toLowerCase()}</Button>

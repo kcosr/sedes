@@ -23,6 +23,7 @@ import { SEDES_VERSION } from "../shared/version.js";
 import { createSedesToolClient } from "./create-sedes-tool-client.js";
 import { runSedesMcp } from "./sedes-mcp.js";
 import { runSedesOpenCodeMcp } from "./sedes-opencode-mcp.js";
+import { runOpenCodeOwnerCli } from "./opencode-owner-cli.js";
 import type { SedesToolLocalSocketConnector } from "./sedes-tool-local-client.js";
 import {
   parseDynamicToolInput,
@@ -258,6 +259,7 @@ export async function runSedesCli(
     stderr: process.stderr,
   };
   const environment = dependencies.environment ?? process.env;
+  if (arguments_[0] === "opencode-owner") return runOpenCodeOwnerCli(arguments_.slice(1), io);
   const readers = {
     readFile:
       dependencies.readFile ??

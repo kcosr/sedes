@@ -167,6 +167,8 @@ export interface BackendRuntimeRecoveryContext {
 }
 
 export interface BackendModuleRuntime {
+  /** Current safe diagnostic from lazy runtime checks; reading must not start work. */
+  runtimeDiagnostic?(): BackendRuntimeDiagnostic | undefined;
   /** Trusted per-input approval provenance for restart-safe CLI source references. */
   agentToolAccessDecisionAuthority?(source: TrustedAgentToolSource): BackendAgentToolAccessDecisionAuthority;
   /** Read-only launch evidence; unknown never authorizes replacing a running owner. */
@@ -282,11 +284,19 @@ export interface PreparedBackendModule {
   recoverAdministration?(context: BackendRuntimeRecoveryContext): Promise<BackendRuntimeAdministration | undefined>;
 }
 
+export interface BackendRuntimeDiagnostic {
+  readonly connectionState: "recovery_required" | "unknown";
+  /** Provider-authored bounded operator guidance; never raw exception text. */
+  readonly message: string;
+}
+
 /**
  * Build-time provider contribution. Modules are compiled into one catalog;
  * they are not discovered or downloaded at runtime.
  */
 export interface BackendModule {
+  /** Map only known private failures to safe Settings diagnostics. */
+  runtimeDiagnostic?(error: unknown): BackendRuntimeDiagnostic | undefined;
   /** Compiled remote host grants, independently authorized from workspace operations. */
   readonly remoteRuntimeCapabilities?: readonly { readonly capabilityId: string; readonly majorVersion: number; readonly operations: readonly string[] }[];
   readonly backendKind: BackendKind;

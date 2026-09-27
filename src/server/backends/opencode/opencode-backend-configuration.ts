@@ -32,11 +32,15 @@ export function parseOpenCodeBackendConfiguration(input: BackendModuleConfigurat
   for (const connection of input.connections) {
     const environment = input.executionEnvironments.find(item => item.id === connection.executionEnvironmentId);
     if (connection.kind !== "opencode_http" || connection.backendInstanceId !== input.backend.id ||
-        !environment || environment.kind !== "local" || defaultsByConnectionId.has(connection.id)) {
+        !environment || defaultsByConnectionId.has(connection.id)) {
       throw new Error("opencode_connection_authority_invalid");
     }
     if (configuration.connection.ownership === "external" && (Object.keys(environment.environmentVariables?.startup ?? {}).length ||
         Object.keys(environment.environmentVariables?.execution ?? {}).length)) throw new Error("opencode_external_environment_unsupported");
+    if (environment.kind !== "local" && configuration.connection.ownership === "external" &&
+        configuration.connection.channel.authentication.secret.source !== "protected_file") {
+      throw new Error("opencode_remote_password_file_required");
+    }
     const parsed = z.strictObject({ defaults: opencodeConnectionDefaultsSchema }).parse(connection.moduleConfiguration);
     defaultsByConnectionId.set(connection.id, parsed.defaults);
   }

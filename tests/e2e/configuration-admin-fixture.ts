@@ -129,6 +129,15 @@ export async function createConfigurationAdminFixture(input: {
   };
   const service = new ConfigurationAdminService(input.repository, {
     authorize: scope => assertScope(scope), projection: input.projection, runtime: adapter,
+    authorizeSecretReference: (scope, environmentId, reference) => {
+      assertScope(scope);
+      const environment = input.repository.get(scope).configuration.executionEnvironments.find(item => item.id === environmentId);
+      // Configuration-only OpenCode browser coverage approves exactly these
+      // host-local references. No credential value or native process exists.
+      if ((environment?.kind === "ssh" || environment?.kind === "outbound") && reference.source === "protected_file" &&
+          reference.path === `/fixture/opencode/${environment.kind}/password`) return;
+      throw new DomainError("bad_request", "This credential reference has not been approved for the fixture execution environment.");
+    },
   });
   await adapter.reconcile(input.scope, input.initial);
   return service;

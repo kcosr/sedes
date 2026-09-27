@@ -53,6 +53,7 @@ export interface RuntimePresentationOptions {
   readonly sidecar: boolean;
   /** A backend definition may be disabled while its runtime still exists. */
   readonly enabled?: boolean;
+  readonly stopEffect?: "service" | "attachment" | "unknown";
 }
 
 /**
@@ -62,12 +63,15 @@ export interface RuntimePresentationOptions {
  */
 export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, options: RuntimePresentationOptions): RuntimePresentation {
   const environment = options.resourceKind === "environment";
+  const attachment = !environment && options.stopEffect === "attachment";
+  const unknownOwnership = !environment && options.stopEffect === "unknown";
   const noun = environment ? "sidecar" : "provider";
   if (!runtime) {
     return { headline: runtimeConnectionLabel(undefined), detail: `The server has not reported status for this ${environment ? "environment" : "backend"} yet.`, tone: "neutral", secondary: [], recoveryEmphasis: false };
   }
   const enabled = options.enabled ?? true;
-  const headline = runtimeConnectionLabel(runtime);
+  const headline = runtime.connectionState === "stopped" && (attachment || unknownOwnership)
+    ? attachment ? "Attachment retired" : "Sedes runtime stopped" : runtimeConnectionLabel(runtime);
   const automatic = runtime.preference === "automatic";
   const upgrade = options.sidecar ? runtime.upgradeState : "current";
   const upgradeQualifier = upgrade === "required" ? "Upgrade required" : upgrade === "pending" ? "Upgrade available" : undefined;
@@ -86,7 +90,8 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
   switch (runtime.connectionState) {
     case "recovery_required":
       tone = "attention";
-      detail = (environment
+      detail = attachment ? "Sedes could not confirm its previous attachment. Retry checks it again; Stop attempts to retire the Sedes attachment while the external server keeps running."
+        : unknownOwnership ? "Sedes could not confirm its previous runtime. Retry checks it again. Stop ends owned execution or retires an external attachment; external servers are left running." : (environment
         ? "Sedes could not confirm ownership of a previous sidecar. Retry checks the host again; Stop checks whether this environment's owned processes can be ended."
         : "Sedes could not confirm the previous provider's state. Retry checks it again; Stop checks whether its owned runtime can be ended.") +
         (disconnectable ? " Disconnect pauses automatic retries." : "") + " Shutdown is unconfirmed until ownership can be verified.";
@@ -97,7 +102,10 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
       tone = "attention";
       detail = (environment
         ? `The remote host could not be reached; retained work on the host is kept.${automatic ? " Reconnection is retried automatically." : ""}`
-        : "The provider could not be reached.") + unconfirmedStop("it is reachable");
+        : "The provider could not be reached.") + (attachment
+          ? " Stop attempts to retire the Sedes attachment when the host is reachable; it does not shut down the external server."
+          : unknownOwnership ? " Stop ends owned execution or retires an external attachment when the host is reachable; external servers are left running."
+          : unconfirmedStop("it is reachable"));
       primary = retry;
       secondary = [act("stop", undefined, "destructive"), act("disconnect")];
       break;
@@ -120,14 +128,18 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
         qualifier = "Backend disabled";
         detail = "This backend is disabled in its configuration.";
       } else {
-        detail = runtime.preference === "stopped" ? `The ${noun} is stopped and will not start automatically.` : `The ${noun} is not running.`;
-        primary = act("start");
+        detail = attachment ? "Sedes has retired its attachment. The external server was left running. Connect to establish a new attachment."
+          : unknownOwnership ? "The Sedes runtime is stopped. Apply the saved configuration to establish its next connection."
+          : runtime.preference === "stopped" ? `The ${noun} is stopped and will not start automatically.` : `The ${noun} is not running.`;
+        primary = act(attachment || !runtime.supportedActions.includes("start") ? "connect" : "start");
       }
       break;
     case "disconnected":
       qualifier = !enabled ? "Backend disabled" : upgradeQualifier;
       if (!enabled) {
-        detail = "This backend is disabled. A provider process may still exist on its host; stop it to release it.";
+        detail = attachment ? "This backend is disabled. Stop retires any retained Sedes attachment and leaves the external server running."
+          : unknownOwnership ? "This backend is disabled. Stop ends retained owned execution or retires an external attachment; external servers are left running."
+          : "This backend is disabled. A provider process may still exist on its host; stop it to release it.";
         secondary = [act("stop", undefined, "destructive")];
       } else if (environment) {
         detail = automatic
@@ -158,7 +170,9 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
       } else if (!enabled) {
         tone = "attention";
         qualifier = "Backend disabled";
-        detail = "This backend is disabled but its runtime is still running. Stop it to release it.";
+        detail = attachment ? "This backend is disabled but its Sedes attachment remains. Stop retires that attachment and leaves the external server running."
+          : unknownOwnership ? "This backend is disabled but has a retained runtime. Stop ends owned execution or retires an external attachment; external servers are left running."
+          : "This backend is disabled but its runtime is still running. Stop it to release it.";
         primary = act("stop", undefined, "destructive");
         secondary = [act("disconnect")];
       } else if (upgrade === "pending") {

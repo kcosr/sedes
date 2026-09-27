@@ -263,6 +263,30 @@ describe("OpenCode compiled module", () => {
     await runtime.close();
   });
 
+  it("retains bounded lazy health diagnostics, clears them on success, and ignores older completions", async () => {
+    const fixture = context(), factory = nativeFactory();
+    const runtime = new OpenCodeBackendModule(factory.create).prepare(configuration()).createRuntime(fixture.value);
+    expect(runtime.runtimeDiagnostic?.()).toBeUndefined();
+    expect(factory.create).not.toHaveBeenCalled();
+    const driver = runtime.driverFactory.create(fixture.connection);
+    await driver.health();
+    const owner = factory.instances[0]!;
+    owner.start.mockRejectedValueOnce(new OpenCodeRuntimeError("opencode_native_store_already_owned"));
+    const failed = await driver.health();
+    expect(failed).toMatchObject({ available: false, diagnostic: { text: expect.stringContaining("opencode-owner inspect") } });
+    expect(runtime.runtimeDiagnostic?.()).toMatchObject({ connectionState: "recovery_required" });
+    await driver.health();
+    expect(runtime.runtimeDiagnostic?.()).toBeUndefined();
+    let entered!: () => void, reject!: (error: Error) => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    owner.start.mockImplementationOnce(() => { entered(); return new Promise<void>((_resolve, fail) => { reject = fail; }); });
+    const old = driver.health(); await started;
+    await driver.health();
+    reject(new OpenCodeRuntimeError("opencode_native_store_already_owned")); await old;
+    expect(runtime.runtimeDiagnostic?.()).toBeUndefined();
+    await runtime.close();
+  });
+
   it("starts the owner lazily and requires explicit confirmation for unknown activity", async () => {
     const factory = nativeFactory(); const fixture = context();
     const runtime = new OpenCodeBackendModule(factory.create).prepare(configuration()).createRuntime(fixture.value);

@@ -135,12 +135,7 @@ export async function prepareBackendNormalizedDatabase(
       const scope = new SingleUserIdentityProvider(database).getScope();
       const repository = new ConfigurationRepository(database, () => now);
       const catalog = compiledBackendModuleCatalog;
-      const projection = new ConfigurationProjection(database, {
-        pi: catalog.protocolReleaseForBackendKind("pi"),
-        codex_app_server: catalog.protocolReleaseForBackendKind("codex_app_server"),
-        claude_agent_sdk: catalog.protocolReleaseForBackendKind("claude_agent_sdk"),
-        grok_build: catalog.protocolReleaseForBackendKind("grok_build"),
-      }, () => now);
+      const projection = new ConfigurationProjection(database, catalog.protocolReleases(), () => now);
       repository.initialize(scope, converted.document, { sourceFingerprint: converted.sourceFingerprint, sourceLabel: input.legacyImport.sourceLabel }, () => {
         projection.adoptLegacyOwnership(scope);
         projection.project(scope, converted.document);

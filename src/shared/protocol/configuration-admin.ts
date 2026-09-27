@@ -130,10 +130,15 @@ export const configurationDocumentSchema = z.strictObject({
     const environment = environments.get(target.executionEnvironmentId);
     if (!backend || backend.kind !== targetBackendKinds[target.kind] || !environment) context.addIssue({ code: "custom", path: ["targets", index], message: "Target must reference a compatible backend and an existing environment." });
     if (target.enabled && !backend?.enabled) context.addIssue({ code: "custom", path: ["targets", index, "enabled"], message: "Enable the backend before enabling this target." });
-    if (environment !== undefined && environment.kind !== "local" && target.kind === "opencode_http") context.addIssue({ code: "custom", path: ["targets", index], message: "OpenCode requires a local environment." });
+    if (environment?.kind === "outbound" && environment.platform !== "linux" && target.kind === "opencode_http" && (target.enabled || backend?.enabled)) context.addIssue({ code: "custom", path: ["targets", index], message: "OpenCode requires a Linux execution host." });
     if (backend?.kind === "opencode" && backend.moduleConfiguration.connection.ownership === "external" &&
         [backend.environmentVariables?.execution, backend.environmentVariables?.startup, environment?.environmentVariables?.execution, environment?.environmentVariables?.startup]
           .some(variables => Object.keys(variables ?? {}).length > 0)) context.addIssue({ code: "custom", path: ["targets", index], message: "External OpenCode cannot receive Sedes startup or execution variables." });
+    if (environment && environment.kind !== "local" && backend?.kind === "opencode" &&
+        backend.moduleConfiguration.connection.ownership === "external" &&
+        backend.moduleConfiguration.connection.channel.authentication.secret.source !== "protected_file") {
+      context.addIssue({ code: "custom", path: ["targets", index], message: "Remote OpenCode requires an owner-protected password file on the execution host." });
+    }
     if (environment !== undefined && environment.kind !== "local" && target.kind === "grok_acp") context.addIssue({ code: "custom", path: ["targets", index], message: "Grok requires a local environment." });
     if (environment?.kind === "outbound" && environment.platform === "win32" && target.kind === "claude_agent_sdk" && (target.enabled || backend?.enabled)) context.addIssue({ code: "custom", path: ["targets", index], message: "Claude requires a macOS or Linux execution host." });
     if (environment !== undefined && environment.kind !== "local" && target.enabled && target.kind === "pi_sdk" &&

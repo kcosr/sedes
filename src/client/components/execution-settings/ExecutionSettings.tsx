@@ -10,7 +10,7 @@ import { RecoveredOperations } from "./RecoveredOperations.js";
 import { PendingHosts, HostConnectorSetup, hostPlatform } from "./PendingHosts.js";
 import { useConfiguration, type ConfigurationControls } from "./useConfiguration.js";
 import { useHostPairings, type HostPairingControls } from "./useHostPairings.js";
-import { allowedEnvironments, backendEditors } from "./backend-editors.js";
+import { allowedEnvironments, backendEditors, backendStopEffect } from "./backend-editors.js";
 import { SelectField, TextField, Toggle } from "./fields.js";
 import { presentRuntime } from "./runtime-presentation.js";
 import type { BackendDefinition, Configuration, EnvironmentDefinition } from "./types.js";
@@ -330,7 +330,7 @@ export function ExecutionSettings({ controls, initialPage = "environments", onPa
         const unsupported = Boolean(environment && !allowedEnvironments(backend, [environment]).length);
         return <section key={backend.id} hidden={view.kind !== "backend" || view.id !== backend.id} className="execution-settings-detail" aria-label={`${backend.label} overview`}>
           {unsupported ? <p role="status">Remote execution is unsupported. This retained configuration cannot run here.</p> : null}
-          <RuntimeControls controls={controls} revision={snapshot.revision} resourceKind="backend" resourceId={backend.id} label={backend.label} runtime={runtime} enabled={backend.enabled} disabled={pending || editing || unsupported} disabledReason={unsupported ? "Remote execution is unsupported for this backend." : pausedReason} onRuntime={state.updateRuntime} onRefresh={state.refreshRuntime} />
+          <RuntimeControls controls={controls} revision={snapshot.revision} resourceKind="backend" resourceId={backend.id} label={backend.label} runtime={runtime} enabled={backend.enabled} stopEffect={backendStopEffect(backend, runtime)} disabled={pending || editing || unsupported} disabledReason={unsupported ? "Remote execution is unsupported for this backend." : pausedReason} onRuntime={state.updateRuntime} onRefresh={state.refreshRuntime} />
           <section className="execution-settings-card"><h4>Connections and defaults</h4><p>{backendEditors[backend.kind].description}</p><ul className="execution-settings-connections">{targets.map(target => <li key={target.id}><strong>{target.label}</strong><span>{environment?.label} · {target.enabled ? "Enabled" : "Disabled"}{configuration.defaultTargetId === target.id ? " · Default for new threads" : ""}</span></li>)}</ul></section>
           <div className="execution-settings-detail-actions"><Button size="sm" variant="outline" disabled={pending} aria-label={`Remove ${backend.label}`} onClick={event => { confirmationTrigger.current = event.currentTarget; setConfirmation({ kind: "remove-backend", id: backend.id, revision: snapshot.revision }); }}>Remove backend</Button></div>
         </section>;

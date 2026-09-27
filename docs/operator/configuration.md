@@ -606,9 +606,10 @@ conversation lifecycle and fail-closed feature limits.
 
 ### OpenCode v2
 
-OpenCode requires a local Linux environment and stock `opencode2` 2.0.18 under
-the Sedes account. Choose an owned resident process or an existing authenticated
-loopback HTTP server. Both exchange conversation traffic over HTTP/SSE. The
+OpenCode requires a Linux execution host and stock `opencode2` 2.0.18 under
+that host's sidecar account (or the Sedes account for local execution). Select
+a local, SSH, or outbound environment independently of ownership. Choose an
+owned resident process or an existing authenticated loopback HTTP server. Both exchange conversation traffic over HTTP/SSE. The
 owned `process_stdio` channel controls startup and lifetime, not JSON-RPC.
 
 The strict module-configuration examples are
@@ -617,8 +618,16 @@ The strict module-configuration examples are
 They illustrate the backend's `moduleConfiguration` value in principal-owned
 Settings; they are not installation bootstrap files. Replace absolute paths
 for the selected account and set the actual native database path. External
-passwords use an approved environment or protected-file reference. Do not put
-password values in configuration JSON.
+passwords use an owner-protected file on a remote execution host. Local
+connections also accept approved environment references. All native paths and
+loopback endpoints are host-relative.
+Do not put password values in configuration JSON. Complete Settings-document
+examples cover [SSH owned](../../config/opencode-ssh-owned.example.json),
+[SSH external](../../config/opencode-ssh-external.example.json),
+[outbound owned](../../config/opencode-outbound-owned.example.json), and
+[outbound external](../../config/opencode-outbound-external.example.json).
+Replace the outbound pairing ID with the accepted host's binding. These are
+principal-owned Settings documents, not installation bootstrap files.
 
 OpenCode currently admits only the `catalog` model policy: native title models,
 plugins and other clients remain outside Sedes's per-session model selection.

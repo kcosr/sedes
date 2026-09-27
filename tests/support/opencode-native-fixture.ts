@@ -1,6 +1,7 @@
 import { execFile, spawn } from "node:child_process";
+import { constants } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, open, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, realpath, mkdir, mkdtemp, open, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -82,7 +83,7 @@ function fixtureProcessKey(process: FixtureProcess): string {
 
 async function createFixtureProcessCleanup(marker: string) {
   const owned = new Map<string, FixtureProcess>();
-  const expected = Buffer.from(`${PROCESS_MARKER_NAME}=${marker}\0`);
+  const expected = [PROCESS_MARKER_NAME, "OPENCODE_PRODUCTION_FIXTURE_OWNER"].map(name => Buffer.from(`${name}=${marker}\0`));
   // Capture before the first fixture process is spawned. Existing processes
   // cannot have inherited this new marker; some same-account services make
   // their environments unreadable. PID + start time keeps reuse distinguishable.
@@ -168,8 +169,10 @@ async function createFixtureProcessCleanup(marker: string) {
         });
         if (!environment) continue;
         bytesRead += environment.length;
-        const offset = environment.indexOf(expected);
-        if (offset < 0 || (offset > 0 && environment[offset - 1] !== 0)) continue;
+        if (!expected.some(value => {
+          const offset = environment.indexOf(value);
+          return offset === 0 || (offset > 0 && environment[offset - 1] === 0);
+        })) continue;
         const after = await fixtureProcess(pid);
         if (after?.startTime === before.startTime) owned.set(fixtureProcessKey(after), after);
       } catch (error) {
@@ -226,6 +229,7 @@ async function createFixtureProcessCleanup(marker: string) {
 }
 
 export interface OpenCodeNativeFixture {
+  readonly account: OpenCodeNativeAccount;
   readonly rootDirectory: string;
   readonly workspace: string;
   readonly url: string;
@@ -235,13 +239,31 @@ export interface OpenCodeNativeFixture {
   stop(): Promise<void>;
 }
 
-export async function startOpencodeNativeFixture(input: {
-  config?: Record<string, unknown>;
-  environment?: Record<string, string>;
-} = {}): Promise<OpenCodeNativeFixture> {
+export interface OpenCodeNativeAccount {
+  readonly executable: string;
+  readonly rootDirectory: string;
+  readonly workspace: string;
+  readonly configDirectory: string;
+  readonly nativeStorePath: string;
+  readonly password: string;
+  readonly environment: NodeJS.ProcessEnv;
+  cleanupProcesses(): Promise<void>;
+  close(): Promise<void>;
+}
+/** Isolated native identity without launching a server; owned-runtime tests launch through production. */
+export async function prepareOpencodeNativeAccount(input: {
+  config?: Record<string, unknown>; environment?: Record<string, string>;
+} = {}): Promise<OpenCodeNativeAccount> {
   if (!RUN_REAL_OPENCODE) throw new Error("Set SEDES_RUN_REAL_OPENCODE=1 for isolated native qualification");
   if (process.platform !== "linux") throw new Error("OpenCode qualification cleanup currently requires Linux /proc");
-  const executable = process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "opencode2";
+  const requested = process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "opencode2";
+  let executable = requested;
+  if (!path.isAbsolute(executable)) {
+    const candidates = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean).map(directory => path.resolve(directory, requested));
+    const found = await Promise.all(candidates.map(async candidate => { try { await access(candidate, constants.X_OK); return candidate; } catch { return undefined; } }));
+    executable = found.find(candidate => candidate !== undefined) ?? requested;
+  }
+  executable = await realpath(executable);
   const marker = randomBytes(32).toString("hex");
   const cleanupProcesses = await createFixtureProcessCleanup(marker);
   const rootDirectory = await mkdtemp(path.join(os.tmpdir(), "sedes-opencode-"));
@@ -256,6 +278,7 @@ export async function startOpencodeNativeFixture(input: {
     SHELL: "/bin/sh",
     ...input.environment,
     [PROCESS_MARKER_NAME]: marker,
+    OPENCODE_PRODUCTION_FIXTURE_OWNER: marker,
     HOME: path.join(rootDirectory, "home"),
     XDG_CONFIG_HOME: path.join(rootDirectory, "config"),
     XDG_DATA_HOME: path.join(rootDirectory, "data"),
@@ -283,6 +306,17 @@ export async function startOpencodeNativeFixture(input: {
     throw error;
   }
 
+  return { executable, rootDirectory, workspace, configDirectory, password, environment,
+    nativeStorePath: path.join(rootDirectory, "data", "opencode", "opencode.db"), cleanupProcesses,
+    close: async () => { await cleanupProcesses(); await rm(rootDirectory, { recursive: true, force: true }); } };
+}
+
+export async function startOpencodeNativeFixture(input: {
+  config?: Record<string, unknown>;
+  environment?: Record<string, string>;
+} = {}): Promise<OpenCodeNativeFixture> {
+  const account = await prepareOpencodeNativeAccount(input);
+  const { executable, rootDirectory, workspace, password, environment, cleanupProcesses } = account;
   const child = spawn(executable, ["serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0"], {
     cwd: workspace, env: environment, stdio: ["pipe", "pipe", "pipe"], detached: true,
   });
@@ -351,7 +385,7 @@ export async function startOpencodeNativeFixture(input: {
       });
     };
     return {
-      rootDirectory, workspace, url, pid: child.pid!, stop,
+      account, rootDirectory, workspace, url, pid: child.pid!, stop,
       stream: (route, signal) => request("GET", route, undefined, signal),
       api: async (method, route, body) => {
         const controller = new AbortController();

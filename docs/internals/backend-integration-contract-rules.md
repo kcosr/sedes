@@ -195,8 +195,10 @@ does not break native continuity, while native stream loss does. Bounded
 retention must preserve unresolved evidence or explicitly fence new work.
 Control admission, including the scope acquisition and evidence catch-up needed
 by a fresh Stop caller, must not wait behind bulk history. These are private
-host contracts; OpenCode remote product admission remains disabled until its
-tool relay and topology qualification are complete.
+host contracts; OpenCode uses the same implementation locally and on persistent
+SSH/outbound Linux hosts. Disconnect releases main's attachment; external backend
+Stop retires only the Sedes host attachment, while owned Stop proves descendant
+cleanup. Preserve existing-only administration and independent control capacity.
 
 Backend runtime control adapters expose `BackendRuntimeControlRejectedError`
 only for positively received, known provider refusals, normalized as stale
@@ -883,14 +885,19 @@ retained work (a running turn, a pending interaction or input, or
 unacknowledged output) needs a main attachment. Whenever main inspects the
 runtime, which it does soon after startup, after the service's controller
 changes, and for every lifecycle preview, it opens those threads one at a time
-within the shared conversation-runtime budget. Their output is then applied and
+within the shared conversation-runtime budget only while an admitted backend
+module exists and both the backend and its environment have automatic connection
+preferences. Recheck that same module and admission before queued discovery and
+each thread acquisition. Existing-only inspection during
+explicit Disconnect remains read-only and must not create thread actors or
+invalidate its own lifecycle confirmation. Their output is then applied and
 acknowledged instead of overflowing the owner's retention bound. A pass cut
 short at the budget retries at the next inspection. Inspection uses the
 existing recovery attachment and never launches a provider. The inspection
 may also report bounded `activity` counts (running turns, background work,
 pending interactions, and conversations with unacknowledged output) that
-interruption previews show; absent counts are not zero. Claude's persistent
-host reports both. Codex's runtime-wide attachment already records and
+interruption previews show; absent counts are not zero. Claude's and OpenCode's
+persistent hosts report both. Codex's runtime-wide attachment already records and
 acknowledges retained outcomes without a thread handle, and Pi, Grok, and
 local Claude workers end with main, so they report neither.
 
@@ -2969,7 +2976,7 @@ surface or mode when admission fails.
 
 Each backend's Native surface has exactly one mechanism: Pi SDK tools in the
 Sedes process for Pi, the stdio `sedes mcp` server for Codex and Claude, and
-the shared stdio `sedes opencode-mcp` bridge for local OpenCode; Grok has none.
+the shared stdio `sedes opencode-mcp` bridge on OpenCode's execution host; Grok has none.
 Admission maps the calling adapter against the thread's backend
 kind, so one backend's mechanism can never satisfy another's Native
 presentation. A provider-launched MCP server receives its reference only
@@ -2989,12 +2996,36 @@ children, unknown sessions and retired bindings fail closed. Expose only the
 fixed discovery/read/action gateway catalog until session-specific catalog
 isolation is proved. Credentials stay in the bridge child's environment and
 private headers; they do not enter native config files, browser contracts,
-ordinary thread credentials or logs. Both external-local and owned-local
-OpenCode support this Native/Progressive mechanism; remote OpenCode and Native/
-Individual remain unsupported. Runtime registration uses fresh absent names,
+ordinary thread credentials or logs. Both owned and external OpenCode support this Native/Progressive mechanism
+locally and on persistent SSH/outbound Linux hosts; Native/Individual remains
+unsupported. Runtime registration uses fresh absent names,
 does not overwrite or retire foreign entries, and revokes only its own bridge
 channel on shutdown. Failed native inventory rows may remain until daemon
 restart; application authorization never depends on their apparent readiness.
+
+A resident execution host must capture a reverse tool call's native input and
+observation position before awaiting source resolution. Main catches up to that
+exact cut before asking for a scoped approval; a later user input cannot lend
+an earlier native-only call authority. Use the canonical source/policy facade,
+with a private provenance envelope, for local and all remote carriers. Retained
+recovery may borrow an existing normal carrier without replacing the carrier
+that carries the reverse call. Promotion can change controller epoch only after
+validating the same service, runtime and native identity; invalidate old ports.
+Host routes outlive main presentation. Detached tools fail unavailable and lost
+sent results remain uncertain; no buffering or replay. OpenCode implements this
+private provenance path. Pi, Codex, Claude and Grok retain their own existing
+source/approval contracts and do not consume OpenCode stamps.
+
+Compiled backend modules may map known private runtime failures to bounded
+normalized Settings guidance through `runtimeDiagnostic`. A lazy module runtime
+may contribute its current safe diagnostic through the same-named read-only
+runtime method; inspection must not start a provider to obtain that message.
+Sequence asynchronous health observations and clear the diagnostic after a
+new successful observation. Raw native messages,
+paths and credentials must not escape. OpenCode uses this for host/store recovery
+and missing platform/runtime capability; Pi, Codex, Claude and Grok keep their
+existing generic runtime diagnostics. Configuration projections obtain release
+identities from the installed catalog, without a second list of providers.
 
 For managed CLI presentation, inject `SEDES_AGENT_TOOL_CLI_MODE` only after
 stripping its ambient value. The variable is a presentation hint available to
@@ -3008,9 +3039,9 @@ of the master enable flag or selected IDs. For unchanged CLI surface/mode,
 allow revision-checked edits to enablement, exact IDs, and access boundary
 during active turns and queued input without retiring the runtime. This shared
 application-policy path applies to local Pi SDK, local/Sidecar SSH Codex and Claude,
-local Grok, and qualified Sedes-created owned-local OpenCode roots; Pi
-remote/isolated CLI, Grok SSH, external-local OpenCode CLI and remote OpenCode
-remain unsupported. OpenCode reconstructs an immutable per-root shell
+local Grok, and qualified Sedes-created owned OpenCode roots locally or on
+SSH/outbound Linux hosts; Pi remote/isolated CLI, Grok SSH, and external OpenCode
+CLI remain unsupported. OpenCode reconstructs an immutable per-root shell
 environment independently of its shared MCP channel and gates native child
 execution when that environment cannot be preserved.
 Removed authority blocks subsequent admission, not work already admitted.
@@ -3087,7 +3118,7 @@ approval. Automations and unavailable interaction bindings fail closed.
 Workpads are application-owned Markdown documents, revision history,
 attribution, and user drafts; providers receive only normalized canonical tools.
 Pi native/CLI, Codex and Claude CLI/Native MCP, Grok CLI, and the admitted
-OpenCode Native MCP/owned-local CLI paths are
+OpenCode Native MCP/owned CLI paths are
 implemented through the shared source-scoped facade. Tool clients use the same canonical operations
 with their environment allowlists. Workpad history is authorized from current
 scope, not historical scope. Approval binds current resource identity/revision;
@@ -3310,6 +3341,12 @@ is explicitly requested.
 Secrets are never sent to the browser, logged, placed in error details, or
 persisted in ordinary application rows. Persist fingerprints or bounded
 metadata only when recovery needs to prove which authority was used.
+Secret-reference choices must be available at the actual execution boundary.
+The persistent sidecar's sanitized bootstrap environment is not a credential
+transport. Remote OpenCode therefore requires a host-local protected password
+file, while local OpenCode also supports its approved environment references.
+Reject an unavailable reference at configuration admission; never broaden a
+bootstrap probe to return host secrets through main.
 
 Execution-settings inventories and detail navigation share one principal-owned
 configuration snapshot. Preserve lifecycle receipts independently of visible

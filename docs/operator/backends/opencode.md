@@ -1,7 +1,9 @@
 # OpenCode v2
 
-Sedes supports stock OpenCode **2.0.18** on local Linux under the same operating
-system account. Select the absolute path to the v2 binary, normally
+Sedes supports stock OpenCode **2.0.18** on a Linux execution host, locally or
+through the persistent SSH or outbound HTTP(S) sidecar. The Sedes server may run
+on another machine or OS. OpenCode and its sidecar use the same host account.
+Select the absolute path to the v2 binary, normally
 `opencode2`. The older `opencode` v1 executable is not an alternative. Provider
 authentication, native project configuration, plugins, permissions, and model
 definitions remain in the selected native OpenCode environment.
@@ -16,22 +18,66 @@ Choose one ownership mode in **Settings → Environments → Backends**:
 | External | Explicit loopback HTTP IP/port, native database path, and Basic password reference | Connects to the existing daemon. Backend Disconnect leaves that daemon and its background work running. Conversation Stop still interrupts the selected session. |
 
 The external URL must be an IP literal such as `http://127.0.0.1:4096`, without
-a path, query, URL credentials, or redirects. Remote HTTP, DNS endpoints,
-WebSocket, UDS, ACP, and SSH/outbound sidecars are not supported. Owned stdio is
-a process-lifetime channel, not a JSON-RPC conversation transport.
+a path, query, URL credentials, or redirects. Loopback means the selected
+execution host, including when Sedes reaches it through SSH or an outbound
+HTTP(S) connector. Native HTTP/SSE, executable/config/database paths, cwd, and
+password references are resolved by that host. There is one native backend
+implementation for all three placements. The sidecar carries its private
+runtime operations; it does not expose OpenCode's native listener to main.
+Direct remote native HTTP, DNS endpoints, native WebSocket, UDS, and ACP are
+unsupported. Owned stdio controls process lifetime, not conversation RPC.
+
+Enable the backend on a selected environment. Remote tool access additionally
+requires the environment's **Agent tools CLI** grant; Files, attachments and
+workspace operations have their own grants. Upgrade existing sidecars to this
+server's build before connecting OpenCode. A non-Linux host cannot advertise
+this runtime.
+
+| Placement and ownership | Available backend actions | Stop or Disconnect effect |
+| --- | --- | --- |
+| Local owned | Connect, Start, Stop, Restart | Stop/Restart terminate the owned daemon and prove child cleanup. |
+| Local external | Connect, Disconnect | Disconnect retires Sedes's attachment; the daemon continues. |
+| SSH/outbound owned | Connect, Disconnect, Start, Stop, Restart | Disconnect releases main's presentation only. Stop/Restart retire the host runtime and terminate owned work. |
+| SSH/outbound external | Connect, Disconnect, Stop | Disconnect leaves the host attachment resident. Stop retires that Sedes attachment, tool routes and retained evidence; the external daemon continues. |
+
+Connect after a remote Disconnect reuses the resident owner. An explicit
+Stop/Restart or environment Stop/Upgrade may abandon retained uncertain
+outcomes after recording them. Stock OpenCode cannot prove a complete inventory
+of background work, so automatic retirement stays blocked; use an explicit
+confirmed action. Cleanup actions remain available when a backend is disabled.
+Conversation Stop remains a separate session operation.
 
 Authenticate OpenCode's providers separately before sending a Sedes message.
 For an existing daemon, enable native password authentication and configure
-the matching password reference in Sedes: an approved `SEDES_OPENCODE_…PASSWORD…`
-environment variable or an owner-protected file. The username is `opencode`.
+the matching password reference in Sedes. Remote hosts require an owner-protected
+file on that host; local connections also accept an approved
+`SEDES_OPENCODE_…PASSWORD…` environment variable. Managed sidecars intentionally
+start with a restricted account environment and do not carry password variables
+through the main server. The username is `opencode`.
 Owned mode generates its own server password. Neither mode writes provider
 credentials into Sedes thread settings.
+
+For example, after storing a strong password in the host account's
+`/home/alice/.config/sedes/opencode-password` file with mode `0600`, run the
+standalone server on that execution host:
+
+```sh
+OPENCODE_PASSWORD="$(cat /home/alice/.config/sedes/opencode-password)" \
+OPENCODE_DB=/home/alice/.local/share/opencode/opencode.db \
+  opencode2 serve --hostname 127.0.0.1 --port 4096
+```
+
+Use those exact native database and password-file paths in Sedes's External
+configuration. Select the SSH or outbound environment for that host. The
+server runs in the foreground; its supervisor is independent of Sedes.
 
 Use a dedicated database path for each native owner. Sedes verifies the native
 process and store and holds a private adjacent lease. Do not launch another
 owner over a leased store. Unproved cleanup or a crash can leave a retained
-lease; inspect the prior process and descendants before manually removing it.
-Sedes never removes native history to resolve a lease conflict.
+lease. Use the host-local `sedes opencode-owner inspect --store PATH` command
+and the [owner recovery procedure](../operations.md#opencode-native-store-recovery).
+Never delete a lock solely because its recorded PID is gone. Sedes never removes
+native history to resolve a lease conflict.
 
 ## Conversations and settings
 
@@ -63,7 +109,12 @@ or cancelled by Sedes.
 
 ## Recovery and limits
 
-OpenCode owns the transcript. Sedes reconstructs native history after a stream
+OpenCode owns the transcript. The resident sidecar retains bounded native
+input/operation evidence across a main-server restart or carrier loss; main
+commits recovered evidence before acknowledging it. Presentation subscriptions
+can close while that host observation continues. A break in the native SSE
+connection is different: OpenCode supplies no event replay. Sedes reconstructs
+native history after a stream
 disconnect, including final full-text repairs for incomplete streaming deltas.
 Initial history acquisition can be expensive: it is bounded to 100,000 records,
 96 MiB of acquisition/projection data, and 60 seconds. Limits fail explicitly.
@@ -102,15 +153,23 @@ authenticated call; it is not the credential. Native permission rules remain
 in force and may ask before a gateway call or deny it. Sedes access-boundary
 approvals are a separate check. Those approvals require a currently observed
 Sedes user input; a native-only or automated input cannot borrow an older
-user message's approval authority. Following a lost observation stream or idle
-handle eviction, send a new user message before requesting an operation requiring
-that approval.
-Operations already within the configured boundary remain available.
+user message's approval authority. Following a lost native observation stream, send a new user message before
+requesting an operation requiring that approval when its original evidence
+cannot be recovered. Idle presentation eviction alone does not lose a retained
+input observer.
+Operations already within the configured boundary remain available while main
+is connected. Host tool calls capture the exact native input and observation
+position before relay. Recovery cannot substitute a later Sedes message for a
+native-only input's authority.
 
 The bridge exits when Sedes closes its authenticated lifetime channel or its
 heartbeat expires. It can survive ordinary idle conversation-handle eviction,
-which releases the thread's event observer and runtime lease while retaining
-routing for operations already within the configured access boundary.
+which releases presentation references while retaining host routes and the
+independent input observation needed for approvals. While main is detached,
+Sedes tool calls fail unavailable. Sent calls with a lost result stay uncertain;
+the sidecar never buffers or replays them on reconnect. Replacement main may
+recover only an existing admitted root from persisted binding and host evidence;
+that recovery cannot launch a missing daemon or reinstall MCP/environment maps.
 Stock OpenCode has no conditional registration ownership check, so Sedes never
 deletes or overwrites an existing entry during cleanup. Failed entries can
 remain in the native MCP inventory until the native workspace/runtime restarts.
@@ -129,9 +188,10 @@ or local external Disconnect retires Sedes's attachment and leaves the daemon ru
 route eviction is unavailable because stock OpenCode cannot prove a complete
 background-work inventory.
 
-**CLI** tools are available for owned, local Sedes-created root sessions.
+**CLI** tools are available for owned Sedes-created root sessions on local,
+SSH and outbound Linux hosts.
 The generic tool settings can retain a CLI selection on other sessions. For
-external or imported sessions, or an unavailable local CLI endpoint, Sedes
+external or imported sessions, or an unavailable host CLI endpoint, Sedes
 withholds CLI credentials and shows an unavailable-tools notice; Send, Steer
 and conversation controls remain usable. Choose Native where supported or
 disable Sedes tools. This does not relax the external execution-variable rule.
@@ -200,7 +260,7 @@ contain copied work. Model information comes from actual native message evidence
 not the currently selected model. Disabling recorded usage leaves ordinary
 history and conversation controls available.
 
-Forks, native commands, managed TUI, and remote execution remain unavailable.
+Forks, native commands, and managed TUI remain unavailable.
 Native configuration can load operator-installed tools independently of Sedes.
 
 For implementation evidence and authority boundaries, see

@@ -31,10 +31,10 @@ function presentationOptionsForBackend(
         { surface: "cli", modes: ["progressive", "individual"] },
       ];
     case "opencode":
-      return environmentKind === "local" ? [
+      return [
         { surface: "native", modes: ["progressive"] },
         { surface: "cli", modes: ["progressive", "individual"] },
-      ] : [{ surface: "native", modes: ["progressive"] }];
+      ];
     case "grok_build":
       return [
         { surface: "cli", modes: ["progressive", "individual"] },

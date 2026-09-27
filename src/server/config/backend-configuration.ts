@@ -351,9 +351,8 @@ const backendConfigurationFileSchema = z
         });
         continue;
       }
-      if ((target.kind === "opencode_http") !== (backend.kind === "opencode") ||
-          (target.kind === "opencode_http" && environment.kind !== "local")) {
-        context.addIssue({ code: "custom", path: ["targets", index], message: "OpenCode requires its HTTP connection in a local environment." });
+      if ((target.kind === "opencode_http") !== (backend.kind === "opencode")) {
+        context.addIssue({ code: "custom", path: ["targets", index], message: "OpenCode requires its HTTP connection kind." });
       }
       if (target.kind === "grok_acp" && environment.kind !== "local") {
         context.addIssue({
@@ -386,6 +385,9 @@ const backendConfigurationFileSchema = z
               path: ["targets", index, "executionEnvironmentId"],
             });
           }
+        } else if (target.kind === "opencode_http" && backend.kind === "opencode") {
+          // Native HTTP/SSE runs on the selected host. The persistent sidecar
+          // carries the same private runtime contract for owned and external.
         } else if (
           target.kind === "claude_agent_sdk" &&
           backend.kind === "claude_agent_sdk"

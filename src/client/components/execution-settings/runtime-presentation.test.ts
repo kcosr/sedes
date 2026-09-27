@@ -54,6 +54,20 @@ describe("runtime presentation", () => {
     expect(summarize(runtime({ connectionState: "recovery_required", supportedActions: ["connect", "disconnect", "start", "stop", "restart", "upgrade"] })).secondary).not.toContain("Retry connection");
   });
 
+  it("offers Connect after retiring an external attachment without claiming its server stopped", () => {
+    const state = runtime({ resourceKind: "backend", connectionState: "stopped", preference: "stopped", supportedActions: ["connect", "disconnect", "stop"] });
+    const options: RuntimePresentationOptions = { resourceKind: "backend", sidecar: false, stopEffect: "attachment" };
+    expect(presentRuntime(state, options)).toMatchObject({ headline: "Attachment retired", primary: { action: "connect" },
+      detail: "Sedes has retired its attachment. The external server was left running. Connect to establish a new attachment." });
+    expect(presentRuntime(state, { ...options, enabled: false }).primary).toBeUndefined();
+    for (const connectionState of ["unreachable", "recovery_required"] as const) {
+      const presentation = presentRuntime({ ...state, connectionState }, options);
+      expect(presentation.detail).toContain("external server");
+      expect(presentation.detail).not.toContain("shutdown on the host");
+      expect(presentation.primary?.action).toBe("connect");
+    }
+  });
+
   it("offers Stop while a runtime is unreachable or awaiting ownership recovery", () => {
     const localBackend: ConfigurationRuntimeState["supportedActions"] = ["connect", "start", "stop", "restart"];
     const backend: RuntimePresentationOptions = { resourceKind: "backend", sidecar: false, enabled: true };

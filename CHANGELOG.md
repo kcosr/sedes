@@ -4,6 +4,10 @@
 
 ### Breaking Changes
 
+- Remote OpenCode requires a matching sidecar build with private OpenCode
+  runtime and tool capabilities. Upgrade existing execution sidecars before
+  connecting this backend. (#17)
+
 - Browser and packaged clients now require client protocol 128 for the OpenCode
   v2 backend identity and terminal Stop diagnostics. (#17)
 
@@ -66,6 +70,12 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- OpenCode v2 can run on Linux execution hosts locally, through SSH, or through
+  outbound HTTP(S) sidecars, using the same owned/external runtime and tools.
+  Remote Disconnect preserves native work; external backend Stop retires only
+  Sedes's attachment. Add host-local `sedes opencode-owner` inspection and exact
+  recovery commands for retained native-store ownership fences. (#17)
 
 - Add stock OpenCode v2 2.0.18 with an owned resident `opencode2` daemon or an
   existing authenticated local server on Linux. Supports native history,

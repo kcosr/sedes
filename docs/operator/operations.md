@@ -887,6 +887,47 @@ ownership descriptor; an absent socket or missing supervisor PID alone is not
 cleanup evidence. Proven spawn failures and early child exits before daemon
 ownership are recorded as stopped automatically.
 
+### OpenCode native-store recovery
+
+The OpenCode database has a separate Sedes ownership fence adjacent to its
+configured native store. It records the exact host lifetime and Sedes owner;
+owned runtimes additionally mark their child processes. A killed owner does
+not prove its children stopped. Keep native history and the fence intact when
+identity or cleanup is ambiguous.
+
+Run the bundled command on the selected Linux execution host as the same
+account and in the same process namespace. Use the configured canonical store
+path, not an inferred default:
+
+```sh
+sedes opencode-owner inspect --store /absolute/path/opencode.db
+```
+
+Inspection is read-only and prints `inspectionFingerprint`, ownership and
+owner identity. If the Sedes owner is positively dead, recover the exact
+inspected record:
+
+```sh
+sedes opencode-owner recover --store /absolute/path/opencode.db --expected-inspection FINGERPRINT
+```
+
+For a Sedes-owned daemon whose marked descendants remain, add
+`--terminate-owned-descendants` only when you intend to stop that work.
+Recovery rechecks process lifetime, fingerprint and file identity. A changed,
+malformed, unreadable or live owner is refused. There is no arbitrary PID kill
+option and no automatic lock deletion on an ambiguous record. External mode
+never signals the operator's daemon, even with that flag.
+
+After successful host recovery, reload Sedes to retry target health and clear
+the prior recovery diagnostic. Settings **Refresh** only inspects existing
+state and does not launch a provider or retry a failed lazy startup.
+
+This command is included in both the local provider CLI and deployed sidecar;
+invoke its installed path if `sedes` is not on the host PATH. No running main
+server, agent-tool credential or MCP setup is needed. Recovering a native-store
+fence does not authorize rewriting the outer sidecar's `service.json` or
+startup lock; follow the separate sidecar recovery instructions for those.
+
 ### SSH target restart recovery
 
 Every SSH execution environment uses the same ownership checks, whether its

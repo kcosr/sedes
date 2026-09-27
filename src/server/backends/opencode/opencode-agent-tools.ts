@@ -105,7 +105,7 @@ export class OpenCodeAgentTools {
       admission.diagnostic = error instanceof OpenCodeRuntimeError && error.code === "opencode_tools_capability_unavailable"
         ? "Sedes OpenCode tools require a newer execution-host sidecar. Upgrade and restart that sidecar, then retry tool admission on a later message. Conversation controls remain available."
         : error instanceof OpenCodeRuntimeError && error.code === "opencode_agent_tools_capacity_reached"
-        ? "Sedes OpenCode tools have reached this runtime's retained session limit. Inspect retained work, then explicitly Stop and Connect the backend to renew tool capacity. Conversation controls remain available."
+        ? "Sedes OpenCode tools have reached this runtime's retained session limit. Inspect retained work, then renew the backend runtime: Disconnect and Connect for local external servers, or Stop and Connect for owned and remote runtimes. Conversation controls remain available."
         : "Sedes OpenCode tools are unavailable. Conversation controls remain available; retry tool admission on a later message.";
     }
   }

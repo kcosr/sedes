@@ -33,6 +33,8 @@ export interface OpenCodeDriverContext {
   readonly attachmentProvenanceKey: Uint8Array;
   readonly outputArtifacts: OutputArtifactPublisher;
   readonly runtime: () => Promise<OpenCodeConversationRuntime>;
+  /** An ordered health observation, including failures hidden by normalized health. */
+  readonly observeHealth?: () => (failure: unknown) => void;
 }
 
 /** Reject cross-scope targets before acquiring or launching a native runtime. */

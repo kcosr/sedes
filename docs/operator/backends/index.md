@@ -30,7 +30,7 @@ state, and backups.
 | [Codex](codex.md)   | Owned local app-server or an external app-server connection | Linux/macOS local; persistent-sidecar runtime over SSH or outbound                                                                    | Submit, Steer, Queue, Stop, rename, compact | Execution settings, approvals, questionnaires, Fast mode, Goal, selected-turn and latest-provider-snapshot forks, eligible managed TUI |
 | [Claude](claude.md) | Managed Claude Agent SDK worker plus Claude Code            | Linux/macOS local; persistent-sidecar runtime over SSH or outbound                                        | Submit, Steer, Queue, Stop, rename                 | Permission modes, prompts, native questions, skills, usage, background-work status, selected-completed-turn forks, native image input                                         |
 | [Grok](grok.md)     | Sedes-owned Grok ACP process                                | Local Linux x64 or macOS arm64/x64                                                              | Submit, Queue, Stop, rename                 | Plans, tool and collaboration rendering, file/image input, completed `ImageGen` and `ImageEdit` artifacts                              |
-| [OpenCode v2](opencode.md) | Owned resident daemon or external HTTP/SSE server | Local Linux, same account | Submit, Steer, Queue, Stop, rename | Native history, reviewed model/effort selection, approvals/forms, observed background work |
+| [OpenCode v2](opencode.md) | Owned resident daemon or external HTTP/SSE server | Local, SSH or outbound Linux host; same host account | Submit, Steer, Queue, Stop, rename | Native history, reviewed model/effort selection, approvals/forms, observed background work |
 
 `Queue` is a provider-neutral Sedes feature: while a turn is active, Sedes
 retains the next input and submits it only after authoritative settlement. It
@@ -115,7 +115,7 @@ runtimes are not equivalent to exercised runtimes.
 | Codex | July 2026 | App-server `0.154.0` reviewed against the compiled `0.153.0` profile | `test:real-codex-agent-tools` | Local process, external UDS/TCP, persistent SSH or outbound sidecar |
 | Claude | August 2026 | Claude Code `2.1.283` with Agent SDK `0.3.283` | `test:real-claude` (twelve files) | Local worker; persistent SSH or outbound sidecar on Linux/macOS |
 | Grok | August 2026 | Grok Build `1.0.4` against the compiled `1.x` ACP profile | `test:real-grok` (three files) | Local Linux x64 or macOS only |
-| OpenCode v2 | September 2026 | Stock `opencode2` 2.0.18 with isolated loopback model fixtures | `test:real-opencode` (no paid inference) | Owned local resident daemon or existing local HTTP server |
+| OpenCode v2 | September 2026 | Stock `opencode2` 2.0.18 with isolated loopback model fixtures | `test:real-opencode` (no paid inference) | Owned or external HTTP/SSE on a Linux execution host; local, SSH and outbound |
 
 Version-pinned qualification evidence for each external runtime is kept under
 `protocol/` beside its compiled profile. Live suites are opt-in. Pi, Codex, Claude, and Grok suites consume provider
@@ -129,7 +129,7 @@ limits in the capability matrix; Claude gained conversation-scoped Steer and
 the sidecar-hosted runtime in September 2026 and is the more actively
 extended of those two, while Grok remains a local-only runtime with no Steer,
 compact, or fork support. OpenCode is the newest integration and currently
-supports stock v2 on local Linux. Expect rougher edges in these newer integrations
+supports stock v2 on Linux execution hosts. Expect rougher edges in these newer integrations
 and report reproducible problems with the backend, runtime version, and
 topology named.
 
@@ -144,7 +144,7 @@ topology named.
 - Choose **Grok** for a local Grok Build installation and the reviewed
   unrestricted ACP profile, including native generated or edited image output.
 
-- Choose **OpenCode v2** for a stock local OpenCode installation, native model
+- Choose **OpenCode v2** for a stock OpenCode installation on a Linux execution host, native model
   catalog, or an existing local daemon with native session history.
 
 You may configure multiple backend instances and targets. Each instance has

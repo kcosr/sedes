@@ -14,6 +14,7 @@ import { parseOpenCodeBackendConfiguration, type PreparedOpenCodeBackendConfigur
 import { OpenCodeRuntime, openCodeRuntimeNamespaceKey, type OpenCodeRuntimeInput } from "./opencode-runtime.js";
 import { openCodeRuntimeConfigurationSchema, resolveOpenCodeRuntimeInput } from "./opencode-runtime-configuration.js";
 import { OPENCODE_RELEASE, OpenCodeRuntimeError } from "./opencode-release.js";
+import { openCodeRuntimeDiagnostic } from "./opencode-runtime-diagnostic.js";
 import { BackendRuntimeControlRejectedError } from "../runtime-control.js";
 import { OpenCodeThreadRepository } from "./opencode-thread-repository.js";
 import { OpenCodeBackendThreadPersistenceAdapter } from "./opencode-backend-thread-persistence-adapter.js";
@@ -42,6 +43,7 @@ const managedTerminals = Object.freeze({
 
 /** Stock OpenCode v2 with private HTTP/SSE protocol and resident runtime ownership. */
 export class OpenCodeBackendModule implements BackendModule {
+  readonly runtimeDiagnostic = openCodeRuntimeDiagnostic;
   readonly backendKind = "opencode" as const;
   readonly connectionKinds = ["opencode_http"] as const;
   readonly protocolRelease = OPENCODE_RELEASE;
@@ -119,6 +121,8 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
   #revision = 0;
   #lastShutdownIncomplete = false;
   #administrating = false;
+  #healthSequence = 0;
+  #healthDiagnostic: ReturnType<typeof openCodeRuntimeDiagnostic>;
   readonly #startup;
   readonly #usage: OpenCodeUsageAccounting;
   readonly #executionEnvironment: OpenCodeExecutionEnvironment;
@@ -202,6 +206,12 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     this.driverFactory = new OpenCodeBackendDriverFactory({ scope: context.scope, instance: context.instance, connections: context.connections,
       nativeNamespaceKey: namespace, repository, settings, catalog, skills, tools: this.#tools, usage: this.#usage,
       attachmentProvenanceKey: context.toolProvenanceKey, outputArtifacts: context.outputArtifacts, executionEnvironment: this.#executionEnvironment, modelPolicy: configuration.modelPolicy,
+      observeHealth: () => {
+        const sequence = ++this.#healthSequence;
+        return failure => {
+          if (!this.#closed && sequence === this.#healthSequence) this.#healthDiagnostic = openCodeRuntimeDiagnostic(failure);
+        };
+      },
       runtime: async () => { const owner = await this.#native(); this.#assertOpen(); return owner; } });
     if (context.sidecarRuntime) {
       const recoveryContext = { ...context, sidecarRuntime: { acquireRecovery: (signal?: AbortSignal) => context.sidecarRuntime!.acquire(signal, { existingOnly: true }) } };
@@ -234,6 +244,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
   }
 
   agentToolAccessDecisionAuthority(source: TrustedAgentToolSource) { return this.#tools.accessDecisionAuthority(source); }
+  runtimeDiagnostic() { return this.#closed ? undefined : this.#healthDiagnostic; }
 
   #invocationTarget(source: TrustedAgentToolSource) {
     if (source.backendKind !== "opencode" || source.scope.tenantId !== this.scope.tenantId ||

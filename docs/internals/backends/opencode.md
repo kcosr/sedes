@@ -91,9 +91,10 @@ conservatively unknown for automatic retirement; forced confirmation is stable
 for the exact native owner while detailed inspection and abandonment evidence
 continue to report retained activity.
 
-Remote product admission remains disabled pending full remote qualification.
-The resident host and tool relay are implemented and qualified through private
-test composition; remote OpenCode is not yet a Settings-supported topology.
+Settings admits local, SSH and Linux outbound placement independently of
+owned/external mode. Native configuration and secret references are resolved
+only on the selected execution host. The canonical runtime and tool facade
+remain shared across the three placements.
 Pi, Codex, Claude and Grok retain their existing backend contracts.
 
 ## Native ownership
@@ -168,7 +169,10 @@ defaults contain separate model and variant selections. Variants are not
 implicitly reasoning-effort values.
 
 External credentials resolve in the execution environment from an approved
-`SEDES_OPENCODE_…PASSWORD…` variable or an approved protected file. Password
+protected file; local connections additionally support an approved
+`SEDES_OPENCODE_…PASSWORD…` variable. Remote admission rejects environment
+references because persistent bootstrap strips secret variables rather than
+returning them through main. Password
 validation has its own purpose; Codex capability-token namespaces and validation
 remain separate. Protected-file resolution preserves canonical-path, owner,
 mode, inode and replacement checks. Password values remain private to the native
