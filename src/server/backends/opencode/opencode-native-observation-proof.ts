@@ -155,9 +155,12 @@ export class OpenCodeNativeObservationProof {
     this.#work.set(id, sessionID);
   }
   #removeWork(id: string): void {
+    // A terminal observed after an inventory read fences that read even if the
+    // corresponding start was lost and no resident marker exists yet.
+    this.#retentionRevision++;
     const sessionID = this.#work.get(id);
     if (sessionID === undefined) return;
-    this.#work.delete(id); this.#retentionRevision++;
+    this.#work.delete(id);
     this.#workBytes -= Buffer.byteLength(id) + Buffer.byteLength(sessionID) + 32;
   }
   #addPending(id: string, sequence: number | null): void {

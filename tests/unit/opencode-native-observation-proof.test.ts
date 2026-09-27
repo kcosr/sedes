@@ -5,6 +5,28 @@ const event = (seq: number, type: string, data: Record<string, unknown>) => pars
   created: 1, type, durable: { aggregateID: "ses_owned", seq, version: 1 }, data: { sessionID: "ses_owned", ...data } });
 const emptyInventory = (owners: readonly string[] = ["ses_owned"]) => ({ pending: new Set<string>(), checkedOwners: new Set(owners), work: new Map<string, string>() });
 describe("OpenCode compact native proof", () => {
+  it.each([
+    ["permission.replied", "permission:per_child", { sessionID: "ses_child", requestID: "per_child", reply: "once" }],
+    ["form.replied", "form:frm_child", { sessionID: "ses_child", id: "frm_child", answer: {} }],
+    ["form.cancelled", "form:frm_child", { sessionID: "ses_child", id: "frm_child" }],
+    ["shell.exited", "shell:sh_child", { id: "sh_child", status: "exited", exit: 0 }],
+    ["shell.deleted", "shell:sh_child", { id: "sh_child" }],
+    ["session.execution.succeeded", "execution:ses_child", { sessionID: "ses_child" }],
+    ["session.execution.failed", "execution:ses_child", { sessionID: "ses_child", error: { type: "unknown", message: "failed" } }],
+    ["session.execution.interrupted", "execution:ses_child", { sessionID: "ses_child", reason: "user" }],
+    ["session.deleted", "execution:ses_child", { sessionID: "ses_child" }],
+  ])("fences stale positive inventory after %s settles work whose start was missed", (type, marker, data) => {
+    const proof = new OpenCodeNativeObservationProof("ses_owned");
+    proof.discontinuity(); const cut = proof.retentionCut();
+    const inventory = { ...emptyInventory(["ses_child"]), work: new Map([[marker as string, "ses_child"]]) };
+    // The read found active work, but its terminal arrives before applying that
+    // read. No held marker or root authority epoch can stand in for this fence.
+    proof.accept(parseOpenCodeNativeEvent({ id: "evt_terminal", created: 1, type, data,
+      ...(String(type).startsWith("session.") ? { durable: { aggregateID: "ses_child", seq: 1, version: type === "session.deleted" ? 2 : 1 } } : {}) }));
+    expect(proof.reconcileRetention(cut, inventory)).toBe(false);
+    expect(proof.retentionCut().work).toEqual([]); expect(proof.hasWork).toBe(false);
+  });
+
   it("reconciles child interactions and shells only against their exact checked owner", () => {
     const proof = new OpenCodeNativeObservationProof("ses_owned");
     proof.accept(parseOpenCodeNativeEvent({ id: "evt_permission", created: 1, type: "permission.asked",

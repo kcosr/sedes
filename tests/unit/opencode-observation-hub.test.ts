@@ -8,7 +8,7 @@ import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 import { openCodeNativeFactFingerprint } from "../../src/server/backends/opencode/opencode-native-observation-proof.js";
 
 const cleanups: (() => void)[] = [];
-afterEach(() => { for (const close of cleanups.splice(0)) close(); });
+afterEach(() => { for (const close of cleanups.splice(0)) close(); vi.useRealTimers(); });
 const authority = (sessionID = "ses_fixture"): OpenCodeNativeAuthority => ({ tenantId: "tenant", principalId: "principal",
   executionEnvironmentId: "environment", backendInstanceId: "backend", runtimeId: "runtime", nativeGeneration: "generation",
   directory: "/workspace", session: { applicationThreadId: `thread-${sessionID}`, nativeSessionID: sessionID, bindingFingerprint: "binding" } });
@@ -25,6 +25,58 @@ function setup(options: ConstructorParameters<typeof OpenCodeObservationHub>[1] 
 async function drain(observation: OpenCodePortObservation) { await observation.wait(); return observation.drain(); }
 
 describe("resident OpenCode native observation journal", () => {
+  it("backs off permanent inventory failures, caps attempts and retains proof until a fresh retry cycle", async () => {
+    const { wire, hub } = setup(); const first = hub.subscribe(authority(), { purpose: "evidence" }); await first.ready;
+    wire.send({ ...event(1), type: "session.inbox.enqueued", data: { sessionID: "ses_fixture", inboxID: "msg_known",
+      item: { type: "user", delivery: "queue", payload: { text: "x" } } } });
+    await first.wait();
+    wire.setResponse("/api/session/ses_fixture/inbox", 503, { error: "unavailable" });
+    const attempts = () => wire.requests.filter(request => request.pathname.endsWith("/inbox")).length;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    wire.disconnect(); await vi.advanceTimersByTimeAsync(100);
+    expect(attempts()).toBe(1);
+    await vi.advanceTimersByTimeAsync(999); expect(attempts()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1); expect(attempts()).toBe(2);
+    await vi.advanceTimersByTimeAsync(1_999); expect(attempts()).toBe(2);
+    await vi.advanceTimersByTimeAsync(1); expect(attempts()).toBe(3);
+    await vi.advanceTimersByTimeAsync(60 * 60_000); expect(attempts()).toBe(10);
+    const retained = hub.subscribe(authority(), { purpose: "evidence" }); const boundary = await retained.ready;
+    const records = retained.drain(); await retained.acknowledge({ journalId: boundary.journalId, sequence: records.at(-1)!.sequence });
+    await retained.close(); await first.close(); hub.releaseScope(authority());
+    expect(hub.hasRetainedAuthority(authority())).toBe(true);
+    await vi.advanceTimersByTimeAsync(60 * 60_000); expect(attempts()).toBe(10);
+    // Explicit backend inspection can request a new bounded cycle.
+    hub.retryReconciliation(); await vi.advanceTimersByTimeAsync(0); expect(attempts()).toBe(11);
+    await vi.advanceTimersByTimeAsync(60 * 60_000); expect(attempts()).toBe(20);
+    // A genuinely new native disconnect/reconnect also resets the retry budget.
+    wire.disconnect(); await vi.advanceTimersByTimeAsync(100); expect(attempts()).toBe(21);
+    expect(hub.hasRetainedAuthority(authority())).toBe(true);
+  });
+
+  it("retries only the failing owner while settled owners and later exact events keep making progress", async () => {
+    const { wire, hub } = setup({ route: (_authority, event) => "sessionID" in event.data &&
+      ["ses_fixture", "ses_child"].includes(event.data.sessionID) });
+    const first = hub.subscribe(authority(), { purpose: "evidence" }); await first.ready;
+    for (const sessionID of ["ses_fixture", "ses_child"]) wire.send({ id: `evt_${sessionID}`, created: 1, type: "permission.asked",
+      data: { sessionID, id: `per_${sessionID}`, action: "write", resources: [] } });
+    await vi.waitFor(() => expect(hub.retentionSnapshot().evidenceRecords).toBe(2));
+    wire.setResponse("/api/session/ses_child", 503, { error: "unavailable" });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    wire.disconnect(); await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(wire.requests.filter(request => request.pathname === "/api/session/ses_fixture/permission")).toHaveLength(1);
+    expect(wire.requests.filter(request => request.pathname === "/api/session/ses_child")).toHaveLength(10);
+    const retained = hub.subscribe(authority(), { purpose: "evidence" }); const boundary = await retained.ready;
+    const records = retained.drain(); await retained.acknowledge({ journalId: boundary.journalId, sequence: records.at(-1)!.sequence });
+    await retained.close(); await first.close(); hub.releaseScope(authority());
+    expect(hub.hasRetainedAuthority(authority())).toBe(true);
+    const terminal = hub.subscribe(authority(), { purpose: "evidence" }); const ready = await terminal.ready;
+    wire.send({ id: "evt_child_replied", created: 2, type: "permission.replied",
+      data: { sessionID: "ses_child", requestID: "per_ses_child", reply: "once" } });
+    await terminal.wait(); const settled = terminal.drain();
+    await terminal.acknowledge({ journalId: ready.journalId, sequence: settled.at(-1)!.sequence }); await terminal.close();
+    expect(hub.hasRetainedAuthority(authority())).toBe(false);
+  });
+
   it("reclaims known input and interaction markers settled inside a native stream gap after exact inventory and ACK", async () => {
     const { wire, hub } = setup(); const observation = hub.subscribe(authority(), { purpose: "evidence" });
     const before = await observation.ready;

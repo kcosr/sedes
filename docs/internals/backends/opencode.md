@@ -53,9 +53,14 @@ native inventory reads reconcile known pending and work markers against their
 exact owning session and location; inbox reads precede activity so a promoted
 input remains retained while running. Read cuts are identity-, continuity- and
 lifecycle-fenced and change no application receipts or approval authority.
-Unobserved dispatch pins and collapsed unknown inventories remain conservative;
-failed reads never prove retirement. An operation acknowledgment alone never
-proves that native work ended.
+Settlement events invalidate an in-flight read even when their start was missed,
+so stale inventory cannot resurrect completed work. Failed reads retry separately
+for each owner with exponential delay from one second to two minutes, stopping
+after ten failures. A new native break/reconnect or explicit backend inspection
+starts a fresh bounded cycle. Other owners continue reconciling independently.
+Unobserved dispatch pins, exhausted retries and collapsed unknown inventories
+remain conservative; failed reads never prove retirement. An operation
+acknowledgment alone never proves that native work ended.
 
 Presentation subscribers have separate bounded queues and cannot acknowledge
 operation evidence. When their shared byte budget fills, the subscriber holding

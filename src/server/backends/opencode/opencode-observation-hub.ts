@@ -11,6 +11,10 @@ import type { OpenCodeNativeAuthority, OpenCodeObservationBoundary,
 
 const MAX_SCOPES = 4_096;
 const CRITICAL_BYTES = 64 * 1_024 * 1_024;
+const RECONCILIATION_INITIAL_RETRY_MS = 1_000;
+const RECONCILIATION_MAXIMUM_RETRY_MS = 120_000;
+const RECONCILIATION_MAXIMUM_FAILURES = 10;
+interface ReconciliationRetry { failures: number; nextAttemptAt: number; }
 interface Scope {
   readonly authority: OpenCodeNativeAuthority; readonly journalId: string;
   readonly proof: OpenCodeNativeObservationProof; readonly records: OpenCodeObservationRecord[];
@@ -29,7 +33,8 @@ export class OpenCodeObservationHub {
   readonly #scopes = new Map<string, Scope>();
   readonly #lifetime = new AbortController();
   readonly #waiters = new Set<() => void>();
-  readonly #reconcileScopes = new Map<Scope, Set<string>>();
+  readonly #reconcileScopes = new Map<Scope, Map<string, ReconciliationRetry>>();
+  readonly #reconcileWaiters = new Set<() => void>();
   #reconciling = false;
   readonly #running: Promise<void>;
   #native?: OpenCodeHttpObservation;
@@ -75,6 +80,12 @@ export class OpenCodeObservationHub {
   hasRetainedAuthority(authority: OpenCodeNativeAuthority): boolean {
     const scope = this.#scopes.get(configurationFingerprint(authority));
     return !!scope && (scope.records.length > 0 || scope.subscribers.size > 0 || scope.proof.hasWork);
+  }
+  /** Explicit inspection may restart bounded lifecycle reads, never evidence or native work. */
+  retryReconciliation(): void {
+    this.#assertOpen();
+    for (const scope of this.#scopes.values()) this.#queueReconciliation(scope);
+    this.#scheduleReconciliation();
   }
   /** Pin a dispatched input before its admission response can race the SSE frame. */
   beginInput(authority: OpenCodeNativeAuthority, inputId: string): void {
@@ -210,7 +221,7 @@ export class OpenCodeObservationHub {
   }
   close(): void {
     if (this.#lifetime.signal.aborted) return;
-    this.#lifetime.abort(); this.#connected = false; void this.#native?.close();
+    this.#lifetime.abort(); this.#connected = false; this.#reconcileScopes.clear(); void this.#native?.close();
     for (const scope of this.#scopes.values()) for (const sub of [...scope.subscribers]) sub.finish({ reason: "closed" });
     this.#changed(); void this.#running.catch(() => undefined);
   }
@@ -251,7 +262,7 @@ export class OpenCodeObservationHub {
   #assertOpen() { if (this.#lifetime.signal.aborted) throw unavailable("opencode_runtime_unavailable"); }
   #collect(scope: Scope): void {
     if (!scope.releaseRequested || scope.records.length || scope.subscribers.size || scope.proof.hasWork) return;
-    this.#scopes.delete(configurationFingerprint(scope.authority)); this.#changed();
+    this.#scopes.delete(configurationFingerprint(scope.authority)); this.#reconcileScopes.delete(scope); this.#changed();
   }
   #changed(): void {
     this.#revision++; for (const wake of this.#waiters) wake();
@@ -262,9 +273,7 @@ export class OpenCodeObservationHub {
   #break(scope: Scope, reason: Extract<OpenCodeObservationRecord, { kind: "native_break" }>["reason"]): void {
     scope.continuity = randomUUID();
     scope.proof.discontinuity();
-    const cut = scope.proof.retentionCut(), owners = new Set(cut.work.map(item => item.sessionID));
-    if (cut.pending.length || cut.unknownExecution) owners.add(scope.authority.session!.nativeSessionID);
-    if (owners.size) this.#reconcileScopes.set(scope, owners);
+    this.#queueReconciliation(scope);
     this.#scheduleReconciliation();
     // One reserved small loss marker per admitted scope, outside raw payload
     // capacity. Existing positive records are never silently evicted.
@@ -325,35 +334,55 @@ export class OpenCodeObservationHub {
     }
     void nativeBytes; this.#changed();
   }
+  #queueReconciliation(scope: Scope): void {
+    const cut = scope.proof.retentionCut(), owners = new Set(cut.work.map(item => item.sessionID));
+    if (cut.pending.length || cut.unknownExecution) owners.add(scope.authority.session!.nativeSessionID);
+    if (owners.size) this.#reconcileScopes.set(scope, new Map([...owners].map(owner => [owner, { failures: 0, nextAttemptAt: 0 }])));
+    else this.#reconcileScopes.delete(scope);
+    for (const wake of this.#reconcileWaiters) wake();
+  }
+  #waitForReconciliation(milliseconds: number): Promise<void> {
+    return new Promise(resolve => {
+      const finish = () => { clearTimeout(timer); this.#reconcileWaiters.delete(finish);
+        this.#lifetime.signal.removeEventListener("abort", finish); resolve(); };
+      const timer = setTimeout(finish, milliseconds); timer.unref?.();
+      this.#reconcileWaiters.add(finish); this.#lifetime.signal.addEventListener("abort", finish, { once: true });
+      if (this.#lifetime.signal.aborted) finish();
+    });
+  }
   #scheduleReconciliation(): void {
     if (this.#reconciling || !this.#connected || this.#lifetime.signal.aborted || !this.#reconcileScopes.size) return;
     this.#reconciling = true;
     void (async () => {
       try {
         while (this.#connected && !this.#lifetime.signal.aborted && this.#reconcileScopes.size) {
-          await Promise.all([...this.#reconcileScopes.keys()].slice(0, 8).map(scope => this.#reconcile(scope)));
-          if (this.#reconcileScopes.size) await new Promise<void>(resolve => {
-            const finish = () => { clearTimeout(timer); this.#lifetime.signal.removeEventListener("abort", finish); resolve(); };
-            const timer = setTimeout(finish, 1_000); timer.unref?.();
-            this.#lifetime.signal.addEventListener("abort", finish, { once: true });
-            if (this.#lifetime.signal.aborted) finish();
-          });
+          const now = Date.now(); let nextAttemptAt = Infinity;
+          const ready: Scope[] = [];
+          for (const [scope, owners] of this.#reconcileScopes) {
+            let due = false;
+            for (const retry of owners.values()) { nextAttemptAt = Math.min(nextAttemptAt, retry.nextAttemptAt); due ||= retry.nextAttemptAt <= now; }
+            if (due && ready.length < 8) ready.push(scope);
+          }
+          if (!ready.length) { await this.#waitForReconciliation(Math.max(1, nextAttemptAt - now)); continue; }
+          await Promise.all(ready.map(scope => this.#reconcile(scope)));
+          if (this.#reconcileScopes.size) await this.#waitForReconciliation(RECONCILIATION_INITIAL_RETRY_MS);
         }
       } finally { this.#reconciling = false; }
     })();
   }
   async #reconcile(scope: Scope): Promise<void> {
     const owners = this.#reconcileScopes.get(scope);
-    this.#reconcileScopes.delete(scope);
-    if (!owners || this.#scopes.get(configurationFingerprint(scope.authority)) !== scope) return;
+    if (!owners) return;
+    if (this.#scopes.get(configurationFingerprint(scope.authority)) !== scope) { this.#reconcileScopes.delete(scope); return; }
     const cut = scope.proof.retentionCut(), continuity = scope.continuity;
-    const sessionID = scope.authority.session!.nativeSessionID, selected = new Set([...owners].slice(0, 4));
+    const sessionID = scope.authority.session!.nativeSessionID;
+    const selected = new Map([...owners].filter(([, retry]) => retry.nextAttemptAt <= Date.now()).slice(0, 4));
     const signal = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(5_000)]);
     try {
       await this.options.assertCurrent?.(signal);
       // Inbox removal may mean promotion into execution. Read activity and
       // interactions afterwards, including when the cut had no work marker.
-      const results = await Promise.allSettled([...selected].map(async owner => {
+      const results = await Promise.allSettled([...selected.keys()].map(async owner => {
         const pending = owner === sessionID && cut.pending.length ? await this.adapter.read("getPending", { sessionID }, signal) : undefined;
         const native = await this.adapter.read("getSession", { sessionID: owner }, signal);
         if (owner === sessionID && native.location.directory !== scope.authority.directory) throw unavailable("opencode_request_authority_mismatch");
@@ -387,12 +416,18 @@ export class OpenCodeObservationHub {
       }
       for (const owner of checkedOwners) owners.delete(owner);
       this.#collect(scope); this.#changed();
-    } catch { /* Failed or raced reads prove nothing; leave these owners queued. */ }
-    for (const owner of selected) if (owners.delete(owner)) owners.add(owner);
-    // Rotate bounded retries so an unavailable session cannot prevent the other
-    // scopes from reconciling. A newer native break owns its replacement queue.
-    if (owners.size && !this.#reconcileScopes.has(scope) && !this.#lifetime.signal.aborted &&
-        this.#scopes.get(configurationFingerprint(scope.authority)) === scope) this.#reconcileScopes.set(scope, owners);
+    } catch { /* Failed or raced reads prove nothing. Their markers stay conservative. */ }
+    // A native break or explicit inspection replaces the entire retry cycle.
+    if (this.#reconcileScopes.get(scope) !== owners) return;
+    this.#reconcileScopes.delete(scope);
+    for (const [owner, retry] of selected) if (owners.delete(owner)) {
+      const failures = retry.failures + 1;
+      if (failures < RECONCILIATION_MAXIMUM_FAILURES) owners.set(owner, { failures,
+        nextAttemptAt: Date.now() + Math.min(RECONCILIATION_MAXIMUM_RETRY_MS, RECONCILIATION_INITIAL_RETRY_MS * 2 ** (failures - 1)) });
+    }
+    if (owners.size && !this.#lifetime.signal.aborted && this.#scopes.get(configurationFingerprint(scope.authority)) === scope) {
+      this.#reconcileScopes.set(scope, owners);
+    }
   }
   async #run(): Promise<void> {
     while (!this.#lifetime.signal.aborted) {

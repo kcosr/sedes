@@ -247,6 +247,7 @@ export class OpenCodeNativeHost {
   /** Bounded read-only refresh; this never claims complete background inventory. */
   async prepareRetirement(): Promise<void> {
     this.#assertOpen(); this.#inventory = undefined;
+    this.#hub.retryReconciliation();
     const signal = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(5_000)]);
     const observationRevision = this.#hub.retentionSnapshot().revision, journalRevision = this.#journal.snapshot().revision;
     const scopes = [...this.#scopes.values()].filter(item => item.port.authority.session);
