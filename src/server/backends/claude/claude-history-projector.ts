@@ -301,6 +301,12 @@ interface MutableTurn {
   readonly nativeMessageStartIndex: number;
   readonly userMessageOrdinal: number;
   sourceOrder: number;
+  /**
+   * Item slots held for the images of completed image reads. A slot is taken
+   * when the read's result arrives, if the turn has room, and kept: a later
+   * transcript item counts it, so a shown image never has to give way.
+   */
+  reservedImageSlots: number;
 }
 
 interface StoppedToolResult {
@@ -635,6 +641,7 @@ function buildTimeline(
   const authenticatedTaskContextOperationIds = new Set<string>();
   const nativeMessageStartIndexByBackendTurnId = new Map<string, number>();
   const userMessageOrdinalByBackendTurnId = new Map<string, number>();
+  const reservedImageSlotsByTurnId = new Map<string, number>();
   const seenTurnIds = new Set<string>();
   let current: MutableTurn | undefined;
   let assistantMessages = 0;
@@ -674,6 +681,7 @@ function buildTimeline(
       userMessageOrdinal,
       taskNotificationBoundary,
       sourceOrder: 0,
+      reservedImageSlots: 0,
     };
   };
   /**
@@ -740,6 +748,9 @@ function buildTimeline(
       current.backendTurnId,
       current.nativeMessageStartIndex,
     );
+    if (current.reservedImageSlots > 0) {
+      reservedImageSlotsByTurnId.set(current.backendTurnId, current.reservedImageSlots);
+    }
     userMessageOrdinalByBackendTurnId.set(
       current.backendTurnId,
       current.userMessageOrdinal,
@@ -1067,6 +1078,7 @@ function buildTimeline(
     itemsById,
     terminalAssistantUuidByBackendTurnId,
     terminalCheckpointUuidByBackendTurnId,
+    reservedImageSlotsByTurnId,
   );
   classifyAssistantResponses(
     responseGroupsByTurn,
@@ -1076,7 +1088,8 @@ function buildTimeline(
     itemsById,
   );
 
-  applyTaskLifecycleReceipts(authentication?.taskLifecycleReceipts ?? [], toolItemsByNativeId, turnsById, itemsById);
+  applyTaskLifecycleReceipts(authentication?.taskLifecycleReceipts ?? [], toolItemsByNativeId, turnsById, itemsById,
+    reservedImageSlotsByTurnId);
   // A native fork resumes at one exact chain entry after Claude's latest
   // compaction. Say why a completed turn without one cannot be forked.
   for (const [backendTurnId, turn] of Object.entries(turnsById)) {
@@ -1169,6 +1182,7 @@ function applyTaskLifecycleReceipts(
   toolItemsByNativeId: ReadonlyMap<string, string>,
   turnsById: Record<string, BackendTurn>,
   itemsById: Record<string, BackendItem>,
+  reservedImageSlotsByTurnId: ReadonlyMap<string, number>,
 ): void {
   for (const receipt of receipts) {
     const toolItemId = toolItemsByNativeId.get(receipt.nativeToolUseId);
@@ -1178,7 +1192,8 @@ function applyTaskLifecycleReceipts(
     if (!launch || launch.semanticKind !== "collaboration") continue;
     if (!receipt.terminalStatus || receipt.terminalAt === null) continue;
     const turn = turnsById[launch.backendTurnId]!;
-    if (turn.orderedBackendItemIds.length >= MAXIMUM_BACKEND_ITEMS_PER_TURN) {
+    if (turn.orderedBackendItemIds.length + (reservedImageSlotsByTurnId.get(turn.backendTurnId) ?? 0) >=
+        MAXIMUM_BACKEND_ITEMS_PER_TURN) {
       throw new ClaudeHistoryProjectionError("history_too_large");
     }
     const backendItemId = stableId("claude-task-terminal", `${launch.backendItemId}\0${receipt.nativeTaskId}`);
@@ -1244,8 +1259,7 @@ function selectionBytes(
  * slot after the read (Claude items use even slots). A read without one is
  * reported pending; this never decodes or publishes, and it looks up only the
  * selected reads. An image is added only after its own read, so trimming a
- * turn can never leave one without it. Transcript items take precedence at
- * the per-turn item cap.
+ * turn can never leave one without it. Each read here holds a turn slot.
  */
 function withViewedImages(
   timeline: ProjectedTimeline,
@@ -1257,14 +1271,11 @@ function withViewedImages(
   if (reads.length === 0) return { selected, pending };
   const turnsById = { ...selected.turnsById };
   const itemsById = { ...selected.itemsById };
-  const reservedByTurn = new Map<string, number>();
   for (const { viewedBackendItemId, image } of reads) {
     const viewed = itemsById[viewedBackendItemId];
     if (viewed?.semanticKind !== "viewed_image" || viewed.status !== "completed") continue;
     const turn = turnsById[viewed.backendTurnId];
     if (!turn) continue;
-    const reserved = reservedByTurn.get(turn.backendTurnId) ?? 0;
-    if (turn.orderedBackendItemIds.length + reserved >= MAXIMUM_BACKEND_ITEMS_PER_TURN) continue;
     const identity = {
       backendItemId: stableId("claude-item-image", viewedBackendItemId),
       backendTurnId: turn.backendTurnId,
@@ -1273,7 +1284,6 @@ function withViewedImages(
     const publicationKey = claudeViewedImagePublicationKey(identity.backendItemId);
     const descriptor = associations?.find(publicationKey);
     if (!descriptor) {
-      reservedByTurn.set(turn.backendTurnId, reserved + 1);
       pending.push({ viewedBackendItemId, identity, publicationKey, image });
       continue;
     }
@@ -1307,6 +1317,7 @@ function applyTerminalReceipts(
   itemsById: Record<string, BackendItem>,
   terminalAssistantUuidByBackendTurnId: Map<string, string>,
   terminalCheckpointUuidByBackendTurnId: Map<string, string>,
+  reservedImageSlotsByTurnId: ReadonlyMap<string, number>,
 ): void {
   if (!Array.isArray(receipts)) invalid();
   const seen = new Set<string>();
@@ -1364,7 +1375,7 @@ function applyTerminalReceipts(
     }
     if (candidate.status === "interrupted" && candidate.providerResultUuid === null &&
         candidate.providerTerminalReason === CLAUDE_PROCESS_LOST_REASON) {
-      appendProcessLostNotice(turnsById, itemsById, candidate.backendTurnId);
+      appendProcessLostNotice(turnsById, itemsById, candidate.backendTurnId, reservedImageSlotsByTurnId);
     }
   }
 }
@@ -1374,9 +1385,11 @@ function appendProcessLostNotice(
   turnsById: Record<string, BackendTurn>,
   itemsById: Record<string, BackendItem>,
   backendTurnId: string,
+  reservedImageSlotsByTurnId: ReadonlyMap<string, number>,
 ): void {
   const turn = turnsById[backendTurnId]!;
-  if (turn.orderedBackendItemIds.length >= MAXIMUM_BACKEND_ITEMS_PER_TURN) {
+  if (turn.orderedBackendItemIds.length + (reservedImageSlotsByTurnId.get(backendTurnId) ?? 0) >=
+      MAXIMUM_BACKEND_ITEMS_PER_TURN) {
     throw new ClaudeHistoryProjectionError("history_too_large");
   }
   // The next native slot: the process that could have used it is gone.
@@ -1843,7 +1856,12 @@ function applyToolResult(
     const image = existing.semanticKind === "viewed_image" && !block.isError
       ? claudeReadResultImage(block.content)
       : undefined;
-    if (image) completedImageReads.push({ viewedBackendItemId: existingId, image });
+    // An image takes a slot only while the turn has room; transcript items
+    // that follow count it.
+    if (image && turn.orderedBackendItemIds.length + turn.reservedImageSlots < MAXIMUM_BACKEND_ITEMS_PER_TURN) {
+      turn.reservedImageSlots += 1;
+      completedImageReads.push({ viewedBackendItemId: existingId, image });
+    }
     if (isClaudeStoppedToolResult(block)) {
       turn.stoppedToolBatch.push({ backendItemId: existingId, unsettled: existing, content: block.content });
     }
@@ -1899,7 +1917,7 @@ function addItem(
   status: BackendItem["status"] = "completed",
   identity?: { readonly messageId: string; readonly blockIndex: number },
 ): string {
-  if (turn.orderedBackendItemIds.length >= MAXIMUM_BACKEND_ITEMS_PER_TURN) {
+  if (turn.orderedBackendItemIds.length + turn.reservedImageSlots >= MAXIMUM_BACKEND_ITEMS_PER_TURN) {
     throw new ClaudeHistoryProjectionError("history_too_large");
   }
   const backendItemId = stableId(
