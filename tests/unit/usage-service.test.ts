@@ -423,17 +423,17 @@ INSERT INTO conversation_bindings(tenant_id,owner_principal_id,application_threa
     expect(service.read(scope,"thread").summary.metrics.input.value).toBe("100");
     expect(service.read(scope,"thread",turnId).summary.metrics.input.value).toBe("30");
   });
-  it.each(["grok_build", "opencode"])("keeps %s usage unsupported before and after materializing a visible turn", (backendKind) => {
+  it.each([["grok_build", "unsupported"], ["opencode", "supported"]] as const)("keeps %s usage support truthful before capture and after materializing a visible turn", (backendKind, support) => {
     const db=database(), service=new UsageService(db, {enabled: true});
     db.prepare("UPDATE agent_backend_instances SET kind=?").run(backendKind);
     expect(db.prepare("SELECT count(*) AS count FROM usage_thread_state").get()).toEqual({count:0});
-    expect(service.read(scope,"thread")).toMatchObject({support:"unsupported",state:"unavailable",turnId:null});
+    expect(service.read(scope,"thread")).toMatchObject({support,state:"unavailable",turnId:null});
     service.registerVisibleTurns(scope,"thread",[{id:"live-turn",revision:1,status:"in_progress",orderedItemIds:[]}]);
     const report=service.read(scope,"thread","live-turn");
-    expect(report.support).toBe("unsupported");expect(report.state).toBe("unavailable");expect(report.turnState).toBe("in_progress");
-    expect(service.read(scope,"thread")).toMatchObject({support:"unsupported",state:"unavailable",turnId:null});
-    expect(db.prepare("SELECT json_extract(report_json,'$.support') AS support FROM usage_thread_state").all()).toEqual([{support:"unsupported"}]);
-    expect(db.prepare("SELECT json_extract(report_json,'$.support') AS support FROM usage_turn_state").all()).toEqual([{support:"unsupported"}]);
+    expect(report.support).toBe(support);expect(report.state).toBe("unavailable");expect(report.turnState).toBe("in_progress");
+    expect(service.read(scope,"thread")).toMatchObject({support,state:"unavailable",turnId:null});
+    expect(db.prepare("SELECT json_extract(report_json,'$.support') AS support FROM usage_thread_state").all()).toEqual([{support}]);
+    expect(db.prepare("SELECT json_extract(report_json,'$.support') AS support FROM usage_turn_state").all()).toEqual([{support}]);
     expect(db.prepare("SELECT count(*) AS count FROM usage_sources").get()).toEqual({count:0});
     expect(()=>service.read(scope,"thread","foreign-turn")).toThrow();
   });

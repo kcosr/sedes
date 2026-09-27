@@ -4,8 +4,10 @@ The OpenCode module and its native runtime are implemented under
 `src/server/backends/opencode`. The production catalog registers the module alongside Pi, Codex, Claude,
 and Grok. It supports discovery, attachment, native history, creation, Submit,
 conversation-scoped Steer, Stop, rename, reviewed model/effort settings,
-permissions, and expressible native forms. Attachment/image delivery, Sedes MCP
-tools, manual compaction, usage accounting, and forks remain unavailable.
+permissions, expressible native forms, skills, attachments/image delivery,
+viewed images, Sedes MCP/CLI tools, owned thread execution variables, and manual
+compaction. Native forks, commands, generated images, and managed TUI are
+unavailable.
 The normalized backend identity is `opencode`, its connection kind is
 `opencode_http`, and the browser brand is `opencode`. Client protocol 128
 includes these closed-enum additions and terminal Stop diagnostics.
@@ -91,9 +93,11 @@ the default `${XDG_CONFIG_HOME:-$HOME/.config}/opencode`. It derives
 controls. The selected configuration directory replaces inherited
 `OPENCODE_CONFIG_DIR`. Both ownership modes reject simulation and incompatible
 config/client/model-URL profiles during admission.
-Owned launch also removes ambient `SEDES_AGENT_TOOL_*`,
-`SEDES_OPENCODE_*PASSWORD*` and `SEDES_CODEX_*TOKEN*` variables so native tools
-cannot inherit another Sedes thread's capabilities or another backend's secrets.
+Owned launch removes all ambient `SEDES_*` variables before installing its
+private runtime ownership marker. Native tools therefore cannot inherit another
+Sedes thread's capabilities, an MCP channel credential or another backend's
+Sedes-managed secret. Generated per-thread CLI variables enter only the exact
+admitted session's separate shell map.
 
 Native project configuration, plugins, hooks, MCP registrations, provider
 credentials, custom models and saved permission grants remain operator authority.
@@ -134,6 +138,17 @@ Recovery acquires native history, pending inputs, interactions and activity agai
 it never resends a native effect. Lifetime invalidation remains visible on the
 separate raw subscription while snapshot hydration is pending.
 
+Only `/api/event` and the finite native input-log route use the provider-private
+SSE framing reader. The official 2.0.18 client hardcodes a 16 MiB decoded buffer,
+including several frames received in one chunk, and offers no override. The
+local reader enforces 32 MiB UTF-8 line/frame bounds, preserves finite EOF flush
+and multiline framing, and rejects malformed JSON/UTF-8. Payloads still pass
+the pinned official event/log schemas. Every observer owns an authenticated
+connection and cancellation lifetime; there is no multiplexing, automatic
+reconnect or event replay at the transport layer. Ordinary requests and native
+mutations continue through the official client. A configurable upstream SSE
+frame bound would remove this local framing requirement.
+
 Each resident handle retains one complete, disposable native-history projection.
 Initial acquisition reads to a captured finite head, validates continuation
 anchors, and catches up by refreshing mutable records, exact records identified
@@ -145,10 +160,10 @@ Live durable changes reuse the retained native cut and unchanged
 closed-turn projections; text fragments update only affected normalized items.
 Child execution and attributed shell changes refresh the scoped activity inventory
 without reading parent history. Paging and lookup operate on the retained
-projection and cannot consume live events. It does not write a transcript mirror. Limits are 16 MiB per
-HTTP response, 64 MiB aggregate decoded acquisition/projection, 100,000 acquisition
-records and 60 seconds through final selection. SSE buffering and the normalized
-event journal are each bounded to 4,096 records/16 MiB. A single whole turn must
+projection and cannot consume live events. It does not write a transcript mirror. Limits are 32 MiB per
+HTTP response, 96 MiB aggregate decoded acquisition/projection, 100,000 acquisition
+records and 60 seconds through final selection. SSE buffering is bounded to
+4,096 records/32 MiB; the normalized event journal remains 4,096 records/16 MiB. A single whole turn must
 fit the shared 16 MiB page limit and item-count limit. Fixed-limit failures are
 explicit and non-retryable; results are never silently truncated to fit history.
 
@@ -271,3 +286,180 @@ dispatched reply blocks any new reply, including force-reset cancellation, until
 its native result can be proved. A never-dispatched attempt permits a fresh
 response. Settlements observed while projection is disconnected are replayed
 on re-establishment so stale interaction panels close.
+
+
+## Per-call Sedes tools
+
+`OpenCodeAgentTools` holds residency-scoped admission independently of actor
+handles. Only an exact accepted private create receipt, matching settings
+snapshot, current binding, and non-reset first-input creation attempt admit a
+root. First submission uses the same exact provisional authority. Sibling
+threads share a native runtime/location registration, never a mutable current
+thread field. Discovery lists three conservative gateways without a session;
+every call resolves an immutable client from `ai.opencode/sessionID` metadata.
+The provider-private loopback ingress authenticates its channel before routing,
+then validates current scope, binding, runtime generation, native location and
+policy. It fixes the adapter to MCP; ordinary CLI source references retain
+their existing audience and adapter.
+
+The stdio helper is bundled as `sedes opencode-mcp`. An authenticated lifetime
+stream fences child invocations with a current stream ID, emits heartbeats every
+500 ms, and uses a 3-second child watchdog. Replacing or losing that stream
+cancels outstanding calls/approvals. A disconnected channel can be reclaimed
+within its 10-second startup window; expiry revokes it. A fresh registration
+uses a new high-entropy name and an absence inventory preflight. Stock PUT is
+unconditional and native GET has no ownership token, so no existing entry is
+replaced, removed, connected or disconnected. Unknown PUT acknowledgment does
+not trigger another registration. Per location there are at most eight channel
+admissions per main lifetime, with 64 total and a 256-entry inventory bound.
+Failed rows can accumulate across main restarts and require a native restart.
+The native MCP execution timeout is 24 hours, distinct from bounded startup,
+catalog, transport and lifetime checks. No MCP readiness sleep gates messages.
+
+`SedesMcpServer` resolves one source client per request and passes it explicitly
+through catalog, description and invocation. Framing, cancellation, schemas,
+gateway effects and output projection are shared with existing providers.
+There is no generic route accepting the OpenCode channel credential. Only the
+child receives it; native session environment injection carries CLI references,
+not the shared channel credential.
+
+Interactive cross-boundary access additionally acquires the provider's current
+input authority. `OpenCodeInputObserver` requires live consumption of the exact
+private dispatched user input, prepared payload proof, and no conflict. Native
+or automation inputs cannot adopt old user provenance. Replacement input,
+terminal execution, revert, deletion, event gaps, disconnect and binding/runtime
+loss invalidate pending approval leases. Cold history proves delivery, but does
+not by itself prove which input is current. The generic source service checks
+this optional lease before and after approval; boundary-free calls do not need
+it. CLI ingress resolves the hook from the current server-owned backend module
+on every call, including stateless references issued before a main restart.
+Pi, Codex, Claude and Grok keep their existing approval authority behavior.
+
+Native permission responses retain the complete native action fingerprint;
+only an exact known Sedes registration/gateway receives a readable Sedes title.
+Native allow/ask/deny and Sedes policy remain independent authorities. Imported,
+child and forked sessions are unmapped until a separately qualified admission
+path exists.
+
+## Thread environments and manual skills
+
+The module-owned execution-environment service reads the thread's immutable
+application snapshot. Nonempty definitions require an owned local runtime and
+are rejected for external mode before secret resolution. Before explicit idle
+Submit or compact, the service qualifies exact binding, runtime generation,
+root location, no native pending input/interactions or running children/shells,
+and a final native subagent-deny rule while preserving earlier operator rules.
+It then resolves secrets and installs the complete shell map from the applied
+launch baseline, thread overrides and generated CLI values last. PATH uses that
+same applied baseline, with the helper directory prepended for CLI. Values are
+not stored in operation receipts or environment fingerprints. Module close and
+session release invalidate pending preparation, including delayed secret reads.
+
+A Steer cannot rotate that map during work: it requires the already installed
+current incarnation. Native children do not inherit the session map and cannot
+be spawned where required variables or CLI credentials would otherwise be lost.
+The volatile map is reinstalled after owned restart. An imported empty snapshot
+preserves the native map; an imported owned idle root with nonempty frozen
+Sedes definitions can receive them on explicit Send. Importing does not adopt
+current defaults. Qualification covers stock CLI directory-root sessions. The
+public location omits workspaceID, so its directory alone is not evidence that
+an arbitrary native workspace-driver session has this shell-environment contract.
+Stock CLI registers no workspace drivers; such custom host integrations are
+outside the qualified topology.
+
+Skill discovery uses the ordinary scoped/authenticated catalog call and exposes
+bounded names and descriptions without native source paths or instruction text.
+Opaque selection IDs bind the connection, native store and workspace. Send
+resolves the selected ID against the fresh native catalog before dispatch, then
+uses ordinary `prompt.skills` so native prepared instructions belong to the
+exact input. Missing selections fail before Send; dispatched replay does not
+resolve changed instructions or resend. Explicit manual selection can use skills
+marked against automatic invocation, matching stock native semantics. Native
+command dispatch remains unsupported because commands may launch other work or
+change session state outside this exact-input path.
+
+## Images and manual compaction
+
+Composer attachment identity uses the scoped owner's ordered path-free evidence.
+Only that owner's byte reader supplies native raster data URIs; agent paths are
+never treated as Sedes-local read authority. An authenticated staged-file
+manifest remains in the native prompt for filesystem operations. History strips
+that carrier and emits public attachment descriptors only with the exact private
+consumed-input correlation. Native-only or invalid carriers do not disclose
+staging paths. Selected native model capability gates image admission.
+
+Viewed-image recognition requires the exact `read` argument contract and raster
+result grammar. It never rereads the path. The completed in-band bytes qualify
+as `provider_input` only after a subsequent actual vision response, with a
+conservative active-context inline-image bound at or below stock's 25 MiB
+omission trigger. A local compaction resets that context; an opaque provider
+checkpoint prevents new qualification until a later local reset. The retained
+artifact association is scoped to store/session/message/tool/content coordinate
+and survives source-byte disappearance; conflicting bytes cannot replace it.
+The viewed row and its future child reserve stable source orders. Reads with
+incomplete arguments or an extensionless path wait for a terminal result before
+choosing a normalized item kind. Plugins can replace `read` or alter final model
+context, and native history does not attest those producers or final media
+lineage. This qualification assumes the admitted stock runtime and trusted
+configuration, not arbitrary adversarial context hooks.
+
+The pinned upstream `Prompt.Base64` schema uses a nested repetition regular
+expression that exhausts V8's regexp stack on roughly 5 MiB encoded payloads.
+The adapter derives its validators from the official encoded schema AST and
+replaces only the identified Base64 predicate with an equivalent linear lexical
+validator. All other official shapes and constraints remain intact. This needs
+no native fork. An upstream stack-safe Base64 predicate would remove the local
+workaround; persisted final-request media lineage would strengthen capture
+provenance. The 32 MiB native response/SSE limit accommodates a 16 MiB decoded
+raster's base64 expansion. Total acquisition still charges repeated reads and
+projection against 96 MiB, so large or repeated native images can produce an
+explicit history-limit error rather than a truncated transcript.
+
+The acquisition increase from 64 to 96 MiB allows a maximal image as the head
+through head/page/anchor reads plus one same-size drained event, without adding
+deduplication to cumulative work accounting. Two maximal-image events in one
+undrained 32 MiB queue overflow and force resnapshot, even for the same image.
+Additional history and repeated live evidence can still reach the finite bound.
+The exact pinned Base64 refinement is checked during module loading; a changed
+or augmented identified check throws `opencode_base64_schema_changed` and
+prevents the server build from loading, rather than accepting a broader schema.
+
+Manual compaction reserves an immutable exact native input ID before one POST.
+A staged revert or existing foreign compaction blocks dispatch; a coalesced
+foreign acknowledgment remains unknown. Exact typed inbox/history readback
+proves admission after a lost reply, including when the native compaction later
+fails. The normalized native record carries the actual terminal outcome.
+Custom instructions are unsupported. Stop cancels only exact privately owned
+pending controls within its original deadline; cancellation HTTP 204 never
+changes admission into proof of withdrawal or successful compaction.
+
+
+## Recorded usage
+
+[`OpenCodeUsageAccounting`](../../../src/server/backends/opencode/opencode-usage-accounting.ts)
+uses the installation-owned `SEDES_EXPERIMENTAL_USAGE=1` gate. Disabled capture
+adds no native reads, subscriptions or normalization. Enabled capture reuses
+ordinary retained history and performs bounded serialized session-counter GETs,
+including on ephemeral native usage updates. Actor and read handles share one
+refcounted source per exact native client/binding, with one latest pending
+snapshot. Runtime generation, workspace and current application binding are
+checked again before publishing. Accounting failure does not fail projection,
+retry input, or block Stop.
+
+The checkpoint is the sole session contribution. It includes native title and
+compaction work, but excludes child sessions and lacks model/effort attribution
+and an exact usage timestamp. Surviving terminal assistant/compaction messages
+allocate only their proved busy-period turn; they never charge the session a
+second time. Missing metrics stay absent; native zeros remain SDK-normalized.
+Input is uncached input plus cache read/write; output is visible plus reasoning.
+Safe-integer validation applies before normalization and to derived sums. Native
+costs use the catalog's USD estimate; request cardinality remains unknown.
+
+The stable accounting epoch survives reconnect and runtime restart. An accepted
+private create receipt plus the exact current binding proves a Sedes-created
+root's zero baseline. Other imports use their first observed lifetime counter
+as an unknown baseline, charging only later increments. Copied child/fork
+transcripts are withheld from turn allocation. Revert does not reduce native
+lifetime totals or already captured work. Exact replay is deduplicated; a genuine
+counter regression remains an accounting gap. Coverage is intentionally partial,
+including explicit child/model and retained-history limits.

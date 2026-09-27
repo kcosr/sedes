@@ -25,6 +25,7 @@ export async function createOpenCodeConversation(context: OpenCodeDriverContext,
   let receipt: Readonly<OpenCodeOperationReceipt> | undefined;
   try {
     assertOpenCodeWorkspace(context, input);
+    context.executionEnvironment.assertDefinitionSupport(input.scope, input.applicationThreadId);
     if (input.creationCorrelation !== undefined) throw rejected();
     const request = requestSchema.parse({ applicationThreadId: input.applicationThreadId, applicationOperationId: input.applicationOperationId,
       requestedBackendConversationId: input.requestedBackendConversationId, source: input.source, ...(input.title !== undefined ? { title: input.title } : {}) });

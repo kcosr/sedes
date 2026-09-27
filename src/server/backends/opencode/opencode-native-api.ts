@@ -1,6 +1,7 @@
 import type { FormInfo, OpenCodeEvent, PermissionRequest, SessionInfo, SessionInboxInfo, SessionMessageInfo, SessionMessagesResponse, SessionsResponse, ShellInfo1 } from "@opencode/client";
 import { OpenCodeEvent as EventSchema } from "@opencode/protocol/groups/event";
 import { PublicSessionMessage } from "@opencode/protocol/groups/message";
+import { openCodeStackSafeEncodedSchema } from "./opencode-native-base64.js";
 import { Form } from "@opencode/schema/form";
 import { Location } from "@opencode/schema/location";
 import { Permission } from "@opencode/schema/permission";
@@ -60,7 +61,7 @@ export class OpenCodeNativeProtocolError extends OpenCodeRuntimeError {
   constructor() { super("opencode_native_protocol_invalid"); }
 }
 export const OPENCODE_NATIVE_EVENT_BUFFER_RECORDS = 4_096;
-export const OPENCODE_NATIVE_EVENT_BUFFER_BYTES = 16 * 1_024 * 1_024;
+export const OPENCODE_NATIVE_EVENT_BUFFER_BYTES = 32 * 1_024 * 1_024;
 const MAX_INVENTORY_RECORDS = 10_000;
 const NativeSession = Schema.Struct({ ...Session.Info.fields, location: Location.PublicRef });
 const NativeInboxMove = Schema.Struct({ ...SessionInbox.Move.fields,
@@ -76,10 +77,10 @@ const Interrupt = Schema.Struct({ interrupted: Schema.Boolean });
 export function openCodeNativeParser<T>(schema: Schema.Constraint, json = true): (value: unknown) => T {
   // Native HTTP endpoints use Effect's JSON codec, which emits null for some
   // optional values (notably page cursors). SSE directly JSON.stringifies events.
-  const decode = Schema.decodeUnknownSync(Schema.toEncoded(json ? Schema.toCodecJson(schema) : schema), { onExcessProperty: "error" });
+  const decode = Schema.decodeUnknownSync(openCodeStackSafeEncodedSchema(schema, json), { onExcessProperty: "error" });
   return value => {
     const limits = { maximumDepth: 64, maximumObjectProperties: 100_000, maximumArrayItems: 1_000_000,
-      maximumTotalNodes: 1_000_000, maximumStringBytes: 16 * 1_024 * 1_024, maximumEncodedBytes: 16 * 1_024 * 1_024 };
+      maximumTotalNodes: 1_000_000, maximumStringBytes: 32 * 1_024 * 1_024, maximumEncodedBytes: 32 * 1_024 * 1_024 };
     try { return snapshotBoundedJson(decode(snapshotBoundedJson(value, limits)), limits) as T; }
     catch { throw new OpenCodeNativeProtocolError(); }
   };

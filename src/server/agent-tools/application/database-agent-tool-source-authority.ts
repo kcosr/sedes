@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import type { BackendKind } from "../../backends/contracts.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
-import type { TrustedAgentToolSource } from "../adapters/backend-facade.js";
+import type { TrustedAgentToolSource, BackendAgentToolAccessDecisionAuthority } from "../adapters/backend-facade.js";
 import type {
   AgentToolEnvironmentAuthorityReader,
   EnvironmentAuthorityResourceFact,
@@ -28,6 +28,7 @@ export type AgentToolSourceCapabilityPresentation =
 export interface ResolvedAgentToolSourceCapability {
   readonly source: TrustedAgentToolSource;
   readonly presentation: AgentToolSourceCapabilityPresentation;
+  readonly accessDecisionAuthority?: BackendAgentToolAccessDecisionAuthority;
 }
 
 export interface EnvironmentScopedAgentToolSourceResolver {
@@ -70,6 +71,7 @@ export class DatabaseAgentToolSourceAuthority
   constructor(
     readonly database: Database.Database,
     installationKey: Uint8Array,
+    readonly accessDecisionAuthority?: (source: TrustedAgentToolSource) => BackendAgentToolAccessDecisionAuthority | undefined,
   ) {
     this.#references = new ThreadSourceReferenceCodec(installationKey);
   }
@@ -397,14 +399,18 @@ export class DatabaseAgentToolSourceAuthority
         "The agent-tool source capability is invalid or expired.",
       );
     }
-    return Object.freeze({
-      source: this.#resolve(
+    const source = this.#resolve(
         scope,
         reference.threadId,
         executionEnvironmentId,
         signal,
-      ),
+      );
+    const accessDecisionAuthority = this.accessDecisionAuthority?.(source);
+    this.#assertOpen(signal);
+    return Object.freeze({
+      source,
       presentation: reference.presentation,
+      ...(accessDecisionAuthority ? { accessDecisionAuthority } : {}),
     });
   }
 

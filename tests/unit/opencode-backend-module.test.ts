@@ -49,6 +49,7 @@ function nativeFactory() {
       health: vi.fn(async () => ({ available: state === "ready", checkedAt: new Date().toISOString() })),
       acquire: vi.fn((): never => { throw new Error("unexpected conversation acquisition in module fixture"); }),
       assertCurrent: vi.fn(async () => undefined),
+      installSessionEnvironment: vi.fn(async () => undefined),
       snapshot: () => ({ state, ownership: input.connection.ownership, references: 0, ...(state === "ready" ? { generation: "owner-generation" } : {}) }),
       stop: vi.fn(async () => {
         const nativeInterrupts = state === "stopped" ? "not_owned" as const : "incomplete" as const;

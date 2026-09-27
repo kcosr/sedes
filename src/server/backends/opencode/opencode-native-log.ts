@@ -75,8 +75,8 @@ export async function readOpenCodeNativeLog(client: OpenCodeHttpClient, input: O
   let decodedBytes = 0;
   let records = 0;
   try {
-    for await (const item of client.stream((sdk, budget) => sdk.session.log({ sessionID: input.sessionID,
-      ...(input.after === undefined ? {} : { after: input.after }), follow: false }, { signal: budget }), parseLog, signal)) {
+    for await (const item of client.stream({ kind: "log", sessionID: input.sessionID,
+      ...(input.after === undefined ? {} : { after: input.after }) }, parseLog, signal)) {
       check();
       decodedBytes += Buffer.byteLength(JSON.stringify(item));
       records++;

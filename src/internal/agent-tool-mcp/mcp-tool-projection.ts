@@ -191,8 +191,9 @@ const laneGuideline =
 export function sedesMcpGatewayTools(
   summaries: readonly AgentToolCatalogSummary[],
   version: SedesMcpProtocolVersion,
+  includeEmptyLanes = false,
 ): readonly SedesMcpTool[] {
-  if (summaries.length === 0) return Object.freeze([]);
+  if (summaries.length === 0 && !includeEmptyLanes) return Object.freeze([]);
   const reads = summaries.filter(({ effects }) => isSideEffectFreeRead(effects));
   const actions = summaries.filter(
     ({ effects }) => !isSideEffectFreeRead(effects),
@@ -206,7 +207,7 @@ export function sedesMcpGatewayTools(
       annotations: { readOnlyHint: true, openWorldHint: false },
     }),
   ];
-  if (reads.length > 0) {
+  if (reads.length > 0 || includeEmptyLanes) {
     tools.push(
       versionedTool(version, {
         name: SEDES_MCP_GATEWAY_NAMES.read,
@@ -217,7 +218,7 @@ export function sedesMcpGatewayTools(
       }),
     );
   }
-  if (actions.length > 0) {
+  if (actions.length > 0 || includeEmptyLanes) {
     tools.push(
       versionedTool(version, {
         name: SEDES_MCP_GATEWAY_NAMES.act,

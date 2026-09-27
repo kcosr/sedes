@@ -1,3 +1,5 @@
+import type { OpenCodeUsageAccounting } from "./opencode-usage-accounting.js";
+import type { OpenCodeAgentTools } from "./opencode-agent-tools.js";
 import { BackendError, type AgentBackendInstance, type AgentConnectionProfile, type AttachConversationInput, type DiscoverConversationsInput } from "../contracts.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
@@ -7,9 +9,12 @@ import type { OpenCodeThreadRepository } from "./opencode-thread-repository.js";
 import type { OpenCodeThreadSettingsRepository } from "./opencode-thread-settings-repository.js";
 import type { OpenCodeModelCatalog } from "./opencode-model-catalog.js";
 import type { CompiledBackendModelPolicy } from "../model-policy.js";
+import type { OpenCodeExecutionEnvironment } from "./opencode-execution-environment.js";
+import type { OpenCodeSkillCatalog } from "./opencode-skill-catalog.js";
+import type { OutputArtifactPublisher } from "../../output-artifacts/contracts.js";
 
 export type OpenCodeConversationRuntime = Pick<OpenCodeRuntime,
-  "nativeNamespaceKey" | "start" | "health" | "snapshot" | "acquire" | "assertCurrent">;
+  "nativeNamespaceKey" | "start" | "health" | "snapshot" | "acquire" | "assertCurrent" | "installSessionEnvironment">;
 
 export interface OpenCodeDriverContext {
   readonly scope: RequestScope;
@@ -20,6 +25,12 @@ export interface OpenCodeDriverContext {
   readonly settings: OpenCodeThreadSettingsRepository;
   readonly catalog: OpenCodeModelCatalog;
   readonly modelPolicy: CompiledBackendModelPolicy;
+  readonly usage: OpenCodeUsageAccounting;
+  readonly executionEnvironment: OpenCodeExecutionEnvironment;
+  readonly skills: OpenCodeSkillCatalog;
+  readonly tools: Pick<OpenCodeAgentTools, "admit" | "release" | "diagnostic" | "gatewayAction">;
+  readonly attachmentProvenanceKey: Uint8Array;
+  readonly outputArtifacts: OutputArtifactPublisher;
   readonly runtime: () => Promise<OpenCodeConversationRuntime>;
 }
 

@@ -2,8 +2,9 @@ import { ClientError, OpenCode, type OpenCodeClient, type ServerInfo, type OpenC
 import { isIP } from "node:net";
 import { z } from "zod";
 import { admitOpenCodeRelease, OpenCodeRuntimeError } from "./opencode-release.js";
+import { readOpenCodeSse } from "./opencode-sse.js";
 
-export const OPENCODE_MAXIMUM_RESPONSE_BYTES = 16 * 1_024 * 1_024;
+export const OPENCODE_MAXIMUM_RESPONSE_BYTES = 32 * 1_024 * 1_024;
 const infoSchema = z.object({
   version: z.string().max(64), pid: z.number().int().positive(),
   urls: z.array(z.string().max(2_048)).max(128), paths: z.object({ tmp: z.string().max(4_096) }).strict(),
@@ -92,16 +93,31 @@ export class OpenCodeHttpClient {
 
   /** No automatic reconnect or event replay claim. Consumers reacquire native truth after EOF. */
   events(validate: (value: unknown) => OpenCodeEvent, signal?: AbortSignal): AsyncIterable<OpenCodeEvent> {
-    return this.stream((client, lifetime) => client.event.subscribe({ signal: lifetime }), validate, signal);
+    return this.stream({ kind: "events" }, validate, signal);
   }
 
-  /** One authenticated stream. Consumers own finite-cut deadlines and continuity. */
-  async *stream<T>(operation: (client: OpenCodeClient, signal: AbortSignal) => AsyncIterable<unknown>,
+  /** Only the two pinned SSE routes bypass the SDK's hardcoded 16 MiB frame
+   * limit. Each observer owns its connection and finite-cut/lifetime budget. */
+  async *stream<T>(input: { readonly kind: "events" } | { readonly kind: "log"; readonly sessionID: string; readonly after?: number },
     validate: (value: unknown) => T, signal?: AbortSignal): AsyncIterable<T> {
     const lifetime = AbortSignal.any([this.#lifetime.signal, ...(signal ? [signal] : [])]);
     try {
       if (lifetime.aborted) return;
-      for await (const value of operation(this.#client, lifetime)) {
+      let route: string;
+      if (input.kind === "events") route = "/api/event";
+      else if (input.kind === "log" && /^ses_[^\x00-\x20/\\]{1,252}$/u.test(input.sessionID) &&
+          (input.after === undefined || Number.isSafeInteger(input.after) && input.after >= 0)) {
+        const query = new URLSearchParams({ follow: "false", ...(input.after === undefined ? {} : { after: String(input.after) }) });
+        route = `/api/experimental/session/${encodeURIComponent(input.sessionID)}/log?${query}`;
+      } else throw new OpenCodeRuntimeError("opencode_request_authority_mismatch");
+      const response = await this.#boundedFetch(`${this.endpoint}${route}`, {
+        method: "GET", headers: { accept: "text/event-stream" }, signal: lifetime,
+      });
+      if (response.status !== 200 || response.headers.get("content-type")?.split(";")[0]?.trim() !== "text/event-stream" || !response.body) {
+        await response.body?.cancel();
+        throw new OpenCodeRuntimeError("opencode_event_stream_failed");
+      }
+      for await (const value of readOpenCodeSse(response.body, lifetime, OPENCODE_MAXIMUM_RESPONSE_BYTES)) {
         if (lifetime.aborted) return;
         yield validate(value);
       }
@@ -109,8 +125,6 @@ export class OpenCodeHttpClient {
       if (!lifetime.aborted) {
         const bounded = boundedFailure(error);
         if (bounded) throw bounded;
-        if (error instanceof ClientError && error.reason === "MalformedResponse") throw new OpenCodeRuntimeError("opencode_event_malformed");
-        if (error instanceof ClientError && error.reason === "SseEventTooLarge") throw new OpenCodeRuntimeError("opencode_event_overflow");
         throw new OpenCodeRuntimeError("opencode_event_stream_failed");
       }
     }
@@ -138,8 +152,8 @@ export class OpenCodeHttpClient {
     const reader = response.body.getReader();
     let bytes = 0;
     let lineBytes = 0;
-    // The official parser bounds whole SSE frames; this additionally bounds an
-    // unterminated wire line by bytes rather than decoded UTF-16 characters.
+    // The SSE reader bounds complete frames; this additionally bounds an
+    // unterminated wire line before passing it to any response consumer.
     const body = new ReadableStream<Uint8Array>({
       async pull(controller) {
         try {
@@ -147,7 +161,7 @@ export class OpenCodeHttpClient {
           if (next.done) { controller.close(); reader.releaseLock(); return; }
           if (lifetime.aborted) throw new OpenCodeRuntimeError("opencode_request_aborted");
           if (eventStream) {
-            for (const value of next.value) { lineBytes = value === 10 ? 0 : lineBytes + 1; if (lineBytes > OPENCODE_MAXIMUM_RESPONSE_BYTES) throw new OpenCodeRuntimeError("opencode_response_too_large"); }
+            for (const value of next.value) { lineBytes = value === 10 || value === 13 ? 0 : lineBytes + 1; if (lineBytes > OPENCODE_MAXIMUM_RESPONSE_BYTES) throw new OpenCodeRuntimeError("opencode_response_too_large"); }
           } else {
             bytes += next.value.byteLength;
             if (bytes > OPENCODE_MAXIMUM_RESPONSE_BYTES) throw new OpenCodeRuntimeError("opencode_response_too_large");
@@ -155,10 +169,11 @@ export class OpenCodeHttpClient {
           controller.enqueue(next.value);
         } catch (error) {
           await reader.cancel().catch(() => undefined);
+          reader.releaseLock();
           controller.error(error instanceof OpenCodeRuntimeError ? error : new OpenCodeRuntimeError("opencode_response_read_failed"));
         }
       },
-      cancel: async () => { await reader.cancel().catch(() => undefined); },
+      cancel: async () => { await reader.cancel().catch(() => undefined); reader.releaseLock(); },
     });
     return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
   }

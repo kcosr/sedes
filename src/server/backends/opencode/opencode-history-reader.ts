@@ -4,7 +4,7 @@ import { OpenCodeNativeReadLimitError, OpenCodeNativeProtocolError, type OpenCod
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 
 export interface OpenCodeHistoryLimits { readonly decodedBytes: number; readonly records: number; readonly milliseconds: number; }
-export const OPENCODE_HISTORY_LIMITS: OpenCodeHistoryLimits = Object.freeze({ decodedBytes: 64 * 1024 * 1024, records: 100_000, milliseconds: 60_000 });
+export const OPENCODE_HISTORY_LIMITS: OpenCodeHistoryLimits = Object.freeze({ decodedBytes: 96 * 1024 * 1024, records: 100_000, milliseconds: 60_000 });
 export type OpenCodeHistoryFailure = "bytes" | "response_bytes" | "records" | "time" | "turn_bytes" | "turn_items" | "invalidated" | "invalid" | "cancelled" | "cursor";
 
 export class OpenCodeHistoryError extends BackendError {

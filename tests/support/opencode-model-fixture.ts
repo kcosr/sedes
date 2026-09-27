@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { createHash } from "node:crypto";
 import {
   createServer,
   type IncomingMessage,
@@ -7,7 +8,7 @@ import {
 import type { AddressInfo } from "node:net";
 
 /** Local deterministic inference only. This fixture never contacts a provider. */
-export async function startOpencodeModelFixture() {
+export async function startOpencodeModelFixture(options: { readonly vision?: boolean } = {}) {
   let requestCount = 0;
   let streamRequestCount = 0;
   const requests: Array<{
@@ -15,8 +16,11 @@ export async function startOpencodeModelFixture() {
     stream: boolean;
     lastRole?: string;
     lastText?: string;
+    toolNames: string[];
+    images: { mime: string; sha256: string }[];
   }> = [];
   let nextHold: StreamHold | undefined;
+  let nextTool: { promptMarker: string; name: string; arguments: Record<string, unknown>; started: () => void } | undefined;
   const holds = new Set<StreamHold>();
   const handlers = new Set<Promise<void>>();
   const server = createServer((request, response) => {
@@ -84,12 +88,25 @@ export async function startOpencodeModelFixture() {
       "content" in last &&
       typeof last.content === "string"
         ? last.content
-        : undefined;
+        : typeof last === "object" && last !== null && "content" in last && Array.isArray(last.content)
+          ? last.content.flatMap(part => typeof part === "object" && part !== null && part.type === "text" && typeof part.text === "string" ? [part.text] : []).join("\n") : undefined;
+    const toolNames = "tools" in input && Array.isArray(input.tools) ? input.tools.flatMap(tool =>
+      typeof tool === "object" && tool !== null && typeof tool.function?.name === "string" ? [tool.function.name] : []) : [];
+    const images: { mime: string; sha256: string }[] = [];
+    const scanImages = (value: unknown): void => {
+      if (typeof value === "string") {
+        const match = /^data:(image\/[a-z]+);base64,([A-Za-z0-9+/=]+)$/u.exec(value);
+        if (match) images.push({ mime: match[1]!, sha256: createHash("sha256").update(Buffer.from(match[2]!, "base64")).digest("hex") });
+      } else if (Array.isArray(value)) value.forEach(scanImages);
+      else if (value && typeof value === "object") Object.values(value).forEach(scanImages);
+    };
+    scanImages(messages);
     requests.push({
       model: input.model,
       stream: input.stream,
       lastRole,
       lastText: lastText?.slice(0, 1024),
+      toolNames, images,
     });
     const id = `chatcmpl-fixture-${requestCount}`;
     const usage = { prompt_tokens: 20, completion_tokens: 4, total_tokens: 24 };
@@ -114,6 +131,11 @@ export async function startOpencodeModelFixture() {
       return;
     }
     streamRequestCount += 1;
+    const tool = nextTool && toolNames.length > 0 && lastRole === "user" && lastText?.includes(nextTool.promptMarker) ? nextTool : undefined;
+    if (tool) {
+      if (!toolNames.includes(tool.name)) throw new Error(`Requested fixture tool is unavailable: ${tool.name}`);
+      nextTool = undefined;
+    }
     // Native title generation may use a streamed request too. Hold only the
     // explicitly selected user prompt, never whichever request happens first.
     const hold =
@@ -123,8 +145,8 @@ export async function startOpencodeModelFixture() {
     if (hold) nextHold = undefined;
     response.writeHead(200, { "content-type": "text/event-stream" });
     const send = (
-      delta: Record<string, string>,
-      finishReason: "stop" | null,
+      delta: Record<string, unknown>,
+      finishReason: "stop" | "tool_calls" | null,
     ) => {
       response.write(
         `data: ${JSON.stringify({
@@ -137,6 +159,11 @@ export async function startOpencodeModelFixture() {
         })}\n\n`,
       );
     };
+    if (tool) {
+      send({ role: "assistant", tool_calls: [{ index: 0, id: `call_fixture_${requestCount}`, type: "function",
+        function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] }, null);
+      send({}, "tool_calls"); response.end("data: [DONE]\n\n"); tool.started(); return;
+    }
     send(
       { role: "assistant", content: hold ? "PREFIX" : "Fixture response" },
       null,
@@ -155,7 +182,7 @@ export async function startOpencodeModelFixture() {
   }
 
   const model = {
-    capabilities: { tools: true, input: ["text"], output: ["text"] },
+    capabilities: { tools: true, input: options.vision ? ["text", "image"] : ["text"], output: ["text"] },
     limit: { context: 100_000, output: 10_000 },
     cost: { input: 0, output: 0 },
   };
@@ -183,6 +210,13 @@ export async function startOpencodeModelFixture() {
     },
     get requests() {
       return requests.slice();
+    },
+    callToolNextStream(promptMarker: string, name: string, args: Record<string, unknown>) {
+      if (nextTool || !promptMarker || !name) throw new Error("Invalid or overlapping fixture tool request");
+      let started!: () => void;
+      const called = new Promise<void>(resolve => { started = resolve; });
+      nextTool = { promptMarker, name, arguments: structuredClone(args), started };
+      return { called };
     },
     holdNextStream(promptMarker: string) {
       if (nextHold)

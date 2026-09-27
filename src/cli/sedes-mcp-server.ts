@@ -47,8 +47,16 @@ import {
 export type SedesMcpPresentationMode = "progressive" | "individual";
 
 export interface SedesMcpServerOptions {
-  readonly client: SedesToolClient;
+  /** Resolved once per call; never stored as mutable connection state. */
+  readonly resolveClient: (input: {
+    readonly metadata: Readonly<Record<string, unknown>> | undefined;
+    readonly requestId: JsonRpcId;
+    readonly signal: AbortSignal;
+  }) => SedesToolClient | Promise<SedesToolClient>;
+  /** Session-independent discovery may return a fixed conservative catalog. */
+  readonly listClient: SedesToolClient;
   readonly mode: SedesMcpPresentationMode;
+  readonly includeEmptyGatewayLanes?: boolean;
   readonly serverVersion: string;
   /** Writes one complete JSON-RPC message or batch; resolves once accepted. */
   readonly send: (message: unknown) => Promise<void>;
@@ -284,16 +292,17 @@ export class SedesMcpServer {
         "Invalid tools/list parameters.",
       );
     }
+    const client = this.#options.listClient;
     // A grant removed between list and describe fails the atomic describe;
     // one fresh listing settles that race.
     for (let attempt = 1; ; attempt += 1) {
       try {
         const { tools: summaries } =
-          await this.#options.client.listTools(signal);
+          await client.listTools(signal);
         if (this.#options.mode === "progressive") {
-          return { tools: sedesMcpGatewayTools(summaries, version) };
+          return { tools: sedesMcpGatewayTools(summaries, version, this.#options.includeEmptyGatewayLanes) };
         }
-        const descriptions = await this.#describeAll(summaries, signal);
+        const descriptions = await this.#describeAll(client, summaries, signal);
         return {
           tools: descriptions.map((description) =>
             projectSedesMcpTool(description, version),
@@ -311,6 +320,7 @@ export class SedesMcpServer {
   }
 
   async #describeAll(
+    client: SedesToolClient,
     summaries: readonly AgentToolCatalogSummary[],
     signal: AbortSignal,
   ): Promise<readonly AgentToolDescription[]> {
@@ -324,7 +334,7 @@ export class SedesMcpServer {
         .slice(offset, offset + AGENT_TOOL_MAXIMUM_DESCRIPTION_IDS)
         .map(({ id }) => id);
       descriptions.push(
-        ...(await this.#options.client.describeTools(ids, signal)).tools,
+        ...(await client.describeTools(ids, signal)).tools,
       );
     }
     return descriptions;
@@ -345,25 +355,28 @@ export class SedesMcpServer {
     const name = params.data.name;
     const input = params.data.arguments ?? {};
     try {
+      const client = await this.#options.resolveClient({ metadata: params.data._meta,
+        requestId: message.id, signal });
+      signal.throwIfAborted();
       if (this.#options.mode === "progressive") {
         switch (name) {
           case SEDES_MCP_GATEWAY_NAMES.catalog:
-            return await this.#catalogGateway(input, version, signal);
+            return await this.#catalogGateway(client, input, version, signal);
           case SEDES_MCP_GATEWAY_NAMES.read:
-            return await this.#laneGateway("read", input, version, signal);
+            return await this.#laneGateway(client, "read", input, version, signal);
           case SEDES_MCP_GATEWAY_NAMES.act:
-            return await this.#laneGateway("act", input, version, signal);
+            return await this.#laneGateway(client, "act", input, version, signal);
           default:
             throw unknownTool();
         }
       }
-      const { tools: summaries } = await this.#options.client.listTools(signal);
+      const { tools: summaries } = await client.listTools(signal);
       const summary = summaries.find(({ id }) => nativeAgentToolName(id) === name);
       if (!summary) throw unknownTool();
       const [description] = (
-        await this.#options.client.describeTools([summary.id], signal)
+        await client.describeTools([summary.id], signal)
       ).tools;
-      return await this.#invoke(description!, input, version, signal);
+      return await this.#invoke(client, description!, input, version, signal);
     } catch (error) {
       if (error instanceof SedesMcpProtocolError) throw error;
       if (error instanceof SedesToolApiError) {
@@ -379,13 +392,14 @@ export class SedesMcpServer {
   }
 
   async #catalogGateway(
+    client: SedesToolClient,
     input: Readonly<Record<string, unknown>>,
     version: SedesMcpProtocolVersion,
     signal: AbortSignal,
   ): Promise<SedesMcpCallToolResult> {
     const keys = Object.keys(input).sort().join(",");
     if (input.action === "list" && keys === "action") {
-      const { tools } = await this.#options.client.listTools(signal);
+      const { tools } = await client.listTools(signal);
       return sedesMcpJsonResult({ tools: sedesMcpCatalogSummaries(tools) }, version);
     }
     const toolIds = input.toolIds;
@@ -405,7 +419,7 @@ export class SedesMcpServer {
         "Use {\"action\":\"list\"} or {\"action\":\"describe\",\"toolIds\":[...]} with 1-16 unique IDs.",
       );
     }
-    const { tools } = await this.#options.client.describeTools(
+    const { tools } = await client.describeTools(
       toolIds as string[],
       signal,
     );
@@ -413,6 +427,7 @@ export class SedesMcpServer {
   }
 
   async #laneGateway(
+    client: SedesToolClient,
     lane: "read" | "act",
     input: Readonly<Record<string, unknown>>,
     version: SedesMcpProtocolVersion,
@@ -434,7 +449,7 @@ export class SedesMcpServer {
       );
     }
     const [description] = (
-      await this.#options.client.describeTools([toolId], signal)
+      await client.describeTools([toolId], signal)
     ).tools;
     if (!description || description.schemaVersion !== schemaVersion) {
       return sedesMcpToolError({
@@ -454,6 +469,7 @@ export class SedesMcpServer {
       });
     }
     return this.#invoke(
+      client,
       description,
       toolInput as Readonly<Record<string, unknown>>,
       version,
@@ -462,6 +478,7 @@ export class SedesMcpServer {
   }
 
   async #invoke(
+    client: SedesToolClient,
     description: AgentToolDescription,
     input: Readonly<Record<string, unknown>>,
     version: SedesMcpProtocolVersion,
@@ -481,7 +498,7 @@ export class SedesMcpServer {
         retryable: false,
       });
     }
-    const result = await this.#options.client.invoke(
+    const result = await client.invoke(
       {
         toolId: description.id,
         schemaVersion: description.schemaVersion,

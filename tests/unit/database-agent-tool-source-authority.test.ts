@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DatabaseAgentToolSourceAuthority } from "../../src/server/agent-tools/application/database-agent-tool-source-authority.js";
 
 const tenantId = "tenant-1";
@@ -100,6 +100,21 @@ describe("DatabaseAgentToolSourceAuthority", () => {
   });
 
   afterEach(() => database.close());
+
+  it("resolves current trusted approval provenance for an old restart-safe CLI reference on every call", () => {
+    const scope = { tenantId, principalId }, signal = new AbortController().signal;
+    const source = authority.resolveInScope(scope, threadId, signal);
+    const reference = authority.issue(source, "management_http", "cli");
+    const first = { acquire: vi.fn() }, replacement = { acquire: vi.fn() };
+    const resolver = vi.fn(() => first);
+    const restarted = new DatabaseAgentToolSourceAuthority(database, new Uint8Array(32).fill(7), resolver);
+    expect(restarted.resolveCapabilityInScope(scope, reference, signal).accessDecisionAuthority).toBe(first);
+    resolver.mockReturnValue(replacement);
+    expect(restarted.resolveCapabilityInScope(scope, reference, signal).accessDecisionAuthority).toBe(replacement);
+    expect(resolver).toHaveBeenCalledTimes(2); expect(resolver).toHaveBeenLastCalledWith(source);
+    expect(() => restarted.resolveCapabilityInScope({ ...scope, principalId: "foreign" }, reference, signal)).toThrow();
+    expect(resolver).toHaveBeenCalledTimes(2);
+  });
 
   it("revokes an issued source capability when its project is removed while keeping resource facts readable", () => {
     const scope = { tenantId, principalId };

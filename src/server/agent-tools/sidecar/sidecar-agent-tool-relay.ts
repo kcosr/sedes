@@ -49,6 +49,7 @@ export function registerSidecarAgentToolRelayOperations(
     return {
       source: caller.source,
       adapter: caller.presentation === "mcp" ? ("mcp" as const) : ("cli" as const),
+      ...(caller.accessDecisionAuthority ? { accessDecisionAuthority: caller.accessDecisionAuthority } : {}),
     };
   };
 
@@ -91,7 +92,7 @@ export function registerSidecarAgentToolRelayOperations(
       { signal },
     ) => {
       try {
-        const { source, adapter } = await resolve(sourceCapability, signal);
+        const { source, adapter, accessDecisionAuthority } = await resolve(sourceCapability, signal);
         assertOpen(signal);
         return {
           outcome: "ok" as const,
@@ -105,6 +106,7 @@ export function registerSidecarAgentToolRelayOperations(
               input: toolInput,
             },
             signal,
+            ...(accessDecisionAuthority ? { accessDecisionAuthority } : {}),
           }),
         };
       } catch (error) {

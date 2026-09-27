@@ -162,6 +162,17 @@ export class OpenCodeThreadRepository {
     return row ? this.requireOperation(scope, applicationThreadId, row.operationId, "interaction") : undefined;
   }
 
+  /** Resolve only an exact scoped action with a possible native effect. */
+  findDispatchedAction(scope: RequestScope, applicationThreadId: string, nativeSessionId: string, nativeInputId: string): Readonly<OpenCodeOperationReceipt> | undefined {
+    this.#assertScope(scope); this.#target(scope, applicationThreadId);
+    identifier.parse(nativeSessionId); identifier.parse(nativeInputId);
+    const row = this.database.prepare(`SELECT application_operation_id AS operationId FROM opencode_operation_receipts
+      WHERE tenant_id=? AND owner_principal_id=? AND application_thread_id=? AND native_namespace_key=? AND native_session_id=?
+      AND native_input_id=? AND operation_kind='action' AND disposition IN ('dispatched','unknown','accepted')`)
+      .get(scope.tenantId, scope.principalId, applicationThreadId, this.#nativeNamespaceKey, nativeSessionId, nativeInputId) as { operationId: string } | undefined;
+    return row ? this.requireOperation(scope, applicationThreadId, row.operationId, "action") : undefined;
+  }
+
   /** Returns true only to the caller that first reserves dispatch authority. */
   markDispatched(scope: RequestScope, applicationThreadId: string, applicationOperationId: string, operationKind: OpenCodeOperationKind, now: number): boolean {
     this.requireOperation(scope, applicationThreadId, applicationOperationId, operationKind);
@@ -230,6 +241,39 @@ export class OpenCodeThreadRepository {
       .get(scope.tenantId, scope.principalId, applicationThreadId, attempt.mutationId);
     if (!settings) throw mismatch();
     return { detail, applicationOperationId: attempt.mutationId, source };
+  }
+
+  /** Exact private root-creation provenance, shared by tools and zero-baseline usage. */
+  hasCreatedRoot(scope: RequestScope, applicationThreadId: string, sessionId: string): boolean {
+    this.#assertScope(scope);
+    const target = this.#target(scope, applicationThreadId);
+    let bound = this.getBinding(scope, applicationThreadId);
+    if (bound) {
+      if (parseOpenCodeBindingDetail(bound).sessionId !== sessionId) return false;
+    } else {
+      try { bound = serializeOpenCodeBindingDetail(this.requireProvisionalBinding(scope, applicationThreadId, sessionId).detail); }
+      catch { return false; }
+    }
+    const rows = this.database.prepare(`SELECT attempt.mutation_id AS mutationId, attempt.provisional_opaque_binding_detail AS detail, attempt.source_kind AS sourceKind,
+      attempt.source_automation_id AS automationId, attempt.source_automation_run_id AS automationRunId
+      FROM conversation_creation_attempts AS attempt JOIN opencode_operation_receipts AS receipt
+        ON receipt.tenant_id=attempt.tenant_id AND receipt.owner_principal_id=attempt.owner_principal_id
+        AND receipt.application_thread_id=attempt.application_thread_id AND receipt.application_operation_id=attempt.mutation_id
+      JOIN opencode_operation_settings_snapshots AS settings ON settings.tenant_id=receipt.tenant_id
+        AND settings.owner_principal_id=receipt.owner_principal_id AND settings.application_thread_id=receipt.application_thread_id
+        AND settings.application_operation_id=receipt.application_operation_id AND settings.operation_kind='create'
+      WHERE receipt.tenant_id=? AND receipt.owner_principal_id=? AND receipt.application_thread_id=?
+        AND receipt.backend_instance_id=? AND receipt.connection_profile_id=? AND receipt.execution_environment_id=?
+        AND receipt.native_namespace_key=? AND receipt.native_session_id=? AND receipt.operation_kind='create' AND receipt.disposition='accepted'
+        AND attempt.backend_instance_id=receipt.backend_instance_id AND attempt.connection_profile_id=receipt.connection_profile_id
+        AND attempt.execution_environment_id=receipt.execution_environment_id AND attempt.creation_kind='first_input'
+        AND attempt.backend_creation_correlation=receipt.native_session_id AND attempt.provisional_backend_conversation_id=receipt.native_session_id
+        AND attempt.force_reset_at IS NULL AND attempt.phase IN ('conversation_identified','first_submission_started','accepted_unpersisted','recovery_required','bound') LIMIT 2`)
+      .all(scope.tenantId, scope.principalId, applicationThreadId, this.#backendInstanceId, target.connectionProfileId,
+        target.executionEnvironmentId, this.#nativeNamespaceKey, sessionId) as Pick<ActiveAttempt, "mutationId" | "detail" | "sourceKind" | "automationId" | "automationRunId">[];
+    if (rows.length !== 1 || rows[0]!.detail !== bound) return false;
+    const receipt = this.readOperation(scope, applicationThreadId, rows[0]!.mutationId, "create");
+    return !!receipt && receipt.disposition === "accepted" && JSON.stringify(receipt.requestSource) === JSON.stringify(attemptSource(rows[0]!));
   }
 
   #activeAttempt(scope: RequestScope, applicationThreadId: string): ActiveAttempt {
@@ -301,7 +345,7 @@ function currentEvidence(receipt: OpenCodeOperationReceipt): OpenCodeOperationEv
 function mismatch(): DomainError {
   return new DomainError("conflict", "The OpenCode operation or native binding does not match its recorded authority.");
 }
-function attemptSource(attempt: ActiveAttempt): NonNullable<OpenCodeOperationEvidence["requestSource"]> {
+function attemptSource(attempt: Pick<ActiveAttempt, "sourceKind" | "automationId" | "automationRunId">): NonNullable<OpenCodeOperationEvidence["requestSource"]> {
   if (!["composer", "automation", "agent_control", "principal_client"].includes(attempt.sourceKind)) throw mismatch();
   return sourceSchema.parse(attempt.sourceKind === "automation"
     ? { kind: "automation", automationId: attempt.automationId, automationRunId: attempt.automationRunId }

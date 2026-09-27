@@ -73,9 +73,19 @@ describe("OpenCode v2 operator configuration", () => {
   it("rejects startup overrides for an external server and every remote environment", () => {
     const external = configuration(true);
     external.backends[0]!.environmentVariables = { execution: {}, startup: { TEST: { kind: "literal", value: "value" } } };
-    expect(() => validateConfigurationDocument(external)).toThrow(/Startup variables/u);
+    expect(() => validateConfigurationDocument(external)).toThrow(/cannot receive Sedes startup or execution variables/u);
     const remote = { ...configuration(), executionEnvironments: [{ id: environmentId, kind: "ssh", label: "Remote", hostAlias: "host", workspaceRoots: ["/workspace"], operations: { kind: "none" } }] };
     expect(() => validateConfigurationDocument(remote)).toThrow();
+  });
+
+  it.each(["backend", "environment"])("rejects execution overrides for an external server from %s defaults", source => {
+    const document = configuration(true);
+    const variables = { startup: {}, execution: { TEST: { kind: "literal" as const, value: "value" } } };
+    if (source === "backend") document.backends[0]!.environmentVariables = variables;
+    else document.executionEnvironments[0]!.environmentVariables = variables;
+    expect(() => validateConfigurationDocument(document)).toThrow(/cannot receive Sedes startup or execution variables/u);
+    expect(() => parseOpenCodeBackendConfiguration({ backend: { ...document.backends[0]!, protocolRelease: "2.0.18" },
+      connections: document.targets, executionEnvironments: document.executionEnvironments, environment: {} })).toThrow(/opencode_external_environment_unsupported/u);
   });
 
   it("reserves native store identity separately from mutable transport settings", () => {

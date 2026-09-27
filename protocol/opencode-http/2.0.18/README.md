@@ -15,6 +15,12 @@ message, pending-input, interaction, shell and active-session APIs. Mutations
 use session creation, prompt, interrupt, exact inbox cancellation, rename/model,
 permission and form APIs.
 
+The stock client hardcodes a 16 MiB SSE parsing buffer without an override.
+The adapter reads only the event and finite input-log SSE routes through its
+bounded 32 MiB framing reader, retaining official payload schemas and the same
+authenticated HTTP/cancellation boundary. This supports the base64 expansion
+of a 16 MiB image without modifying the SDK installation or native executable.
+
 The supplemental `/api/experimental/session/:sessionID/log` endpoint is used
 only for bounded read-only input recovery. It requires one final matching
 `log.synced` marker and EOF and records missing sequence intervals explicitly.

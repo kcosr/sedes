@@ -16,7 +16,7 @@ import type {
 } from "./contracts.js";
 import type { BackendDriverFactory } from "./registry.js";
 import type { RequestScope } from "../identity/identity-provider.js";
-import type { BackendAgentToolFacade } from "../agent-tools/adapters/backend-facade.js";
+import type { BackendAgentToolFacade, BackendAgentToolAccessDecisionAuthority, TrustedAgentToolSource } from "../agent-tools/adapters/backend-facade.js";
 import type { ExecutionEnvironmentChannelProvider } from "../execution/environment-channel.js";
 import type { ManagedTerminalResourceAuthority } from "../terminal/managed-terminal-carrier.js";
 import type { SavedAgentBackendAdapter } from "./saved-agent-adapter.js";
@@ -167,6 +167,8 @@ export interface BackendRuntimeRecoveryContext {
 }
 
 export interface BackendModuleRuntime {
+  /** Trusted per-input approval provenance for restart-safe CLI source references. */
+  agentToolAccessDecisionAuthority?(source: TrustedAgentToolSource): BackendAgentToolAccessDecisionAuthority;
   /** Read-only launch evidence; unknown never authorizes replacing a running owner. */
   startupEnvironmentState?(): Promise<"not_started" | "started" | "unknown">;
   readonly administration?: BackendRuntimeAdministration;

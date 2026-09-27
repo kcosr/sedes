@@ -144,7 +144,8 @@ describe("OpenCode driver through the shared conversation actor", () => {
     expect(recovered.timeline.orderedTurnIds).toEqual(initial.timeline.orderedTurnIds);
     expect(acquired.actor.projectionRecoveryRequired).toBe(false);
     expect(current.attached).toHaveBeenCalledOnce(); expect(current.runtime.snapshot()).toMatchObject({ generation: "native-generation", references: 1 });
-    expect(current.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(2);
+    // Both the input tracker and projection independently reconnect exactly once.
+    expect(current.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(4);
     expect(current.interrupts()).toHaveLength(0); acquired.release();
   });
 

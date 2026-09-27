@@ -212,7 +212,8 @@ export class OpenCodeInteractions {
   }
 
   #map(source: Source, request: PermissionRequest | FormInfo, openedAt: string): OpenCodeInteractionMapResult {
-    return source === "permission" ? mapOpenCodePermission({ request: request as PermissionRequest, authority: this.#authority, openedAt })
+    return source === "permission" ? mapOpenCodePermission({ request: request as PermissionRequest, authority: this.#authority, openedAt,
+      displayTitle: this.context.tools.gatewayAction(this.attach.binding.applicationThreadId, (request as PermissionRequest).action) })
       : mapOpenCodeForm({ request: request as FormInfo, authority: this.#authority, openedAt });
   }
   #parseResponse(input: unknown): InteractionResponseInput {

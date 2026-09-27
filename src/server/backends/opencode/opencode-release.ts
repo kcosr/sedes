@@ -61,8 +61,7 @@ export function openCodeOwnedEnvironment(input: {
   // Native provider authority belongs to this installation. Ambient Sedes
   // capabilities and other backend credentials do not belong to its tools.
   for (const name of Object.keys(environment)) {
-    if (name.startsWith("SEDES_AGENT_TOOL_") || /^SEDES_OPENCODE_.*PASSWORD.*$/u.test(name) ||
-        /^SEDES_CODEX_.*TOKEN.*$/u.test(name)) delete environment[name];
+    if (name.startsWith("SEDES_")) delete environment[name];
   }
   for (const name of ["OPENCODE_SIMULATE", ...incompatibleProfileInputs,
     "OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "OPENCODE_PTY_HANDOFF"]) delete environment[name];

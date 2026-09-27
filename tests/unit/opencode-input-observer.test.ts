@@ -337,3 +337,33 @@ describe("OpenCode independent private input observation", () => {
     expect(() => f.observer.correlations()).toThrow();
   });
 });
+
+describe("OpenCode current-input access decisions", () => {
+  it("requires consumption plus prepared private user provenance and loses the lease on foreign delivery", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    const authority = f.observer.accessDecisionAuthority(); const signal = new AbortController().signal;
+    await expect(authority.acquire(signal)).rejects.toMatchObject({ toolError: { code: "permission_denied", retryable: false } });
+    f.wire.send(enqueue(1)); f.wire.send(delivered(2)); await consumed(f);
+    const lease = await authority.acquire(signal);
+    expect(lease.isCurrent()).toBe(true);
+    f.wire.send(delivered(3, "msg_foreign"));
+    await vi.waitFor(() => expect(lease.signal.aborted).toBe(true));
+    expect(lease.isCurrent()).toBe(false);
+    await expect(authority.acquire(signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+    lease.release();
+  });
+  it("does not grant a cold observer current-input authority from an older consumed receipt", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    f.wire.send(enqueue(1)); f.wire.send(delivered(2)); await consumed(f);
+    f.wire.messages.push(user()); f.observer.close();
+    const cold = f.createObserver(); await cold.start(); cold.observeHistory(f.wire.messages);
+    await expect(cold.accessDecisionAuthority().acquire(new AbortController().signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+  });
+  it("invalidates pending access decisions on an observation gap", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    f.wire.send(enqueue(1)); f.wire.send(delivered(2)); await consumed(f);
+    const lease = await f.observer.accessDecisionAuthority().acquire(new AbortController().signal);
+    f.wire.send(renamed(4));
+    await vi.waitFor(() => expect(lease.signal.aborted).toBe(true)); expect(lease.isCurrent()).toBe(false);
+  });
+});

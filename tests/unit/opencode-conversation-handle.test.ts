@@ -155,8 +155,46 @@ describe("OpenCode SSE and native history composition", () => {
     // path runs before checking that no native history request escaped.
     await new Promise<void>(resolve => setImmediate(resolve));
     expect(current.wire.requests.some(request => request.pathname.endsWith("/message"))).toBe(false);
-    held.release(); await second;
     expect(current.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
+    held.release(); await second;
+    // One reused input tracker plus the independently owned projection stream.
+    expect(current.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(2);
+  });
+  it("reports maximal-image event overflow while hydration is blocked and recovers authoritative history", async () => {
+    const current = await attached([user(), { ...assistant([{ type: "text", text: "Before overflow" }]),
+      time: { created: 2, completed: 3 } }, idle()]);
+    const initial = await current.handle.establishProjection({ signal: signal() });
+    const raw: BackendConversationEvent[] = []; current.handle.subscribe(value => raw.push(value));
+    const gate = current.wire.hold(`/api/session/${current.wire.sessionID}/message`);
+    const hydration = current.handle.establishProjection({ signal: signal() });
+    const rejected = expect(hydration).rejects.toMatchObject({ backendCode: "opencode_history_invalidated" });
+    await gate.entered;
+    try {
+      const data = Buffer.alloc(16 * 1024 * 1024).toString("base64");
+      // Each valid native admission fits the 32 MiB frame bound; together they
+      // exceed the projection observer's queued-byte limit while its reader waits.
+      for (const inboxID of ["msg_native_image_one", "msg_native_image_two"]) {
+        current.wire.send(event("session.inbox.enqueued", { inboxID, item: { type: "user", delivery: "queue",
+          payload: { text: "Native image input", files: [{ data, mime: "image/png", source: { type: "inline" } }] } } }, true));
+      }
+      await vi.waitFor(() => expect(raw.filter(value => value.type === "resnapshot_required"))
+        .toEqual([{ type: "resnapshot_required", reason: "buffer_overflow" }]), { timeout: 10_000 });
+      // Admission events are not transcript proof. The native inbox is now
+      // empty; the fresh authoritative transcript determines what is rendered.
+      current.wire.messages[1] = { ...assistant([{ type: "text", text: "Recovered native result" }]),
+        time: { created: 2, completed: 4 } };
+    } finally { gate.release(); }
+    await rejected;
+    const recovered = await current.handle.establishProjection({ signal: signal() });
+    expect(recovered.handleSequence).toBeGreaterThan(initial.handleSequence);
+    const stale: SequencedBackendEvent[] = []; initial.subscribeFromNext(value => stale.push(value));
+    expect(stale).toMatchObject([{ event: { type: "resnapshot_required", reason: "buffer_overflow" } }]);
+    expect(recovered.snapshot.itemsById[openCodeHistoryItemId("msg_assistant", 0)])
+      .toMatchObject({ status: "completed", markdown: { text: "Recovered native result" } });
+    expect(recovered.snapshot.orderedBackendTurnIds).toEqual(initial.snapshot.orderedBackendTurnIds);
+    expect(recovered.snapshot.runState).toBe("idle");
+    expect(current.wire.requests.every(request => request.method === "GET")).toBe(true);
+    expect(current.runtime.snapshot()).toMatchObject({ state: "ready", generation: "native-generation", references: 1 });
   });
   it("ignores child token fragments and main compaction fragments while refreshing child activity without history reads", async () => {
     const current = await attached([user(), assistant()]);

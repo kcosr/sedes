@@ -12,13 +12,13 @@ thread state does not support it.
 | Mid-turn Steer | Yes, aimed at the current turn | Yes, aimed at the current turn | Yes, delivered to the conversation | No; Queue instead | Yes, delivered to the conversation |
 | Stop | Yes | Yes | Yes | Yes | Yes; pending native inputs may remain unconfirmed |
 | Background work indicator above composer | No | No | Subagents and commands | No | Child sessions and attributed shells |
-| Manual compact | Yes | Yes | No | No | No |
+| Manual compact | Yes | Yes | No | No | Yes; exact native outcome |
 | Exact completed-turn fork | Yes | Yes | Yes, idle source | No | No |
 | Latest provider snapshot fork | No | Yes | No | No | No |
-| Skills | Yes | Yes | Yes, eligible skills | Not currently | Not currently |
+| Skills | Yes | Yes | Yes, eligible skills | Not currently | Explicit native skill selection |
 | Structured questions | No | Questionnaires and MCP forms | Multiple-choice questions | Not exposed | Supported forms and questionnaires |
 | Provider permission interaction | Primitive prompts | Approvals | Permission prompts | Not exposed | Allow once or Deny and stop |
-| Native image input | Model dependent | Model dependent | PNG, JPEG, GIF, WebP | Model dependent | Not currently |
+| Native image input | Model dependent | Model dependent | PNG, JPEG, GIF, WebP | Model dependent | Model dependent |
 | Generated-image display | No native artifact | Completed in-band PNG | No native artifact | Completed local ImageGen/ImageEdit JPEG | No native artifact |
 | Remote (SSH or outbound) workspace | Managed workspace tools/context | Persistent runtime; separately granted Files/CLI | Persistent runtime; separately granted Files/CLI | No | No |
 | Managed provider terminal | No | Eligible external connections | No | No | No |
@@ -131,7 +131,7 @@ Presentation has two controls:
 
 - **Surface** chooses Native tools or the generated CLI. This selector appears
   only when the target supports more than one surface: eligible local Pi, and
-  Codex and Claude threads.
+  Codex and Claude threads, plus qualified owned-local OpenCode roots.
 - **Mode** chooses Progressive discovery or Individual named tools/commands.
   Progressive keeps the initial surface compact and describes operations on
   demand. Individual presents each granted operation directly with typed
@@ -146,7 +146,10 @@ provider's own permission settings apply to them. New Codex and Claude threads
 start on Native tools with Individual mode; threads created before this change
 keep their CLI setting until you change it. Grok supports both modes on its
 single CLI surface,
-so its surface selector is hidden. OpenCode does not yet expose Sedes agent tools.
+so its surface selector is hidden. OpenCode supports Native Progressive through
+its bundled shared MCP bridge for Sedes-created local root threads, plus both
+CLI modes for qualified owned-local roots. Imported sessions and native
+children cannot use another thread's Sedes tools.
 An unavailable combination is omitted
 rather than silently replaced with another surface or mode.
 
@@ -457,9 +460,16 @@ Unconfirmed withdrawal stays visible and can leave an input pending in
 OpenCode. History recovery uses bounded native reads; a conversation beyond
 those limits reports unavailable history without hiding Stop.
 
-Attachments, Sedes agent tools, scoped execution variables, skills, manual
-compact, fork, recorded usage and managed terminals are not yet supported.
-Native image generation and remote execution are also unavailable.
+OpenCode also supports staged files, model-dependent image input, qualified
+viewed images, explicit skills, and manual compact. Sedes-created root threads
+can use Native Progressive tools through the bundled MCP bridge; owned roots
+can also use CLI tools. Owned threads support scoped shell environment
+variables, with limits on native child spawning because those variables are
+not inherited by children. Initial MCP discovery may lag the first prompt.
+
+Forks, native commands, managed terminals, native image generation, and remote
+execution are unavailable. See the operator guide for approval provenance,
+registration cleanup, and image proof limits.
 
 See the [OpenCode operator guide](../operator/backends/opencode.md).
 

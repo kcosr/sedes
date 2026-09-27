@@ -1221,7 +1221,7 @@ Recorded accounting is opt-in through the installation-owned
 `SEDES_EXPERIMENTAL_USAGE=1` main-server environment setting. A disabled
 `UsageSink.enabled` must prevent creation of usage normalizers, history scans,
 and usage-only runtime leases or subscriptions, not merely discard database
-writes. Pi, Codex, and Claude implement this gate; Grok and OpenCode remain
+writes. Pi, Codex, Claude, and OpenCode implement this gate; Grok remains
 explicitly unsupported. Provider delivery acknowledgements, normal conversation history,
 and live context occupancy must continue when accounting is off. Main-server
 recovery, report routes, and browser query subscriptions obey the same setting;
@@ -1236,8 +1236,9 @@ connection aliases. A reconnect is not a new accounting epoch. Retain metric
 presence, normalization version, model/provider dimensions, and coverage; absent
 values are not zero and native correlations do not prove request cardinality.
 
-Pi, Codex, and Claude implement durable capture through this boundary. Grok
-and OpenCode explicitly declare `usageAccounting: "unsupported"`. Live `UsageSnapshot` and
+Pi, Codex, Claude, and OpenCode implement durable capture through this boundary.
+OpenCode currently reports partial main-session coverage; child usage and request
+counts are unproved. Grok explicitly declares `usageAccounting: "unsupported"`. Live `UsageSnapshot` and
 `usage_changed` contain only context occupancy and transcript counters; token,
 cost, and request totals come solely from accounting reads. Query-wide cumulative
 facts cover lower-scope evidence rather than being added to it. Turn allocations
@@ -1268,6 +1269,7 @@ baseline and ignores one offered on reattachment. Audit per backend:
 | Pi | Not applicable: native entries are additive and keyed by entry. |
 | Codex | Not used: one counter series per thread across warm resume and reconnect; a fork child's counter stays non-contributing, with turn intervals charged. |
 | Claude | Each resumed, forked, or reattached query opens its series at its first result. The startup message's own zero-turn result is a proven start; any other first result is an unknown one. |
+| OpenCode v2 | One persisted lifetime counter per session across reconnects. Only an exact Sedes-created root has a proved zero baseline; imports begin at their first observed counter with unknown earlier coverage. |
 | Grok | Unsupported; no usage is captured. |
 
 Codex child capture uses native spawn ancestry under an admitted root binding,
@@ -1303,6 +1305,7 @@ Backends that cannot establish a value pass `null`. Audit per backend:
 | Pi | Thinking level from the latest `thinking_level_change` ancestor on the entry's native branch; model and provider stay fact-reported. |
 | Codex | The generation-fenced, provider-confirmed `#model` tuple. Attribution is withheld while a `turn/start` that changes the tuple awaits its receipt, and after one whose delivery outcome is unknown until a new confirmation. Subagent counters carry none. |
 | Claude | The effort applied and confirmed before the result arrives, for the confirmed model's `modelUsage` row only; helper and subagent models in the same delta keep none. |
+| OpenCode v2 | No inferred attribution on lifetime counters. Surviving assistant/compaction allocations use only the actual native message model; effort and unavailable model metadata remain unknown. |
 | Grok | Unsupported; no usage is captured. |
 
 Register visible normalized turn stubs with ordinary snapshot/page loading.
@@ -2890,6 +2893,18 @@ agent-control work uses the destination thread's own policy. Cancellation
 follows the exact invocation/turn/runtime signal; browser presence is not
 authority and must not be polled to infer cancellation.
 
+A backend whose daemon accepts inputs from other clients must additionally
+prove that the current consumed input came from an authenticated Sedes user
+request. Its server-owned access-decision authority is re-resolved for every
+CLI or MCP invocation, including restart-safe source references. Acquire and
+revalidate this authority only when an invocation needs interactive approval;
+otherwise authorized calls inside the configured boundary do not need a user
+turn. Combine its cancellation signal with the ordinary decision lease and
+invalidate it on input replacement, conflicting proof, stream gaps, disconnect,
+terminal events or runtime replacement. Historical receipts alone cannot
+establish a current user turn. OpenCode implements this additional authority;
+Pi, Codex, Claude and Grok retain their existing actor-owned turn authority.
+
 CLI presentation receives an opaque, unguessable, restart-safe thread source
 reference—not a caller-selected thread ID. Resolve it beneath server-derived
 tenant/principal authority and re-resolve the thread's current workspace,
@@ -2942,7 +2957,8 @@ surface or mode when admission fails.
 
 Each backend's Native surface has exactly one mechanism: Pi SDK tools in the
 Sedes process for Pi, the stdio `sedes mcp` server for Codex and Claude, and
-none for Grok. Admission maps the calling adapter against the thread's backend
+the shared stdio `sedes opencode-mcp` bridge for local OpenCode; Grok has none.
+Admission maps the calling adapter against the thread's backend
 kind, so one backend's mechanism can never satisfy another's Native
 presentation. A provider-launched MCP server receives its reference only
 through a channel proven to expose it no more widely than the CLI environment
@@ -2950,6 +2966,23 @@ does: Codex's per-thread server `env`, or Claude's query environment behind a
 placeholder in the argument-borne MCP config. Keep the provider's MCP permission
 controls in force, derive tool hints only from declared effects, and never
 write operator provider configuration.
+
+A provider that shares MCP clients across sessions must not receive a fixed
+thread reference in that shared client's environment. OpenCode uses a private
+runtime/location channel credential, a supervised lifetime stream, and native
+per-call session metadata. Resolve each call independently to one currently
+admitted Sedes-created root and derive its canonical source on the server;
+never mutate a connection-wide source from the last call. Imports, native
+children, unknown sessions and retired bindings fail closed. Expose only the
+fixed discovery/read/action gateway catalog until session-specific catalog
+isolation is proved. Credentials stay in the bridge child's environment and
+private headers; they do not enter native config files, browser contracts,
+ordinary thread credentials or logs. Both external-local and owned-local
+OpenCode support this Native/Progressive mechanism; remote OpenCode and Native/
+Individual remain unsupported. Runtime registration uses fresh absent names,
+does not overwrite or retire foreign entries, and revokes only its own bridge
+channel on shutdown. Failed native inventory rows may remain until daemon
+restart; application authorization never depends on their apparent readiness.
 
 For managed CLI presentation, inject `SEDES_AGENT_TOOL_CLI_MODE` only after
 stripping its ambient value. The variable is a presentation hint available to
@@ -2963,7 +2996,11 @@ of the master enable flag or selected IDs. For unchanged CLI surface/mode,
 allow revision-checked edits to enablement, exact IDs, and access boundary
 during active turns and queued input without retiring the runtime. This shared
 application-policy path applies to local Pi SDK, local/Sidecar SSH Codex and Claude,
-and local Grok; Pi remote/isolated CLI and Grok SSH remain unsupported.
+local Grok, and qualified Sedes-created owned-local OpenCode roots; Pi
+remote/isolated CLI, Grok SSH, external-local OpenCode CLI and remote OpenCode
+remain unsupported. OpenCode reconstructs an immutable per-root shell
+environment independently of its shared MCP channel and gates native child
+execution when that environment cannot be preserved.
 Removed authority blocks subsequent admission, not work already admitted.
 Revalidate pending environment decisions against the policy revision before
 execution. Native-tool policy changes remain idle-only.
@@ -3010,7 +3047,9 @@ normalized item lifecycle. Pi completes assistant messages on native
 terminalizes; Claude emits completion when a projection delta changes an item
 from streaming to terminal; and Grok projects every completed visible text
 block while retaining the last non-user block as streaming until later history
-or terminal evidence makes it final. None exposes provider-native deltas or
+or terminal evidence makes it final. OpenCode reconciles native text state with
+authoritative history and terminal evidence, retaining unfinished text as
+streaming until that evidence is available. None exposes provider-native deltas or
 identifiers through this contract.
 
 Managed terminals require both backend-native lifecycle support and explicit
@@ -3035,7 +3074,8 @@ approval. Automations and unavailable interaction bindings fail closed.
 
 Workpads are application-owned Markdown documents, revision history,
 attribution, and user drafts; providers receive only normalized canonical tools.
-Pi native/CLI, Codex and Claude CLI/Native MCP, and Grok CLI paths are
+Pi native/CLI, Codex and Claude CLI/Native MCP, Grok CLI, and the admitted
+OpenCode Native MCP/owned-local CLI paths are
 implemented through the shared source-scoped facade. Tool clients use the same canonical operations
 with their environment allowlists. Workpad history is authorized from current
 scope, not historical scope. Approval binds current resource identity/revision;

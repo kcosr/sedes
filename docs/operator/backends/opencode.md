@@ -49,7 +49,8 @@ supported selection before new work. Only reviewed reasoning-effort variants
 appear in Sedes; arbitrary native variants are not treated as effort settings.
 
 Send, conversation-scoped Steer, Sedes Queue, Stop, rename, model/effort changes,
-saved Agents, and expressible native permissions/forms are supported. Queue
+saved Agents, skills, manual compaction, and expressible native permissions/forms
+are supported. Queue
 stays in Sedes until the preceding work settles. Stop preserves that queue and
 attempts to withdraw each still-pending Sedes input from the native inbox.
 An input already consumed by OpenCode is not returned as unsent.
@@ -65,7 +66,7 @@ or cancelled by Sedes.
 OpenCode owns the transcript. Sedes reconstructs native history after a stream
 disconnect, including final full-text repairs for incomplete streaming deltas.
 Initial history acquisition can be expensive: it is bounded to 100,000 records,
-64 MiB of acquisition/projection data, and 60 seconds. Limits fail explicitly.
+96 MiB of acquisition/projection data, and 60 seconds. Limits fail explicitly.
 
 An HTTP prompt acknowledgment proves inbox admission, not consumption. Sedes
 tracks each submitted input independently. Lost replies never trigger a second
@@ -85,10 +86,95 @@ proved, Sedes blocks a second response, including reset cancellation. Inspect
 the native request before proceeding. Pending requests in known direct child
 sessions produce a notice and require a native client to answer them.
 
-Attachments, image input/viewing, generated-image artifacts, Sedes agent-tool
-MCP/CLI, per-thread execution environment injection, manual compaction, forks,
-and usage accounting are currently unavailable. Native configuration may still
-load operator-installed tools independently of Sedes.
+## Tools, skills, and execution variables
+
+**Native / Progressive** agent tools use the bundled `sedes opencode-mcp`
+helper. No separate bridge installation or permanent native configuration is
+required. Sedes admits a fresh private MCP registration for the exact native
+runtime and workspace, then reuses it across Sedes-created root threads there.
+OpenCode passes the native session ID on each call; Sedes maps it to the exact
+thread and applies that thread's current tool policy. Imported sessions and
+native children do not inherit another thread's Sedes tools.
+
+The bridge credential identifies this runtime/workspace channel, not one
+thread. It is passed only to the MCP child. The session ID routes an already
+authenticated call; it is not the credential. Native permission rules remain
+in force and may ask before a gateway call or deny it. Sedes access-boundary
+approvals are a separate check. Those approvals require a currently observed
+Sedes user input; a native-only or automated input cannot borrow an older
+user message's approval authority. Following a lost observation stream, send a
+new user message before requesting an operation requiring that approval.
+Operations already within the configured boundary remain available.
+
+The bridge exits when Sedes closes its authenticated lifetime channel or its
+heartbeat expires. It can survive ordinary idle conversation-handle eviction.
+Stock OpenCode has no conditional registration ownership check, so Sedes never
+deletes or overwrites an existing entry during cleanup. Failed entries can
+remain in the native MCP inventory until the native workspace/runtime restarts.
+Admissions and inventory are bounded; exceeding a limit makes Sedes tools
+unavailable with a notice, while conversation controls remain usable. Initial
+MCP discovery can race the first prompt; Sedes does not delay all messages to
+wait for native catalog readiness.
+
+**CLI** tools are available for owned, local Sedes-created root sessions.
+Thread environment definitions are supported only for owned runtimes. They
+replace the complete native session shell environment before explicit work,
+using the immutable owned launch baseline, the thread's frozen definitions,
+and generated Sedes CLI variables last. They do not reconfigure provider
+credentials, MCP children, VCS helpers, or arbitrary native/plugin processes.
+Definitions must not select native identity/configuration or override Sedes
+credentials. Native children do not inherit this session map; child spawning
+is denied when it would lose required execution variables or CLI authority.
+An external runtime rejects nonempty Sedes execution-variable definitions.
+Native environment maps are volatile and are reinstalled after an owned restart.
+Imported sessions with an empty Sedes definition preserve their native map.
+
+A selected skill is attached to an ordinary prompt and frozen in the native
+inbox with that exact input. This is an explicit manual selection, including
+skills marked against automatic invocation. Native commands remain unsupported
+because they can change the model or spawn work outside this submission path.
+
+## Images and compaction
+
+Composer files use authenticated Sedes staging. Models advertising vision can
+receive validated native image bytes. A completed native image read can show
+**Viewed image** with the actual retained bytes when subsequent provider work
+proves that image's inclusion. If context pruning, a checkpoint, missing bytes,
+or another proof gap prevents that conclusion, the child image is unavailable;
+Sedes does not reread a path and present a later file as the original input.
+Operator plugins can replace native tools, so this relies on the admitted
+stock runtime and trusted local configuration, rather than cryptographic tool
+producer attestation. Native generated-image artifacts are unavailable.
+Native reads and event frames are bounded to 32 MiB; complete history acquisition
+is bounded to 96 MiB including repeated reads. Large image histories can
+therefore return an explicit size-limit error. The adapter also avoids an
+upstream Base64-validation stack overflow for large images without requiring a
+patched OpenCode build.
+
+Manual compact uses one exact private native control ID. Its HTTP reply means
+admission; only its native terminal record proves completion or failure.
+Staged revert, foreign pending compaction, and custom compaction instructions
+are rejected. Stop attempts withdrawal of exact pending Sedes-owned controls
+and preserves the ordinary Sedes Queue.
+
+## Recorded usage
+
+With the main-server `SEDES_EXPERIMENTAL_USAGE=1` setting, OpenCode reports native
+main-session token totals and estimated USD cost, including native title and
+compaction work. It does not report a bill, request counts, or child-session
+usage. Turn detail comes from surviving native history and can be incomplete.
+Reconnect and repeated history reads do not charge work twice; revert does not
+subtract work already performed.
+
+Sedes-created roots have a proved zero baseline. Imported sessions count only
+increases after their first observed total and retain an unknown earlier-usage
+notice. Native fork/child transcript allocations are withheld because they can
+contain copied work. Model information comes from actual native message evidence,
+not the currently selected model. Disabling recorded usage leaves ordinary
+history and conversation controls available.
+
+Forks, native commands, managed TUI, and remote execution remain unavailable.
+Native configuration can load operator-installed tools independently of Sedes.
 
 For implementation evidence and authority boundaries, see
 [OpenCode internals](../../internals/backends/opencode.md). The isolated

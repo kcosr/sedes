@@ -6,6 +6,8 @@ import { boundedOpenCodeProcessFile, canonicalOpenCodeStore, readOpenCodeNativeI
 import { createOpenCodeNativeStoreLifecycle, openCodeNativeStoreNamespaceKey, type OpenCodeNativeStoreLease } from "./opencode-native-store.js";
 import { startOpenCodeOwnedProcess, type OpenCodeOwnedProcess } from "./opencode-owned-process.js";
 import { admitOpenCodeNativeProfile, OpenCodeRuntimeError } from "./opencode-release.js";
+import { mergeResolvedEnvironment, type ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
+import { OpenCodeNativeMutations } from "./opencode-native-mutations.js";
 
 export interface OpenCodeRuntimeAuthority {
   readonly tenantId: string;
@@ -84,6 +86,25 @@ export class OpenCodeRuntime {
   async health(): Promise<{ readonly available: boolean; readonly checkedAt: string }> {
     try { await this.assertCurrent(); return { available: true, checkedAt: new Date().toISOString() }; }
     catch { return { available: false, checkedAt: new Date().toISOString() }; }
+  }
+
+  /** Full-map replacement uses the immutable launched baseline, including descendant ownership. */
+  async installSessionEnvironment(input: { readonly expectedGeneration: string; readonly sessionID: string;
+    readonly overrides: ResolvedEnvironmentVariables; readonly generated: Readonly<Record<string, string>>;
+    readonly executableDirectory?: string;
+    readonly signal?: AbortSignal }): Promise<void> {
+    if (this.#input.connection.ownership !== "owned" || !this.#owned || !this.#client ||
+        this.#state !== "ready" || this.#generation !== input.expectedGeneration) throw new OpenCodeRuntimeError("opencode_environment_topology_unsupported");
+    const owner = this.#owned, client = this.#client;
+    await this.assertCurrent(input.signal);
+    if (owner !== this.#owned || client !== this.#client || this.#generation !== input.expectedGeneration) throw new OpenCodeRuntimeError("opencode_runtime_identity_changed");
+    const merged = mergeResolvedEnvironment(mergeResolvedEnvironment(owner.shellEnvironment, input.overrides), input.generated);
+    if (input.executableDirectory !== undefined && (!path.isAbsolute(input.executableDirectory) || input.executableDirectory.includes("\0"))) throw new OpenCodeRuntimeError("opencode_environment_topology_unsupported");
+    const variables = input.executableDirectory === undefined ? merged : { ...merged,
+      PATH: merged.PATH ? `${input.executableDirectory}${path.delimiter}${merged.PATH}` : input.executableDirectory };
+    await new OpenCodeNativeMutations(client).setEnvironment({ sessionID: input.sessionID, variables }, input.signal);
+    await this.assertCurrent(input.signal);
+    if (owner !== this.#owned || client !== this.#client || this.#generation !== input.expectedGeneration) throw new OpenCodeRuntimeError("opencode_runtime_identity_changed");
   }
 
   start(): Promise<void> {

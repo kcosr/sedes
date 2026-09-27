@@ -130,7 +130,8 @@ import { ComposerAttachmentRepository } from "./db/repositories/composer-attachm
 import { OutputImageArtifactRepository } from "./db/repositories/output-image-artifact-repository.js";
 import { SavedAgentRepository } from "./db/repositories/saved-agent-repository.js";
 import { ThreadTemplateRepository } from "./db/repositories/thread-template-repository.js";
-import { LateBoundBackendAgentToolFacade } from "./agent-tools/adapters/backend-facade.js";
+import { LateBoundBackendAgentToolFacade, BackendAgentToolRequestError, type BackendAgentToolAccessDecisionAuthority,
+  type TrustedAgentToolSource } from "./agent-tools/adapters/backend-facade.js";
 import { AgentManagementService } from "./agent-tools/application/agent-management-service.js";
 import { AgentThreadControlService } from "./agent-tools/application/agent-thread-control-service.js";
 import { AgentThreadInventoryControlService } from "./agent-tools/application/agent-thread-inventory-control-service.js";
@@ -505,9 +506,14 @@ export async function startProductionApplication(
     const registry = new AgentBackendRegistry();
     const agentTools = new LateBoundBackendAgentToolFacade();
     resources.defer("backend agent tools", () => agentTools.close());
+    const unavailableAccessDecisionAuthority: BackendAgentToolAccessDecisionAuthority = {
+      acquire: async () => { throw new BackendAgentToolRequestError({ code: "permission_denied", message: "Interactive approval is unavailable for this input and must not be retried.", retryable: false }); },
+    };
+    let resolveSourceAccessDecisionAuthority = (_source: TrustedAgentToolSource): BackendAgentToolAccessDecisionAuthority | undefined => unavailableAccessDecisionAuthority;
     const agentToolSources = new DatabaseAgentToolSourceAuthority(
       database,
       toolProvenanceKey,
+      source => resolveSourceAccessDecisionAuthority(source),
     );
     let webSearchConfiguration = backendConfigurationFile.webSearch;
     const webSearchProvider = new GrokCliWebSearchProvider({
@@ -819,6 +825,16 @@ export async function startProductionApplication(
       if (!preference || preference === "automatic") await applyBackendRuntime(configured.id);
     }
     const moduleRuntimes = runtimeModules.runtimes;
+    resolveSourceAccessDecisionAuthority = source => {
+      const target = agentToolSources.database.prepare(`SELECT backend_instance_id AS backendInstanceId FROM application_threads
+        WHERE tenant_id=? AND owner_principal_id=? AND id=? AND workspace_id=? AND environment_id=?`)
+        .get(source.scope.tenantId, source.scope.principalId, source.sourceThreadId, source.sourceWorkspaceId, source.sourceEnvironmentId) as
+          { backendInstanceId: string } | undefined;
+      const runtime = target ? moduleRuntimes.get(target.backendInstanceId) : undefined;
+      if (!runtime || runtime.scope.tenantId !== source.scope.tenantId || runtime.scope.principalId !== source.scope.principalId ||
+          runtime.instance.kind !== source.backendKind) return unavailableAccessDecisionAuthority;
+      return runtime.agentToolAccessDecisionAuthority?.(source);
+    };
     const bindingPersistence = runtimeModules.threadPersistence;
     const bindingDetails = runtimeModules.bindingDetails;
     const presentationProviders = runtimeModules.presentation;

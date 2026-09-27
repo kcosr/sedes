@@ -25,8 +25,8 @@ export function parseOpenCodeBackendConfiguration(input: BackendModuleConfigurat
     throw new Error("opencode_restrictive_model_policy_unsupported");
   }
   if (configuration.connection.ownership === "external" &&
-      Object.keys(input.backend.environmentVariables?.startup ?? {}).length > 0) {
-    throw new Error("opencode_external_startup_environment_unsupported");
+      (Object.keys(input.backend.environmentVariables?.startup ?? {}).length > 0 || Object.keys(input.backend.environmentVariables?.execution ?? {}).length > 0)) {
+    throw new Error("opencode_external_environment_unsupported");
   }
   const defaultsByConnectionId = new Map<string, OpenCodeConnectionDefaults>();
   for (const connection of input.connections) {
@@ -35,6 +35,8 @@ export function parseOpenCodeBackendConfiguration(input: BackendModuleConfigurat
         !environment || environment.kind !== "local" || defaultsByConnectionId.has(connection.id)) {
       throw new Error("opencode_connection_authority_invalid");
     }
+    if (configuration.connection.ownership === "external" && (Object.keys(environment.environmentVariables?.startup ?? {}).length ||
+        Object.keys(environment.environmentVariables?.execution ?? {}).length)) throw new Error("opencode_external_environment_unsupported");
     const parsed = z.strictObject({ defaults: opencodeConnectionDefaultsSchema }).parse(connection.moduleConfiguration);
     defaultsByConnectionId.set(connection.id, parsed.defaults);
   }

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionMessageInfo } from "@opencode/client";
-import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
-import { OpenCodeNativeApi, OpenCodeNativeReadLimitError, parseOpenCodeNativeMessage, type OpenCodeNativeObservation } from "../../src/server/backends/opencode/opencode-native-api.js";
+import { OpenCodeHttpClient, OPENCODE_MAXIMUM_RESPONSE_BYTES } from "../../src/server/backends/opencode/opencode-http-client.js";
+import { OpenCodeNativeApi, OpenCodeNativeReadLimitError, OPENCODE_NATIVE_EVENT_BUFFER_BYTES, parseOpenCodeNativeMessage, type OpenCodeNativeObservation } from "../../src/server/backends/opencode/opencode-native-api.js";
 import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 
 const clients: OpenCodeHttpClient[] = [];
@@ -122,7 +122,8 @@ describe("OpenCode validated native reads", () => {
   });
   it("bounds response overflow as a nonretryable read limit instead of transport failure", async () => {
     const { fixture, api } = setup();
-    fixture.setResponse(`/api/session/${fixture.sessionID}/message`, 200, { data: [{ ...message(1), text: "x".repeat(17 * 1024 * 1024) }], cursor: {} });
+    expect(OPENCODE_MAXIMUM_RESPONSE_BYTES).toBe(32 * 1024 * 1024);
+    fixture.setResponse(`/api/session/${fixture.sessionID}/message`, 200, { data: [{ ...message(1), text: "x".repeat(OPENCODE_MAXIMUM_RESPONSE_BYTES + 1) }], cursor: {} });
     await expect(api.getHistoryPage(fixture.sessionID)).rejects.toMatchObject({ code: "opencode_native_read_limit", limit: "response_bytes", retryable: false });
     expect(new OpenCodeNativeReadLimitError("response_bytes").message).not.toContain("x".repeat(64));
   });
@@ -182,11 +183,28 @@ describe("OpenCode SSE-first observation", () => {
   });
   it("bounds total decoded event bytes independently of the record count", async () => {
     const { fixture, api } = setup(); const observation = observe(api); await observation.ready;
+    expect(OPENCODE_NATIVE_EVENT_BUFFER_BYTES).toBe(32 * 1024 * 1024);
     const event = { id: "evt_large", type: "session.text.delta", created: 1,
-      data: { sessionID: fixture.sessionID, assistantMessageID: "msg_assistant", ordinal: 0, delta: "x".repeat(9 * 1024 * 1024) } };
-    fixture.send(event); fixture.send({ ...event, id: "evt_larger" });
+      data: { sessionID: fixture.sessionID, assistantMessageID: "msg_assistant", ordinal: 0, delta: "x".repeat(12 * 1024 * 1024) } };
+    fixture.send(event); await observation.wait(); // Each frame fits; three undrained frames exceed 32 MiB.
+    fixture.send({ ...event, id: "evt_larger" });
+    fixture.send({ ...event, id: "evt_overflow" });
     await expect(observation.ended).resolves.toMatchObject({ reason: "overflow" });
     expect(() => observation.drain()).toThrow("opencode_event_overflow");
+  });
+  it("invalidates for resnapshot when two supported maximum-image events exceed the queued-byte budget", async () => {
+    const { fixture, api } = setup(); const observation = observe(api); await observation.ready;
+    const event = { id: "evt_image", type: "session.inbox.enqueued", created: 1,
+      durable: { aggregateID: fixture.sessionID, seq: 0, version: 1 }, data: { sessionID: fixture.sessionID, inboxID: "msg_image",
+        item: { type: "user", delivery: "queue", payload: { text: "image", files: [{ data: Buffer.alloc(16 * 1_024 * 1_024).toString("base64"),
+          mime: "image/png", source: { type: "inline" } }] } } } };
+    fixture.send(event); await observation.wait(); // One ~22.4 MB image frame is supported.
+    fixture.send({ ...event, id: "evt_image_two", durable: { ...event.durable, seq: 1 } });
+    await expect(observation.ended).resolves.toMatchObject({ reason: "overflow" });
+    expect(() => observation.drain()).toThrow("opencode_event_overflow");
+    const replacement = observe(api); await replacement.ready;
+    await expect(api.getHistoryPage(fixture.sessionID)).resolves.toMatchObject({ data: [] });
+    expect(fixture.requests.filter(request => request.pathname === "/api/event")).toHaveLength(2);
   });
   it("bounds readiness even if response headers arrive but no connected frame follows", async () => {
     vi.useFakeTimers();

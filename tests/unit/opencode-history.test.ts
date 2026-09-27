@@ -107,6 +107,39 @@ describe("OpenCode complete retained native history acquisition", () => {
     expect(refreshed.retainedDecodedBytes).toBe(first.retainedDecodedBytes);
   });
 
+  it.each(["user", "running read", "completed read"])("acquires and refreshes a maximal image %s head with a same-size drained event", async kind => {
+    const data = Buffer.alloc(16 * 1024 * 1024).toString("base64");
+    const head = kind === "user"
+      ? parseOpenCodeNativeMessage({ id: "msg_image_head", type: "user", text: "Inspect", time: { created: 200 },
+        files: [{ mime: "image/png", data, name: "image.png", source: { type: "inline" } }] })
+      : assistant("msg_image_head", { content: [{ type: "tool", id: "tool_image", name: "read",
+        state: { status: "completed", input: { path: "/workspace/image.png" }, content: [
+          { type: "text", text: "Image read successfully" },
+          { type: "file", mime: "image/png", uri: `data:image/png;base64,${data}`, name: "/workspace/image.png" },
+        ] }, time: { created: 200, completed: 210 } }],
+        time: { created: 200, streamed: 205, ...(kind === "completed read" ? { completed: 220 } : {}) } });
+    const { api } = apiFixture([head]);
+    const eventBytes = Buffer.byteLength(JSON.stringify(head)) + 1024;
+    let drainedBytes = 0;
+    const original = api.getHistoryPage.getMockImplementation()!;
+    api.getHistoryPage.mockImplementation(async (...args) => {
+      const page = await original(...args);
+      drainedBytes = eventBytes;
+      return page;
+    });
+    const input = { sessionId, additionalUsage: () => ({ decodedBytes: drainedBytes, records: drainedBytes ? 1 : 0 }) };
+    expect(OPENCODE_HISTORY_LIMITS.decodedBytes).toBe(96 * 1024 * 1024);
+    const acquired = await readOpenCodeHistory(api, input);
+    expect(acquired.messages.map(message => message.id)).toEqual([head.id]);
+    expect(acquired.decodedBytes).toBeGreaterThan(64 * 1024 * 1024);
+    expect(acquired.decodedBytes).toBeLessThan(OPENCODE_HISTORY_LIMITS.decodedBytes);
+    drainedBytes = 0;
+    const refreshed = await refreshOpenCodeHistory(api, restartOpenCodeHistoryAcquisition(acquired), input);
+    expect(refreshed.messages.map(message => message.id)).toEqual([head.id]);
+    expect(refreshed.decodedBytes).toBeGreaterThan(64 * 1024 * 1024);
+    expect(refreshed.decodedBytes).toBeLessThan(OPENCODE_HISTORY_LIMITS.decodedBytes);
+  });
+
   it.each([50, 1_000])("refreshes only mutable records and the head in an open period with %i settled steps", async steps => {
     const shell = parseOpenCodeNativeMessage({ id: "msg_background", type: "shell", shellID: "sh_background", status: "running", command: "background", time: { created: 200 } });
     const compaction = parseOpenCodeNativeMessage({ id: "msg_compaction", type: "compaction", status: "running", reason: "manual", summary: "", recent: "", time: { created: 200 } });
@@ -346,7 +379,7 @@ describe("OpenCode normalized retained history", () => {
     parseOpenCodeNativeMessage({ id: "msg_agent", type: "agent-switched", agent: "review", time: { created: 208 } }), idle("msg_idle")];
     const result = projection(messages); const page = result.history({ limit: 10 });
     expect(Object.values(page.itemsById).map(item => item.semanticKind)).toEqual(["user_message", "reasoning", "tool", "tool", "assistant_message", "command", "compaction", "notice"]);
-    expect(Object.values(page.itemsById).map(item => item.sourceOrder)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(Object.values(page.itemsById).map(item => item.sourceOrder)).toEqual([0, 1, 2, 4, 5, 6, 7, 8]);
     expect(backendHistoryPageSchema.safeParse(page).success).toBe(true);
   });
 
@@ -476,7 +509,10 @@ describe("OpenCode normalized retained history", () => {
     expect(ended.snapshot()).toEqual(new OpenCodeHistoryProjection(retained(endedMessages), endedOptions).snapshot());
     expect(ended.turnsById[ended.orderedBackendTurnIds[0]!]!.status).toBe("interrupted");
     expect(ended.itemsById[openCodeHistoryItemId("msg_finished", 0)]!.status).toBe("completed");
-    for (const index of [0, 1]) expect(ended.itemsById[openCodeHistoryItemId("msg_live", index)]!.status).toBe("interrupted");
+    expect(ended.itemsById[openCodeHistoryItemId("msg_live", 0)]!.status).toBe("interrupted");
+    // An extensionless read lacks a terminal result needed to choose its stable
+    // ordinary-tool or viewed-image item kind. Its source slots stay reserved.
+    expect(ended.itemsById[openCodeHistoryItemId("msg_live", 1)]).toBeUndefined();
   });
 
   it("rejects an oversized overlay atomically and distinguishes invalid schema from byte overflow", () => {

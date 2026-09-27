@@ -191,7 +191,7 @@ describe("OpenCode desired settings authority", () => {
     actions.persistAccepted(scope, "thread", { mutationId: "op2", expectedThreadRevision: 0, settingsGuard: { kind: "proven_applied" }, operation: { ...operation, value: encodeOpenCodeModelSetting(connection.id, modelId) }, now: 3 });
     expect(settings.get(scope, "thread").desired).toEqual(selection);
     expect(() => actions.driverAction({ action: "rename", title: " " }, "rename")).toThrow();
-    expect(() => actions.driverAction({ action: "compact" }, "compact")).toThrow();
+    expect(actions.driverAction({ action: "compact" }, "compact")).toEqual({ action: "compact", applicationOperationId: "compact" });
   });
   it("presents desired and effective selections independently with stable desired revision", async () => {
     const { database, settings, persistence, presentation } = fixture(); const read = await catalog();

@@ -17,6 +17,7 @@ export class OpenCodeThreadActionPersistence implements ThreadActionPersistenceP
   async afterInterruptAccepted(): Promise<boolean> { return false; }
   driverAction(operation: Parameters<ThreadActionPersistenceProvider["driverAction"]>[0], applicationOperationId: string): RegisteredBackendActionInput {
     if (operation.action === "rename" && operation.title.trim()) return { ...operation, applicationOperationId };
+    if (operation.action === "compact") return { ...operation, applicationOperationId };
     if (operation.action !== "set_setting" || operation.value === null) throw unavailable();
     if (operation.settingId === "model") {
       const selection = decodeOpenCodeModelSetting(operation.value);
@@ -41,7 +42,7 @@ export class OpenCodeThreadActionPersistence implements ThreadActionPersistenceP
         } else throw unavailable();
         this.input.settings.updateDesired(scope, applicationThreadId, { desired, now: input.now,
           expectedRevision: input.settingsGuard.kind === "staged" ? input.settingsGuard.expectedRevision : current.revision });
-      } else if (operation.action !== "rename" || !operation.title.trim()) throw unavailable();
+      } else if (operation.action !== "compact" && (operation.action !== "rename" || !operation.title.trim())) throw unavailable();
       const changed = this.input.database.prepare(`UPDATE application_threads SET
         ${operation.action === "rename" ? "title=?," : ""} revision=revision+1, updated_at=max(updated_at,?)
         WHERE tenant_id=? AND owner_principal_id=? AND id=? AND backend_instance_id=? AND revision=?`)

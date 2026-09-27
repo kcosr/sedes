@@ -1,3 +1,4 @@
+import { BackendAgentToolRequestError, type BackendAgentToolAccessDecisionAuthority } from "../../agent-tools/adapters/backend-facade.js";
 import { randomUUID } from "node:crypto";
 import { SessionInbox } from "@opencode/schema/session-inbox";
 import type { AttachConversationInput, SubmissionReconciliation } from "../contracts.js";
@@ -52,6 +53,8 @@ export class OpenCodeInputObserver {
   readonly #events = new Map<number, EventProof>();
   readonly #boundaries = new Map<string, number>();
   readonly #waiters = new Set<() => void>();
+  #currentInput?: string;
+  #inputAuthority = new AbortController();
   #trackerId = randomUUID();
   #connected = false;
   #started = false;
@@ -77,6 +80,38 @@ export class OpenCodeInputObserver {
   }
 
   get trackerId(): string { return this.#trackerId; }
+
+  /** A prior user receipt is not authority for an unrelated current native turn. */
+  accessDecisionAuthority(): BackendAgentToolAccessDecisionAuthority {
+    return { acquire: async signal => {
+      signal.throwIfAborted();
+      await this.#assertCurrent(signal);
+      const input = this.#currentInput;
+      const epoch = this.#inputAuthority;
+      const current = () => {
+        try {
+          this.#assertAuthority();
+          if (!input || !this.#connected || epoch.signal.aborted || this.#currentInput !== input) return false;
+          const tracked = this.#byInput.get(input);
+          if (!tracked) return false;
+          const proof = this.#evidence(tracked);
+          return dispatched(proof) && proof.receipt.requestSource?.kind === "user" &&
+            !!proof.consumedFingerprint && !!proof.preparedPayloadFingerprint && !proof.payloadConflict;
+        } catch { return false; }
+      };
+      if (!current()) throw new BackendAgentToolRequestError({ code: "permission_denied", retryable: false,
+        message: "An access decision requires a current user input proved by Sedes. Send a new user message before requesting this operation." });
+      const controller = new AbortController();
+      return { signal: AbortSignal.any([signal, epoch.signal, this.#signal, controller.signal]),
+        isCurrent: current, release: () => controller.abort() };
+    } };
+  }
+
+  #changeInputAuthority(input?: string): void {
+    this.#inputAuthority.abort();
+    this.#inputAuthority = new AbortController();
+    this.#currentInput = input;
+  }
 
   async start(signal?: AbortSignal): Promise<void> {
     this.#assertAuthority(); signal?.throwIfAborted();
@@ -203,6 +238,7 @@ export class OpenCodeInputObserver {
 
   close(): void {
     if (this.#closed) return;
+    this.#changeInputAuthority();
     this.#closed = true; this.#connected = false; this.#controller.abort();
     clearTimeout(this.#refreshTimer); this.#observation?.close(); this.#wake();
     this.#events.clear(); this.#boundaries.clear();
@@ -241,6 +277,7 @@ export class OpenCodeInputObserver {
     safelyNotify(() => this.attach.onSubmissionObserved?.({ backendCorrelation: evidence.receipt.applicationOperationId }));
   }
   #proofChanged(evidence: OpenCodeInputEvidence): void {
+    if (evidence.payloadConflict && evidence.receipt.nativeInputId === this.#currentInput) this.#changeInputAuthority();
     this.#notify(evidence); this.#wake();
     safelyNotify(() => this.options.onProofChanged?.());
   }
@@ -263,6 +300,7 @@ export class OpenCodeInputObserver {
     if (!("durable" in event) || !event.durable || !("sessionID" in event.data) || event.data.sessionID !== this.#sessionID) return;
     if (event.durable.aggregateID !== this.#sessionID || !Number.isSafeInteger(event.durable.seq) || event.durable.seq < 0) throw new OpenCodeNativeProtocolError();
     const seq = event.durable.seq;
+    if (live && this.#liveFrontier >= 0 && seq !== this.#liveFrontier + 1) this.#changeInputAuthority();
     if (live) { if (seq <= this.#liveFrontier) throw new OpenCodeNativeProtocolError(); this.#liveFrontier = seq; }
     const fingerprint = openCodeOperationFingerprint(event);
     const prior = this.#events.get(seq);
@@ -288,6 +326,12 @@ export class OpenCodeInputObserver {
     else if (event.type === "session.step.started") this.#rememberBoundary(event.data.assistantMessageID, seq);
     else if (event.type === "session.revert.committed") this.#proveRevert(event.data.to, seq, fingerprint);
     else if (event.type === "session.deleted") { this.#boundaries.clear(); this.#events.clear(); }
+    if (live) {
+      if (event.type === "session.inbox.delivered") this.#changeInputAuthority(event.data.inboxID);
+      else if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed" ||
+          event.type === "session.execution.interrupted" || event.type === "session.revert.committed" ||
+          event.type === "session.revert.staged" || event.type === "session.deleted") this.#changeInputAuthority();
+    }
     // No native event is retained in the handle's history queue by this observer.
   }
   #rememberBoundary(id: string, seq: number): void {
@@ -332,6 +376,7 @@ export class OpenCodeInputObserver {
         this.#connected = true; this.#wake(); this.#scheduleRefresh(0);
         await observation.ended;
       } catch { /* This exact subscription is terminal. A new tracker may recover only positive proof. */ }
+      this.#changeInputAuthority();
       this.#connected = false; this.#reads.clear(); this.#wake(); this.#observation?.close();
       if (this.#signal.aborted) break;
       try { await delay(Math.min(1_000, 100 * attempt), this.#signal); } catch { break; }

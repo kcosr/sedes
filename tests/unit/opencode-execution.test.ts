@@ -51,11 +51,12 @@ function fixture(input: { desired?: OpenCodeSelection | null; native?: OpenCodeS
     }
     if (path === `/api/session/${wire.sessionID}/prompt` && method === "POST") {
       const text = state.preparedText ?? body.text;
+      const skills = body.skills?.map((skill: { id: string }) => ({ id: skill.id, name: "Manual skill", text: "private prepared skill source" }));
       const admitted: SessionInboxUser = { id: body.id, sessionID: wire.sessionID, type: "user",
-        payload: { text }, delivery: body.delivery, time: { created: 10 } };
+        payload: { text, ...(skills ? { skills } : {}) }, delivery: body.delivery, time: { created: 10 } };
       if (state.admission) state.pending.push(admitted);
       if (state.consume) { state.pending = state.pending.filter(item => item.id !== body.id);
-        wire.messages.push({ id: body.id, type: "user", text, time: { created: 10 } }); }
+        wire.messages.push({ id: body.id, type: "user", text, ...(skills ? { skills } : {}), time: { created: 10 } }); }
       if (state.postGate) await state.postGate;
       if (state.dropPromptAck) throw new Error("lost prompt acknowledgment");
       return json({ data: admitted });
@@ -388,6 +389,23 @@ describe("OpenCode settings observation fencing", () => {
 });
 
 describe("OpenCode exact input delivery", () => {
+  it("attaches a fresh manual skill to the ordinary exact input while preserving text and skips catalog on dispatched replay", async () => {
+    const f = fixture();
+    f.wire.setResponse("/api/skill", 200, { location: { directory: f.wire.directory }, data: [{ id: "manual", name: "Manual skill",
+      autoinvoke: false, path: "/private/skill/SKILL.md", content: "private prepared skill source" }] });
+    const selectedSkillId = (await f.context.skills.read({ connection: f.context.connection, workspace: f.attach.workspace })).skills[0]!.id;
+    const input = { ...f.submit("skill-input", "Ordinary authenticated text"), selectedSkillId };
+    await expect(f.delivery.submit(input)).resolves.toMatchObject({ accepted: true });
+    expect(f.posts("/prompt")).toHaveLength(1);
+    expect(f.posts("/prompt")[0]!.body).toMatchObject({ text: "Ordinary authenticated text", skills: [{ id: "manual" }] });
+    expect(f.posts("/prompt")[0]!.body).not.toHaveProperty("content");
+    f.wire.setResponse("/api/skill", 503, {});
+    await expect(f.delivery.submit(input)).resolves.toMatchObject({ accepted: true });
+    expect(f.posts("/prompt")).toHaveLength(1);
+    await expect(f.delivery.submit({ ...input, selectedSkillId: undefined })).rejects.toMatchObject({ category: "submission_unknown" });
+    expect(f.posts("/prompt")).toHaveLength(1);
+  });
+
   it("sends original wire text once but accepts exact native hook-prepared consumption", async () => {
     const f = fixture(); f.state.preparedText = "Prepared by native hook";
     await expect(f.delivery.submit(f.submit())).resolves.toMatchObject({ accepted: true, completionCorrelation: "submit-operation" });

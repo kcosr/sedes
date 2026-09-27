@@ -1,6 +1,9 @@
+import { OpenCodeUsageAccounting } from "./opencode-usage-accounting.js";
+import { OpenCodeAgentTools } from "./opencode-agent-tools.js";
+import type { TrustedAgentToolSource } from "../../agent-tools/adapters/backend-facade.js";
 import { randomUUID } from "node:crypto";
 import { configurationFingerprint } from "../../config/configuration-fingerprint.js";
-import { backendStartupEnvironmentVariables, mergeResolvedEnvironment, resolveEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
+import { backendStartupEnvironmentVariables, createThreadEnvironmentResolver, mergeResolvedEnvironment, resolveEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { ManagedTerminalCarrierError } from "../../terminal/managed-terminal-carrier.js";
 import type { AgentConnectionProfile } from "../contracts.js";
 import { NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES, type BackendModule, type BackendModuleConfigurationInput, type BackendModuleRuntime, type BackendModuleRuntimeContext, type BackendRuntimeAdministration, type BackendRuntimeInspection, type PreparedBackendModule } from "../module.js";
@@ -18,8 +21,11 @@ import { OpenCodeAutomationExecutionPolicy } from "./opencode-automation-executi
 import { OpenCodeThreadSettingsRepository } from "./opencode-thread-settings-repository.js";
 import { OpenCodeModelCatalog } from "./opencode-model-catalog.js";
 import { OpenCodeNativeMutations } from "./opencode-native-mutations.js";
+import { OpenCodeExecutionEnvironment } from "./opencode-execution-environment.js";
+import { OpenCodeSkillCatalog } from "./opencode-skill-catalog.js";
+import { OpenCodeCliEnvironment } from "./opencode-cli-environment.js";
 
-type NativeRuntime = Pick<OpenCodeRuntime, "nativeNamespaceKey" | "start" | "health" | "snapshot" | "stop" | "close" | "acquire" | "assertCurrent">;
+type NativeRuntime = Pick<OpenCodeRuntime, "nativeNamespaceKey" | "start" | "health" | "snapshot" | "stop" | "close" | "acquire" | "assertCurrent" | "installSessionEnvironment">;
 type NativeRuntimeFactory = (input: OpenCodeRuntimeInput) => NativeRuntime;
 const managedTerminals = Object.freeze({
   async authorizeAdmission(): Promise<never> { throw terminalUnavailable(); },
@@ -100,11 +106,22 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
   #lastShutdownIncomplete = false;
   #administrating = false;
   readonly #startup;
+  readonly #usage: OpenCodeUsageAccounting;
+  readonly #executionEnvironment: OpenCodeExecutionEnvironment;
+  readonly #tools: OpenCodeAgentTools;
 
   constructor(readonly context: BackendModuleRuntimeContext, readonly configuration: PreparedOpenCodeBackendConfiguration,
     readonly input: BackendModuleConfigurationInput, readonly namespace: string, readonly createNativeRuntime: NativeRuntimeFactory) {
     this.scope = context.scope; this.instance = context.instance;
+    this.#usage = new OpenCodeUsageAccounting(context.usage);
+    this.#tools = new OpenCodeAgentTools({ facade: context.agentTools, cli: context.agentToolCli });
     this.#startup = backendStartupEnvironmentVariables(input);
+    this.#executionEnvironment = new OpenCodeExecutionEnvironment({ scope: context.scope, ownership: configuration.connection.ownership,
+      readDefinitions: threadId => {
+        if (!context.executionEnvironmentVariables) throw new Error("opencode_environment_snapshot_unavailable");
+        return context.executionEnvironmentVariables(threadId);
+      }, resolve: createThreadEnvironmentResolver(context), cli: new OpenCodeCliEnvironment({ availability: context.agentToolCli,
+        sourceCapabilities: context.agentToolSourceCapabilities, tools: context.agentTools }) });
     const repository = new OpenCodeThreadRepository({ database: context.database, scope: context.scope,
       backendInstanceId: context.instance.id, nativeNamespaceKey: namespace });
     const settings = new OpenCodeThreadSettingsRepository({ database: context.database, scope: context.scope, backendInstanceId: context.instance.id });
@@ -132,6 +149,16 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
         return { models, ...(defaultModel ? { defaultModel } : {}) };
       } finally { lease.release(); }
     } });
+    const skills = new OpenCodeSkillCatalog({ scope: context.scope, backendInstanceId: context.instance.id, nativeNamespaceKey: namespace,
+      readNative: async (directory, signal) => {
+        const runtime = await this.#native(); await runtime.start(); this.#assertOpen(); signal?.throwIfAborted();
+        const lease = runtime.acquire();
+        try {
+          const result = await new OpenCodeNativeMutations(lease.client).listSkills(directory, signal);
+          await runtime.assertCurrent(signal); this.#assertOpen();
+          return result;
+        } finally { lease.release(); }
+      } });
     const connections = new Map(context.connections.map(connection => [connection.id, connection]));
     this.discovery = { nativeNamespaceKey: (connection: AgentConnectionProfile) => {
       const admitted = connections.get(connection.id);
@@ -143,7 +170,8 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
       return namespace;
     } };
     this.driverFactory = new OpenCodeBackendDriverFactory({ scope: context.scope, instance: context.instance, connections: context.connections,
-      nativeNamespaceKey: namespace, repository, settings, catalog, modelPolicy: configuration.modelPolicy,
+      nativeNamespaceKey: namespace, repository, settings, catalog, skills, tools: this.#tools, usage: this.#usage,
+      attachmentProvenanceKey: context.toolProvenanceKey, outputArtifacts: context.outputArtifacts, executionEnvironment: this.#executionEnvironment, modelPolicy: configuration.modelPolicy,
       runtime: async () => { const owner = await this.#native(); this.#assertOpen(); return owner; } });
     if (configuration.connection.ownership === "owned") {
       this.administration = {
@@ -155,6 +183,8 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     }
   }
 
+  agentToolAccessDecisionAuthority(source: TrustedAgentToolSource) { return this.#tools.accessDecisionAuthority(source); }
+
   async start(): Promise<void> { this.#assertOpen(); }
   async startupEnvironmentState(): Promise<"not_started" | "started" | "unknown"> {
     const state = this.#owner?.snapshot().state;
@@ -162,7 +192,10 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
   }
   close(): Promise<void> {
     this.#closed = true;
+    this.#executionEnvironment.close();
+    this.#usage.close();
     return this.#closePromise ??= (async () => {
+      await this.#tools.close();
       await this.#opening?.catch(() => undefined);
       await this.#owner?.close();
     })();

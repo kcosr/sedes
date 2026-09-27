@@ -82,7 +82,7 @@ function requestId(value: string, prefix: "per_" | "frm_"): void {
   }
 }
 
-export function mapOpenCodePermission(input: { readonly request: PermissionRequest; readonly authority: OpenCodeInteractionAuthority; readonly openedAt: string }): OpenCodeInteractionMapResult {
+export function mapOpenCodePermission(input: { readonly request: PermissionRequest; readonly authority: OpenCodeInteractionAuthority; readonly openedAt: string; readonly displayTitle?: string }): OpenCodeInteractionMapResult {
   const owner = authority(input.authority);
   let request: PermissionRequest;
   try { request = parsePermission(input.request); } catch { throw new OpenCodeInteractionMappingError("invalid_request"); }
@@ -90,7 +90,7 @@ export function mapOpenCodePermission(input: { readonly request: PermissionReque
   requestId(request.id, "per_");
   const requestFingerprint = fingerprint("permission", request);
   return mapped({ authority: owner, kind: "permission", request, requestFingerprint,
-    interaction: { ...base(owner, "permission", requestFingerprint, input.openedAt, `Permission: ${request.action}`), kind: "decision",
+    interaction: { ...base(owner, "permission", requestFingerprint, input.openedAt, `Permission: ${input.displayTitle ?? request.action}`), kind: "decision",
       message: boundText(`Allow once permits this requested action. Deny and stop interrupts the run and rejects every other pending permission in this session.\n\nAction: ${request.action}\nResources:\n${request.resources.join("\n")}${request.message ? `\n\n${request.message}` : ""}`),
       invocation: { arguments: boundValue({ action: request.action, resources: request.resources }) },
       actions: [{ backendActionId: "allow_once", label: boundDisplayText("Allow once"), role: "primary" },

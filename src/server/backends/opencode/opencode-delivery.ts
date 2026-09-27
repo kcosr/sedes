@@ -9,6 +9,8 @@ import type { OpenCodeInputObserver } from "./opencode-input-observer.js";
 import { OpenCodeNativeApi } from "./opencode-native-api.js";
 import { OpenCodeNativeMutations, OpenCodeNativeMutationInputError } from "./opencode-native-mutations.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
+import { openCodeAttachmentEvidence, prepareOpenCodeAttachments } from "./opencode-attachments.js";
+import { qualifiedOpenCodeModelId } from "./opencode-model-selection.js";
 
 /** One HTTP prompt per immutable operation. Admission alone is never Submit acceptance. */
 export class OpenCodeDelivery {
@@ -39,8 +41,9 @@ export class OpenCodeDelivery {
 
   async #send(input: SubmitTurnInput | SteerTurnInput, kind: OpenCodeInputKind): Promise<SubmissionReconciliation> {
     requireOpenCodeBinding(this.context, this.input);
+    this.context.executionEnvironment.assertDefinitionSupport(this.input.scope, this.input.binding.applicationThreadId);
     if (!input.applicationOperationId || input.applicationOperationId.length > 160 || !input.mutationId ||
-        input.reconciliationToken !== input.applicationOperationId || input.attachments.length || input.selectedSkillId) {
+        input.reconciliationToken !== input.applicationOperationId) {
       throw invalid("The OpenCode input or requested capability is unavailable.");
     }
     const excerpts = contextExcerptArraySchema.parse(input.contextExcerpts);
@@ -60,12 +63,21 @@ export class OpenCodeDelivery {
     if (!existing) snapshot = (await this.settings.prepare(operationId, kind)).snapshot;
     const requestFingerprint = openCodeOperationFingerprint({ kind, operationId, mutationId: input.mutationId,
       reconciliationToken: input.reconciliationToken, source, text, selection: snapshot!.selection,
+      attachments: openCodeAttachmentEvidence(input),
+      ...(input.selectedSkillId ? { selectedSkillId: input.selectedSkillId } : {}),
       ...(kind === "steer" && "target" in input ? { target: input.target } : {}) });
     if (existing && existing.requestFingerprint !== requestFingerprint) throw invalid("The OpenCode input differs from its original request.");
     if (existing && existing.disposition !== "prepared") {
       if (existing.disposition === "not_applied") throw invalid("The original OpenCode input was not dispatched.");
       return this.observer.reconcile(operationId, kind);
     }
+    const skill = input.selectedSkillId ? await this.context.skills.resolve({ connection: this.context.connection,
+      workspace: this.input.workspace, selectedSkillId: input.selectedSkillId, signal: this.settings.lifetime }) : undefined;
+    const attachmentCatalog = input.attachments.some(item => item.kind === "image") ? await this.context.catalog.read({
+      connection: this.context.connection, workspace: this.input.workspace, signal: this.settings.lifetime }) : undefined;
+    const prepared = await prepareOpenCodeAttachments(input, { key: this.context.attachmentProvenanceKey, operationId,
+      text, acceptsImages: attachmentCatalog?.modelsById.get(qualifiedOpenCodeModelId(snapshot!.selection))?.capabilities.input.includes("image") ?? false,
+      signal: this.settings.lifetime });
     await this.observer.start();
     const nativeInputId = `msg_${openCodeOperationFingerprint({ scope, namespace: this.context.nativeNamespaceKey,
       threadId: binding.applicationThreadId, sessionId: binding.backendConversationId, operationId, kind })}`;
@@ -92,6 +104,9 @@ export class OpenCodeDelivery {
     }
     // A prepared replay rechecks the latest desired/current selection before work.
     await this.settings.prepare(operationId, kind);
+    await this.context.tools.admit(this.context, this.input, this.settings.runtime, this.settings.lifetime);
+    await this.context.executionEnvironment.prepare({ context: this.context, input: this.input, runtime: this.settings.runtime,
+      operation: kind, signal: this.settings.lifetime });
     await this.settings.assertCurrent();
     await this.observer.start();
     this.observer.track(this.#evidence.begin(scope, binding.applicationThreadId, operationId, kind,
@@ -102,7 +117,7 @@ export class OpenCodeDelivery {
     }
     try {
       const admitted = await this.#native.prompt({ sessionID: binding.backendConversationId, id: nativeInputId,
-        text, delivery: kind === "submit" ? "queue" : "steer", resume: true }, this.settings.lifetime);
+        ...prepared, ...(skill ? { skills: [{ id: skill }] } : {}), delivery: kind === "submit" ? "queue" : "steer", resume: true }, this.settings.lifetime);
       await this.settings.assertCurrent();
       this.observer.recordAdmission(operationId, kind, admitted);
     } catch (error) {

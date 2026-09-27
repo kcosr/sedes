@@ -7,7 +7,7 @@ import type {
   SedesToolInvocationResult,
 } from "../contracts/agent-tool-contracts.js";
 import { CanonicalAgentToolRequestError } from "../invocation/canonical-inline-agent-tool-service.js";
-import { BackendAgentToolRequestError } from "../adapters/backend-facade.js";
+import { BackendAgentToolRequestError, type BackendAgentToolAccessDecisionAuthority } from "../adapters/backend-facade.js";
 import type { SourceScopedAgentToolService } from "../application/source-scoped-agent-tool-service.js";
 import type { CreateAgentToolInvocationRequest } from "./agent-tool-http-contracts.js";
 
@@ -26,6 +26,7 @@ export interface ResolvedAgentToolSourceContext {
 export interface ResolvedAgentToolSourceCapabilityContext {
   readonly source: ResolvedAgentToolSourceContext;
   readonly presentation: "cli" | "mcp";
+  readonly accessDecisionAuthority?: BackendAgentToolAccessDecisionAuthority;
 }
 
 /** Resolves only inside the server-derived request scope. */
@@ -83,6 +84,7 @@ export class PolicyCheckedAgentToolHttpService {
         adapter: caller.presentation === "mcp" ? "mcp" : "http",
         request,
         signal,
+        ...(caller.accessDecisionAuthority ? { accessDecisionAuthority: caller.accessDecisionAuthority } : {}),
       });
     } catch (error) {
       throw mapBackendError(error);

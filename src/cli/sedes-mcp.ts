@@ -7,7 +7,7 @@ import {
   SEDES_AGENT_TOOL_SOURCE_CAPABILITY_VARIABLE,
   normalizeSedesAgentToolEndpoint,
 } from "./sedes-agent-tool-endpoint.js";
-import { SedesMcpServer, type SedesMcpPresentationMode } from "./sedes-mcp-server.js";
+import { SedesMcpServer, type SedesMcpPresentationMode, type SedesMcpServerOptions } from "./sedes-mcp-server.js";
 import {
   SedesToolApiError,
   normalizeSedesAgentToolSourceCapability,
@@ -25,6 +25,7 @@ with SEDES_AGENT_TOOL_ENDPOINT and SEDES_AGENT_TOOL_SOURCE_CAPABILITY set.
 export interface SedesMcpOutput {
   write(chunk: string): boolean;
   once(event: "drain", listener: () => void): unknown;
+  off?(event: "drain", listener: () => void): unknown;
 }
 
 export interface SedesMcpDependencies {
@@ -73,9 +74,6 @@ export async function runSedesMcp(
     output.write(usage);
     return 0;
   }
-  let server: SedesMcpServer;
-  let writes = Promise.resolve();
-  let writeFailed = false;
   try {
     const mode = parseMode(arguments_);
     const environment = dependencies.environment ?? process.env;
@@ -101,26 +99,13 @@ export async function runSedesMcp(
         ? { transportRequestId: dependencies.transportRequestId }
         : {}),
     });
-    server = new SedesMcpServer({
-      client,
+    return await runSedesMcpStdio({
+      resolveClient: () => client,
+      listClient: client,
       mode,
       serverVersion: SEDES_VERSION,
       ...(dependencies.id ? { requestId: dependencies.id } : {}),
-      send: (message) => {
-        const line = `${JSON.stringify(message)}\n`;
-        writes = writes.then(async () => {
-          if (writeFailed) return;
-          try {
-            if (!output.write(line)) {
-              await new Promise<void>((resolve) => output.once("drain", resolve));
-            }
-          } catch {
-            writeFailed = true;
-          }
-        });
-        return writes;
-      },
-    });
+    }, dependencies);
   } catch (error) {
     if (error instanceof SedesMcpUsageError) {
       stderr.write(`${error.message}\n${usage}`);
@@ -134,15 +119,51 @@ export async function runSedesMcp(
     return 1;
   }
 
+}
+
+/** Shared framing/backpressure/cancellation for fixed-thread and per-call sources. */
+export async function runSedesMcpStdio(
+  options: Omit<SedesMcpServerOptions, "send">,
+  dependencies: SedesMcpDependencies = {},
+): Promise<number> {
+  const stderr = dependencies.stderr ?? process.stderr;
+  const output = dependencies.output ?? process.stdout;
+  let writes = Promise.resolve();
+  let writeFailed = false;
+  const server = new SedesMcpServer({ ...options,
+      send: (message) => {
+        const line = `${JSON.stringify(message)}\n`;
+        writes = writes.then(async () => {
+          if (writeFailed || dependencies.signal?.aborted) return;
+          try {
+            if (!output.write(line)) {
+              await new Promise<void>((resolve) => {
+                let settled = false;
+                const done = () => {
+                  if (settled) return; settled = true;
+                  output.off?.("drain", done); dependencies.signal?.removeEventListener("abort", done); resolve();
+                };
+                output.once("drain", done);
+                if (!settled) {
+                  if (dependencies.signal?.aborted) done();
+                  else dependencies.signal?.addEventListener("abort", done, { once: true });
+                }
+              });
+            }
+          } catch {
+            writeFailed = true;
+          }
+        });
+        return writes;
+      },
+    });
   const input = dependencies.input ?? process.stdin;
   const iterator = input[Symbol.asyncIterator]();
+  let onStop: (() => void) | undefined;
   const stopped = new Promise<IteratorResult<Uint8Array | string>>((resolve) => {
     if (dependencies.signal?.aborted) resolve({ done: true, value: undefined });
-    dependencies.signal?.addEventListener(
-      "abort",
-      () => resolve({ done: true, value: undefined }),
-      { once: true },
-    );
+    onStop = () => resolve({ done: true, value: undefined });
+    dependencies.signal?.addEventListener("abort", onStop, { once: true });
   });
   const decoder = new SedesMcpLineDecoder();
   let exitCode = 0;
@@ -164,7 +185,9 @@ export async function runSedesMcp(
   } finally {
     // A read may still be pending after a signal stop; releasing the input
     // must not wait for it.
+    if (onStop) dependencies.signal?.removeEventListener("abort", onStop);
     void iterator.return?.().catch(() => undefined);
+    if (!dependencies.input && dependencies.signal?.aborted) process.stdin.destroy();
     await server.close();
     await writes;
   }

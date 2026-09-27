@@ -1,3 +1,5 @@
+import { OpenCodeUsageAccounting } from "../../src/server/backends/opencode/opencode-usage-accounting.js";
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import Database from "better-sqlite3";
 import { vi } from "vitest";
 import type { SessionMessageInfo } from "@opencode/client";
@@ -9,6 +11,8 @@ import { serializeOpenCodeBindingDetail, type OpenCodeBindingDetail } from "../.
 import { OpenCodeThreadSettingsRepository } from "../../src/server/backends/opencode/opencode-thread-settings-repository.js";
 import { OpenCodeModelCatalog } from "../../src/server/backends/opencode/opencode-model-catalog.js";
 import { OpenCodeNativeMutations } from "../../src/server/backends/opencode/opencode-native-mutations.js";
+import { OpenCodeExecutionEnvironment } from "../../src/server/backends/opencode/opencode-execution-environment.js";
+import { OpenCodeSkillCatalog } from "../../src/server/backends/opencode/opencode-skill-catalog.js";
 import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
 import { openCodeExecutionSettingsMigration } from "../../src/server/db/migrations/123-opencode-execution-settings.js";
 import { openCodeRecoveryRetirementMigration } from "../../src/server/db/migrations/124-opencode-recovery-retirement.js";
@@ -81,6 +85,7 @@ export function createOpenCodeConversationFixture(input: {
     health: async () => ({ available: !client.lifetime.aborted, checkedAt: new Date().toISOString() }),
     snapshot: () => ({ state: client.lifetime.aborted ? "disconnected" : "ready", ownership: "owned", generation: "native-generation", references, identity }),
     assertCurrent: vi.fn(async signal => { signal?.throwIfAborted(); if (client.lifetime.aborted) throw new OpenCodeRuntimeError("opencode_runtime_identity_changed"); }),
+    installSessionEnvironment: vi.fn(async () => { throw new Error("unexpected scoped environment installation"); }),
     acquire: vi.fn(() => {
       if (client.lifetime.aborted) throw new OpenCodeRuntimeError("opencode_runtime_identity_changed");
       references++; let released = false;
@@ -95,7 +100,13 @@ export function createOpenCodeConversationFixture(input: {
     const defaultModel = await native.getDefaultModel(directory, signal);
     return { models, ...(defaultModel ? { defaultModel } : {}) };
   } });
-  const context = { scope, instance, connection, repository, settings, catalog, modelPolicy, nativeNamespaceKey: namespace, runtime: async () => runtime };
+  const executionEnvironment = new OpenCodeExecutionEnvironment({ scope, ownership: "owned", readDefinitions: () => ({}), resolve: async () => ({}) });
+  const skills = new OpenCodeSkillCatalog({ scope, backendInstanceId: backend, nativeNamespaceKey: namespace,
+    readNative: (directory, signal) => new OpenCodeNativeMutations(client).listSkills(directory, signal) });
+  const context = { scope, instance, connection, repository, settings, catalog, modelPolicy, executionEnvironment, skills, usage: new OpenCodeUsageAccounting(NO_USAGE_SINK),
+    attachmentProvenanceKey: Buffer.alloc(32, 7), outputArtifacts: { findImage: () => undefined,
+      publishImage: async (): Promise<import("../../src/server/output-artifacts/contracts.js").OutputImageArtifactDescriptor> => { throw new Error("unexpected image publication"); } },
+    tools: { admit: async () => {}, release: () => {}, diagnostic: () => undefined, gatewayAction: () => undefined }, nativeNamespaceKey: namespace, runtime: async () => runtime };
   const driver = new OpenCodeConversationBackendDriver(context);
   const attached = vi.spyOn(driver, "attach");
   const environmentRelease = vi.fn(async () => undefined);

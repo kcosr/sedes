@@ -1285,3 +1285,38 @@ it.each(["saved_agent", "task", "workpad"] as const)(
     expect(requestApplicationDecision).toHaveBeenCalledOnce();
   },
 );
+
+describe("provider current-input access decision authority", () => {
+  it.each(["current", "stale", "aborted"] as const)("checks the %s lease around interactive approval", async state => {
+    const controller = new AbortController(); let current = true;
+    const release = vi.fn();
+    const readThreadStatus = vi.fn(async () => ({ threadId: "thread-2", backend: "pi" as const, lifecycle: "active" as const, activity: "idle" as const }));
+    const requestApplicationDecision = vi.fn(async () => {
+      if (state === "stale") current = false;
+      if (state === "aborted") controller.abort();
+      return "allow" as const;
+    });
+    const gate = new SourceScopedAgentToolService(
+      new CanonicalInlineAgentToolService({ application: { readThreadStatus } }),
+      { get: () => ({ enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "cli", mode: "progressive" }, accessBoundary: "environment", revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
+      new AgentToolEnvironmentAuthorityResolver({ resolveEnvironment: () => undefined, resolveWorkspace: () => undefined,
+        resolveThread: (_scope, id) => ({ id, environmentId: "environment-2", label: "Other thread" }),
+        resolveThreadFamily: () => undefined, resolveSavedAgent: () => undefined, resolveWorkpad: () => undefined, resolveTask: () => undefined,
+        listEnvironments: () => [{ id: "environment-1", environmentId: "environment-1", label: "Local" }, { id: "environment-2", environmentId: "environment-2", label: "Other" }] }),
+      sourceRevalidator, approvalAuthority, { requestApplicationDecision });
+    const result = gate.invoke({ source, adapter: "cli", signal: new AbortController().signal,
+      request: { toolId: "thread.status", schemaVersion: 2, requestId: `current-${state}`, input: { threadId: "thread-2" } },
+      accessDecisionAuthority: { acquire: async () => ({ signal: controller.signal, isCurrent: () => current, release }) } });
+    if (state === "current") { await expect(result).resolves.toMatchObject({ state: "completed" }); expect(readThreadStatus).toHaveBeenCalledOnce(); }
+    else { await expect(result).rejects.toMatchObject({ toolError: { code: "cancelled" } }); expect(readThreadStatus).not.toHaveBeenCalled(); }
+    expect(requestApplicationDecision).toHaveBeenCalledOnce(); expect(release).toHaveBeenCalledOnce();
+  });
+  it("does not require user provenance for an operation already inside its boundary", async () => {
+    const gate = service({ surface: "cli", mode: "progressive" });
+    const acquire = vi.fn(async () => { throw new Error("must not acquire"); });
+    await expect(gate.invoke({ source, adapter: "cli", signal: new AbortController().signal,
+      request: { toolId: "agent.context", schemaVersion: 2, requestId: "inside-boundary", input: {} },
+      accessDecisionAuthority: { acquire } })).resolves.toMatchObject({ state: "completed" });
+    expect(acquire).not.toHaveBeenCalled();
+  });
+});

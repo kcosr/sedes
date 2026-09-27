@@ -466,10 +466,13 @@ creation shows provenance and lets you override, remove, or restore inherited
 values. Thread snapshots remain fixed, and forks inherit them. Ordinary
 terminals use environment-level tool defaults when launched.
 
-OpenCode currently stores these execution definitions but does not inject them
-into native session shells. Its supported environment boundary is owned-daemon
-startup only; see [OpenCode v2](backends/opencode.md). Do not rely on configured
-thread values for OpenCode work until scoped execution injection is available.
+OpenCode installs frozen thread execution definitions into owned local root
+session shells before explicit work, using the applied daemon startup baseline
+and generated CLI values last. It does not reconfigure provider credentials,
+MCP children or native helper processes. Native child spawning is denied when
+required thread variables or CLI authority would otherwise be lost. External
+servers reject nonempty Sedes execution definitions; an imported empty snapshot
+preserves the native map. See [OpenCode v2](backends/opencode.md).
 
 A value can be a literal, a reference to an execution-host environment variable,
 a reference to a protected execution-host file, or an explicit removal. Use

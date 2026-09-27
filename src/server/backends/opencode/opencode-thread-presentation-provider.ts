@@ -56,13 +56,17 @@ export class OpenCodeThreadPresentationProvider implements ThreadBackendPresenta
     ] };
     const effectiveModel = models.find(model => model.id === effectiveId);
     const revision = createHash("sha256").update(JSON.stringify({ backendRevision: input.backend.configurationRevision,
-      connectionRevision: input.connection.configurationRevision, settings, models, catalogKnown })).digest("hex");
+      connectionRevision: input.connection.configurationRevision, settings, models, skills: input.catalog?.skills ?? [], catalogKnown })).digest("hex");
     return { revision: `opencode_${revision}`, backend: { label: boundDisplayText(input.backend.label), brand: "opencode",
       ...(effectiveModel || desiredModel ? { modelLabel: boundDisplayText((effectiveModel ?? desiredModel)!.label) } : {}) },
       interactionMode: "interactive", settings: normalized, settingDescriptors, nextTurnSettingIds: [],
       automationAllowed: !!desiredModel && !!desiredEffort && efforts.includes(desiredEffort) &&
         (observed === null || observed.classification === "recognized"),
-      providerFeatureCapabilities: [], providerFeatureStates: [], composerCommands: [], skills: [] };
+      providerFeatureCapabilities: [], providerFeatureStates: [], composerCommands: [], skills: (input.catalog?.skills ?? []).map(skill => ({
+        id: skill.id, name: boundDisplayText(skill.name), reference: skill.reference,
+        ...(skill.displayName ? { displayName: boundDisplayText(skill.displayName) } : {}),
+        ...(skill.description ? { description: boundDisplayText(skill.description) } : {}),
+      })) };
   }
 }
 function modelIdentity(selection: OpenCodeSelection | null): string | null {

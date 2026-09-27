@@ -1,6 +1,6 @@
 import type { FormDetail, ModelInfo, ModelRef, PermissionGetInput, PermissionReplyInput, PermissionRequest,
   SessionCreateInput, SessionFormCancelInput, SessionFormGetInput, SessionFormReplyInput, SessionInboxCancelInput,
-  SessionInboxUser, SessionPromptInput, SessionSwitchModelInput } from "@opencode/client";
+  SessionInboxUser, SessionPromptInput, SessionSwitchModelInput, SessionCompactInput, SessionCompactOutput } from "@opencode/client";
 import { Form } from "@opencode/schema/form";
 import { Location } from "@opencode/schema/location";
 import { Model } from "@opencode/schema/model";
@@ -9,6 +9,7 @@ import { PromptInput } from "@opencode/schema/prompt-input";
 import { Session } from "@opencode/schema/session";
 import { SessionInbox } from "@opencode/schema/session-inbox";
 import { SessionMessage } from "@opencode/schema/session-message";
+import { Skill } from "@opencode/schema/skill";
 import { Schema } from "effect";
 import path from "node:path";
 import { snapshotBoundedJson } from "../../provider-protocol/json/bounded-json-snapshot.js";
@@ -19,12 +20,14 @@ import { OpenCodeRuntimeError } from "./opencode-release.js";
 export type OpenCodeNativeModel = ModelInfo;
 export type OpenCodeNativeModelRef = ModelRef;
 export type OpenCodeNativePromptAdmission = SessionInboxUser;
+export type OpenCodeNativeCompactInput = Pick<SessionCompactInput, "sessionID"> & { readonly id: string; readonly delivery: "steer" | "queue" };
 export type OpenCodeNativePermission = PermissionRequest;
 export type OpenCodeNativeFormDetail = FormDetail;
 export type OpenCodeNativeFormAnswer = SessionFormReplyInput["answer"];
+export type OpenCodeNativeSkill = Schema.Schema.Type<typeof Skill.Info>;
 export type OpenCodeNativeCreateInput = Pick<SessionCreateInput, "title" | "model" | "metadata" | "permissions"> &
   { readonly id: string; readonly location: { readonly directory: string } };
-export type OpenCodeNativePromptInput = Pick<SessionPromptInput, "sessionID" | "text" | "files" | "metadata"> &
+export type OpenCodeNativePromptInput = Pick<SessionPromptInput, "sessionID" | "text" | "files" | "metadata" | "skills"> &
   { readonly id: string; readonly delivery: "steer" | "queue"; readonly resume: boolean };
 export type OpenCodeNativePermissionReplyInput = Omit<PermissionReplyInput, "decision" | "message"> &
   { readonly decision: "once" | "reject" };
@@ -55,9 +58,12 @@ const parseCreateInput = requestParser<OpenCodeNativeCreateInput>(Schema.Struct(
   title: Schema.optional(Schema.String), model: Schema.optional(Model.Ref), location: Schema.Struct({ directory: Schema.String }),
   metadata: Schema.optional(Session.Metadata), permissions: Schema.optional(Permission.Ruleset) }));
 const parsePromptInput = requestParser<OpenCodeNativePromptInput>(Schema.Struct({ sessionID: Session.ID, id: SessionMessage.ID,
-  text: PromptInput.Prompt.fields.text, files: PromptInput.Prompt.fields.files,
+  text: PromptInput.Prompt.fields.text, files: PromptInput.Prompt.fields.files, skills: PromptInput.Prompt.fields.skills,
   metadata: SessionInbox.UserPayload.fields.metadata, delivery: SessionInbox.Delivery, resume: Schema.Boolean }));
 const parseInputRef = requestParser<SessionInboxCancelInput>(Schema.Struct({ sessionID: Session.ID, inboxID: SessionMessage.ID }));
+const parseCompactInput = requestParser<OpenCodeNativeCompactInput>(Schema.Struct({ sessionID: Session.ID,
+  id: SessionMessage.ID, delivery: SessionInbox.Delivery }));
+const parseCompaction = openCodeNativeParser<SessionCompactOutput>(SessionInbox.Compaction);
 const parseModelInput = requestParser<SessionSwitchModelInput>(Schema.Struct({ sessionID: Session.ID, model: Model.Ref }));
 const parsePermissionRef = requestParser<PermissionGetInput>(Schema.Struct({ sessionID: Session.ID, requestID: Permission.ID }));
 const parsePermissionReply = requestParser<OpenCodeNativePermissionReplyInput>(Schema.Struct({ sessionID: Session.ID,
@@ -70,6 +76,11 @@ const parsePermission = openCodeNativeParser<OpenCodeNativePermission>(Permissio
 const parseForm = openCodeNativeParser<OpenCodeNativeFormDetail>(Form.Detail);
 const parseModels = openCodeNativeParser<{ location: { directory?: string }; data: ModelInfo[] }>(Location.response(Schema.Array(Model.Info)));
 const parseDefault = openCodeNativeParser<{ location: { directory?: string }; data: ModelInfo | null }>(Location.response(Schema.UndefinedOr(Model.Info)));
+const parseSkills = openCodeNativeParser<{ location: { directory?: string }; data: OpenCodeNativeSkill[] }>(Location.response(Schema.Array(Skill.Info)));
+const parseEnvironment = requestParser<{ sessionID: string; variables: Readonly<Record<string, string>> }>(Schema.Struct({
+  sessionID: Session.ID, variables: Schema.Record(Schema.String, Schema.String) }));
+const parsePermissions = requestParser<{ sessionID: string; permissions: Permission.Ruleset }>(Schema.Struct({
+  sessionID: Session.ID, permissions: Permission.Ruleset }));
 function noContent(value: unknown): void { if (value !== undefined) throw new OpenCodeNativeProtocolError(); }
 function scopedRef(input: { sessionID: string }, other: string, prefix: string): void {
   nativeId(input.sessionID, "ses_"); nativeId(other, prefix);
@@ -100,6 +111,40 @@ export class OpenCodeNativeMutations {
   async cancelInput(input: SessionInboxCancelInput, signal?: AbortSignal): Promise<void> {
     const request = parseInputRef(input); scopedRef(request, request.inboxID, "msg_");
     return this.client.call((client, budget) => client.session.inbox.cancel(request, { signal: budget }), noContent, signal);
+  }
+  async compact(input: OpenCodeNativeCompactInput, signal?: AbortSignal): Promise<SessionCompactOutput> {
+    const request = parseCompactInput(input); scopedRef(request, request.id, "msg_");
+    return this.client.call((client, budget) => client.session.compact(request, { signal: budget }), value => {
+      const admission = parseCompaction(value);
+      // Native coalesces another pending compaction. That never proves admission
+      // of our reserved control, nor gives us authority over the other control.
+      if (admission.id !== request.id || admission.sessionID !== request.sessionID || admission.delivery !== request.delivery) {
+        throw new OpenCodeNativeProtocolError();
+      }
+      return admission;
+    }, signal);
+  }
+  async setEnvironment(input: { sessionID: string; variables: Readonly<Record<string, string>> }, signal?: AbortSignal): Promise<void> {
+    const request = parseEnvironment(input); nativeId(request.sessionID, "ses_");
+    if (Object.keys(request.variables).length > 512 || Buffer.byteLength(JSON.stringify(request.variables)) > 1_048_576 ||
+        Object.entries(request.variables).some(([key, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || key.length > 256 || value.includes("\0") || Buffer.byteLength(value) > 65_536)) {
+      throw new OpenCodeNativeMutationInputError();
+    }
+    return this.client.call((client, budget) => client.session.environment(request, { signal: budget }), noContent, signal);
+  }
+  async setPermissions(input: { sessionID: string; permissions: Permission.Ruleset }, signal?: AbortSignal): Promise<void> {
+    const request = parsePermissions(input); nativeId(request.sessionID, "ses_");
+    if (request.permissions.length > 1_024) throw new OpenCodeNativeMutationInputError();
+    return this.client.call((client, budget) => client.session.update(request, { signal: budget }), noContent, signal);
+  }
+  async listSkills(workspace: string, signal?: AbortSignal): Promise<readonly OpenCodeNativeSkill[]> {
+    directory(workspace);
+    return this.client.call((client, budget) => client.skill.list({ location: { directory: workspace } }, { signal: budget }), value => {
+      const result = parseSkills(value);
+      if (result.location.directory !== workspace || result.data.length > 4_096 ||
+          new Set(result.data.map(skill => skill.id)).size !== result.data.length) throw new OpenCodeNativeProtocolError();
+      return result.data;
+    }, signal);
   }
   async listModels(workspace: string, signal?: AbortSignal): Promise<readonly OpenCodeNativeModel[]> {
     directory(workspace);

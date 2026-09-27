@@ -29,7 +29,13 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
   async catalog(input: Parameters<ConversationBackendDriver["catalog"]>[0]) {
     try {
       assertOpenCodeWorkspace(this.input, input);
-      return (await this.input.catalog.read({ connection: this.connection, workspace: input.workspace })).catalog;
+      const catalog = (await this.input.catalog.read({ connection: this.connection, workspace: input.workspace })).catalog;
+      try {
+        const skills = await this.input.skills.read({ connection: this.connection, workspace: input.workspace });
+        return { ...catalog, skills: skills.skills, notices: [...catalog.notices, ...skills.notices] };
+      } catch {
+        return { ...catalog, notices: [...catalog.notices, boundDisplayText("The OpenCode skill catalog is unavailable.")] };
+      }
     } catch (error) { throw mapOpenCodeConversationError(error); }
   }
   async create(input: Parameters<ConversationBackendDriver["create"]>[0]) { return createOpenCodeConversation(this.input, input); }
@@ -110,6 +116,7 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
       await runtime.assertCurrent();
       handle = new OpenCodeConversationHandle(this.input, input, runtime, lease);
       input.onControlReady?.(handle.control);
+      await this.input.tools.admit(this.input, input, runtime);
       return handle;
     } catch (error) {
       if (handle) await handle.close(); else lease.release();
@@ -155,6 +162,8 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
       if (unfinished || activity.active || activity.activeChildren.length ||
           activity.shells.some(shell => shell.status === "running") || pending.length || interactions.permissions.length || interactions.forms.length) return "busy";
       // This releases client residency only; neither ownership mode retires the daemon here.
+      this.input.executionEnvironment.release(input.binding.applicationThreadId);
+      this.input.tools.release(input.binding.applicationThreadId);
       return "released";
     } catch (error) {
       // Normal retirement reports terminal provider absence and proceeds; strict
@@ -173,7 +182,7 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
 }
 
 /** Read only the unfinished suffix, with the same finite native-history bounds. */
-async function hasUnfinishedNativePeriod(api: OpenCodeNativeApi, sessionID: string, signal: AbortSignal): Promise<boolean> {
+export async function hasUnfinishedNativePeriod(api: OpenCodeNativeApi, sessionID: string, signal: AbortSignal): Promise<boolean> {
   let cursor: string | undefined, bytes = 0, records = 0;
   const seen = new Set<string>(), cursors = new Set<string>();
   while (true) {

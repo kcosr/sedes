@@ -18,7 +18,8 @@ import { OpenCodeExecutionSettings, type OpenCodeObservedSettings } from "./open
 import { OpenCodeDelivery } from "./opencode-delivery.js";
 import { OpenCodeActions } from "./opencode-actions.js";
 import { OpenCodeInteractions } from "./opencode-interactions.js";
-import { toEffective } from "./opencode-model-selection.js";
+import { qualifiedOpenCodeModelId, toEffective } from "./opencode-model-selection.js";
+import { classifyOpenCodeRead, materializeOpenCodeViewedImages, type OpenCodeViewedImage } from "./opencode-viewed-images.js";
 import { OpenCodeInputEvidenceRepository, openCodeOperationFingerprint } from "./opencode-input-evidence.js";
 
 const JOURNAL_BYTES = 16 * 1024 * 1024;
@@ -53,6 +54,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   readonly #lifetime: AbortSignal;
   readonly #api: OpenCodeNativeApi;
   readonly #interrupts = new ConversationInterruptLedger();
+  readonly #usage;
   readonly #inputObservation;
   readonly #settings;
   readonly #delivery;
@@ -83,6 +85,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   #generation = randomUUID();
   #observation?: OpenCodeNativeObservation;
   #projection?: OpenCodeHistoryProjection;
+  #viewedImages: ReadonlyMap<string, OpenCodeViewedImage> = new Map();
   #retained?: OpenCodeRetainedHistory;
   #activity: "running" | "idle" | "unknown" = "unknown";
   #background: BackgroundActivity = unknownActivity;
@@ -103,6 +106,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     readonly runtime: OpenCodeConversationRuntime, readonly lease: OpenCodeRuntimeLease) {
     this.binding = Object.freeze({ ...input.binding });
     this.#api = new OpenCodeNativeApi(lease.client);
+    this.#usage = context.usage.acquire(context, input, runtime, lease.client);
     this.#lifetime = AbortSignal.any([this.#local.signal, lease.client.lifetime]);
     this.control = Object.freeze({
       generation: `${lease.generation}:${randomUUID()}`, lifetime: this.#lifetime,
@@ -152,6 +156,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
             listener(entry.value);
           }
           this.#listeners.add(listener);
+          this.#toolDiagnostic();
           // Interactions are live gates, outside the native transcript snapshot.
           // Re-establishment must republish gates that opened before its cut.
           const interactions = this.#interactions.snapshotInteractions();
@@ -189,11 +194,12 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   #capabilities(): BackendCapabilityDocument {
     const observed = this.#observedSettings;
     return { revision: `opencode-v2-execution-${openCodeHistoryFingerprint(observed?.observed ?? null)}`,
-      actions: ["rename", "set_model", "set_thinking_level"], deliveryModes: ["submit", "steer"], steerTarget: "conversation",
-      composerAttachments: { fileStaging: false, nativeImage: false }, nonblockingQuestions: false,
+      actions: ["rename", "compact", "set_model", "set_thinking_level"], deliveryModes: ["submit", "steer"], steerTarget: "conversation",
+      composerAttachments: { fileStaging: true, nativeImage: observed?.observed.classification === "recognized" &&
+        observed.catalog.catalog.models.some(model => model.id === qualifiedOpenCodeModelId(observed.observed.resolvedSelection!) && model.inputModalities.includes("image")) }, nonblockingQuestions: false,
       providerOutputArtifacts: { nativeImage: false }, supportsHistory: true,
       branching: { availability: "unavailable", reason: boundDisplayText("Native branching is not qualified.") },
-      interactionKinds: ["decision", "form", "questionnaire"], usageAccounting: "unsupported", usageSections: [],
+      interactionKinds: ["decision", "form", "questionnaire"], usageAccounting: "supported", usageSections: [],
       effectiveSettings: observed?.observed.classification === "recognized" && observed.observed.resolvedSelection
         ? toEffective(observed.observed.resolvedSelection, this.context.connection.id, observed.catalog.catalog) : {} };
   }
@@ -208,13 +214,20 @@ export class OpenCodeConversationHandle implements ConversationHandle {
         nativeHead: this.#retained!.messages.at(-1)?.id ?? null });
     });
   }
+  #toolDiagnostic(): void {
+    const message = this.context.tools.diagnostic(this.binding.applicationThreadId);
+    if (message && !this.#closed) this.#emit({ type: "notice", notice: { id: "opencode-tools-unavailable", tone: "warning",
+      message: boundDisplayText(message), createdAt: new Date().toISOString() } });
+  }
   async submit(input: Parameters<ConversationHandle["submit"]>[0]) {
     this.#assertOpen();
     try { return await this.#delivery.submit(input); } catch (error) { throw mapOpenCodeConversationError(error); }
+    finally { this.#toolDiagnostic(); }
   }
   async steer(input: Parameters<ConversationHandle["steer"]>[0]) {
     this.#assertOpen();
     try { return await this.#delivery.steer(input); } catch (error) { throw mapOpenCodeConversationError(error); }
+    finally { this.#toolDiagnostic(); }
   }
   async perform(input: Parameters<ConversationHandle["perform"]>[0]) {
     this.#assertOpen();
@@ -278,8 +291,10 @@ export class OpenCodeConversationHandle implements ConversationHandle {
           disposition: "accepted", nativeEvidenceFingerprint: openCodeOperationFingerprint(acknowledgement), now: Date.now() });
         // Interrupt leaves native inbox entries intact. Cleanup is bounded by
         // this same Stop deadline, including an acknowledged idle no-op.
-        try { await budget.wait(this.#inputObservation.observer.withdrawPending(budget.signal, input.deadlineAt)); }
-        catch { /* The input's own receipt stays unresolved; a fresh Stop may withdraw it. */ }
+        await Promise.allSettled([
+          budget.wait(this.#inputObservation.observer.withdrawPending(budget.signal, input.deadlineAt)),
+          budget.wait(this.#actions.withdrawPendingCompactions(budget.signal, input.deadlineAt)),
+        ]); // A fresh Stop can retry exact pending controls; neither cleanup extends its budget.
       });
     } catch (error) {
       const current = repository.requireOperation(scope, threadId, input.applicationOperationId, "interrupt");
@@ -325,7 +340,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     this.#invalidate("provider_handle_closed");
     this.#local.abort(); this.#release();
   };
-  #release(): void { if (!this.#released) { this.#released = true; this.lease.release(); } }
+  #release(): void { if (!this.#released) { this.#released = true; this.#usage.release(); this.lease.release(); } }
   #assertOpen(): void {
     if (this.#closed || this.#lifetime.aborted) throw openCodeConversationError("opencode_handle_closed", "The OpenCode conversation connection is closed.");
   }
@@ -379,6 +394,9 @@ export class OpenCodeConversationHandle implements ConversationHandle {
         this.#ownerLost(); return false;
       }
       if ("sessionID" in event.data && event.data.sessionID === this.binding.backendConversationId) {
+        if (this.context.usage.enabled && event.type === "session.usage.updated" && this.#retained && this.#projection) {
+          this.#usage.record(this.#retained.messages, Object.values(this.#projection.turnsById));
+        }
         // Only replayable parent changes and text overlays affect the timeline.
         // Compaction/tool fragments and progress have no durable full value yet.
         return "durable" in event || event.type === "session.text.delta" || event.type === "session.reasoning.delta";
@@ -463,6 +481,14 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       await this.runtime.assertCurrent(signal);
       check();
       this.#inputObservation.observer.observeHistory(retained.messages);
+      if (retained.messages.some(message => message.type === "assistant" && message.content.some(part => part.type === "tool" && classifyOpenCodeRead(part).kind === "viewed"))) {
+        const catalog = await this.context.catalog.read({ connection: this.context.connection, workspace: this.input.workspace, signal });
+        await this.runtime.assertCurrent(signal); check();
+        this.#viewedImages = await materializeOpenCodeViewedImages({ messages: retained.messages, nativeNamespaceKey: this.context.nativeNamespaceKey,
+          sessionID: this.binding.backendConversationId, scope: this.input.scope, threadId: this.binding.applicationThreadId,
+          publisher: this.context.outputArtifacts, models: catalog.modelsById, signal,
+          assertCurrent: async () => { await this.runtime.assertCurrent(signal); check(); } });
+      } else this.#viewedImages = new Map();
       const remaining = extra();
       this.#retained = { ...retained, decodedBytes: retained.decodedBytes + remaining.decodedBytes, records: retained.records + remaining.records };
       this.#retainedPartAllowance = peakPartBytes;
@@ -474,6 +500,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       for (const [id, dirtyRevision] of dirtyMessages) if (this.#dirtyMessages.get(id) === dirtyRevision) this.#dirtyMessages.delete(id);
       this.#dirtyParts.clear();
       if (prior && !this.#invalidated) this.#diff(prior, projection);
+      if (this.context.usage.enabled) this.#usage.record(this.#retained.messages, Object.values(projection.turnsById));
       return projection;
     } catch (error) {
       if (!parent.aborted && !this.#lifetime.aborted) this.#invalidate("history_changed");
@@ -494,7 +521,8 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       binding.applicationThreadId, binding.backendInstanceId, binding.connectionProfileId, binding.executionEnvironmentId,
       this.context.nativeNamespaceKey], generation: this.#generation, activity: this.#activity,
       backgroundActivity: this.#background, observedParts: this.#parts, previous: this.#projection,
-      deliveryCorrelations: this.#inputObservation.observer.correlations(), signal });
+      deliveryCorrelations: this.#inputObservation.observer.correlations(), attachmentProvenanceKey: this.context.attachmentProvenanceKey,
+      viewedImages: this.#viewedImages, signal });
   }
 
   #drain(observation: OpenCodeNativeObservation): boolean {
@@ -673,6 +701,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
 
   #invalidate(reason: Extract<BackendConversationEvent, { type: "resnapshot_required" }>["reason"]): void {
     if (this.#invalidated && reason !== "provider_handle_closed") return;
+    this.#usage.gap("capture_gap");
     this.#invalidated = true; this.#activity = "unknown"; this.#background = unknownActivity;
     this.#emit({ type: "resnapshot_required", reason });
   }

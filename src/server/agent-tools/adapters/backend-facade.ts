@@ -72,6 +72,15 @@ export interface BackendAgentToolPolicy {
   readonly enabledToolIds: readonly string[];
 }
 
+/** Trusted provider-side provenance, consulted only for interactive access decisions. */
+export interface BackendAgentToolAccessDecisionAuthority {
+  acquire(signal: AbortSignal): Promise<{
+    readonly signal: AbortSignal;
+    isCurrent(): boolean;
+    release(): void;
+  }>;
+}
+
 export interface BackendAgentToolInvocationInput {
   readonly source: TrustedAgentToolSource;
   readonly adapter: AgentToolAdapter;
@@ -79,6 +88,7 @@ export interface BackendAgentToolInvocationInput {
   readonly signal: AbortSignal;
   readonly onInvocationStarted?: (invocationId: string) => void | Promise<void>;
   readonly onProgress?: (progress: SedesToolProgress) => void | Promise<void>;
+  readonly accessDecisionAuthority?: BackendAgentToolAccessDecisionAuthority;
 }
 
 export interface BackendAgentToolFacade {

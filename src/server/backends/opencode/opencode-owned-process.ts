@@ -12,6 +12,8 @@ export interface OpenCodeOwnedProcess {
   readonly endpoint: string;
   readonly client: OpenCodeHttpClient;
   readonly exited: Promise<void>;
+  /** Exact applied launch baseline after native CLI credential removal; never a public snapshot. */
+  readonly shellEnvironment: Readonly<Record<string, string>>;
   stop(): Promise<void>;
 }
 
@@ -35,6 +37,8 @@ export async function startOpenCodeOwnedProcess(input: {
   const marker = randomBytes(32).toString("hex");
   const password = randomBytes(32).toString("base64url");
   const environment = openCodeOwnedEnvironment({ ...input, marker, password });
+  const shellEnvironment = Object.freeze(Object.fromEntries(Object.entries(environment)
+    .filter((entry): entry is [string, string] => entry[1] !== undefined && !["OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD"].includes(entry[0]))));
   const cleanup = await createOpenCodeProcessCleanup(marker);
   let child: ChildProcessWithoutNullStreams | undefined;
   let exit: Promise<void> = Promise.resolve();
@@ -103,7 +107,7 @@ export async function startOpenCodeOwnedProcess(input: {
     });
     if (!launched.pid || exited) throw new OpenCodeRuntimeError("opencode_startup_exited");
     client = new OpenCodeHttpClient({ endpoint, password });
-    return Object.freeze({ pid: launched.pid, executablePath, endpoint, client, exited: exit, stop });
+    return Object.freeze({ pid: launched.pid, executablePath, endpoint, client, exited: exit, shellEnvironment, stop });
   } catch (cause) {
     try { await stop(); }
     catch { throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved"); }

@@ -218,8 +218,8 @@ same opt-in suite; ordinary `npm test` performs no such machine-wide scan.
 The suite combines native characterization with production adapter qualification.
 Characterization includes reproducing missing idle filtering, MCP catalog
 readiness races, and synthetic credential environment exposure. Production
-checks exercise native codecs, resident ownership, history, delivery, and
-mutation recovery. The compiled OpenCode module admits exactly stock 2.0.18;
+checks exercise native codecs, resident ownership, history, delivery, mutation
+recovery, MCP ingress, scoped shell environments, images, compaction and usage. The compiled OpenCode module admits exactly stock 2.0.18;
 these loopback fixtures do not qualify authenticated external model providers.
 See the [OpenCode operator guide](../operator/backends/opencode.md).
 
