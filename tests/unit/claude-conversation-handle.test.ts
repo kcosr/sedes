@@ -6198,6 +6198,197 @@ describe("Claude image reads and meta rows", () => {
     await handle.close();
   });
 
+  /** A PNG whose width names it, so a publisher can hold particular images. */
+  const pngOfWidth = (width: number) => {
+    const bytes = Buffer.from(PNG);
+    bytes.writeUInt32BE(width, 16);
+    return bytes;
+  };
+  /** Holds each publication whose image width is held until it is released. */
+  function heldPublisher(held: (width: number) => boolean) {
+    const recording = recordingPublisher();
+    const waiting: (() => void)[] = [];
+    const started: PublishOutputImageInput[] = [];
+    let open = false;
+    const publisher: OutputArtifactPublisher = {
+      findImage: recording.publisher.findImage,
+      publishImage: async (input) => {
+        started.push(input);
+        if (!open && held(Buffer.from(input.bytes).readUInt32BE(16))) {
+          await new Promise<void>((resolve) => waiting.push(resolve));
+        }
+        return await recording.publisher.publishImage(input);
+      },
+    };
+    return { ...recording, publisher, started,
+      release: () => { open = true; for (const resume of waiting.splice(0)) resume(); } };
+  }
+  /** One turn that reads the named images, each image as wide as its position. */
+  function imageTurn(transcript: ClaudeTranscriptFixture, names: readonly string[], prompt = "Look at the screenshots"): string {
+    const promptUuid = transcript.prompt(prompt);
+    for (const [index, name] of names.entries()) {
+      const [call] = readCall(transcript, [`/workspace/${name}`]);
+      transcript.imageResult(toolUseId(transcript, call!), call!, { data: pngOfWidth(index + 1).toString("base64"), mediaType: "image/png" });
+    }
+    transcript.answer("Seen.");
+    return promptUuid;
+  }
+  const shownImages = (items: Record<string, import("../../src/shared/protocol/backend.js").BackendItem>) =>
+    Object.values(items).flatMap(item => item.semanticKind === "image" && item.image.representation === "artifact"
+      ? [item.image.fileName?.text] : []).sort();
+
+  it("opens with the newest images of its window and shows the rest as live updates", async () => {
+    const transcript = new ClaudeTranscriptFixture();
+    imageTurn(transcript, ["a.png", "b.png", "c.png", "d.png", "e.png", "f.png"]);
+    // The two oldest are still publishing when the snapshot is taken.
+    const { publisher, published, release } = heldPublisher((width) => width <= 2);
+    const { handle } = createHandle(fixture(), vi.fn(), { initialMessages: await history(transcript), resumeSession: true,
+      outputArtifacts: publisher });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    expect(shownImages(established.snapshot.itemsById)).toEqual(["c.png", "d.png", "e.png", "f.png"]);
+    const projector = new ConversationProjector({ backendInstanceId: BINDING.backendInstanceId, bindingIdentity: BINDING.applicationThreadId });
+    projector.replace(established.snapshot, established.handleSequence);
+    const events: BackendConversationEvent[] = [];
+    const rejected: unknown[] = [];
+    established.subscribeFromNext((event) => {
+      events.push(event.event);
+      const applied = projector.apply(event);
+      if (applied.kind === "resnapshot_required") rejected.push(applied.reason);
+    });
+    release();
+    await vi.waitFor(() => expect(events.filter(event => event.type === "item_completed" &&
+      event.item.semanticKind === "image")).toHaveLength(2));
+    expect(events.map(event => event.type)).toEqual(["item_completed", "item_completed", "turn_updated"]);
+    expect(rejected).toEqual([]);
+    const snapshot = await projectionSnapshot(handle);
+    expect(shownImages(snapshot.itemsById)).toEqual(["a.png", "b.png", "c.png", "d.png", "e.png", "f.png"]);
+    const timeline = projector.timeline();
+    expect(timeline.turnsById[timeline.orderedTurnIds[0]!]!.orderedItemIds.map(id => timeline.itemsById[id]!.kind))
+      .toEqual(["user_message", ...Array.from({ length: 6 }, () => ["viewed_image", "image"]).flat(), "assistant_message"]);
+    expect(published).toHaveLength(6);
+    await handle.close();
+  });
+
+  it("returns a history page within its publication budget and shows the rest on the next fetch", async () => {
+    const transcript = new ClaudeTranscriptFixture();
+    imageTurn(transcript, ["a.png", "b.png", "c.png", "d.png", "e.png", "f.png"]);
+    for (let index = 0; index < 11; index += 1) {
+      transcript.prompt(`Later ${index}`);
+      transcript.answer(`Answer ${index}.`);
+    }
+    const { publisher, started, published, release } = heldPublisher(() => true);
+    const { handle } = createHandle(fixture(), vi.fn(), { initialMessages: await history(transcript), resumeSession: true,
+      outputArtifacts: publisher });
+    await projectionSnapshot(handle);
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const page = handle.history({ limit: 20 }).then((value) => { settled = true; return value; });
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(settled).toBe(false);
+      // Four wait inline and two start in the background; none has finished.
+      expect(started).toHaveLength(6);
+      expect(published).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(shownImages((await page).itemsById)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+    release();
+    await vi.waitFor(async () => expect(shownImages((await handle.history({ limit: 20 })).itemsById))
+      .toEqual(["a.png", "b.png", "c.png", "d.png", "e.png", "f.png"]));
+    expect(started).toHaveLength(6);
+    await handle.close();
+  });
+
+  it("stops publishing between images when the handle closes", async () => {
+    const transcript = new ClaudeTranscriptFixture();
+    imageTurn(transcript, ["a.png", "b.png", "c.png", "d.png", "e.png", "f.png", "g.png", "h.png"]);
+    for (let index = 0; index < 11; index += 1) {
+      transcript.prompt(`Later ${index}`);
+      transcript.answer(`Answer ${index}.`);
+    }
+    const { publisher, started, release } = heldPublisher(() => true);
+    const { handle } = createHandle(fixture(), vi.fn(), { initialMessages: await history(transcript), resumeSession: true,
+      outputArtifacts: publisher });
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext((event) => events.push(event.event));
+    const page = handle.history({ limit: 20 });
+    await vi.waitFor(() => expect(started).toHaveLength(6));
+    const closing = handle.close();
+    // The reader stops waiting at once, and the two queued images never start.
+    await expect(page).resolves.toBeDefined();
+    release();
+    await closing;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(started).toHaveLength(6);
+    expect(events.filter(event => event.type.startsWith("item_"))).toEqual([]);
+  });
+
+  it("reports a located turn not found when history drops it while its images publish", async () => {
+    const transcript = new ClaudeTranscriptFixture();
+    const promptUuid = imageTurn(transcript, ["a.png"]);
+    for (let index = 0; index < 11; index += 1) {
+      transcript.prompt(`Later ${index}`);
+      transcript.answer(`Answer ${index}.`);
+    }
+    const { publisher, started, release } = heldPublisher(() => true);
+    const provider = fixture();
+    const messages = await history(transcript);
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: messages, resumeSession: true, outputArtifacts: publisher });
+    await projectionSnapshot(handle);
+    expect(started).toHaveLength(0);
+    const target = projectClaudeHistory(messages).usageTurns[0]!.backendTurnId;
+    const located = handle.locateTurn({ maximumTurnCandidates: 20, matchesBackendTurnId: (candidate) => candidate === target });
+    await vi.waitFor(() => expect(started).toHaveLength(1));
+    // Claude retracts the turn's prompt while its image is publishing.
+    provider.messages.push({ type: "assistant", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+      supersedes: [promptUuid], message: { id: "msg-retraction", type: "message", role: "assistant", model: "claude-sonnet-5",
+        content: [{ type: "text", text: "Retried." }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } },
+    } as unknown as SDKMessage);
+    await vi.waitFor(async () => expect((await handle.history({ limit: 20 })).orderedBackendTurnIds).not.toContain(target));
+    expect(started).toHaveLength(1);
+    release();
+    await expect(located).resolves.toEqual({ status: "not_found" });
+    await handle.close();
+  });
+
+  it("projects the window ahead of a result only for a built-in image read", async () => {
+    const transcript = new ClaudeTranscriptFixture();
+    transcript.prompt("Look at the screenshot", { uuid: PROMPT_ID });
+    const call = (id: string, name: string, input: unknown) =>
+      transcript.reply([{ type: "tool_use", id, name, input }], { stopReason: "tool_use" })[0]!;
+    const screenshot = call("toolu-browser", "mcp__browser__screenshot", {});
+    const screenshotResult = transcript.imageResult("toolu-browser", screenshot, { data: PNG.toString("base64"), mediaType: "image/png" });
+    const listing = call("toolu-list", "mcp__browser__list", {});
+    const listingResult = transcript.toolResult("toolu-list", listing, "two tabs");
+    const read = call("toolu-read", "Read", { file_path: "/workspace/shot.png" });
+    const readResult = transcript.imageResult("toolu-read", read, { data: PNG.toString("base64"), mediaType: "image/png" });
+    const { publisher, published } = recordingPublisher();
+    const { handle, settings, provider, turnId } = await startedTurn({ outputArtifacts: publisher });
+    // Every projection reads the thread's lifecycle receipts once.
+    const projections = vi.spyOn(settings, "listTaskLifecycleReceipts");
+    const settle = async (callUuid: string, resultUuid: string, items: number) => {
+      provider.messages.push(live(transcript, callUuid));
+      await vi.waitFor(async () => expect((await projectionSnapshot(handle)).turnsById[turnId]!.orderedBackendItemIds).toHaveLength(items));
+      const before = projections.mock.calls.length;
+      provider.messages.push(live(transcript, resultUuid));
+      await vi.waitFor(async () => {
+        const snapshot = await projectionSnapshot(handle);
+        expect(snapshot.itemsById[snapshot.turnsById[turnId]!.orderedBackendItemIds[items - 1]!]).toMatchObject({ status: "completed" });
+      });
+      return projections.mock.calls.length - before;
+    };
+    const screenshotProjections = await settle(screenshot, screenshotResult, 2);
+    const listingProjections = await settle(listing, listingResult, 3);
+    const readProjections = await settle(read, readResult, 4);
+    expect(screenshotProjections).toBe(listingProjections);
+    expect(readProjections).toBeGreaterThan(listingProjections);
+    expect(published).toHaveLength(1);
+    await handle.close();
+  });
+
   it("publishes the reads in the first snapshot, a history page, and a located turn when first opened", async () => {
     const transcript = new ClaudeTranscriptFixture();
     const turn = (index: number, fileName: string) => {

@@ -100,6 +100,7 @@ import { findClaudeSafeSkill } from "./claude-skills.js";
 import { ClaudeOperationalNoticeProjector } from "./claude-operational-notices.js";
 import type { OutputArtifactPublisher } from "../../output-artifacts/contracts.js";
 import {
+  CLAUDE_VIEWED_IMAGE_INLINE_BUDGET,
   ClaudeViewedImagePublications,
   type ClaudeViewedImageCandidate,
 } from "./claude-viewed-images.js";
@@ -257,6 +258,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   readonly #operationalNotices: ClaudeOperationalNoticeProjector;
   /** This attachment's published and failed read images, by publication key. */
   readonly #viewedImages: ClaudeViewedImagePublications;
+  #viewedImagesPublished = false;
   readonly #backgroundActivity = new ClaudeBackgroundActivity();
   readonly #releaseSession: () => void;
   readonly #releaseAgentToolCli: () => void;
@@ -391,6 +393,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       outputArtifacts: input.outputArtifacts,
       scope: this.#scope,
       applicationThreadId: input.binding.applicationThreadId,
+      onPublished: () => this.#showPublishedViewedImages(),
     });
     // A verified fork child's copied turns are inherited, not its own work.
     const forkChild = this.#settings.findForkChild(this.#scope, input.binding.applicationThreadId);
@@ -520,7 +523,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
         await this.#consume(message);
         // A message can move the window over a read whose image is not yet
         // published, for example a retraction or a relinked compaction.
-        await this.#publishWindowViewedImages();
+        if (!this.#closed && !this.#projectionInvalidated) {
+          this.#viewedImages.schedule(this.#projection.pendingViewedImages);
+        }
         return this.#usageAccounting?.deliveryCommitted === false ? false : undefined;
       },
       onFailure: (error) => {
@@ -543,7 +548,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
       } else if (!this.#session.reattached && this.#backgroundActivity.snapshot().state === "unknown" && !this.#backgroundActivity.retirementBlocked) this.#backgroundActivity.reset();
       const initialMessages = await input.loadInitialMessages();
       this.#installInitialMessages(initialMessages);
-      // The first snapshot already shows the images of the reads it holds.
+      // The first snapshot shows the newest images of the reads it holds;
+      // the rest follow as live updates.
       await this.#publishWindowViewedImages();
       this.#effectiveModel =
         initialization.actualModel ?? desired.model ?? undefined;
@@ -689,9 +695,17 @@ export class ClaudeConversationHandle implements ConversationHandle {
             });
       };
       let selected = select();
-      if (await this.#viewedImages.publish(selected.pendingViewedImages, input.signal)) {
-        selected = select();
+      if (await this.#viewedImages.publish(selected.pendingViewedImages, CLAUDE_VIEWED_IMAGE_INLINE_BUDGET, input.signal)) {
+        input.signal?.throwIfAborted();
+        this.#assertOpen();
+        try {
+          selected = select();
+        } catch {
+          // History changed while images were published; the page read
+          // before stays exact, only without them.
+        }
       }
+      input.signal?.throwIfAborted();
       this.#usageAccounting?.registerTurns(Object.values(selected.page.turnsById));
       return {
         ...selected.page,
@@ -736,15 +750,19 @@ export class ClaudeConversationHandle implements ConversationHandle {
           ...(terminalReceipts.length === 0 ? {} : { terminalReceipts }),
         });
         input.signal?.throwIfAborted();
-        if (selected.status !== "found") {
-          throw new ClaudeHistoryProjectionError("claude_history_invalid");
-        }
         return selected;
       };
       let selected = this.#terminalReceipts([backendTurnId]).length === 0 ? preliminary : select();
-      if (await this.#viewedImages.publish(selected.pendingViewedImages, input.signal)) {
-        selected = select();
+      if (selected.status !== "found") {
+        throw new ClaudeHistoryProjectionError("claude_history_invalid");
       }
+      if (await this.#viewedImages.publish(selected.pendingViewedImages, CLAUDE_VIEWED_IMAGE_INLINE_BUDGET, input.signal)) {
+        this.#assertOpen();
+        selected = select();
+        // History changed while images were published.
+        if (selected.status !== "found") return { status: "not_found" };
+      }
+      input.signal?.throwIfAborted();
       return { status: "found", page: selected.page };
     } catch (error) {
       throw mapClaudeHistoryRequestError(error);
@@ -1488,6 +1506,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   async close(options?: { readonly reason: "evicted" }): Promise<void> {
     if (this.#closed) return this.#closePromise;
     this.#closed = true;
+    this.#viewedImages.close();
     this.#clearStopConfirmation();
     this.#usageAccounting?.close();
     // Detaching first fences remote permission callbacks before the local
@@ -1901,6 +1920,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       backendCode: code,
     });
     if (this.#projectionInvalidated) return error;
+    this.#viewedImages.close();
     this.#partialItems.clear();
     this.#partialMessageId = undefined;
     this.#partialMessageSourceOrderBase = undefined;
@@ -2420,7 +2440,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
    * completes is published before the real projection sees the result.
    */
   async #publishArrivingViewedImages(message: SessionMessage): Promise<void> {
-    if (!carriesToolResultImage(message)) return;
+    if (!carriesImageReadResult(message, this.#projection.imageReadToolUseIds)) return;
     let pending: readonly ClaudeViewedImageCandidate[];
     try {
       pending = this.#projectLatest([...this.#projectionMessages, message], {
@@ -2431,15 +2451,38 @@ export class ClaudeConversationHandle implements ConversationHandle {
       // Projecting the message for real reports its failure.
       return;
     }
-    await this.#viewedImages.publish(pending);
+    // Only the reads this row completes; earlier ones publish in the background.
+    const earlier = new Set(this.#projection.pendingViewedImages.map(({ publicationKey }) => publicationKey));
+    await this.#viewedImages.publish(
+      pending.filter(({ publicationKey }) => !earlier.has(publicationKey)),
+      CLAUDE_VIEWED_IMAGE_INLINE_BUDGET,
+    );
   }
 
-  /** Publishes the window's pending read images, then shows them as new items. */
+  /**
+   * Publishes the window's newest pending read images within the inline
+   * budget, then shows them as new items; the rest follow in the background.
+   */
   async #publishWindowViewedImages(): Promise<void> {
     if (this.#closed || this.#projectionInvalidated) return;
-    const pending = this.#viewedImages.publishable(this.#projection.pendingViewedImages);
-    if (pending.length === 0 || !(await this.#viewedImages.publish(pending))) return;
-    if (this.#closed || this.#projectionInvalidated) return;
+    const pending = this.#projection.pendingViewedImages;
+    if (pending.length === 0 || !(await this.#viewedImages.publish(pending, CLAUDE_VIEWED_IMAGE_INLINE_BUDGET))) return;
+    this.#showViewedImages();
+  }
+
+  /** A background publication finished; show every newly published window image at once. */
+  #showPublishedViewedImages(): void {
+    if (this.#viewedImagesPublished) return;
+    this.#viewedImagesPublished = true;
+    queueMicrotask(() => {
+      this.#viewedImagesPublished = false;
+      this.#showViewedImages();
+    });
+  }
+
+  #showViewedImages(): void {
+    if (this.#closed || this.#projectionInvalidated || !this.#initialHistoryLoaded) return;
+    if (!this.#projection.pendingViewedImages.some(({ publicationKey }) => this.#viewedImages.find(publicationKey))) return;
     const previous = this.#projection.snapshot;
     this.#refreshProjection();
     this.#emitProjectionDelta(previous, this.#projection.snapshot);
@@ -3161,11 +3204,12 @@ function modelOutputMessageId(message: SDKMessage): string | undefined {
   return message.event.type === "message_start" ? message.event.message.id : undefined;
 }
 
-/** A user row with a tool result that carries an image block. */
-function carriesToolResultImage(message: SessionMessage): boolean {
+/** A user row with an image result for one of the given built-in image reads. */
+function carriesImageReadResult(message: SessionMessage, imageReadToolUseIds: ReadonlySet<string>): boolean {
   const content = (message.message as { readonly content?: unknown } | null)?.content;
-  return Array.isArray(content) && content.some((block: unknown) =>
-    isRecord(block) && block.type === "tool_result" && Array.isArray(block.content) &&
+  return imageReadToolUseIds.size > 0 && Array.isArray(content) && content.some((block: unknown) =>
+    isRecord(block) && block.type === "tool_result" && typeof block.tool_use_id === "string" &&
+    imageReadToolUseIds.has(block.tool_use_id) && Array.isArray(block.content) &&
     block.content.some((part: unknown) => isRecord(part) && part.type === "image"));
 }
 

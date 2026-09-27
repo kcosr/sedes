@@ -2563,19 +2563,98 @@ describe("Claude image reads", () => {
     expect(located.pendingViewedImages.map(({ identity }) => identity.backendTurnId)).toEqual([oldTurn]);
   });
 
-  it("keeps transcript items ahead of an image at the per-turn item cap", () => {
-    const texts = (count: number) => Array.from({ length: Math.ceil(count / 2_000) }, (_, row) =>
-      assistant(uuid(10_000 + row), Array.from({ length: Math.min(2_000, count - row * 2_000) }, () => ({ type: "text", text: "x" }))));
+  it("never separates a read from its image when trimming an oversized current turn", () => {
+    const build = (finalCharacters: number) => [prompt,
+      { ...assistant(uuid(2), [{ type: "text", text: "x".repeat(2_000_000) }]),
+        message: { role: "assistant", id: "msg-1", content: [{ type: "text", text: "x".repeat(2_000_000) }], stop_reason: "tool_use" } },
+      { ...read(3, "msg-1", "toolu-1", "/workspace/shot.png") }, result(4, "toolu-1", imageContent()),
+      { ...assistant(uuid(5), [{ type: "text", text: "y".repeat(finalCharacters) }]),
+        message: { role: "assistant", id: "msg-2", content: [{ type: "text", text: "y".repeat(finalCharacters) }], stop_reason: "end_turn" } }];
+    const [pending] = projectClaudeHistory(build(1)).pendingViewedImages;
+    const authentication = { ...historyAuthentication,
+      viewedImages: retained(new Map([[pending!.publicationKey, descriptor(1)]])).viewedImages };
+    const shapes = new Set<string>();
+    // Across the sizes where the trim reaches the read, the read and its
+    // image are kept or omitted together.
+    for (let headroom = 5_200; headroom >= 2_000; headroom -= 400) {
+      const snapshot = projectClaudeHistory(build(MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES - headroom), [], authentication).snapshot;
+      expect(serializedUtf8Bytes(snapshot)).toBeLessThanOrEqual(MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES);
+      const items = ordered(snapshot);
+      const shape = items.map(item => item.semanticKind).join(",");
+      shapes.add(shape);
+      for (const [index, item] of items.entries()) {
+        if (item.semanticKind !== "image") continue;
+        expect(items[index - 1]).toMatchObject({ semanticKind: "viewed_image", backendItemId: pending!.viewedBackendItemId });
+        expect(item.backendItemId).toBe(pending!.identity.backendItemId);
+      }
+    }
+    expect(shapes).toEqual(new Set([
+      "user_message,notice,viewed_image,image,assistant_message",
+      "user_message,notice,assistant_message",
+    ]));
+  });
+
+  const texts = (count: number, firstRow = 10_000) => Array.from({ length: Math.ceil(count / 2_000) }, (_, row) =>
+    assistant(uuid(firstRow + row), Array.from({ length: Math.min(2_000, count - row * 2_000) }, () => ({ type: "text", text: "x" }))));
+  const associateAll = (messages: readonly unknown[]) => {
+    const pending = projectClaudeHistory(messages).pendingViewedImages;
+    return { pending, projection: projectClaudeHistory(messages, [], { ...historyAuthentication, viewedImages: retained(
+      new Map(pending.map(({ publicationKey }, index) => [publicationKey, descriptor(index + 1)]))).viewedImages }) };
+  };
+
+  it("holds an image's slot when its result arrives, if its turn has room", () => {
     const project = (textCount: number) => {
-      const messages = [prompt, ...texts(textCount), read(3, "msg-1", "toolu-1", "/workspace/shot.png"), result(4, "toolu-1", imageContent())];
-      const pending = projectClaudeHistory(messages).pendingViewedImages;
-      const associated = projectClaudeHistory(messages, [], { ...historyAuthentication, viewedImages: retained(
-        new Map(pending.map(({ publicationKey }) => [publicationKey, descriptor(1)]))).viewedImages });
-      const turn = associated.usageTurns[0]!;
-      return { pending: pending.length, items: turn.orderedBackendItemIds.length };
+      const { pending, projection } = associateAll([prompt, ...texts(textCount), read(3, "msg-1", "toolu-1", "/workspace/shot.png"),
+        result(4, "toolu-1", imageContent())]);
+      const items = ordered(projection.snapshot);
+      return { pending: pending.length, items: items.length, last: items.at(-1)!.semanticKind };
     };
-    // A user message, the texts, and the read.
-    expect(project(MAXIMUM_BACKEND_ITEMS_PER_TURN - 3)).toEqual({ pending: 1, items: MAXIMUM_BACKEND_ITEMS_PER_TURN });
-    expect(project(MAXIMUM_BACKEND_ITEMS_PER_TURN - 2)).toEqual({ pending: 0, items: MAXIMUM_BACKEND_ITEMS_PER_TURN });
+    // A user message, the texts, and the read, with room for its image.
+    expect(project(MAXIMUM_BACKEND_ITEMS_PER_TURN - 3)).toEqual({ pending: 1, items: MAXIMUM_BACKEND_ITEMS_PER_TURN, last: "image" });
+    // The read took the last slot: it completes without its image.
+    expect(project(MAXIMUM_BACKEND_ITEMS_PER_TURN - 2)).toEqual({ pending: 0, items: MAXIMUM_BACKEND_ITEMS_PER_TURN, last: "viewed_image" });
+  });
+
+  it("keeps a shown image as its turn fills, so a live turn only grows", () => {
+    const messages = (textCount: number) => [prompt, read(2, "msg-1", "toolu-1", "/workspace/shot.png"),
+      result(3, "toolu-1", imageContent()), ...texts(textCount)];
+    const early = associateAll(messages(10)).projection;
+    const full = associateAll(messages(MAXIMUM_BACKEND_ITEMS_PER_TURN - 3)).projection;
+    const earlyIds = ordered(early.snapshot).map(item => item.backendItemId);
+    const fullItems = ordered(full.snapshot);
+    expect(fullItems).toHaveLength(MAXIMUM_BACKEND_ITEMS_PER_TURN);
+    expect(fullItems.slice(0, earlyIds.length).map(item => item.backendItemId)).toEqual(earlyIds);
+    expect(fullItems[2]).toMatchObject({ semanticKind: "image" });
+    // One more transcript item exceeds the turn, as it would without images.
+    expect(() => projectClaudeHistory(messages(MAXIMUM_BACKEND_ITEMS_PER_TURN - 2))).toThrowError(
+      expect.objectContaining({ code: "history_too_large" }));
+  });
+
+  it("reports several pending images up to the cap and none beyond it", () => {
+    const reads = ["a", "b", "c"].flatMap((name, index) => [read(3 + index * 2, `msg-${name}`, `toolu-${name}`, `/workspace/${name}.png`),
+      result(4 + index * 2, `toolu-${name}`, imageContent())]);
+    const { pending, projection } = associateAll([prompt, ...texts(MAXIMUM_BACKEND_ITEMS_PER_TURN - 6), ...reads]);
+    const fileName = (candidate: (typeof pending)[number]) => {
+      const view = projection.snapshot.itemsById[candidate.viewedBackendItemId]!;
+      return view.semanticKind === "viewed_image" ? view.fileName?.text : undefined;
+    };
+    expect(pending.map(fileName)).toEqual(["a.png", "b.png"]);
+    const items = ordered(projection.snapshot);
+    expect(items).toHaveLength(MAXIMUM_BACKEND_ITEMS_PER_TURN);
+    expect(items.slice(-5).map(item => [item.semanticKind, item.status])).toEqual([
+      ["viewed_image", "completed"], ["image", "completed"], ["viewed_image", "completed"], ["image", "completed"],
+      ["viewed_image", "completed"],
+    ]);
+  });
+
+  it("reserves enough bytes for an image with the longest escaped file name", () => {
+    const name = `${"\"".repeat(250)}.png`;
+    const messages = [prompt, read(2, "msg-1", "toolu-1", `/workspace/${name}`), result(3, "toolu-1", imageContent())];
+    const without = projectClaudeHistory(messages).snapshot;
+    const { projection } = associateAll(messages);
+    const image = ordered(projection.snapshot)[2]!;
+    expect(image).toMatchObject({ semanticKind: "image", image: { fileName: { text: name } } });
+    expect(serializedUtf8Bytes(projection.snapshot) - serializedUtf8Bytes(without)).toBeLessThanOrEqual(2_048);
+    expect(serializedUtf8Bytes(projection.snapshot) - serializedUtf8Bytes(without)).toBeGreaterThan(1_000);
   });
 });

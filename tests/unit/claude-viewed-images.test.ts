@@ -73,7 +73,7 @@ describe("Claude viewed-image publications", () => {
     const publisher = spied(retained);
     const publications = new ClaudeViewedImagePublications({ outputArtifacts: publisher, scope, applicationThreadId: "thread-a" });
     expect(publications.find(image.publicationKey)).toBeDefined();
-    expect(publications.publishable([image])).toEqual([]);
+    await expect(publications.publish([image])).resolves.toBe(false);
     expect(publications.find(image.publicationKey)).toBeDefined();
     expect(publisher.findImage).toHaveBeenCalledTimes(1);
     expect(publisher.publishImage).not.toHaveBeenCalled();
@@ -90,7 +90,8 @@ describe("Claude viewed-image publications", () => {
         applicationThreadId: "thread-a" }),
     ]) {
       expect(other.find(image.publicationKey)).toBeUndefined();
-      expect(other.publishable([image])).toEqual([image]);
+      await expect(other.publish([image])).resolves.toBe(true);
+      expect(other.find(image.publicationKey)!.artifactId).not.toBe(owner.find(image.publicationKey)!.artifactId);
     }
   });
 
@@ -103,31 +104,139 @@ describe("Claude viewed-image publications", () => {
     const publications = new ClaudeViewedImagePublications({ outputArtifacts: publisher, scope, applicationThreadId: "thread-a" });
     const image = candidate("invalid", data);
     await expect(publications.publish([image])).resolves.toBe(false);
+    await expect(publications.publish([image])).resolves.toBe(false);
+    publications.schedule([image]);
+    await publications.idle();
     expect(publisher.publishImage).not.toHaveBeenCalled();
-    expect(publications.publishable([image])).toEqual([]);
     expect(publications.find(image.publicationKey)).toBeUndefined();
-    expect(publisher.findImage).not.toHaveBeenCalled();
   });
 
-  it("remembers a store failure for this record only", async () => {
-    const publisher = spied();
+  it("remembers a store failure against retries only, never against lookups", async () => {
+    const retained = createInMemoryOutputArtifactPublisher();
+    const publisher = spied(retained);
     publisher.publishImage.mockRejectedValueOnce(new Error("disk full"));
     const image = candidate("store");
     const first = new ClaudeViewedImagePublications({ outputArtifacts: publisher, scope, applicationThreadId: "thread-a" });
     await expect(first.publish([image])).resolves.toBe(false);
     await expect(first.publish([image])).resolves.toBe(false);
     expect(publisher.publishImage).toHaveBeenCalledTimes(1);
+    expect(first.find(image.publicationKey)).toBeUndefined();
+    // Another path (a reopened handle, a driver read) publishes it; the
+    // failed record still finds it.
     const reopened = new ClaudeViewedImagePublications({ outputArtifacts: publisher, scope, applicationThreadId: "thread-a" });
     await expect(reopened.publish([image])).resolves.toBe(true);
     expect(publisher.publishImage).toHaveBeenCalledTimes(2);
+    expect(first.find(image.publicationKey)).toEqual(reopened.find(image.publicationKey));
   });
 
-  it("stops between images when the reader cancels", async () => {
+  it("forgets the oldest verified association past its bound, then finds it again", async () => {
+    const publisher = spied();
+    const publications = new ClaudeViewedImagePublications({ outputArtifacts: publisher, scope, applicationThreadId: "thread-a",
+      maximumRemembered: 2 });
+    const images = ["one", "two", "three"].map((key) => candidate(key));
+    for (const image of images) await publications.publish([image]);
+    publisher.findImage.mockClear();
+    expect(publications.find(images[2]!.publicationKey)).toBeDefined();
+    expect(publications.find(images[1]!.publicationKey)).toBeDefined();
+    expect(publisher.findImage).not.toHaveBeenCalled();
+    // The first was evicted: one lookup restores it, which evicts the least recent.
+    expect(publications.find(images[0]!.publicationKey)).toBeDefined();
+    expect(publisher.findImage).toHaveBeenCalledTimes(1);
+    expect(publications.find(images[0]!.publicationKey)).toBeDefined();
+    expect(publisher.findImage).toHaveBeenCalledTimes(1);
+    expect(publications.find(images[2]!.publicationKey)).toBeDefined();
+    expect(publisher.findImage).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not look up an image it is about to publish", async () => {
+    const publisher = spied();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const publishImage = publisher.publishImage.getMockImplementation()!;
+    publisher.publishImage.mockImplementation(async (input) => { await gate; return await publishImage(input); });
+    const publications = new ClaudeViewedImagePublications({ outputArtifacts: publisher, scope, applicationThreadId: "thread-a" });
+    const images = ["one", "two", "three"].map((key) => candidate(key));
+    publications.schedule(images);
+    for (const image of images) expect(publications.find(image.publicationKey)).toBeUndefined();
+    expect(publisher.findImage).not.toHaveBeenCalled();
+    release();
+    await publications.idle();
+    for (const image of images) expect(publications.find(image.publicationKey)).toBeDefined();
+    expect(publisher.findImage).not.toHaveBeenCalled();
+  });
+
+  it("waits for at most its budget, then finishes the rest in the background and reports each", async () => {
+    vi.useFakeTimers();
+    try {
+      const publisher = spied();
+      const releases = new Map<string, () => void>();
+      const publishImage = publisher.publishImage.getMockImplementation()!;
+      publisher.publishImage.mockImplementation(async (input) => {
+        await new Promise<void>((resolve) => releases.set(input.publicationKey, resolve));
+        return await publishImage(input);
+      });
+      const published: string[] = [];
+      const publications = new ClaudeViewedImagePublications({ outputArtifacts: publisher, scope, applicationThreadId: "thread-a",
+        onPublished: (key) => published.push(key) });
+      const images = ["a", "b", "c", "d", "e"].map((key) => candidate(key));
+      let settled = false;
+      const waited = publications.publish(images, { maximumImages: 2, timeoutMs: 1_000 }).then((result) => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      // The two newest wait inline; two more start in the background.
+      expect([...releases.keys()]).toEqual(["d", "e", "c", "b"].map((key) => candidate(key).publicationKey));
+      releases.get(candidate("e").publicationKey)!();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(waited).resolves.toBe(true);
+      expect(published).toEqual([]);
+      // The inline image still running at the deadline and the queued ones
+      // are reported as they finish.
+      releases.get(candidate("d").publicationKey)!();
+      releases.get(candidate("c").publicationKey)!();
+      releases.get(candidate("b").publicationKey)!();
+      await vi.advanceTimersByTimeAsync(0);
+      releases.get(candidate("a").publicationKey)!();
+      await publications.idle();
+      expect(published).toEqual(["d", "c", "b", "a"].map((key) => candidate(key).publicationKey));
+      for (const image of images) expect(publications.find(image.publicationKey)).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ends a reader's wait when it cancels, without dropping the images", async () => {
     const publisher = spied();
     const publications = new ClaudeViewedImagePublications({ outputArtifacts: publisher, scope, applicationThreadId: "thread-a" });
     const controller = new AbortController();
     controller.abort(new Error("cancelled"));
-    await expect(publications.publish([candidate("one"), candidate("two")], controller.signal)).rejects.toThrow("cancelled");
-    expect(publisher.publishImage).not.toHaveBeenCalled();
+    await expect(publications.publish([candidate("one"), candidate("two")], undefined, controller.signal)).resolves.toBe(false);
+    await publications.idle();
+    expect(publisher.publishImage).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops between images when closed and reports nothing after", async () => {
+    const publisher = spied();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const publishImage = publisher.publishImage.getMockImplementation()!;
+    publisher.publishImage.mockImplementation(async (input) => { await gate; return await publishImage(input); });
+    const onPublished = vi.fn();
+    const publications = new ClaudeViewedImagePublications({ outputArtifacts: publisher, scope, applicationThreadId: "thread-a",
+      onPublished });
+    const waited = publications.publish(["a", "b", "c", "d", "e", "f"].map((key) => candidate(key)));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(publisher.publishImage).toHaveBeenCalledTimes(6);
+    publications.close();
+    await expect(waited).resolves.toBe(false);
+    release();
+    await publications.idle();
+    publications.schedule([candidate("g")]);
+    await expect(publications.publish([candidate("h")])).resolves.toBe(false);
+    expect(publisher.publishImage).toHaveBeenCalledTimes(6);
+    expect(onPublished).not.toHaveBeenCalled();
   });
 });
