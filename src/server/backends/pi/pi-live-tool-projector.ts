@@ -37,7 +37,7 @@ interface ActiveAssistantStream {
   readonly sourceOrderBase: number;
   readonly startedAt: string;
   assistantEnded: boolean;
-  nextFallbackOrder: number;
+  nextFallbackContentIndex: number;
 }
 
 interface PendingPiToolCall {
@@ -79,6 +79,15 @@ export interface PiLiveToolProjectorOptions {
   readonly now?: () => string;
   readonly maximumPendingCalls?: number;
 }
+
+/**
+ * Each assistant content block owns two source-order positions: the block
+ * itself at `base + 2 * contentIndex` and one reserved child position after
+ * it. Content indexes stay below this bound so one message fits its stride.
+ */
+export const PI_MAXIMUM_ASSISTANT_CONTENT_INDEX = 1_000;
+export const PI_ASSISTANT_SOURCE_ORDER_STRIDE =
+  2 * PI_MAXIMUM_ASSISTANT_CONTENT_INDEX;
 
 const phaseRank: Readonly<Record<OperationPhase, number>> = {
   arguments_streaming: 0,
@@ -184,7 +193,8 @@ export class PiLiveToolProjector {
       !input.backendTurnId ||
       !Number.isSafeInteger(input.sourceOrderBase ?? 0) ||
       (input.sourceOrderBase ?? 0) < 0 ||
-      (input.sourceOrderBase ?? 0) > Number.MAX_SAFE_INTEGER - 1_000
+      (input.sourceOrderBase ?? 0) >
+        Number.MAX_SAFE_INTEGER - PI_ASSISTANT_SOURCE_ORDER_STRIDE
     ) {
       throw new Error("pi_live_tool_stream_invalid");
     }
@@ -201,7 +211,7 @@ export class PiLiveToolProjector {
       sourceOrderBase: input.sourceOrderBase ?? 0,
       startedAt: input.startedAt ?? this.#now(),
       assistantEnded: false,
-      nextFallbackOrder: input.sourceOrderBase ?? 0,
+      nextFallbackContentIndex: 0,
     };
     return [];
   }
@@ -528,6 +538,9 @@ export class PiLiveToolProjector {
         return this.#invalidate("buffer_overflow");
       }
       const contentIndex = this.#nextFallbackContentIndex();
+      if (!this.#validContentIndex(contentIndex)) {
+        return this.#invalidate("buffer_overflow");
+      }
       pending = this.#newPending(contentIndex, args, callId);
       this.#byContentIndex.set(contentIndex, pending);
       const correlation = this.#applyIdentity(pending, toolName, callId);
@@ -617,10 +630,10 @@ export class PiLiveToolProjector {
     callId?: string,
   ): PendingPiToolCall {
     const stream = this.#stream!;
-    const sourceOrder = stream.sourceOrderBase + contentIndex;
-    stream.nextFallbackOrder = Math.max(
-      stream.nextFallbackOrder,
-      sourceOrder + 1,
+    const sourceOrder = stream.sourceOrderBase + 2 * contentIndex;
+    stream.nextFallbackContentIndex = Math.max(
+      stream.nextFallbackContentIndex,
+      contentIndex + 1,
     );
     return {
       assistantStreamEpoch: stream.epoch,
@@ -637,11 +650,8 @@ export class PiLiveToolProjector {
 
   #nextFallbackContentIndex(): number {
     const stream = this.#stream!;
-    const contentIndex = Math.max(
-      0,
-      stream.nextFallbackOrder - stream.sourceOrderBase,
-    );
-    stream.nextFallbackOrder += 1;
+    const contentIndex = stream.nextFallbackContentIndex;
+    stream.nextFallbackContentIndex += 1;
     return contentIndex;
   }
 
@@ -721,7 +731,7 @@ export class PiLiveToolProjector {
     return (
       Number.isSafeInteger(contentIndex) &&
       contentIndex >= 0 &&
-      contentIndex < 1_000
+      contentIndex < PI_MAXIMUM_ASSISTANT_CONTENT_INDEX
     );
   }
 

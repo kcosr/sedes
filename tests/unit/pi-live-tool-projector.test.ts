@@ -382,7 +382,7 @@ describe("Pi live tool projection", () => {
     ).toEqual([]);
   });
 
-  it("uses stream epoch plus content index for stable identity and source order", () => {
+  it("uses stream epoch plus content index for stable identity and doubled source order", () => {
     const live = projector();
     live.beginAssistantStream({
       streamEpoch: "response/17",
@@ -454,13 +454,13 @@ describe("Pi live tool projection", () => {
       item: {
         backendItemId: "live:ea12301c61458a7483a8db05c3b05d2e:2",
         backendTurnId: "turn-1",
-        sourceOrder: 12,
+        sourceOrder: 14,
         phase: "arguments_streaming",
       },
     });
     expect(itemEvent(bashStart).item).toMatchObject({
       backendItemId: "live:ea12301c61458a7483a8db05c3b05d2e:4",
-      sourceOrder: 14,
+      sourceOrder: 18,
     });
     expect(itemEvent(bashDelta)).toMatchObject({
       type: "item_updated",
@@ -475,7 +475,7 @@ describe("Pi live tool projection", () => {
     });
     expect(itemEvent(readEnd).item).toMatchObject({
       phase: "arguments_complete",
-      sourceOrder: 12,
+      sourceOrder: 14,
     });
   });
 
@@ -662,6 +662,48 @@ describe("Pi live tool projection", () => {
         phase: "preflight_or_executing",
         command: { text: "pwd" },
       },
+    });
+  });
+
+  it("gives execution-only calls the next free even position after observed blocks", () => {
+    const live = projector(["bash"]);
+    live.beginAssistantStream({
+      streamEpoch: "epoch-3",
+      backendTurnId: "turn-3",
+      sourceOrderBase: 7,
+    });
+    live.consume(
+      toolCallUpdate("toolcall_start", 3, {
+        type: "toolCall",
+        id: "streamed-call",
+        name: "bash",
+        arguments: {},
+      }),
+    );
+    const first = live.consume(
+      executionEvent({
+        type: "tool_execution_start",
+        toolCallId: "fallback-one",
+        toolName: "bash",
+        args: { command: "pwd" },
+      }),
+    );
+    const second = live.consume(
+      executionEvent({
+        type: "tool_execution_start",
+        toolCallId: "fallback-two",
+        toolName: "bash",
+        args: { command: "ls" },
+      }),
+    );
+
+    expect(itemEvent(first).item).toMatchObject({
+      backendItemId: "live:epoch-3:4",
+      sourceOrder: 15,
+    });
+    expect(itemEvent(second).item).toMatchObject({
+      backendItemId: "live:epoch-3:5",
+      sourceOrder: 17,
     });
   });
 

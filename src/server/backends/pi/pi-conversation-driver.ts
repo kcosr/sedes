@@ -86,7 +86,11 @@ import {
 import { stagedAttachmentManifest } from "../staged-attachment-manifest.js";
 import { PiHistoryProjector } from "./pi-history-projector.js";
 import { piAssistantResponseEvidence } from "./pi-assistant-response-phase.js";
-import { PiLiveToolProjector } from "./pi-live-tool-projector.js";
+import {
+  PI_ASSISTANT_SOURCE_ORDER_STRIDE,
+  PI_MAXIMUM_ASSISTANT_CONTENT_INDEX,
+  PiLiveToolProjector,
+} from "./pi-live-tool-projector.js";
 import { PiProjectionEstablisher } from "./pi-projection-establisher.js";
 import { projectPiUserMessageContent } from "./pi-skill-message.js";
 import { formatPiContextExcerptPrompt } from "./pi-context-excerpt-message.js";
@@ -2434,7 +2438,8 @@ interface PiConversationHandleOptions {
 
 class PiConversationHandle implements ConversationHandle {
   readonly #usageAccounting: PiUsageAccounting | undefined;
-  static readonly #assistantSourceOrderStride = 1_000;
+  static readonly #assistantSourceOrderStride =
+    PI_ASSISTANT_SOURCE_ORDER_STRIDE;
 
   readonly binding: ConversationBinding;
   readonly #scope: ExecutionScope;
@@ -4102,7 +4107,7 @@ class PiConversationHandle implements ConversationHandle {
     if (
       !Number.isSafeInteger(nested.contentIndex) ||
       nested.contentIndex < 0 ||
-      nested.contentIndex >= PiConversationHandle.#assistantSourceOrderStride
+      nested.contentIndex >= PI_MAXIMUM_ASSISTANT_CONTENT_INDEX
     ) {
       this.#emit({
         type: "resnapshot_required",
@@ -4121,7 +4126,8 @@ class PiConversationHandle implements ConversationHandle {
         itemId: `${this.#activeTurnId}:live:${this.#assistantEpoch}:${key}`,
         kind,
         contentIndex: nested.contentIndex,
-        sourceOrder: this.#assistantSourceOrderBase + nested.contentIndex,
+        // The odd position after each block is reserved for its child.
+        sourceOrder: this.#assistantSourceOrderBase + 2 * nested.contentIndex,
         text: "",
         startedAt: this.#now(),
       };
