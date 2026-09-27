@@ -104,6 +104,7 @@ class PiBackendModuleRuntime implements BackendModuleRuntime {
       agentTools: context.agentTools,
       agentToolSourceCapabilities: context.agentToolSourceCapabilities,
       agentToolCli: context.agentToolCli,
+      outputArtifacts: context.outputArtifacts,
       ...(context.environmentOperations.environmentKind !== "local"
         ? {
             resolveRemoteWorkspace: (workspace) => {

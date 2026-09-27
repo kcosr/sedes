@@ -382,7 +382,7 @@ describe("Pi live tool projection", () => {
     ).toEqual([]);
   });
 
-  it("uses stream epoch plus content index for stable identity and source order", () => {
+  it("uses stream epoch plus content index for stable identity and doubled source order", () => {
     const live = projector();
     live.beginAssistantStream({
       streamEpoch: "response/17",
@@ -449,18 +449,12 @@ describe("Pi live tool projection", () => {
       ...readEnd,
     ];
     expectCanonical(all);
-    expect(itemEvent(readStart)).toMatchObject({
-      type: "item_started",
-      item: {
-        backendItemId: "live:ea12301c61458a7483a8db05c3b05d2e:2",
-        backendTurnId: "turn-1",
-        sourceOrder: 12,
-        phase: "arguments_streaming",
-      },
-    });
+    // A built-in read waits for its final path before choosing its kind.
+    expect(readStart).toEqual([]);
+    expect(readDelta).toEqual([]);
     expect(itemEvent(bashStart).item).toMatchObject({
       backendItemId: "live:ea12301c61458a7483a8db05c3b05d2e:4",
-      sourceOrder: 14,
+      sourceOrder: 18,
     });
     expect(itemEvent(bashDelta)).toMatchObject({
       type: "item_updated",
@@ -469,13 +463,16 @@ describe("Pi live tool projection", () => {
         command: { text: "printf hello" },
       },
     });
-    expect(itemEvent(readDelta).item).toMatchObject({
-      semanticKind: "file_read",
-      path: { text: "README.md" },
-    });
-    expect(itemEvent(readEnd).item).toMatchObject({
-      phase: "arguments_complete",
-      sourceOrder: 12,
+    expect(itemEvent(readEnd)).toMatchObject({
+      type: "item_started",
+      item: {
+        backendItemId: "live:ea12301c61458a7483a8db05c3b05d2e:2",
+        backendTurnId: "turn-1",
+        semanticKind: "file_read",
+        path: { text: "README.md" },
+        phase: "arguments_complete",
+        sourceOrder: 14,
+      },
     });
   });
 
@@ -665,8 +662,50 @@ describe("Pi live tool projection", () => {
     });
   });
 
+  it("gives execution-only calls the next free even position after observed blocks", () => {
+    const live = projector(["bash"]);
+    live.beginAssistantStream({
+      streamEpoch: "epoch-3",
+      backendTurnId: "turn-3",
+      sourceOrderBase: 7,
+    });
+    live.consume(
+      toolCallUpdate("toolcall_start", 3, {
+        type: "toolCall",
+        id: "streamed-call",
+        name: "bash",
+        arguments: {},
+      }),
+    );
+    const first = live.consume(
+      executionEvent({
+        type: "tool_execution_start",
+        toolCallId: "fallback-one",
+        toolName: "bash",
+        args: { command: "pwd" },
+      }),
+    );
+    const second = live.consume(
+      executionEvent({
+        type: "tool_execution_start",
+        toolCallId: "fallback-two",
+        toolName: "bash",
+        args: { command: "ls" },
+      }),
+    );
+
+    expect(itemEvent(first).item).toMatchObject({
+      backendItemId: "live:epoch-3:4",
+      sourceOrder: 15,
+    });
+    expect(itemEvent(second).item).toMatchObject({
+      backendItemId: "live:epoch-3:5",
+      sourceOrder: 17,
+    });
+  });
+
   it("publishes only after delayed tool identity becomes available", () => {
-    const live = projector(["read"]);
+    const live = projector(["bash"]);
     live.beginAssistantStream({
       streamEpoch: "epoch-3",
       backendTurnId: "turn-3",
@@ -684,8 +723,8 @@ describe("Pi live tool projection", () => {
       toolCallUpdate("toolcall_delta", 0, {
         type: "toolCall",
         id: "delayed-call",
-        name: "read",
-        arguments: { path: "src/index.ts" },
+        name: "bash",
+        arguments: { command: "pwd" },
       }),
     );
 
@@ -693,8 +732,8 @@ describe("Pi live tool projection", () => {
     expect(itemEvent(events)).toMatchObject({
       type: "item_started",
       item: {
-        semanticKind: "file_read",
-        path: { text: "src/index.ts" },
+        semanticKind: "command",
+        command: { text: "pwd" },
       },
     });
   });

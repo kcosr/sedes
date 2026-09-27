@@ -109,6 +109,7 @@ import {
   type CompiledBackendModelPolicy,
 } from "../../src/server/backends/model-policy.js";
 import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-tool-source-capabilities.js";
+import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 
 const roots: string[] = [];
 const toolProvenanceKey = new Uint8Array(32).fill(0x42);
@@ -125,6 +126,7 @@ class PiConversationBackendDriver extends ProductionPiConversationBackendDriver 
     super({
       modelPolicy: catalogModelPolicy,
       agentToolSourceCapabilities,
+      outputArtifacts: createInMemoryOutputArtifactPublisher(),
       ...options,
     });
   }
@@ -132,10 +134,11 @@ class PiConversationBackendDriver extends ProductionPiConversationBackendDriver 
 
 type PiDriverOptions = Omit<
   ProductionPiDriverOptions,
-  "agentToolSourceCapabilities" | "modelPolicy"
+  "agentToolSourceCapabilities" | "modelPolicy" | "outputArtifacts"
 > & {
   readonly modelPolicy?: CompiledBackendModelPolicy;
   readonly agentToolSourceCapabilities?: ProductionPiDriverOptions["agentToolSourceCapabilities"];
+  readonly outputArtifacts?: ProductionPiDriverOptions["outputArtifacts"];
 };
 
 const noAgentTools = {
@@ -10170,7 +10173,7 @@ describe("Pi conversation backend driver", () => {
       assistantStarts.map((event) =>
         event.type === "item_started" ? event.item.sourceOrder : -1,
       ),
-    ).toEqual([1, 2, 1_001, 1_002]);
+    ).toEqual([1, 3, 2_001, 2_003]);
     expect(
       projectionResults.filter(({ kind }) => kind === "resnapshot_required"),
     ).toEqual([]);
@@ -10188,7 +10191,7 @@ describe("Pi conversation backend driver", () => {
       settledAssistantItems.map(({ backendItemId }) => backendItemId),
     ).toEqual(liveAssistantIds);
     expect(settledAssistantItems.map(({ sourceOrder }) => sourceOrder)).toEqual(
-      [1, 2, 1_001, 1_002],
+      [1, 3, 2_001, 2_003],
     );
     expect(settledAssistantItems.map(item => item.responsePhase)).toEqual([
       "provisional", "provisional", "final", "final",

@@ -1,5 +1,9 @@
 import { PiUsageAccounting } from "./pi-usage-accounting.js";
 import type { UsageSink } from "../../usage/contracts.js";
+import type {
+  OutputArtifactPublisher,
+  OutputImageArtifactDescriptor,
+} from "../../output-artifacts/contracts.js";
 import { turnFailure } from "../turn-failure.js";
 import { cancelledPiRetryEntries, createPiCancelledRetryMarker, piCancelledRetryMarkerType } from "./pi-cancelled-retry-marker.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
@@ -84,9 +88,26 @@ import {
   requireSubmissionRetryAnchor,
 } from "../submission-retry-anchor.js";
 import { stagedAttachmentManifest } from "../staged-attachment-manifest.js";
-import { PiHistoryProjector } from "./pi-history-projector.js";
+import {
+  PiHistoryProjector,
+  type PiHistoryProjection,
+} from "./pi-history-projector.js";
+import {
+  decodePiViewedImage,
+  fillPiViewedImageChildren,
+  piViewedImageChildItem,
+  piViewedImagePublicationKey,
+  piViewedImageResultPart,
+  type PiViewedImageCandidate,
+  type PiViewedImageChildTarget,
+  type PiViewedImagePart,
+} from "./pi-viewed-image.js";
 import { piAssistantResponseEvidence } from "./pi-assistant-response-phase.js";
-import { PiLiveToolProjector } from "./pi-live-tool-projector.js";
+import {
+  PI_ASSISTANT_SOURCE_ORDER_STRIDE,
+  PI_MAXIMUM_ASSISTANT_CONTENT_INDEX,
+  PiLiveToolProjector,
+} from "./pi-live-tool-projector.js";
 import { PiProjectionEstablisher } from "./pi-projection-establisher.js";
 import { projectPiUserMessageContent } from "./pi-skill-message.js";
 import { formatPiContextExcerptPrompt } from "./pi-context-excerpt-message.js";
@@ -183,6 +204,10 @@ const submissionPersistenceWaitMilliseconds = 5_000;
 // requested through ConversationHandle.history rather than embedded in every
 // authoritative projection.
 const readSnapshotTurns = 10;
+/** Background child-image publications one projection seed schedules. */
+const viewedImageSeedPublicationBudget = 32;
+/** Child-image publications one older-history page waits for. */
+const viewedImagePagePublicationBudget = 16;
 const targetPiTimelinePayloadBytes = 256 * 1_024;
 const maximumPiItemsPerTurn = 1_000;
 const maximumPiSnapshotOrPageBytes = 4 * 1_024 * 1_024;
@@ -232,6 +257,8 @@ export interface PiDriverOptions extends PiSessionStoreOptions {
   readonly agentToolCli?: PiAgentToolCliResolution;
   readonly now?: () => string;
   readonly modelPolicy: CompiledBackendModelPolicy;
+  /** Publishes the in-band image of a built-in image read. */
+  readonly outputArtifacts: OutputArtifactPublisher;
 }
 
 interface ResolvedPiWorkspace {
@@ -958,6 +985,30 @@ function parseRetryAnchor(value: string | undefined): RetryAnchor | undefined {
 }
 
 /**
+ * Adds the already-published child image of each viewed image in `turnIds`.
+ * This only looks artifacts up; it never reads bytes or publishes.
+ */
+function fillPublishedPiViewedImages(
+  projection: PiHistoryProjection,
+  turnIds: ReadonlySet<string>,
+  outputArtifacts: OutputArtifactPublisher,
+  binding: ConversationBinding,
+  sessionId: string,
+): ReturnType<typeof fillPiViewedImageChildren> {
+  return fillPiViewedImageChildren(
+    projection.snapshot,
+    projection.viewedImages,
+    turnIds,
+    (candidate) =>
+      outputArtifacts.findImage(
+        { tenantId: binding.tenantId, principalId: binding.ownerPrincipalId },
+        binding.applicationThreadId,
+        piViewedImagePublicationKey({ sessionId, ...candidate }),
+      ),
+  );
+}
+
+/**
  * Selects the newest contiguous whole-turn window that satisfies both Pi's
  * count policy and the backend aggregate wire contract.
  */
@@ -1279,9 +1330,11 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
   readonly #openHandles = new Map<string, PiConversationHandle>();
   readonly #pendingAttachments = new Set<string>();
   readonly #modelPolicy: CompiledBackendModelPolicy;
+  readonly #outputArtifacts: OutputArtifactPublisher;
 
   constructor(options: PiDriverOptions) {
     this.#usage = options.usage;
+    this.#outputArtifacts = options.outputArtifacts;
     this.#resolveThreadEnvironment = options.resolveThreadEnvironment ?? (async () => Object.freeze({}));
     this.instance = options.instance;
     this.connection = options.connection;
@@ -1740,6 +1793,7 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
         agentToolTurnCorrelation,
         onEffectiveSettings: this.#onEffectiveSettings,
         modelPolicy: this.#modelPolicy,
+        outputArtifacts: this.#outputArtifacts,
         now: this.#now,
         release: async () => {
           if (
@@ -1824,12 +1878,18 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
           ),
         authentication,
       );
-      const snapshot = await backendCall(
-        () =>
-          new PiHistoryProjector({
-            toolIdentityAuthentication: authentication,
-          }).project(session.sessionManager.getBranch()).snapshot,
+      const projection = await backendCall(() =>
+        new PiHistoryProjector({
+          toolIdentityAuthentication: authentication,
+        }).project(session.sessionManager.getBranch()),
       );
+      const snapshot = fillPublishedPiViewedImages(
+        projection,
+        new Set(projection.snapshot.orderedBackendTurnIds.slice(-readSnapshotTurns)),
+        this.#outputArtifacts,
+        input.binding,
+        session.sessionId,
+      ).snapshot;
       return {
         snapshot: selectPiSnapshotWindow(
           snapshot,
@@ -2430,11 +2490,13 @@ interface PiConversationHandleOptions {
   readonly now: () => string;
   readonly release: () => void | Promise<void>;
   readonly modelPolicy: CompiledBackendModelPolicy;
+  readonly outputArtifacts: OutputArtifactPublisher;
 }
 
 class PiConversationHandle implements ConversationHandle {
   readonly #usageAccounting: PiUsageAccounting | undefined;
-  static readonly #assistantSourceOrderStride = 1_000;
+  static readonly #assistantSourceOrderStride =
+    PI_ASSISTANT_SOURCE_ORDER_STRIDE;
 
   readonly binding: ConversationBinding;
   readonly #scope: ExecutionScope;
@@ -2477,6 +2539,18 @@ class PiConversationHandle implements ConversationHandle {
   >();
   readonly #emittedTurns = new Map<string, BackendTurn>();
   readonly #emittedItems = new Map<string, BackendItem>();
+  readonly #outputArtifacts: OutputArtifactPublisher;
+  /**
+   * The child each unpublished viewed image targets in the current projection
+   * generation, by publication key. Every seed replaces it, so a publication
+   * that finishes after a refresh adds its child under the new identity.
+   */
+  #viewedImageTargets = new Map<string, PiViewedImageChildTarget>();
+  readonly #viewedImagePublications = new Map<
+    string,
+    Promise<OutputImageArtifactDescriptor | undefined>
+  >();
+  #viewedImageBackfill: Promise<void> = Promise.resolve();
   readonly #unsubscribeSession: Unsubscribe;
   #activeTurnId?: string;
   #runState: BackendConversationSnapshot["runState"];
@@ -2525,6 +2599,7 @@ class PiConversationHandle implements ConversationHandle {
     this.#release = options.release;
     this.#onEffectiveSettings = options.onEffectiveSettings;
     this.#modelPolicy = options.modelPolicy;
+    this.#outputArtifacts = options.outputArtifacts;
     this.#runState = options.session.isIdle ? "idle" : "running";
     if (options.session.isIdle) {
       const branch = options.session.sessionManager.getBranch();
@@ -2667,21 +2742,37 @@ class PiConversationHandle implements ConversationHandle {
     await backendCall(() => this.#session.ready());
     input.signal?.throwIfAborted();
     validatePage(input.limit);
-    const projection = await backendCall(
-      () =>
-        new PiHistoryProjector({
-          runState: this.#runState,
-          activeUserEntryId: this.#activeTurnId,
-          toolIdentityAuthentication: this.#toolIdentityAuthentication,
-        }).project(this.#session.sessionManager.getBranch()).snapshot,
+    const projected = await backendCall(() =>
+      new PiHistoryProjector({
+        runState: this.#runState,
+        activeUserEntryId: this.#activeTurnId,
+        toolIdentityAuthentication: this.#toolIdentityAuthentication,
+      }).project(this.#session.sessionManager.getBranch()),
     );
     const before = parseHistoryCursor(
       input.cursor,
       this.#session.sessionId,
-      projection.orderedBackendTurnIds.length,
+      projected.snapshot.orderedBackendTurnIds.length,
     );
+    const pageTurnIds = new Set(
+      projected.snapshot.orderedBackendTurnIds.slice(
+        Math.max(0, before - input.limit),
+        before,
+      ),
+    );
+    // Forks and sessions from before image capture have no artifacts yet.
+    const missing = this.#fillViewedImages(projected, pageTurnIds).missing;
+    for (const candidate of missing
+      .slice(-viewedImagePagePublicationBudget)
+      .reverse()) {
+      input.signal?.throwIfAborted();
+      await this.#publishViewedImage(this.#viewedImageKey(candidate), () =>
+        this.#persistedViewedImagePart(candidate),
+      );
+    }
+    input.signal?.throwIfAborted();
     return selectPiHistoryPage(
-      projection,
+      this.#fillViewedImages(projected, pageTurnIds).snapshot,
       this.#session.sessionId,
       before,
       input.limit,
@@ -2694,14 +2785,14 @@ class PiConversationHandle implements ConversationHandle {
     await backendCall(() => this.#session.ready());
     input.signal?.throwIfAborted();
     validateTurnCandidateLimit(input.maximumTurnCandidates);
-    const projection = await backendCall(
-      () =>
-        new PiHistoryProjector({
-          runState: this.#runState,
-          activeUserEntryId: this.#activeTurnId,
-          toolIdentityAuthentication: this.#toolIdentityAuthentication,
-        }).project(this.#session.sessionManager.getBranch()).snapshot,
+    const projected = await backendCall(() =>
+      new PiHistoryProjector({
+        runState: this.#runState,
+        activeUserEntryId: this.#activeTurnId,
+        toolIdentityAuthentication: this.#toolIdentityAuthentication,
+      }).project(this.#session.sessionManager.getBranch()),
     );
+    const projection = projected.snapshot;
     input.signal?.throwIfAborted();
     const candidateCount = Math.min(
       projection.orderedBackendTurnIds.length,
@@ -2715,7 +2806,7 @@ class PiConversationHandle implements ConversationHandle {
       input.signal?.throwIfAborted();
       if (!matched) continue;
       const selected = selectPiHistoryPage(
-        projection,
+        this.#fillViewedImages(projected, new Set([backendTurnId])).snapshot,
         this.#session.sessionId,
         index + 1,
         1,
@@ -4020,6 +4111,9 @@ class PiConversationHandle implements ConversationHandle {
     for (const projected of this.#liveTools.consume(event)) {
       this.#emit(projected);
     }
+    if (event.type === "tool_execution_end") {
+      this.#publishLiveViewedImages();
+    }
     if (event.type === "tool_execution_start") {
       for (const projected of this.#liveTools.consumeAgentToolInvocationMarkers(
         this.#session.sessionManager.getBranch(),
@@ -4102,7 +4196,7 @@ class PiConversationHandle implements ConversationHandle {
     if (
       !Number.isSafeInteger(nested.contentIndex) ||
       nested.contentIndex < 0 ||
-      nested.contentIndex >= PiConversationHandle.#assistantSourceOrderStride
+      nested.contentIndex >= PI_MAXIMUM_ASSISTANT_CONTENT_INDEX
     ) {
       this.#emit({
         type: "resnapshot_required",
@@ -4121,7 +4215,8 @@ class PiConversationHandle implements ConversationHandle {
         itemId: `${this.#activeTurnId}:live:${this.#assistantEpoch}:${key}`,
         kind,
         contentIndex: nested.contentIndex,
-        sourceOrder: this.#assistantSourceOrderBase + nested.contentIndex,
+        // The odd position after each block is reserved for its child.
+        sourceOrder: this.#assistantSourceOrderBase + 2 * nested.contentIndex,
         text: "",
         startedAt: this.#now(),
       };
@@ -4500,13 +4595,17 @@ class PiConversationHandle implements ConversationHandle {
     this.#assistantEpoch = undefined;
     this.#assistantItems.clear();
     this.#liveTools.reset();
-    const full = new PiHistoryProjector({
+    const projected = new PiHistoryProjector({
       runState: this.#runState,
       activeUserEntryId: this.#activeTurnId,
       toolIdentityAuthentication: this.#toolIdentityAuthentication,
-    }).project(this.#session.sessionManager.getBranch()).snapshot;
+    }).project(this.#session.sessionManager.getBranch());
+    const filled = this.#fillViewedImages(
+      projected,
+      new Set(projected.snapshot.orderedBackendTurnIds.slice(-readSnapshotTurns)),
+    );
     const seed = selectPiProjectionWindow(
-      full,
+      filled.snapshot,
       readSnapshotTurns,
       this.#session.sessionId,
     );
@@ -4518,7 +4617,166 @@ class PiConversationHandle implements ConversationHandle {
     for (const item of Object.values(seed.snapshot.itemsById)) {
       this.#emittedItems.set(item.backendItemId, item);
     }
+    this.#scheduleViewedImageBackfill(
+      filled.missing.filter(({ child }) =>
+        this.#emittedTurns.has(child.backendTurnId),
+      ),
+    );
     return seed;
+  }
+
+  #viewedImageKey(
+    coordinates: Pick<
+      PiViewedImageCandidate,
+      "assistantEntryId" | "toolCallId" | "imageIndex"
+    >,
+  ): string {
+    return piViewedImagePublicationKey({
+      sessionId: this.#session.sessionId,
+      assistantEntryId: coordinates.assistantEntryId,
+      toolCallId: coordinates.toolCallId,
+      imageIndex: coordinates.imageIndex,
+    });
+  }
+
+  #fillViewedImages(
+    projection: PiHistoryProjection,
+    turnIds: ReadonlySet<string>,
+  ): ReturnType<typeof fillPiViewedImageChildren> {
+    return fillPublishedPiViewedImages(
+      projection,
+      turnIds,
+      this.#outputArtifacts,
+      this.binding,
+      this.#session.sessionId,
+    );
+  }
+
+  /** Re-resolves a persisted image part; the entry must still match. */
+  #persistedViewedImagePart(
+    candidate: PiViewedImageCandidate,
+  ): PiViewedImagePart | undefined {
+    const entry = this.#session.sessionManager.getEntry(
+      candidate.toolResultEntryId,
+    );
+    if (
+      entry?.type !== "message" ||
+      entry.message.role !== "toolResult" ||
+      entry.message.toolCallId !== candidate.toolCallId
+    ) {
+      return undefined;
+    }
+    const part = piViewedImageResultPart(entry.message);
+    return part?.imageIndex === candidate.imageIndex ? part : undefined;
+  }
+
+  /**
+   * Replaces the child targets with this generation's missing children and
+   * publishes a bounded, newest-first share of them in the background.
+   */
+  #scheduleViewedImageBackfill(
+    candidates: readonly PiViewedImageCandidate[],
+  ): void {
+    const keyed = candidates.map((candidate) => ({
+      key: this.#viewedImageKey(candidate),
+      candidate,
+    }));
+    this.#viewedImageTargets = new Map(
+      keyed.map(({ key, candidate }) => [key, candidate.child]),
+    );
+    for (const { key, candidate } of keyed
+      .slice(-viewedImageSeedPublicationBudget)
+      .reverse()) {
+      this.#viewedImageBackfill = this.#viewedImageBackfill.then(async () => {
+        if (this.#closed || !this.#viewedImageTargets.has(key)) return;
+        await this.#publishViewedImage(key, () =>
+          this.#persistedViewedImagePart(candidate),
+        );
+      });
+    }
+  }
+
+  #publishLiveViewedImages(): void {
+    const results = this.#liveTools.takeViewedImageResults();
+    if (results.length === 0) return;
+    const branch = this.#session.sessionManager.getBranch();
+    for (const result of results) {
+      const assistantEntryId = findPiToolCallAssistantEntryId(
+        branch,
+        result.toolCallId,
+        result.toolName,
+      );
+      if (!assistantEntryId) continue;
+      const key = this.#viewedImageKey({
+        assistantEntryId,
+        toolCallId: result.toolCallId,
+        imageIndex: result.part.imageIndex,
+      });
+      this.#viewedImageTargets.set(key, result.child);
+      void this.#publishViewedImage(key, () => result.part);
+    }
+  }
+
+  /**
+   * Publishes one child image, at most once at a time per key, then adds it
+   * to whichever generation currently targets that key. It never rejects.
+   */
+  #publishViewedImage(
+    key: string,
+    part: () => PiViewedImagePart | undefined,
+  ): Promise<OutputImageArtifactDescriptor | undefined> {
+    const active = this.#viewedImagePublications.get(key);
+    if (active) return active;
+    const scope = {
+      tenantId: this.binding.tenantId,
+      principalId: this.binding.ownerPrincipalId,
+    };
+    const threadId = this.binding.applicationThreadId;
+    const publication = (async () => {
+      const existing = this.#outputArtifacts.findImage(scope, threadId, key);
+      if (existing) return existing;
+      const resolved = part();
+      const decoded = resolved ? decodePiViewedImage(resolved) : undefined;
+      if (!decoded) return undefined;
+      return await this.#outputArtifacts.publishImage({
+        scope,
+        threadId,
+        publicationKey: key,
+        mediaType: decoded.mediaType,
+        bytes: decoded.bytes,
+      });
+    })()
+      .catch(() => undefined)
+      .then((descriptor) => {
+        this.#viewedImagePublications.delete(key);
+        if (descriptor) this.#deliverViewedImage(key, descriptor);
+        return descriptor;
+      });
+    this.#viewedImagePublications.set(key, publication);
+    return publication;
+  }
+
+  #deliverViewedImage(
+    key: string,
+    descriptor: OutputImageArtifactDescriptor,
+  ): void {
+    if (this.#closed) return;
+    const target = this.#viewedImageTargets.get(key);
+    if (
+      !target ||
+      !this.#emittedTurns.has(target.backendTurnId) ||
+      !this.#emittedItems.has(target.viewedItemId) ||
+      this.#emittedItems.has(target.backendItemId)
+    ) {
+      return;
+    }
+    this.#viewedImageTargets.delete(key);
+    // Only a new item: the projections order it by its reserved source order.
+    // A turn update here would reopen a completed turn.
+    this.#emit({
+      type: "item_completed",
+      item: piViewedImageChildItem(target, descriptor),
+    });
   }
 
   #requestProjectionRefreshForWindow(): void {
