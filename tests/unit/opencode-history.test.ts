@@ -155,6 +155,38 @@ describe("OpenCode complete retained native history acquisition", () => {
     await expect(refreshOpenCodeHistory(api, before, { sessionId: "ses_foreign" })).rejects.toMatchObject({ reason: "invalidated" });
   });
 
+  it("refetches exact dirty settled records without rereading the open suffix and invalidates a reopened retry anchor", async () => {
+    const complete = assistant("msg_retry", { error: { type: "ProviderError", message: "retryable failure" }, time: { created: 200, completed: 250 } });
+    const suffix = Array.from({ length: 500 }, (_, index) => user(`msg_suffix_${index}`));
+    const { api, state } = apiFixture([complete, ...suffix]);
+    const before = await readOpenCodeHistory(api, { sessionId });
+    api.getMessage.mockClear(); api.getHistoryPage.mockClear();
+    state.messages[0] = assistant("msg_retry", { time: { created: 200, completed: 250 }, content: [{ type: "text", text: "updated full value" }] });
+    const dirtyMessageIds = new Set(["msg_retry"]);
+    const updated = await refreshOpenCodeHistory(api, restartOpenCodeHistoryAcquisition(before), { sessionId, dirtyMessageIds });
+    expect(api.getHistoryPage).toHaveBeenCalledOnce();
+    expect(api.getMessage.mock.calls.map(([, id]) => id)).toEqual(["msg_retry", "msg_suffix_499"]);
+    expect(updated.messages[0]).toBe(state.messages[0]);
+    expect(updated.messages[1]).toBe(before.messages[1]);
+    state.messages[0] = assistant("msg_retry", { time: { created: 400 } });
+    await expect(refreshOpenCodeHistory(api, restartOpenCodeHistoryAcquisition(updated), { sessionId, dirtyMessageIds }))
+      .rejects.toMatchObject({ reason: "invalidated" });
+  });
+
+  it.each(["running", "streaming"] as const)("keeps a completed assistant with %s tools mutable before later records", async status => {
+    const tool = { type: "tool", id: "tool_pending", name: "read", state: status === "running"
+      ? { status, input: {}, metadata: {} } : { status, input: "" }, time: { created: 210 } };
+    const message = assistant("msg_tools", { content: [tool], time: { created: 200, completed: 250 } });
+    const { api, state } = apiFixture([message, user("msg_later")]);
+    const before = await readOpenCodeHistory(api, { sessionId }); api.getMessage.mockClear();
+    state.messages[0] = assistant("msg_tools", { time: { created: 200, completed: 250 }, content: [
+      { ...tool, state: { status: "completed", input: {}, content: [{ type: "text", text: "late tool result" }] }, time: { created: 210, completed: 300 } },
+    ] });
+    const updated = await refreshOpenCodeHistory(api, restartOpenCodeHistoryAcquisition(before), { sessionId });
+    expect(api.getMessage.mock.calls.map(([, id]) => id)).toEqual(["msg_tools", "msg_later"]);
+    expect(updated.messages[0]).toEqual(state.messages[0]);
+  });
+
   it.each(["empty", "duplicate", "missing_anchor", "changed_anchor", "reused_cursor"] as const)("rejects %s continuity rather than installing a truncated prefix", async fault => {
     const { api } = apiFixture([user("msg_a"), user("msg_b"), idle("msg_c")]);
     const original = api.getHistoryPage.getMockImplementation()!;

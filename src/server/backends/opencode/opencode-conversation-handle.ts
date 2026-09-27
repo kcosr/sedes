@@ -55,6 +55,10 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   readonly #childIds = new Set<string>();
   readonly #shellIds = new Set<string>();
   readonly #dirtyParts = new Set<string>();
+  readonly #dirtyMessages = new Map<string, number>();
+  readonly #shellMessageIds = new Map<string, string>();
+  #latestAssistantMessageId?: string;
+  #latestCompactionMessageId?: string;
   #eventBytes = 0;
   #eventRecords = 0;
   #partBytes = 0;
@@ -179,6 +183,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     this.#release(); this.#rawListeners.clear(); this.#listeners.clear();
     this.#journal.length = 0; this.#journalBytes = 0; this.#parts.clear(); this.#partBytes = 0; this.#nativePartCounts.clear();
     this.#retained = undefined; this.#projection = undefined;
+    this.#dirtyMessages.clear(); this.#shellMessageIds.clear();
   }
 
   readonly #ownerLost = () => {
@@ -230,6 +235,8 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     this.#generation = randomUUID(); this.#parts.clear(); this.#partBytes = 0; this.#seenEvents.clear(); this.#nativePartCounts.clear();
     this.#retained = undefined; this.#projection = undefined;
     this.#dirtyParts.clear(); this.#projectedRevision = this.#structuralRevision;
+    this.#dirtyMessages.clear(); this.#shellMessageIds.clear();
+    this.#latestAssistantMessageId = undefined; this.#latestCompactionMessageId = undefined;
     this.#observedActivityRevision = this.#activityRevision;
     const observation = this.#api.observe({ signal: this.#lifetime, include: event => {
       if ((event.type === "session.moved" || event.type === "session.deleted") && event.data.sessionID === this.binding.backendConversationId) {
@@ -286,7 +293,9 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     try {
       await this.runtime.assertCurrent(signal); check();
       const revision = this.#structuralRevision, activityRevision = this.#activityRevision;
-      const readInput = { sessionId: this.binding.backendConversationId, signal, assertCurrent: check, additionalUsage: extra };
+      const dirtyMessages = new Map(this.#dirtyMessages);
+      const readInput = { sessionId: this.binding.backendConversationId, signal, assertCurrent: check, additionalUsage: extra,
+        dirtyMessageIds: new Set(dirtyMessages.keys()) };
       // Install one finite native cut. Work observed during acquisition remains
       // dirty for the pump; unrelated or continuous streaming cannot demand quiet.
       const retained = this.#retained
@@ -322,6 +331,9 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       const projection = this.#project(signal); check();
       const prior = this.#projection; this.#projection = projection;
       this.#projectedRevision = revision; this.#observedActivityRevision = activityRevision;
+      // An event arriving during the read retains its newer revision even if
+      // this same native record was already selected for an earlier reread.
+      for (const [id, dirtyRevision] of dirtyMessages) if (this.#dirtyMessages.get(id) === dirtyRevision) this.#dirtyMessages.delete(id);
       this.#dirtyParts.clear();
       if (prior && !this.#invalidated) this.#diff(prior, projection);
       return projection;
@@ -363,8 +375,8 @@ export class OpenCodeConversationHandle implements ConversationHandle {
         this.#invalidate("history_changed"); throw new OpenCodeHistoryError("invalidated");
       }
       if ("sessionID" in event.data && event.data.sessionID === this.binding.backendConversationId) {
+        if ("durable" in event) { this.#structuralRevision++; this.#markNativeChanges(event); }
         if (this.#observeText(event)) continue;
-        if ("durable" in event) this.#structuralRevision++;
       } else {
         if ((event.type === "session.created" || event.type === "session.forked") && event.data.parentID === this.binding.backendConversationId) this.#childIds.add(event.data.sessionID);
         if (event.type === "session.deleted") this.#childIds.delete(event.data.sessionID);
@@ -374,6 +386,34 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       }
     }
     return changed;
+  }
+
+  #markDirtyMessage(id: string | undefined): void {
+    if (!id) return;
+    if (!this.#dirtyMessages.has(id) && this.#dirtyMessages.size >= JOURNAL_RECORDS) throw new OpenCodeHistoryError("records");
+    this.#dirtyMessages.set(id, this.#structuralRevision);
+  }
+
+  #markNativeChanges(event: OpenCodeNativeEvent): void {
+    // Pinned message-updater addresses assistant/tool mutations by message ID,
+    // shell mutations by shell ID, and compaction mutations by the latest row.
+    if ("assistantMessageID" in event.data) this.#markDirtyMessage(event.data.assistantMessageID);
+    if (event.type === "session.step.started") {
+      this.#markDirtyMessage(this.#latestAssistantMessageId);
+      this.#latestAssistantMessageId = event.data.assistantMessageID;
+    } else if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed" || event.type === "session.execution.interrupted") {
+      this.#markDirtyMessage(this.#latestAssistantMessageId);
+    } else if (event.type === "session.shell.started") {
+      this.#shellMessageIds.set(event.data.shell.id, event.id.replace(/^evt_/, "msg_"));
+      this.#markDirtyMessage(this.#shellMessageIds.get(event.data.shell.id));
+    } else if (event.type === "session.shell.ended") {
+      this.#markDirtyMessage(this.#shellMessageIds.get(event.data.shell.id));
+    } else if (event.type === "session.compaction.started") {
+      this.#latestCompactionMessageId = event.data.inputID ?? event.id.replace(/^evt_/, "msg_");
+      this.#markDirtyMessage(this.#latestCompactionMessageId);
+    } else if (event.type === "session.compaction.ended" || event.type === "session.compaction.failed") {
+      this.#markDirtyMessage(this.#latestCompactionMessageId);
+    }
   }
 
   #observeText(event: OpenCodeNativeEvent): boolean {
@@ -393,14 +433,20 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     const bytes = this.#partBytes - Buffer.byteLength(previous?.text ?? "") + Buffer.byteLength(text);
     if (bytes > JOURNAL_BYTES || (!previous && this.#parts.size >= JOURNAL_RECORDS)) throw new OpenCodeHistoryError("bytes");
     this.#parts.set(key, { text, completed: ended }); this.#partBytes = bytes; this.#dirtyParts.add(key);
-    if ((this.#nativePartCounts.get(data.assistantMessageID)?.[kind] ?? 0) <= data.ordinal) this.#structuralRevision++;
+    if ((this.#nativePartCounts.get(data.assistantMessageID)?.[kind] ?? 0) <= data.ordinal) {
+      this.#structuralRevision++; this.#markDirtyMessage(data.assistantMessageID);
+    }
     return true;
   }
 
   #pruneParts(retained: OpenCodeRetainedHistory): void {
     this.#nativePartCounts.clear();
+    this.#shellMessageIds.clear(); this.#latestAssistantMessageId = undefined; this.#latestCompactionMessageId = undefined;
     for (const message of retained.messages) {
+      if (message.type === "shell") this.#shellMessageIds.set(message.shellID, message.id);
+      if (message.type === "compaction" && message.status === "running") this.#latestCompactionMessageId = message.id;
       if (message.type !== "assistant") continue;
+      this.#latestAssistantMessageId = message.id;
       const ordinals = { text: 0, reasoning: 0 };
       for (const part of message.content) {
         if (part.type !== "text" && part.type !== "reasoning") continue;

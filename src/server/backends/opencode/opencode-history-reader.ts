@@ -66,6 +66,8 @@ export interface OpenCodeHistoryReadInput {
   readonly limits?: Partial<OpenCodeHistoryLimits>;
   readonly assertCurrent?: () => void;
   readonly additionalUsage?: () => { readonly decodedBytes: number; readonly records: number };
+  /** Exact retained records changed by durable events in this finite acquisition. */
+  readonly dirtyMessageIds?: ReadonlySet<string>;
 }
 type OpenCodeHistoryApi = Pick<OpenCodeNativeApi, "getHistoryPage" | "getMessage">;
 
@@ -137,14 +139,15 @@ async function acquireOpenCodeHistory(api: OpenCodeHistoryApi, input: OpenCodeHi
     const messages: OpenCodeNativeMessage[] = prior ? [...prior.messages] : [];
     if (prior?.headId) {
       if (!head || messages.at(-1)?.id !== prior.headId || !prior.forwardCursor) throw new OpenCodeHistoryError("invalidated");
-      // Match the pinned session fork projector's settled-history predicate: completed
-      // assistant messages and non-running shell/compaction records are stable,
-      // including within the open period. Mutable records can precede an idle.
+      // Most settled records can be retained by reference, but durable events
+      // can reopen an assistant or replace its content after step completion.
+      // Running tools and background records can also precede an idle boundary.
       for (let index = 0; index < messages.length; index++) {
         const message = messages[index]!;
-        const mutable = message.type === "assistant" && message.time.completed === undefined ||
+        const mutable = message.type === "assistant" && (message.time.completed === undefined ||
+          message.content.some(part => part.type === "tool" && (part.state.status === "running" || part.state.status === "streaming"))) ||
           message.type === "shell" && message.status === "running" || message.type === "compaction" && message.status === "running";
-        if (mutable || index === messages.length - 1) messages[index] = await anchor(message);
+        if (mutable || input.dirtyMessageIds?.has(message.id) || index === messages.length - 1) messages[index] = await anchor(message);
       }
       if (head.id !== prior.headId) {
         const seen = new Set(messages.map(message => message.id));

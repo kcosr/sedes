@@ -133,8 +133,12 @@ separate raw subscription while snapshot hydration is pending.
 
 Each resident handle retains one complete, disposable native-history projection.
 Initial acquisition reads to a captured finite head, validates continuation
-anchors, and catches up by refreshing unfinished records and following native
-forward cursors. Live durable changes reuse the retained native cut and unchanged
+anchors, and catches up by refreshing mutable records, exact records identified
+by durable events, and the retained head before following native forward cursors.
+A completed assistant can reopen on a native retry or receive a late tool result;
+completion alone is not an immutability guarantee. A retry that changes the
+record's creation anchor triggers a fresh projection generation.
+Live durable changes reuse the retained native cut and unchanged
 closed-turn projections; text fragments update only affected normalized items.
 Child execution and attributed shell changes refresh the scoped activity inventory
 without reading parent history. Paging and lookup operate on the retained
