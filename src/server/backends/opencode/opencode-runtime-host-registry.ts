@@ -136,6 +136,18 @@ export class OpenCodeRuntimeHostRegistry {
     resident.host ??= resident.runtime.nativeHost;
     if (resident.runtime.snapshot().state === "ready") await resident.host?.prepareRetirement().catch(() => undefined);
   }
+  #serviceSnapshot(resident: Resident) {
+    const native = resident.runtime.snapshot();
+    // Stock background inventory is incomplete even when foreground reads are
+    // empty. Keep that conservative service posture stable while main detaches
+    // and native events/ACKs continue: those do not replace the confirmed owner.
+    // Detailed work and evidence still appear in backend inspection/archival.
+    const blockers: SidecarUpgradeBlocker[] = ["unknown_state"];
+    if (native.state === "cleanup_unproved") blockers.push("cleanup_unproven");
+    return { state: "unknown" as const, blockers,
+      revision: configurationFingerprint({ runtimeId: resident.runtime.runtimeId,
+        state: native.state, generation: native.generation ?? null, ownership: native.ownership }) };
+  }
   #snapshot(resident: Resident) {
     resident.host ??= resident.runtime.nativeHost;
     const native = resident.runtime.snapshot(), retained = resident.host?.retentionSnapshot();
@@ -150,8 +162,7 @@ export class OpenCodeRuntimeHostRegistry {
     // Confirmation authorizes retiring this exact native owner. Streaming deltas,
     // evidence ACKs and newly observed work must not make a confirmed force Stop
     // impossible; current blockers still govern every non-forced retirement.
-    const revision = configurationFingerprint({ runtimeId: resident.runtime.runtimeId,
-      state: native.state, generation: native.generation ?? null, ownership: native.ownership });
+    const { revision } = this.#serviceSnapshot(resident);
     return { state, incarnation: resident.runtime.runtimeId, revision, blockers,
       startupEnvironmentFingerprint: resident.startupEnvironmentFingerprint,
       retainedThreadIds: retained?.threadIds ?? [] };
@@ -198,7 +209,7 @@ export class OpenCodeRuntimeHostRegistry {
       startupEnvironmentFingerprint: configurationFingerprint(configuration.startupEnvironmentVariables ?? {}),
       unregister: () => {}, frozen: false, retiring: false };
     resident.unregister = this.input.services.register({ resourceId: runtime.runtimeId, kind: "provider",
-      snapshot: () => { const { state, revision, blockers } = this.#snapshot(resident); return { state, revision, blockers }; },
+      snapshot: () => this.#serviceSnapshot(resident),
       prepareRestart: () => this.#refresh(resident),
       stop: (reason, { force }) => this.#retire(resident, reason, force) });
     this.#runtimes.set(configuration.instance.id, resident); this.#byId.set(runtime.runtimeId, resident);

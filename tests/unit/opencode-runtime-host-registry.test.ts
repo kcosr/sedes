@@ -4,6 +4,11 @@ import { OpenCodeRuntimeHostRegistry, type OpenCodeRuntimeConfiguration } from "
 import type { OpenCodeRuntime, OpenCodeRuntimeInput, OpenCodeRuntimeSnapshot } from "../../src/server/backends/opencode/opencode-runtime.js";
 import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execution/environment-channel.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
+import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
+import { OpenCodeHttpNativeAdapter } from "../../src/server/backends/opencode/opencode-http-native-adapter.js";
+import { OpenCodeNativeHost } from "../../src/server/backends/opencode/opencode-native-host.js";
+import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
+import { openCodeTestMutationControl } from "../helpers/opencode-native-port-fixture.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" }, executionEnvironmentId = "environment";
 const serviceConfiguration = { environmentRevision: 1, operationsRevision: 1 };
@@ -14,7 +19,7 @@ const configuration: OpenCodeRuntimeConfiguration = {
   connection: { ownership: "owned", channel: { type: "process_stdio", executablePath: "/bin/opencode2", workingDirectory: "/workspace" } },
 };
 function deferred() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
-function fixture() {
+function fixture(createHost?: (runtimeId: string) => OpenCodeNativeHost) {
   const archive = vi.fn(async (_record: unknown) => {});
   const services = new PersistentSidecarServiceRegistry({ scope: { ...scope, installationId: "installation", executionEnvironmentId }, buildId: "build", artifactSha256: "a".repeat(64), runtimeWireVersion: 1, configuration: serviceConfiguration, recordAbandonment: archive });
   const epoch = services.attach(serviceConfiguration), owners: FakeRuntime[] = [];
@@ -22,6 +27,8 @@ function fixture() {
     cleanupFailure: false, startupFailure: false, created: vi.fn(), launched: vi.fn(), signals: vi.fn() };
   class FakeRuntime {
     readonly runtimeId = randomUUID();
+    readonly liveHost = createHost?.(this.runtimeId);
+    generation = "native-generation";
     state: OpenCodeRuntimeSnapshot["state"] = "stopped";
     frozen = false; revision = 0; retained = 0; active: number | null = null; interactions: number | null = null;
     startPromise?: Promise<void>;
@@ -33,8 +40,8 @@ function fixture() {
       snapshot: () => ({ operations: this.retained ? [{ identity: { origin: "application", applicationOperationId: "retained-operation", operationKind: "submit", step: "prompt" }, status: "unknown" }] : [] }),
     };
     constructor(readonly input: OpenCodeRuntimeInput) { controls.created(); owners.push(this); }
-    get nativeHost() { return this.state === "ready" || this.state === "cleanup_unproved" ? this.host : undefined; }
-    snapshot() { return { state: this.state, ownership: this.input.connection.ownership, generation: this.state === "ready" ? "native-generation" : undefined, references: 0 }; }
+    get nativeHost() { return this.state === "ready" || this.state === "cleanup_unproved" ? this.liveHost ?? this.host : undefined; }
+    snapshot() { return { state: this.state, ownership: this.input.connection.ownership, generation: this.state === "ready" ? this.generation : undefined, references: 0 }; }
     start() {
       this.state = "starting";
       return this.startPromise = (async () => {
@@ -51,6 +58,7 @@ function fixture() {
       await this.startPromise?.catch(() => undefined);
       if (this.input.connection.ownership === "owned") controls.signals();
       if (controls.cleanupFailure) { this.state = "cleanup_unproved"; throw new Error("descendants uncertain"); }
+      this.liveHost?.close();
       this.state = "stopped";
       return { cleanup: "proved", nativeInterrupts: this.input.connection.ownership === "owned" ? "complete" : "not_owned" };
     }
@@ -167,6 +175,77 @@ describe("resident OpenCode runtime registry", () => {
     await expect(f.hosts.ensure(configuration, f.epoch)).rejects.toThrow("startup failed");
     const retained = await f.hosts.lookup(configuration, f.epoch);
     expect(retained).toBe(f.owners[0]); expect(f.services.status().resources[0]!.blockers).toContain("cleanup_unproven");
+  });
+
+  it.each(["owned", "external"] as const)("preserves confirmed service retirement of %s work while native SSE continues after detach", async ownership => {
+    const wire = createOpenCodeApiFixture(), client = new OpenCodeHttpClient({
+      endpoint: "http://127.0.0.1:4096", password: "fixture", fetch: wire.fetch,
+    });
+    const f = fixture(runtimeId => new OpenCodeNativeHost({ ...scope, executionEnvironmentId,
+      backendInstanceId: "backend", runtimeId, nativeGeneration: "native-generation" }, new OpenCodeHttpNativeAdapter(client), {
+      assertCurrent: async () => {},
+      installSessionEnvironment: async () => { throw new Error("unexpected environment mutation"); },
+      ensureMcpRegistration: async () => { throw new Error("unexpected MCP mutation"); },
+    }, client.lifetime));
+    try {
+      const selected: OpenCodeRuntimeConfiguration = ownership === "owned" ? configuration : { ...configuration,
+        connection: { ownership: "external", channel: { type: "http", url: "http://127.0.0.1:4096", authentication: {
+          type: "basic", username: "opencode", secret: { source: "environment", variable: "SEDES_OPENCODE_PASSWORD" } } } } };
+      const runtime = await f.hosts.ensure(selected, f.epoch), host = f.hosts.get(runtime.runtimeId);
+      const port = host.acquire({ directory: wire.directory, session: {
+        applicationThreadId: "retained-thread", nativeSessionID: wire.sessionID, bindingFingerprint: "binding",
+      } });
+      const observer = port.observe({ purpose: "evidence" }), boundary = await observer.ready;
+      wire.send({ id: "evt_delivered", created: 1, type: "session.inbox.delivered",
+        durable: { aggregateID: wire.sessionID, seq: 1, version: 1 }, data: { sessionID: wire.sessionID, inboxID: "msg_current" } });
+      await observer.wait();
+      await observer.acknowledge({ journalId: boundary.journalId, sequence: observer.drain().at(-1)!.sequence });
+      wire.setResponse("/api/session/active", 200, { data: { [wire.sessionID]: { type: "running" } } });
+      expect((await f.hosts.inspect(runtime.runtimeId)).state).toBe("active");
+      const confirmed = f.services.status();
+      expect(confirmed.resources[0]).toMatchObject({ state: "unknown", blockers: ["unknown_state"] });
+
+      // A native mutation receipt, followed by main closing its evidence reader,
+      // changes the detailed inventory but not authority to retire this owner.
+      await port.mutate("interruptSession", { sessionID: wire.sessionID }, openCodeTestMutationControl("interrupt"));
+      expect(host.retentionSnapshot().retainedMutationCount).toBe(1);
+      await observer.close(); host.release(port); f.services.detach(f.epoch);
+      const beforeStreaming = host.retentionSnapshot().revision;
+      wire.send({ id: "evt_delta", created: 2, type: "session.text.delta", data: {
+        sessionID: wire.sessionID, assistantMessageID: "msg_assistant", ordinal: 0, delta: "still running",
+      } });
+      await vi.waitFor(() => expect(host.retentionSnapshot().revision).not.toBe(beforeStreaming));
+      wire.send({ id: "evt_enqueued", created: 3, type: "session.inbox.enqueued",
+        durable: { aggregateID: wire.sessionID, seq: 2, version: 1 }, data: { sessionID: wire.sessionID,
+          inboxID: "msg_queued", item: { type: "user", delivery: "queue", payload: { text: "queued during detach" } } } });
+      await vi.waitFor(() => expect(host.retentionSnapshot().observation.pendingEvidenceCount).toBe(1));
+      expect(host.retentionSnapshot().activeWorkCount).toBeNull();
+      expect(f.services.status().resourcesFingerprint).toBe(confirmed.resourcesFingerprint);
+
+      await f.services.stop({ expectedServiceIncarnation: confirmed.serviceIncarnation, controllerEpoch: confirmed.controllerEpoch,
+        expectedConfiguration: confirmed.desiredConfiguration, expectedResourcesFingerprint: confirmed.resourcesFingerprint,
+        force: true, reason: "upgrade" });
+      expect(f.services.status().state).toBe("stopped");
+      expect(f.controls.signals).toHaveBeenCalledTimes(ownership === "owned" ? 1 : 0);
+      expect(f.archive.mock.calls[0]![0]).toMatchObject({ kind: "opencode", reason: "upgrade", evidence: {
+        ownership, retention: { threadIds: ["retained-thread"], retainedMutationCount: 1,
+          observation: { pendingEvidenceCount: 1 } },
+      } });
+    } finally { client.close(); }
+  });
+
+  it("still rejects service confirmation after native owner generation or desired configuration changes", async () => {
+    const f = fixture(); await f.hosts.ensure(configuration, f.epoch);
+    const confirmed = f.services.status();
+    const request = { expectedServiceIncarnation: confirmed.serviceIncarnation, controllerEpoch: confirmed.controllerEpoch,
+      expectedConfiguration: confirmed.desiredConfiguration, expectedResourcesFingerprint: confirmed.resourcesFingerprint,
+      force: true, reason: "upgrade" };
+    f.owners[0]!.generation = "replaced-native-generation";
+    await expect(f.services.stop(request)).rejects.toThrow("confirmation_stale");
+    f.owners[0]!.generation = "native-generation";
+    f.services.attach({ ...serviceConfiguration, environmentRevision: 2 });
+    await expect(f.services.stop({ ...request, controllerEpoch: f.services.controllerEpoch })).rejects.toThrow("confirmation_stale");
+    expect(f.controls.signals).not.toHaveBeenCalled(); expect(f.archive).not.toHaveBeenCalled();
   });
 
   it("participates in environment Stop/Upgrade and fences startup at the service boundary", async () => {
