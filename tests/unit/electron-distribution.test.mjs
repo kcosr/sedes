@@ -37,6 +37,8 @@ describe('Electron distribution profiles', () => {
     expect(config.directories.output).toBe(`dist/${profile}`);
     expect(config.artifactName).toContain(`sedes-${profile}-`);
     expect(config.extraResources.length > 0).toBe(profile === 'full');
+    if (profile === 'full') expect(config.extraResources.find(resource => resource.to === 'local-server').filter)
+      .toContain('runtime-entrypoints.json');
     if (profile === 'client') await expect(config.afterPack({})).resolves.toBeUndefined();
   });
   it('records unpacked file checksums, metadata, and symlinks', async () => {

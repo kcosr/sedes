@@ -65,6 +65,7 @@ module.exports = {
       filter: [
         'package.json',
         'package-lock.json',
+        'runtime-entrypoints.json',
         'native-modules.json',
         'defaults/server.json',
         'protocol/codex-app-server/*/release.json',
