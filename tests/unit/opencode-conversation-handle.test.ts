@@ -70,6 +70,137 @@ describe("OpenCode SSE and native history composition", () => {
     held.release();
     expect((await read).snapshot.orderedBackendTurnIds).toEqual([]);
   });
+  it("still awaits the same SSE readiness after its first establishment caller cancels", async () => {
+    const current = await attached(); const held = current.wire.hold("/api/event");
+    const cancellation = new AbortController();
+    const first = current.handle.establishProjection({ signal: cancellation.signal });
+    const rejected = expect(first).rejects.toBeInstanceOf(Error);
+    await held.entered; cancellation.abort(); await rejected;
+    const second = current.handle.establishProjection({ signal: signal() });
+    // Queue one microtask behind the establishment call so its reused-observer
+    // path runs before checking that no native history request escaped.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(current.wire.requests.some(request => request.pathname.endsWith("/message"))).toBe(false);
+    held.release(); await second;
+    expect(current.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
+  });
+  it("ignores child token fragments and main compaction fragments while refreshing child activity without history reads", async () => {
+    const current = await attached([user(), assistant()]);
+    const childID = "ses_child";
+    current.wire.sessions.push({ ...current.wire.session, id: childID, parentID: current.wire.sessionID });
+    current.wire.setResponse("/api/session/active", 200, { data: { ses_fixture: { type: "running" }, [childID]: { type: "running" } } });
+    const baseline = await current.handle.establishProjection({ signal: signal() }); const events: SequencedBackendEvent[] = [];
+    baseline.subscribeFromNext(value => events.push(value));
+    expect(baseline.snapshot.backgroundActivity).toMatchObject({ state: "known", agents: 1 });
+    const historyRequests = () => current.wire.requests.filter(request => request.pathname.includes("/message"));
+    const before = historyRequests().length;
+    // More fragments than the live journal's capacity prove excluded child
+    // tokens cannot overflow or consume the parent's history-acquisition budget.
+    for (let index = 0; index < 4_100; index++) {
+      current.wire.send(event(`session.${index % 2 ? "text" : "reasoning"}.delta`, {
+        sessionID: childID, assistantMessageID: "msg_child", ordinal: 0, delta: "child" }));
+      current.wire.send(event("session.compaction.delta", { text: "summary fragment" }));
+    }
+    current.wire.send(textEvent("text", "delta", "parent"));
+    await vi.waitFor(() => expect(textOf(events, "assistant_message")).toBe("parent"));
+    expect(historyRequests()).toHaveLength(before);
+    expect(events.some(value => value.event.type === "resnapshot_required")).toBe(false);
+    current.wire.setResponse("/api/session/active", 200, { data: { ses_fixture: { type: "running" } } });
+    const settled = event("session.execution.succeeded", { sessionID: childID }, true);
+    current.wire.send({ ...settled, durable: { ...settled.durable, aggregateID: childID } });
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ event: {
+      type: "background_activity_changed", activity: { state: "known", agents: 0, commands: 0, other: 0 },
+    } })));
+    expect(historyRequests()).toHaveLength(before);
+  });
+  it("installs a finite cut despite compaction fragments arriving during every history response", async () => {
+    const current = await attached([user(), assistant()]);
+    current.wire.setResponse("/api/session/active", 200, { data: { ses_fixture: { type: "running" } } });
+    const getPage = OpenCodeNativeApi.prototype.getHistoryPage;
+    let pages = 0;
+    vi.spyOn(OpenCodeNativeApi.prototype, "getHistoryPage").mockImplementation(async function (this: OpenCodeNativeApi, id, input) {
+      if (++pages > 5) throw new Error("acquisition incorrectly waits for stream quiet");
+      const result = await getPage.call(this, id, input);
+      current.wire.send(event("session.compaction.delta", { text: "still compacting" }));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      return result;
+    });
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    expect(baseline.snapshot.runState).toBe("running");
+    expect(pages).toBe(2);
+  });
+  it("publishes a finite baseline before durable parent updates become quiet", async () => {
+    const current = await attached([user(), idle()]);
+    const getPage = OpenCodeNativeApi.prototype.getHistoryPage;
+    let injecting = true, pages = 0;
+    vi.spyOn(OpenCodeNativeApi.prototype, "getHistoryPage").mockImplementation(async function (this: OpenCodeNativeApi, id, input) {
+      if (++pages > 8) throw new Error("finite baseline waited for all parent events to stop");
+      const page = await getPage.call(this, id, input);
+      if (injecting) {
+        current.wire.send(event("session.renamed", { title: `Concurrent title ${pages}` }, true));
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
+      return page;
+    });
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    injecting = false;
+    expect(baseline.snapshot.runState).toBe("idle");
+    expect(baseline.snapshot.orderedBackendTurnIds).toHaveLength(1);
+    // The pending bounded catch-up can complete without replacing the owner or
+    // forcing another ascending scan of the unchanged completed prefix.
+    await current.handle.history({ limit: 1 });
+    expect(current.wire.requests.filter(request => request.query.get("order") === "asc")).toHaveLength(1);
+    expect(current.client.lifetime.aborted).toBe(false);
+  });
+  it("keeps an older idle cut unknown until catch-up supplies the newer active turn coordinate", async () => {
+    const current = await attached([user(), idle()]);
+    const getPage = OpenCodeNativeApi.prototype.getHistoryPage;
+    let admitted = false;
+    vi.spyOn(OpenCodeNativeApi.prototype, "getHistoryPage").mockImplementation(async function (this: OpenCodeNativeApi, id, input) {
+      const page = await getPage.call(this, id, input);
+      if (!admitted && input?.order === "desc") {
+        admitted = true;
+        current.wire.messages.push({ ...user("msg_new_user"), time: { created: 4 } }, { ...assistant(), time: { created: 5 } });
+        current.wire.setResponse("/api/session/active", 200, { data: { ses_fixture: { type: "running" } } });
+        current.wire.send(event("session.execution.started", {}, true));
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
+      return page;
+    });
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    expect(baseline.snapshot.runState).toBe("disconnected");
+    expect(baseline.snapshot.activeBackendTurnId).toBeUndefined();
+    const events: SequencedBackendEvent[] = []; baseline.subscribeFromNext(value => events.push(value));
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ event: expect.objectContaining({
+      type: "run_state_changed", state: "running", activeBackendTurnId: expect.any(String),
+    }) })));
+    expect(events.some(value => value.event.type === "resnapshot_required")).toBe(false);
+  });
+  it("observes attributed shell creation while idle and scopes terminal shell refreshes without rereading history", async () => {
+    const current = await attached([user(), idle()]);
+    const baseline = await current.handle.establishProjection({ signal: signal() }); const events: SequencedBackendEvent[] = [];
+    baseline.subscribeFromNext(value => events.push(value));
+    const before = current.wire.requests.filter(request => request.pathname.includes("/message")).length;
+    const shell = { id: "sh_owned", status: "running", command: "sleep 60", cwd: current.wire.directory,
+      shell: "/bin/sh", file: "/fixture/output", metadata: { sessionID: current.wire.sessionID }, time: { started: 1 } };
+    current.wire.setResponse("/api/shell", 200, { location: { directory: current.wire.directory }, data: [shell] });
+    current.wire.send({ id: "evt_foreign_shell", created: 1, type: "shell.created", data: { info: { ...shell, id: "sh_foreign", metadata: { sessionID: "ses_foreign" } } } });
+    current.wire.send({ id: "evt_shell_created", created: 2, type: "shell.created", data: { info: shell } });
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ event: {
+      type: "background_activity_changed", activity: { state: "known", agents: 0, commands: 1, other: 0 },
+    } })));
+    const shellReads = current.wire.requests.filter(request => request.pathname === "/api/shell").length;
+    current.wire.send({ id: "evt_foreign_exit", created: 3, type: "shell.exited", data: { id: "sh_foreign", exit: 0, status: "exited" } });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(current.wire.requests.filter(request => request.pathname === "/api/shell")).toHaveLength(shellReads);
+    current.wire.setResponse("/api/shell", 200, { location: { directory: current.wire.directory }, data: [{ ...shell, status: "exited", exit: 0, time: { started: 1, completed: 4 } }] });
+    current.wire.send({ id: "evt_shell_exit", created: 4, type: "shell.exited", data: { id: shell.id, exit: 0, status: "exited" } });
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ event: {
+      type: "background_activity_changed", activity: { state: "known", agents: 0, commands: 0, other: 0 },
+    } })));
+    expect(current.wire.requests.filter(request => request.pathname.includes("/message"))).toHaveLength(before);
+    expect((await current.handle.establishProjection({ signal: signal() })).snapshot.runState).toBe("idle");
+  });
   it("keeps reasoning/text ordinal zero distinct and replaces streamed text with exact ended values", async () => {
     const current = await attached([user(), assistant([{ type: "reasoning", text: "" }, { type: "text", text: "" }])]);
     current.wire.setResponse("/api/session/active", 200, { data: { ses_fixture: { type: "running" } } });
@@ -112,18 +243,58 @@ describe("OpenCode SSE and native history composition", () => {
     const messages = Array.from({ length: 12 }, (_, index) => [user(`msg_user_${index}`), idle(`msg_idle_${index}`)]).flat();
     const current = await attached(messages); const baseline = await current.handle.establishProjection({ signal: signal() });
     const held = current.wire.hold(`/api/session/${current.wire.sessionID}/message`);
-    const read = current.handle.history({ limit: 10, cursor: baseline.history.previousCursor });
+    const read = current.handle.establishProjection({ signal: signal() });
     const rejected = expect(read).rejects.toMatchObject({ backendCode: "opencode_history_invalidated" });
     await held.entered; current.wire.messages.splice(2);
     current.wire.send(event("session.revert.cleared", {}, true)); held.release(); await rejected;
     await current.handle.establishProjection({ signal: signal() });
     await expect(current.handle.history({ limit: 10, cursor: baseline.history.previousCursor })).rejects.toMatchObject({ backendCode: "opencode_history_cursor" });
   });
+  it("keeps terminal native events live when an older retained-page request is cancelled", async () => {
+    const current = await attached([user(), assistant()]);
+    current.wire.setResponse("/api/session/active", 200, { data: { ses_fixture: { type: "running" } } });
+    const baseline = await current.handle.establishProjection({ signal: signal() }); const events: SequencedBackendEvent[] = [];
+    baseline.subscribeFromNext(value => events.push(value));
+    const abort = new AbortController();
+    const read = current.handle.history({ limit: 10, signal: abort.signal });
+    const rejected = expect(read).rejects.toBeInstanceOf(Error);
+    abort.abort();
+    current.wire.messages[1] = { ...assistant([{ type: "text", text: "Finished" }]), time: { created: 2, completed: 3 } };
+    current.wire.messages.push(idle()); current.wire.setResponse("/api/session/active", 200, { data: {} });
+    current.wire.send(event("session.execution.succeeded", {}, true));
+    await rejected;
+    await vi.waitFor(() => expect(events.some(value => value.event.type === "turn_completed")).toBe(true));
+    expect(textOf(events, "assistant_message")).toBe("Finished");
+    expect(events.some(value => value.event.type === "resnapshot_required")).toBe(false);
+    expect(current.wire.requests.filter(request => request.query.get("order") === "asc")).toHaveLength(1);
+    const count = current.wire.requests.length;
+    const older = await current.handle.history({ limit: 1 });
+    expect(older.orderedBackendTurnIds).toHaveLength(1);
+    await current.handle.locateTurn({ maximumTurnCandidates: 1, matchesBackendTurnId: () => true });
+    expect(current.wire.requests).toHaveLength(count);
+    await expect(current.handle.history({ limit: 1, cursor: "invalid" })).rejects.toMatchObject({ backendCode: "opencode_history_cursor" });
+    expect(events.some(value => value.event.type === "resnapshot_required")).toBe(false);
+  });
+  it("delivers a newly observed already-completed turn through the actor without forcing resnapshot", async () => {
+    const current = setup(); const acquired = await current.acquire();
+    const generation = acquired.actor.timeline.generation;
+    const raw: BackendConversationEvent[] = []; (await current.handle()).subscribe(value => raw.push(value));
+    current.wire.messages.push(user(), { ...assistant([{ type: "text", text: "Complete between observations" }]), time: { created: 2, completed: 3 } }, idle());
+    current.wire.send(event("session.execution.succeeded", {}, true));
+    await vi.waitFor(() => {
+      expect(acquired.actor.timeline.orderedTurnIds).toHaveLength(1);
+      expect(Object.values(acquired.actor.timeline.turnsById)[0]?.status).toBe("completed");
+    });
+    expect(acquired.actor.timeline.generation).toBe(generation);
+    expect(raw.some(value => value.type === "resnapshot_required")).toBe(false);
+    expect(raw.find(value => value.type === "turn_started")).toMatchObject({ turn: { status: "in_progress", orderedBackendItemIds: [] } });
+    expect(current.attached).toHaveBeenCalledOnce(); acquired.release();
+  });
   it.each(["establishProjection", "history", "locateTurn"] as const)("keeps the original deadline through final %s selection", async method => {
     const current = await attached([user(), idle()]);
     if (method !== "establishProjection") await current.handle.establishProjection({ signal: signal() });
     let now = Date.now(); vi.spyOn(Date, "now").mockImplementation(() => now);
-    const expire = <T>(value: T): T => { now += 120_001; return value; };
+    const expire = <T>(value: T): T => { now += OPENCODE_HISTORY_LIMITS.milliseconds + 1; return value; };
     if (method === "establishProjection") {
       const original = OpenCodeHistoryProjection.prototype.snapshot;
       vi.spyOn(OpenCodeHistoryProjection.prototype, "snapshot").mockImplementation(function (this: OpenCodeHistoryProjection, input) { return expire(original.call(this, input)); });

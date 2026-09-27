@@ -4222,6 +4222,25 @@ describe("ConversationActorManager", () => {
     await manager.close();
   });
 
+  it.each([
+    { label: "proved fixed history limit", futile: true, attempts: 1 },
+    { label: "legacy non-retryable remote error", futile: false, attempts: 3 },
+  ])("preserves the recovery disposition for $label", async ({ futile, attempts }) => {
+    const { driver, handle, manager } = fixture();
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const failure = new BackendError({ category: "unavailable", retryable: false, crossedSubmissionBoundary: false,
+      safeMessage: "Native history unavailable.", backendCode: futile ? "fixed_limit" : "codex_remote_-32000",
+      ...(futile ? { projectionRecovery: "futile" as const } : {}) });
+    const establishment = vi.spyOn(handle, "establishProjection").mockRejectedValue(failure);
+    const received: ConversationActorEvent[] = [];
+    acquired.actor.subscribe(event => received.push(event));
+    handle.emit(0, { type: "resnapshot_required", reason: "contradictory_state" });
+    await vi.waitFor(() => expect(received.some(event => event.type === "backend_event" && event.event.type === "notice")).toBe(true));
+    expect(establishment).toHaveBeenCalledTimes(attempts);
+    expect(acquired.actor.projectionRecoveryRequired).toBe(true);
+    acquired.release(); await manager.close();
+  });
+
   it("retries projection replacement and surfaces a terminal recovery failure", async () => {
     const { driver, handle, manager } = fixture();
     const acquired = await manager.acquire({

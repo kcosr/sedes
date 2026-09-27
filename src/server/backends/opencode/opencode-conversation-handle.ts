@@ -6,10 +6,11 @@ import { boundDisplayText } from "../../conversations/payload-policy.js";
 import type { AttachConversationInput, BackendEventListener, ConversationControl, ConversationHandle,
   EstablishProjectionInput, EstablishedBackendProjection, HistoryPageInput, InterruptConversationInput, LocateTurnInput } from "../contracts.js";
 import { ConversationInterruptLedger } from "../conversation-interrupt.js";
+import { mapOpenCodeConversationError } from "./opencode-conversation-error.js";
 import { openCodeConversationError, requireOpenCodeBinding, type OpenCodeConversationRuntime, type OpenCodeDriverContext } from "./opencode-conversation-context.js";
 import { OpenCodeNativeApi, OpenCodeNativeProtocolError, OpenCodeNativeReadLimitError, type OpenCodeNativeActivity, type OpenCodeNativeEvent, type OpenCodeNativeObservation } from "./opencode-native-api.js";
 import { OpenCodeHistoryError, OPENCODE_HISTORY_LIMITS, openCodeHistoryFingerprint, readOpenCodeHistory,
-  refreshOpenCodeHistory, type OpenCodeRetainedHistory } from "./opencode-history-reader.js";
+  refreshOpenCodeHistory, restartOpenCodeHistoryAcquisition, type OpenCodeRetainedHistory } from "./opencode-history-reader.js";
 import { OpenCodeHistoryProjection, openCodeHistoryPartKey, openCodeNativePartEnded, type OpenCodeObservedPart } from "./opencode-history-projection.js";
 import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
 
@@ -49,8 +50,11 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   readonly #listeners = new Set<BackendEventListener>();
   readonly #journal: { readonly value: SequencedBackendEvent; readonly bytes: number }[] = [];
   readonly #parts = new Map<string, OpenCodeObservedPart>();
+  readonly #nativePartCounts = new Map<string, { text: number; reasoning: number }>();
   readonly #seenEvents = new Set<string>();
   readonly #childIds = new Set<string>();
+  readonly #shellIds = new Set<string>();
+  readonly #dirtyParts = new Set<string>();
   #eventBytes = 0;
   #eventRecords = 0;
   #partBytes = 0;
@@ -69,6 +73,9 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   #tail: Promise<unknown> = Promise.resolve();
   #pump?: Promise<void>;
   #structuralRevision = 0;
+  #projectedRevision = 0;
+  #activityRevision = 0;
+  #observedActivityRevision = 0;
 
   constructor(readonly context: OpenCodeDriverContext, readonly input: AttachConversationInput,
     readonly runtime: OpenCodeConversationRuntime, readonly lease: OpenCodeRuntimeLease) {
@@ -116,15 +123,13 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   async history(input: HistoryPageInput) {
     return this.#acquire(input.signal, async signal => {
       this.#assertSynchronized();
-      const projection = await this.#refresh(signal);
-      return projection.history({ ...input, signal });
+      return this.#projection!.history({ ...input, signal });
     });
   }
   async locateTurn(input: LocateTurnInput) {
     return this.#acquire(input.signal, async signal => {
       this.#assertSynchronized();
-      const projection = await this.#refresh(signal);
-      return projection.locateTurn({ ...input, signal });
+      return this.#projection!.locateTurn({ ...input, signal });
     });
   }
 
@@ -172,7 +177,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     this.lease.client.lifetime.removeEventListener("abort", this.#ownerLost);
     await this.#observation?.close();
     this.#release(); this.#rawListeners.clear(); this.#listeners.clear();
-    this.#journal.length = 0; this.#journalBytes = 0; this.#parts.clear(); this.#partBytes = 0;
+    this.#journal.length = 0; this.#journalBytes = 0; this.#parts.clear(); this.#partBytes = 0; this.#nativePartCounts.clear();
     this.#retained = undefined; this.#projection = undefined;
   }
 
@@ -199,8 +204,13 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       budget.throwIfAborted(); return value;
     } catch (error) {
       if (timeout.aborted || Date.now() >= deadline) throw new OpenCodeHistoryError("time");
-      throw error;
+      throw this.#readError(error);
     }
+  }
+  #readError(error: unknown) {
+    const mapped = mapOpenCodeConversationError(error);
+    if (mapped.backendCode === "opencode_runtime_identity_changed") this.#ownerLost();
+    return mapped;
   }
   #exclusive<T>(signal: AbortSignal | undefined, effect: (signal: AbortSignal) => Promise<T>): Promise<T> {
     const budget = AbortSignal.any([this.#lifetime, ...(signal ? [signal] : [])]);
@@ -212,22 +222,36 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   }
 
   async #startObservation(signal: AbortSignal): Promise<void> {
-    if (this.#observation && !this.#invalidated && !this.#observation.failure) return;
+    if (this.#observation && !this.#invalidated && !this.#observation.failure) {
+      await waitOpenCode(this.#observation.ready, signal); return;
+    }
     await this.#observation?.close();
     signal.throwIfAborted(); this.#assertOpen();
-    this.#generation = randomUUID(); this.#parts.clear(); this.#partBytes = 0; this.#seenEvents.clear();
+    this.#generation = randomUUID(); this.#parts.clear(); this.#partBytes = 0; this.#seenEvents.clear(); this.#nativePartCounts.clear();
     this.#retained = undefined; this.#projection = undefined;
+    this.#dirtyParts.clear(); this.#projectedRevision = this.#structuralRevision;
+    this.#observedActivityRevision = this.#activityRevision;
     const observation = this.#api.observe({ signal: this.#lifetime, include: event => {
       if ((event.type === "session.moved" || event.type === "session.deleted") && event.data.sessionID === this.binding.backendConversationId) {
         this.#ownerLost(); return false;
       }
-      if ("sessionID" in event.data && (event.data.sessionID === this.binding.backendConversationId || this.#childIds.has(event.data.sessionID))) return true;
-      if (event.type === "session.created" && event.data.parentID === this.binding.backendConversationId) {
+      if ("sessionID" in event.data && event.data.sessionID === this.binding.backendConversationId) {
+        // Only replayable parent changes and text overlays affect the timeline.
+        // Compaction/tool fragments and progress have no durable full value yet.
+        return "durable" in event || event.type === "session.text.delta" || event.type === "session.reasoning.delta";
+      }
+      if ((event.type === "session.created" || event.type === "session.forked") && event.data.parentID === this.binding.backendConversationId) {
         this.#childIds.add(event.data.sessionID); return true;
       }
-      // These events carry only a shell ID. Refresh the scoped inventory even
-      // when completion races the first observation of that shell.
-      return event.type === "shell.exited" || event.type === "shell.deleted";
+      if ("sessionID" in event.data && this.#childIds.has(event.data.sessionID)) {
+        return event.type === "session.execution.started" || event.type === "session.execution.succeeded" ||
+          event.type === "session.execution.failed" || event.type === "session.execution.interrupted" ||
+          event.type === "session.moved" || event.type === "session.deleted";
+      }
+      if (event.type === "shell.created" && event.data.info.metadata.sessionID === this.binding.backendConversationId) {
+        this.#shellIds.add(event.data.info.id); return true;
+      }
+      return (event.type === "shell.exited" || event.type === "shell.deleted") && this.#shellIds.has(event.data.id);
     } });
     this.#observation = observation;
     void observation.ended.then(end => {
@@ -261,42 +285,44 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     };
     try {
       await this.runtime.assertCurrent(signal); check();
-      let retained: OpenCodeRetainedHistory | undefined;
-      // A finite native cut may advance during reads. Only durable changes require
-      // a new cut; disposable text deltas can never starve hydration.
-      for (;;) {
-        check(); const revision = this.#structuralRevision;
-        const readInput = { sessionId: this.binding.backendConversationId, signal, assertCurrent: check, additionalUsage: extra };
-        retained = retained ? await refreshOpenCodeHistory(this.#api, retained, readInput) : await readOpenCodeHistory(this.#api, readInput);
-        consumedBytes = retained.decodedBytes; consumedRecords = retained.records;
-        chargedExtraBytes = this.#eventBytes - initialEventBytes + peakPartBytes;
-        chargedExtraRecords = this.#eventRecords - initialEventRecords;
-        this.#retained = retained;
-        this.#pruneParts(retained);
-        const [session, activity, pending, interactions] = await Promise.all([
-          this.#api.getSession(this.binding.backendConversationId, signal),
-          this.#api.getActivity(this.binding.backendConversationId, this.input.workspace.canonicalPath, signal),
-          this.#api.getPending(this.binding.backendConversationId, signal),
-          this.#api.getInteractions(this.binding.backendConversationId, signal),
-        ]);
-        if (session.location.directory !== this.input.workspace.canonicalPath) {
-          this.#ownerLost(); throw new OpenCodeHistoryError("invalidated");
-        }
-        const suffix = retained.messages.slice(retained.messages.findLastIndex(message => message.type === "idle") + 1);
-        const unfinished = suffix.some(message => ["user", "assistant", "synthetic", "compaction"].includes(message.type));
-        // An empty process-local active list cannot settle an orphaned busy period.
-        this.#activity = activity.active ? "running" : unfinished || pending.length || interactions.permissions.length || interactions.forms.length ? "unknown" : "idle";
-        this.#background = openCodeObservedActivity(activity);
-        this.#childIds.clear(); for (const child of activity.children) this.#childIds.add(child.id);
-        await this.runtime.assertCurrent(signal);
-        check();
-        if (revision === this.#structuralRevision) break;
+      const revision = this.#structuralRevision, activityRevision = this.#activityRevision;
+      const readInput = { sessionId: this.binding.backendConversationId, signal, assertCurrent: check, additionalUsage: extra };
+      // Install one finite native cut. Work observed during acquisition remains
+      // dirty for the pump; unrelated or continuous streaming cannot demand quiet.
+      const retained = this.#retained
+        ? await refreshOpenCodeHistory(this.#api, restartOpenCodeHistoryAcquisition(this.#retained), readInput)
+        : await readOpenCodeHistory(this.#api, readInput);
+      consumedBytes = retained.decodedBytes; consumedRecords = retained.records;
+      chargedExtraBytes = this.#eventBytes - initialEventBytes + peakPartBytes;
+      chargedExtraRecords = this.#eventRecords - initialEventRecords;
+      this.#retained = retained;
+      this.#pruneParts(retained);
+      const [session, activity, pending, interactions] = await Promise.all([
+        this.#api.getSession(this.binding.backendConversationId, signal),
+        this.#api.getActivity(this.binding.backendConversationId, this.input.workspace.canonicalPath, signal),
+        this.#api.getPending(this.binding.backendConversationId, signal),
+        this.#api.getInteractions(this.binding.backendConversationId, signal),
+      ]);
+      if (session.location.directory !== this.input.workspace.canonicalPath) {
+        this.#ownerLost(); throw new OpenCodeHistoryError("invalidated");
       }
+      const suffix = retained.messages.slice(retained.messages.findLastIndex(message => message.type === "idle") + 1);
+      const unfinished = suffix.some(message => ["user", "assistant", "synthetic", "compaction"].includes(message.type));
+      // An empty process-local active list cannot settle an orphaned busy period.
+      // A newer active inventory also cannot invent an opening coordinate in an
+      // older idle cut; the queued finite catch-up supplies that native record.
+      this.#activity = activity.active ? suffix.length ? "running" : "unknown"
+        : unfinished || pending.length || interactions.permissions.length || interactions.forms.length ? "unknown" : "idle";
+      this.#acceptActivity(activity);
+      await this.runtime.assertCurrent(signal);
+      check();
       const remaining = extra();
       this.#retained = { ...retained, decodedBytes: retained.decodedBytes + remaining.decodedBytes, records: retained.records + remaining.records };
       this.#retainedPartAllowance = peakPartBytes;
       const projection = this.#project(signal); check();
       const prior = this.#projection; this.#projection = projection;
+      this.#projectedRevision = revision; this.#observedActivityRevision = activityRevision;
+      this.#dirtyParts.clear();
       if (prior && !this.#invalidated) this.#diff(prior, projection);
       return projection;
     } catch (error) {
@@ -304,7 +330,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       if (timeout.aborted) throw new OpenCodeHistoryError("time");
       if (error instanceof OpenCodeNativeReadLimitError) throw new OpenCodeHistoryError(error.limit === "response_bytes" ? "response_bytes" : "records");
       if (error instanceof OpenCodeNativeProtocolError) throw new OpenCodeHistoryError("invalid");
-      throw error;
+      throw this.#readError(error);
     }
   }
 
@@ -317,7 +343,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     return new OpenCodeHistoryProjection(retained, { bindingScope: [binding.tenantId, binding.ownerPrincipalId,
       binding.applicationThreadId, binding.backendInstanceId, binding.connectionProfileId, binding.executionEnvironmentId,
       this.context.nativeNamespaceKey], generation: this.#generation, activity: this.#activity,
-      backgroundActivity: this.#background, observedParts: this.#parts, signal });
+      backgroundActivity: this.#background, observedParts: this.#parts, previous: this.#projection, signal });
   }
 
   #drain(observation: OpenCodeNativeObservation): boolean {
@@ -336,8 +362,16 @@ export class OpenCodeConversationHandle implements ConversationHandle {
         this.#generation = randomUUID(); this.#parts.clear(); this.#partBytes = 0;
         this.#invalidate("history_changed"); throw new OpenCodeHistoryError("invalidated");
       }
-      if ("sessionID" in event.data && event.data.sessionID === this.binding.backendConversationId && this.#observeText(event)) continue;
-      this.#structuralRevision++;
+      if ("sessionID" in event.data && event.data.sessionID === this.binding.backendConversationId) {
+        if (this.#observeText(event)) continue;
+        if ("durable" in event) this.#structuralRevision++;
+      } else {
+        if ((event.type === "session.created" || event.type === "session.forked") && event.data.parentID === this.binding.backendConversationId) this.#childIds.add(event.data.sessionID);
+        if (event.type === "session.deleted") this.#childIds.delete(event.data.sessionID);
+        if (event.type === "shell.created") this.#shellIds.add(event.data.info.id);
+        if (event.type === "shell.deleted") this.#shellIds.delete(event.data.id);
+        this.#activityRevision++;
+      }
     }
     return changed;
   }
@@ -358,13 +392,13 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     const text = "text" in data ? data.text : (previous?.text ?? "") + data.delta;
     const bytes = this.#partBytes - Buffer.byteLength(previous?.text ?? "") + Buffer.byteLength(text);
     if (bytes > JOURNAL_BYTES || (!previous && this.#parts.size >= JOURNAL_RECORDS)) throw new OpenCodeHistoryError("bytes");
-    this.#parts.set(key, { text, completed: ended }); this.#partBytes = bytes;
-    if (!this.#retained?.messages.some(message => message.id === data.assistantMessageID &&
-      message.type === "assistant" && message.content.filter(part => part.type === kind).length > data.ordinal)) this.#structuralRevision++;
+    this.#parts.set(key, { text, completed: ended }); this.#partBytes = bytes; this.#dirtyParts.add(key);
+    if ((this.#nativePartCounts.get(data.assistantMessageID)?.[kind] ?? 0) <= data.ordinal) this.#structuralRevision++;
     return true;
   }
 
   #pruneParts(retained: OpenCodeRetainedHistory): void {
+    this.#nativePartCounts.clear();
     for (const message of retained.messages) {
       if (message.type !== "assistant") continue;
       const ordinals = { text: 0, reasoning: 0 };
@@ -376,6 +410,26 @@ export class OpenCodeConversationHandle implements ConversationHandle {
           this.#partBytes -= Buffer.byteLength(observed.text); this.#parts.delete(key);
         }
       }
+      this.#nativePartCounts.set(message.id, ordinals);
+    }
+  }
+
+  #acceptActivity(activity: OpenCodeNativeActivity): void {
+    this.#background = openCodeObservedActivity(activity);
+    this.#childIds.clear(); for (const child of activity.children) this.#childIds.add(child.id);
+    this.#shellIds.clear(); for (const shell of activity.shells) this.#shellIds.add(shell.id);
+  }
+
+  async #refreshActivity(signal: AbortSignal): Promise<void> {
+    const revision = this.#activityRevision;
+    await this.runtime.assertCurrent(signal);
+    const activity = await this.#api.getActivity(this.binding.backendConversationId, this.input.workspace.canonicalPath, signal);
+    await this.runtime.assertCurrent(signal); this.#assertOpen(); signal.throwIfAborted();
+    const previous = this.#background;
+    this.#acceptActivity(activity); this.#observedActivityRevision = revision;
+    this.#projection?.updateRuntimeState({ backgroundActivity: this.#background });
+    if (openCodeHistoryFingerprint(previous) !== openCodeHistoryFingerprint(this.#background)) {
+      this.#emit({ type: "background_activity_changed", activity: this.#background });
     }
   }
 
@@ -384,18 +438,24 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     if (!observation || this.#pump) return;
     const work = (async () => {
       while (!this.#closed && !this.#lifetime.aborted && this.#observation === observation && !this.#invalidated) {
-        await observation.wait(this.#lifetime);
+        if (this.#projectedRevision === this.#structuralRevision && this.#observedActivityRevision === this.#activityRevision && !this.#dirtyParts.size) {
+          await observation.wait(this.#lifetime);
+        }
         await this.#exclusive(this.#lifetime, async signal => {
           if (this.#observation !== observation || this.#invalidated) return;
-          const revision = this.#structuralRevision;
-          if (!this.#drain(observation)) return;
-          if (revision !== this.#structuralRevision) { await this.#refresh(signal); return; }
-          const prior = this.#projection; const next = this.#project(signal); this.#projection = next;
-          if (prior) this.#diff(prior, next);
+          this.#drain(observation);
+          if (this.#projectedRevision !== this.#structuralRevision) { await this.#refresh(signal); return; }
+          if (this.#observedActivityRevision !== this.#activityRevision) await this.#refreshActivity(signal);
+          if (!this.#dirtyParts.size || !this.#projection) return;
+          const changed = this.#projection.applyObservedParts({ observedParts: this.#parts, changedPartKeys: this.#dirtyParts,
+            signal, additionalDecodedBytes: Math.max(0, this.#partBytes - this.#retainedPartAllowance) });
+          this.#dirtyParts.clear();
+          for (const item of changed) this.#emit({ type: item.status === "streaming" ? "item_updated" : "item_completed", item });
         });
       }
     })();
-    this.#pump = work.catch(() => {
+    this.#pump = work.catch(error => {
+      this.#readError(error);
       if (this.#observation === observation && !this.#lifetime.aborted && !this.#closed) this.#invalidate("history_changed");
     }).finally(() => {
       this.#pump = undefined;
@@ -407,10 +467,11 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     if (before.orderedBackendTurnIds.some(id => !after.turnsById[id]) || Object.keys(before.itemsById).some(id => !after.itemsById[id])) {
       this.#invalidate("history_changed"); return;
     }
-    const same = (a: unknown, b: unknown) => openCodeHistoryFingerprint(a) === openCodeHistoryFingerprint(b);
+    const same = (a: unknown, b: unknown) => a === b || openCodeHistoryFingerprint(a) === openCodeHistoryFingerprint(b);
     for (const id of after.orderedBackendTurnIds) {
       const turn = after.turnsById[id]!; const prior = before.turnsById[id];
-      if (!prior) this.#emit({ type: "turn_started", turn });
+      if (!prior) this.#emit({ type: "turn_started", turn: { backendTurnId: turn.backendTurnId,
+        status: "in_progress", startedAt: turn.startedAt, orderedBackendItemIds: [] } });
       for (const itemId of turn.orderedBackendItemIds) {
         const item = after.itemsById[itemId]!; const old = before.itemsById[itemId];
         if (!old || !same(old, item)) this.#emit({ type: item.status !== "streaming" ? "item_completed" : old ? "item_updated" : "item_started", item });

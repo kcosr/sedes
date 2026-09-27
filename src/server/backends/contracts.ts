@@ -780,6 +780,8 @@ export interface BackendErrorShape {
    * The application then does not offer to start another fork.
    */
   readonly forkRestart?: "futile";
+  /** Repeating this exact projection acquisition cannot repair a proved fixed failure. */
+  readonly projectionRecovery?: "futile";
 }
 
 export class BackendError extends Error implements BackendErrorShape {
@@ -789,6 +791,7 @@ export class BackendError extends Error implements BackendErrorShape {
   readonly backendCode?: string;
   readonly steerRejectionReason?: BackendErrorShape["steerRejectionReason"];
   readonly forkRestart?: BackendErrorShape["forkRestart"];
+  readonly projectionRecovery?: BackendErrorShape["projectionRecovery"];
   /**
    * Bounded, server-only evidence that an external mutation whose immediate
    * result was uncertain may later become authoritative. The owning mutation
@@ -811,6 +814,7 @@ export class BackendError extends Error implements BackendErrorShape {
     this.backendCode = input.backendCode;
     this.steerRejectionReason = input.steerRejectionReason;
     this.forkRestart = input.forkRestart;
+    this.projectionRecovery = input.projectionRecovery;
     this.lateMutationReconciliation = options?.lateMutationReconciliation;
   }
 

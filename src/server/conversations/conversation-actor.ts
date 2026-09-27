@@ -1568,7 +1568,7 @@ export class ConversationActor {
         if (this.#closing || this.#closed) throw error;
         // Retrying a fixed provider limit cannot repair the projection and may
         // repeat an expensive history acquisition. Preserve the backend's proof.
-        if (error instanceof BackendError && !error.retryable) break;
+        if (error instanceof BackendError && error.projectionRecovery === "futile") break;
         await Promise.resolve();
       }
     }

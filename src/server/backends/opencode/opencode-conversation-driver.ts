@@ -1,12 +1,15 @@
 import { z } from "zod";
 import { boundDisplayText } from "../../conversations/payload-policy.js";
-import { type AgentBackendInstance, type AgentConnectionProfile, type BackendHealth, type ConversationBackendDriver,
+import { BackendError, type AgentBackendInstance, type AgentConnectionProfile, type BackendHealth, type ConversationBackendDriver,
   type AttachConversationInput, type DiscoverConversationsInput, type ReadConversationInput, type ReleaseConversationResidencyInput } from "../contracts.js";
 import { assertOpenCodeWorkspace, openCodeConversationError, requireOpenCodeBinding, type OpenCodeDriverContext } from "./opencode-conversation-context.js";
 import { OpenCodeNativeApi } from "./opencode-native-api.js";
 import { OpenCodeConversationHandle, openCodeUnsupported, waitOpenCode } from "./opencode-conversation-handle.js";
 import { serializeOpenCodeBindingDetail } from "./opencode-binding-detail.js";
-import { openCodeHistoryFingerprint } from "./opencode-history-reader.js";
+import { OPENCODE_HISTORY_LIMITS, OpenCodeHistoryError, openCodeHistoryFingerprint } from "./opencode-history-reader.js";
+import { mapOpenCodeConversationError } from "./opencode-conversation-error.js";
+import { OpenCodeRuntimeError } from "./opencode-release.js";
+import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
 
 const cursorSchema = z.strictObject({ v: z.literal(1), scope: z.string().length(43), native: z.string().min(1).max(16_384) });
 
@@ -28,6 +31,11 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
   async reconcileSubmission(..._input: Parameters<ConversationBackendDriver["reconcileSubmission"]>): Promise<never> { throw openCodeUnsupported(); }
 
   async discover(input: DiscoverConversationsInput) {
+    try { return await this.#discover(input); }
+    catch (error) { throw mapOpenCodeConversationError(error); }
+  }
+
+  async #discover(input: DiscoverConversationsInput) {
     assertOpenCodeWorkspace(this.input, input); input.signal.throwIfAborted();
     if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 200) throw openCodeUnsupported();
     const scope = openCodeHistoryFingerprint([this.input.scope, this.instance.id, this.connection.id,
@@ -63,6 +71,11 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
   }
 
   async attach(input: AttachConversationInput): Promise<OpenCodeConversationHandle> {
+    try { return await this.#attach(input); }
+    catch (error) { throw mapOpenCodeConversationError(error); }
+  }
+
+  async #attach(input: AttachConversationInput): Promise<OpenCodeConversationHandle> {
     requireOpenCodeBinding(this.input, input);
     const runtime = await this.#runtime(); await runtime.start();
     const lease = runtime.acquire();
@@ -86,26 +99,46 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
     try {
       const result = await handle.establishProjection({ signal: handle.control.lifetime });
       return { snapshot: result.snapshot, usage: await handle.usage() };
-    } finally { await handle.close(); }
+    } catch (error) { throw mapOpenCodeConversationError(error); }
+    finally { await handle.close(); }
   }
 
   async releaseConversationResidency(input: ReleaseConversationResidencyInput): Promise<"released" | "busy" | "undelivered"> {
     requireOpenCodeBinding(this.input, input);
-    const runtime = await this.#runtime(); await runtime.start();
-    const lease = runtime.acquire();
+    let lease: OpenCodeRuntimeLease | undefined;
+    const cancellation = new AbortController();
     try {
+      const runtime = await this.#runtime(); await runtime.start();
+      lease = runtime.acquire();
       const api = new OpenCodeNativeApi(lease.client);
-      const [session, activity, pending, interactions] = await Promise.all([
-        api.getSession(input.binding.backendConversationId), api.getActivity(input.binding.backendConversationId, input.workspace.canonicalPath),
-        api.getPending(input.binding.backendConversationId), api.getInteractions(input.binding.backendConversationId),
+      const signal = AbortSignal.any([cancellation.signal, AbortSignal.timeout(OPENCODE_HISTORY_LIMITS.milliseconds)]);
+      const sessionID = input.binding.backendConversationId;
+      // Only the selected session lookup can prove absence. A failed inventory
+      // or history lookup remains uncertainty about work, and cannot release it.
+      const session = await api.getSession(sessionID, signal).catch(async error => {
+        if (error instanceof OpenCodeRuntimeError && error.code === "opencode_native_not_found") {
+          await runtime.assertCurrent(signal); throw mapOpenCodeConversationError(error);
+        }
+        throw error;
+      });
+      await runtime.assertCurrent(signal);
+      if (session.location.directory !== input.workspace.canonicalPath) throw openCodeConversationError(
+        "opencode_session_location_changed", "The OpenCode conversation moved to another workspace.", "invalid_state");
+      const [unfinished, activity, pending, interactions] = await Promise.all([
+        hasUnfinishedNativePeriod(api, sessionID, signal), api.getActivity(sessionID, input.workspace.canonicalPath, signal),
+        api.getPending(sessionID, signal), api.getInteractions(sessionID, signal),
       ]);
-      await runtime.assertCurrent();
-      if (session.location.directory !== input.workspace.canonicalPath || activity.active || activity.activeChildren.length ||
+      await runtime.assertCurrent(signal); signal.throwIfAborted();
+      if (unfinished || activity.active || activity.activeChildren.length ||
           activity.shells.some(shell => shell.status === "running") || pending.length || interactions.permissions.length || interactions.forms.length) return "busy";
       // This releases client residency only; neither ownership mode retires the daemon here.
       return "released";
-    } catch { return "busy"; }
-    finally { lease.release(); }
+    } catch (error) {
+      // Normal retirement reports terminal provider absence and proceeds; strict
+      // policy refresh propagates it. Neither consumer mistakes it for busy work.
+      if (error instanceof BackendError && (error.category === "not_found" || error.backendCode === "opencode_session_location_changed")) throw error;
+      return "busy";
+    } finally { cancellation.abort(); lease?.release(); }
   }
 
   async #runtime() {
@@ -113,5 +146,27 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
     if (runtime.nativeNamespaceKey !== this.input.nativeNamespaceKey) throw openCodeConversationError(
       "opencode_runtime_namespace_mismatch", "The OpenCode runtime does not match the bound native store.", "permission_denied");
     return runtime;
+  }
+}
+
+/** Read only the unfinished suffix, with the same finite native-history bounds. */
+async function hasUnfinishedNativePeriod(api: OpenCodeNativeApi, sessionID: string, signal: AbortSignal): Promise<boolean> {
+  let cursor: string | undefined, bytes = 0, records = 0;
+  const seen = new Set<string>(), cursors = new Set<string>();
+  while (true) {
+    signal.throwIfAborted();
+    const page = await api.getHistoryPage(sessionID, { ...(cursor ? { cursor } : { order: "desc" }), limit: 50, signal });
+    bytes += page.decodedBytes; records += page.data.length;
+    if (bytes > OPENCODE_HISTORY_LIMITS.decodedBytes) throw new OpenCodeHistoryError("bytes");
+    if (records > OPENCODE_HISTORY_LIMITS.records) throw new OpenCodeHistoryError("records");
+    for (const message of page.data) {
+      if (seen.has(message.id)) throw new OpenCodeHistoryError("invalidated");
+      seen.add(message.id);
+      if (message.type === "idle") return false;
+      if (["user", "assistant", "synthetic", "compaction"].includes(message.type) || message.type === "shell" && message.status === "running") return true;
+    }
+    if (!page.data.length) return false;
+    if (!page.cursor.next || cursors.has(page.cursor.next)) throw new OpenCodeHistoryError("invalidated");
+    cursor = page.cursor.next; cursors.add(cursor);
   }
 }

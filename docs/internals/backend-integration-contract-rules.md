@@ -1502,12 +1502,15 @@ Provider-private codes and causes stay on the server; only the normalized API
 error, retryability, and Sedes request ID cross the boundary. Every compiled
 backend must classify invalid authoritative history and an individual normalized
 field that cannot satisfy the product contract as non-retryable. Projection
-recovery honors an explicit non-retryable `BackendError`: the actor reports
-synchronization failure after that attempt instead of repeating a fixed-limit
-acquisition. Retryable failures retain the bounded recovery loop. A bounded native
-acquisition that overflows before retention, and transient timeout, overload, or
-availability failures, are retryable and request-local; they do not fence the
-conversation. Tests must cover both pre-header runtime acquisition and post-header
+recovery stops early only when a backend proves the same acquisition is futile
+with the server-private `BackendError.projectionRecovery: "futile"` marker.
+A generic `retryable: false` does not establish that proof. OpenCode marks its
+fixed aggregate history budgets and invalid authoritative projections this way;
+Pi, Codex, Claude and Grok retain their existing bounded recovery retries.
+Disposable request-local buffer overflow and transient transport timeout, overload
+or availability failures remain retryable. Fixed retained-history byte, record
+or aggregate time limits are terminal for that acquisition. Older-page and
+targeted-lookup failures do not fence an otherwise healthy live conversation. Tests must cover both pre-header runtime acquisition and post-header
 pre-live projection or encoding failure.
 
 The shared thread route applies a finite deadline to runtime acquisition,

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { backendConversationSnapshotSchema, backendHistoryPageSchema } from "../../src/shared/protocol/backend.js";
 import { MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES } from "../../src/shared/protocol/payload.js";
 import { OpenCodeHistoryProjection, openCodeHistoryItemId, openCodeHistoryPartKey, openCodeHistoryTurnId, type OpenCodeHistoryProjectionInput } from "../../src/server/backends/opencode/opencode-history-projection.js";
-import { OPENCODE_HISTORY_LIMITS, openCodeHistoryFingerprint, readOpenCodeHistory, refreshOpenCodeHistory, type OpenCodeRetainedHistory } from "../../src/server/backends/opencode/opencode-history-reader.js";
+import { OPENCODE_HISTORY_LIMITS, openCodeHistoryFingerprint, readOpenCodeHistory, refreshOpenCodeHistory, restartOpenCodeHistoryAcquisition, type OpenCodeRetainedHistory } from "../../src/server/backends/opencode/opencode-history-reader.js";
 import { OpenCodeNativeProtocolError, OpenCodeNativeReadLimitError, parseOpenCodeNativeMessage,
   type OpenCodeNativeApi, type OpenCodeNativeMessage } from "../../src/server/backends/opencode/opencode-native-api.js";
 import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
@@ -17,7 +17,7 @@ const assistant = (id: string, extra: Record<string, unknown> = {}): OpenCodeNat
 });
 function retained(messages: readonly OpenCodeNativeMessage[]): OpenCodeRetainedHistory {
   return { sessionId, messages, ...(messages.length ? { headId: messages.at(-1)!.id } : {}),
-    frontier: openCodeHistoryFingerprint(messages.map(message => [message.id, message.type])), decodedBytes: Buffer.byteLength(JSON.stringify(messages)), records: messages.length };
+    frontier: openCodeHistoryFingerprint(messages.map(message => [message.id, message.type])), decodedBytes: Buffer.byteLength(JSON.stringify(messages)), retainedDecodedBytes: Buffer.byteLength(JSON.stringify(messages)), records: messages.length };
 }
 function projection(messages: readonly OpenCodeNativeMessage[], options: Partial<OpenCodeHistoryProjectionInput> = {}) {
   return new OpenCodeHistoryProjection(retained(messages), { ...identity, ...options });
@@ -92,6 +92,19 @@ describe("OpenCode complete retained native history acquisition", () => {
     expect(api.getMessage.mock.calls.map(([, id]) => id)).toContain("msg_answer");
     expect(api.getHistoryPage.mock.calls.map(([, options]) => options?.cursor)).toEqual([undefined, "prev:msg_answer", "prev:msg_settled"]);
     expect(refreshed.forwardCursor).toBe("prev:msg_next_answer");
+  });
+
+  it("rebudgets retained storage between acquisitions without replaying lifetime read charges", async () => {
+    const { api } = apiFixture([user("msg_a"), idle("msg_b")]);
+    const first = await readOpenCodeHistory(api, { sessionId });
+    expect(first.retainedDecodedBytes).toBe(Buffer.byteLength(JSON.stringify(first.messages)));
+    const next = restartOpenCodeHistoryAcquisition(first);
+    expect(next.messages).toBe(first.messages);
+    expect(next.decodedBytes).toBe(first.retainedDecodedBytes);
+    expect(next.records).toBe(2);
+    expect(next.decodedBytes).toBeLessThan(first.decodedBytes);
+    const refreshed = await refreshOpenCodeHistory(api, next, { sessionId });
+    expect(refreshed.retainedDecodedBytes).toBe(first.retainedDecodedBytes);
   });
 
   it("refreshes mutable background records before the old idle and fails if rewind removed its head", async () => {
@@ -308,12 +321,48 @@ describe("OpenCode normalized retained history", () => {
     expect(child.orderedBackendTurnIds[0]).not.toBe(parent.orderedBackendTurnIds[0]);
   });
 
+  it("patches only affected live parts and reuses closed projections on native catch-up", () => {
+    const closed = [user("msg_old", "old ".repeat(10_000)), idle("msg_old_end")];
+    const native = assistant("msg_live", { content: [{ type: "reasoning", text: "" }, { type: "text", text: "" }] });
+    const messages = [...closed, user("msg_new"), native];
+    const value = projection(messages, { activity: "running" });
+    const oldItem = value.itemsById[openCodeHistoryItemId("msg_old")];
+    const key = openCodeHistoryPartKey("msg_live", "text", 0);
+    const observations = new Map([[key, { text: "streamed prefix", completed: false }]]);
+    const changed = value.applyObservedParts({ observedParts: observations, changedPartKeys: new Set([key]) });
+    expect(changed).toHaveLength(1);
+    expect(changed[0]).toMatchObject({ backendItemId: openCodeHistoryItemId("msg_live", 1), markdown: { text: "streamed prefix" }, sourceOrder: 2 });
+    expect(value.itemsById[openCodeHistoryItemId("msg_old")]).toBe(oldItem);
+    expect(value.snapshot().snapshot.itemsById[openCodeHistoryItemId("msg_live", 1)]).toEqual(changed[0]);
+    expect(value.applyObservedParts({ observedParts: observations })).toEqual([]);
+    const next = new OpenCodeHistoryProjection(retained([...messages, idle("msg_end")]), { ...identity, previous: value, observedParts: observations });
+    expect(next.itemsById[openCodeHistoryItemId("msg_old")]).toBe(oldItem);
+    expect(next.turnsById[value.orderedBackendTurnIds[0]!]).toBe(value.turnsById[value.orderedBackendTurnIds[0]!]);
+    value.updateRuntimeState({ activity: "unknown", backgroundActivity: { state: "known", agents: 1, commands: 2, other: 0 } });
+    expect(value.snapshot().snapshot).toMatchObject({ runState: "disconnected", backgroundActivity: { agents: 1, commands: 2 } });
+  });
+
+  it("rejects an oversized overlay atomically and distinguishes invalid schema from byte overflow", () => {
+    const messages = [user("msg_a"), assistant("msg_live")];
+    const baseline = projection(messages, { activity: "running" });
+    const value = projection(messages, { activity: "running", limits: { decodedBytes: baseline.decodedBytes + 32 } });
+    const before = value.itemsById[openCodeHistoryItemId("msg_live", 0)];
+    const key = openCodeHistoryPartKey("msg_live", "text", 0);
+    expect(() => value.applyObservedParts({ observedParts: new Map([[key, { text: "x".repeat(64), completed: false }]]) }))
+      .toThrow(expect.objectContaining({ reason: "bytes", projectionRecovery: "futile" }));
+    expect(value.itemsById[openCodeHistoryItemId("msg_live", 0)]).toBe(before);
+    expect(() => projection([{ ...user("msg_bad"), time: { created: -8_640_000_000_000_000 } }]))
+      .toThrow(expect.objectContaining({ reason: "invalid", projectionRecovery: "futile" }));
+  });
+
   it("charges raw plus normalized memory and rejects oversized whole turns without truncating text", () => {
     const messages = [user("msg_text", "full authoritative text"), idle("msg_end")];
     const normal = projection(messages);
     expect(() => projection(messages, { limits: { decodedBytes: normal.decodedBytes - 1 } })).toThrow(expect.objectContaining({ reason: "bytes", retryable: false }));
     expect(projection(messages, { limits: { decodedBytes: normal.decodedBytes } }).history({ limit: 1 }).orderedBackendTurnIds).toEqual(normal.orderedBackendTurnIds);
-    expect(() => projection([user("msg_huge", "x".repeat(MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES)), idle("msg_end")])).toThrow(expect.objectContaining({ reason: "turn_bytes", retryable: false }));
+    for (const length of [MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES, MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES - 100]) {
+      expect(() => projection([user("msg_huge", "x".repeat(length)), idle("msg_end")])).toThrow(expect.objectContaining({ reason: "turn_bytes", retryable: false }));
+    }
   });
 
   it("selects fewer large whole turns to fit one page, preserving complete message text", () => {

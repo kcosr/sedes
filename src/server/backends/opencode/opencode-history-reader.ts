@@ -4,7 +4,7 @@ import { OpenCodeNativeReadLimitError, OpenCodeNativeProtocolError, type OpenCod
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 
 export interface OpenCodeHistoryLimits { readonly decodedBytes: number; readonly records: number; readonly milliseconds: number; }
-export const OPENCODE_HISTORY_LIMITS: OpenCodeHistoryLimits = Object.freeze({ decodedBytes: 64 * 1024 * 1024, records: 100_000, milliseconds: 120_000 });
+export const OPENCODE_HISTORY_LIMITS: OpenCodeHistoryLimits = Object.freeze({ decodedBytes: 64 * 1024 * 1024, records: 100_000, milliseconds: 60_000 });
 export type OpenCodeHistoryFailure = "bytes" | "response_bytes" | "records" | "time" | "turn_bytes" | "turn_items" | "invalidated" | "invalid" | "cancelled" | "cursor";
 
 export class OpenCodeHistoryError extends BackendError {
@@ -12,6 +12,7 @@ export class OpenCodeHistoryError extends BackendError {
     const limit = ["bytes", "response_bytes", "records", "time", "turn_bytes", "turn_items"].includes(reason);
     super({ category: reason === "invalid" ? "incompatible_protocol" : reason === "cursor" ? "invalid_state" : "unavailable",
       retryable: reason === "invalidated", crossedSubmissionBoundary: false,
+      ...(limit || reason === "invalid" ? { projectionRecovery: "futile" as const } : {}),
       backendCode: `opencode_history_${limit ? "limit_" : ""}${reason}`,
       safeMessage: limit ? `OpenCode history exceeds the ${reason.replaceAll("_", " ")} acquisition limit.`
         : reason === "cancelled" ? "OpenCode history acquisition was cancelled."
@@ -30,6 +31,20 @@ export interface OpenCodeRetainedHistory {
   /** Cumulative decoded acquisition, including validation and buffered replacements. */
   readonly decodedBytes: number;
   readonly records: number;
+  /** Actual native DTO storage; unlike acquisition work this does not include rereads. */
+  readonly retainedDecodedBytes: number;
+}
+
+/** Begin a new bounded acquisition while retaining the previously validated native cut. */
+export function restartOpenCodeHistoryAcquisition(prior: OpenCodeRetainedHistory): OpenCodeRetainedHistory {
+  return { ...prior, decodedBytes: prior.retainedDecodedBytes, records: prior.messages.length };
+}
+
+const messageBytes = new WeakMap<object, number>();
+function nativeMessageBytes(message: OpenCodeNativeMessage): number {
+  let size = messageBytes.get(message);
+  if (size === undefined) { size = Buffer.byteLength(JSON.stringify(message)); messageBytes.set(message, size); }
+  return size;
 }
 
 export function openCodeHistoryFingerprint(value: unknown): string {
@@ -101,14 +116,14 @@ async function acquireOpenCodeHistory(api: OpenCodeHistoryApi, input: OpenCodeHi
   const page = async (query: { cursor?: string; order?: "asc" | "desc"; limit: number }) => {
     const value = await wait(() => api.getHistoryPage(input.sessionId, { ...query, signal }));
     if (!Array.isArray(value.data) || value.data.length > query.limit || !Number.isSafeInteger(value.decodedBytes) || value.decodedBytes < 0) throw new OpenCodeHistoryError("invalid");
-    decodedBytes += Math.max(value.decodedBytes, Buffer.byteLength(JSON.stringify(value.data)));
+    decodedBytes += Math.max(value.decodedBytes, 2 + Math.max(0, value.data.length - 1) + value.data.reduce((sum, message) => sum + nativeMessageBytes(message), 0));
     records += value.data.length;
     check();
     return value;
   };
   const anchor = async (message: OpenCodeNativeMessage) => {
     const value = await wait(() => api.getMessage(input.sessionId, message.id, signal));
-    decodedBytes += Buffer.byteLength(JSON.stringify(value)); records++;
+    decodedBytes += nativeMessageBytes(value); records++;
     check();
     if (value.id !== message.id || value.type !== message.type || value.time.created !== message.time.created) throw new OpenCodeHistoryError("invalidated");
     // The active head may legitimately acquire full text/tool values while this
@@ -184,7 +199,8 @@ async function acquireOpenCodeHistory(api: OpenCodeHistoryApi, input: OpenCodeHi
     return Object.freeze({ sessionId: input.sessionId, messages: Object.freeze(messages),
       ...(head ? { headId: head.id } : {}), frontier: openCodeHistoryFingerprint(messages.map(message => [message.id, message.type])),
       ...(headPage.cursor.previous ? { forwardCursor: headPage.cursor.previous } : {}),
-      decodedBytes: decodedBytes + extra.decodedBytes, records: records + extra.records });
+      decodedBytes: decodedBytes + extra.decodedBytes, records: records + extra.records,
+      retainedDecodedBytes: 2 + Math.max(0, messages.length - 1) + messages.reduce((sum, message) => sum + nativeMessageBytes(message), 0) });
   } catch (error) {
     if (input.signal?.aborted) throw new OpenCodeHistoryError("cancelled");
     if (timerController.signal.aborted || Date.now() >= deadline) throw new OpenCodeHistoryError("time");

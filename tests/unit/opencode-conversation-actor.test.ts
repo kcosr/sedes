@@ -115,20 +115,19 @@ describe("OpenCode driver through the shared conversation actor", () => {
     } finally { borrowed.release(); acquired.release(); }
   });
 
-  it("cancels a held actor history read while independent control remains usable", async () => {
+  it("cancels an actor retained-history request while independent control remains usable", async () => {
     const current = fixture({ messages: completedMessages(1) }); const acquired = await current.acquire();
-    const gate = current.wire.hold(`/api/session/${current.wire.sessionID}/message`);
     const abort = new AbortController();
     const history = acquired.actor.history({ limit: 10, signal: abort.signal });
     const failed = expect(history).rejects.toBeInstanceOf(Error);
-    await gate.entered;
+    abort.abort();
     const borrowed = current.manager.acquireExistingControl(scope, threadID)!;
     try {
       await borrowed.control.interrupt({ applicationOperationId: "stop-during-history", deadlineAt: Date.now() + 30_000 });
-      abort.abort(); await failed;
+      await failed;
       expect(current.interrupts()).toHaveLength(1);
       expect(borrowed.control.lifetime.aborted).toBe(false);
-    } finally { gate.release(); borrowed.release(); acquired.release(); }
+    } finally { borrowed.release(); acquired.release(); }
   });
 
   it("reacquires a truthful bounded snapshot after SSE EOF without replacing the native owner", async () => {
@@ -154,7 +153,7 @@ describe("OpenCode driver through the shared conversation actor", () => {
     const initial = await acquired.actor.captureSnapshotState();
     const raw: BackendConversationEvent[] = []; (await current.handle()).subscribe(event => raw.push(event));
     const gate = current.wire.hold(`/api/session/${current.wire.sessionID}/message`);
-    const history = acquired.actor.history({ limit: 10 });
+    const history = (await current.handle()).establishProjection({ signal: new AbortController().signal });
     const rejected = expect(history).rejects.toBeInstanceOf(Error);
     await gate.entered;
     try {
