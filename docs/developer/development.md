@@ -196,6 +196,25 @@ shutdown/restart, external UDS/TCP survival, unavailable-target isolation, and
 owned-stdio process-group/native-lock ordering. It currently requires Linux
 x64, procfs, and a compatible operator-installed Codex command.
 
+The OpenCode v2 qualification suite uses an explicitly selected `opencode2`
+2.0.18 binary with disposable configuration/storage and loopback model/MCP
+fixtures. It never uses a native account or external inference. It is excluded
+from ordinary `npm test` and self-gates before launching the binary:
+
+```sh
+SEDES_RUN_REAL_OPENCODE=1 \
+  SEDES_REAL_OPENCODE_EXECUTABLE=/absolute/path/to/opencode2 \
+  env -u NODE_ENV npm run test:real-opencode
+```
+
+The process fixtures require POSIX; the MCP process-environment exposure test
+additionally requires Linux procfs. These are characterization tests: passing
+includes reproducing missing idle filtering, MCP catalog readiness races, and
+synthetic bootstrap exposure. A passing suite does **not** qualify a production
+OpenCode backend. No OpenCode module is currently registered, and the compiled
+Pi, Codex, Claude, and Grok paths remain unchanged. The fixture version pin
+records the release under investigation, not a production compatibility policy.
+
 After client, Capacitor dependency/configuration, or native Android changes,
 run:
 
