@@ -1092,7 +1092,20 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     if (this.#ownership.current(threadId)) return "busy";
     // A remote managed TUI outlives its presentation handle and holds its own
     // native subscription, which would prevent Codex from applying new config.
-    if (this.#managedTui?.registry.runningAuthority(input.scope, input.binding.applicationThreadId)) return "busy";
+    if (this.#managedTui) {
+      try {
+        // The remote registry's synchronous cache is empty before attachment.
+        // Await its authoritative snapshot rather than interpreting that gap
+        // as proof that no managed native subscriber exists.
+        await this.#managedTui.consumeLifecycle();
+      } catch (error) {
+        throw codexError("unavailable", "Codex could not verify managed terminal state. Reconnect the backend and retry.",
+          "codex_residency_tui_state_unavailable", true, error);
+      }
+      const lifecycle = this.#managedTui.registry.projection(input.scope, input.binding.applicationThreadId).state.lifecycle;
+      if (["starting", "running", "stopping"].includes(lifecycle) ||
+        this.#managedTui.registry.runningAuthority(input.scope, input.binding.applicationThreadId)) return "busy";
+    }
     try {
       const inspected = await this.#client.requestWithReceipt(
         codexThreadReadMethod,

@@ -1045,7 +1045,10 @@ describe("ThreadRuntimeCoordinator", () => {
         runtimes: coordinator,
         operation,
       }),
-    ).rejects.toMatchObject({ code: "invalid_transition" });
+    ).rejects.toMatchObject({
+      code: "invalid_transition",
+      message: expect.stringContaining("close the affected thread's agent terminal"),
+    });
     expect(operation).not.toHaveBeenCalled();
     await expect(
       runWithArchivedThreadRuntimesRetired({

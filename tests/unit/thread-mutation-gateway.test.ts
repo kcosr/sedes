@@ -5233,7 +5233,12 @@ describe("ThreadMutationGateway agent-tool policy", () => {
     { error: new DomainError("runtime_unavailable", "Provider unavailable."), code: "runtime_unavailable" },
   ])("leaves policy unchanged when provider release fails with $code", async ({ error, code }) => {
     const subject = agentToolPolicyMutationFixture({ providerReleaseError: error });
-    await expect(subject.gateway.mutate(scope, "thread-1", subject.operation)).rejects.toMatchObject({ code });
+    await expect(subject.gateway.mutate(scope, "thread-1", subject.operation)).rejects.toMatchObject({
+      code,
+      ...(error instanceof ThreadRuntimeNotIdleError
+        ? { message: expect.stringContaining("close any open agent terminal") }
+        : {}),
+    });
     expect(subject.releaseProviderResidency).toHaveBeenCalledExactlyOnceWith(scope, "thread-1", { failurePolicy: "propagate" });
     expect(subject.update).not.toHaveBeenCalled();
     expect(subject.publishThreadSnapshot).not.toHaveBeenCalled();

@@ -2862,7 +2862,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         if (error instanceof ThreadRuntimeNotIdleError) {
           throw new DomainError(
             "invalid_transition",
-            "Agent tool exposure can change only while the thread is idle.",
+            "Wait for active work to finish and close any open agent terminal for this thread before changing agent tools.",
             false,
             { cause: error },
           );
