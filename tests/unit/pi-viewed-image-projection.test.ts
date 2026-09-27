@@ -370,6 +370,28 @@ describe("Pi live viewed-image projection", () => {
     expect(projector.takeViewedImageResults()).toEqual([]);
   });
 
+  it("adds no child for a failed read even when its result has an image part", () => {
+    const projector = live();
+    const events = readToCompletion(projector, 0, "call", "shot.png", imageResult(), true);
+    expect(events.at(-1)?.item).toMatchObject({ semanticKind: "viewed_image", status: "failed" });
+    expect(projector.takeViewedImageResults()).toEqual([]);
+  });
+
+  it("starts an unpublished read as streaming when its execution ends first", () => {
+    const projector = live();
+    projector.consume(update("toolcall_start", 0, "call", "read", { path: "shot.png" }));
+    const events = items(
+      projector.consume(
+        execution({ type: "tool_execution_end", toolCallId: "call", toolName: "read", result: imageResult(), isError: false }),
+      ),
+    );
+    expect(events.map(({ type, item }) => [type, item.semanticKind, item.status])).toEqual([
+      ["item_started", "viewed_image", "streaming"],
+      ["item_completed", "viewed_image", "completed"],
+    ]);
+    expect(projector.takeViewedImageResults()).toHaveLength(1);
+  });
+
   it("completes a text-only or non-vision read without a child", () => {
     const projector = live();
     const textOnly = readToCompletion(projector, 0, "text", "big.png", {
@@ -547,6 +569,9 @@ describe("Pi historical viewed-image projection", () => {
       message("r1", toolResult("missing", [{ type: "text", text: "ENOENT '/secret/missing.png'" }], true)),
       message("r2", toolResult("text", [{ type: "text", text: "plain text" }])),
       message("r3", toolResult("blind", imageResult(PI_NON_VISION_IMAGE_NOTE).content)),
+      message("assistant-2", assistant([{ type: "toolCall", id: "denied", name: "read", arguments: { path: "denied.png" } }])),
+      marker("m4", "assistant-2", "denied"),
+      message("r4", toolResult("denied", imageResult().content, true)),
     ]);
     const { itemsById } = projection.snapshot;
     expect(itemsById["assistant:0"]).toMatchObject({
@@ -557,6 +582,7 @@ describe("Pi historical viewed-image projection", () => {
     expect(JSON.stringify(projection.snapshot)).not.toContain("/secret");
     expect(itemsById["assistant:1"]).toMatchObject({ semanticKind: "viewed_image", status: "completed" });
     expect(itemsById["assistant:2"]).toMatchObject({ semanticKind: "viewed_image", status: "completed" });
+    expect(itemsById["assistant-2:0"]).toMatchObject({ semanticKind: "viewed_image", status: "failed" });
     expect(projection.viewedImages).toEqual([]);
   });
 
