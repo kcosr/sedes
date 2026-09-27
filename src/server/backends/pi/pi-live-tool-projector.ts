@@ -48,6 +48,8 @@ interface ActiveAssistantStream {
   readonly startedAt: string;
   assistantEnded: boolean;
   nextFallbackContentIndex: number;
+  /** Content index of each tool call in the ended assistant message. */
+  endedToolCallIndexes?: ReadonlyMap<string, number>;
 }
 
 interface PendingPiToolCall {
@@ -267,6 +269,24 @@ export class PiLiveToolProjector {
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
       this.#stream.assistantEnded = true;
+      const content = own(event.message, "content");
+      if (Array.isArray(content)) {
+        // Execution-only calls take their real position, and any fallback
+        // follows every block of the message, not only its tool calls.
+        const indexes = new Map<string, number>();
+        for (let index = 0; index < content.length; index += 1) {
+          const block = own(content, String(index));
+          const id = own(block, "id");
+          if (own(block, "type") === "toolCall" && typeof id === "string") {
+            indexes.set(id, index);
+          }
+        }
+        this.#stream.endedToolCallIndexes = indexes;
+        this.#stream.nextFallbackContentIndex = Math.max(
+          this.#stream.nextFallbackContentIndex,
+          content.length,
+        );
+      }
       return [];
     }
     if (event.type === "tool_execution_start") {
@@ -570,7 +590,11 @@ export class PiLiveToolProjector {
       if (this.#byContentIndex.size >= this.#maximumPendingCalls) {
         return this.#invalidate("buffer_overflow");
       }
-      const contentIndex = this.#nextFallbackContentIndex();
+      const ended = this.#stream!.endedToolCallIndexes?.get(callId);
+      const contentIndex =
+        ended !== undefined && !this.#byContentIndex.has(ended)
+          ? ended
+          : this.#nextFallbackContentIndex();
       if (!this.#validContentIndex(contentIndex)) {
         return this.#invalidate("buffer_overflow");
       }

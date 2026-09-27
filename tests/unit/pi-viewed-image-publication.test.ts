@@ -187,10 +187,34 @@ function nativeBlock(block: Block): unknown {
     : { type: "toolCall", id: block.read.id, name: "read", arguments: { path: block.read.path } };
 }
 
-/** A Pi session whose prompts run the next scripted tool-read message. */
-function scriptedSessionFactory(script: Block[][]): PiSdkSessionFactory {
+interface PromptScript {
+  /** Tool-read assistant messages, each followed by its tool results. */
+  readonly messages: readonly (readonly Block[])[];
+  /**
+   * Runs after a message's tools end and before Pi persists their results,
+   * which it does together once the whole batch finishes.
+   */
+  readonly beforeResults?: (
+    messageIndex: number,
+    emit: (event: unknown) => void,
+  ) => void | Promise<void>;
+  /** Ends the run after the hook without persisting results or answering. */
+  readonly settleWithoutResults?: boolean;
+}
+
+/** Wraps one tool-read message as a prompt script. */
+function single(blocks: readonly Block[]): PromptScript {
+  return { messages: [blocks] };
+}
+
+/** A Pi session whose prompts run the next scripted tool-read messages. */
+function scriptedSessionFactory(
+  script: PromptScript[],
+  managers: SessionManager[] = [],
+): PiSdkSessionFactory {
   return {
     async create({ manager, customTools = [] }) {
+      managers.push(manager);
       const listeners = new Set<Parameters<PiSdkSession["subscribe"]>[0]>();
       const emit = (event: unknown): void => {
         for (const listener of listeners) listener(event as never);
@@ -220,7 +244,8 @@ function scriptedSessionFactory(script: Block[][]): PiSdkSessionFactory {
           manager.appendMessage(user);
           emit({ type: "message_end", message: user });
           await Promise.resolve();
-          const blocks = script.shift() ?? [];
+          const prompt = script.shift() ?? { messages: [] };
+          for (const [messageIndex, blocks] of prompt.messages.entries()) {
           const content = blocks.map(nativeBlock);
           const assistant = assistantMessage(content, "toolUse");
           emit({ type: "message_start", message: assistant });
@@ -268,6 +293,7 @@ function scriptedSessionFactory(script: Block[][]): PiSdkSessionFactory {
           manager.appendMessage(assistant as never);
           emit({ type: "message_end", message: assistant });
           await Promise.resolve();
+          const results: unknown[] = [];
           for (const block of blocks) {
             if (!("read" in block)) continue;
             const { id, path: readPath } = block.read;
@@ -281,17 +307,26 @@ function scriptedSessionFactory(script: Block[][]): PiSdkSessionFactory {
               result: { content: resultContent, details: undefined },
               isError,
             });
-            const result = {
+            results.push({
               role: "toolResult" as const,
               toolCallId: id,
               toolName: "read",
               content: resultContent,
               isError,
               timestamp: Date.now(),
-            };
+            });
+          }
+          await prompt.beforeResults?.(messageIndex, emit);
+          if (prompt.settleWithoutResults) {
+            idle = true;
+            emit({ type: "agent_settled" });
+            return;
+          }
+          for (const result of results) {
             manager.appendMessage(result as never);
             emit({ type: "message_end", message: result });
             await Promise.resolve();
+          }
           }
           const final = assistantMessage([{ type: "text", text: "done" }], "stop");
           emit({ type: "message_start", message: final });
@@ -370,17 +405,22 @@ function recordingPublisher() {
   const published: PublishOutputImageInput[] = [];
   let gate: Promise<void> | undefined;
   let open: (() => void) | undefined;
+  let failing = false;
   const publisher: OutputArtifactPublisher = {
     findImage: (...args) => base.findImage(...args),
     publishImage: async (input) => {
       published.push(input);
       await gate;
+      if (failing) throw new Error("test_publication_failed");
       return await base.publishImage(input);
     },
   };
   return {
     publisher,
     published,
+    fail(value = true) {
+      failing = value;
+    },
     hold() {
       gate = new Promise((resolve) => {
         open = resolve;
@@ -396,7 +436,7 @@ function recordingPublisher() {
 function driverWith(
   fixture: Awaited<ReturnType<typeof workspace>>,
   outputArtifacts: OutputArtifactPublisher,
-  script: Block[][] = [],
+  script: PromptScript[] = [],
   extra: Partial<PiDriverOptions> = {},
 ) {
   return new PiConversationBackendDriver({
@@ -539,13 +579,13 @@ describe("Pi viewed-image publication", () => {
     const fixture = await workspace();
     const recorder = recordingPublisher();
     const driver = driverWith(fixture, recorder.publisher, [
-      [
+      single([
         { text: "Looking" },
         { read: { id: "first", path: "/private/shots/one.png" } },
         { text: "Between" },
         { read: { id: "second", path: "/private/shots/TWO.BMP" } },
         { text: "After" },
-      ],
+      ]),
     ]);
     const conversation = await created(driver, fixture);
     const handle = await driver.attach(conversation.attach);
@@ -638,7 +678,7 @@ describe("Pi viewed-image publication", () => {
     const fixture = await workspace();
     const recorder = recordingPublisher();
     const driver = driverWith(fixture, recorder.publisher, [
-      [{ read: { id: "call", path: "diagram.png" } }],
+      single([{ read: { id: "call", path: "diagram.png" } }]),
     ]);
     const conversation = await created(driver, fixture);
     const handle = await driver.attach(conversation.attach);
@@ -673,7 +713,7 @@ describe("Pi viewed-image publication", () => {
     const fixture = await workspace();
     const recorder = recordingPublisher();
     const driver = driverWith(fixture, recorder.publisher, [
-      [{ read: { id: "call", path: "slow.png" } }],
+      single([{ read: { id: "call", path: "slow.png" } }]),
     ]);
     const conversation = await created(driver, fixture);
     const handle = await driver.attach(conversation.attach);
@@ -783,8 +823,12 @@ describe("Pi viewed-image publication", () => {
     const driver = driverWith(fixture, recorder.publisher);
     const conversation = await created(driver, fixture);
     const manager = await persisted(fixture, conversation.backendConversationId);
+    const keys: string[] = [];
     for (let index = 0; index < 30; index += 1) {
-      appendImageReadTurn(manager, conversation.backendConversationId, index);
+      const coordinates = appendImageReadTurn(manager, conversation.backendConversationId, index);
+      keys.push(
+        piViewedImagePublicationKey({ sessionId: conversation.backendConversationId, ...coordinates, imageIndex: 1 }),
+      );
     }
     const handle = await driver.attach(conversation.attach);
     const established = await handle.establishProjection({ signal: new AbortController().signal });
@@ -800,6 +844,10 @@ describe("Pi viewed-image publication", () => {
     });
     expect(page.orderedBackendTurnIds).toHaveLength(20);
     expect(recorder.published).toHaveLength(26);
+    // Newest first: turns 19 down to 4 of the page's 0 to 19.
+    expect(recorder.published.slice(10).map(({ publicationKey }) => publicationKey)).toEqual(
+      keys.slice(4, 20).reverse(),
+    );
     const pageChildren = childImages(page.itemsById);
     expect(pageChildren).toHaveLength(16);
     // The budget favours the newest turns of the page.
@@ -825,7 +873,7 @@ describe("Pi viewed-image publication", () => {
     const fixture = await workspace();
     const recorder = recordingPublisher();
     const driver = driverWith(fixture, recorder.publisher, [
-      [
+      single([
         {
           read: {
             id: "missing",
@@ -837,7 +885,7 @@ describe("Pi viewed-image publication", () => {
         { read: { id: "text", path: "big.gif", content: [{ type: "text", text: "Read image file [image/gif]\n[Image omitted: could not be converted to a supported inline image format.]" }] } },
         { read: { id: "blind", path: "seen.webp", content: imageContent(PI_NON_VISION_IMAGE_NOTE) } },
         { read: { id: "corrupt", path: "corrupt.jpg", content: imageContent(undefined, "AAAA") } },
-      ],
+      ]),
     ]);
     const conversation = await created(driver, fixture);
     const handle = await driver.attach(conversation.attach);
@@ -898,6 +946,430 @@ describe("Pi viewed-image publication", () => {
     const published = await driver.read(conversation.attach);
     expect(childImages(published.snapshot.itemsById)).toHaveLength(1);
     expect(recorder.published).toHaveLength(1);
+  });
+});
+
+describe("Pi viewed-image backfill bounds", () => {
+  it("publishes at most 32 missing children per seed, newest first", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const driver = driverWith(fixture, recorder.publisher);
+    const conversation = await created(driver, fixture);
+    const manager = await persisted(fixture, conversation.backendConversationId);
+    const calls = Array.from({ length: 40 }, (_, index) => `call-${index}`);
+    manager.appendMessage({ role: "user", content: [{ type: "text", text: "look" }], timestamp: Date.now() });
+    const assistantEntryId = manager.appendMessage(
+      assistantMessage(
+        calls.map((id) => ({ type: "toolCall", id, name: "read", arguments: { path: `${id}.png` } })),
+        "toolUse",
+      ) as never,
+    );
+    for (const toolCallId of calls) {
+      manager.appendCustomEntry(
+        piToolIdentityMarkerType,
+        createPiToolIdentityMarker(
+          { assistantEntryId, toolCallId, toolName: "read", identity: readIdentity },
+          { conversationId: conversation.backendConversationId, installationKey: toolProvenanceKey },
+        ),
+      );
+    }
+    for (const toolCallId of calls) {
+      manager.appendMessage({ role: "toolResult", toolCallId, toolName: "read", content: imageContent(), isError: false, timestamp: Date.now() } as never);
+    }
+    manager.appendMessage(assistantMessage([{ type: "text", text: "done" }], "stop") as never);
+
+    const handle = await driver.attach(conversation.attach);
+    await vi.waitFor(() => expect(recorder.published).toHaveLength(32));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(recorder.published.map(({ publicationKey }) => publicationKey)).toEqual(
+      calls
+        .slice(8)
+        .reverse()
+        .map((toolCallId) =>
+          piViewedImagePublicationKey({
+            sessionId: conversation.backendConversationId,
+            assistantEntryId,
+            toolCallId,
+            imageIndex: 1,
+          }),
+        ),
+    );
+    expect(childImages((await driver.read(conversation.attach)).snapshot.itemsById)).toHaveLength(32);
+    await handle.close();
+  });
+
+  it("publishes nothing for a persisted result that no longer matches its call", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const managers: SessionManager[] = [];
+    const driver = driverWith(fixture, recorder.publisher, [], {
+      sessionFactory: scriptedSessionFactory([], managers),
+    });
+    const conversation = await created(driver, fixture);
+    const manager = await persisted(fixture, conversation.backendConversationId);
+    appendImageReadTurn(manager, conversation.backendConversationId, 0);
+    appendImageReadTurn(manager, conversation.backendConversationId, 1);
+    recorder.hold();
+    const handle = await driver.attach(conversation.attach);
+    await vi.waitFor(() => expect(recorder.published).toHaveLength(1));
+    // The older turn's result now names another call.
+    const attached = managers.at(-1)!;
+    const olderResult = attached
+      .getBranch()
+      .find((entry) => entry.type === "message" && entry.message.role === "toolResult")!;
+    if (olderResult.type !== "message" || olderResult.message.role !== "toolResult") throw new Error("fixture");
+    (olderResult.message as { toolCallId: string }).toolCallId = "another-call";
+    recorder.release();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(recorder.published).toHaveLength(1);
+    await handle.close();
+  });
+});
+
+describe("Pi viewed-image publication failures", () => {
+  it("does not retry a key whose publication failed on later seeds or pages", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    recorder.fail();
+    const driver = driverWith(fixture, recorder.publisher);
+    const conversation = await created(driver, fixture);
+    const manager = await persisted(fixture, conversation.backendConversationId);
+    appendImageReadTurn(manager, conversation.backendConversationId, 1);
+    const handle = await driver.attach(conversation.attach);
+    await handle.establishProjection({ signal: new AbortController().signal });
+    await vi.waitFor(() => expect(recorder.published).toHaveLength(1));
+
+    const page = await handle.history({ limit: 5 });
+    expect(childImages(page.itemsById)).toEqual([]);
+    await handle.perform({ applicationOperationId: "compact", action: "compact" });
+    const reseeded = await handle.establishProjection({ signal: new AbortController().signal });
+    expect(childImages(reseeded.snapshot.itemsById)).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(recorder.published).toHaveLength(1);
+    await handle.close();
+
+    // A new attachment tries again.
+    recorder.fail(false);
+    const reopened = await driver.attach(conversation.attach);
+    await vi.waitFor(async () =>
+      expect(childImages((await driver.read(conversation.attach)).snapshot.itemsById)).toHaveLength(1),
+    );
+    expect(recorder.published).toHaveLength(2);
+    await reopened.close();
+  });
+});
+
+/** Publishes a persisted read's child up front, as an earlier attachment did. */
+async function prepublish(
+  publisher: OutputArtifactPublisher,
+  sessionId: string,
+  coordinates: { readonly assistantEntryId: string; readonly toolCallId: string },
+) {
+  await publisher.publishImage({
+    scope,
+    threadId: "thread",
+    publicationKey: piViewedImagePublicationKey({ sessionId, ...coordinates, imageIndex: 1 }),
+    mediaType: "image/png",
+    bytes: Buffer.from(pixel, "base64"),
+  });
+}
+
+/** A before-results hook that forces a resnapshot and waits for the test. */
+function pauseWithResnapshot() {
+  let reached!: () => void;
+  let resume!: () => void;
+  const atHook = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const paused = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  return {
+    atHook,
+    resume: () => resume(),
+    async beforeResults(_messageIndex: number, emit: (event: unknown) => void) {
+      // An execution update for an unknown call invalidates the live projection.
+      emit({ type: "tool_execution_update", toolCallId: "unknown", toolName: "read", args: {}, partialResult: {} });
+      reached();
+      await paused;
+    },
+  };
+}
+
+describe("Pi viewed images seeded before their results persist", () => {
+  const blocks: Block[] = [
+    { read: { id: "shown", path: "shown.png" } },
+    {
+      read: {
+        id: "broken",
+        path: "broken.png",
+        isError: true,
+        content: [{ type: "text", text: "EACCES: permission denied, open '/private/broken.png'" }],
+      },
+    },
+  ];
+
+  it("completes the seeded rows and adds the child once Pi persists the results", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const pause = pauseWithResnapshot();
+    const driver = driverWith(fixture, recorder.publisher, [
+      { messages: [blocks], beforeResults: pause.beforeResults },
+    ]);
+    const conversation = await created(driver, fixture);
+    const handle = await driver.attach(conversation.attach);
+    const first = await follow(handle, conversation.backendConversationId);
+    const submitted = await submit(handle, "look");
+    await pause.atHook;
+    expect(first.events.at(-1)?.event).toMatchObject({ type: "resnapshot_required" });
+    first.unsubscribe();
+
+    const second = await follow(handle, conversation.backendConversationId);
+    const seeded = Object.values(second.projection.snapshot.itemsById).filter(
+      (item) => item.semanticKind === "viewed_image",
+    );
+    expect(seeded.map(({ status }) => status)).toEqual(["streaming", "streaming"]);
+    expect(seeded.every(({ backendItemId }) => !backendItemId.startsWith("live:"))).toBe(true);
+    pause.resume();
+    await vi.waitFor(() =>
+      expect(second.events.some(({ event }) => event.type === "turn_completed")).toBe(true),
+    );
+    await vi.waitFor(async () =>
+      expect(childImages((await driver.read(conversation.attach)).snapshot.itemsById)).toHaveLength(1),
+    );
+
+    expect(second.results.filter(({ kind }) => kind === "resnapshot_required")).toEqual([]);
+    const current = (await driver.read(conversation.attach)).snapshot;
+    expect(turnShape(current, submitted.backendTurnId!)).toEqual([
+      "user_message",
+      "viewed:completed:shown.png",
+      "image:provider_input",
+      "viewed:failed:broken.png",
+      "assistant_message",
+    ]);
+    expect(JSON.stringify(current)).not.toContain("/private");
+    const timeline = second.normalized.timeline();
+    const turn = timeline.turnsById[timeline.orderedTurnIds.at(-1)!]!;
+    expect(turn.orderedItemIds.map((id) => [timeline.itemsById[id]!.kind, timeline.itemsById[id]!.status])).toEqual([
+      ["user_message", "completed"],
+      ["viewed_image", "completed"],
+      ["image", "completed"],
+      ["viewed_image", "failed"],
+      ["assistant_message", "completed"],
+    ]);
+    second.unsubscribe();
+    await handle.close();
+  });
+
+  it("orders later live items after a seeded running turn and its reserved child slots", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const pause = pauseWithResnapshot();
+    const driver = driverWith(fixture, recorder.publisher, [
+      { messages: [[{ read: { id: "shown", path: "shown.png" } }]], beforeResults: pause.beforeResults },
+    ]);
+    const conversation = await created(driver, fixture);
+    const manager = await persisted(fixture, conversation.backendConversationId);
+    // Earlier turns push history's branch-wide order past the live base.
+    for (let turn = 0; turn < 4; turn += 1) {
+      manager.appendMessage({ role: "user", content: [{ type: "text", text: `earlier ${turn}` }], timestamp: Date.now() });
+      manager.appendMessage(
+        assistantMessage(
+          Array.from({ length: 700 }, (_, index) => ({ type: "text", text: `${turn}.${index}` })),
+          "stop",
+        ) as never,
+      );
+    }
+    const handle = await driver.attach(conversation.attach);
+    const first = await follow(handle, conversation.backendConversationId);
+    const submitted = await submit(handle, "look");
+    await pause.atHook;
+    first.unsubscribe();
+    const second = await follow(handle, conversation.backendConversationId);
+    const seededOrders = second.projection.snapshot.turnsById[submitted.backendTurnId!]!.orderedBackendItemIds.map(
+      (id) => second.projection.snapshot.itemsById[id]!.sourceOrder,
+    );
+    expect(Math.min(...seededOrders)).toBeGreaterThan(2_001);
+    pause.resume();
+    await vi.waitFor(async () =>
+      expect(childImages((await driver.read(conversation.attach)).snapshot.itemsById)).toHaveLength(1),
+    );
+    await vi.waitFor(() =>
+      expect(second.events.some(({ event }) => event.type === "turn_completed")).toBe(true),
+    );
+    expect(second.results.filter(({ kind }) => kind === "resnapshot_required")).toEqual([]);
+    const current = (await driver.read(conversation.attach)).snapshot;
+    expect(turnShape(current, submitted.backendTurnId!)).toEqual([
+      "user_message",
+      "viewed:completed:shown.png",
+      "image:provider_input",
+      "assistant_message",
+    ]);
+    const timeline = second.normalized.timeline();
+    const turn = timeline.turnsById[timeline.orderedTurnIds.at(-1)!]!;
+    expect(turn.orderedItemIds.map((id) => timeline.itemsById[id]!.kind)).toEqual([
+      "user_message",
+      "viewed_image",
+      "image",
+      "assistant_message",
+    ]);
+    second.unsubscribe();
+    await handle.close();
+  });
+
+  it("interrupts a seeded row whose result never persists before settlement", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const pause = pauseWithResnapshot();
+    const driver = driverWith(fixture, recorder.publisher, [
+      { messages: [blocks], beforeResults: pause.beforeResults, settleWithoutResults: true },
+    ]);
+    const conversation = await created(driver, fixture);
+    const handle = await driver.attach(conversation.attach);
+    const first = await follow(handle, conversation.backendConversationId);
+    const submitted = await submit(handle, "look");
+    await pause.atHook;
+    first.unsubscribe();
+    const second = await follow(handle, conversation.backendConversationId);
+    pause.resume();
+    await vi.waitFor(() =>
+      expect(second.events.some(({ event }) => event.type === "turn_completed")).toBe(true),
+    );
+    expect(second.results.filter(({ kind }) => kind === "resnapshot_required")).toEqual([]);
+    const current = (await driver.read(conversation.attach)).snapshot;
+    const rows = current.turnsById[submitted.backendTurnId!]!.orderedBackendItemIds
+      .map((id) => current.itemsById[id]!)
+      .filter((item) => item.semanticKind === "viewed_image");
+    expect(rows.map(({ status, error }) => [status, error?.code])).toEqual([
+      ["interrupted", "pi_tool_result_missing"],
+      ["interrupted", "pi_tool_result_missing"],
+    ]);
+    // The earlier generation published the image live; this one has no result to pair it with.
+    expect(childImages(current.itemsById)).toEqual([]);
+    second.unsubscribe();
+    await handle.close();
+  });
+});
+
+describe("Pi viewed-image publication and close", () => {
+  it("waits for a started publication, starts no other, and delivers nothing after close", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const driver = driverWith(fixture, recorder.publisher);
+    const conversation = await created(driver, fixture);
+    const manager = await persisted(fixture, conversation.backendConversationId);
+    for (let index = 0; index < 3; index += 1) {
+      appendImageReadTurn(manager, conversation.backendConversationId, index);
+    }
+    recorder.hold();
+    const handle = await driver.attach(conversation.attach);
+    const received: string[] = [];
+    handle.subscribe((event) => received.push(event.type));
+    await vi.waitFor(() => expect(recorder.published).toHaveLength(1));
+
+    let closed = false;
+    const closing = handle.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(closed).toBe(false);
+    recorder.release();
+    await closing;
+    expect(recorder.published).toHaveLength(1);
+    expect(received).toEqual([]);
+  });
+
+  it("stops publishing an older page when the handle closes", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const driver = driverWith(fixture, recorder.publisher);
+    const conversation = await created(driver, fixture);
+    const manager = await persisted(fixture, conversation.backendConversationId);
+    for (let index = 0; index < 13; index += 1) {
+      const coordinates = appendImageReadTurn(manager, conversation.backendConversationId, index);
+      if (index >= 3) {
+        await prepublish(recorder.publisher, conversation.backendConversationId, coordinates);
+      }
+    }
+    const prepublished = recorder.published.length;
+    const handle = await driver.attach(conversation.attach);
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    expect(established.history.previousCursor).toBeDefined();
+    recorder.hold();
+    const page = handle.history({ cursor: established.history.previousCursor!, limit: 20 });
+    await vi.waitFor(() => expect(recorder.published).toHaveLength(prepublished + 1));
+    const closing = handle.close();
+    recorder.release();
+    await expect(page).rejects.toMatchObject({ backendCode: "pi_handle_closed" });
+    await closing;
+    expect(recorder.published).toHaveLength(prepublished + 1);
+  });
+});
+
+describe("Pi viewed images near the per-turn item bound", () => {
+  it("opens, reads and pages a turn whose children exceed Pi's item bound", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const driver = driverWith(fixture, recorder.publisher);
+    const conversation = await created(driver, fixture);
+    const manager = await persisted(fixture, conversation.backendConversationId);
+    // 1 user + 260 x (text + 2 image reads) + final: 782 items, 1302 with children.
+    const turnId = manager.appendMessage({ role: "user", content: [{ type: "text", text: "look" }], timestamp: Date.now() });
+    for (let index = 0; index < 260; index += 1) {
+      const calls = [`a-${index}`, `b-${index}`];
+      const assistantEntryId = manager.appendMessage(
+        assistantMessage(
+          [
+            { type: "text", text: `step ${index}` },
+            ...calls.map((id) => ({ type: "toolCall", id, name: "read", arguments: { path: `${id}.png` } })),
+          ],
+          "toolUse",
+        ) as never,
+      );
+      for (const toolCallId of calls) {
+        manager.appendCustomEntry(
+          piToolIdentityMarkerType,
+          createPiToolIdentityMarker(
+            { assistantEntryId, toolCallId, toolName: "read", identity: readIdentity },
+            { conversationId: conversation.backendConversationId, installationKey: toolProvenanceKey },
+          ),
+        );
+      }
+      for (const toolCallId of calls) {
+        manager.appendMessage({ role: "toolResult", toolCallId, toolName: "read", content: imageContent(), isError: false, timestamp: Date.now() } as never);
+        // Published before, as by an earlier attachment's backfill.
+        await recorder.publisher.publishImage({
+          scope,
+          threadId: "thread",
+          publicationKey: piViewedImagePublicationKey({
+            sessionId: conversation.backendConversationId,
+            assistantEntryId,
+            toolCallId,
+            imageIndex: 1,
+          }),
+          mediaType: "image/png",
+          bytes: Buffer.from(pixel, "base64"),
+        });
+      }
+    }
+    manager.appendMessage(assistantMessage([{ type: "text", text: "done" }], "stop") as never);
+    const publishedBefore = recorder.published.length;
+
+    const unattached = await driver.read(conversation.attach);
+    expect(unattached.snapshot.turnsById[turnId]!.orderedBackendItemIds).toHaveLength(1_302);
+    const handle = await driver.attach(conversation.attach);
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    expect(established.snapshot.turnsById[turnId]!.orderedBackendItemIds).toHaveLength(1_302);
+    expect(childImages(established.snapshot.itemsById)).toHaveLength(520);
+    const located = await handle.locateTurn({
+      maximumTurnCandidates: 1,
+      matchesBackendTurnId: (candidate) => candidate === turnId,
+    });
+    expect(located).toMatchObject({ status: "found" });
+    const page = await handle.history({ limit: 5 });
+    expect(page.turnsById[turnId]!.orderedBackendItemIds).toHaveLength(1_302);
+    expect(recorder.published).toHaveLength(publishedBefore);
+    await handle.close();
   });
 });
 

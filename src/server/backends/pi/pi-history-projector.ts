@@ -65,9 +65,10 @@ import { USER_FORK_CONTEXT_BOUNDARY } from "../fork-context-boundary.js";
 import { piAssistantResponseEvidence } from "./pi-assistant-response-phase.js";
 import {
   classifyPiViewedImage,
-  PI_VIEWED_IMAGE_READ_FAILED,
+  PI_TOOL_RESULT_MISSING,
   piViewedImageItem,
-  piViewedImageResultPart,
+  settlePiViewedImage,
+  type PiUnresolvedViewedImage,
   type PiViewedImageCandidate,
   type PiViewedImageClassification,
 } from "./pi-viewed-image.js";
@@ -157,6 +158,11 @@ export interface PiHistoryProjection {
    * projector never reads or publishes artifacts; its owner decides that.
    */
   readonly viewedImages: readonly PiViewedImageCandidate[];
+  /**
+   * Image reads of the running turn that have no result yet, and so remain
+   * `streaming`. Their owner settles them once Pi persists the result.
+   */
+  readonly unresolvedViewedImages: readonly PiUnresolvedViewedImage[];
 }
 
 export interface PiHistoryProjectorOptions {
@@ -317,6 +323,7 @@ export class PiHistoryProjector {
     const pendingTools = new Map<string, PendingHistoryTool[]>();
     const diagnostics: PiHistoryDiagnostic[] = [];
     const viewedImages: PiViewedImageCandidate[] = [];
+    const unresolvedViewedImages: PiUnresolvedViewedImage[] = [];
     const identityMarkers = new Map<
       string,
       Array<{
@@ -1033,42 +1040,17 @@ export class PiHistoryProjector {
           }
           const prior = items[itemIndex.get(match.itemId)!]!;
           const phase = terminalPhase(message);
-          if (match.viewedImage) {
-            const failed = resultError(message);
-            replaceItem(
-              piViewedImageItem({
-                backendItemId: prior.backendItemId,
-                backendTurnId: prior.backendTurnId,
-                sourceOrder: prior.sourceOrder,
-                status: failed ? "failed" : "completed",
-                ...(prior.startedAt ? { startedAt: prior.startedAt } : {}),
-                completedAt: entry.timestamp,
-                ...(match.viewedImage.fileName
-                  ? { fileName: match.viewedImage.fileName }
-                  : {}),
-                ...(failed ? { error: PI_VIEWED_IMAGE_READ_FAILED } : {}),
-              }),
-            );
-            const image = failed ? undefined : piViewedImageResultPart(message);
-            if (image) {
-              viewedImages.push({
-                child: {
-                  backendItemId: `${prior.backendItemId}:image`,
-                  backendTurnId: prior.backendTurnId,
-                  sourceOrder: prior.sourceOrder + 1,
-                  viewedItemId: prior.backendItemId,
-                  startedAt: entry.timestamp,
-                  completedAt: entry.timestamp,
-                  ...(match.viewedImage.fileName
-                    ? { fileName: match.viewedImage.fileName }
-                    : {}),
-                },
-                assistantEntryId: match.assistantEntryId,
-                toolCallId: match.toolCallId,
-                toolResultEntryId: entry.id,
-                imageIndex: image.imageIndex,
-              });
-            }
+          if (match.viewedImage && prior.semanticKind === "viewed_image") {
+            const settled = settlePiViewedImage({
+              viewed: prior,
+              assistantEntryId: match.assistantEntryId,
+              toolCallId: match.toolCallId,
+              toolResultEntryId: entry.id,
+              result: message,
+              completedAt: entry.timestamp,
+            });
+            replaceItem(settled.item);
+            if (settled.candidate) viewedImages.push(settled.candidate);
             continue;
           }
           replaceItem(
@@ -1205,6 +1187,13 @@ export class PiHistoryProjector {
           this.#runState === "running" &&
           current?.backendTurnId === prior.backendTurnId;
         if (active) {
+          if (prior.semanticKind === "viewed_image") {
+            unresolvedViewedImages.push({
+              viewedItemId: prior.backendItemId,
+              assistantEntryId: pending.assistantEntryId,
+              toolCallId: pending.toolCallId,
+            });
+          }
           continue;
         }
         if (!("phase" in prior) && prior.semanticKind !== "viewed_image") {
@@ -1218,13 +1207,7 @@ export class PiHistoryProjector {
           replaceItem({
             ...prior,
             status: "interrupted",
-            error: {
-              category: "interrupted",
-              message: {
-                text: "Pi history did not contain a matching tool result.",
-              },
-              code: "pi_tool_result_missing",
-            },
+            error: PI_TOOL_RESULT_MISSING,
           });
           continue;
         }
@@ -1321,6 +1304,7 @@ export class PiHistoryProjector {
       diagnostics,
       backendTurnIdByEntryId,
       viewedImages,
+      unresolvedViewedImages,
     };
   }
 }

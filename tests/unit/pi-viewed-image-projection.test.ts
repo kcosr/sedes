@@ -283,6 +283,34 @@ describe("Pi live viewed-image projection", () => {
     ]);
   });
 
+  it("places execution-only calls at their position in the ended message", () => {
+    const projector = live();
+    projector.consume({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Looking" },
+          { type: "toolCall", id: "late", name: "read", arguments: { path: "late.png" } },
+          { type: "text", text: "After" },
+        ],
+      },
+    } as unknown as AgentSessionEvent);
+    const late = items(
+      projector.consume(
+        execution({ type: "tool_execution_start", toolCallId: "late", toolName: "read", args: { path: "late.png" } }),
+      ),
+    );
+    const unknown = items(
+      projector.consume(
+        execution({ type: "tool_execution_start", toolCallId: "other", toolName: "read", args: { path: "other.png" } }),
+      ),
+    );
+    // Counting tool blocks alone would give index 0, the text block's position.
+    expect(late[0]?.item).toMatchObject({ backendItemId: "live:epoch:1", sourceOrder: 3 });
+    expect(unknown[0]?.item).toMatchObject({ backendItemId: "live:epoch:3", sourceOrder: 7 });
+  });
+
   it("orders several reads in one message two positions apart with reserved children", () => {
     const projector = live();
     const first = readToCompletion(projector, 1, "first", "one.png", imageResult());
@@ -325,6 +353,43 @@ describe("Pi live viewed-image projection", () => {
     });
     expect(JSON.stringify(events)).not.toContain("/home/private");
     expect(projector.takeViewedImageResults()).toEqual([]);
+  });
+
+  it("lists no child for an image part that could never be published", () => {
+    const projector = live();
+    for (const [index, part] of [
+      { type: "image", data: pixel, mimeType: "image/svg+xml" },
+      { type: "image", data: "", mimeType: "image/png" },
+      { type: "image", mimeType: "image/png" },
+    ].entries()) {
+      const events = readToCompletion(projector, index, `call-${index}`, `x-${index}.png`, {
+        content: [{ type: "text", text: "Read image file" }, part],
+      });
+      expect(events.at(-1)?.item).toMatchObject({ semanticKind: "viewed_image", status: "completed" });
+    }
+    expect(projector.takeViewedImageResults()).toEqual([]);
+  });
+
+  it("adds no child for a failed read even when its result has an image part", () => {
+    const projector = live();
+    const events = readToCompletion(projector, 0, "call", "shot.png", imageResult(), true);
+    expect(events.at(-1)?.item).toMatchObject({ semanticKind: "viewed_image", status: "failed" });
+    expect(projector.takeViewedImageResults()).toEqual([]);
+  });
+
+  it("starts an unpublished read as streaming when its execution ends first", () => {
+    const projector = live();
+    projector.consume(update("toolcall_start", 0, "call", "read", { path: "shot.png" }));
+    const events = items(
+      projector.consume(
+        execution({ type: "tool_execution_end", toolCallId: "call", toolName: "read", result: imageResult(), isError: false }),
+      ),
+    );
+    expect(events.map(({ type, item }) => [type, item.semanticKind, item.status])).toEqual([
+      ["item_started", "viewed_image", "streaming"],
+      ["item_completed", "viewed_image", "completed"],
+    ]);
+    expect(projector.takeViewedImageResults()).toHaveLength(1);
   });
 
   it("completes a text-only or non-vision read without a child", () => {
@@ -460,6 +525,23 @@ describe("Pi historical viewed-image projection", () => {
     ]);
   });
 
+  it("lists no candidate for an unsupported image part", () => {
+    const projection = project([
+      message("user", { role: "user", content: "look" }),
+      message("assistant", assistant([{ type: "toolCall", id: "call", name: "read", arguments: { path: "a.png" } }])),
+      marker("marker", "assistant", "call"),
+      message(
+        "result",
+        toolResult("call", [
+          { type: "text", text: "Read image file [image/tiff]" },
+          { type: "image", data: pixel, mimeType: "image/tiff" },
+        ]),
+      ),
+    ]);
+    expect(projection.snapshot.itemsById["assistant:0"]).toMatchObject({ semanticKind: "viewed_image", status: "completed" });
+    expect(projection.viewedImages).toEqual([]);
+  });
+
   it("keeps an unmarked read a generic tool", () => {
     const projection = project([
       message("user", { role: "user", content: "look" }),
@@ -487,6 +569,9 @@ describe("Pi historical viewed-image projection", () => {
       message("r1", toolResult("missing", [{ type: "text", text: "ENOENT '/secret/missing.png'" }], true)),
       message("r2", toolResult("text", [{ type: "text", text: "plain text" }])),
       message("r3", toolResult("blind", imageResult(PI_NON_VISION_IMAGE_NOTE).content)),
+      message("assistant-2", assistant([{ type: "toolCall", id: "denied", name: "read", arguments: { path: "denied.png" } }])),
+      marker("m4", "assistant-2", "denied"),
+      message("r4", toolResult("denied", imageResult().content, true)),
     ]);
     const { itemsById } = projection.snapshot;
     expect(itemsById["assistant:0"]).toMatchObject({
@@ -497,6 +582,7 @@ describe("Pi historical viewed-image projection", () => {
     expect(JSON.stringify(projection.snapshot)).not.toContain("/secret");
     expect(itemsById["assistant:1"]).toMatchObject({ semanticKind: "viewed_image", status: "completed" });
     expect(itemsById["assistant:2"]).toMatchObject({ semanticKind: "viewed_image", status: "completed" });
+    expect(itemsById["assistant-2:0"]).toMatchObject({ semanticKind: "viewed_image", status: "failed" });
     expect(projection.viewedImages).toEqual([]);
   });
 
@@ -518,5 +604,9 @@ describe("Pi historical viewed-image projection", () => {
       semanticKind: "viewed_image",
       status: "streaming",
     });
+    expect(settled.unresolvedViewedImages).toEqual([]);
+    expect(running.unresolvedViewedImages).toEqual([
+      { viewedItemId: "assistant:0", assistantEntryId: "assistant", toolCallId: "call" },
+    ]);
   });
 });
