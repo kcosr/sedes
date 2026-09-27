@@ -14,6 +14,8 @@ const CRITICAL_BYTES = 64 * 1_024 * 1_024;
 const RECONCILIATION_INITIAL_RETRY_MS = 1_000;
 const RECONCILIATION_MAXIMUM_RETRY_MS = 120_000;
 const RECONCILIATION_MAXIMUM_FAILURES = 10;
+const settlementEvents = new Set(["permission.replied", "form.replied", "form.cancelled", "shell.exited", "shell.deleted",
+  "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "session.deleted"]);
 interface ReconciliationRetry { failures: number; nextAttemptAt: number; }
 interface Scope {
   readonly authority: OpenCodeNativeAuthority; readonly journalId: string;
@@ -36,6 +38,7 @@ export class OpenCodeObservationHub {
   readonly #reconcileScopes = new Map<Scope, Map<string, ReconciliationRetry>>();
   readonly #reconcileWaiters = new Set<() => void>();
   #reconciling = false;
+  #settlementRevision = 0n;
   readonly #running: Promise<void>;
   #native?: OpenCodeHttpObservation;
   #connected = false;
@@ -80,12 +83,6 @@ export class OpenCodeObservationHub {
   hasRetainedAuthority(authority: OpenCodeNativeAuthority): boolean {
     const scope = this.#scopes.get(configurationFingerprint(authority));
     return !!scope && (scope.records.length > 0 || scope.subscribers.size > 0 || scope.proof.hasWork);
-  }
-  /** Explicit inspection may restart bounded lifecycle reads, never evidence or native work. */
-  retryReconciliation(): void {
-    this.#assertOpen();
-    for (const scope of this.#scopes.values()) this.#queueReconciliation(scope);
-    this.#scheduleReconciliation();
   }
   /** Pin a dispatched input before its admission response can race the SSE frame. */
   beginInput(authority: OpenCodeNativeAuthority, inputId: string): void {
@@ -293,6 +290,9 @@ export class OpenCodeObservationHub {
     }
   }
   #capture(event: OpenCodeNativeEvent, nativeBytes: number): void {
+    // A gap-born child/shell can settle before its parent route is seeded by
+    // inventory. Fence all in-flight inventories before applying that filter.
+    if (settlementEvents.has(event.type)) this.#settlementRevision++;
     for (const scope of this.#scopes.values()) {
       const matches = this.options.route ? this.options.route(scope.authority, event) : rootEvent(scope.authority, event);
       if (!matches || scope.proof.isDuplicate(event)) continue;
@@ -374,7 +374,7 @@ export class OpenCodeObservationHub {
     const owners = this.#reconcileScopes.get(scope);
     if (!owners) return;
     if (this.#scopes.get(configurationFingerprint(scope.authority)) !== scope) { this.#reconcileScopes.delete(scope); return; }
-    const cut = scope.proof.retentionCut(), continuity = scope.continuity;
+    const cut = scope.proof.retentionCut(), continuity = scope.continuity, settlementRevision = this.#settlementRevision;
     const sessionID = scope.authority.session!.nativeSessionID;
     const selected = new Map([...owners].filter(([, retry]) => retry.nextAttemptAt <= Date.now()).slice(0, 4));
     const signal = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(5_000)]);
@@ -396,7 +396,7 @@ export class OpenCodeObservationHub {
       if (!inventories.length) throw unavailable("opencode_request_failed");
       const checkedOwners = new Set(inventories.map(item => item.owner));
       await this.options.assertCurrent?.(signal); signal.throwIfAborted();
-      if (!this.#connected || continuity !== scope.continuity) throw unavailable("opencode_observation_continuity_lost");
+      if (!this.#connected || continuity !== scope.continuity || settlementRevision !== this.#settlementRevision) throw unavailable("opencode_observation_continuity_lost");
       const work = new Map<string, string>();
       for (const { owner, activity, interactions } of inventories) {
         if (activity.active) work.set(`execution:${owner}`, owner);
@@ -417,7 +417,7 @@ export class OpenCodeObservationHub {
       for (const owner of checkedOwners) owners.delete(owner);
       this.#collect(scope); this.#changed();
     } catch { /* Failed or raced reads prove nothing. Their markers stay conservative. */ }
-    // A native break or explicit inspection replaces the entire retry cycle.
+    // A new native break replaces the entire retry cycle.
     if (this.#reconcileScopes.get(scope) !== owners) return;
     this.#reconcileScopes.delete(scope);
     for (const [owner, retry] of selected) if (owners.delete(owner)) {

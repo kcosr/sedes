@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
 import { OpenCodeHttpNativeAdapter } from "../../src/server/backends/opencode/opencode-http-native-adapter.js";
+import { OpenCodeNativeHost } from "../../src/server/backends/opencode/opencode-native-host.js";
 import { OpenCodeObservationHub } from "../../src/server/backends/opencode/opencode-observation-hub.js";
 import { parseOpenCodeObservationBoundary, parseOpenCodeObservationRecords } from "../../src/server/backends/opencode/opencode-native-codecs.js";
 import type { OpenCodeNativeAuthority, OpenCodePortObservation } from "../../src/server/backends/opencode/opencode-native-port.js";
@@ -25,6 +26,44 @@ function setup(options: ConstructorParameters<typeof OpenCodeObservationHub>[1] 
 async function drain(observation: OpenCodePortObservation) { await observation.wait(); return observation.drain(); }
 
 describe("resident OpenCode native observation journal", () => {
+  it.each(["child", "shell"] as const)("fences gap-born %s settlements before the real host route knows their identity", async kind => {
+    const wire = createOpenCodeApiFixture({ directory: authority().directory });
+    const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture", fetch: wire.fetch });
+    let probe = async () => {};
+    const { directory, session, ...owner } = authority();
+    const host = new OpenCodeNativeHost(owner, new OpenCodeHttpNativeAdapter(client), {
+      assertCurrent: () => probe(), installSessionEnvironment: async () => {}, ensureMcpRegistration: async () => {},
+    }, client.lifetime);
+    cleanups.push(() => { host.close(); client.close(); });
+    const port = host.acquire({ directory, session }), observer = port.observe({ purpose: "evidence" }); await observer.ready;
+    wire.send({ ...event(1), type: "session.inbox.enqueued", data: { sessionID: "ses_fixture", inboxID: "msg_pending",
+      item: { type: "user", delivery: "queue", payload: { text: "pending" } } } }); await observer.wait();
+    // Only the inventory sees this gap-born resource; no created event seeded it.
+    if (kind === "child") {
+      wire.sessions.push({ ...wire.session, id: "ses_gap_child", parentID: wire.sessionID });
+      wire.setResponse("/api/session/active", 200, { data: { ses_gap_child: { type: "running" } } });
+    } else wire.setResponse("/api/shell", 200, { location: { directory }, data: [{
+      id: "sh_gap", status: "running", command: "sleep 60", cwd: directory, shell: "/bin/sh", file: "/tmp/output",
+      metadata: { sessionID: wire.sessionID }, time: { started: 1 },
+    }] });
+    let release!: () => void, enter!: () => void, calls = 0;
+    const held = new Promise<void>(resolve => { release = resolve; }), entered = new Promise<void>(resolve => { enter = resolve; });
+    probe = async () => { if (++calls === 2) { enter(); await held; } };
+    wire.disconnect(); await entered; // All inventory reads completed, routes not yet seeded.
+    const before = host.retentionSnapshot();
+    wire.send(kind === "child" ? { ...event(1, "session.execution.succeeded", "ses_gap_child"), data: { sessionID: "ses_gap_child" } }
+      : { id: "evt_gap_exit", type: "shell.exited", created: 2, data: { id: "sh_gap", status: "exited", exit: 0 } });
+    await vi.waitFor(() => expect(host.retentionSnapshot().revision).not.toBe(before.revision));
+    expect(host.retentionSnapshot().observation.pendingEvidenceCount).toBe(before.observation.pendingEvidenceCount);
+    expect(host.retentionSnapshot().observation.nativeConnected).toBe(true);
+    wire.clearResponse("/api/session/active"); wire.clearResponse("/api/shell"); release();
+    await vi.waitFor(() => expect(calls).toBeGreaterThanOrEqual(4), { timeout: 5_000 });
+    const recovered = port.observe({ purpose: "evidence" }), boundary = await recovered.ready;
+    const records = recovered.drain(); await recovered.acknowledge({ journalId: boundary.journalId, sequence: records.at(-1)!.sequence });
+    await recovered.close(); await observer.close(); host.release(port);
+    await vi.waitFor(() => expect(port.lifetime.aborted).toBe(true));
+  });
+
   it("backs off permanent inventory failures, caps attempts and retains proof until a fresh retry cycle", async () => {
     const { wire, hub } = setup(); const first = hub.subscribe(authority(), { purpose: "evidence" }); await first.ready;
     wire.send({ ...event(1), type: "session.inbox.enqueued", data: { sessionID: "ses_fixture", inboxID: "msg_known",
@@ -45,11 +84,8 @@ describe("resident OpenCode native observation journal", () => {
     await retained.close(); await first.close(); hub.releaseScope(authority());
     expect(hub.hasRetainedAuthority(authority())).toBe(true);
     await vi.advanceTimersByTimeAsync(60 * 60_000); expect(attempts()).toBe(10);
-    // Explicit backend inspection can request a new bounded cycle.
-    hub.retryReconciliation(); await vi.advanceTimersByTimeAsync(0); expect(attempts()).toBe(11);
-    await vi.advanceTimersByTimeAsync(60 * 60_000); expect(attempts()).toBe(20);
     // A genuinely new native disconnect/reconnect also resets the retry budget.
-    wire.disconnect(); await vi.advanceTimersByTimeAsync(100); expect(attempts()).toBe(21);
+    wire.disconnect(); await vi.advanceTimersByTimeAsync(100); expect(attempts()).toBe(11);
     expect(hub.hasRetainedAuthority(authority())).toBe(true);
   });
 

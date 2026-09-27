@@ -234,6 +234,35 @@ describe("resident OpenCode runtime registry", () => {
     } finally { client.close(); }
   });
 
+  it("does not reset exhausted native reconciliation or read healthy scopes on automatic service status", async () => {
+    const wire = createOpenCodeApiFixture(), client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture", fetch: wire.fetch });
+    const f = fixture(runtimeId => new OpenCodeNativeHost({ ...scope, executionEnvironmentId,
+      backendInstanceId: "backend", runtimeId, nativeGeneration: "native-generation" }, new OpenCodeHttpNativeAdapter(client), {
+      assertCurrent: async () => {}, installSessionEnvironment: async () => {}, ensureMcpRegistration: async () => {},
+    }, client.lifetime));
+    try {
+      const runtime = await f.hosts.ensure(configuration, f.epoch), host = f.hosts.get(runtime.runtimeId);
+      const port = host.acquire({ directory: wire.directory, session: { applicationThreadId: "thread", nativeSessionID: wire.sessionID, bindingFingerprint: "binding" } });
+      const observer = port.observe({ purpose: "evidence" }); await observer.ready;
+      wire.send({ id: "evt_pending", created: 1, type: "session.inbox.enqueued",
+        durable: { aggregateID: wire.sessionID, seq: 1, version: 1 }, data: { sessionID: wire.sessionID, inboxID: "msg_pending",
+          item: { type: "user", delivery: "queue", payload: { text: "pending" } } } });
+      await observer.wait();
+      const initial = wire.requests.length;
+      for (let i = 0; i < 4; i++) await f.services.refreshStatus();
+      expect(wire.requests).toHaveLength(initial); // No native outage: no inventory polling.
+      wire.setResponse(`/api/session/${wire.sessionID}/inbox`, 503, { error: "unavailable" });
+      const attempts = () => wire.requests.filter(request => request.pathname.endsWith("/inbox")).length;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      wire.disconnect(); await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(attempts()).toBe(10);
+      const exhausted = wire.requests.length;
+      for (let i = 0; i < 120; i++) { await f.services.refreshStatus(); await vi.advanceTimersByTimeAsync(30_000); }
+      expect(attempts()).toBe(10); expect(wire.requests).toHaveLength(exhausted);
+      expect(host.retentionSnapshot().threadIds).toContain("thread");
+    } finally { client.close(); vi.useRealTimers(); }
+  });
+
   it("still rejects service confirmation after native owner generation or desired configuration changes", async () => {
     const f = fixture(); await f.hosts.ensure(configuration, f.epoch);
     const confirmed = f.services.status();

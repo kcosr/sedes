@@ -210,7 +210,9 @@ export class OpenCodeRuntimeHostRegistry {
       unregister: () => {}, frozen: false, retiring: false };
     resident.unregister = this.input.services.register({ resourceId: runtime.runtimeId, kind: "provider",
       snapshot: () => this.#serviceSnapshot(resident),
-      prepareRestart: () => this.#refresh(resident),
+      // Native inventory cannot clear stock OpenCode's unknown-state blocker.
+      // Automatic service polling must not re-read every resident conversation;
+      // explicit backend inspection still refreshes its detailed inventory.
       stop: (reason, { force }) => this.#retire(resident, reason, force) });
     this.#runtimes.set(configuration.instance.id, resident); this.#byId.set(runtime.runtimeId, resident);
     try {
