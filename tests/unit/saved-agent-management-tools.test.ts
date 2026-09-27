@@ -16,7 +16,7 @@ import {
 import { createThreadCreateToolDefinition } from "../../src/server/agent-tools/tools/thread-management-tools.js";
 import { createPiAgentToolSet } from "../../src/server/backends/pi/pi-agent-tool-adapter.js";
 import { PiToolAccessController } from "../../src/server/backends/pi/pi-tool-access.js";
-import { OpenCodeSavedAgentBackendAdapter } from "../../src/server/backends/opencode/opencode-saved-agent-adapter.js";
+import { OPENCODE_SAVED_AGENT_PRESENTATION } from "../../src/server/backends/opencode/opencode-saved-agent-adapter.js";
 import { backendBrandSchema } from "../../src/shared/protocol/conversation.js";
 
 const agentId = "10000000-0000-4000-8000-000000000001";
@@ -115,7 +115,7 @@ function context(): TrustedToolInvocationContext {
 describe("Saved Agent canonical tools", () => {
   it.each(backendBrandSchema.options)("validates executed Saved Agent outputs for the %s presentation brand", async (brand) => {
     const backend = brand === "opencode"
-      ? new OpenCodeSavedAgentBackendAdapter().presentation
+      ? OPENCODE_SAVED_AGENT_PRESENTATION
       : { typeId: brand, label: { text: brand }, brand };
     const agent = {
       ...await service().get({ tenantId: "tenant-1", principalId: "principal-1" }, agentId),

@@ -24,6 +24,8 @@ export interface OpenCodeHistoryProjectionInput {
   readonly activity: "running" | "idle" | "unknown";
   readonly backgroundActivity?: BackgroundActivity;
   readonly observedParts?: ReadonlyMap<string, OpenCodeObservedPart>;
+  /** Exact private dispatch/consumption proof; native-only messages have no entry. */
+  readonly deliveryCorrelations?: ReadonlyMap<string, string>;
   readonly limits?: Partial<OpenCodeHistoryLimits>;
   readonly signal?: AbortSignal;
   /** Reuse unchanged closed turns from this same scoped projection. */
@@ -67,6 +69,7 @@ function parsed<T>(schema: { parse(value: unknown): T }, value: unknown): T {
 }
 
 interface CachedPeriod {
+  readonly correlationFingerprint: string;
   readonly messages: readonly OpenCodeNativeMessage[];
   readonly boundary: OpenCodeNativeMessage;
   readonly turn: BackendTurn;
@@ -77,6 +80,7 @@ interface CachedPeriod {
 }
 
 interface CachedMessage {
+  readonly deliveryOperationId?: string;
   readonly native: OpenCodeNativeMessage;
   readonly turnId: string;
   readonly turnStatus: BackendTurn["status"];
@@ -152,6 +156,10 @@ export class OpenCodeHistoryProjection {
       if (!opening) return;
       const backendTurnId = openCodeHistoryTurnId(retained.sessionId, opening.id);
       const status: BackendTurn["status"] = !boundary ? "in_progress" : boundary.outcome === "succeeded" ? "completed" : boundary.outcome;
+      const correlated = period.filter(message => message.type === "user").map(message =>
+        [message.id, input.deliveryCorrelations?.get(message.id) ?? null] as const);
+      const completionCorrelations = correlated.flatMap(([, operationId]) => operationId ? [operationId] : []);
+      const correlationFingerprint = openCodeHistoryFingerprint(correlated);
       let turn: BackendTurn;
       let selectedItems: Readonly<Record<string, BackendItem>>;
       let fingerprint: string;
@@ -160,7 +168,7 @@ export class OpenCodeHistoryProjection {
         ? input.previous : undefined;
       const cached = boundary && previous && previous.#scope === this.#scope && previous.#generation === this.#generation
         ? previous.#periods.get(opening.id) : undefined;
-      if (cached && cached.boundary === boundary && cached.messages.length === period.length &&
+      if (cached && cached.correlationFingerprint === correlationFingerprint && cached.boundary === boundary && cached.messages.length === period.length &&
           cached.messages.every((message, index) => message === period[index])) {
         ({ turn, items: selectedItems, fingerprint, wholeBytes } = cached);
         projectedBytes += cached.bytes; check();
@@ -181,8 +189,9 @@ export class OpenCodeHistoryProjection {
         for (const message of period) {
           check();
           const sourceOrder = orderedBackendItemIds.length;
+          const deliveryOperationId = message.type === "user" ? input.deliveryCorrelations?.get(message.id) : undefined;
           const old = previous ? previous.#messages.get(message.id) : undefined;
-          if (old && old.native === message && old.turnId === backendTurnId && old.turnStatus === status && old.sourceOrder === sourceOrder) {
+          if (old && old.deliveryOperationId === deliveryOperationId && old.native === message && old.turnId === backendTurnId && old.turnStatus === status && old.sourceOrder === sourceOrder) {
             if (orderedBackendItemIds.length + old.items.length > MAXIMUM_BACKEND_ITEMS_PER_TURN) throw new OpenCodeHistoryError("turn_items");
             for (const item of old.items) {
               if (items[item.backendItemId] || builtItems[item.backendItemId]) throw new OpenCodeHistoryError("invalid");
@@ -191,9 +200,10 @@ export class OpenCodeHistoryProjection {
             projectedBytes += old.bytes; check(); this.#messages.set(message.id, old);
           } else {
             const beforeMessageBytes = projectedBytes;
-            projectMessage(message, backendTurnId, status, input.observedParts, add, () => orderedBackendItemIds.length);
+            projectMessage(message, backendTurnId, status, input.observedParts, add, () => orderedBackendItemIds.length, deliveryOperationId);
             if (immutableMessage(message)) this.#messages.set(message.id, { native: message, turnId: backendTurnId, turnStatus: status,
-              sourceOrder, items: orderedBackendItemIds.slice(sourceOrder).map(id => builtItems[id]!), bytes: projectedBytes - beforeMessageBytes });
+              sourceOrder, ...(deliveryOperationId ? { deliveryOperationId } : {}),
+              items: orderedBackendItemIds.slice(sourceOrder).map(id => builtItems[id]!), bytes: projectedBytes - beforeMessageBytes });
           }
         }
         let diagnostic: string | undefined;
@@ -204,6 +214,7 @@ export class OpenCodeHistoryProjection {
           }
         }
         turn = parsed(backendTurnSchema, { backendTurnId, status, startedAt: timestamp(opening.time.created),
+          ...(completionCorrelations.length ? { completionCorrelations: [...new Set(completionCorrelations)] } : {}),
           ...(boundary ? { completedAt: timestamp(boundary.time.created), endedBy: status === "completed" ? "agent_settled" : status } : {}),
           ...(status === "failed" ? { failure: turnFailure(diagnostic) } : {}), orderedBackendItemIds });
         projectedBytes += serializedUtf8Bytes(turn); check();
@@ -214,7 +225,7 @@ export class OpenCodeHistoryProjection {
         fingerprint = openCodeHistoryFingerprint(wholeTurn);
         // A closed turn containing a still-mutable native record must be rebuilt.
         if (boundary && period.every(immutableMessage)) {
-          this.#periods.set(opening.id, { messages: period, boundary, turn, items: selectedItems,
+          this.#periods.set(opening.id, { messages: period, boundary, turn, items: selectedItems, correlationFingerprint,
             bytes: projectedBytes - beforeBytes, wholeBytes, fingerprint });
         }
       }
@@ -393,7 +404,8 @@ export class OpenCodeHistoryProjection {
 }
 
 function projectMessage(message: OpenCodeNativeMessage, backendTurnId: string, turnStatus: BackendTurn["status"],
-  observed: ReadonlyMap<string, OpenCodeObservedPart> | undefined, add: (item: BackendItem) => void, nextOrder: () => number): void {
+  observed: ReadonlyMap<string, OpenCodeObservedPart> | undefined, add: (item: BackendItem) => void, nextOrder: () => number,
+  deliveryOperationId?: string): void {
   const base = (part: string | number = "message", status: BackendItem["status"] = "completed") => ({
     backendItemId: openCodeHistoryItemId(message.id, part), backendTurnId, status, sourceOrder: nextOrder(), startedAt: timestamp(message.time.created),
   });
@@ -408,7 +420,7 @@ function projectMessage(message: OpenCodeNativeMessage, backendTurnId: string, t
           mimeType: file.mime as "image/png" | "image/jpeg" | "image/gif" | "image/webp",
           ...(file.name ? { fileName: boundDisplayText(path.basename(file.name)) } : {}) });
       }
-      add({ ...base(), semanticKind: "user_message", content });
+      add({ ...base(), semanticKind: "user_message", content, ...(deliveryOperationId ? { deliveryOperationId } : {}) });
       (message.files ?? []).forEach((file, index) => {
         if (!["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.mime)) notice(`Native attachment: ${file.name ? path.basename(file.name) : file.mime} (contents unavailable)`, `file:${index}`);
       });

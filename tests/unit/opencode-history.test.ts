@@ -411,6 +411,36 @@ describe("OpenCode normalized retained history", () => {
     expect(value.snapshot().snapshot).toMatchObject({ runState: "disconnected", backgroundActivity: { agents: 1, commands: 2 } });
   });
 
+  it.each(["open", "closed"] as const)("refreshes private correlations in an unchanged %s cached period", state => {
+    const messages = [user("msg_first"), user("msg_steer"), user("msg_native")];
+    if (state === "closed") messages.push(idle("msg_idle"));
+    const before = projection(messages, { activity: state === "open" ? "running" : "idle" });
+    const turn = before.orderedBackendTurnIds[0]!;
+    expect(before.turnsById[turn]!.completionCorrelations).toBeUndefined();
+    const proofs = new Map([["msg_first", "ordinary-operation"], ["msg_steer", "steer-operation"]]);
+    const after = projection(messages, { previous: before, deliveryCorrelations: proofs });
+    expect(after.turnsById[turn]!.completionCorrelations).toEqual(["ordinary-operation", "steer-operation"]);
+    expect(after.itemsById[openCodeHistoryItemId("msg_first")]).toMatchObject({ deliveryOperationId: "ordinary-operation" });
+    expect(after.itemsById[openCodeHistoryItemId("msg_steer")]).toMatchObject({ deliveryOperationId: "steer-operation" });
+    expect(after.itemsById[openCodeHistoryItemId("msg_native")]).not.toHaveProperty("deliveryOperationId");
+    expect(after.itemsById[openCodeHistoryItemId("msg_first")]).not.toBe(before.itemsById[openCodeHistoryItemId("msg_first")]);
+    const revoked = projection(messages, { previous: after, deliveryCorrelations: new Map() });
+    expect(revoked.turnsById[turn]!.completionCorrelations).toBeUndefined();
+    expect(revoked.itemsById[openCodeHistoryItemId("msg_first")]).not.toHaveProperty("deliveryOperationId");
+    expect(before.turnsById[turn]!.completionCorrelations).toBeUndefined();
+  });
+
+  it("never infers correlation from native metadata or unrelated non-user records", () => {
+    const forged = parseOpenCodeNativeMessage({ ...user("msg_external"), metadata: {
+      applicationOperationId: "forged-operation", sedes: { operationId: "forged-operation" },
+    } });
+    const value = projection([forged, assistant("msg_assistant", { time: { created: 200, completed: 250 } }), idle("msg_idle")], {
+      deliveryCorrelations: new Map([["msg_assistant", "not-a-user-operation"], ["msg_absent", "absent-operation"]]),
+    });
+    expect(value.turnsById[value.orderedBackendTurnIds[0]!]!.completionCorrelations).toBeUndefined();
+    expect(value.itemsById[openCodeHistoryItemId("msg_external")]).not.toHaveProperty("deliveryOperationId");
+  });
+
   it("reuses settled message items inside an open period while refreshing mutable work and settlement", () => {
     const settled = [user("msg_user"), assistant("msg_finished", {
       time: { created: 200, streamed: 220, completed: 250 }, content: [
@@ -468,7 +498,10 @@ describe("OpenCode normalized retained history", () => {
     expect(() => projection(messages, { limits: { decodedBytes: normal.decodedBytes - 1 } })).toThrow(expect.objectContaining({ reason: "bytes", retryable: false }));
     expect(projection(messages, { limits: { decodedBytes: normal.decodedBytes } }).history({ limit: 1 }).orderedBackendTurnIds).toEqual(normal.orderedBackendTurnIds);
     for (const length of [MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES, MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES - 100]) {
-      expect(() => projection([user("msg_huge", "x".repeat(length)), idle("msg_end")])).toThrow(expect.objectContaining({ reason: "turn_bytes", retryable: false }));
+      // Isolate the normalized whole-turn bound from the earlier native JSON
+      // envelope bound, which now rejects an individual record this large.
+      expect(() => projection([{ ...user("msg_huge"), text: "x".repeat(length) } as OpenCodeNativeMessage, idle("msg_end")]))
+        .toThrow(expect.objectContaining({ reason: "turn_bytes", retryable: false }));
     }
   });
 

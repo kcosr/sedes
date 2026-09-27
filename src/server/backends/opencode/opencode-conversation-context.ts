@@ -4,6 +4,9 @@ import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
 import { parseOpenCodeBindingDetail, serializeOpenCodeBindingDetail, type OpenCodeBindingDetail } from "./opencode-binding-detail.js";
 import type { OpenCodeRuntime } from "./opencode-runtime.js";
 import type { OpenCodeThreadRepository } from "./opencode-thread-repository.js";
+import type { OpenCodeThreadSettingsRepository } from "./opencode-thread-settings-repository.js";
+import type { OpenCodeModelCatalog } from "./opencode-model-catalog.js";
+import type { CompiledBackendModelPolicy } from "../model-policy.js";
 
 export type OpenCodeConversationRuntime = Pick<OpenCodeRuntime,
   "nativeNamespaceKey" | "start" | "health" | "snapshot" | "acquire" | "assertCurrent">;
@@ -14,6 +17,9 @@ export interface OpenCodeDriverContext {
   readonly connection: AgentConnectionProfile;
   readonly nativeNamespaceKey: string;
   readonly repository: OpenCodeThreadRepository;
+  readonly settings: OpenCodeThreadSettingsRepository;
+  readonly catalog: OpenCodeModelCatalog;
+  readonly modelPolicy: CompiledBackendModelPolicy;
   readonly runtime: () => Promise<OpenCodeConversationRuntime>;
 }
 
@@ -42,8 +48,11 @@ export function requireOpenCodeBinding(context: OpenCodeDriverContext,
         detail.tenantId !== binding.tenantId || detail.principalId !== binding.ownerPrincipalId ||
         detail.backendInstanceId !== binding.backendInstanceId || detail.connectionProfileId !== binding.connectionProfileId ||
         detail.executionEnvironmentId !== binding.executionEnvironmentId || detail.sessionId !== binding.backendConversationId ||
-        detail.canonicalWorkspacePath !== input.workspace.canonicalPath || detail.nativeNamespaceKey !== context.nativeNamespaceKey ||
-        context.repository.getBinding(input.scope, binding.applicationThreadId) !== serializeOpenCodeBindingDetail(detail)) throw new Error();
+        detail.canonicalWorkspacePath !== input.workspace.canonicalPath || detail.nativeNamespaceKey !== context.nativeNamespaceKey) throw new Error();
+    const persisted = context.repository.getBinding(input.scope, binding.applicationThreadId);
+    const admitted = persisted ?? serializeOpenCodeBindingDetail(context.repository.requireProvisionalBinding(
+      input.scope, binding.applicationThreadId, binding.backendConversationId).detail);
+    if (admitted !== serializeOpenCodeBindingDetail(detail)) throw new Error();
     return detail;
   } catch {
     throw openCodeConversationError("opencode_binding_authority_invalid", "The OpenCode conversation binding is unavailable.", "permission_denied");

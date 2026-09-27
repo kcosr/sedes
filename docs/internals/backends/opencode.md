@@ -1,12 +1,11 @@
 # OpenCode v2 runtime and native history
 
 The OpenCode module and its native runtime are implemented under
-`src/server/backends/opencode`. They are currently exercised through the
-qualification suites and a test catalog. The production module catalog still
-contains Pi, Codex, Claude and Grok. OpenCode discovery, attachment, history,
-recovery and conversation Stop operate in that test catalog; creation, delivery,
-settings and interaction mutations remain explicitly unavailable pending their
-integration and production admission.
+`src/server/backends/opencode`. The production catalog registers the module alongside Pi, Codex, Claude,
+and Grok. It supports discovery, attachment, native history, creation, Submit,
+conversation-scoped Steer, Stop, rename, reviewed model/effort settings,
+permissions, and expressible native forms. Attachment/image delivery, Sedes MCP
+tools, manual compaction, usage accounting, and forks remain unavailable.
 The normalized backend identity is `opencode`, its connection kind is
 `opencode_http`, and the browser brand is `opencode`. Client protocol 128
 includes these closed-enum additions and terminal Stop diagnostics.
@@ -110,7 +109,11 @@ includes principal, backend, connection, environment, canonical workspace,
 native namespace and session. Operation identity and request fingerprint are
 immutable before dispatch; accepted or proven-not-applied outcomes cannot be
 reopened. Create/fork destinations are deliberately unbound until their result
-is validated. Later mutations must match the exact persisted session binding.
+is validated. Later mutations must match the exact persisted session binding. First Send
+may use a provisional binding only when its active scoped attempt, application-
+reserved native session ID, accepted creation receipt, immutable settings
+snapshot, source, and private binding detail all match. There is no general
+adoption authority in a native metadata marker.
 Changing the configured database changes reserved native identity; changing an
 endpoint updates the runtime configuration revision and requires fresh admission.
 
@@ -160,8 +163,9 @@ terminal evidence arrives. Settings-only suffixes do not claim running ownership
 
 Text and reasoning use separate native ordinal counters. Observed deltas are
 disposable overlays; final native values replace them, including empty text.
-After prefix loss, the final value repairs the transcript. Native inputs never
-receive invented Sedes delivery provenance. Observed child sessions and attributed
+After prefix loss, the final value repairs the transcript. Native inputs receive Sedes delivery provenance only from an exact private
+input receipt and positive consumed-input evidence. External native inputs
+receive none. Observed child sessions and attributed
 shells refresh background counts; this is not a complete inventory of native Jobs.
 Idle client eviction releases the handle while keeping either native owner alive.
 Archive/policy residency release refreshes observed activity and refuses busy or
@@ -190,3 +194,70 @@ cancellation, overflow/reconnect, fixed-limit failures, lifetime revocation and
 background-safe eviction.
 These tests do not require authenticated model requests or use an operator's
 running OpenCode server.
+
+## Delivery and mutation evidence
+
+Creation reserves a provider-valid native session ID derived from the
+application attempt. A scoped immutable creation receipt and settings snapshot
+precede the single POST. Readback must match that ID, workspace, model and
+private creation fingerprint before adoption. A missing session after an
+ambiguous request is not permission to create again.
+
+Each Submit/Steer snapshots desired settings and reserves an exact native input
+ID before dispatch. The independent input observer subscribes before effects
+and records native prepared-payload admission separately from consumption.
+Prepared native transformations are allowed; a conflicting later payload blocks
+correlation. HTTP admission alone leaves the Sedes operation pending. The
+bounded consumption wait is one second after acknowledgment; the observer
+continues independently of projection hydration and actor mailboxes.
+
+Positive consumed input is published through the optional normalized
+`onSubmissionObserved` callback, under the actor's current control/lifetime
+fences. Shared first-Send finalization verifies the original attempt and
+source. Ordinary queue and Steer reconciliation match the exact operation.
+Publication work is deferred outside observer callbacks to avoid actor/mailbox
+cycles. Pi, Codex, Claude and Grok retain their projected-item correlation paths.
+
+The native prompt has `queue` or conversation-level `steer` delivery. Its
+private receipt never manufactures a native turn ID. History groups busy
+periods using actual native records; private consumed-user correlations supply
+delivery/completion provenance even when several steers enter one period.
+
+Stop uses one original absolute deadline for native interruption and pending
+input withdrawal. Its accepted acknowledgment proves only interruption command
+acceptance. Exact inbox DELETE alone is insufficient withdrawal proof: stock
+OpenCode returns a successful no-op after promotion. Exact Cancelled evidence
+or a gap-qualified, event-anchored Revert proves withdrawal. Positive consumed
+evidence survives later history deletion and wins over absence. Cleanup failure
+leaves that input unresolved; only a new explicit Stop may attempt it again.
+The private Stop receipt survives handle replacement and cannot cancel later
+work through replay.
+
+On loss of the original continuous input subscription, the replacement
+subscribes first, then reads inbox, then the exact native message. A surviving
+pending input remains unresolved; exact user/Delivered evidence is accepted.
+If neither survives, the bounded finite experimental event log is additional
+evidence only. Its final `log.synced` watermark and EOF must validate, sequence
+gaps remain explicit, and a watermark alone proves no event payload. Stock CLI
+2.0.18 disables event persistence by default, so this read usually has no
+replay payload. With no surviving proof, lost tracking becomes `failed_unknown`;
+a healthy pending tracker never does so solely because time passes. There is
+no automatic resend or late-acceptance path for terminal ordinary Submit.
+
+Rename and model/effort changes reserve immutable private intent, perform one
+native effect and read back its exact result. Desired settings revisions change
+only on desired writes; observed native selection is separately generation- and
+revision-fenced. Imported desired settings remain null until explicit selection.
+Arbitrary native variants are readable but not runnable through Sedes. Model
+IDs qualify provider plus model; effort mapping admits only the reviewed full
+OpenAI chat/Responses variant overlay, rejecting extra conflicting settings.
+
+Interaction mappings bind tenant, principal, thread, native session, runtime
+generation and request fingerprint. Native permission IDs and form option values
+stay private. Responses reserve immutable intent before their effect and
+revalidate native identity around network reads. An exact terminal form answer
+or cancellation can recover a lost acknowledgment; disappearance of a
+permission request cannot. An external client's settlement removes the gate
+without creating a Sedes operation receipt. Unsupported session-owned forms
+receive one exact automatic cancellation; global unowned forms receive a notice
+and no effect. Permission cancellation without native rejection is unsupported.

@@ -6,6 +6,11 @@ import { OpenCodeConversationBackendDriver } from "../../src/server/backends/ope
 import type { OpenCodeConversationRuntime } from "../../src/server/backends/opencode/opencode-conversation-context.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
 import { serializeOpenCodeBindingDetail, type OpenCodeBindingDetail } from "../../src/server/backends/opencode/opencode-binding-detail.js";
+import { OpenCodeThreadSettingsRepository } from "../../src/server/backends/opencode/opencode-thread-settings-repository.js";
+import { OpenCodeModelCatalog } from "../../src/server/backends/opencode/opencode-model-catalog.js";
+import { OpenCodeNativeMutations } from "../../src/server/backends/opencode/opencode-native-mutations.js";
+import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
+import { openCodeExecutionSettingsMigration } from "../../src/server/db/migrations/123-opencode-execution-settings.js";
 import { OpenCodeThreadRepository } from "../../src/server/backends/opencode/opencode-thread-repository.js";
 import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
 import type { OpenCodeNativeIdentity } from "../../src/server/backends/opencode/opencode-native-identity.js";
@@ -39,16 +44,17 @@ export function createOpenCodeConversationFixture(input: {
     CREATE TABLE agent_backend_instances (tenant_id TEXT,id TEXT,kind TEXT,PRIMARY KEY(tenant_id,id));
     CREATE TABLE agent_connection_profiles (tenant_id TEXT,owner_principal_id TEXT,id TEXT,kind TEXT,PRIMARY KEY(tenant_id,owner_principal_id,id));
     CREATE TABLE workspaces (tenant_id TEXT,owner_principal_id TEXT,id TEXT,canonical_path TEXT,PRIMARY KEY(tenant_id,owner_principal_id,id));
-    CREATE TABLE application_threads (tenant_id TEXT,owner_principal_id TEXT,id TEXT,backend_instance_id TEXT,connection_profile_id TEXT,environment_id TEXT,workspace_id TEXT,PRIMARY KEY(tenant_id,owner_principal_id,id));
+    CREATE TABLE application_threads (tenant_id TEXT,owner_principal_id TEXT,id TEXT,backend_instance_id TEXT,connection_profile_id TEXT,environment_id TEXT,workspace_id TEXT, backing_state TEXT DEFAULT 'bound', PRIMARY KEY(tenant_id,owner_principal_id,id), UNIQUE(tenant_id,owner_principal_id,id,backend_instance_id,connection_profile_id,environment_id));
     CREATE TABLE conversation_bindings (tenant_id TEXT,owner_principal_id TEXT,application_thread_id TEXT,backend_instance_id TEXT,connection_profile_id TEXT,execution_environment_id TEXT,backend_conversation_id TEXT,
       UNIQUE(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,connection_profile_id,execution_environment_id));
   `);
   database.prepare("INSERT INTO agent_backend_instances VALUES (?,?,?)").run(scope.tenantId, backend, "opencode");
   database.prepare("INSERT INTO agent_connection_profiles VALUES (?,?,?,?)").run(scope.tenantId, scope.principalId, connectionID, "opencode_http");
   database.prepare("INSERT INTO workspaces VALUES (?,?,?,?)").run(scope.tenantId, scope.principalId, workspaceID, directory);
-  database.prepare("INSERT INTO application_threads VALUES (?,?,?,?,?,?,?)").run(scope.tenantId, scope.principalId, threadID, backend, connectionID, environmentID, workspaceID);
+  database.prepare("INSERT INTO application_threads (tenant_id,owner_principal_id,id,backend_instance_id,connection_profile_id,environment_id,workspace_id) VALUES (?,?,?,?,?,?,?)").run(scope.tenantId, scope.principalId, threadID, backend, connectionID, environmentID, workspaceID);
   database.prepare("INSERT INTO conversation_bindings VALUES (?,?,?,?,?,?,?)").run(scope.tenantId, scope.principalId, threadID, backend, connectionID, environmentID, sessionID);
   database.exec(openCodeNativeEvidenceMigration.sql);
+  database.exec(openCodeExecutionSettingsMigration.sql);
   const repository = new OpenCodeThreadRepository({ database, scope, backendInstanceId: backend, nativeNamespaceKey: namespace });
   const detail: OpenCodeBindingDetail = { version: 1, ...scope, sessionId: sessionID, backendInstanceId: backend,
     connectionProfileId: connectionID, executionEnvironmentId: environmentID, canonicalWorkspacePath: directory, nativeNamespaceKey: namespace };
@@ -79,7 +85,15 @@ export function createOpenCodeConversationFixture(input: {
       return { client, generation: "native-generation", identity, release: () => { if (!released) { released = true; references--; } } };
     }),
   };
-  const context = { scope, instance, connection, repository, nativeNamespaceKey: namespace, runtime: async () => runtime };
+  const settings = new OpenCodeThreadSettingsRepository({ database, scope, backendInstanceId: backend });
+  const modelPolicy = compileBackendModelPolicy({ type: "catalog" }, "provider_model_effort");
+  const catalog = new OpenCodeModelCatalog({ modelPolicy, readNative: async (directory, signal) => {
+    const native = new OpenCodeNativeMutations(client);
+    const models = await native.listModels(directory, signal);
+    const defaultModel = await native.getDefaultModel(directory, signal);
+    return { models, ...(defaultModel ? { defaultModel } : {}) };
+  } });
+  const context = { scope, instance, connection, repository, settings, catalog, modelPolicy, nativeNamespaceKey: namespace, runtime: async () => runtime };
   const driver = new OpenCodeConversationBackendDriver(context);
   const attached = vi.spyOn(driver, "attach");
   const environmentRelease = vi.fn(async () => undefined);

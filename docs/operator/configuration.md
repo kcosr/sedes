@@ -596,6 +596,29 @@ checked against the backend `modelPolicy`; `providerIds` are unsupported.
 Targets are local-only. See [Grok backend](backends/grok.md) for the supported
 conversation lifecycle and fail-closed feature limits.
 
+### OpenCode v2
+
+OpenCode requires a local Linux environment and stock `opencode2` 2.0.18 under
+the Sedes account. Choose an owned resident process or an existing authenticated
+loopback HTTP server. Both exchange conversation traffic over HTTP/SSE. The
+owned `process_stdio` channel controls startup and lifetime, not JSON-RPC.
+
+The strict module-configuration examples are
+[`opencode-owned.example.json`](../../config/opencode-owned.example.json) and
+[`opencode-external.example.json`](../../config/opencode-external.example.json).
+They illustrate the backend's `moduleConfiguration` value in principal-owned
+Settings; they are not installation bootstrap files. Replace absolute paths
+for the selected account and set the actual native database path. External
+passwords use an approved environment or protected-file reference. Do not put
+password values in configuration JSON.
+
+OpenCode currently admits only the `catalog` model policy: native title models,
+plugins and other clients remain outside Sedes's per-session model selection.
+Targets choose a catalog default or exact provider-qualified model and a
+reviewed default/effort variant. Unqualified native variants require explicit
+repair before new work. See [OpenCode v2](backends/opencode.md) for capability
+limits and uncertain-input recovery.
+
 ### Codex
 
 Every enabled Codex backend declares one connection topology, an

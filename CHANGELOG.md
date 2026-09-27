@@ -67,6 +67,11 @@
 
 ### Added
 
+- Add stock OpenCode v2 2.0.18 with an owned resident `opencode2` daemon or an
+  existing authenticated local server on Linux. Supports native history,
+  Send, Steer, Queue, Stop, model selection, saved Agents, and native
+  approvals/forms. Reconnect never automatically resends an uncertain input.
+
 - Sidebar thread rows and previews show a slow grey spinner for live subagents
   and a grey dot for remaining background commands. Active turns and unseen
   completions take priority; acknowledging completion reveals ongoing work

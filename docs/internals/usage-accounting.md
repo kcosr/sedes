@@ -318,6 +318,11 @@ clients; it advances atomically with changed reports.
 | Codex subagents | Each child's cumulative lifetime counter under the root thread | Included once in the root session with a main/subagent breakdown | Never allocated to parent turns | Not reported; no cost | None |
 | Claude | Per-query cumulative `modelUsage` checkpoints and the query cost estimate; per-turn result usage; main-loop assistant messages | Sum of query epochs' latest checkpoints, each counted from its reported baseline | Result `usage` as `main_loop`; messages until the result arrives | Reported per model; SDK cumulative estimate | Applied effort for the confirmed model's row |
 | Grok | None; declares `usageAccounting: "unsupported"` | Unsupported | Unsupported | — | — |
+| OpenCode v2 | None; declares `usageAccounting: "unsupported"` | Unsupported | Unsupported | — | — |
+
+OpenCode's native usage fields are not yet qualified for the Sedes accounting
+ledger. History and effective model settings therefore produce no token, cost,
+turn, or subagent usage records; absent accounting is not a zero-usage claim.
 
 Epochs: Pi uses its native entry store, Codex a single native counter series
 per thread, and Claude one epoch per actual SDK query (its startup message

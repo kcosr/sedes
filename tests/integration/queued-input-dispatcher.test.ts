@@ -3171,6 +3171,105 @@ describe("QueuedInputDispatcher", () => {
     } finally { await dispatcher.close(); fixture.database.close(); }
   });
 
+  it("accepts only the exact uncertain ordinary head without acquiring an actor in its observer", async () => {
+    const fixture = createFixture();
+    const repository = new QueuedInputRepository(fixture.database);
+    const completion = new SubmissionCompletionRepository(fixture.database);
+    const gateway = new FakeGateway();
+    const scheduler = new ManualScheduler();
+    const { dispatcher, events } = createDispatcher(repository, gateway, { now: { value: 600 }, scheduler });
+    const [threadId, otherThreadId] = fixture.threadIds;
+    try {
+      enqueueUser(fixture, repository, threadId, "observed-head", 500);
+      gateway.submitBehaviors.push(new Error("acknowledgment lost"));
+      await dispatcher.recover(fixture.scope);
+      enqueueUser(fixture, repository, threadId, "observed-later", 700);
+      const before = repository.get(fixture.scope, threadId, "observed-head");
+      const eventCount = events.length;
+      const acquire = vi.spyOn(gateway, "withConversation").mockImplementation(async () => {
+        throw new Error("observer_must_not_acquire_actor");
+      });
+      await expect(dispatcher.observeAuthoritativeSubmission(fixture.scope, threadId, "operation-observed-later")).resolves.toBe(false);
+      await expect(dispatcher.observeAuthoritativeSubmission(fixture.scope, otherThreadId, "operation-observed-head")).resolves.toBe(false);
+      expect(repository.get(fixture.scope, threadId, "observed-head")).toEqual(before);
+      expect(events).toHaveLength(eventCount);
+      await expect(dispatcher.observeAuthoritativeSubmission(fixture.scope, threadId, "operation-observed-head")).resolves.toBe(true);
+      expect(repository.get(fixture.scope, threadId, "observed-head")).toMatchObject({ state: "accepted" });
+      expect(completion.get(fixture.scope, threadId, "operation-observed-head")).toMatchObject({
+        backendCorrelation: "operation-observed-head", completionObservedAt: null,
+      });
+      const accepted = repository.get(fixture.scope, threadId, "observed-head");
+      const acceptedEventCount = events.length;
+      await expect(dispatcher.observeAuthoritativeSubmission(fixture.scope, threadId, "operation-observed-head")).resolves.toBe(false);
+      expect(repository.get(fixture.scope, threadId, "observed-head")).toEqual(accepted);
+      expect(events).toHaveLength(acceptedEventCount);
+      expect(repository.get(fixture.scope, threadId, "observed-later").state).toBe("pending");
+      expect(acquire).not.toHaveBeenCalled();
+      expect(gateway.reconciled).toEqual([]);
+      expect(gateway.submitted.map(input => input.applicationOperationId)).toEqual(["operation-observed-head"]);
+      expect(scheduler.scheduled.some(task => !task.cancelled)).toBe(true);
+      acquire.mockRestore();
+      scheduler.runLatest();
+      await vi.waitFor(() => expect(events.length).toBeGreaterThan(acceptedEventCount));
+      expect(gateway.submitted.map(input => input.applicationOperationId)).toEqual(["operation-observed-head"]);
+      await dispatcher.close();
+      expect(scheduler.scheduled.every(task => task.cancelled)).toBe(true);
+    } finally { await dispatcher.close(); fixture.database.close(); }
+  });
+
+  it("waits for an in-flight ordinary submit to persist uncertainty before consuming its notification", async () => {
+    const fixture = createFixture();
+    const repository = new QueuedInputRepository(fixture.database);
+    const gateway = new FakeGateway();
+    const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 600 }, scheduler: new ManualScheduler() });
+    const [threadId] = fixture.threadIds;
+    let rejectSubmit!: (error: Error) => void;
+    try {
+      enqueueUser(fixture, repository, threadId, "early-notification", 500);
+      gateway.submitBehaviors.push(new Promise((_resolve, reject) => { rejectSubmit = reject; }));
+      const dispatch = dispatcher.recover(fixture.scope);
+      await vi.waitFor(() => expect(gateway.submitted).toHaveLength(1));
+      let observed = false;
+      const observation = dispatcher.observeAuthoritativeSubmission(fixture.scope, threadId, "operation-early-notification")
+        .then(value => { observed = true; return value; });
+      await Promise.resolve();
+      expect(observed).toBe(false);
+      rejectSubmit(new Error("acknowledgment lost"));
+      await dispatch;
+      await expect(observation).resolves.toBe(true);
+      expect(repository.get(fixture.scope, threadId, "early-notification").state).toBe("accepted");
+      expect(gateway.submitted).toHaveLength(1);
+      expect(gateway.reconciled).toEqual([]);
+    } finally { await dispatcher.close(); fixture.database.close(); }
+  });
+
+  it.each(["settled", "later-dispatch"] as const)(
+    "automatically records a proved nonretryable ordinary withdrawal as not_sent on %s", async trigger => {
+      const fixture = createFixture();
+      const repository = new QueuedInputRepository(fixture.database);
+      const gateway = new FakeGateway();
+      const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 600 }, scheduler: new ManualScheduler() });
+      const [threadId] = fixture.threadIds;
+      try {
+        enqueueUser(fixture, repository, threadId, "withdrawn-head", 500);
+        gateway.submitBehaviors.push(new Error("acknowledgment lost"));
+        await dispatcher.recover(fixture.scope);
+        enqueueUser(fixture, repository, threadId, "withdrawn-later", 700);
+        gateway.reconciliationBehaviors.push({ status: "not_accepted", retryable: false,
+          diagnostic: { text: "Claude withdrew this input before consumption." } });
+        if (trigger === "settled") await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+        else await dispatcher.dispatchAdmitted(fixture.scope, threadId);
+        expect(repository.get(fixture.scope, threadId, "withdrawn-head")).toMatchObject({
+          state: "failed", failureReason: "not_sent",
+        });
+        expect(repository.get(fixture.scope, threadId, "withdrawn-later").state).toBe("pending");
+        expect(gateway.submitted.map(input => input.applicationOperationId)).toEqual(["operation-withdrawn-head"]);
+        expect(gateway.reconciled).toHaveLength(1);
+        expect(new SubmissionCompletionRepository(fixture.database).find(fixture.scope, threadId, "operation-withdrawn-head")).toBeUndefined();
+      } finally { await dispatcher.close(); fixture.database.close(); }
+    },
+  );
+
   it.each(["unresolved", "not_accepted"] as const)("keeps automatic %s reconciliation read-only and blocks later input", async status => {
     const fixture = createFixture();
     const repository = new QueuedInputRepository(fixture.database);

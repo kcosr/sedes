@@ -6,7 +6,7 @@ accounts, credentials, and failure modes, and none of them implies another:
 1. **Client connection** — how a browser, Electron, or Android client reaches a
    Sedes server.
 2. **Provider runtime connection** — how that Sedes server talks to each
-   provider runtime (Pi, Codex, Claude, Grok).
+   provider runtime (Pi, Codex, Claude, Grok, OpenCode v2).
 3. **Execution environment** — where workspace operations, Files, agent tools,
    and terminals actually run for a thread.
 
@@ -105,7 +105,7 @@ execution environment grants is the same for every backend that can run there:
 | Directory browsing, Files, Compare | Within the saved local workspace roots | `directory_browser` and `workspace_files` |
 | Composer attachments | Within the saved local workspace roots | `composer_attachments` |
 | Pi workspace tools and context | Built in | `workspace_tools` plus `workspace_context`; `workspace_skills` for remote skills |
-| Sedes agent-tool CLI | Eligible local threads on all four backends | `agent_tools_cli`, for Codex and Claude only |
+| Sedes agent-tool CLI | Eligible local Pi, Codex, Claude, and Grok threads | `agent_tools_cli`, for Codex and Claude only |
 | Application terminals | PTY from the service account | `interactive_terminal` plus native PTY assets on that host; see [Supported environments](terminals.md#supported-environments) |
 | Codex managed TUI | External UDS/TCP connection with PTY support | Negotiated `codex_managed_tui` operations on the sidecar |
 

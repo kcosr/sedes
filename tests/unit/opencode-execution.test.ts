@@ -1,0 +1,251 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ModelInfo, SessionInboxUser } from "@opencode/client";
+import type { RegisteredBackendActionInput, SteerTurnInput, SubmitTurnInput } from "../../src/server/backends/contracts.js";
+import { OpenCodeActions } from "../../src/server/backends/opencode/opencode-actions.js";
+import { OpenCodeDelivery } from "../../src/server/backends/opencode/opencode-delivery.js";
+import { OpenCodeExecutionSettings } from "../../src/server/backends/opencode/opencode-execution-settings.js";
+import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
+import { OpenCodeInputObserver } from "../../src/server/backends/opencode/opencode-input-observer.js";
+import { OpenCodeInputEvidenceRepository } from "../../src/server/backends/opencode/opencode-input-evidence.js";
+import { qualifiedOpenCodeModelId, type OpenCodeSelection } from "../../src/server/backends/opencode/opencode-model-selection.js";
+import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
+import { createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
+
+const cleanup: (() => Promise<void>)[] = [];
+afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); vi.restoreAllMocks(); });
+const modelA = { providerID: "provider", id: "model-a" };
+const modelB = { providerID: "provider", id: "model-b" };
+const nativeModel = (selection: OpenCodeSelection): ModelInfo => ({ ...selection, modelID: `routed-${selection.id}`,
+  package: "fixture:package", name: selection.id, enabled: true, status: "active", capabilities: { tools: true, input: ["text"], output: ["text"] },
+  variants: [], time: { released: 0 }, cost: [], limit: { context: 100, output: 10 } });
+
+function fixture(input: { desired?: OpenCodeSelection | null; native?: OpenCodeSelection } = {}) {
+  const wire = createOpenCodeApiFixture(); wire.session.model = input.native ?? modelA;
+  const calls: { path: string; method: string; body?: any }[] = [];
+  const state = {
+    models: [nativeModel(modelA), nativeModel(modelB)], modelUpdate: true, dropModelAck: false,
+    admission: true, consume: true, dropPromptAck: false, preparedText: undefined as string | undefined,
+    pending: [] as SessionInboxUser[], postGate: undefined as Promise<void> | undefined,
+  };
+  const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+  const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture", fetch: async (value, init) => {
+    const url = new URL(String(value)), path = url.pathname, method = init?.method ?? "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    calls.push({ path, method, body });
+    if (path === "/api/model") return json({ location: { directory: wire.directory }, data: state.models });
+    if (path === "/api/model/default") return json({ location: { directory: wire.directory }, data: state.models[0] });
+    if (path === `/api/session/${wire.sessionID}/model` && method === "POST") {
+      if (state.modelUpdate) wire.session.model = body.model;
+      if (state.dropModelAck) throw new Error("lost model acknowledgment");
+      return new Response(null, { status: 204 });
+    }
+    if (path === `/api/session/${wire.sessionID}` && method === "PATCH") {
+      wire.session.title = body.title; return new Response(null, { status: 204 });
+    }
+    if (path === `/api/session/${wire.sessionID}/prompt` && method === "POST") {
+      const text = state.preparedText ?? body.text;
+      const admitted: SessionInboxUser = { id: body.id, sessionID: wire.sessionID, type: "user",
+        payload: { text }, delivery: body.delivery, time: { created: 10 } };
+      if (state.admission) state.pending.push(admitted);
+      if (state.consume) { state.pending = state.pending.filter(item => item.id !== body.id);
+        wire.messages.push({ id: body.id, type: "user", text, time: { created: 10 } }); }
+      if (state.postGate) await state.postGate;
+      if (state.dropPromptAck) throw new Error("lost prompt acknowledgment");
+      return json({ data: admitted });
+    }
+    if (path === `/api/session/${wire.sessionID}/inbox`) return json({ data: state.pending });
+    return wire.fetch(value, init);
+  } });
+  const base = createOpenCodeConversationFixture({ native: { client, sessionID: wire.sessionID, directory: wire.directory } });
+  if (input.desired !== null) base.context.settings.updateDesired(scope, threadID, {
+    expectedRevision: 0, desired: input.desired ?? modelA, now: 1,
+  });
+  const attach = { ...base.target, onSubmissionObserved: vi.fn() };
+  const lease = base.runtime.acquire(), lifetime = new AbortController();
+  const settings = new OpenCodeExecutionSettings(base.context, attach, base.runtime, client, "execution-generation");
+  const observer = new OpenCodeInputObserver(base.context, attach, base.runtime, lease, lifetime.signal);
+  const actions = new OpenCodeActions(base.context, attach, settings);
+  const delivery = new OpenCodeDelivery(base.context, attach, settings, observer);
+  const evidence = new OpenCodeInputEvidenceRepository(base.repository);
+  const submit = (operationId = "submit-operation", text = "Original input"): SubmitTurnInput => ({
+    applicationOperationId: operationId, mutationId: operationId, reconciliationToken: operationId,
+    source: { kind: "user" }, text, contextExcerpts: [], attachments: [], taskContexts: [],
+  });
+  const steer = (operationId = "steer-operation"): SteerTurnInput => ({ ...submit(operationId), target: { kind: "conversation" } });
+  const action = (operationId = "model-operation", selection = modelA): RegisteredBackendActionInput => ({
+    action: "set_model", applicationOperationId: operationId, provider: base.context.connection.id, modelId: qualifiedOpenCodeModelId(selection),
+  });
+  const posts = (suffix: string) => calls.filter(call => call.method === "POST" && call.path.endsWith(suffix));
+  cleanup.push(async () => { lifetime.abort(); observer.close(); lease.release(); await base.dispose(); });
+  return { ...base, wire, client, attach, calls, state, settings, observer, actions, delivery, evidence, submit, steer, action, posts };
+}
+
+describe("OpenCode execution settings and explicit actions", () => {
+  it("reapplies desired A over recognized external B for ordinary input without changing desired revision", async () => {
+    const f = fixture({ native: modelB });
+    const before = f.context.settings.get(scope, threadID);
+    await expect(f.settings.prepare("ordinary", "submit")).resolves.toMatchObject({ snapshot: { selection: modelA } });
+    expect(f.posts("/model")).toHaveLength(1);
+    expect(f.posts("/model")[0]!.body).toEqual({ model: modelA });
+    expect(f.context.settings.get(scope, threadID)).toMatchObject({ desired: modelA, revision: before.revision,
+      observed: { classification: "recognized", resolvedSelection: modelA }, observationState: "confirmed" });
+    expect(f.calls.at(-1)).toMatchObject({ method: "GET", path: `/api/session/${f.wire.sessionID}` });
+  });
+
+  it("blocks steering on desired/native mismatch without changing native model", async () => {
+    const f = fixture({ native: modelB });
+    await expect(f.settings.prepare("steer", "steer")).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(f.posts("/model")).toEqual([]); expect(f.wire.session.model).toEqual(modelB);
+  });
+
+  it.each(["custom", "unavailable"] as const)("blocks ordinary %s state but allows explicit repair", async kind => {
+    const f = fixture({ native: kind === "custom" ? { ...modelA, variant: "native-only" } : { providerID: "gone", id: "gone" } });
+    await expect(f.settings.prepare("blocked", "submit")).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(f.posts("/model")).toEqual([]);
+    await expect(f.actions.perform(f.action())).resolves.toEqual({ accepted: true });
+    expect(f.wire.session.model).toEqual(modelA);
+    await expect(f.settings.prepare("repaired", "submit")).resolves.toMatchObject({ snapshot: { selection: modelA } });
+  });
+
+  it("leaves imported null desired settings unset despite recognized native observation", async () => {
+    const f = fixture({ desired: null });
+    await expect(f.settings.prepare("import", "submit")).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(f.context.settings.get(scope, threadID)).toMatchObject({ desired: null, revision: 0,
+      observed: { classification: "recognized", resolvedSelection: modelA } });
+    expect(f.posts("/model")).toEqual([]);
+  });
+
+  it("rejects removed desired catalog entries without adopting the remaining model", async () => {
+    const f = fixture({ native: modelB }); f.state.models = [nativeModel(modelB)];
+    await expect(f.settings.prepare("removed", "submit")).rejects.toThrow();
+    expect(f.posts("/model")).toEqual([]); expect(f.context.settings.get(scope, threadID).desired).toEqual(modelA);
+  });
+
+  it("proves exact native no-op actions by GET and returns accepted replay without another POST", async () => {
+    const f = fixture(); const action = f.action();
+    await expect(f.actions.perform(action)).resolves.toEqual({ accepted: true });
+    const post = f.calls.findIndex(call => call.method === "POST");
+    expect(f.calls[post + 1]).toMatchObject({ path: `/api/session/${f.wire.sessionID}`, method: "GET" });
+    const count = f.calls.length;
+    await expect(f.actions.perform(action)).resolves.toEqual({ accepted: true });
+    expect(f.calls).toHaveLength(count); expect(f.posts("/model")).toHaveLength(1);
+    await expect(f.actions.perform({ ...action, modelId: qualifiedOpenCodeModelId(modelB) } as RegisteredBackendActionInput))
+      .rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(f.posts("/model")).toHaveLength(1);
+  });
+
+  it.each(["no-change", "lost-ack"] as const)("reconciles a %s model action through exact GET with no replay", async failure => {
+    const f = fixture({ native: modelB });
+    f.state.modelUpdate = failure !== "no-change"; f.state.dropModelAck = failure === "lost-ack";
+    await expect(f.actions.perform(f.action())).rejects.toMatchObject({ crossedSubmissionBoundary: true, category: "submission_unknown" });
+    if (failure === "no-change") {
+      await expect(f.actions.reconcile(f.action())).resolves.toEqual({ outcome: "unknown" });
+      f.wire.session.model = modelA;
+    }
+    await expect(f.actions.reconcile(f.action())).resolves.toEqual({ outcome: "accepted" });
+    await expect(f.actions.perform(f.action())).resolves.toEqual({ accepted: true });
+    expect(f.posts("/model")).toHaveLength(1);
+  });
+
+  it("fences stale runtime, wrong scope and desired changes during native readback", async () => {
+    const f = fixture({ native: modelB });
+    const wrong = new OpenCodeExecutionSettings(f.context, { ...f.attach, scope: { ...scope, principalId: "other" } }, f.runtime, f.client, "wrong");
+    await expect(wrong.prepare("wrong", "submit")).rejects.toThrow(); expect(f.calls).toEqual([]);
+    const original = vi.mocked(f.runtime.assertCurrent).getMockImplementation()!;
+    vi.mocked(f.runtime.assertCurrent).mockImplementation(async signal => {
+      await original(signal);
+      if (f.posts("/model").length && f.context.settings.get(scope, threadID).revision === 1) {
+        f.context.settings.updateDesired(scope, threadID, { expectedRevision: 1, desired: modelB, now: Date.now() });
+      }
+    });
+    await expect(f.settings.prepare("raced", "submit")).rejects.toThrow();
+    expect(f.context.settings.get(scope, threadID).desired).toEqual(modelB);
+    expect(f.posts("/model")).toHaveLength(1);
+  });
+});
+
+describe("OpenCode exact input delivery", () => {
+  it("sends original wire text once but accepts exact native hook-prepared consumption", async () => {
+    const f = fixture(); f.state.preparedText = "Prepared by native hook";
+    await expect(f.delivery.submit(f.submit())).resolves.toMatchObject({ accepted: true, completionCorrelation: "submit-operation" });
+    expect(f.posts("/prompt")[0]!.body).toMatchObject({ text: "Original input", delivery: "queue", resume: true });
+    expect(f.evidence.get(scope, threadID, "submit-operation", "submit")).toMatchObject({ payloadConflict: false });
+    expect(f.attach.onSubmissionObserved).toHaveBeenCalledWith({ backendCorrelation: "submit-operation" });
+    await expect(f.delivery.submit(f.submit())).resolves.toMatchObject({ accepted: true });
+    await expect(f.delivery.submit(f.submit("submit-operation", "Changed text"))).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    expect(f.posts("/prompt")).toHaveLength(1);
+  });
+
+  it("does not accept admission alone and keeps late consumption recoverable after the one-second wait", async () => {
+    const f = fixture(); f.state.consume = false;
+    const started = Date.now();
+    await expect(f.delivery.submit(f.submit())).rejects.toMatchObject({ category: "submission_unknown", crossedSubmissionBoundary: true });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    const evidence = f.evidence.get(scope, threadID, "submit-operation", "submit");
+    expect(evidence.receipt.disposition).toBe("accepted"); expect(evidence.consumedFingerprint).toBeNull();
+    expect(f.attach.onSubmissionObserved).not.toHaveBeenCalled();
+    const admitted = f.state.pending[0]!;
+    f.state.pending = []; f.wire.messages.push({ id: admitted.id, type: "user", text: admitted.payload.text, time: { created: 11 } });
+    await expect(f.observer.reconcile("submit-operation", "submit")).resolves.toEqual({ status: "accepted" });
+    await expect(f.delivery.submit(f.submit())).resolves.toMatchObject({ accepted: true });
+    expect(f.posts("/prompt")).toHaveLength(1);
+  });
+
+  it("recovers a lost prompt ACK from exact consumed input without a second POST", async () => {
+    const f = fixture(); f.state.dropPromptAck = true;
+    await expect(f.delivery.submit(f.submit())).resolves.toMatchObject({ accepted: true });
+    expect(f.posts("/prompt")).toHaveLength(1);
+    await expect(f.delivery.submit(f.submit())).resolves.toMatchObject({ accepted: true });
+    expect(f.posts("/prompt")).toHaveLength(1);
+  });
+
+  it("continues exact observation and withdrawal checks while a prompt ACK is held", async () => {
+    const f = fixture(); let release!: () => void;
+    f.state.postGate = new Promise<void>(resolve => { release = resolve; });
+    const first = f.delivery.submit(f.submit());
+    await vi.waitFor(() => expect(f.posts("/prompt")).toHaveLength(1));
+    await vi.waitFor(() => expect(f.attach.onSubmissionObserved).toHaveBeenCalledWith({ backendCorrelation: "submit-operation" }));
+    await expect(f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000)).resolves.toBeUndefined();
+    await expect(f.delivery.submit(f.submit())).resolves.toMatchObject({ accepted: true });
+    expect(f.posts("/prompt")).toHaveLength(1);
+    release(); await expect(first).resolves.toMatchObject({ accepted: true });
+  });
+
+  it("upgrades a stale pre-dispatch failure after another caller sends the same operation", async () => {
+    const f = fixture(); const originalPrepare = f.settings.prepare.bind(f.settings);
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const atFinalRead = new Promise<void>(resolve => { entered = resolve; });
+    vi.spyOn(f.settings, "prepare").mockImplementation(originalPrepare)
+      .mockImplementationOnce(originalPrepare)
+      .mockImplementationOnce(async () => { entered(); await held; throw new Error("stale final catalog read failed"); });
+    const first = f.delivery.submit(f.submit()).catch(error => error);
+    await atFinalRead;
+    await expect(f.delivery.submit(f.submit())).resolves.toMatchObject({ accepted: true });
+    release();
+    expect(await first).toMatchObject({ category: "submission_unknown", crossedSubmissionBoundary: true, retryable: false });
+    expect(f.repository.requireOperation(scope, threadID, "submit-operation", "submit").disposition).toBe("accepted");
+    expect(f.posts("/prompt")).toHaveLength(1);
+  });
+
+  it("admits several conversation steers without inventing native turn IDs", async () => {
+    const f = fixture(); f.state.consume = false;
+    for (const id of ["steer-one", "steer-two"]) {
+      await expect(f.delivery.steer(f.steer(id))).resolves.toEqual({ status: "pending_materialization",
+        reconciliationToken: id, completionCorrelation: id });
+    }
+    expect(f.posts("/prompt").map(call => call.body.delivery)).toEqual(["steer", "steer"]);
+    expect(new Set(f.posts("/prompt").map(call => call.body.id)).size).toBe(2);
+    expect(f.attach.onSubmissionObserved).not.toHaveBeenCalled();
+    await expect(f.delivery.steer({ ...f.steer("invalid-target"), target: { kind: "turn", turnId: "native-turn" } }))
+      .rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(f.posts("/prompt")).toHaveLength(2);
+  });
+
+  it("rejects unsupported input and absent desired selection before any prompt effect", async () => {
+    const f = fixture({ desired: null });
+    await expect(f.delivery.submit(f.submit())).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    await expect(f.delivery.submit({ ...f.submit("unsupported"), selectedSkillId: "native-skill" })).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(f.posts("/prompt")).toEqual([]);
+  });
+});

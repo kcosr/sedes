@@ -106,7 +106,6 @@ export type AuthoritativeSubmissionObserver = (
   applicationThreadId: string,
   input: {
     readonly backendCorrelation: string;
-    readonly backendTurnId: string;
   },
 ) => void | Promise<void>;
 
@@ -1165,6 +1164,14 @@ export class ConversationActorManager {
             if (entry.control === control) entry.control = undefined;
           }, { once: true });
         },
+        onSubmissionObserved: observation => {
+          const control = entry.control;
+          if (!this.#onAuthoritativeSubmission || signal.aborted || !control || control.lifetime.aborted) return;
+          observationChain = observationChain.then(async () => {
+            if (signal.aborted || entry.control !== control || control.lifetime.aborted) return;
+            await this.#onAuthoritativeSubmission?.(input.scope, input.binding.applicationThreadId, observation);
+          }).catch(() => undefined);
+        },
       });
       actor = new ConversationActor({
         handle,
@@ -1205,7 +1212,6 @@ export class ConversationActorManager {
                         input.binding.applicationThreadId,
                         {
                           backendCorrelation: event.backendCorrelation,
-                          backendTurnId: event.backendTurnId,
                         },
                       )
                     : this.#onAuthoritativeCompletion?.(

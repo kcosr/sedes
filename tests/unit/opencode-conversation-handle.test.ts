@@ -36,6 +36,60 @@ function textOf(events: SequencedBackendEvent[], kind: "assistant_message" | "re
 }
 
 describe("OpenCode conversation authority and finite discovery", () => {
+  it("keeps an accepted Stop private receipt across handle replacement without interrupting later work", async () => {
+    const current = await attached();
+    const operation = { applicationOperationId: "stop-private-replay", deadlineAt: Date.now() + 30_000 };
+    await current.handle.interrupt(operation);
+    expect(current.interrupts()).toHaveLength(1);
+    await current.handle.close();
+    current.wire.setResponse("/api/session/active", 200, { data: { ses_fixture: { type: "running" } } });
+    const replacement = await current.driver.attach(current.target); cleanup.push(() => replacement.close());
+    expect(await replacement.reconcileInterrupt(operation)).toEqual({ outcome: "accepted" });
+    await replacement.interrupt(operation);
+    expect(current.interrupts()).toHaveLength(1);
+    await expect(replacement.interrupt({ ...operation, deadlineAt: operation.deadlineAt + 1 })).rejects.toBeInstanceOf(Error);
+    expect(current.interrupts()).toHaveLength(1);
+  });
+  it("does not retry an uncertain native Stop on a replacement handle", async () => {
+    const current = await attached();
+    current.wire.setResponse(`/api/session/${current.wire.sessionID}/interrupt`, 500, { error: "lost native reply" });
+    const operation = { applicationOperationId: "stop-unknown-replay", deadlineAt: Date.now() + 30_000 };
+    await expect(current.handle.interrupt(operation)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    await current.handle.close();
+    const replacement = await current.driver.attach(current.target); cleanup.push(() => replacement.close());
+    expect(await replacement.reconcileInterrupt(operation)).toEqual({ outcome: "unknown" });
+    current.wire.clearResponse(`/api/session/${current.wire.sessionID}/interrupt`);
+    await expect(replacement.interrupt(operation)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    expect(current.interrupts()).toHaveLength(1);
+    await replacement.interrupt({ applicationOperationId: "fresh-stop", deadlineAt: Date.now() + 30_000 });
+    expect(current.interrupts()).toHaveLength(2);
+  });
+  it("refuses an expired Stop before native mutation and records positive nonapplication", async () => {
+    const current = await attached();
+    const operation = { applicationOperationId: "expired-stop", deadlineAt: Date.now() - 1 };
+    await expect(current.handle.interrupt(operation)).rejects.toBeInstanceOf(Error);
+    expect(await current.handle.reconcileInterrupt(operation)).toEqual({ outcome: "not_applied" });
+    expect(current.interrupts()).toHaveLength(0);
+  });
+  it("republishes current native interactions after a fresh projection cut and removes externally resolved gates", async () => {
+    const current = await attached();
+    const route = `/api/session/${current.wire.sessionID}/permission`;
+    current.wire.setResponse(route, 200, { data: [{ id: "per_existing", sessionID: current.wire.sessionID, action: "write", resources: ["file"] }] });
+    const projection = await current.handle.establishProjection({ signal: signal() });
+    const events: SequencedBackendEvent[] = []; const unsubscribe = projection.subscribeFromNext(value => events.push(value));
+    expect(events.filter(value => value.event.type === "interaction_opened")).toHaveLength(1);
+    const refreshed = await current.handle.establishProjection({ signal: signal() });
+    const later: SequencedBackendEvent[] = []; refreshed.subscribeFromNext(value => later.push(value));
+    expect(later.filter(value => value.event.type === "interaction_opened")).toHaveLength(1);
+    current.wire.clearResponse(route);
+    current.wire.send({ id: "evt_external_permission", type: "permission.replied", created: 2, data: { sessionID: current.wire.sessionID,
+      requestID: "per_existing", reply: "once" } });
+    await vi.waitFor(() => expect(later.filter(value => value.event.type === "interaction_resolved")).toHaveLength(1));
+    expect(events.map(value => value.handleSequence)).toEqual(events.map((_, index) => projection.handleSequence + index + 1));
+    expect(later.map(value => value.handleSequence)).toEqual(later.map((_, index) => refreshed.handleSequence + index + 1));
+    unsubscribe();
+    expect(current.wire.requests.every(request => request.method === "GET")).toBe(true);
+  });
   it("rejects foreign scope and immutable binding fields before acquiring a runtime", async () => {
     const current = setup();
     for (const change of [{ scope: { ...scope, principalId: "foreign" } },

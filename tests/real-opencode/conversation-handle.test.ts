@@ -39,8 +39,8 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
     const created = await native.api("POST", "/api/session", { title: "Actor qualification", location: { directory: native.workspace },
       model: { providerID: "probe", id: "probe-model" } });
     expect(created.status).toBe(200);
-    // Only the native fixture seeds history. The production adapter's M2
-    // surface remains read-only apart from its separately qualified Stop.
+    // Only the native fixture seeds imported history; the production adapter
+    // reads that history and separately controls the active native session.
     const imported = await native.api("POST", "/api/experimental/session/import", {
       info: { ...created.body.data, id: "ses_actor_qualification", title: "Imported actor qualification" },
       messages: seedMessages(), location: { directory: native.workspace },

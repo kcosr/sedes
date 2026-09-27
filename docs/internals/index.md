@@ -24,12 +24,12 @@ native authority begins and ends.
 
 | Document | Scope |
 | --- | --- |
-| [Backend internals overview](backends/index.md) | Shared reading order and comparison of the four compiled backends. |
+| [Backend internals overview](backends/index.md) | Shared reading order and comparison of the five compiled backends. |
 | [Pi internals](backends/pi.md) | SDK runtime, session storage, projection, delivery, tools, and local/SSH workspace behavior. |
 | [Codex internals](backends/codex.md) | App-server transport, thread history, mutations, provider features, and supported topologies. |
 | [Claude internals](backends/claude.md) | Managed Agent SDK worker lifecycle, session/history acquisition, permissions, delivery, and local/persistent SSH execution boundaries. |
 | [Grok internals](backends/grok.md) | ACP process/session lifecycle, native history, permissions, artifacts, and owned-local boundary. |
-| [OpenCode v2 runtime foundation](backends/opencode.md) | Qualified owned/external HTTP runtime, native identity, cleanup and scoped evidence; production conversation registration remains gated. |
+| [OpenCode v2](backends/opencode.md) | Owned/external HTTP runtime, native history, delivery, Stop, settings, interactions and scoped mutation evidence. |
 
 ## Conversation and provider contracts
 

@@ -134,6 +134,7 @@ export class QueuedInputDispatcher {
   readonly #threadTails = new Map<string, Promise<void>>();
   readonly #recoveryByScope = new Map<string, Promise<void>>();
   readonly #retryTimers = new Map<string, unknown>();
+  readonly #observationPublicationTimers = new Map<string, unknown>();
   readonly #scheduledSteerIntents = new Set<string>();
   readonly #inflightOperations = new Set<Promise<void>>();
   #closing = false;
@@ -1090,6 +1091,14 @@ export class QueuedInputDispatcher {
     return this.#track(async () => {
       await this.#requireRecovery(scope);
       return this.#serialize(scope, applicationThreadId, async () => {
+        const head = this.#repository.listActiveHeads(scope).find(item => item.applicationThreadId === applicationThreadId);
+        if (head?.state === "uncertain" && head.deliveryMode === "submit" && head.mutationId === backendCorrelation) {
+          this.#repository.markAccepted(scope, applicationThreadId, head.id, {
+            expectedState: "uncertain", acceptedAt: this.#clock.now(), backendCorrelation,
+          });
+          this.#scheduleSubmissionPublication(scope, applicationThreadId);
+          return true;
+        }
         const receipt = this.#operations.findAwaitingSteerSubmission(
           scope,
           applicationThreadId,
@@ -1130,8 +1139,7 @@ export class QueuedInputDispatcher {
             );
           })
           .immediate();
-        await this.#emitQueueChanged(scope, applicationThreadId);
-        this.#scheduleCurrentHead(scope, applicationThreadId);
+        this.#scheduleSubmissionPublication(scope, applicationThreadId);
         return true;
       });
     });
@@ -1144,6 +1152,8 @@ export class QueuedInputDispatcher {
       this.#scheduler.cancel(handle);
     }
     this.#retryTimers.clear();
+    for (const handle of this.#observationPublicationTimers.values()) this.#scheduler.cancel(handle);
+    this.#observationPublicationTimers.clear();
     this.#closePromise = (async () => {
       await Promise.allSettled([...this.#recoveryByScope.values()]);
       await Promise.allSettled([...this.#inflightOperations]);
@@ -1599,7 +1609,8 @@ export class QueuedInputDispatcher {
       // The row remains uncertain and continues to block later queue entries.
       return;
     }
-    if (options?.acceptanceOnly && reconciliation.status !== "accepted") return;
+    if (options?.acceptanceOnly && reconciliation.status !== "accepted" &&
+        !(reconciliation.status === "not_accepted" && !reconciliation.retryable)) return;
     if (reconciliation.status === "unresolved") return;
     if (reconciliation.status === "failed_unknown") {
       // Tracking is terminal, so the head must not stay uncertain forever.
@@ -1653,7 +1664,8 @@ export class QueuedInputDispatcher {
               expectedState: "uncertain",
               retryable: reconciliation.retryable,
               diagnostic:
-                "The backend proved that submission was not accepted.",
+                reconciliation.diagnostic?.text ?? "The backend proved that submission was not accepted.",
+              ...(!reconciliation.retryable ? { failureReason: "not_sent" as const } : {}),
               now: this.#clock.now(),
               retryPolicy: this.#retryPolicy,
             },
@@ -1885,6 +1897,23 @@ export class QueuedInputDispatcher {
       },
     );
     this.#retryTimers.set(key, handle);
+  }
+
+  #scheduleSubmissionPublication(scope: RequestScope, applicationThreadId: string): void {
+    if (this.#closing || this.#closed) return;
+    const key = threadKey(scope, applicationThreadId);
+    if (this.#observationPublicationTimers.has(key)) return;
+    const timer = this.#scheduler.schedule(0, () => {
+      if (this.#observationPublicationTimers.get(key) !== timer) return;
+      this.#observationPublicationTimers.delete(key);
+      if (this.#closing || this.#closed) return;
+      void this.#track(() => this.#serialize(scope, applicationThreadId, async () => {
+        await this.#emitQueueChanged(scope, applicationThreadId);
+        this.#scheduleCurrentHead(scope, applicationThreadId);
+        this.#schedulePendingDispatch(scope, applicationThreadId);
+      })).catch(() => undefined);
+    });
+    this.#observationPublicationTimers.set(key, timer);
   }
 
   #scheduleRetry(

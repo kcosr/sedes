@@ -3,8 +3,8 @@ import type { BackendCapabilityDocument, BackendConversationEvent, SequencedBack
 import { backendConversationEventSchema } from "../../../shared/protocol/backend.js";
 import type { BackgroundActivity } from "../../../shared/protocol/background-activity.js";
 import { boundDisplayText } from "../../conversations/payload-policy.js";
-import type { AttachConversationInput, BackendEventListener, ConversationControl, ConversationHandle,
-  EstablishProjectionInput, EstablishedBackendProjection, HistoryPageInput, InterruptConversationInput, LocateTurnInput } from "../contracts.js";
+import { BackendError, type AttachConversationInput, type BackendEventListener, type ConversationControl, type ConversationHandle,
+  type EstablishProjectionInput, type EstablishedBackendProjection, type HistoryPageInput, type InterruptConversationInput, type LocateTurnInput } from "../contracts.js";
 import { ConversationInterruptLedger } from "../conversation-interrupt.js";
 import { mapOpenCodeConversationError } from "./opencode-conversation-error.js";
 import { openCodeConversationError, requireOpenCodeBinding, type OpenCodeConversationRuntime, type OpenCodeDriverContext } from "./opencode-conversation-context.js";
@@ -13,6 +13,13 @@ import { OpenCodeHistoryError, OPENCODE_HISTORY_LIMITS, openCodeHistoryFingerpri
   refreshOpenCodeHistory, restartOpenCodeHistoryAcquisition, type OpenCodeRetainedHistory } from "./opencode-history-reader.js";
 import { OpenCodeHistoryProjection, openCodeHistoryPartKey, openCodeNativePartEnded, type OpenCodeObservedPart } from "./opencode-history-projection.js";
 import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
+import { acquireOpenCodeInputObserver } from "./opencode-input-observer.js";
+import { OpenCodeExecutionSettings, type OpenCodeObservedSettings } from "./opencode-execution-settings.js";
+import { OpenCodeDelivery } from "./opencode-delivery.js";
+import { OpenCodeActions } from "./opencode-actions.js";
+import { OpenCodeInteractions } from "./opencode-interactions.js";
+import { toEffective } from "./opencode-model-selection.js";
+import { OpenCodeInputEvidenceRepository, openCodeOperationFingerprint } from "./opencode-input-evidence.js";
 
 const JOURNAL_BYTES = 16 * 1024 * 1024;
 const JOURNAL_RECORDS = 4096;
@@ -46,6 +53,11 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   readonly #lifetime: AbortSignal;
   readonly #api: OpenCodeNativeApi;
   readonly #interrupts = new ConversationInterruptLedger();
+  readonly #inputObservation;
+  readonly #settings;
+  readonly #delivery;
+  readonly #actions;
+  readonly #interactions;
   readonly #rawListeners = new Set<(event: BackendConversationEvent) => void>();
   readonly #listeners = new Set<BackendEventListener>();
   readonly #journal: { readonly value: SequencedBackendEvent; readonly bytes: number }[] = [];
@@ -80,6 +92,8 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   #projectedRevision = 0;
   #activityRevision = 0;
   #observedActivityRevision = 0;
+  #observedSettings?: OpenCodeObservedSettings;
+  #proofRefreshPending = false;
 
   constructor(readonly context: OpenCodeDriverContext, readonly input: AttachConversationInput,
     readonly runtime: OpenCodeConversationRuntime, readonly lease: OpenCodeRuntimeLease) {
@@ -91,6 +105,14 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       interrupt: (value: InterruptConversationInput) => this.interrupt(value),
       reconcileInterrupt: (value: InterruptConversationInput) => this.reconcileInterrupt(value),
     });
+    this.#settings = new OpenCodeExecutionSettings(context, input, runtime, lease.client,
+      `${lease.generation}:${openCodeHistoryFingerprint([this.binding, input.opaqueBindingDetail])}`);
+    this.#inputObservation = acquireOpenCodeInputObserver(context, input, runtime, lease, this.#lifetime,
+      { onProofChanged: () => this.#inputProofChanged() });
+    this.#delivery = new OpenCodeDelivery(context, input, this.#settings, this.#inputObservation.observer);
+    this.#actions = new OpenCodeActions(context, input, this.#settings);
+    this.#interactions = new OpenCodeInteractions(context, input, runtime, lease, this.#lifetime,
+      `${lease.generation}:${openCodeHistoryFingerprint([this.binding, input.opaqueBindingDetail])}`, event => this.#emit(event));
     lease.client.lifetime.addEventListener("abort", this.#ownerLost, { once: true });
     if (lease.client.lifetime.aborted) this.#ownerLost();
   }
@@ -98,6 +120,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   async establishProjection(input: EstablishProjectionInput): Promise<EstablishedBackendProjection> {
     return this.#acquire(input.signal, async signal => {
       this.#assertOpen();
+      await this.#inputObservation.observer.start(signal);
       await this.#startObservation(signal);
       const projection = await this.#refresh(signal);
       this.#assertOpen(); signal.throwIfAborted();
@@ -116,8 +139,17 @@ export class OpenCodeConversationHandle implements ConversationHandle {
             return () => undefined;
           }
           // No await between replay and registration: native events cannot fall into the gap.
-          for (const entry of this.#journal) if (entry.value.handleSequence > after) listener(entry.value);
+          const replayedInteractions = new Set<string>();
+          for (const entry of this.#journal) if (entry.value.handleSequence > after) {
+            if (entry.value.event.type === "interaction_opened") replayedInteractions.add(entry.value.event.interaction.backendInteractionId);
+            listener(entry.value);
+          }
           this.#listeners.add(listener);
+          // Interactions are live gates, outside the native transcript snapshot.
+          // Re-establishment must republish gates that opened before its cut.
+          for (const interaction of this.#interactions.snapshotInteractions()) {
+            if (!replayedInteractions.has(interaction.backendInteractionId)) this.#emit({ type: "interaction_opened", interaction });
+          }
           return () => this.#listeners.delete(listener);
         },
       };
@@ -139,38 +171,127 @@ export class OpenCodeConversationHandle implements ConversationHandle {
 
   async backendCapabilities(): Promise<BackendCapabilityDocument> {
     this.#assertOpen();
-    return { revision: "opencode-v2-history-1", actions: [], deliveryModes: [], steerTarget: null,
+    await this.#refreshSettings();
+    return this.#capabilities();
+  }
+  #capabilities(): BackendCapabilityDocument {
+    const observed = this.#observedSettings;
+    return { revision: `opencode-v2-execution-${openCodeHistoryFingerprint(observed?.observed ?? null)}`,
+      actions: ["rename", "set_model", "set_thinking_level"], deliveryModes: ["submit", "steer"], steerTarget: "conversation",
       composerAttachments: { fileStaging: false, nativeImage: false }, nonblockingQuestions: false,
       providerOutputArtifacts: { nativeImage: false }, supportsHistory: true,
       branching: { availability: "unavailable", reason: boundDisplayText("Native branching is not qualified.") },
-      interactionKinds: [], usageAccounting: "unsupported", usageSections: [], effectiveSettings: {} };
+      interactionKinds: ["decision", "form", "questionnaire"], usageAccounting: "unsupported", usageSections: [],
+      effectiveSettings: observed?.observed.classification === "recognized" && observed.observed.resolvedSelection
+        ? toEffective(observed.observed.resolvedSelection, this.context.connection.id, observed.catalog.catalog) : {} };
   }
   async usage() { this.#assertOpen(); return {}; }
-  async captureSubmissionRetryAnchor(): Promise<never> { throw openCodeUnsupported(); }
-  async submit(..._input: Parameters<ConversationHandle["submit"]>): Promise<never> { throw openCodeUnsupported(); }
-  async steer(..._input: Parameters<ConversationHandle["steer"]>): Promise<never> { throw openCodeUnsupported(); }
-  async perform(..._input: Parameters<ConversationHandle["perform"]>): Promise<never> { throw openCodeUnsupported(); }
-  async reconcileAction(..._input: Parameters<ConversationHandle["reconcileAction"]>): Promise<never> { throw openCodeUnsupported(); }
-  async respond(..._input: Parameters<ConversationHandle["respond"]>): Promise<never> { throw openCodeUnsupported(); }
-  async reconcileInteractionResponse(..._input: Parameters<ConversationHandle["reconcileInteractionResponse"]>): Promise<never> { throw openCodeUnsupported(); }
+  async captureSubmissionRetryAnchor(): Promise<string> {
+    return this.#acquire(undefined, async signal => {
+      await this.#startObservation(signal);
+      const projection = await this.#refresh(signal);
+      if (projection.runState !== "idle" && projection.runState !== "failed") throw openCodeConversationError(
+        "opencode_retry_anchor_requires_settled", "OpenCode must be settled before sending a new input.", "invalid_state");
+      return JSON.stringify({ v: 1, scope: openCodeHistoryFingerprint([this.binding, this.input.opaqueBindingDetail]),
+        nativeHead: this.#retained!.messages.at(-1)?.id ?? null });
+    });
+  }
+  async submit(input: Parameters<ConversationHandle["submit"]>[0]) {
+    this.#assertOpen();
+    try { return await this.#delivery.submit(input); } catch (error) { throw mapOpenCodeConversationError(error); }
+  }
+  async steer(input: Parameters<ConversationHandle["steer"]>[0]) {
+    this.#assertOpen();
+    try { return await this.#delivery.steer(input); } catch (error) { throw mapOpenCodeConversationError(error); }
+  }
+  async perform(input: Parameters<ConversationHandle["perform"]>[0]) {
+    this.#assertOpen();
+    try { const result = await this.#actions.perform(input); await this.#refreshSettings();
+      this.#emit({ type: "capabilities_changed", capabilities: this.#capabilities() }); return result;
+    } catch (error) { throw mapOpenCodeConversationError(error); }
+  }
+  async reconcileAction(input: Parameters<ConversationHandle["reconcileAction"]>[0]) {
+    this.#assertOpen(); return this.#actions.reconcile(input);
+  }
+  get retirementBlocked(): boolean {
+    if (this.#closed || this.#lifetime.aborted) return false;
+    try { return new OpenCodeInputEvidenceRepository(this.context.repository).list(this.input.scope, this.binding.applicationThreadId)
+      .some(item => item.receipt.disposition !== "prepared" && item.receipt.disposition !== "not_applied" && !item.consumedFingerprint && !item.withdrawnFingerprint); }
+    catch { return true; }
+  }
+  async respond(input: Parameters<ConversationHandle["respond"]>[0]): Promise<void> {
+    this.#assertOpen(); await this.#interactions.respond(input);
+  }
+  async reconcileInteractionResponse(input: Parameters<ConversationHandle["reconcileInteractionResponse"]>[0]) {
+    this.#assertOpen(); return this.#interactions.reconcileInteractionResponse(input);
+  }
 
   async interrupt(input: InterruptConversationInput): Promise<void> {
     this.#assertOpen();
-    await this.#interrupts.execute(input, this.#lifetime, async budget => {
-      requireOpenCodeBinding(this.context, this.input);
-      await budget.wait(this.runtime.assertCurrent(budget.signal));
-      const session = await budget.wait(this.#api.getSession(this.binding.backendConversationId, budget.signal));
-      if (session.location.directory !== this.input.workspace.canonicalPath) {
-        this.#ownerLost();
-        throw openCodeConversationError("opencode_session_location_changed", "The OpenCode conversation moved to another workspace.", "permission_denied");
+    requireOpenCodeBinding(this.context, this.input);
+    if (!input.applicationOperationId || input.applicationOperationId.length > 160 || !Number.isSafeInteger(input.deadlineAt)) throw openCodeUnsupported();
+    const repository = this.context.repository, scope = this.input.scope, threadId = this.binding.applicationThreadId;
+    const fingerprint = openCodeOperationFingerprint({ operationId: input.applicationOperationId, deadlineAt: input.deadlineAt, binding: this.binding });
+    const previous = repository.readOperation(scope, threadId, input.applicationOperationId, "interrupt");
+    if (previous) {
+      if (previous.requestFingerprint !== fingerprint) throw openCodeUnsupported();
+      if (previous.disposition === "accepted") return;
+      throw this.#stopUnconfirmed(previous.disposition !== "not_applied");
+    }
+    repository.reserveOperation(scope, { applicationThreadId: threadId, connectionProfileId: this.binding.connectionProfileId,
+      executionEnvironmentId: this.binding.executionEnvironmentId, nativeSessionId: this.binding.backendConversationId,
+      applicationOperationId: input.applicationOperationId, operationKind: "interrupt", nativeInputId: null,
+      requestFingerprint: fingerprint, requestSource: null, deadlineAt: input.deadlineAt }, Date.now());
+    let claimed = false, dispatched = false;
+    try {
+      await this.#interrupts.execute(input, this.#lifetime, async budget => {
+        requireOpenCodeBinding(this.context, this.input);
+        await budget.wait(this.runtime.assertCurrent(budget.signal));
+        const session = await budget.wait(this.#api.getSession(this.binding.backendConversationId, budget.signal));
+        if (session.location.directory !== this.input.workspace.canonicalPath) {
+          this.#ownerLost();
+          throw openCodeConversationError("opencode_session_location_changed", "The OpenCode conversation moved to another workspace.", "permission_denied");
+        }
+        // Subscribe before cancellation can emit its only surviving proof.
+        await budget.wait(this.#inputObservation.observer.start(budget.signal));
+        await budget.wait(this.runtime.assertCurrent(budget.signal));
+        budget.remainingMilliseconds();
+        claimed = repository.markDispatched(scope, threadId, input.applicationOperationId, "interrupt", Date.now());
+        if (!claimed) throw this.#stopUnconfirmed(true);
+        // Control never waits for the projection mutex or its history requests.
+        budget.dispatch(); dispatched = true;
+        const acknowledgement = await budget.wait(this.#api.interruptSession(this.binding.backendConversationId, budget.signal));
+        await budget.wait(this.runtime.assertCurrent(budget.signal));
+        budget.remainingMilliseconds();
+        repository.recordOutcome(scope, threadId, input.applicationOperationId, "interrupt", { expected: "dispatched",
+          disposition: "accepted", nativeEvidenceFingerprint: openCodeOperationFingerprint(acknowledgement), now: Date.now() });
+        // Interrupt leaves native inbox entries intact. Cleanup is bounded by
+        // this same Stop deadline, including an acknowledged idle no-op.
+        try { await budget.wait(this.#inputObservation.observer.withdrawPending(budget.signal, input.deadlineAt)); }
+        catch { /* The input's own receipt stays unresolved; a fresh Stop may withdraw it. */ }
+      });
+    } catch (error) {
+      const current = repository.requireOperation(scope, threadId, input.applicationOperationId, "interrupt");
+      if (current.disposition === "accepted") return;
+      if (current.disposition === "prepared" || claimed && !dispatched) {
+        repository.recordOutcome(scope, threadId, input.applicationOperationId, "interrupt", {
+          expected: current.disposition === "prepared" ? "prepared" : "dispatched", disposition: "not_applied", nativeEvidenceFingerprint: null, now: Date.now(),
+        });
       }
-      await budget.wait(this.runtime.assertCurrent(budget.signal));
-      // Control never waits for the projection mutex or its history requests.
-      budget.dispatch();
-      await budget.wait(this.#api.interruptSession(this.binding.backendConversationId, budget.signal));
-    });
+      throw dispatched ? this.#stopUnconfirmed(true) : error;
+    }
   }
-  async reconcileInterrupt(input: InterruptConversationInput) { return this.#interrupts.reconcile(input); }
+  async reconcileInterrupt(input: InterruptConversationInput): Promise<import("../contracts.js").BackendMutationReconciliation> {
+    this.#assertOpen(); requireOpenCodeBinding(this.context, this.input);
+    const receipt = this.context.repository.readOperation(this.input.scope, this.binding.applicationThreadId, input.applicationOperationId, "interrupt");
+    if (!receipt) return { outcome: "unknown" };
+    if (receipt.requestFingerprint !== openCodeOperationFingerprint({ operationId: input.applicationOperationId, deadlineAt: input.deadlineAt, binding: this.binding })) throw openCodeUnsupported();
+    return { outcome: receipt.disposition === "accepted" ? "accepted" : receipt.disposition === "not_applied" ? "not_applied" : "unknown" };
+  }
+  #stopUnconfirmed(crossed: boolean): BackendError {
+    return new BackendError({ category: crossed ? "submission_unknown" : "unavailable", retryable: false,
+      crossedSubmissionBoundary: crossed, backendCode: "opencode_stop_unconfirmed", safeMessage: "OpenCode Stop could not be confirmed. Nothing was repeated." });
+  }
   subscribe(listener: (event: BackendConversationEvent) => void): () => void {
     this.#assertOpen(); this.#rawListeners.add(listener); return () => this.#rawListeners.delete(listener);
   }
@@ -178,6 +299,8 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   async close(_options?: { readonly reason: "evicted" }): Promise<void> {
     if (this.#closed) return;
     this.#closed = true; this.#local.abort();
+    this.#inputObservation.release();
+    this.#interactions.close();
     this.lease.client.lifetime.removeEventListener("abort", this.#ownerLost);
     await this.#observation?.close();
     this.#release(); this.#rawListeners.clear(); this.#listeners.clear();
@@ -239,6 +362,8 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     this.#latestAssistantMessageId = undefined; this.#latestCompactionMessageId = undefined;
     this.#observedActivityRevision = this.#activityRevision;
     const observation = this.#api.observe({ signal: this.#lifetime, include: event => {
+      // Approval/form observations remain independent of history acquisition.
+      this.#interactions.observe(event);
       if ((event.type === "session.moved" || event.type === "session.deleted") && event.data.sessionID === this.binding.backendConversationId) {
         this.#ownerLost(); return false;
       }
@@ -323,8 +448,10 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       this.#activity = activity.active ? suffix.length ? "running" : "unknown"
         : unfinished || pending.length || interactions.permissions.length || interactions.forms.length ? "unknown" : "idle";
       this.#acceptActivity(activity);
+      await this.#interactions.refresh(interactions);
       await this.runtime.assertCurrent(signal);
       check();
+      this.#inputObservation.observer.observeHistory(retained.messages);
       const remaining = extra();
       this.#retained = { ...retained, decodedBytes: retained.decodedBytes + remaining.decodedBytes, records: retained.records + remaining.records };
       this.#retainedPartAllowance = peakPartBytes;
@@ -355,7 +482,8 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     return new OpenCodeHistoryProjection(retained, { bindingScope: [binding.tenantId, binding.ownerPrincipalId,
       binding.applicationThreadId, binding.backendInstanceId, binding.connectionProfileId, binding.executionEnvironmentId,
       this.context.nativeNamespaceKey], generation: this.#generation, activity: this.#activity,
-      backgroundActivity: this.#background, observedParts: this.#parts, previous: this.#projection, signal });
+      backgroundActivity: this.#background, observedParts: this.#parts, previous: this.#projection,
+      deliveryCorrelations: this.#inputObservation.observer.correlations(), signal });
   }
 
   #drain(observation: OpenCodeNativeObservation): boolean {
@@ -376,6 +504,9 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       }
       if ("sessionID" in event.data && event.data.sessionID === this.binding.backendConversationId) {
         if ("durable" in event) { this.#structuralRevision++; this.#markNativeChanges(event); }
+        if (event.type === "session.model.selected") void this.#refreshSettings().then(() => {
+          if (!this.#closed && !this.#lifetime.aborted) this.#emit({ type: "capabilities_changed", capabilities: this.#capabilities() });
+        });
         if (this.#observeText(event)) continue;
       } else {
         if ((event.type === "session.created" || event.type === "session.forked") && event.data.parentID === this.binding.backendConversationId) this.#childIds.add(event.data.sessionID);
@@ -533,6 +664,22 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     if (this.#invalidated && reason !== "provider_handle_closed") return;
     this.#invalidated = true; this.#activity = "unknown"; this.#background = unknownActivity;
     this.#emit({ type: "resnapshot_required", reason });
+  }
+  #inputProofChanged(): void {
+    this.#structuralRevision++;
+    if (this.#proofRefreshPending || !this.#retained || this.#invalidated || this.#closed || this.#lifetime.aborted) return;
+    this.#proofRefreshPending = true;
+    // Queue one refresh without awaiting it from the independent proof observer.
+    void this.#exclusive(this.#lifetime, async signal => {
+      if (!this.#invalidated && this.#observation) await this.#refresh(signal);
+    }).catch(() => undefined).finally(() => { this.#proofRefreshPending = false; });
+  }
+  async #refreshSettings(): Promise<void> {
+    try { this.#observedSettings = await this.#settings.observe(this.#lifetime); }
+    catch {
+      this.#observedSettings = undefined;
+      try { this.#settings.markUnknown(); } catch { /* Retired authority cannot publish new effective state. */ }
+    }
   }
   #emit(value: BackendConversationEvent): void {
     const event = backendConversationEventSchema.parse(value);

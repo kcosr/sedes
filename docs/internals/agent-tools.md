@@ -207,12 +207,17 @@ their stored presentation.
 | Local Claude             | Progressive, Individual through MCP on eligible queries  | Progressive, Individual on eligible queries                     |
 | Claude over SSH/outbound | Progressive, Individual through MCP with sidecar support | Progressive, Individual with sidecar capability and admission   |
 | Local Grok               | None                                                     | Progressive, Individual on eligible Sedes-created sessions      |
+| Local OpenCode v2        | Intentionally unsupported                                | Intentionally unsupported                                       |
 | In-memory conformance    | None                                                     | Intentionally unavailable outside contract tests                |
 
 Codex and Claude Native presentation uses exactly the eligibility and runtime
 admission of their CLI presentation, and is unavailable on Windows execution
 hosts. Grok has no Native surface. Grok SSH targets and Pi remote CLI
 presentation are intentionally unsupported.
+OpenCode v2 currently has no Sedes agent-tool presentation in either external
+or Sedes-owned server mode. Sedes does not inject thread tool credentials or
+install its MCP bridge into an OpenCode session. OpenCode's own configured
+native tools and MCP servers do not grant access to Sedes agent tools.
 The shared CLI implements both CLI modes for every supported row: local Pi,
 Codex, Claude, and Grok, plus the admitted Codex and Claude remote relays. It does not
 add a CLI path to the intentionally unsupported Pi-SSH or Grok-SSH topologies.

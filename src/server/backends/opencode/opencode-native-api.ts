@@ -9,6 +9,7 @@ import { SessionInbox } from "@opencode/schema/session-inbox";
 import { Shell } from "@opencode/schema/shell";
 import { Schema } from "effect";
 import path from "node:path";
+import { snapshotBoundedJson } from "../../provider-protocol/json/bounded-json-snapshot.js";
 import { OpenCodeHttpClient } from "./opencode-http-client.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 
@@ -72,15 +73,18 @@ const Active = Schema.Record(Session.ID, Schema.Struct({ type: Schema.Literal("r
 const ShellList = Schema.Struct({ location: Location.PublicRef, data: Schema.Array(Shell.Info) });
 const Interrupt = Schema.Struct({ interrupted: Schema.Boolean });
 
-function parser<T>(schema: Schema.Constraint, json = true): (value: unknown) => T {
+export function openCodeNativeParser<T>(schema: Schema.Constraint, json = true): (value: unknown) => T {
   // Native HTTP endpoints use Effect's JSON codec, which emits null for some
   // optional values (notably page cursors). SSE directly JSON.stringifies events.
   const decode = Schema.decodeUnknownSync(Schema.toEncoded(json ? Schema.toCodecJson(schema) : schema), { onExcessProperty: "error" });
   return value => {
-    try { return decode(value) as T; }
+    const limits = { maximumDepth: 64, maximumObjectProperties: 100_000, maximumArrayItems: 1_000_000,
+      maximumTotalNodes: 1_000_000, maximumStringBytes: 16 * 1_024 * 1_024, maximumEncodedBytes: 16 * 1_024 * 1_024 };
+    try { return snapshotBoundedJson(decode(snapshotBoundedJson(value, limits)), limits) as T; }
     catch { throw new OpenCodeNativeProtocolError(); }
   };
 }
+const parser = openCodeNativeParser;
 export const parseOpenCodeNativeMessage = parser<OpenCodeNativeMessage>(PublicSessionMessage);
 export const parseOpenCodeNativeEvent = parser<OpenCodeNativeEvent>(EventSchema, false);
 const parseSession = parser<OpenCodeNativeSession>(NativeSession);

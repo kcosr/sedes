@@ -21,6 +21,9 @@ export interface PreparedOpenCodeBackendConfiguration extends OpenCodeModuleConf
 export function parseOpenCodeBackendConfiguration(input: BackendModuleConfigurationInput): PreparedOpenCodeBackendConfiguration {
   if (input.backend.kind !== "opencode") throw new Error("opencode_backend_kind_invalid");
   const configuration = opencodeModuleConfigurationSchema.parse(input.backend.moduleConfiguration);
+  if (input.backend.modelPolicy.type !== "catalog") {
+    throw new Error("opencode_restrictive_model_policy_unsupported");
+  }
   if (configuration.connection.ownership === "external" &&
       Object.keys(input.backend.environmentVariables?.startup ?? {}).length > 0) {
     throw new Error("opencode_external_startup_environment_unsupported");

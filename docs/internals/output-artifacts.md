@@ -341,6 +341,7 @@ Any native output shape other than the exact completed `ImageGen` or
 | Grok | **Supported for owned-local sessions:** exact completed `ImageGen` or `ImageEdit` with a valid JPEG at the scoped session path. |
 | Claude | **Viewed images only:** the single in-band image block returned by a completed built-in `Read` of a PNG, JPEG, GIF, or WebP path, as Claude received it. |
 | Pi | **Viewed images only:** the first in-band image part returned by a completed built-in `read` of a PNG, JPEG, GIF, WebP, or BMP path, as Pi sent it to the model. |
+| OpenCode v2 | **Intentionally unsupported:** no durable generated-image or viewed-image artifact capture. |
 
 The boundaries outside that table remain important:
 
@@ -358,12 +359,17 @@ The boundaries outside that table remain important:
   blocks from MCP and other non-read tools remain metadata-only entries, and
   subagent reads show no viewed image.
 - Claude and Pi have no provider-generated image path.
+- The OpenCode adapter advertises no native image output capability. Native tool output,
+  file paths, or image metadata do not establish artifact-byte authority and
+  are not converted into downloadable images.
 
 Input image support is independent. Pi, Codex, and Grok may accept normalized
 composer images under their own model- and topology-sensitive input
 capabilities without gaining provider-output support. Claude also accepts
 verified native composer image bytes, but that input path likewise says nothing
 about its output contract.
+OpenCode currently also rejects composer attachments and native image input;
+its text conversation support does not imply either image capability.
 
 ## Related documentation
 

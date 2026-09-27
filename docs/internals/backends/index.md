@@ -1,6 +1,6 @@
 # Backend maintainer references
 
-These documents define provider-private implementation contracts for the four
+These documents define provider-private implementation contracts for the five
 compiled backends. They cover wire/profile admission, runtime ownership,
 history and live projection, mutation recovery, native identity, and
 fail-closed behavior. They are maintainer references, not setup guides.
@@ -25,6 +25,7 @@ capabilities, troubleshooting, and live-suite safety, start with the
 | Codex | [Codex internals](codex.md) | [Operate Codex](../../operator/backends/codex.md) | Codex app-server protocol and provider rollout/store |
 | Claude | [Claude internals](claude.md) | [Operate Claude](../../operator/backends/claude.md) | Pinned Agent SDK and Claude Code session/history APIs |
 | Grok | [Grok internals](grok.md) | [Operate Grok](../../operator/backends/grok.md) | Reviewed Grok ACP dialect and native update journal |
+| OpenCode | [OpenCode internals](opencode.md) | [Operate OpenCode](../../operator/backends/opencode.md) | Pinned v2 HTTP/SSE API and native SQLite-owned history |
 
 ## Contract map
 
@@ -34,14 +35,14 @@ product advertises. The
 remains the authority for capabilities; never restate a capability here in
 terms that could disagree with it.
 
-| Concern | Pi | Codex | Claude | Grok |
-| --- | --- | --- | --- | --- |
-| Runtime ownership | SDK embedded in Sedes | Shared owned/external client generation | Local worker or persistent SSH/outbound SDK-query runtime on Linux/macOS | One owned process per resident session |
-| History acquisition | Authoritative native branch | Closed legacy or paginated adapter | One SDK-owned authoritative acquisition per handle | Bounded native update pages and resident window |
-| Mutation proof | Authenticated native markers | Method-specific protocol/history evidence | Reserved application identity plus SDK correlation/result | ACP prompt IDs plus native-history correlation |
-| Native fork | Exact completed boundary; no isolated workspace | Exact completed boundary or provider snapshot | Idle exact completed boundary | Unsupported |
-| Native output image | Unsupported | Completed in-band PNG `imageGeneration` | Unsupported | Completed local `ImageGen`/`ImageEdit` JPEG |
-| Steer target | Exact active turn | Exact active turn | Conversation, via native next-priority delivery | Unsupported |
+| Concern | Pi | Codex | Claude | Grok | OpenCode |
+| --- | --- | --- | --- | --- | --- |
+| Runtime ownership | SDK embedded in Sedes | Shared owned/external client generation | Local worker or persistent SSH/outbound SDK-query runtime on Linux/macOS | One owned process per resident session | Resident owned daemon or external HTTP/SSE owner |
+| History acquisition | Authoritative native branch | Closed legacy or paginated adapter | One SDK-owned authoritative acquisition per handle | Bounded native update pages and resident window | Bounded complete native cut and incremental refresh |
+| Mutation proof | Authenticated native markers | Method-specific protocol/history evidence | Reserved application identity plus SDK correlation/result | ACP prompt IDs plus native-history correlation | Private scoped receipt plus exact native per-input or mutation evidence |
+| Native fork | Exact completed boundary; no isolated workspace | Exact completed boundary or provider snapshot | Idle exact completed boundary | Unsupported | Unsupported |
+| Native output image | Unsupported | Completed in-band PNG `imageGeneration` | Unsupported | Completed local `ImageGen`/`ImageEdit` JPEG | Unsupported |
+| Steer target | Exact active turn | Exact active turn | Conversation, via native next-priority delivery | Unsupported | Conversation; materialized only on exact consumed-input evidence |
 
 This table is a routing aid, not a substitute for each contract. Browser and
 shared protocol code must never branch on these provider-native details.
@@ -55,7 +56,7 @@ shared protocol code must never branch on these provider-native details.
    protocol, capabilities, history, interactions, attachments, output
    artifacts, agent tools, execution environments, persistence, recovery, and
    diagnostics.
-4. Audit all four compiled backends and record an implemented or intentionally
+4. Audit all five compiled backends and record an implemented or intentionally
    unsupported disposition for each.
 5. Update the operator guide only when installation, security, topology,
    capabilities, limits, or troubleshooting changes. Keep provider-private

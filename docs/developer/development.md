@@ -215,13 +215,13 @@ whose ownership cannot be excluded. Hidden procfs ancestry or an ambiguous
 unreadable process makes cleanup unproved and retains the isolated native
 directory for inspection. The detached-child cleanup regression belongs to this
 same opt-in suite; ordinary `npm test` performs no such machine-wide scan.
-These are characterization tests: passing
-includes reproducing missing idle filtering, MCP catalog readiness races, and
-synthetic credential environment exposure. These are accepted native limitations,
-not prerequisites for a patched OpenCode release. A passing suite does **not** qualify a production
-OpenCode backend. No OpenCode module is currently registered, and the compiled
-Pi, Codex, Claude, and Grok paths remain unchanged. The fixture version pin
-records the release under investigation, not a production compatibility policy.
+The suite combines native characterization with production adapter qualification.
+Characterization includes reproducing missing idle filtering, MCP catalog
+readiness races, and synthetic credential environment exposure. Production
+checks exercise native codecs, resident ownership, history, delivery, and
+mutation recovery. The compiled OpenCode module admits exactly stock 2.0.18;
+these loopback fixtures do not qualify authenticated external model providers.
+See the [OpenCode operator guide](../operator/backends/opencode.md).
 
 After client, Capacitor dependency/configuration, or native Android changes,
 run:

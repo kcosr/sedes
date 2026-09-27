@@ -15,6 +15,9 @@ import { OpenCodeThreadActionPersistence } from "./opencode-thread-action-persis
 import { OpenCodeThreadPresentationProvider } from "./opencode-thread-presentation-provider.js";
 import { OpenCodeSavedAgentBackendAdapter } from "./opencode-saved-agent-adapter.js";
 import { OpenCodeAutomationExecutionPolicy } from "./opencode-automation-execution-policy.js";
+import { OpenCodeThreadSettingsRepository } from "./opencode-thread-settings-repository.js";
+import { OpenCodeModelCatalog } from "./opencode-model-catalog.js";
+import { OpenCodeNativeMutations } from "./opencode-native-mutations.js";
 
 type NativeRuntime = Pick<OpenCodeRuntime, "nativeNamespaceKey" | "start" | "health" | "snapshot" | "stop" | "close" | "acquire" | "assertCurrent">;
 type NativeRuntimeFactory = (input: OpenCodeRuntimeInput) => NativeRuntime;
@@ -23,7 +26,7 @@ const managedTerminals = Object.freeze({
   async attachViewer(): Promise<never> { throw terminalUnavailable(); },
 });
 
-/** Deliberately absent from compiledBackendModuleCatalog until conversation execution is qualified. */
+/** Stock OpenCode v2 with private HTTP/SSE protocol and resident runtime ownership. */
 export class OpenCodeBackendModule implements BackendModule {
   readonly backendKind = "opencode" as const;
   readonly connectionKinds = ["opencode_http"] as const;
@@ -81,9 +84,9 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
   readonly discoveryPersistence;
   readonly discovery;
   readonly presentation;
-  readonly actionPersistence = new OpenCodeThreadActionPersistence();
-  readonly savedAgents = new OpenCodeSavedAgentBackendAdapter();
-  readonly automationExecutionPolicy = new OpenCodeAutomationExecutionPolicy();
+  readonly actionPersistence;
+  readonly savedAgents;
+  readonly automationExecutionPolicy;
   readonly installationAdvisories = NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES;
   readonly managedProviderTerminals = managedTerminals;
   readonly administration: BackendRuntimeAdministration | undefined;
@@ -104,9 +107,31 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     this.#startup = backendStartupEnvironmentVariables(input);
     const repository = new OpenCodeThreadRepository({ database: context.database, scope: context.scope,
       backendInstanceId: context.instance.id, nativeNamespaceKey: namespace });
-    const persistence = new OpenCodeBackendThreadPersistenceAdapter(repository);
+    const settings = new OpenCodeThreadSettingsRepository({ database: context.database, scope: context.scope, backendInstanceId: context.instance.id });
+    const resolveConnectionDefaults = (connection: AgentConnectionProfile) => {
+      const admitted = context.connections.find(candidate => candidate.id === connection.id);
+      if (!admitted || (["tenantId", "ownerPrincipalId", "backendInstanceId", "executionEnvironmentId", "templateId", "kind", "configurationRevision", "enabled"] as const)
+        .some(key => admitted[key] !== connection[key])) return undefined;
+      return configuration.defaultsByConnectionId.get(admitted.templateId);
+    };
+    const adapterInput = { database: context.database, scope: context.scope, backendInstanceId: context.instance.id,
+      settings, modelPolicy: configuration.modelPolicy, resolveConnectionDefaults };
+    const persistence = new OpenCodeBackendThreadPersistenceAdapter({ ...adapterInput, repository });
     this.threadPersistence = this.bindingDetails = this.discoveryPersistence = persistence;
-    this.presentation = new OpenCodeThreadPresentationProvider(context.scope, context.instance.id);
+    this.presentation = new OpenCodeThreadPresentationProvider(adapterInput);
+    this.actionPersistence = new OpenCodeThreadActionPersistence(adapterInput);
+    this.savedAgents = new OpenCodeSavedAgentBackendAdapter({ ...adapterInput, persistence });
+    this.automationExecutionPolicy = new OpenCodeAutomationExecutionPolicy(adapterInput);
+    const catalog = new OpenCodeModelCatalog({ modelPolicy: configuration.modelPolicy, readNative: async (directory, signal) => {
+      const runtime = await this.#native(); await runtime.start(); this.#assertOpen(); signal?.throwIfAborted();
+      const lease = runtime.acquire();
+      try {
+        const native = new OpenCodeNativeMutations(lease.client);
+        const [models, defaultModel] = await Promise.all([native.listModels(directory, signal), native.getDefaultModel(directory, signal)]);
+        await runtime.assertCurrent(signal); this.#assertOpen();
+        return { models, ...(defaultModel ? { defaultModel } : {}) };
+      } finally { lease.release(); }
+    } });
     const connections = new Map(context.connections.map(connection => [connection.id, connection]));
     this.discovery = { nativeNamespaceKey: (connection: AgentConnectionProfile) => {
       const admitted = connections.get(connection.id);
@@ -118,7 +143,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
       return namespace;
     } };
     this.driverFactory = new OpenCodeBackendDriverFactory({ scope: context.scope, instance: context.instance, connections: context.connections,
-      nativeNamespaceKey: namespace, repository,
+      nativeNamespaceKey: namespace, repository, settings, catalog, modelPolicy: configuration.modelPolicy,
       runtime: async () => { const owner = await this.#native(); this.#assertOpen(); return owner; } });
     if (configuration.connection.ownership === "owned") {
       this.administration = {

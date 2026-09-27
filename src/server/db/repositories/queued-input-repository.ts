@@ -86,7 +86,7 @@ export type QueuedInputRecord = {
   readonly invalidStateRequeues: 0 | 1;
   readonly nextAttemptAt: number | null;
   readonly diagnostic: string | null;
-  /** Normalized reason recorded with a failure; `not_sent` is a proven-unused Steer. */
+  /** Normalized reason recorded with a failure; `not_sent` is a proven-unused input. */
   readonly failureReason: "not_sent" | null;
   readonly failureAcknowledgedAt: number | null;
   readonly cancellationMutationId: string | null;
@@ -1072,6 +1072,7 @@ export class QueuedInputRepository {
       readonly expectedState: "dispatching" | "uncertain";
       readonly retryable: boolean;
       readonly diagnostic: string;
+      readonly failureReason?: "not_sent";
       readonly now: number;
       readonly retryPolicy: QueueRetryPolicy;
     },
@@ -1095,6 +1096,7 @@ export class QueuedInputRepository {
           input.expectedState,
           input.diagnostic,
           input.now,
+          input.failureReason,
         );
       }
       return this.#scheduleRetryOrFail(
@@ -2504,6 +2506,7 @@ export class QueuedInputRepository {
     expectedState: "dispatching" | "uncertain",
     diagnostic: string,
     now: number,
+    failureReason?: "not_sent",
   ): QueuedInputRecord {
     const changed = this.database
       .prepare(
@@ -2513,7 +2516,7 @@ export class QueuedInputRepository {
             reconciliation_token = NULL, retry_anchor = NULL,
             delivery_mode = NULL,
             backend_correlation = NULL,
-            diagnostic = ?
+            diagnostic = ?, failure_reason = ?
           WHERE tenant_id = ? AND owner_principal_id = ?
             AND application_thread_id = ? AND id = ? AND state = ?
             AND delivery_mode = 'submit'
@@ -2522,6 +2525,7 @@ export class QueuedInputRepository {
       .run(
         now,
         diagnostic,
+        failureReason ?? null,
         scope.tenantId,
         scope.principalId,
         applicationThreadId,

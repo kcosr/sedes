@@ -63,10 +63,10 @@ function nativeFactory() {
   return { create: vi.fn((input: OpenCodeRuntimeInput) => { const instance = native(input); instances.push(instance); return instance; }), instances };
 }
 
-describe("OpenCode M1 private module foundation", () => {
-  it("is available only through an explicit test catalog and does not start during preparation", async () => {
-    expect(compiledBackendModuleCatalog.moduleForBackendKind("opencode")).toBeUndefined();
-    expect(compiledBackendModuleCatalog.moduleForConnectionKind("opencode_http")).toBeUndefined();
+describe("OpenCode compiled module", () => {
+  it("is registered in production and does not start during preparation", async () => {
+    expect(compiledBackendModuleCatalog.moduleForBackendKind("opencode")).toBeInstanceOf(OpenCodeBackendModule);
+    expect(compiledBackendModuleCatalog.moduleForConnectionKind("opencode_http")).toBe(compiledBackendModuleCatalog.moduleForBackendKind("opencode"));
     const factory = nativeFactory(); const module = new OpenCodeBackendModule(factory.create);
     expect(new BackendModuleCatalog([module]).moduleForBackendKind("opencode")).toBe(module);
     const prepared = module.prepare(configuration());
@@ -77,8 +77,8 @@ describe("OpenCode M1 private module foundation", () => {
     await runtime.start();
     expect(factory.create).not.toHaveBeenCalled();
     expect(await runtime.startupEnvironmentState!()).toBe("not_started");
-    expect(runtime.driverFactory.supportsConversationCreation).toBe(false);
-    expect(runtime.driverFactory.creationIdentity).toBeUndefined();
+    expect(runtime.driverFactory.supportsConversationCreation).toBe(true);
+    expect(runtime.driverFactory.creationIdentity).toMatchObject({ assignment: "application", createReplay: "idempotent" });
     expect(runtime.savedAgents.presentation).toMatchObject({ brand: "opencode", typeId: "opencode" });
     expect(runtime.bindingDetails).toBe(runtime.threadPersistence);
     expect(runtime.discoveryPersistence).toBe(runtime.threadPersistence);
@@ -88,8 +88,8 @@ describe("OpenCode M1 private module foundation", () => {
     await expect(driver.catalog({} as never)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
     await expect(driver.create({} as never)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
     await expect(driver.attach({ scope: { ...scope, principalId: "another-principal" } } as never)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
-    expect(() => runtime.savedAgents.validateOverrides({ overrides: [] })).toThrow(/unavailable/u);
-    expect(() => runtime.automationExecutionPolicy.assertCanAutomate(scope, "thread")).toThrow(/unavailable/u);
+    expect(runtime.savedAgents.validateOverrides({ overrides: [] })).toMatchObject({ backendTypeId: "opencode", overrides: [] });
+    expect(() => runtime.automationExecutionPolicy.assertCanAutomate(scope, "thread")).toThrow();
     await expect(runtime.managedProviderTerminals.authorizeAdmission({} as never)).rejects.toMatchObject({ code: "terminal_unavailable" });
     expect(factory.create).not.toHaveBeenCalled();
     await runtime.close();

@@ -220,6 +220,10 @@ Pi and Codex steer the exact turn that is running. Claude's Steer goes to the
 conversation: Claude takes it at its next opportunity, usually when the tool
 call it is running finishes, and it never interrupts work. If the turn is still
 running, the message joins it at that point; otherwise it starts the next turn.
+OpenCode v2 also steers the conversation at its next native opportunity. Its
+input remains pending until exact native consumption is observed. Stop tries
+to withdraw each unconsumed native input; an uncertain outcome stays visible
+for review and is never resent automatically.
 Grok has no Steer, so active-turn input waits in Queue.
 
 The selector shows only modes the current backend supports; temporarily

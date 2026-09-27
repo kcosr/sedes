@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { opencodeHttpUrlSchema, opencodeModuleConfigurationSchema } from "../../src/shared/protocol/opencode-configuration.js";
 import type { ConfigurationDocument } from "../../src/shared/protocol/configuration-admin.js";
 import { parseOpenCodeBackendConfiguration } from "../../src/server/backends/opencode/opencode-backend-configuration.js";
@@ -22,6 +23,22 @@ function configuration(external = false): ConfigurationDocument {
 }
 
 describe("OpenCode v2 operator configuration", () => {
+  it.each(["owned", "external"])("validates the checked-in %s module configuration example", ownership => {
+    const value = JSON.parse(readFileSync(new URL(`../../config/opencode-${ownership}.example.json`, import.meta.url), "utf8"));
+    expect(opencodeModuleConfigurationSchema.parse(value).connection.ownership).toBe(ownership);
+  });
+  it.each([false, true])("rejects restrictive model policy before runtime admission, external=%s", external => {
+    const policies: ConfigurationDocument["backends"][number]["modelPolicy"][] = [
+      { type: "allowlist", allowed: [{ modelIds: ["model"] }] },
+      { type: "denylist", denied: [{ reasoningEfforts: ["high"] }] }];
+    for (const modelPolicy of policies) {
+      const document = configuration(external);
+      document.backends[0]!.modelPolicy = structuredClone(modelPolicy);
+      expect(() => validateConfigurationDocument(document)).toThrow(/configuration or target defaults are invalid/u);
+      expect(() => parseOpenCodeBackendConfiguration({ backend: { ...document.backends[0]!, protocolRelease: "2.0.18" },
+        connections: document.targets, executionEnvironments: document.executionEnvironments, environment: {} })).toThrow(/restrictive_model_policy/u);
+    }
+  });
   it.each([false, true])("validates the closed configuration with external=%s", external => {
     const value = validateConfigurationDocument(configuration(external));
     const backend = value.backends[0]!;
@@ -74,10 +91,10 @@ describe("OpenCode v2 operator configuration", () => {
     expect(configurationIdentities(value).find(entry => entry.kind === "backend")).not.toEqual(before);
   });
 
-  it("exposes ownership-appropriate lifecycle actions and leaves production registration gated", () => {
+  it("exposes ownership-appropriate lifecycle actions through the production catalog", () => {
     expect(backendLifecycleActions(configuration(true).backends[0], false)).toEqual(["connect", "disconnect"]);
     expect(backendLifecycleActions(configuration().backends[0], false)).toEqual(["connect", "start", "stop", "restart"]);
-    expect(compiledBackendModuleCatalog.moduleForBackendKind("opencode")).toBeUndefined();
+    expect(compiledBackendModuleCatalog.moduleForBackendKind("opencode")).toBeDefined();
     for (const kind of ["pi", "codex_app_server", "claude_agent_sdk", "grok_build"] as const) {
       expect(compiledBackendModuleCatalog.moduleForBackendKind(kind)).toBeDefined();
       expect(backendLifecycleActions(backendEditors[kind].createBackend(kind), false)).toEqual(["connect", "start", "stop", "restart"]);

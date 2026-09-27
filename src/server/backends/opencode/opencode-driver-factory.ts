@@ -1,12 +1,18 @@
 import type { BackendDriverFactory } from "../registry.js";
-import { BackendError, type AgentBackendInstance, type AgentConnectionProfile } from "../contracts.js";
+import { createHash } from "node:crypto";
+import { APPLICATION_ASSIGNED_CREATION_IDENTITY, BackendError, type AgentBackendInstance, type AgentConnectionProfile } from "../contracts.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import { OpenCodeConversationBackendDriver } from "./opencode-conversation-driver.js";
 import type { OpenCodeDriverContext } from "./opencode-conversation-context.js";
 
 export class OpenCodeBackendDriverFactory implements BackendDriverFactory {
   readonly connectionKinds = ["opencode_http"] as const;
-  readonly supportsConversationCreation = false;
+  readonly supportsConversationCreation = true;
+  readonly creationIdentity = Object.freeze({ ...APPLICATION_ASSIGNED_CREATION_IDENTITY,
+    reserveBackendConversationId(seed: string): string {
+      if (!seed || seed.length > 128 || /\p{Cc}/u.test(seed) || Buffer.from(seed).toString("utf8") !== seed) throw new Error("opencode_creation_seed_invalid");
+      return `ses_${createHash("sha256").update(seed).digest("hex")}`;
+    } });
   readonly scope: RequestScope;
   readonly instance: AgentBackendInstance;
   readonly #connections: ReadonlyMap<string, AgentConnectionProfile>;

@@ -3601,6 +3601,95 @@ describe("ConversationActorManager", () => {
     await manager.close();
   });
 
+  it("observes native consumption during blocked hydration and orders projected completion behind it", async () => {
+    const order: string[] = [];
+    let releaseObservation!: () => void;
+    const observationGate = new Promise<void>(resolve => { releaseObservation = resolve; });
+    const submission = vi.fn<AuthoritativeSubmissionObserver>(async (_scope, _thread, observation) => {
+      order.push(`submission:${observation.backendCorrelation}`);
+      if (submission.mock.calls.length === 1) await observationGate;
+    });
+    const completion = vi.fn<AuthoritativeCompletionObserver>(() => { order.push("completion"); });
+    const { driver, handle, manager } = fixture(completion, submission);
+    let callbacks!: Parameters<ConversationBackendDriver["attach"]>[0];
+    const lifetime = new AbortController();
+    vi.mocked(driver.attach).mockImplementation(async input => {
+      callbacks = input;
+      input.onControlReady?.({ generation: "native-before-history", lifetime: lifetime.signal,
+        interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
+      return handle as unknown as ConversationHandle;
+    });
+    const establish = handle.establishProjection.bind(handle);
+    let releaseHistory!: () => void;
+    const historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
+    vi.spyOn(handle, "establishProjection").mockImplementation(async input => {
+      await historyGate;
+      return establish(input);
+    });
+    handle.establishmentSnapshots[0]!.turnsById["turn-1"]!.completionCorrelations = ["native-consumed"];
+    const acquiring = manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    callbacks.onSubmissionObserved?.({ backendCorrelation: "native-consumed" });
+    await vi.waitFor(() => expect(submission).toHaveBeenCalledOnce());
+    expect(submission).toHaveBeenCalledWith(scope, binding.applicationThreadId, { backendCorrelation: "native-consumed" });
+    expect(completion).not.toHaveBeenCalled();
+    releaseHistory();
+    const acquired = await acquiring;
+    expect(completion).not.toHaveBeenCalled();
+    releaseObservation();
+    await vi.waitFor(() => expect(order).toEqual([
+      "submission:native-consumed", "submission:native-consumed", "completion",
+    ]));
+    acquired.release();
+    await manager.close();
+  });
+
+  it.each(["replaced", "revoked", "closed"] as const)(
+    "fences queued native observations when their exact control is %s", async disposition => {
+      let releaseObservation!: () => void;
+      const gate = new Promise<void>(resolve => { releaseObservation = resolve; });
+      const submission = vi.fn<AuthoritativeSubmissionObserver>(async () => { await gate; });
+      const { driver, handle, manager } = fixture(undefined, submission);
+      let callbacks!: Parameters<ConversationBackendDriver["attach"]>[0];
+      const lifetime = new AbortController();
+      vi.mocked(driver.attach).mockImplementation(async input => {
+        callbacks = input;
+        return handle as unknown as ConversationHandle;
+      });
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      callbacks.onSubmissionObserved?.({ backendCorrelation: "without-control" });
+      callbacks.onControlReady?.({ generation: "old-owner", lifetime: lifetime.signal,
+        interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
+      callbacks.onSubmissionObserved?.({ backendCorrelation: "first" });
+      await vi.waitFor(() => expect(submission).toHaveBeenCalledOnce());
+      callbacks.onSubmissionObserved?.({ backendCorrelation: "queued-old-owner" });
+      let closing: Promise<void> | undefined;
+      if (disposition === "replaced") {
+        callbacks.onControlReady?.({ generation: "new-owner", lifetime: new AbortController().signal,
+          interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
+      } else if (disposition === "revoked") {
+        lifetime.abort();
+      } else {
+        acquired.release();
+        closing = manager.close();
+      }
+      releaseObservation();
+      await closing;
+      // A fresh valid notification provides a deterministic drain boundary.
+      if (disposition === "replaced") {
+        callbacks.onSubmissionObserved?.({ backendCorrelation: "new-owner-observed" });
+        await vi.waitFor(() => expect(submission).toHaveBeenCalledTimes(2));
+      }
+      if (disposition !== "closed") {
+        acquired.release();
+        await manager.close();
+      }
+      expect(submission.mock.calls.map(([, , observed]) => observed.backendCorrelation)).toEqual(
+        disposition === "replaced" ? ["first", "new-owner-observed"] : ["first"],
+      );
+    },
+  );
+
   it("orders Stop after an admitted first native submit, without taking the projection mailbox", async () => {
     const { driver, handle, manager } = fixture();
     const lifetime = new AbortController();
@@ -5154,7 +5243,6 @@ describe("ConversationActorManager", () => {
         binding.applicationThreadId,
         {
           backendCorrelation: "uncertain-steer",
-          backendTurnId: "turn-1",
         },
       ),
     );

@@ -91,10 +91,17 @@ export class OpenCodeHttpClient {
   }
 
   /** No automatic reconnect or event replay claim. Consumers reacquire native truth after EOF. */
-  async *events(validate: (value: unknown) => OpenCodeEvent, signal?: AbortSignal): AsyncIterable<OpenCodeEvent> {
+  events(validate: (value: unknown) => OpenCodeEvent, signal?: AbortSignal): AsyncIterable<OpenCodeEvent> {
+    return this.stream((client, lifetime) => client.event.subscribe({ signal: lifetime }), validate, signal);
+  }
+
+  /** One authenticated stream. Consumers own finite-cut deadlines and continuity. */
+  async *stream<T>(operation: (client: OpenCodeClient, signal: AbortSignal) => AsyncIterable<unknown>,
+    validate: (value: unknown) => T, signal?: AbortSignal): AsyncIterable<T> {
     const lifetime = AbortSignal.any([this.#lifetime.signal, ...(signal ? [signal] : [])]);
     try {
-      for await (const value of this.#client.event.subscribe({ signal: lifetime })) {
+      if (lifetime.aborted) return;
+      for await (const value of operation(this.#client, lifetime)) {
         if (lifetime.aborted) return;
         yield validate(value);
       }

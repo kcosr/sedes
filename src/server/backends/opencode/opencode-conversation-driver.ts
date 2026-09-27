@@ -10,6 +10,8 @@ import { OPENCODE_HISTORY_LIMITS, OpenCodeHistoryError, openCodeHistoryFingerpri
 import { mapOpenCodeConversationError } from "./opencode-conversation-error.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
+import { acquireOpenCodeInputObserver } from "./opencode-input-observer.js";
+import { createOpenCodeConversation } from "./opencode-conversation-creation.js";
 
 const cursorSchema = z.strictObject({ v: z.literal(1), scope: z.string().length(43), native: z.string().min(1).max(16_384) });
 
@@ -24,11 +26,32 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
     try { const runtime = await this.input.runtime(); await runtime.start(); return await runtime.health(); }
     catch { return { available: false, checkedAt: new Date().toISOString() }; }
   }
-  async catalog(..._input: Parameters<ConversationBackendDriver["catalog"]>): Promise<never> { throw openCodeUnsupported(); }
-  async create(..._input: Parameters<ConversationBackendDriver["create"]>): Promise<never> { throw openCodeUnsupported(); }
+  async catalog(input: Parameters<ConversationBackendDriver["catalog"]>[0]) {
+    try {
+      assertOpenCodeWorkspace(this.input, input);
+      return (await this.input.catalog.read({ connection: this.connection, workspace: input.workspace })).catalog;
+    } catch (error) { throw mapOpenCodeConversationError(error); }
+  }
+  async create(input: Parameters<ConversationBackendDriver["create"]>[0]) { return createOpenCodeConversation(this.input, input); }
   async resolveBranchCheckpoint(..._input: Parameters<ConversationBackendDriver["resolveBranchCheckpoint"]>): Promise<never> { throw openCodeUnsupported(); }
   async branchConversation(..._input: Parameters<ConversationBackendDriver["branchConversation"]>): Promise<never> { throw openCodeUnsupported(); }
-  async reconcileSubmission(..._input: Parameters<ConversationBackendDriver["reconcileSubmission"]>): Promise<never> { throw openCodeUnsupported(); }
+  async reconcileSubmission(input: Parameters<ConversationBackendDriver["reconcileSubmission"]>[0]) {
+    if (!input.binding || !input.opaqueBindingDetail || input.reconciliationToken !== input.applicationOperationId) throw openCodeUnsupported();
+    const attach = { scope: input.scope, workspace: input.workspace, binding: input.binding, opaqueBindingDetail: input.opaqueBindingDetail };
+    requireOpenCodeBinding(this.input, attach);
+    const kind = input.steerTarget ? "steer" : "submit";
+    const receipt = this.input.repository.readOperation(input.scope, input.binding.applicationThreadId, input.applicationOperationId, kind);
+    if (!receipt) return { status: "unresolved" as const, diagnostic: boundDisplayText("No private OpenCode dispatch proof exists for this input.") };
+    if (receipt.disposition === "not_applied") return { status: "not_accepted" as const, retryable: false, diagnostic: boundDisplayText("The input was not dispatched to OpenCode.") };
+    const runtime = await this.#runtime(); await runtime.start();
+    const lease = runtime.acquire(); const lifetime = new AbortController();
+    let observation: ReturnType<typeof acquireOpenCodeInputObserver> | undefined;
+    try {
+      observation = acquireOpenCodeInputObserver(this.input, attach, runtime, lease, lifetime.signal);
+      return await observation.observer.reconcile(input.applicationOperationId, kind, AbortSignal.timeout(60_000));
+    } catch (error) { throw mapOpenCodeConversationError(error); }
+    finally { lifetime.abort(); observation?.release(); lease.release(); }
+  }
 
   async discover(input: DiscoverConversationsInput) {
     try { return await this.#discover(input); }

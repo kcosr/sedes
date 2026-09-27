@@ -1,0 +1,18 @@
+{
+  "nativeStorePath": "/home/sedes/.local/share/opencode/opencode.db",
+  "connection": {
+    "ownership": "external",
+    "channel": {
+      "type": "http",
+      "url": "http://127.0.0.1:4096",
+      "authentication": {
+        "type": "basic",
+        "username": "opencode",
+        "secret": {
+          "source": "protected_file",
+          "path": "/home/sedes/.config/sedes/opencode-password"
+        }
+      }
+    }
+  }
+}

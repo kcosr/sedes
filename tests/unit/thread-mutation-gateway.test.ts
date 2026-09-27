@@ -4761,6 +4761,62 @@ describe("ThreadMutationGateway backend-action receipts", () => {
 });
 
 describe("ThreadMutationGateway durable submission observation", () => {
+  it("finishes exact first-send evidence before publishing and never acquires a runtime", async () => {
+    const order: string[] = [];
+    let releaseFinalization!: () => void;
+    const finalization = new Promise<void>(resolve => { releaseFinalization = resolve; });
+    let waiting = true;
+    const observeFirstSend = vi.fn(async (_scope: RequestScope, _thread: string, correlation: string) => {
+      if (!waiting || correlation !== "first-operation") return false;
+      order.push("first-send-started");
+      await finalization;
+      waiting = false;
+      order.push("first-send-finalized");
+      return true;
+    });
+    const recoverActiveFirstSend = vi.fn();
+    const acquire = vi.fn();
+    const findAwaitingSteerSubmission = vi.fn();
+    const queueObserver = vi.fn(async () => false);
+    let releasePublication!: () => void;
+    const publication = new Promise<void>(resolve => { releasePublication = resolve; });
+    const publishThreadSnapshot = vi.fn(async () => { order.push("snapshot"); await publication; });
+    const gateway = new ThreadMutationGateway({
+      bindings: {} as never, inventory: {} as never,
+      lifecycle: { observeAuthoritativeSubmission: observeFirstSend, recoverActiveFirstSend } as never,
+      forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
+      queue: { observeAuthoritativeSubmission: queueObserver } as never,
+      operations: { findAwaitingSteerSubmission } as never,
+      completions: {} as never, queueGateway: {} as never, runtimes: { acquire } as never,
+      interactions: {} as never, presentation: {} as never, agentToolPolicies: {} as never,
+      actionPersistence: new Map(), publishThreadSnapshot, now: () => 2_000,
+    });
+    const observation = gateway.observeAuthoritativeSubmission(scope, "thread-1", "first-operation");
+    await vi.waitFor(() => expect(order).toEqual(["first-send-started"]));
+    expect(publishThreadSnapshot).not.toHaveBeenCalled();
+    releaseFinalization();
+    await expect(Promise.race([
+      observation,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("observer_waited_for_runtime_publication")), 250)),
+    ])).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(publishThreadSnapshot).toHaveBeenCalledOnce());
+    expect(order).toEqual(["first-send-started", "first-send-finalized", "snapshot"]);
+    expect(findAwaitingSteerSubmission).not.toHaveBeenCalled();
+    await gateway.observeAuthoritativeSubmission(scope, "thread-1", "first-operation");
+    await gateway.observeAuthoritativeSubmission(scope, "thread-1", "stop-operation");
+    expect(publishThreadSnapshot).toHaveBeenCalledOnce();
+    expect(queueObserver).toHaveBeenCalledTimes(3);
+    expect(observeFirstSend).toHaveBeenNthCalledWith(1, scope, "thread-1", "first-operation");
+    expect(acquire).not.toHaveBeenCalled();
+    expect(recoverActiveFirstSend).not.toHaveBeenCalled();
+    let closed = false;
+    const closing = gateway.close().then(() => { closed = true; });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    releasePublication();
+    await closing;
+  });
+
   it("delegates an uncertain queue-source Steer to the queue serializer", async () => {
     const observeAuthoritativeSubmission = vi.fn(async () => true);
     const findAwaitingSteerSubmission = vi.fn(() => ({
@@ -4770,7 +4826,7 @@ describe("ThreadMutationGateway durable submission observation", () => {
     const gateway = new ThreadMutationGateway({
       bindings: {} as never,
       inventory: {} as never,
-      lifecycle: {} as never,
+      lifecycle: { observeAuthoritativeSubmission: async () => false } as never,
       forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
       queue: { observeAuthoritativeSubmission } as never,
       operations: {
@@ -4798,11 +4854,7 @@ describe("ThreadMutationGateway durable submission observation", () => {
       "thread-1",
       "queued-steer-1",
     );
-    expect(findAwaitingSteerSubmission).toHaveBeenCalledWith(
-      scope,
-      "thread-1",
-      "queued-steer-1",
-    );
+    expect(findAwaitingSteerSubmission).not.toHaveBeenCalled();
   });
 
   it("atomically accepts a pending steer when its Pi user turn persists", async () => {
@@ -4840,9 +4892,9 @@ describe("ThreadMutationGateway durable submission observation", () => {
     const gateway = new ThreadMutationGateway({
       bindings: { database } as never,
       inventory: { database } as never,
-      lifecycle: {} as never,
+      lifecycle: { observeAuthoritativeSubmission: async () => false } as never,
       forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
-      queue: {} as never,
+      queue: { observeAuthoritativeSubmission: async () => false } as never,
       operations: {
         database,
         findAwaitingSteerSubmission: vi.fn(
@@ -4888,7 +4940,7 @@ describe("ThreadMutationGateway durable submission observation", () => {
       backendCorrelation: "steer-1",
       attachmentIds: [],
     });
-    expect(publishThreadSnapshot).toHaveBeenCalledWith(scope, "thread-1");
+    await vi.waitFor(() => expect(publishThreadSnapshot).toHaveBeenCalledWith(scope, "thread-1"));
     expect(acceptSteer).toHaveBeenCalledOnce();
     expect(recordAccepted).toHaveBeenCalledOnce();
     expect(acquire).not.toHaveBeenCalled();

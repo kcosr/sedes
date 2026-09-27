@@ -249,6 +249,8 @@ export type ConversationCreationIdentity =
       readonly assignment: "application";
       /** Application pre-assigns the backend conversation ID. */
       readonly requestedBackendConversationId: "required";
+      /** Pure native-ID formatting, called once before the durable reservation. */
+      readonly reserveBackendConversationId: (seed: string) => string;
       /** Drivers may safely replay create for the same operation/id. */
       readonly createReplay: "idempotent";
       /** First submission still completes before durable thread binding. */
@@ -269,6 +271,7 @@ export type ConversationCreationIdentity =
 export const APPLICATION_ASSIGNED_CREATION_IDENTITY = Object.freeze({
   assignment: "application",
   requestedBackendConversationId: "required",
+  reserveBackendConversationId: (seed: string) => seed,
   createReplay: "idempotent",
   bindBeforeFirstSubmission: false,
 } as const satisfies ConversationCreationIdentity);
@@ -330,6 +333,12 @@ export interface AttachConversationInput {
    * never authorizes launching or resuming work merely to make Stop available.
    */
   readonly onControlReady?: (control: ConversationControl) => void;
+  /**
+   * Exact input consumption proved independently of transcript hydration.
+   * This is a notification, never a provider-effect or retry authorization.
+   * The consumer serializes it with projected submission/completion evidence.
+   */
+  readonly onSubmissionObserved?: (input: { readonly backendCorrelation: string }) => void;
 }
 
 export interface ReadConversationInput {

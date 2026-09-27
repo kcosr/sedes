@@ -340,7 +340,6 @@ describe("in-memory canonical thread stream", () => {
           applicationThreadId: string,
           input: {
             readonly backendCorrelation: string;
-            readonly backendTurnId: string;
           },
         ) => void)
       | undefined;

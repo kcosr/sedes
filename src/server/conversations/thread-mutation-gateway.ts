@@ -413,7 +413,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     });
   }
 
-  observeAuthoritativeSubmission(
+  async observeAuthoritativeSubmission(
     scope: RequestScope,
     applicationThreadId: string,
     backendCorrelation: string,
@@ -421,23 +421,9 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     if (this.#closing) {
       return Promise.reject(new Error("thread_mutation_gateway_closed"));
     }
-    const routedSteer = this.input.operations.findAwaitingSteerSubmission(
-      scope,
-      applicationThreadId,
-      backendCorrelation,
-    );
-    if (routedSteer) {
-      const receipt = routedSteer;
-      if (receipt.source === "queued_input") {
-        return this.input.queue
-          .observeAuthoritativeSubmission(
-            scope,
-            applicationThreadId,
-            backendCorrelation,
-          )
-          .then(() => undefined);
-      }
-    }
+    // Queue serialization waits for an in-flight submit to persist uncertainty.
+    // Keep it outside this mailbox: queue dispatch itself enters the gateway.
+    if (await this.input.queue.observeAuthoritativeSubmission(scope, applicationThreadId, backendCorrelation)) return;
     const key = operationKey(scope, applicationThreadId);
     let mailbox = this.#mailboxes.get(key);
     if (!mailbox) {
@@ -445,6 +431,10 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       this.#mailboxes.set(key, mailbox);
     }
     return mailbox.enqueue(async () => {
+      if (await this.input.lifecycle.observeAuthoritativeSubmission(scope, applicationThreadId, backendCorrelation)) {
+        this.#scheduleSubmissionPublication(scope, applicationThreadId);
+        return;
+      }
       const receipt = this.input.operations.findAwaitingSteerSubmission(
         scope,
         applicationThreadId,
@@ -467,6 +457,15 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           attachmentIds: receipt.attachments.map(({ id }) => id),
         });
       })();
+      this.#scheduleSubmissionPublication(scope, applicationThreadId);
+    });
+  }
+
+  #scheduleSubmissionPublication(scope: RequestScope, applicationThreadId: string): void {
+    this.#ownDetachedPublication(async () => {
+      // Publication may acquire the newly bound actor. Let the authoritative
+      // observer finish before any runtime replacement can wait on its drain.
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
       await this.input.publishThreadSnapshot(scope, applicationThreadId);
       await this.#changed(scope, applicationThreadId);
     });

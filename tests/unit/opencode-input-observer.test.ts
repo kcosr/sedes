@@ -1,0 +1,263 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionInboxUser, SessionMessageInfo } from "@opencode/client";
+import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
+import { acquireOpenCodeInputObserver, findOpenCodeInputObserver, OpenCodeInputObserver } from "../../src/server/backends/opencode/opencode-input-observer.js";
+import { OpenCodeInputEvidenceRepository, openCodePreparedPayloadFingerprint, type OpenCodeInputKind } from "../../src/server/backends/opencode/opencode-input-evidence.js";
+import { createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
+import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
+
+const cleanups: (() => Promise<void>)[] = [];
+afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+const admission = (id = "msg_owned", text = "prepared text"): SessionInboxUser =>
+  ({ id, sessionID: "ses_fixture", type: "user", payload: { text }, delivery: "queue", time: { created: 1 } });
+const user = (id = "msg_owned", text = "prepared text"): SessionMessageInfo => ({ id, type: "user", text, time: { created: 1 } });
+function event(seq: number, type: string, data: Record<string, unknown>) {
+  return { id: `evt_${seq}`, type, created: 1, durable: { aggregateID: "ses_fixture", seq, version: 1 }, data: { sessionID: "ses_fixture", ...data } };
+}
+const enqueue = (seq: number, id = "msg_owned", text = "prepared text") => event(seq, "session.inbox.enqueued", {
+  inboxID: id, item: { type: "user", delivery: "queue", payload: { text } },
+});
+const delivered = (seq: number, id = "msg_owned") => event(seq, "session.inbox.delivered", { inboxID: id });
+const cancelled = (seq: number, id = "msg_owned") => event(seq, "session.inbox.cancelled", { inboxID: id });
+const renamed = (seq: number) => event(seq, "session.renamed", { title: "title" });
+const reverted = (seq: number, to = "msg_boundary") => event(seq, "session.revert.committed", { to });
+function fixture(input: { autoConnect?: boolean } = {}) {
+  const wire = createOpenCodeApiFixture(input);
+  let onDelete: ((id: string) => void) | undefined;
+  let log: unknown[] | undefined;
+  const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture-only-canary", fetch: async (value, init) => {
+    const url = new URL(String(value));
+    if (url.pathname.endsWith("/log") && log) {
+      return new Response(log.map(item => `data: ${JSON.stringify(item)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+    }
+    if (init?.method === "DELETE" && url.pathname.includes("/inbox/")) {
+      wire.requests.push({ method: "DELETE", pathname: url.pathname, query: url.searchParams });
+      onDelete?.(url.pathname.split("/").at(-1)!); return new Response(null, { status: 204 });
+    }
+    return wire.fetch(value, init);
+  } });
+  const native = createOpenCodeConversationFixture({ native: { client, sessionID: wire.sessionID, directory: wire.directory } });
+  const evidence = new OpenCodeInputEvidenceRepository(native.repository);
+  const controllers: OpenCodeInputObserver[] = [];
+  const lifetime = new AbortController(); const lease = native.runtime.acquire();
+  const observed = vi.fn(); const changed = vi.fn();
+  const attach = { ...native.target, onSubmissionObserved: observed };
+  const createObserver = () => {
+    const observer = new OpenCodeInputObserver(native.context, attach, native.runtime, lease, lifetime.signal, { onProofChanged: changed });
+    controllers.push(observer); return observer;
+  };
+  const observer = createObserver();
+  const reserve = (operationId = "operation", id = "msg_owned", kind: OpenCodeInputKind = "submit", dispatch = true, controller = observer) => {
+    native.repository.reserveOperation(scope, { applicationThreadId: threadID, connectionProfileId: native.target.binding.connectionProfileId,
+      executionEnvironmentId: native.target.binding.executionEnvironmentId, nativeSessionId: wire.sessionID,
+      applicationOperationId: operationId, operationKind: kind, nativeInputId: id, requestFingerprint: "a".repeat(64), requestSource: { kind: "user" }, deadlineAt: null }, Date.now());
+    const row = evidence.begin(scope, threadID, operationId, kind, controller.trackerId, kind === "steer" ? "steer" : "queue");
+    controller.track(row);
+    if (dispatch) native.repository.markDispatched(scope, threadID, operationId, kind, Date.now());
+    return row;
+  };
+  const row = (operationId = "operation", kind: OpenCodeInputKind = "submit") => evidence.get(scope, threadID, operationId, kind);
+  const pending = (items: SessionInboxUser[]) => wire.setResponse(`/api/session/${wire.sessionID}/inbox`, 200, { data: items });
+  cleanups.push(async () => { lifetime.abort(); controllers.forEach(controller => controller.close()); lease.release(); await native.dispose(); });
+  return { ...native, wire, evidence, lifetime, lease, attach, observed, changed, observer, createObserver, reserve, row, pending,
+    onDelete: (callback: (id: string) => void) => { onDelete = callback; },
+    log: (events: unknown[], seq: number) => { log = [...events, { type: "log.synced", aggregateID: wire.sessionID, seq }]; } };
+}
+async function consumed(f: ReturnType<typeof fixture>, operationId = "operation", kind: OpenCodeInputKind = "submit") {
+  await vi.waitFor(() => expect(f.row(operationId, kind).consumedFingerprint).toMatch(/^[a-f0-9]{64}$/u));
+}
+
+describe("OpenCode independent private input observation", () => {
+  it("persists exact delivered proof and notifies before history or model completion", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    const held = f.wire.hold(`/api/session/${f.wire.sessionID}/message`);
+    f.wire.send(enqueue(1)); f.wire.send(delivered(2)); await consumed(f);
+    expect(f.observed).toHaveBeenCalledExactlyOnceWith({ backendCorrelation: "operation" });
+    expect(f.observer.correlations()).toEqual(new Map([["msg_owned", "operation"]]));
+    expect(await f.observer.reconcile("operation", "submit")).toEqual({ status: "accepted" });
+    expect(f.wire.requests.some(request => request.pathname.endsWith("/message"))).toBe(false); held.release();
+  });
+
+  it("ACK, enqueued and pending establish admission only, using the hook-prepared payload", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    f.pending([admission("msg_owned", "hook transformed")]);
+    f.observer.recordAdmission("operation", "submit", admission("msg_owned", "hook transformed"));
+    f.wire.send(enqueue(1, "msg_owned", "hook transformed"));
+    await vi.waitFor(() => expect(f.row().enqueueSequence).toBe(1));
+    expect(f.row()).toMatchObject({ preparedPayloadFingerprint: openCodePreparedPayloadFingerprint({ text: "hook transformed" }), consumedFingerprint: null });
+    expect((await f.observer.reconcile("operation", "submit")).status).toBe("unresolved");
+    expect(f.observed).not.toHaveBeenCalled();
+    f.wire.messages.push(user("msg_owned", "hook transformed"));
+    expect(await f.observer.reconcile("operation", "submit")).toEqual({ status: "accepted" });
+  });
+
+  it("ignores foreign IDs, forged metadata and reserved-but-undispatched inputs", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve("operation", "msg_owned", "submit", false);
+    f.wire.send(enqueue(1)); f.wire.send(delivered(2)); f.wire.send(delivered(3, "msg_foreign"));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(f.row()).toMatchObject({ consumedFingerprint: null, preparedPayloadFingerprint: null });
+    expect((await f.observer.reconcile("operation", "submit")).status).toBe("unresolved");
+    expect(f.observed).not.toHaveBeenCalled();
+  });
+
+  it("preserves consumption irreversibly through cancellation, revert and restart", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    f.wire.send(enqueue(1)); f.wire.send(delivered(2)); await consumed(f);
+    f.wire.send(cancelled(3)); f.wire.send(reverted(4, "msg_owned"));
+    f.observer.close(); const recovery = f.createObserver(); await recovery.start();
+    expect(await recovery.reconcile("operation", "submit")).toEqual({ status: "accepted" });
+    expect(recovery.correlations().get("msg_owned")).toBe("operation");
+  });
+
+  it("returns exact nonretryable cancellation proof but not native DELETE acknowledgement", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve(); f.pending([admission()]);
+    await f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000);
+    f.pending([]);
+    expect((await f.observer.reconcile("operation", "submit")).status).toBe("unresolved");
+    f.wire.send(cancelled(1));
+    await vi.waitFor(() => expect(f.row().withdrawalKind).toBe("cancelled"));
+    expect(await f.observer.reconcile("operation", "submit")).toMatchObject({ status: "not_accepted", retryable: false });
+  });
+
+  it("a fresh Stop cancels only exact owned pending inputs, including an idle second attempt", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve(); f.pending([admission(), admission("msg_foreign")]);
+    await f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000);
+    f.onDelete(id => { f.wire.send(cancelled(1, id)); f.pending([admission("msg_foreign")]); });
+    await f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000);
+    await vi.waitFor(() => expect(f.row().withdrawalKind).toBe("cancelled"));
+    expect(f.wire.requests.filter(request => request.method === "DELETE").map(request => request.pathname)).toEqual([
+      "/api/session/ses_fixture/inbox/msg_owned", "/api/session/ses_fixture/inbox/msg_owned",
+    ]);
+    expect(f.wire.requests.some(request => request.pathname.endsWith("/interrupt"))).toBe(false);
+  });
+
+  it("a promotion racing cancellation remains consumed", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve(); f.pending([admission()]);
+    f.onDelete(() => { f.wire.messages.push(user()); f.pending([]); f.wire.send(delivered(1)); });
+    await f.observer.withdrawPending(new AbortController().signal, Date.now() + 1_000); await consumed(f);
+    expect(await f.observer.reconcile("operation", "submit")).toEqual({ status: "accepted" });
+  });
+
+  it("declines withdrawal without a positive boundary insertion and dense event interval", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    f.wire.send(enqueue(1)); f.wire.send(reverted(2));
+    await vi.waitFor(() => expect(f.row().enqueueSequence).toBe(1));
+    expect((await f.observer.reconcile("operation", "submit")).status).toBe("unresolved");
+    expect(f.row().withdrawnFingerprint).toBeNull();
+  });
+
+  it("proves unconsumed revert erasure from exact enqueue, earlier insertion and a dense interval", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    f.wire.send(delivered(0, "msg_boundary")); f.wire.send(renamed(1)); f.wire.send(enqueue(2)); f.wire.send(renamed(3)); f.wire.send(reverted(4));
+    await vi.waitFor(() => expect(f.row().withdrawalKind).toBe("reverted"));
+    expect(await f.observer.reconcile("operation", "submit")).toMatchObject({ status: "not_accepted", retryable: false });
+  });
+
+  it.each(["gap", "later", "reuse"])("declines revert erasure with %s evidence", async mode => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    if (mode === "later") { f.wire.send(enqueue(0)); f.wire.send(delivered(1, "msg_boundary")); }
+    else { f.wire.send(delivered(0, "msg_boundary")); f.wire.send(enqueue(1)); }
+    if (mode === "reuse") f.wire.send(enqueue(2));
+    f.wire.send(reverted(3)); await vi.waitFor(() => expect(f.row().enqueueSequence).not.toBeNull());
+    expect((await f.observer.reconcile("operation", "submit")).status).toBe("unresolved");
+    expect(f.row().withdrawnFingerprint).toBeNull();
+  });
+
+  it("reports payload conflicts as unresolved without projecting a correlation", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve(); f.observer.recordAdmission("operation", "submit", admission());
+    f.wire.messages.push(user("msg_owned", "conflicting payload"));
+    expect((await f.observer.reconcile("operation", "submit")).status).toBe("unresolved");
+    expect(f.row()).toMatchObject({ payloadConflict: true });
+    expect(f.row().consumedFingerprint).not.toBeNull(); expect(f.observer.correlations().size).toBe(0); expect(f.observed).not.toHaveBeenCalled();
+  });
+
+  it("slow continuous missing observations never become terminal tracker loss", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve();
+    expect((await f.observer.reconcile("operation", "submit")).status).toBe("unresolved");
+    expect((await f.observer.awaitConsumption("operation", "submit", 20)).status).toBe("unresolved");
+    expect((await f.observer.reconcile("operation", "submit")).status).toBe("unresolved");
+  });
+
+  it("restarts a broken live tracker in the same runtime and reports missing lifecycle as failed unknown", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve(); const tracker = f.observer.trackerId;
+    f.wire.disconnect(); await vi.waitFor(() => expect(f.observer.trackerId).not.toBe(tracker)); await f.observer.start();
+    const result = await f.observer.reconcile("operation", "submit");
+    expect(result.status).toBe("failed_unknown"); expect(JSON.stringify(result)).toContain("delayed request");
+    expect(f.wire.requests.every(request => request.method === "GET")).toBe(true);
+  });
+
+  it("keeps known pending recovery unresolved and consumes automatically without history hydration", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve(); f.pending([admission()]); const tracker = f.observer.trackerId;
+    f.wire.disconnect(); await vi.waitFor(() => expect(f.observer.trackerId).not.toBe(tracker)); await f.observer.start();
+    expect((await f.observer.reconcile("operation", "submit")).status).toBe("unresolved");
+    f.pending([]); f.wire.messages.push(user()); await consumed(f);
+    expect(f.observed).toHaveBeenCalledExactlyOnceWith({ backendCorrelation: "operation" });
+  });
+
+  it("orders recovery subscription, inbox and exact message to catch promotion between reads", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve(); f.observer.close();
+    const inbox = f.wire.hold("/api/session/ses_fixture/inbox"); const recovery = f.createObserver();
+    await recovery.start(); const result = recovery.reconcile("operation", "submit");
+    await inbox.entered; f.wire.messages.push(user()); inbox.release();
+    expect(await result).toEqual({ status: "accepted" });
+    const relevant = f.wire.requests.map(request => request.pathname);
+    const subscription = relevant.lastIndexOf("/api/event"); const pending = relevant.indexOf("/api/session/ses_fixture/inbox", subscription);
+    const message = relevant.indexOf("/api/session/ses_fixture/message/msg_owned", pending);
+    expect(subscription).toBeLessThan(pending); expect(pending).toBeLessThan(message);
+  });
+
+  it("honors exact live delivery while a recovery message read is blocked", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve(); f.observer.close();
+    const message = f.wire.hold("/api/session/ses_fixture/message/msg_owned"); const recovery = f.createObserver();
+    await recovery.start(); const result = recovery.reconcile("operation", "submit");
+    await message.entered; f.wire.send(delivered(2)); await consumed(f); message.release();
+    expect(await result).toEqual({ status: "accepted" });
+  });
+
+  it("recovers positive cancellation from a validated retained log but treats watermark-only history as gaps", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve(); f.observer.close();
+    f.log([cancelled(3)], 3); const recovery = f.createObserver(); await recovery.start();
+    expect(await recovery.reconcile("operation", "submit")).toMatchObject({ status: "not_accepted", retryable: false });
+    f.reserve("second", "msg_second", "submit", true, recovery); recovery.close(); f.log([], 9);
+    const secondRecovery = f.createObserver(); await secondRecovery.start();
+    expect((await secondRecovery.reconcile("second", "submit")).status).toBe("failed_unknown");
+  });
+
+  it("cancels a caller wait without interrupting shared observation and bounds waiting for readiness", async () => {
+    const f = fixture({ autoConnect: false }); f.reserve();
+    expect((await f.observer.awaitConsumption("operation", "submit", 20)).status).toBe("unresolved");
+    const abort = new AbortController(); const waiting = f.observer.start(abort.signal); abort.abort(new Error("caller stopped"));
+    await expect(waiting).rejects.toThrow("caller stopped");
+    f.wire.connected(); await f.observer.start(); f.wire.send(delivered(1)); await consumed(f);
+    expect(f.client.lifetime.aborted).toBe(false);
+  });
+
+  it("does not dispatch cancellation after its original deadline or caller cancellation", async () => {
+    const f = fixture(); await f.observer.start(); f.reserve(); f.pending([admission()]);
+    const abort = new AbortController(); abort.abort();
+    await expect(f.observer.withdrawPending(abort.signal, Date.now() + 1_000)).rejects.toThrow();
+    await expect(f.observer.withdrawPending(new AbortController().signal, Date.now() - 1)).rejects.toThrow();
+    expect(f.wire.requests.some(request => request.method === "DELETE")).toBe(false);
+  });
+
+  it("shares tracker continuity and callback fanout across reader and actor leases", async () => {
+    const f = fixture(); f.observer.close();
+    const readerLifetime = new AbortController(); const actorLifetime = new AbortController();
+    const reader = acquireOpenCodeInputObserver(f.context, { ...f.attach, onSubmissionObserved: undefined }, f.runtime, f.lease, readerLifetime.signal);
+    const actor = acquireOpenCodeInputObserver(f.context, f.attach, f.runtime, f.lease, actorLifetime.signal);
+    expect(reader.observer).toBe(actor.observer); expect(findOpenCodeInputObserver(f.client, f.attach)).toBe(actor.observer);
+    await actor.observer.start(); f.reserve("operation", "msg_owned", "submit", true, actor.observer);
+    const tracker = actor.observer.trackerId; readerLifetime.abort(); expect(actor.observer.trackerId).toBe(tracker);
+    f.wire.send(delivered(1)); await consumed(f); expect(f.observed).toHaveBeenCalledExactlyOnceWith({ backendCorrelation: "operation" });
+    actor.release(); expect(findOpenCodeInputObserver(f.client, f.attach)).toBeUndefined();
+    const next = acquireOpenCodeInputObserver(f.context, f.attach, f.runtime, f.lease, f.lifetime.signal);
+    expect(next.observer.trackerId).not.toBe(tracker); await vi.waitFor(() => expect(f.observed).toHaveBeenCalledTimes(2)); next.release();
+  });
+
+  it("catches subscriber exceptions and fences a replaced binding before observing further proof", async () => {
+    const f = fixture(); f.observed.mockImplementation(() => { throw new Error("listener"); });
+    await f.observer.start(); f.reserve(); f.wire.send(delivered(1)); await consumed(f);
+    f.database.prepare("UPDATE conversation_bindings SET backend_conversation_id='ses_replaced'").run();
+    expect(() => f.observer.correlations()).toThrow();
+  });
+});
