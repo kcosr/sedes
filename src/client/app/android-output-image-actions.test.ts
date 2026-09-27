@@ -108,7 +108,7 @@ describe("Android output image actions", () => {
     expect(plugin.beginTransfer).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "copy",
-        fileName: "generated-image.png",
+        fileName: "image.png",
       }),
     );
   });
