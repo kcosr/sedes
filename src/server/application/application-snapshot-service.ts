@@ -34,7 +34,7 @@ import {
 
 export type ApplicationThreadDurableSummary = Omit<
   NormalizedApplicationThreadSummary,
-  "runState" | "terminalSummary"
+  "runState" | "terminalSummary" | "backgroundWork"
 >;
 
 export interface ApplicationTerminalSummaryReader {
@@ -212,6 +212,11 @@ export class ApplicationSnapshotService {
         const loaded = await this.runtimes.captureLoadedState(scope, thread.id);
         return {
           ...thread,
+          ...(thread.available &&
+          thread.backingState === "bound" &&
+          loaded?.backgroundWork
+            ? { backgroundWork: loaded.backgroundWork }
+            : {}),
           terminalSummary: terminalSummaries.get(thread.id) ?? {
             runningCount: 0,
             retainedCount: 0,
@@ -559,6 +564,11 @@ export class ApplicationSnapshotPublicationBoundary {
       if (!this.#readyToPublish(scope, hub)) return "retry";
       thread = {
         ...durable,
+        ...(durable.available &&
+        durable.backingState === "bound" &&
+        loaded?.backgroundWork
+          ? { backgroundWork: loaded.backgroundWork }
+          : {}),
         terminalSummary: terminals,
         runState: runState(
           durable.backingState,

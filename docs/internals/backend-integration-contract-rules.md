@@ -1732,6 +1732,27 @@ observation; `canEvict` is exclusively a cleanup-safety check. A thread may
 accept a new ordinary message while its background work or notifications still
 prevent retirement.
 
+Application thread summaries project this observation as optional
+`backgroundWork` category counts, without descriptions or provider identities.
+This is volatile thread/runtime-generation state delivered through the existing
+tenant/principal-scoped application stream; it adds no configuration, durable
+state, controls, or provider side effects. Only a loaded, current runtime with
+known positive inventory may contribute counts. Unknown, disconnected,
+reconciling, unavailable, closed, or retiring runtimes contribute no live claim.
+Full snapshots and thread upserts must agree, without attaching dormant
+conversations. Publish inventory changes independently of main-turn state,
+including runtime establishment and retirement, and fence obsolete generations.
+The browser must also suppress retained counts while its application stream is
+not current. Absence of sidebar counts is not evidence authorizing retirement;
+the existing conservative background-activity eviction checks remain authoritative.
+
+Sidebar and peek presentation preserve failure and interaction priority, then
+main-turn activity, unseen completion, active subagents, and remaining commands
+or other tasks. One glyph represents the winning tier; completion acknowledgment
+reveals lower-priority ongoing work. Shared count labels retain the categories.
+This shared projection applies to all four compiled backends: Claude supplies
+the inventory, while Codex, Pi, and Grok intentionally contribute no counts.
+
 Claude implements this observation from native inventory events in local and
 persistent runtimes. Codex keeps its existing collaboration interactions but
 intentionally omits this inventory: individual tool results cannot reconcile

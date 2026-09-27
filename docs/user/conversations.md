@@ -403,6 +403,13 @@ finished. Subagent launches and observed completion, failure, or stop appear
 as separate blue activity rows in the transcript, without child conversations.
 This indicator does not provide individual task stop controls.
 
+The sidebar and thread preview also show live background work: a slow grey
+spinner for subagents, or a solid grey dot when only commands or other tasks
+remain. An active main turn's blue spinner takes priority, followed by the blue
+unacknowledged-completion dot. Opening the thread acknowledges completion and
+reveals any remaining background indicator. Hover for counts by kind. Uncertain
+or disconnected observations do not claim that background work is still live.
+
 ## Find text in a thread
 
 On narrow screens, Bookmarks and thread settings stay in the main thread

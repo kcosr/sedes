@@ -87,3 +87,27 @@ describe("ThreadPeekCard location", () => {
     expect(document.querySelector('[data-row="target"]')).not.toBeNull();
   });
 });
+
+describe("ThreadPeekCard background state", () => {
+  it("shares the row's completion, agent, command and idle priority", () => {
+    const base = thread();
+    const active = { ...base, backgroundWork: { agents: 1, commands: 0, other: 0 } };
+    const view = render(<ThreadPeekCard thread={active} workspaceLabel="Sedes" position={{ top: 10, left: 20 }} />);
+    const stateRow = () => view.container.querySelector('[data-row="state"]')!;
+    expect(stateRow()).toHaveTextContent("Waiting for subagent");
+    expect(stateRow().querySelector('[data-glyph="background-agents"] .comet-spinner')).not.toBeNull();
+
+    view.rerender(<ThreadPeekCard thread={{ ...active, attention: { ...base.attention, unseenCompletion: true } }} workspaceLabel="Sedes" position={{ top: 10, left: 20 }} />);
+    expect(stateRow()).toHaveTextContent("Finished while you were away · 1 subagent still running");
+    expect(stateRow().querySelector('[data-glyph="unseen"] .flat-row-unseen-dot')).not.toBeNull();
+    expect(view.container.querySelector('[data-row="unseen"]')).toBeNull();
+
+    view.rerender(<ThreadPeekCard thread={{ ...base, backgroundWork: { agents: 0, commands: 2, other: 0 } }} workspaceLabel="Sedes" position={{ top: 10, left: 20 }} />);
+    expect(stateRow()).toHaveTextContent("Background work · 2 commands");
+    expect(stateRow().querySelector('[data-glyph="background-commands"] .flat-row-background-dot')).not.toBeNull();
+
+    view.rerender(<ThreadPeekCard thread={active} backgroundWorkCurrent={false} workspaceLabel="Sedes" position={{ top: 10, left: 20 }} />);
+    expect(stateRow()).toHaveTextContent("Idle");
+    expect(stateRow().querySelector(".comet-spinner")).toBeNull();
+  });
+});

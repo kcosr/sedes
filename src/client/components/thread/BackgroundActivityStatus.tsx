@@ -1,5 +1,6 @@
 import { useContext } from "react";
 import type { NormalizedThreadSnapshot } from "../../../shared/index.js";
+import { backgroundWorkLabel } from "../../lib/background-work.js";
 import { ChatViewVisibilityContext } from "./chat-view-visibility.js";
 
 /** Live work is independent of the main turn and never changes Send/Stop. */
@@ -34,20 +35,8 @@ export function BackgroundActivityStatus({
       !current || snapshot.runState === "reconciling"
         ? "Checking background work…"
         : "Background work status unavailable";
-  } else if (activity.agents === 1 && total === 1) {
-    label = "Waiting for subagent";
-  } else if (activity.commands === 1 && total === 1) {
-    label = "Background command running";
   } else {
-    const counts = [
-      activity.agents > 0 &&
-        `${activity.agents} subagent${activity.agents === 1 ? "" : "s"}`,
-      activity.commands > 0 &&
-        `${activity.commands} command${activity.commands === 1 ? "" : "s"}`,
-      activity.other > 0 &&
-        `${activity.other} other task${activity.other === 1 ? "" : "s"}`,
-    ].filter(Boolean);
-    label = `Background work · ${counts.join(", ")}`;
+    label = backgroundWorkLabel(activity);
   }
   const description =
     !uncertain && total === 1

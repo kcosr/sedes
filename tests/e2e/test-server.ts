@@ -346,6 +346,33 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
   }[]>();
   readonly #backgroundTasks = new Map<string, { taskId: string; toolId: string }>();
 
+  #sidebarBackground?: {
+    sessionId: string;
+    queue: ClaudeE2eMessageQueue;
+    finish: () => void;
+  };
+
+  /** Native inventory events remain live independently of main-turn completion. */
+  advanceSidebarBackground(stage: string): boolean {
+    const held = this.#sidebarBackground;
+    if (!held) return false;
+    if (stage === "finish") held.finish();
+    else if (stage === "agents" || stage === "commands" || stage === "empty") {
+      held.queue.push({ type: "system", subtype: "background_tasks_changed",
+        uuid: crypto.randomUUID(), session_id: held.sessionId,
+        tasks: stage === "agents"
+          ? [
+              { task_id: "sidebar-agent", task_type: "local_agent", description: "Review changes" },
+              { task_id: "sidebar-command", task_type: "local_bash", description: "Build assets" },
+            ]
+          : stage === "commands"
+          ? [{ task_id: "sidebar-command", task_type: "local_bash", description: "Build assets" }]
+          : [],
+      });
+    } else return false;
+    return true;
+  }
+
   async readCliRelease(): Promise<string> {
     return "2.1.283";
   }
@@ -424,7 +451,14 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
       setModel: async () => undefined,
       setPermissionMode: async () => undefined,
       applyFlagSettings: async () => undefined,
-      close: () => { this.#interruptions.delete(sessionId); close(); },
+      close: () => {
+        this.#interruptions.delete(sessionId);
+        if (this.#sidebarBackground?.sessionId === sessionId) {
+          this.#sidebarBackground.finish();
+          this.#sidebarBackground = undefined;
+        }
+        close();
+      },
     }) as unknown as ClaudeQuery;
   }
 
@@ -779,7 +813,20 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
           },
         },
       } as unknown as ClaudeMessage);
-      await new Promise((resolve) => setTimeout(resolve, 700));
+      if (promptText === "Start sidebar background fixture") {
+        await new Promise<void>((finish) => {
+          this.#sidebarBackground = { sessionId, queue, finish };
+          queue.push({ type: "system", subtype: "background_tasks_changed",
+            uuid: crypto.randomUUID(), session_id: sessionId,
+            tasks: [
+              { task_id: "sidebar-agent", task_type: "local_agent", description: "Review changes" },
+              { task_id: "sidebar-command", task_type: "local_bash", description: "Build assets" },
+            ],
+          });
+        });
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 700));
+      }
       queue.push({
         type: "stream_event",
         uuid: assistantUuid,
@@ -5170,6 +5217,9 @@ async function main(): Promise<void> {
   });
   app.get("/__e2e/claude/steers/state", (_request, response) => {
     response.json({ heldCount: claudeSdk.heldSteerCount() });
+  });
+  app.post("/__e2e/claude/sidebar-background/:stage", (request, response) => {
+    response.status(claudeSdk.advanceSidebarBackground(request.params.stage) ? 204 : 409).end();
   });
   app.post("/__e2e/claude/steers/fold", (_request, response) => {
     claudeSdk.foldHeldSteers();

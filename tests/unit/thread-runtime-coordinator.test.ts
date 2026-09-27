@@ -16,7 +16,7 @@ import {
   type AcquireConversationActorInput,
   type ConversationActorManager,
 } from "../../src/server/conversations/conversation-actor-manager.js";
-import type { NormalizedThreadSnapshot } from "../../src/shared/protocol/conversation.js";
+import type { NormalizedThreadSnapshot, ThreadEventEnvelope } from "../../src/shared/protocol/conversation.js";
 import { BackendError } from "../../src/server/backends/contracts.js";
 import { PiConversationBackendDriver } from "../../src/server/backends/pi/pi-conversation-driver.js";
 import { GrokConversationBackendDriver } from "../../src/server/backends/grok/grok-conversation-driver.js";
@@ -121,6 +121,7 @@ function resetCoordinator(
   ) => AcquireConversationActorInput = runtimeTarget,
   hubs = new ScopedThreadEventHubRegistry(),
   bridgeReady = Promise.resolve(),
+  onThreadChanged?: (eventScope: typeof scope, threadId: string) => Promise<void>,
 ) {
   const actorRelease = actors.map(() => vi.fn());
   let actorIndex = 0;
@@ -185,6 +186,7 @@ function resetCoordinator(
     } as never,
     hubs,
     retentionMilliseconds,
+    onThreadChanged,
   });
   return { coordinator, actorRelease, replacementPublications };
 }
@@ -2555,5 +2557,125 @@ describe("ThreadRuntimeCoordinator", () => {
     expect(secondRelease).toHaveBeenCalledOnce();
     expect(secondBridgeRelease).toHaveBeenCalledOnce();
     expect(secondInteractionRelease).toHaveBeenCalledOnce();
+  });
+});
+
+
+describe("loaded sidebar background work", () => {
+  it("publishes live count transitions without changing input readiness, and clears on retirement", async () => {
+    const timeline = {
+      generation: "background-generation",
+      runState: "idle" as const,
+      backgroundActivity: { state: "known" as const, agents: 2, commands: 1, other: 0 },
+    };
+    const actor = {
+      timeline, canEvict: true, closed: false, replacementSafe: true,
+      ensureProjectionCurrent: vi.fn(async () => undefined),
+      subscribe: () => () => undefined,
+      closeIfIdle: vi.fn(async () => true),
+    } as unknown as ConversationActor;
+    const observed: unknown[] = [];
+    const hubs = new ScopedThreadEventHubRegistry();
+    const hub = hubs.thread(scope, "background-thread");
+    let summaryListener!: (event: ThreadEventEnvelope) => void;
+    vi.spyOn(hub, "subscribeInternal").mockImplementation((listener) => {
+      summaryListener = listener;
+      return { close: vi.fn() } as ReturnType<typeof hub.subscribeInternal>;
+    });
+    const { coordinator } = resetCoordinator([actor], 60_000, runtimeTarget,
+      hubs, Promise.resolve(), async (eventScope, threadId) => {
+        expect(eventScope).toEqual(scope);
+        observed.push(await coordinator.captureLoadedState(eventScope, threadId));
+      });
+    const runtime = await coordinator.acquire(scope, "background-thread");
+    await vi.waitFor(() => expect(observed).toEqual([
+      { runState: "idle", backgroundWork: { agents: 2, commands: 1, other: 0 } },
+    ]));
+    for (const counts of [
+      { agents: 1, commands: 3, other: 0 },
+      { agents: 0, commands: 0, other: 0 },
+      { agents: 0, commands: 1, other: 0 },
+    ]) {
+      timeline.backgroundActivity = { state: "known", ...counts };
+      summaryListener({ event: { type: "background_activity_changed", generation: timeline.generation,
+        activity: timeline.backgroundActivity } } as ThreadEventEnvelope);
+      await vi.waitFor(() => expect(observed.at(-1)).toEqual({ runState: "idle",
+        ...(counts.agents + counts.commands > 0 ? { backgroundWork: counts } : {}),
+      }));
+    }
+    runtime.release();
+    await coordinator.runWithRuntimeRetired(scope, "background-thread", async () => undefined);
+    await vi.waitFor(() => expect(observed.at(-1)).toBeUndefined());
+    expect(observed).toHaveLength(5);
+    await coordinator.close();
+  });
+
+  it("publishes replacement counts and ignores a retired generation's late close notification", async () => {
+    let oldClosed!: () => void;
+    const first = resettableActor({ generation: "generation-background-old", canEvict: false });
+    const second = resettableActor({ generation: "generation-background-new", canEvict: false });
+    Object.defineProperty(first.actor, "timeline", { get: () => ({
+      generation: "generation-background-old", runState: "idle",
+      backgroundActivity: { state: "known", agents: 4, commands: 0, other: 0 },
+    }) });
+    Object.defineProperty(second.actor, "timeline", { get: () => ({
+      generation: "generation-background-new", runState: "idle",
+      backgroundActivity: { state: "known", agents: 1, commands: 2, other: 0 },
+    }) });
+    vi.mocked(first.actor.onClosed).mockImplementation((callback) => { oldClosed = callback; return () => undefined; });
+    const observed: unknown[] = [];
+    const { coordinator } = resetCoordinator([first.actor, second.actor], 60_000, runtimeTarget,
+      new ScopedThreadEventHubRegistry(), Promise.resolve(), async (eventScope, threadId) => {
+        observed.push(await coordinator.captureLoadedState(eventScope, threadId));
+      });
+    const runtime = await coordinator.acquire(scope, "replacement-background-thread");
+    const evidence = await coordinator.captureLoadedRuntime(scope, "replacement-background-thread");
+    await coordinator.forceResetLoadedRuntime(scope, "replacement-background-thread", evidence!);
+    const current = { runState: "idle", backgroundWork: { agents: 1, commands: 2, other: 0 } };
+    await vi.waitFor(() => expect(observed.at(-1)).toEqual(current));
+    expect(observed).toContainEqual(undefined);
+    oldClosed();
+    expect(await coordinator.captureLoadedState(scope, "replacement-background-thread")).toEqual(current);
+    expect(observed.at(-1)).toEqual(current);
+    runtime.release();
+    await coordinator.close();
+  });
+
+  it("fails closed for unknown, absent, disconnected, reconciling, closed, obsolete and wrong-scope activity", async () => {
+    const timeline: { generation: string; runState: NormalizedThreadSnapshot["runState"];
+      backgroundActivity?: { state: "known" | "unknown"; agents: number; commands: number; other: number } } = {
+      generation: "background-generation", runState: "idle",
+      backgroundActivity: { state: "known", agents: 1, commands: 2, other: 0 },
+    };
+    const state = { closed: false, replacementRequired: false };
+    const actor = {
+      timeline, canEvict: false,
+      get closed() { return state.closed; },
+      get replacementRequired() { return state.replacementRequired; },
+      ensureProjectionCurrent: vi.fn(async () => undefined), subscribe: () => () => undefined,
+    } as unknown as ConversationActor;
+    const { coordinator } = resetCoordinator([actor]);
+    const runtime = await coordinator.acquire(scope, "background-thread");
+    for (const wrongScope of [ { ...scope, principalId: "other" }, { ...scope, tenantId: "other" } ]) {
+      expect(await coordinator.captureLoadedState(wrongScope, "background-thread")).toBeUndefined();
+    }
+    expect(await coordinator.captureLoadedState(scope, "unloaded-thread")).toBeUndefined();
+    timeline.backgroundActivity!.state = "unknown";
+    expect(await coordinator.captureLoadedState(scope, "background-thread")).toEqual({ runState: "idle" });
+    timeline.backgroundActivity!.state = "known";
+    for (const runState of ["disconnected", "reconciling"] as const) {
+      timeline.runState = runState;
+      expect(await coordinator.captureLoadedState(scope, "background-thread")).toEqual({ runState });
+    }
+    timeline.runState = "idle";
+    state.replacementRequired = true;
+    expect(await coordinator.captureLoadedState(scope, "background-thread")).toEqual({ runState: "idle" });
+    state.replacementRequired = false;
+    timeline.backgroundActivity = undefined;
+    expect(await coordinator.captureLoadedState(scope, "background-thread")).toEqual({ runState: "idle" });
+    state.closed = true;
+    expect(await coordinator.captureLoadedState(scope, "background-thread")).toBeUndefined();
+    runtime.release();
+    await coordinator.close();
   });
 });

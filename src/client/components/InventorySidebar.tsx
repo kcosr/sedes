@@ -182,6 +182,7 @@ import {
   FlatThreadRow,
   flatRowGlyphIcon,
   flatRowGlyphKind,
+  flatRowGlyphLabel,
   type FlatThreadRowTaskSummary,
   type FlatThreadRowForkInfo,
 } from "./thread/FlatThreadRow.js";
@@ -256,6 +257,9 @@ interface PendingSidebarQuickSwitch {
 }
 
 const IDLE_SIDEBAR_QUICK_SWITCH: SidebarQuickSwitchState = { kind: "idle" };
+
+/** Connection authority is presentation-only; it never changes inventory or controls. */
+const SidebarBackgroundWorkCurrentContext = createContext(false);
 
 const SidebarQuickSwitchContext = createContext<SidebarQuickSwitchState>(
   IDLE_SIDEBAR_QUICK_SWITCH,
@@ -1368,6 +1372,9 @@ export function InventorySidebar({
     ({ inventoryState }) => inventoryState === "settled",
   ).length;
   return (
+    <SidebarBackgroundWorkCurrentContext.Provider
+      value={state.authoritative && state.connection === "connected"}
+    >
     <SidebarQuickSwitchContext.Provider value={quickSwitchState}>
       <div
         className="sidebar-inner"
@@ -2123,6 +2130,9 @@ export function InventorySidebar({
         {peekTarget && peek.position && (
           <ThreadPeekCard
             thread={peekTarget.thread}
+            backgroundWorkCurrent={
+              state.authoritative && state.connection === "connected"
+            }
             workspaceLabel={
               workspaceLabelFor(peekTarget.thread.workspaceId) ?? "Workspace"
             }
@@ -2166,6 +2176,7 @@ export function InventorySidebar({
         />}
       </div>
     </SidebarQuickSwitchContext.Provider>
+    </SidebarBackgroundWorkCurrentContext.Provider>
   );
 }
 
@@ -3402,6 +3413,7 @@ function FlatRowItemContent(
   },
   forwardedRef: React.ForwardedRef<HTMLElement>,
 ): React.JSX.Element {
+  const backgroundWorkCurrent = useContext(SidebarBackgroundWorkCurrentContext);
   const clickNamesToFilter = useSyncExternalStore(
     subscribeClickNamesToFilter,
     getClickNamesToFilter,
@@ -3477,9 +3489,8 @@ function FlatRowItemContent(
       : thread.inventoryState === "settled"
         ? ("unsettle" as const)
         : ("settle" as const);
-  const renameGlyphKind = flatRowGlyphKind(thread);
-  const renameGlyphVisible =
-    thread.attention.unseenCompletion || renameGlyphKind !== "idle";
+  const renameGlyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
+  const renameGlyphVisible = renameGlyphKind !== "idle";
   const openArchiveChoices = (impact: ThreadArchiveImpact) => {
     setArchiveInitialImpact(impact);
     actionPending.current = false;
@@ -3643,20 +3654,10 @@ function FlatRowItemContent(
       >
         <span
           className="flat-row-glyph"
-          data-glyph={
-            renameGlyphVisible
-              ? thread.attention.unseenCompletion && renameGlyphKind === "idle"
-                ? "unseen"
-                : renameGlyphKind
-              : undefined
-          }
+          data-glyph={renameGlyphVisible ? renameGlyphKind : undefined}
           aria-hidden="true"
         >
-          {thread.attention.unseenCompletion && renameGlyphKind === "idle" ? (
-            <span className="flat-row-unseen-dot" />
-          ) : renameGlyphVisible ? (
-            flatRowGlyphIcon(renameGlyphKind)
-          ) : null}
+          {renameGlyphVisible ? flatRowGlyphIcon(renameGlyphKind) : null}
         </span>
         <label className="sr-only" htmlFor={`flat-row-title-${thread.id}`}>
           Thread title
@@ -3683,6 +3684,7 @@ function FlatRowItemContent(
   ) : (
     <FlatThreadRow
       thread={thread}
+      backgroundWorkCurrent={backgroundWorkCurrent}
       density={density}
       showBackendBrand={showBackendBrand}
       futureTimes={futureTimes}
@@ -4267,6 +4269,7 @@ function ThreadRow({
   configurationCopyPending: boolean;
   taskSummary?: FlatThreadRowTaskSummary;
 }): React.JSX.Element {
+  const backgroundWorkCurrent = useContext(SidebarBackgroundWorkCurrentContext);
   const quickSwitchHint = useSidebarQuickSwitchHint(thread.id);
   const [renaming, setRenaming] = useState(false);
   const [renameTitle, setRenameTitle] = useState("");
@@ -4302,12 +4305,18 @@ function ThreadRow({
   const restoreRowFocus = useRef(false);
   const automation = thread.automation ?? undefined;
   const unseen = thread.attention.unseenCompletion;
-  const unseenOwnsGlyph = unseen && flatRowGlyphKind(thread) === "idle";
+  const glyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
+  const glyphLabel = flatRowGlyphLabel(thread, backgroundWorkCurrent);
+  const unseenOwnsGlyph = glyphKind === "unseen";
+  const backgroundOwnsGlyph =
+    glyphKind === "background-agents" || glyphKind === "background-commands";
   const spinning =
     thread.runState === "running" ||
     thread.runState === "starting" ||
     thread.runState === "stopping";
   const showsRunIndicator =
+    !unseenOwnsGlyph &&
+    !backgroundOwnsGlyph &&
     thread.runState !== "idle" &&
     thread.runState !== "waiting_for_input" &&
     thread.runState !== "waiting_for_approval" &&
@@ -4338,9 +4347,19 @@ function ThreadRow({
           className="run-indicator unseen"
           data-testid="thread-row-unseen-dot"
           role="img"
-          aria-label="Finished while you were away"
-          title="Finished while you were away"
+          aria-label={glyphLabel}
+          title={glyphLabel}
         />
+      ) : backgroundOwnsGlyph ? (
+        <span
+          className="flat-row-glyph"
+          data-glyph={glyphKind}
+          role="img"
+          aria-label={glyphLabel}
+          title={glyphLabel}
+        >
+          {flatRowGlyphIcon(glyphKind)}
+        </span>
       ) : kind === "settled" ? (
         <Check size={13} strokeWidth={2.2} />
       ) : kind === "snoozed" || kind === "automations" ? (

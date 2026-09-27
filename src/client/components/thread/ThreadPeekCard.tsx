@@ -19,6 +19,7 @@ import { automationTimeLabel, shortRelativeTime } from "../../lib/time.js";
 import {
   flatRowGlyphIcon,
   flatRowGlyphKind,
+  flatRowGlyphLabel,
   flatRowTime,
   futureTimeLabel,
   type FlatThreadRowForkInfo,
@@ -195,6 +196,7 @@ export function useThreadPeek(options?: {
 /** The thread's state as one human sentence fragment for the peek panel. */
 export function threadStateInWords(
   thread: NormalizedApplicationThreadSummary,
+  backgroundWorkCurrent = true,
 ): string {
   if (thread.runState === "failed") return "Failed";
   if (thread.backingState === "creation_unknown") return "Start failed";
@@ -221,6 +223,14 @@ export function threadStateInWords(
       ? `${base} · ${thread.queuedInputCount} queued`
       : base;
   }
+  const glyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
+  if (
+    glyphKind === "unseen" ||
+    glyphKind === "background-agents" ||
+    glyphKind === "background-commands"
+  ) {
+    return flatRowGlyphLabel(thread, backgroundWorkCurrent);
+  }
   if (thread.inventoryState === "snoozed") {
     return thread.snoozedUntil !== undefined
       ? `Snoozed · wakes ${futureTimeLabel(thread.snoozedUntil)}`
@@ -239,6 +249,7 @@ export function threadStateInWords(
 
 export function ThreadPeekCard({
   thread,
+  backgroundWorkCurrent = true,
   workspaceLabel,
   workspacePath,
   workspaceAvailable,
@@ -254,6 +265,7 @@ export function ThreadPeekCard({
   panelRef,
 }: {
   readonly thread: NormalizedApplicationThreadSummary;
+  readonly backgroundWorkCurrent?: boolean;
   readonly workspaceLabel: string;
   readonly workspacePath?: string;
   readonly workspaceAvailable?: boolean;
@@ -272,7 +284,8 @@ export function ThreadPeekCard({
 }): React.JSX.Element {
   const title = thread.title.text || "Untitled thread";
   const time = flatRowTime(thread, futureTimes);
-  const glyphKind = flatRowGlyphKind(thread);
+  const glyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
+  const stateLabel = threadStateInWords(thread, backgroundWorkCurrent);
   const automation = thread.automation ?? undefined;
   const automationFailed =
     thread.attention.automationContext === "failed" ||
@@ -341,11 +354,15 @@ export function ThreadPeekCard({
           </div>
         )}
         <div className="thread-peek-row" data-row="state">
-          <span className="thread-peek-row-icon" data-glyph={glyphKind}>
+          <span
+            className="thread-peek-row-icon"
+            data-glyph={glyphKind}
+            aria-hidden="true"
+          >
             {flatRowGlyphIcon(glyphKind)}
           </span>
-          <span className="thread-peek-row-text">
-            {threadStateInWords(thread)}
+          <span className="thread-peek-row-text" title={stateLabel}>
+            {stateLabel}
           </span>
         </div>
         {automation && (
@@ -381,7 +398,7 @@ export function ThreadPeekCard({
             <span className="thread-peek-row-text">{lineage}</span>
           </div>
         )}
-        {thread.attention.unseenCompletion && (
+        {thread.attention.unseenCompletion && glyphKind !== "unseen" && (
           <div className="thread-peek-row" data-row="unseen">
             <span className="thread-peek-row-icon">
               <span className="thread-peek-dot" />

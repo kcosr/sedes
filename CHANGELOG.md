@@ -4,13 +4,16 @@
 
 ### Breaking Changes
 
+- Browser and packaged clients must use client protocol 127, which adds
+  confirmed live background-work counts to sidebar thread summaries.
+
 - Codex persistent runtimes require Codex runtime protocol 2 so tool-policy
   refreshes cannot reuse an older sidecar’s cached session configuration.
   Upgrade existing sidecars before reconnecting. No database migration or
   browser protocol change is required for this fix.
 
 - Codex viewed images use a new `viewed_image` transcript item, introduced
-  in client protocol 123. This build requires client protocol 126; see the
+  in client protocol 123. This build requires client protocol 127; see the
   client protocol entries below. (#11, #13, #14)
 
 - Claude backends require Claude Code 2.1.281 or newer and are tested through
@@ -55,6 +58,12 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Sidebar thread rows and previews show a slow grey spinner for live subagents
+  and a grey dot for remaining background commands. Active turns and unseen
+  completions take priority; acknowledging completion reveals ongoing work
+  without changing Send, Steer, Queue, or Stop behavior. Claude supplies this
+  live inventory today; stale or unavailable activity is not shown as live.
 
 - Show a collapsed **Viewed image** row when Claude or Pi opens an image file
   with its built-in read tool: PNG, JPEG, GIF, or WebP, and BMP on Pi. Expand

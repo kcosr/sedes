@@ -27,6 +27,10 @@ import {
   shortRelativeTime,
   snoozeLabel,
 } from "../../lib/time.js";
+import {
+  backgroundWorkCounts,
+  backgroundWorkLabel,
+} from "../../lib/background-work.js";
 import "./flat-thread-row.css";
 
 /**
@@ -61,6 +65,9 @@ export type FlatRowGlyphKind =
   | "failed"
   | "waiting"
   | "running"
+  | "unseen"
+  | "background-agents"
+  | "background-commands"
   | "draft"
   | "snoozed"
   | "automation"
@@ -70,6 +77,7 @@ export type FlatRowGlyphKind =
 
 export function flatRowGlyphKind(
   thread: NormalizedApplicationThreadSummary,
+  backgroundWorkCurrent = true,
 ): FlatRowGlyphKind {
   if (
     thread.runState === "failed" ||
@@ -92,12 +100,54 @@ export function flatRowGlyphKind(
   ) {
     return "running";
   }
+  if (thread.attention.unseenCompletion) return "unseen";
+  const background = currentBackgroundWork(thread, backgroundWorkCurrent);
+  if (background && background.agents > 0) return "background-agents";
+  if (background && (background.commands > 0 || background.other > 0)) {
+    return "background-commands";
+  }
   if (thread.backingState === "unbound") return "draft";
   if (thread.inventoryState === "snoozed") return "snoozed";
   if (thread.automation) return "automation";
   if (thread.inventoryState === "settled") return "settled";
   if (thread.runState === "disconnected") return "disconnected";
   return "idle";
+}
+
+function currentBackgroundWork(
+  thread: NormalizedApplicationThreadSummary,
+  current: boolean,
+): NormalizedApplicationThreadSummary["backgroundWork"] {
+  return current &&
+    thread.runState !== "disconnected" &&
+    thread.runState !== "reconciling"
+    ? thread.backgroundWork
+    : undefined;
+}
+
+/** Shared accessible state name for the sidebar and peek panel. */
+export function flatRowGlyphLabel(
+  thread: NormalizedApplicationThreadSummary,
+  backgroundWorkCurrent = true,
+): string {
+  const kind = flatRowGlyphKind(thread, backgroundWorkCurrent);
+  const background = currentBackgroundWork(thread, backgroundWorkCurrent);
+  if (kind === "unseen") {
+    const counts = background && backgroundWorkCounts(background);
+    return `Finished while you were away${counts ? ` · ${counts} still running` : ""}`;
+  }
+  if (
+    (kind === "background-agents" || kind === "background-commands") &&
+    background
+  ) {
+    return backgroundWorkLabel(background);
+  }
+  if (kind === "waiting") {
+    return thread.runState === "waiting_for_approval"
+      ? "Waiting for approval"
+      : "Waiting for input";
+  }
+  return kind.charAt(0).toUpperCase() + kind.slice(1);
 }
 
 /** Icon node for a glyph kind; shared with the peek panel's state row. */
@@ -109,6 +159,16 @@ export function flatRowGlyphIcon(kind: FlatRowGlyphKind): React.ReactNode {
       return <CircleHelp size={14} strokeWidth={2.2} />;
     case "running":
       return <span className="comet-spinner flat-row-spin" />;
+    case "unseen":
+      return (
+        <span className="flat-row-unseen-dot" data-testid="flat-row-unseen-dot" />
+      );
+    case "background-agents":
+      return (
+        <span className="comet-spinner flat-row-spin flat-row-background-spin" />
+      );
+    case "background-commands":
+      return <span className="flat-row-background-dot" />;
     case "draft":
       return <PencilLine size={14} strokeWidth={2} />;
     case "snoozed":
@@ -268,6 +328,7 @@ export function FlatThreadRow({
   thread,
   density,
   showBackendBrand,
+  backgroundWorkCurrent = true,
   futureTimes = false,
   selected = false,
   workspaceLabel,
@@ -299,6 +360,8 @@ export function FlatThreadRow({
   readonly density: SidebarDensity;
   /** Render the thread's backend brand mark beside the state glyph. */
   readonly showBackendBrand: boolean;
+  /** Live background counts require a current application connection. */
+  readonly backgroundWorkCurrent?: boolean;
   /** The row sits in a future-times group; trailing time renders absolute. */
   readonly futureTimes?: boolean;
   readonly selected?: boolean;
@@ -345,18 +408,9 @@ export function FlatThreadRow({
   const settled = thread.inventoryState === "settled";
   const unseen = thread.attention.unseenCompletion;
   const title = thread.title.text || "Untitled thread";
-  const glyphKind = flatRowGlyphKind(thread);
-  const glyphVisible = unseen || glyphKind !== "idle";
-  const glyphLabel =
-    glyphKind === "waiting"
-      ? thread.runState === "waiting_for_approval"
-        ? "Waiting for approval"
-        : "Waiting for input"
-      : glyphKind.charAt(0).toUpperCase() + glyphKind.slice(1);
-  const renderedGlyphLabel =
-    unseen && glyphKind === "idle"
-      ? "Finished while you were away"
-      : glyphLabel;
+  const glyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
+  const glyphVisible = glyphKind !== "idle";
+  const renderedGlyphLabel = flatRowGlyphLabel(thread, backgroundWorkCurrent);
   const time = flatRowTime(thread, futureTimes);
   const context = density === "card" ? flatRowContext(thread) : undefined;
 
@@ -376,26 +430,13 @@ export function FlatThreadRow({
   const glyph = (
     <span
       className="flat-row-glyph"
-      data-glyph={
-        glyphVisible
-          ? unseen && glyphKind === "idle"
-            ? "unseen"
-            : glyphKind
-          : undefined
-      }
+      data-glyph={glyphVisible ? glyphKind : undefined}
       role={glyphVisible ? "img" : undefined}
       aria-hidden={glyphVisible ? undefined : "true"}
       aria-label={glyphVisible ? renderedGlyphLabel : undefined}
       title={glyphVisible ? renderedGlyphLabel : undefined}
     >
-      {unseen && glyphKind === "idle" ? (
-        <span
-          className="flat-row-unseen-dot"
-          data-testid="flat-row-unseen-dot"
-        />
-      ) : glyphVisible ? (
-        flatRowGlyphIcon(glyphKind)
-      ) : null}
+      {glyphVisible ? flatRowGlyphIcon(glyphKind) : null}
     </span>
   );
 
