@@ -278,19 +278,27 @@ turn stop is never required to make the panel appear.
 - **Questionnaires and forms:** implemented for the supported native field
   shapes. Unsupported session-owned forms receive a bounded notice and at most
   one exact native cancellation dispatch. Global or differently owned forms are
-  neither answered nor cancelled.
+  neither answered nor cancelled. Pending permissions/forms in verified direct
+  child sessions produce an inspection notice; Sedes cannot answer or cancel
+  them through the parent. Unrelated sessions are ignored.
 - **Invocation context:** permission action and resources are displayed as
   bounded read-only arguments.
-- **Force-reset cancellation:** exact form cancellation is implemented.
+- **Force-reset cancellation:** exact form cancellation is implemented only
+  when no earlier response to the request may already have taken effect.
   Permission cancellation is intentionally unsupported because native reject
   also affects other pending permissions. Closing or replacing Sedes's actor
   does not cancel permissions retained by the OpenCode server, in either
   external or Sedes-owned server mode. Reattach can present them again for an
-  explicit response; reset does not claim native cleanup.
+  explicit response, subject to that same earlier-response fence; reset does
+  not claim native cleanup.
 - **Recovery:** private response receipts bind the operation, native request
   fingerprint, session, and generation. A dispatched response is never sent
   again automatically. Exact terminal form state can confirm a lost response;
   disappearance of a permission cannot prove which response applied.
+  An earlier dispatched, unknown or accepted response blocks every fresh
+  response to that native request, including force-reset cancellation. Sedes
+  reports that block and requires native inspection rather than risking a
+  duplicate effect. A never-dispatched attempt permits a new response.
 - **Private boundary:** native IDs, field keys, option mappings, permissions,
   forms, response encoding, and HTTP/SSE interpretation remain under
   `src/server/backends/opencode`. The shared interaction broker supplies the

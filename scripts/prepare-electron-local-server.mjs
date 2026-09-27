@@ -4,7 +4,7 @@ import { chmod, cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:f
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { assertServerRuntimeBoundary } from './check-server-runtime.mjs';
+import { assertServerRuntimeBoundary, writeRuntimeEntrypoints } from './check-server-runtime.mjs';
 import { prunePlatformPackages } from './server-package-native.mjs';
 import { assertPackageNodeVersion } from './package-node-version.mjs';
 
@@ -87,6 +87,7 @@ export async function prepareElectronLocalServer() {
   const { rebuild } = await import(pathToFileURL(requireElectron.resolve('@electron/rebuild')).href);
   await rebuildElectronNativeAddons(stage, { electronVersion, rebuild });
   await cp(dist, path.join(stage, 'dist'), { recursive: true, filter: source => !source.endsWith('.map') && !source.endsWith('.test.js') });
+  await writeRuntimeEntrypoints(stage);
   const configuration = JSON.parse(await readFile(path.join(repositoryRoot, 'config/server.example.json'), 'utf8'));
   if (configuration.schemaVersion !== 11 || Object.keys(configuration).some(key => !['schemaVersion', 'packagedClients', 'listen'].includes(key)) || !Array.isArray(configuration.packagedClients) || configuration.packagedClients.length !== 0) throw new Error('electron_local_server_default_configuration_invalid');
   await mkdir(path.join(stage, 'defaults'));

@@ -67,11 +67,15 @@ export class OpenCodeInteractions {
     this.#signal.addEventListener("abort", () => this.close(), { once: true });
   }
 
-  async refresh(inventory?: OpenCodeNativeInteractions, children?: readonly OpenCodeNativeSession[]): Promise<void> {
+  async refresh(inventory?: OpenCodeNativeInteractions, children?: readonly OpenCodeNativeSession[], activeChildren: readonly string[] = []): Promise<void> {
     this.#assertOpen();
     if (children) {
-      if (children.length > MAX_GATES || children.some(child => child.parentID !== this.#authority.sessionID)) throw new OpenCodeNativeProtocolError();
-      this.#children.clear(); for (const child of children) this.#children.add(child.id);
+      if (children.some(child => child.parentID !== this.#authority.sessionID)) throw new OpenCodeNativeProtocolError();
+      const active = new Set(activeChildren);
+      // Activity inventory includes completed children. It can exceed the
+      // interaction cache without making the parent conversation unreadable.
+      const ordered = children.toSorted((left, right) => Number(active.has(right.id)) - Number(active.has(left.id)) || right.time.updated - left.time.updated);
+      this.#children.clear(); for (const child of ordered.slice(0, MAX_GATES)) this.#children.add(child.id);
     }
     if (this.#refresh) { this.#refreshAgain = true; return this.#refresh; }
     const reading = (async () => {
@@ -97,7 +101,9 @@ export class OpenCodeInteractions {
   observe(event: OpenCodeNativeEvent): void {
     if (this.#closed) return;
     if ((event.type === "session.created" || event.type === "session.forked") && event.data.parentID === this.#authority.sessionID) {
-      if (this.#children.size < MAX_GATES) this.#children.add(event.data.sessionID);
+      const retained = [...this.#children].filter(id => id !== event.data.sessionID).slice(0, MAX_GATES - 1);
+      this.#children.clear(); this.#children.add(event.data.sessionID);
+      for (const id of retained) this.#children.add(id);
       return;
     }
     if (event.type === "session.deleted") this.#children.delete(event.data.sessionID);

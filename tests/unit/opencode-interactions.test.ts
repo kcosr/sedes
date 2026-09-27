@@ -267,4 +267,20 @@ describe("OpenCode exact interaction controller", () => {
     expect(notices.some(text => text.includes("no matching session owner"))).toBe(false);
     expect(f.controller.snapshotInteractions()).toEqual([]); expect(f.effects()).toHaveLength(0);
   });
+
+  it("keeps large child histories readable and inspects active children before completed ones", async () => {
+    const f = fixture();
+    const children = Array.from({ length: 1_101 }, (_, index) => ({ ...f.wire.session,
+      id: `ses_child_${index}`, parentID: "ses_fixture", time: { ...f.wire.session.time, updated: index } }));
+    const active = children[1_050]!;
+    f.permissions.set("per_active_child", { ...permission("per_active_child"), sessionID: active.id });
+    await expect(f.controller.refresh({ permissions: [], forms: [] }, children, [active.id])).resolves.toBeUndefined();
+    const childReads = f.requests.filter(request => request.path.includes("/ses_child_"));
+    expect(childReads[0]?.path).toBe(`/api/session/${active.id}/permission`);
+    expect(childReads).toHaveLength(64);
+    const notices = f.events.mock.calls.filter(([event]) => event.type === "notice").map(([event]) => event.notice.message.text);
+    expect(notices.some(text => text.includes("inventory limit"))).toBe(true);
+    expect(notices.some(text => text.includes("subagent is waiting for permission"))).toBe(true);
+    expect(f.effects()).toHaveLength(0);
+  });
 });

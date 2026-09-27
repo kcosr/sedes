@@ -459,7 +459,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       this.#activity = activity.active ? suffix.length ? "running" : "unknown"
         : unfinished || pending.length || interactions.permissions.length || interactions.forms.length ? "unknown" : "idle";
       this.#acceptActivity(activity);
-      await this.#interactions.refresh(interactions, activity.children);
+      await this.#interactions.refresh(interactions, activity.children, activity.activeChildren);
       await this.runtime.assertCurrent(signal);
       check();
       this.#inputObservation.observer.observeHistory(retained.messages);

@@ -256,6 +256,48 @@ describe("OpenCode execution settings and explicit actions", () => {
 });
 
 describe("OpenCode settings observation fencing", () => {
+  it("allows Submit's second preparation to finish while its model-selected event refreshes settings", async () => {
+    const f = fixture({ native: modelB }); const handle = await f.driver.attach(f.attach); cleanup.push(() => handle.close());
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const read = f.context.catalog.read.bind(f.context.catalog); let reads = 0;
+    vi.spyOn(f.context.catalog, "read").mockImplementation(async input => {
+      const number = ++reads; const result = await read(input);
+      if (number === 2) {
+        expect(f.posts("/model")).toHaveLength(1);
+        f.wire.send({ id: "evt_submit_model_selected", created: 1, type: "session.model.selected",
+          data: { sessionID: f.wire.sessionID, model: modelA }, durable: { aggregateID: f.wire.sessionID, seq: 1, version: 1 } });
+        await vi.waitFor(() => expect(reads).toBeGreaterThanOrEqual(3));
+      }
+      return result;
+    });
+    await expect(handle.submit(f.submit("submit-event-race"))).resolves.toMatchObject({ accepted: true, completionCorrelation: "submit-event-race" });
+    expect(f.posts("/model")).toHaveLength(1); expect(f.posts("/prompt")).toHaveLength(1);
+    expect(f.context.settings.get(scope, threadID)).toMatchObject({ desired: modelA, observationState: "confirmed" });
+  });
+
+  it.each(["action", "steer"] as const)("does not let background model observation reject a valid %s read", async operation => {
+    const f = fixture(); const handle = await f.driver.attach(f.attach); cleanup.push(() => handle.close());
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const read = f.context.catalog.read.bind(f.context.catalog); let reads = 0;
+    vi.spyOn(f.context.catalog, "read").mockImplementation(async input => {
+      const number = ++reads; const result = await read(input);
+      if (number === 1) {
+        f.wire.send({ id: `evt_${operation}_model_selected`, created: 1, type: "session.model.selected",
+          data: { sessionID: f.wire.sessionID, model: modelA }, durable: { aggregateID: f.wire.sessionID, seq: 1, version: 1 } });
+        await vi.waitFor(() => expect(reads).toBeGreaterThanOrEqual(2));
+      }
+      return result;
+    });
+    if (operation === "action") {
+      await expect(handle.perform(f.action("action-event-race", modelB))).resolves.toEqual({ accepted: true });
+      expect(f.posts("/model")).toHaveLength(1);
+    } else {
+      await expect(handle.steer(f.steer("steer-event-race"))).resolves.toMatchObject({ status: "pending_materialization", completionCorrelation: "steer-event-race" });
+      expect(f.repository.readOperation(scope, threadID, "steer-event-race", "steer")?.disposition).toBe("accepted");
+      expect(f.posts("/model")).toHaveLength(0); expect(f.posts("/prompt")).toHaveLength(1);
+    }
+  });
+
   it.each(["action", "submit", "steer"] as const)("fences an in-flight %s when its handle closes during catalog preparation", async operation => {
     const f = fixture(); const handle = await f.driver.attach(f.attach); cleanup.push(() => handle.close());
     let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });

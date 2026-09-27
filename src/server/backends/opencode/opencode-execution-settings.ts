@@ -42,10 +42,8 @@ export class OpenCodeExecutionSettings {
     ]);
     this.#assertSession(session);
     await this.assertCurrent(signal);
-    if (sequence !== this.#observationSequence) throw changed();
     const observed = classifyObserved({ selection: nativeSelection(session, catalog), catalog });
-    if (!this.context.settings.recordObserved(this.input.scope, settings.applicationThreadId,
-      { expectedRevision: settings.revision, generation: this.generation, observed, now: Date.now() })) throw changed();
+    this.#publishObserved(settings, observed, sequence);
     return { session, catalog, settings, observed };
   }
 
@@ -85,11 +83,8 @@ export class OpenCodeExecutionSettings {
     this.#assertSession(session); await this.assertCurrent(signal);
     // A native no-op still gets a readback; 204 and ModelSelected alone do not prove selection.
     if (!sameOpenCodeSelection(session.model ?? null, desired)) throw unavailable("The requested OpenCode model selection could not be confirmed.");
-    if (sequence !== this.#observationSequence) return;
     const observed = classifyObserved({ selection: desired, catalog: read.catalog });
-    if (!this.context.settings.recordObserved(this.input.scope, read.settings.applicationThreadId, {
-      expectedRevision: read.settings.revision, generation: this.generation, observed, now: Date.now(),
-    })) throw changed();
+    this.#publishObserved(read.settings, observed, sequence);
   }
 
   async assertCurrent(signal?: AbortSignal): Promise<void> {
@@ -103,6 +98,15 @@ export class OpenCodeExecutionSettings {
   }
   #signal(signal?: AbortSignal): AbortSignal {
     return signal ? AbortSignal.any([this.lifetime, signal]) : this.lifetime;
+  }
+  #publishObserved(settings: OpenCodeThreadSettingsRecord, observed: OpenCodeObservation, sequence: number): void {
+    const current = this.context.settings.get(this.input.scope, settings.applicationThreadId);
+    if (current.revision !== settings.revision || current.observationGeneration !== this.generation) throw changed();
+    // A newer background read controls publication, not this caller's valid
+    // admission result. Only real desired/binding-generation changes reject it.
+    if (sequence !== this.#observationSequence) return;
+    if (!this.context.settings.recordObserved(this.input.scope, settings.applicationThreadId,
+      { expectedRevision: settings.revision, generation: this.generation, observed, now: Date.now() })) throw changed();
   }
   markUnknown(): void {
     const settings = this.context.settings.get(this.input.scope, this.input.binding.applicationThreadId);

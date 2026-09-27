@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { assertServerRuntimeBoundary } from './check-server-runtime.mjs';
+import { assertServerRuntimeBoundary, writeRuntimeEntrypoints } from './check-server-runtime.mjs';
 import { assertBuildTarget, buildNativeAddons, prunePlatformPackages } from './server-package-native.mjs';
 import { writePackageIntegrity, verifyPackageIntegrity } from './server-package-integrity.mjs';
 import { writeServerWrappers } from './install-server-lib.mjs';
@@ -58,6 +58,7 @@ try {
   await mkdir(stage);
   for (const filename of ['package.json','package-lock.json']) await cp(path.join(repositoryRoot, 'packages/server-runtime', filename), path.join(stage, filename));
   await cp(path.join(repositoryRoot, 'dist'), path.join(stage, 'dist'), {recursive:true, filter: filename => !filename.endsWith('.map') && !filename.endsWith('.test.js')});
+  await writeRuntimeEntrypoints(stage);
   for (const filename of ['LICENSE','THIRD-PARTY-NOTICES.md','config/server.example.json']) {
     await mkdir(path.dirname(path.join(stage, filename)), {recursive:true});
     await cp(path.join(repositoryRoot, filename), path.join(stage, filename));
