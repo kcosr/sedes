@@ -7,7 +7,7 @@
 - Codex persistent runtimes require Codex runtime protocol 2 so tool-policy
   refreshes cannot reuse an older sidecar’s cached session configuration.
   Upgrade existing sidecars before reconnecting. No database migration or
-  browser protocol change is required for this fix.
+  browser protocol change is required for this fix. (#15)
 
 - Codex viewed images use a new `viewed_image` transcript item, introduced
   in client protocol 123. This build requires client protocol 126; see the
@@ -122,9 +122,9 @@
 
 - Codex archives now unsubscribe Sedes from the native conversation and refuse
   while a native turn or goal is active. Archiving or changing tools also
-  requires a closed managed Codex TUI. A bound Codex conversation whose history is not yet
-  materialized requires its first message before changing tools, so a refresh
-  cannot discard an empty native session.
+  requires a closed managed Codex TUI. A bound Codex conversation whose history
+  is not yet materialized requires its first message before changing tools, so
+  a refresh cannot discard an empty native session. (#15)
 
 - A Claude tool call that **Stop** aborted now reads as interrupted
   (**Activity · 1 tool call · Interrupted**) instead of failed, live and after
@@ -205,7 +205,8 @@
   Codex or Claude thread already has a persistent SSH session, including
   after the server reconnects. Provider release failures leave the saved
   policy unchanged; disabled or unavailable bound targets must be enabled or
-  reconnected before Native/presentation edits. CLI access edits still apply live.
+  reconnected before Native/presentation edits. CLI access edits still apply
+  live. (#15)
 
 - Claude's note after a resized image read (`[Image: original …]`) no longer
   opens a running turn that exists only live and disappears on reload. Sedes
