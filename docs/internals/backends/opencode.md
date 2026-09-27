@@ -48,9 +48,14 @@ execution-terminal, step-boundary, deletion and revert events; other durable
 payloads become compact sequence/fingerprint facts. Native presentation still
 receives the full events. Cached historical proof facts are reclaimable across
 scopes; pending execution and input markers are not. Positive root completion
-can clear uncertainty caused by a native stream break, but an unresolved prompt
-pin remains until exact native evidence settles it. An operation acknowledgment
-alone never proves that native work ended.
+can clear uncertainty caused by a native stream break. After reconnect, bounded
+native inventory reads reconcile known pending and work markers against their
+exact owning session and location; inbox reads precede activity so a promoted
+input remains retained while running. Read cuts are identity-, continuity- and
+lifecycle-fenced and change no application receipts or approval authority.
+Unobserved dispatch pins and collapsed unknown inventories remain conservative;
+failed reads never prove retirement. An operation acknowledgment alone never
+proves that native work ended.
 
 Presentation subscribers have separate bounded queues and cannot acknowledge
 operation evidence. When their shared byte budget fills, the subscriber holding
@@ -71,7 +76,10 @@ into at most two polling requests per carrier, with bounded aggregate responses
 and separate evidence/presentation purposes. Closing one subscription cannot
 invalidate another thread's poll. Stop confirmation binds the runtime identity,
 generation, ownership and state, so streaming text cannot continually invalidate
-a confirmed Stop.
+a confirmed Stop. At the environment service boundary, stock OpenCode remains
+conservatively unknown for automatic retirement; forced confirmation is stable
+for the exact native owner while detailed inspection and abandonment evidence
+continue to report retained activity.
 
 Remote product admission remains disabled pending tool relay and full remote
 qualification. The host implementation is exercised through test composition;

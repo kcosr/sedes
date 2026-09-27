@@ -3,7 +3,7 @@ import { configurationFingerprint } from "../../config/configuration-fingerprint
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 import type { OpenCodeHttpNativeAdapter, OpenCodeHttpObservation } from "./opencode-http-native-adapter.js";
 import { OPENCODE_NATIVE_EVENT_BUFFER_BYTES, OPENCODE_NATIVE_EVENT_BUFFER_RECORDS,
-  OPENCODE_OBSERVATION_WIRE_BYTES, openCodeNeedsFullEvidenceEvent, type OpenCodeNativeEvent } from "./opencode-native-codecs.js";
+  OPENCODE_OBSERVATION_WIRE_BYTES, openCodeNeedsFullEvidenceEvent, type OpenCodeNativeEvent, type OpenCodeNativeActivity } from "./opencode-native-codecs.js";
 import { OpenCodeNativeObservationProof, OPENCODE_NATIVE_PROOF_BYTES, OPENCODE_NATIVE_PROOF_RECORDS,
   openCodeNativeFactFingerprint } from "./opencode-native-observation-proof.js";
 import type { OpenCodeNativeAuthority, OpenCodeObservationBoundary,
@@ -29,6 +29,8 @@ export class OpenCodeObservationHub {
   readonly #scopes = new Map<string, Scope>();
   readonly #lifetime = new AbortController();
   readonly #waiters = new Set<() => void>();
+  readonly #reconcileScopes = new Map<Scope, Set<string>>();
+  #reconciling = false;
   readonly #running: Promise<void>;
   #native?: OpenCodeHttpObservation;
   #connected = false;
@@ -44,6 +46,8 @@ export class OpenCodeObservationHub {
   constructor(readonly adapter: OpenCodeHttpNativeAdapter, readonly options: {
     readonly route?: (authority: OpenCodeNativeAuthority, event: OpenCodeNativeEvent) => boolean;
     readonly onRetentionChanged?: () => void;
+    readonly assertCurrent?: (signal: AbortSignal) => Promise<void>;
+    readonly onActivity?: (authority: OpenCodeNativeAuthority, activity: OpenCodeNativeActivity) => void;
     readonly maximumCriticalBytes?: number; readonly maximumCriticalRecords?: number;
     readonly maximumProofBytes?: number; readonly maximumPresentationBytes?: number;
   } = {}) {
@@ -258,6 +262,10 @@ export class OpenCodeObservationHub {
   #break(scope: Scope, reason: Extract<OpenCodeObservationRecord, { kind: "native_break" }>["reason"]): void {
     scope.continuity = randomUUID();
     scope.proof.discontinuity();
+    const cut = scope.proof.retentionCut(), owners = new Set(cut.work.map(item => item.sessionID));
+    if (cut.pending.length || cut.unknownExecution) owners.add(scope.authority.session!.nativeSessionID);
+    if (owners.size) this.#reconcileScopes.set(scope, owners);
+    this.#scheduleReconciliation();
     // One reserved small loss marker per admitted scope, outside raw payload
     // capacity. Existing positive records are never silently evicted.
     if (!scope.lossPending) {
@@ -317,11 +325,80 @@ export class OpenCodeObservationHub {
     }
     void nativeBytes; this.#changed();
   }
+  #scheduleReconciliation(): void {
+    if (this.#reconciling || !this.#connected || this.#lifetime.signal.aborted || !this.#reconcileScopes.size) return;
+    this.#reconciling = true;
+    void (async () => {
+      try {
+        while (this.#connected && !this.#lifetime.signal.aborted && this.#reconcileScopes.size) {
+          await Promise.all([...this.#reconcileScopes.keys()].slice(0, 8).map(scope => this.#reconcile(scope)));
+          if (this.#reconcileScopes.size) await new Promise<void>(resolve => {
+            const finish = () => { clearTimeout(timer); this.#lifetime.signal.removeEventListener("abort", finish); resolve(); };
+            const timer = setTimeout(finish, 1_000); timer.unref?.();
+            this.#lifetime.signal.addEventListener("abort", finish, { once: true });
+            if (this.#lifetime.signal.aborted) finish();
+          });
+        }
+      } finally { this.#reconciling = false; }
+    })();
+  }
+  async #reconcile(scope: Scope): Promise<void> {
+    const owners = this.#reconcileScopes.get(scope);
+    this.#reconcileScopes.delete(scope);
+    if (!owners || this.#scopes.get(configurationFingerprint(scope.authority)) !== scope) return;
+    const cut = scope.proof.retentionCut(), continuity = scope.continuity;
+    const sessionID = scope.authority.session!.nativeSessionID, selected = new Set([...owners].slice(0, 4));
+    const signal = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(5_000)]);
+    try {
+      await this.options.assertCurrent?.(signal);
+      // Inbox removal may mean promotion into execution. Read activity and
+      // interactions afterwards, including when the cut had no work marker.
+      const results = await Promise.allSettled([...selected].map(async owner => {
+        const pending = owner === sessionID && cut.pending.length ? await this.adapter.read("getPending", { sessionID }, signal) : undefined;
+        const native = await this.adapter.read("getSession", { sessionID: owner }, signal);
+        if (owner === sessionID && native.location.directory !== scope.authority.directory) throw unavailable("opencode_request_authority_mismatch");
+        const [activity, interactions] = await Promise.all([
+          this.adapter.read("getActivity", { sessionID: owner, directory: native.location.directory }, signal),
+          this.adapter.read("getInteractions", { sessionID: owner }, signal),
+        ]);
+        return { owner, activity, interactions, pending };
+      }));
+      const inventories = results.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+      if (!inventories.length) throw unavailable("opencode_request_failed");
+      const checkedOwners = new Set(inventories.map(item => item.owner));
+      await this.options.assertCurrent?.(signal); signal.throwIfAborted();
+      if (!this.#connected || continuity !== scope.continuity) throw unavailable("opencode_observation_continuity_lost");
+      const work = new Map<string, string>();
+      for (const { owner, activity, interactions } of inventories) {
+        if (activity.active) work.set(`execution:${owner}`, owner);
+        for (const child of activity.activeChildren) work.set(`execution:${child}`, child);
+        for (const shell of activity.shells) if (shell.status === "running") work.set(`shell:${shell.id}`, owner);
+        for (const item of interactions.permissions) work.set(`permission:${item.id}`, owner);
+        for (const item of interactions.forms) work.set(`form:${item.id}`, owner);
+        this.options.onActivity?.(scope.authority, activity);
+      }
+      if (!scope.proof.reconcileRetention(cut, { pending: new Set(inventories.find(item => item.owner === sessionID)?.pending?.map(item => item.id)), checkedOwners, work })) {
+        throw unavailable("opencode_observation_continuity_lost");
+      }
+      scope.proofTouched = ++this.#proofClock; this.#reclaimProofSpace(0);
+      const others = this.#proofBytes() - scope.proof.bytes;
+      if (!scope.proof.trim(Math.max(0, this.#maximumProofBytes - others))) {
+        this.#exhausted = true; this.#break(scope, "overflow");
+      }
+      for (const owner of checkedOwners) owners.delete(owner);
+      this.#collect(scope); this.#changed();
+    } catch { /* Failed or raced reads prove nothing; leave these owners queued. */ }
+    for (const owner of selected) if (owners.delete(owner)) owners.add(owner);
+    // Rotate bounded retries so an unavailable session cannot prevent the other
+    // scopes from reconciling. A newer native break owns its replacement queue.
+    if (owners.size && !this.#reconcileScopes.has(scope) && !this.#lifetime.signal.aborted &&
+        this.#scopes.get(configurationFingerprint(scope.authority)) === scope) this.#reconcileScopes.set(scope, owners);
+  }
   async #run(): Promise<void> {
     while (!this.#lifetime.signal.aborted) {
       try {
         const native = this.adapter.observe({ signal: this.#lifetime.signal, include: () => false,
-          onConnected: () => { this.#connected = true; this.#changed(); },
+          onConnected: () => { this.#connected = true; this.#changed(); this.#scheduleReconciliation(); },
           onEvent: record => this.#capture(record.event, record.decodedBytes) });
         this.#native = native; await native.ready; const end = await native.ended;
         if (this.#lifetime.signal.aborted) return;

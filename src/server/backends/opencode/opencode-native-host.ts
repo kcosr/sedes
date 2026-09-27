@@ -42,6 +42,8 @@ export class OpenCodeNativeHost {
   constructor(readonly owner: OpenCodeNativeOwner, readonly adapter: OpenCodeHttpNativeAdapter,
     readonly hooks: OpenCodeNativeHostHooks, nativeLifetime: AbortSignal) {
     this.#hub = new OpenCodeObservationHub(adapter, {
+      assertCurrent: signal => hooks.assertCurrent(signal),
+      onActivity: (authority, activity) => this.#routes.get(configurationFingerprint(authority))?.seed(activity),
       route: (authority, event) => this.#routes.get(configurationFingerprint(authority))?.accept(event) ?? false,
       onRetentionChanged: () => { for (const scope of this.#scopes.values()) this.#collectScope(scope.port.authority); },
     });

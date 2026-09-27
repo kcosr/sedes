@@ -16,7 +16,7 @@ const event = (seq: number, type = "session.inbox.delivered", sessionID = "ses_f
   type, created: 1, durable: { aggregateID: sessionID, seq, version: 1 }, data: { sessionID,
     ...(type === "session.inbox.delivered" ? { inboxID: `msg_${seq}` } : { title: `title${seq}` }) } });
 function setup(options: ConstructorParameters<typeof OpenCodeObservationHub>[1] = {}) {
-  const wire = createOpenCodeApiFixture();
+  const wire = createOpenCodeApiFixture({ directory: authority().directory });
   const client = new OpenCodeHttpClient({ endpoint: "http://127.0.0.1:4096", password: "fixture", fetch: wire.fetch });
   const hub = new OpenCodeObservationHub(new OpenCodeHttpNativeAdapter(client), options);
   hub.admitScope(authority()); cleanups.push(() => { hub.close(); client.close(); });
@@ -25,6 +25,84 @@ function setup(options: ConstructorParameters<typeof OpenCodeObservationHub>[1] 
 async function drain(observation: OpenCodePortObservation) { await observation.wait(); return observation.drain(); }
 
 describe("resident OpenCode native observation journal", () => {
+  it("reclaims known input and interaction markers settled inside a native stream gap after exact inventory and ACK", async () => {
+    const { wire, hub } = setup(); const observation = hub.subscribe(authority(), { purpose: "evidence" });
+    const before = await observation.ready;
+    wire.send({ ...event(1), type: "session.inbox.enqueued", data: { sessionID: "ses_fixture", inboxID: "msg_known",
+      item: { type: "user", delivery: "queue", payload: { text: "x" } } } });
+    wire.send({ id: "evt_permission", created: 1, type: "permission.asked",
+      data: { sessionID: "ses_fixture", id: "per_known", action: "write", resources: [] } });
+    await vi.waitFor(() => expect(hub.retentionSnapshot().evidenceRecords).toBe(2));
+    observation.drain(); await observation.acknowledge({ journalId: before.journalId, sequence: 2 }); await observation.close();
+    hub.releaseScope(authority()); expect(hub.hasRetainedAuthority(authority())).toBe(true);
+    // Native delivery/permission reply happen while disconnected; stock SSE has
+    // no replay. Successful empty inventories settle only resident markers.
+    wire.disconnect();
+    await vi.waitFor(() => expect(wire.requests.filter(request => request.pathname.endsWith("/permission"))).toHaveLength(1));
+    expect(wire.requests.filter(request => request.pathname.endsWith("/inbox"))).toHaveLength(1);
+    expect(hub.hasRetainedAuthority(authority())).toBe(true); // loss record still unACKed
+    const recovered = hub.subscribe(authority(), { purpose: "evidence" }); const boundary = await recovered.ready;
+    const records = recovered.drain(); expect(records).toHaveLength(1); expect(records[0]!.kind).toBe("native_break");
+    await recovered.acknowledge({ journalId: boundary.journalId, sequence: records[0]!.sequence }); await recovered.close();
+    await vi.waitFor(() => expect(hub.hasRetainedAuthority(authority())).toBe(false));
+    expect(boundary.proof.currentInputId).toBeNull();
+  });
+
+  it("replaces a consumed pending marker with positively observed running work after a stream gap", async () => {
+    const { wire, hub } = setup(); const first = hub.subscribe(authority(), { purpose: "evidence" }); await first.ready;
+    wire.send({ ...event(1), type: "session.inbox.enqueued", data: { sessionID: "ses_fixture", inboxID: "msg_known",
+      item: { type: "user", delivery: "queue", payload: { text: "x" } } } });
+    await first.wait(); wire.setResponse("/api/session/active", 200, { data: { ses_fixture: { type: "running" } } }); wire.disconnect();
+    await vi.waitFor(() => expect(wire.requests.some(request => request.pathname === "/api/session/active")).toBe(true));
+    const recovered = hub.subscribe(authority(), { purpose: "evidence" }); const boundary = await recovered.ready;
+    const records = recovered.drain(); await recovered.acknowledge({ journalId: boundary.journalId, sequence: records.at(-1)!.sequence });
+    await recovered.close(); await first.close(); hub.releaseScope(authority());
+    expect(hub.hasRetainedAuthority(authority())).toBe(true);
+    expect(wire.requests.findIndex(request => request.pathname.endsWith("/inbox")))
+      .toBeLessThan(wire.requests.findIndex(request => request.pathname === "/api/session/active"));
+    wire.send({ ...event(3), type: "session.execution.succeeded", data: { sessionID: "ses_fixture" } });
+    const terminal = hub.subscribe(authority(), { purpose: "evidence" }); const final = await terminal.ready;
+    await terminal.wait(); const ended = terminal.drain();
+    await terminal.acknowledge({ journalId: final.journalId, sequence: ended.at(-1)!.sequence }); await terminal.close();
+    await vi.waitFor(() => expect(hub.hasRetainedAuthority(authority())).toBe(false));
+  });
+
+  it("reads a child interaction from its exact session and directory instead of erasing it from root absence", async () => {
+    const { wire, hub } = setup({ route: (_authority, event) => "sessionID" in event.data &&
+      ["ses_fixture", "ses_child"].includes(event.data.sessionID) });
+    const permission = { id: "per_child", sessionID: "ses_child", action: "write", resources: [] };
+    wire.setResponse("/api/session/ses_child", 200, { data: { ...wire.session, id: "ses_child", parentID: wire.sessionID, location: { directory: "/child" } } });
+    wire.setResponse("/api/session/ses_child/permission", 200, { data: [permission] });
+    wire.setResponse("/api/session/ses_child/form", 200, { data: [] });
+    wire.setResponse("/api/shell", 200, { location: { directory: "/child" }, data: [] });
+    const first = hub.subscribe(authority(), { purpose: "evidence" }); await first.ready;
+    wire.send({ id: "evt_child_permission", created: 1, type: "permission.asked", data: permission });
+    await first.wait(); wire.disconnect();
+    await vi.waitFor(() => expect(wire.requests.filter(request => request.pathname === "/api/session/ses_child/permission")).toHaveLength(1));
+    const retained = hub.subscribe(authority(), { purpose: "evidence" }); const boundary = await retained.ready;
+    const records = retained.drain(); await retained.acknowledge({ journalId: boundary.journalId, sequence: records.at(-1)!.sequence });
+    await retained.close(); await first.close(); hub.releaseScope(authority());
+    expect(hub.hasRetainedAuthority(authority())).toBe(true);
+    expect(wire.requests.find(request => request.pathname === "/api/shell")!.query.toString()).toContain(encodeURIComponent("/child"));
+    wire.setResponse("/api/session/ses_child/permission", 200, { data: [] }); wire.disconnect();
+    await vi.waitFor(() => expect(wire.requests.filter(request => request.pathname === "/api/session/ses_child/permission")).toHaveLength(2));
+    const recovered = hub.subscribe(authority(), { purpose: "evidence" }); const final = await recovered.ready;
+    const lost = recovered.drain(); await recovered.acknowledge({ journalId: final.journalId, sequence: lost.at(-1)!.sequence }); await recovered.close();
+    await vi.waitFor(() => expect(hub.hasRetainedAuthority(authority())).toBe(false));
+  });
+
+  it("retains a known native marker when reconnect inventory fails", async () => {
+    const { wire, hub } = setup(); const observation = hub.subscribe(authority(), { purpose: "evidence" }); await observation.ready;
+    wire.send({ ...event(1), type: "session.inbox.enqueued", data: { sessionID: "ses_fixture", inboxID: "msg_known",
+      item: { type: "user", delivery: "queue", payload: { text: "x" } } } });
+    await observation.wait(); wire.setResponse("/api/session/ses_fixture/inbox", 503, { error: "unavailable" }); wire.disconnect();
+    await vi.waitFor(() => expect(wire.requests.some(request => request.pathname.endsWith("/inbox"))).toBe(true));
+    const recovered = hub.subscribe(authority(), { purpose: "evidence" }); const boundary = await recovered.ready;
+    const records = recovered.drain(); await recovered.acknowledge({ journalId: boundary.journalId, sequence: records.at(-1)!.sequence });
+    await recovered.close(); await observation.close(); hub.releaseScope(authority());
+    expect(hub.hasRetainedAuthority(authority())).toBe(true);
+  });
+
   it("retains detached tool output as exact compact facts while presentation keeps the full native payload", async () => {
     const { wire, hub } = setup({ maximumCriticalBytes: 32_768, maximumCriticalRecords: 2 });
     const first = hub.subscribe(authority(), { purpose: "evidence" }); const ready = await first.ready; await first.close();
