@@ -6187,7 +6187,7 @@ describe("Claude image reads and meta rows", () => {
     ]);
     const failed = Object.values(liveSnapshot.itemsById).find(item => item.status === "failed")!;
     expect(failed.error).toEqual({ category: "unavailable", message: { text: "Claude could not read this image." },
-      code: "claude_image_read_failed" });
+      code: "claude_viewed_image_read_failed" });
     expect(JSON.stringify(liveSnapshot)).not.toContain("/home/someone");
     // The invalid image was offered once; later messages and reads do not retry it.
     expect(published).toHaveLength(1);

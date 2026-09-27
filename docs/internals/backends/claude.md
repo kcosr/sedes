@@ -562,10 +562,11 @@ runs, and is registered and counted like any tool call. Its result is never
 copied onto it:
 
 - An `is_error` result fails it with a Sedes-written error
-  (`claude_image_read_failed`, "Claude could not read this image."), because
+  (`claude_viewed_image_read_failed`, "Claude could not read this image."), because
   Claude's error text names absolute paths.
-- A Stop result and an unfinished read settle as other tools do, without that
-  error.
+- A Stop result settles it as other tools do, without that error. A read
+  still without a result when its turn ends is `interrupted`, even when the
+  turn failed: the read never completed.
 - A text result, or an image block that is not the result's only image, not a
   base64 source, not of a supported media type, or beyond the 16 MiB output
   ceiling, completes it with no image.

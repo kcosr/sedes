@@ -208,7 +208,7 @@ export function completeClaudeTool(
         ? { ...existing, status, error: {
           category: "unavailable" as const,
           message: boundDisplayText("Claude could not read this image."),
-          code: "claude_image_read_failed",
+          code: "claude_viewed_image_read_failed",
         } }
         : { ...existing, status };
     case "collaboration":
@@ -275,6 +275,9 @@ export function settleInterruptedClaudeTool(
       };
     case "collaboration":
       return { ...item, status, action: "status", completedAt };
+    case "viewed_image":
+      // A read without a result never completed, whatever ended its turn.
+      return { ...item, status: "interrupted", completedAt };
     default:
       return { ...item, status, completedAt };
   }

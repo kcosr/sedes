@@ -2501,7 +2501,7 @@ describe("Claude image reads", () => {
       result(3, "toolu-1", error, true)]);
     const [, view] = ordered(projection.snapshot);
     expect(view).toMatchObject({ semanticKind: "viewed_image", status: "failed", fileName: { text: "missing.png" },
-      error: { category: "unavailable", message: { text: "Claude could not read this image." }, code: "claude_image_read_failed" } });
+      error: { category: "unavailable", message: { text: "Claude could not read this image." }, code: "claude_viewed_image_read_failed" } });
     expect(JSON.stringify(projection.snapshot)).not.toContain("private-project");
     expect(projection.pendingViewedImages).toEqual([]);
   });
@@ -2532,6 +2532,22 @@ describe("Claude image reads", () => {
       backendTurnId: receiptTurn!, status: "interrupted", providerTerminalReason: "process_lost", providerResultUuid: null,
       terminalAt: Date.parse(timestamp) }]).snapshot);
     expect(settled).toMatchObject({ semanticKind: "viewed_image", status: "interrupted", completedAt: timestamp });
+  });
+
+  it("interrupts a read still without a result when its turn fails, and fails the other tools as before", () => {
+    const timestamp = "2026-09-26T10:00:05.000Z";
+    const command = { type: "tool_use", id: "toolu-cmd", name: "Bash", input: { command: "sleep 9" } };
+    const shot = { type: "tool_use", id: "toolu-shot", name: "Read", input: { file_path: "/workspace/shot.png" } };
+    const messages = [prompt, { ...assistant(uuid(2), [command, shot]),
+      message: { role: "assistant", id: "msg-1", content: [command, shot], stop_reason: "tool_use" } }];
+    const [turnId] = projectClaudeHistory(messages).snapshot.orderedBackendTurnIds;
+    const snapshot = projectClaudeHistory(messages, [{ backendTurnId: turnId!, status: "failed",
+      providerTerminalReason: "error_during_execution", providerResultUuid: uuid(3), terminalAt: Date.parse(timestamp) }]).snapshot;
+    expect(snapshot.turnsById[turnId!]).toMatchObject({ status: "failed" });
+    const [, failed, view] = ordered(snapshot);
+    expect(failed).toMatchObject({ semanticKind: "command", status: "failed", phase: "failed", completedAt: timestamp });
+    expect(view).toEqual({ backendItemId: expect.any(String), backendTurnId: turnId, sourceOrder: 4,
+      semanticKind: "viewed_image", status: "interrupted", completedAt: timestamp, fileName: { text: "shot.png" } });
   });
 
   it("gives a fork or import its own image identities and keys", () => {

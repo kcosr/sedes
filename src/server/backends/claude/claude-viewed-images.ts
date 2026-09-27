@@ -1,3 +1,4 @@
+import { maximumBase64Characters } from "../../../shared/output-artifact-limits.js";
 import { pathForRemoteRoot } from "../../execution/remote-path.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import {
@@ -16,7 +17,7 @@ const CLAUDE_IMAGE_READ_EXTENSIONS: ReadonlySet<string> = new Set([
   "gif",
   "webp",
 ]);
-const MAXIMUM_BASE64_CHARACTERS = Math.ceil(MAXIMUM_OUTPUT_IMAGE_BYTES / 3) * 4;
+const MAXIMUM_BASE64_CHARACTERS = maximumBase64Characters(MAXIMUM_OUTPUT_IMAGE_BYTES);
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/u;
 const MAXIMUM_REMEMBERED_PUBLICATIONS = 4_096;
 
