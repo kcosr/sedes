@@ -15,7 +15,10 @@ async function alive(pid: number): Promise<boolean> {
   }
 }
 
-it.skipIf(process.platform !== "linux")("native fixture kills a marked detached child after root exit, allows its cleanup grace, and leaves unrelated children alive", async () => {
+// The machine-wide ownership scan is deliberately opt-in with the native
+// fixtures, never part of ordinary npm test. An unreadable same-account process
+// whose ownership cannot be excluded makes this qualification unavailable.
+it.skipIf(process.platform !== "linux" || process.env.SEDES_RUN_REAL_OPENCODE !== "1")("native fixture kills a marked detached child after root exit, allows its cleanup grace, and leaves unrelated children alive", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sedes-opencode-cleanup-test-"));
   const executable = path.join(directory, "fake-opencode.cjs");
   const childEvidence = path.join(directory, "child.json");
@@ -83,7 +86,12 @@ process.stdin.on("end", () => process.exit(0));
     // command-name/group scan. The native helper retains uncertain directories.
     if (detachedPid && await alive(detachedPid)) process.kill(detachedPid, "SIGKILL");
     if (unrelated?.pid && await alive(unrelated.pid)) unrelated.kill("SIGKILL");
-    if (fixture) await fixture.stop();
-    await rm(directory, { recursive: true, force: true });
+    try {
+      if (fixture) await fixture.stop();
+    } finally {
+      // The helper intentionally retains its native root on uncertain cleanup;
+      // this separate fake-CLI/evidence directory has no running dependants.
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 }, 30_000);

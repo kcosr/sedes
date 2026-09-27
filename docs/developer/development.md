@@ -208,7 +208,14 @@ SEDES_RUN_REAL_OPENCODE=1 \
 ```
 
 The process fixtures require Linux procfs to identify and clean up marked
-descendants, including children in detached process groups. These are characterization tests: passing
+descendants, including children in detached process groups. Run this opt-in
+suite on a host with visible process ancestry and without concurrently starting
+non-dumpable same-account processes (such as SSH agents or control masters)
+whose ownership cannot be excluded. Hidden procfs ancestry or an ambiguous
+unreadable process makes cleanup unproved and retains the isolated native
+directory for inspection. The detached-child cleanup regression belongs to this
+same opt-in suite; ordinary `npm test` performs no such machine-wide scan.
+These are characterization tests: passing
 includes reproducing missing idle filtering, MCP catalog readiness races, and
 synthetic credential environment exposure. These are accepted native limitations,
 not prerequisites for a patched OpenCode release. A passing suite does **not** qualify a production
