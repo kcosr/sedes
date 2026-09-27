@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { ImageItem, ViewedImageItem } from "../../../shared/index.js";
+import { ProviderFeatureConversationItems } from "../../provider-features/registry.js";
 import { ConversationItemView } from "../conversation/ConversationItemView.js";
 import {
   ViewedImageDisclosure,
@@ -10,7 +11,12 @@ import {
   type ItemRenderContext,
 } from "../conversation/types.js";
 
-/** The transcript's viewed-image row, paired with its captured image. */
+/**
+ * The transcript's viewed-image row, paired with its captured image. The row
+ * itself carries the viewed item's identity and provider features, as
+ * ConversationItemView would, so the disclosed image item is never nested in
+ * another conversation-item wrapper.
+ */
 export function ViewedImageGroup({
   item,
   image,
@@ -27,8 +33,10 @@ export function ViewedImageGroup({
   return (
     <section
       className="activity-group viewed-image-group"
+      data-item-id={item.id}
+      data-item-kind={item.kind}
+      data-item-status={item.status}
       data-testid="viewed-image-group"
-      data-viewed-image-item-id={item.id}
       data-viewed-image-status={viewedImageStatus(item)}
     >
       <ViewedImageDisclosure
@@ -39,6 +47,12 @@ export function ViewedImageGroup({
           ) : undefined
         }
       />
+      {item.providerFeatures?.length ? (
+        <ProviderFeatureConversationItems
+          item={item}
+          capabilities={context.providerFeatureCapabilities ?? []}
+        />
+      ) : null}
     </section>
   );
 }

@@ -100,6 +100,9 @@ const seekRequestTtlMilliseconds = 15_000;
 const seekCompletionCheckMilliseconds = 1_000;
 /** Breathing room between the viewport top and the pinned message. */
 const seekTopOffset = 16;
+/** Transcript rows that mount collapsed and disclose their own children. */
+const disclosureRowSelector =
+  '[data-activity-first-item-id], [data-item-kind="viewed_image"]';
 /** Keys that express scroll intent on the focused viewport (End/Home have
     dedicated handling; these fall through to the browser's own scroll). */
 const scrollIntentKeys = new Set([
@@ -1322,13 +1325,11 @@ export function Transcript({
           for (const candidate of element.querySelectorAll<HTMLElement>(
             `[${attribute}]`,
           )) {
-            if (
-              attribute !== "data-activity-first-item-id" &&
-              candidate.closest("[data-activity-first-item-id]")
-            ) {
-              // Expanded activity children disappear when the new projection
-              // mounts collapsed. Only the group's outer disclosure is a
-              // stable anchor across that replacement.
+            const disclosureRow = candidate.closest(disclosureRowSelector);
+            if (disclosureRow && disclosureRow !== candidate) {
+              // Expanded activity children and viewed images disappear when
+              // the new projection mounts collapsed. Only the row's outer
+              // disclosure is a stable anchor across that replacement.
               continue;
             }
             const id = candidate.getAttribute(attribute);
@@ -1336,7 +1337,7 @@ export function Transcript({
             const measuredOffset =
               candidate.getBoundingClientRect().top - viewportTop;
             const viewportOffset =
-              attribute === "data-activity-first-item-id" &&
+              disclosureRow &&
               measuredOffset < 0 &&
               candidate.querySelector('[aria-expanded="true"]')
                 ? 0

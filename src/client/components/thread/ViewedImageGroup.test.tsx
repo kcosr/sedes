@@ -73,6 +73,16 @@ describe("ViewedImageGroup", () => {
     expect(screen.getByText("Viewed image")).toBeVisible();
   });
 
+  it("carries the viewed item's identity on the row itself", () => {
+    const { container } = render(<ViewedImageGroup item={viewed} image={image} />);
+    const row = screen.getByTestId("viewed-image-group");
+    expect(row).toHaveAttribute("data-item-id", "viewed-1");
+    expect(row).toHaveAttribute("data-item-kind", "viewed_image");
+    expect(row).toHaveAttribute("data-item-status", "completed");
+    expect(row).toHaveAttribute("data-viewed-image-status", "completed");
+    expect(container.querySelector(".conversation-item")).toBeNull();
+  });
+
   it("shows a running read as working, disclosing an image that already exists", () => {
     const streaming: ViewedImageItem = { ...viewed, status: "streaming" };
     const { container, rerender } = render(<ViewedImageGroup item={streaming} />);
@@ -102,6 +112,7 @@ describe("ViewedImageGroup", () => {
     const { container } = render(<ViewedImageGroup item={failed} />);
     const row = screen.getByTestId("viewed-image-group");
     expect(row).toHaveAttribute("data-viewed-image-status", "failed");
+    expect(row).toHaveAttribute("data-item-status", "failed");
     const disclosure = screen.getByRole("button", {
       name: "Viewed image · screen.png · Failed",
     });
@@ -158,6 +169,31 @@ describe("ViewedImageGroup", () => {
     expect(
       screen.getByRole("button", { name: "Viewed image · screen.png" }),
     ).not.toHaveAccessibleDescription();
+  });
+
+  it("renders the viewed item's provider features like any conversation item", () => {
+    const ref = { featureId: "example.viewer", schemaVersion: 1 };
+    render(
+      <ViewedImageGroup
+        item={{ ...viewed, providerFeatures: [{ ref, payload: null }] }}
+        context={{
+          assistantLabel: "Assistant",
+          providerFeatureCapabilities: [
+            {
+              ref,
+              revision: 1,
+              label: { text: "Viewer" },
+              availability: "available",
+              operations: [],
+              presentationSlots: ["conversation_item"],
+            },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByTestId("viewed-image-group")).toContainElement(
+      screen.getByText("Viewer is unavailable in this client version."),
+    );
   });
 });
 

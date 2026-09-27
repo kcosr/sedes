@@ -4438,7 +4438,9 @@ describe("Transcript viewed images", () => {
     expect(
       row.compareDocumentPosition(groups[1]!) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    expect(row).toHaveAttribute("data-item-id", "viewed-1");
     expect(row).toHaveAttribute("data-viewed-image-status", "failed");
+    expect(row.closest(".conversation-item")).toBeNull();
 
     const disclosure = within(row).getByRole("button", {
       name: "Viewed image · missing.png · Failed",
@@ -4449,5 +4451,88 @@ describe("Transcript viewed images", () => {
     expect(within(row).getByText("File does not exist.", { selector: ".op-error" }))
       .toBeVisible();
     expect(container.querySelector('[data-item-kind="image"]')).toBeNull();
+  });
+
+  it("anchors an expanded viewed image by its row rather than the disappearing image", () => {
+    const viewedSnapshot = () => {
+      const snapshot = makeSnapshot(["turn-1"], false);
+      snapshot.turnsById["turn-1"] = {
+        ...snapshot.turnsById["turn-1"]!,
+        orderedItemIds: ["viewed-1", "image-1"],
+      };
+      snapshot.itemsById = {
+        "viewed-1": {
+          id: "viewed-1",
+          turnId: "turn-1",
+          kind: "viewed_image",
+          status: "completed",
+          revision: 1,
+          fileName: { text: "captured.png" },
+        },
+        "image-1": {
+          id: "image-1",
+          turnId: "turn-1",
+          kind: "image",
+          status: "completed",
+          revision: 1,
+          origin: { kind: "viewed", capture: "file_snapshot" },
+          image: {
+            representation: "artifact",
+            artifactId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            mimeType: "image/png",
+            byteSize: 24,
+            sha256: "a".repeat(64),
+            fileName: { text: "captured.png" },
+          },
+        },
+      };
+      return snapshot;
+    };
+    vi.stubGlobal("IntersectionObserver", class {
+      observe() {}
+      disconnect() {}
+    });
+    const fake = new FakeTranscriptStore(viewedSnapshot());
+    let replaced = false;
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains("message-viewport")) {
+          return { top: 0 } as DOMRect;
+        }
+        if (this.dataset.itemKind === "viewed_image") {
+          return { top: replaced ? 250 : -120 } as DOMRect;
+        }
+        if (this.dataset.itemKind === "image") {
+          return { top: 20 } as DOMRect;
+        }
+        return { top: -300 } as DOMRect;
+      });
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Viewed image · captured.png" }),
+    );
+    expect(document.querySelector('[data-item-kind="image"]')).not.toBeNull();
+    const originalViewport = screen.getByRole("region", { name: "Messages" });
+    Object.defineProperties(originalViewport, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 1_000 },
+    });
+    originalViewport.scrollTop = 400;
+    fireEvent.scroll(originalViewport);
+    fireEvent.scroll(originalViewport);
+
+    act(() => fake.replaceProjection("summary"));
+    replaced = true;
+    act(() => fake.replaceProjection("summary", viewedSnapshot()));
+
+    const replacementViewport = screen.getByRole("region", {
+      name: "Messages",
+    });
+    expect(replacementViewport).not.toBe(originalViewport);
+    expect(document.querySelector('[data-item-kind="image"]')).toBeNull();
+    expect(replacementViewport.scrollTop).toBe(250);
+    rect.mockRestore();
+    vi.unstubAllGlobals();
   });
 });
