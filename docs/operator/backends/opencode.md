@@ -119,6 +119,16 @@ unavailable with a notice, while conversation controls remain usable. Initial
 MCP discovery can race the first prompt; Sedes does not delay all messages to
 wait for native catalog readiness.
 
+Each host runtime admits up to 1,000 thread routes and remembers up to 4,096
+distinct CLI credentials, including revoked credentials. Remote routes remain
+reserved after a thread closes because native background work may still call
+them. Capacity is therefore a runtime-lifetime limit, not an active-tab limit.
+If capacity is reached, inspect retained work before explicitly retiring and
+reconnecting the backend. Owned Stop terminates its work; remote external Stop
+or local external Disconnect retires Sedes's attachment and leaves the daemon running. Automatic
+route eviction is unavailable because stock OpenCode cannot prove a complete
+background-work inventory.
+
 **CLI** tools are available for owned, local Sedes-created root sessions.
 The generic tool settings can retain a CLI selection on other sessions. For
 external or imported sessions, or an unavailable local CLI endpoint, Sedes

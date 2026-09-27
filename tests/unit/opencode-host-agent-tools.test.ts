@@ -51,6 +51,32 @@ function fixture() {
 }
 
 describe("OpenCode execution-host tool ingress", () => {
+  it("bounds retained routes without silently evicting earlier authority", async () => {
+    const f = fixture();
+    const first = await f.tools.admit(f.target, { ...f.admission, cli: { sourceCapability: "cli-first", mode: "progressive" } });
+    for (let index = 1; index < 1_000; index++) {
+      await f.tools.admit({ ...f.target, session: { ...f.target.session, applicationThreadId: `thread-${index}` } }, f.admission);
+    }
+    await expect(f.tools.admit({ ...f.target, session: { ...f.target.session, applicationThreadId: "overflow" } }, f.admission))
+      .rejects.toMatchObject({ code: "opencode_agent_tools_capacity_reached" });
+    expect(f.tools.cliEnvironment(f.target, first.cliAdmissionId!).generated.SEDES_AGENT_TOOL_SOURCE_CAPABILITY).toBe("cli-first");
+    await expect(f.tools.admit(f.target, { ...f.admission, cli: { sourceCapability: "cli-first", mode: "progressive" } })).resolves.toEqual(first);
+  });
+
+  it("bounds revoked CLI recognition across released sessions and never reassigns an old credential", async () => {
+    const f = fixture();
+    for (let index = 0; index < 4_096; index++) {
+      await f.tools.admit(f.target, { ...f.admission, cli: { sourceCapability: `cli-${index}`, mode: "progressive" } });
+      f.tools.release(f.target);
+    }
+    await expect(f.tools.admit(f.target, { ...f.admission, cli: { sourceCapability: "overflow", mode: "progressive" } }))
+      .rejects.toMatchObject({ code: "opencode_agent_tools_capacity_reached" });
+    expect(f.tools.ownsCliCapability("cli-0")).toBe(true);
+    expect(() => f.tools.captureCliInvocation("cli-0")).toThrow();
+    const other = { ...f.target, session: { ...f.target.session, applicationThreadId: "other" } };
+    await expect(f.tools.admit(other, { ...f.admission, cli: { sourceCapability: "cli-0", mode: "progressive" } })).rejects.toThrow();
+  });
+
   it("freezes current input before the first native metadata await", async () => {
     const f = fixture(); await f.open(); await f.deliver(1);
     const held = f.wire.hold(`/api/session/${f.wire.sessionID}`);

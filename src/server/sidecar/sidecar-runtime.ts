@@ -12,7 +12,6 @@ import type { SidecarArtifactRegistration } from "./sidecar-artifact.js";
 import { SidecarProvisionerCleanupError, type SidecarProvisioner } from "./sidecar-provisioner.js";
 import { SidecarServiceManagementError, type SidecarArtifactInstallation, type SidecarServiceControlInput, type SidecarServiceControlBoundary } from "./sidecar-provisioner.js";
 import type { SidecarServiceStatus, SidecarManagementReceipt } from "../../internal/sidecar-protocol/service-management-v1.js";
-import { isSidecarRevisionChanged } from "./runtime-channel.js";
 
 const DEFAULT_IDLE_MILLISECONDS = 5 * 60_000;
 
@@ -308,15 +307,12 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   /** An invocation can arrive on the current carrier before its backend has a
    * local presentation. Borrow that carrier; replacing it would cancel the very
    * request whose retained authority we are resolving. Pending configuration
-   * still requires the daemon's existing-only recovery attachment. */
+   * permits this narrow borrow of original authority; callers still use the
+   * provider's existing-only operation. It never admits current configuration. */
   async acquireExisting(scope: RequestScope, executionEnvironmentId: string, signal: AbortSignal): Promise<SidecarRuntimeLease<Session>> {
     const attachmentSignal = this.#attachmentController.signal;
     this.#assertScope(scope, executionEnvironmentId);
-    try { await this.#assertActive(); }
-    catch (error) {
-      if (!isSidecarRevisionChanged(error)) throw error;
-      return this.acquireRetainedRecovery(scope, executionEnvironmentId, signal);
-    }
+    await this.#assertActive(true);
     signal.throwIfAborted();
     const current = this.#borrowCurrentRecovery([]);
     if (current) return current;

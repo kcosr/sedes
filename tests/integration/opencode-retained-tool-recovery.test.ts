@@ -40,24 +40,40 @@ describe("OpenCode retained tool owner recovery", () => {
     current.release(); retained.release(); initial.release();
   });
 
-  it("refuses ordinary promotion through a stale configuration carrier", async () => {
+  it("preserves ordinary read-only recovery while configuration is pending", async () => {
     const f = fixture(), first = await f.attach(), original = f.client(); await original.start();
+    const initial = original.acquire(f.target);
+    await initial.client.mutate("prompt", { sessionID: f.wire.sessionID, id: "msg_pending", text: "pending", delivery: "queue", resume: true }, control("pending"));
     await first.close(); await f.attach({ recovery: true, environmentRevision: 2 });
     const replacement = f.client(); await replacement.startRetained();
     f.setNormalError(new Error("sidecar_revision_changed"));
-    await expect(replacement.start()).rejects.toThrow("sidecar_revision_changed");
+    await expect(replacement.start()).resolves.toBeUndefined();
+    const retained = replacement.acquire(f.target);
+    await expect(retained.client.read("getSession", { sessionID: f.wire.sessionID })).resolves.toMatchObject({ id: f.wire.sessionID });
+    await expect(retained.client.mutate("prompt", { sessionID: f.wire.sessionID, id: "msg_denied", text: "denied", delivery: "queue", resume: true }, control("denied"))).rejects.toBeDefined();
+    await expect(replacement.admitToolSession(f.target, { sourceCapability: "new-source", catalog: [] })).rejects.toBeDefined();
+    const acquisitions = vi.mocked(f.provider.acquire).mock.calls.length;
+    await expect(replacement.start()).resolves.toBeUndefined();
+    expect(f.provider.acquire).toHaveBeenCalledTimes(acquisitions);
+    retained.release(); initial.release();
     expect(f.owners).toHaveLength(1); expect(f.owners[0]!.start).toHaveBeenCalledOnce();
-    expect(f.promptCount()).toBe(0);
+    expect(f.promptCount()).toBe(1);
   });
 
-  it("refuses promotion when current configuration has disabled the retained native owner", async () => {
+  it("keeps disabled retained native owners readable without enabling new work", async () => {
     const f = fixture(), first = await f.attach(), original = f.client(); await original.start();
+    const initial = original.acquire(f.target);
+    await initial.client.mutate("prompt", { sessionID: f.wire.sessionID, id: "msg_pending", text: "pending", delivery: "queue", resume: true }, control("pending"));
     await first.close(); await f.attach();
     const replacement = f.client({ ...f.configuration, instance: { ...f.configuration.instance, enabled: false } });
     await replacement.startRetained();
-    await expect(replacement.start()).rejects.toBeDefined();
+    await expect(replacement.start()).resolves.toBeUndefined();
+    const retained = replacement.acquire(f.target);
+    await expect(retained.client.read("getSession", { sessionID: f.wire.sessionID })).resolves.toMatchObject({ id: f.wire.sessionID });
+    await expect(retained.client.mutate("prompt", { sessionID: f.wire.sessionID, id: "msg_disabled", text: "denied", delivery: "queue", resume: true }, control("disabled"))).rejects.toBeDefined();
+    retained.release(); initial.release();
     expect(f.owners).toHaveLength(1); expect(f.owners[0]!.start).toHaveBeenCalledOnce();
-    expect(f.promptCount()).toBe(0);
+    expect(f.promptCount()).toBe(1);
   });
 
   it("refuses changed native configuration before either retained or normal attachment", async () => {

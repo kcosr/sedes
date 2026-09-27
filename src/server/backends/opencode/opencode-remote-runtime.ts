@@ -16,6 +16,7 @@ import { decodeOpenCodeNativeFailure, OpenCodeNativeMutationDeliveryError, openC
   parseOpenCodeMutationOutput, parseOpenCodeObservationBoundary, parseOpenCodeObservationRecords,
   parseAdmission, parseCompaction, parseMutationSession } from "./opencode-native-codecs.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
+import { openCodeToolInvokeOperation } from "./opencode-tool-relay-wire.js";
 import { openCodeRuntimeExecuteOperation, openCodeRuntimeControlOperation, openCodeRuntimeCommandLane,
   openCodeRuntimeResponseSchema, openCodeRuntimeInfoSchema, openCodeRuntimeTargetSchema,
   openCodePortAdmissionSchema, openCodeRuntimeSuccessSchema, openCodeRuntimeInspectionSchema, openCodeObservationPollTargetSchema,
@@ -27,6 +28,7 @@ export class OpenCodeRemoteRuntime {
   #attachment?: SidecarRuntimeLease;
   #info?: OpenCodeRuntimeInfo;
   #starting?: Promise<void>;
+  #startingRetained = false;
   #closed = false;
   #recovery = false;
   #invocationRecovery = false;
@@ -45,7 +47,8 @@ export class OpenCodeRemoteRuntime {
   }
   start(): Promise<void> {
     if (this.#closed) return Promise.reject(unavailable());
-    if (this.#starting) return this.#starting;
+    if (this.#starting) return this.#startingRetained
+      ? this.#starting.catch(() => undefined).then(() => this.start()) : this.#starting;
     if (this.#attachment && this.#info?.snapshot.state === "ready") {
       if (!this.#invocationRecovery) return this.assertCurrent();
       return this.#starting = this.#admitCurrentConfiguration().finally(() => { this.#starting = undefined; });
@@ -58,7 +61,8 @@ export class OpenCodeRemoteRuntime {
     if (this.#closed) return Promise.reject(unavailable());
     if (this.#starting) return this.#starting;
     if (this.#attachment && this.#info?.snapshot.state === "ready") return this.assertCurrent();
-    this.#starting = this.#start(true).finally(() => { this.#starting = undefined; });
+    this.#startingRetained = true;
+    this.#starting = this.#start(true).finally(() => { this.#starting = undefined; this.#startingRetained = false; });
     return this.#starting;
   }
   async #start(existingOnly = false): Promise<void> {
@@ -87,13 +91,18 @@ export class OpenCodeRemoteRuntime {
   }
   async #admitCurrentConfiguration(): Promise<void> {
     const retained = this.#ready();
-    const fresh = await this.input.provider.acquire();
+    let recovery = !this.input.configuration.instance.enabled || !this.input.configuration.connections.some(connection => connection.enabled);
+    const fresh = recovery ? await this.input.acquireRecovery() : await this.input.provider.acquire().catch(error => {
+      if (!isSidecarRevisionChanged(error)) throw error;
+      recovery = true;
+      return this.input.acquireRecovery();
+    });
     let adopted = false;
     try {
       if (this.#closed || fresh.serviceIncarnation !== retained.attachment.serviceIncarnation ||
           fresh.controllerEpoch < retained.attachment.controllerEpoch ||
           fresh.channel !== retained.attachment.channel && fresh.controllerEpoch === retained.attachment.controllerEpoch) throw unavailable();
-      const info = openCodeRuntimeInfoSchema.parse(await call(fresh, { action: "lookup", configuration: this.input.configuration }));
+      const info = openCodeRuntimeInfoSchema.parse(await call(fresh, { action: recovery ? "lookup_recovery" : "lookup", configuration: this.input.configuration }));
       if (this.#closed || info.nativeNamespaceKey !== this.nativeNamespaceKey || info.runtimeId !== retained.info.runtimeId ||
           info.snapshot.state !== "ready" || info.snapshot.generation !== retained.info.snapshot.generation ||
           configurationFingerprint(info.snapshot.identity ?? null) !== configurationFingerprint(retained.info.snapshot.identity ?? null) ||
@@ -110,7 +119,7 @@ export class OpenCodeRemoteRuntime {
         void fresh.closed.then(() => this.#disconnected(fresh), () => this.#disconnected(fresh));
         retained.attachment.release();
       }
-      this.#recovery = false; this.#invocationRecovery = false;
+      this.#recovery = recovery; this.#invocationRecovery = false;
     } finally { if (!adopted) fresh.release(); }
   }
   #disconnected(attachment: SidecarRuntimeLease): void {
@@ -213,6 +222,8 @@ export class OpenCodeRemoteRuntime {
     signal?: AbortSignal): Promise<OpenCodeHostToolAdmissionResult> {
     if (this.#recovery) throw unavailable();
     const { attachment, info } = this.#ready();
+    attachment.channel.assertReady();
+    if (!attachment.channel.supportsIncomingOperation(openCodeToolInvokeOperation)) throw new OpenCodeRuntimeError("opencode_tools_capability_unavailable");
     return openCodeHostToolAdmissionResultSchema.parse(await call(attachment, { action: "tools_admit",
       runtimeId: info.runtimeId, nativeGeneration: info.snapshot.generation!,
       target: openCodeHostToolTargetSchema.parse(target), admission: openCodeHostToolAdmissionSchema.parse(admission) }, signal));
@@ -250,6 +261,7 @@ export class OpenCodeRemoteRuntime {
 export async function callOpenCodeRemoteRuntime(attachment: SidecarRuntimeLease, command: OpenCodeRuntimeCommandInput, signal?: AbortSignal): Promise<unknown> {
   signal?.throwIfAborted();
   const channel = attachment.channel;
+  channel.assertReady();
   const definition = openCodeRuntimeCommandLane(command) === "control" ? openCodeRuntimeControlOperation : openCodeRuntimeExecuteOperation;
   if (!channel.supportsOperation(definition)) throw new OpenCodeRuntimeError("opencode_runtime_capability_unavailable");
   const body = await channel.encodeBody({ ...command, controllerEpoch: attachment.controllerEpoch, serviceIncarnation: attachment.serviceIncarnation });

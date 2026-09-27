@@ -31,9 +31,10 @@ function fixture(transportKind: string) {
     streams.set(stream, carrier); return stream;
   }
   const launch = vi.fn(async () => attach(false)), attachExisting = vi.fn(async () => attach(true));
+  let activeRevision = 1;
   const owner = new SidecarRuntimeOwner({ scope: f.scope, executionEnvironmentId: environmentId,
     environmentConfigurationRevision: 1, operationsConfigurationRevision: 1,
-    activeEnvironmentConfigurationRevision: () => 1, activeOperationsConfigurationRevision: () => 1,
+    activeEnvironmentConfigurationRevision: () => activeRevision, activeOperationsConfigurationRevision: () => 1,
     authorizedCapabilities: [], authorizedRuntimeCapabilities: [], isAutomaticConnectionEnabled: () => true,
     artifact: { artifactId: SIDECAR_ARTIFACT_ID, modes: SIDECAR_ARTIFACT_MODES, executableDirectory: "/fixture",
       executablePath: "/fixture/sedes", artifactSha256: "a".repeat(64), artifactBytes: 1, buildId: "test",
@@ -63,10 +64,54 @@ function fixture(transportKind: string) {
     clients.push(value); return value;
   }
   cleanups.push(async () => { for (const value of clients) await value.close(); await owner.close(); await f.close(); });
-  return { ...f, owner, provider, client, launch, attachExisting, carriers };
+  return { ...f, owner, provider, client, launch, attachExisting, carriers, setRevision: (revision: number) => { activeRevision = revision; } };
 }
 
 describe("OpenCode recovery through the production sidecar owner", () => {
+  it.each([false, true])("ordinary startup waits for retained admission then promotes or ensures, missing=%s", async missing => {
+    const f = fixture("ssh_stdio");
+    if (!missing) await f.client().start();
+    let release!: () => void, entered!: () => void;
+    const arrived = new Promise<void>(resolve => { entered = resolve; });
+    const wait = new Promise<void>(resolve => { release = resolve; });
+    const acquireExisting = f.provider.acquireExisting;
+    vi.spyOn(f.provider, "acquireExisting").mockImplementation(async signal => {
+      entered(); await wait; return acquireExisting(signal);
+    });
+    const recovered = f.client();
+    const retained = recovered.startRetained();
+    const retainedResult = retained.catch(error => error);
+    await arrived;
+    const ordinary = recovered.start();
+    release(); await retainedResult; await ordinary;
+    const normal = recovered.acquire(f.target);
+    await expect(normal.client.mutate("prompt", { sessionID: f.wire.sessionID, id: "msg_overlap", text: "overlap", delivery: "queue", resume: true }, control("overlap")))
+      .resolves.toMatchObject({ id: "msg_overlap" });
+    expect(f.promptCount()).toBe(1); expect(f.owners).toHaveLength(1); expect(f.owners[0]!.start).toHaveBeenCalledOnce();
+    normal.release();
+  });
+
+  it.each(["ssh_stdio", "outbound_websocket"])("borrows a pending-revision %s invocation carrier without cancelling its response path", async kind => {
+    const f = fixture(kind), original = f.client(); await original.start();
+    const normal = original.acquire(f.target);
+    await normal.client.mutate("prompt", { sessionID: f.wire.sessionID, id: "msg_pending", text: "pending", delivery: "queue", resume: true }, control("pending"));
+    const carrier = f.carriers[0]!;
+    let closed = false; void carrier.lease.closed.then(() => { closed = true; });
+    f.setRevision(2);
+    const recovered = f.client(); await recovered.startRetained();
+    const narrow = recovered.acquire(f.target);
+    await expect(narrow.client.read("getSession", { sessionID: f.wire.sessionID })).resolves.toMatchObject({ id: f.wire.sessionID });
+    expect(closed).toBe(false); expect(f.attachExisting).not.toHaveBeenCalled(); expect(f.launch).toHaveBeenCalledOnce();
+    // An ordinary caller deliberately transitions to pending-config recovery;
+    // it remains readable after the current normal carrier is retired.
+    await recovered.start();
+    const ordinary = recovered.acquire(f.target);
+    await expect(ordinary.client.read("getSession", { sessionID: f.wire.sessionID })).resolves.toMatchObject({ id: f.wire.sessionID });
+    await expect(ordinary.client.mutate("prompt", { sessionID: f.wire.sessionID, id: "msg_stale", text: "denied", delivery: "queue", resume: true }, control("stale"))).rejects.toBeDefined();
+    expect(f.promptCount()).toBe(1); expect(f.owners[0]!.start).toHaveBeenCalledOnce();
+    ordinary.release(); narrow.release(); normal.release();
+  });
+
   it.each(["ssh_stdio", "outbound_websocket"])("recovers a tool on its existing %s carrier without replacing normal authority", async kind => {
     const f = fixture(kind), original = f.client(); await original.start();
     const normal = original.acquire(f.target);

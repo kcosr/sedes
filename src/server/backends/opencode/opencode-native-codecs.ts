@@ -469,6 +469,7 @@ const nativeFailureCodes = [
   "opencode_mutation_retention_full", "opencode_mutation_outcome_unknown", "opencode_mutation_pending", "opencode_mutation_owner_closed",
   "opencode_mutation_wait_cancelled",
   "opencode_environment_topology_unsupported", "opencode_environment_resolution_failed", "opencode_agent_tools_unavailable",
+  "opencode_agent_tools_capacity_reached",
   "opencode_observation_retention_full", "opencode_observation_controller_superseded",
   "opencode_observation_cursor_conflict",
 ] as const;

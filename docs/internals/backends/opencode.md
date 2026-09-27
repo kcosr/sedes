@@ -435,6 +435,16 @@ not trigger another registration. Per location there are at most eight channel
 admissions per host-runtime lifetime, with 64 total and a 256-entry inventory
 bound. Failed rows can accumulate across host-runtime restarts and require a
 native restart.
+The host additionally retains at most 1,000 admitted thread routes and 4,096
+distinct CLI capability identities per runtime lifetime. Remote detach does
+not release these routes: a native shell or background job can call later,
+and stock inventory cannot prove that such work no longer exists. Revoked CLI
+identities remain recognizable until retirement so they cannot fall through
+to another backend's relay. Re-admission of an existing route is permitted at
+capacity; new admission returns an explicit capacity diagnostic. Automatic
+LRU eviction is intentionally absent. A confirmed backend Stop followed by
+Connect creates fresh capacity; owned Stop terminates work, while external
+Stop retires only Sedes's attachment.
 The native MCP execution timeout is 24 hours, distinct from bounded startup,
 catalog, transport and lifetime checks. No MCP readiness sleep gates messages.
 

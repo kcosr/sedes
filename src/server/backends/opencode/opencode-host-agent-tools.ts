@@ -31,6 +31,7 @@ import { OpenCodeHttpNativeAdapter } from "./opencode-http-native-adapter.js";
 import { OpenCodeMcpIngress, type OpenCodeMcpChannel } from "./opencode-mcp-ingress.js";
 import { BackendAgentToolRequestError } from "../../agent-tools/adapters/backend-facade.js";
 import { openCodeNativeAuthoritySchema, openCodeMutationControlSchema, OpenCodeNativeMutationDeliveryError } from "./opencode-native-codecs.js";
+import { OpenCodeRuntimeError } from "./opencode-release.js";
 
 export const openCodeHostToolTargetSchema = openCodeNativeAuthoritySchema.pick({ directory: true, session: true }).required({ session: true });
 export const openCodeHostToolAdmissionSchema = z.strictObject({ sourceCapability: z.string().min(1).max(16_384),
@@ -72,18 +73,20 @@ export class OpenCodeHostAgentTools {
     const admission = openCodeHostToolAdmissionSchema.parse(value);
     if (admission.cli) {
       const known = this.#cliCapabilities.get(admission.cli.sourceCapability);
-      if (known && !sameTarget(known.target, target) || !known && this.#cliCapabilities.size >= 4_096) throw denied();
+      if (known && !sameTarget(known.target, target)) throw denied();
+      if (!known && this.#cliCapabilities.size >= 4_096) throw capacityReached();
     }
     await this.#assertTarget(target, signal);
     if (admission.cli) {
       // Concurrent admission can change the capability index during validation.
       const known = this.#cliCapabilities.get(admission.cli.sourceCapability);
-      if (known && !sameTarget(known.target, target) || !known && this.#cliCapabilities.size >= 4_096) throw denied();
+      if (known && !sameTarget(known.target, target)) throw denied();
+      if (!known && this.#cliCapabilities.size >= 4_096) throw capacityReached();
       // CLI authority needs no native MCP registration, catalogue or workspace
       // slot. Keep its exact session bound and subject to the same live limit.
       const key = target.session.applicationThreadId, previous = this.#sessions.get(key);
       if (previous && sameTarget(previous.target, target) && JSON.stringify(previous.admission) === JSON.stringify(admission)) return previous.result;
-      if (!previous && this.#sessions.size >= 1_000) throw denied();
+      if (!previous && this.#sessions.size >= 1_000) throw capacityReached();
       previous?.owner.abort();
       const result = Object.freeze({ registrationAdmissionId: randomBytes(32).toString("base64url"),
         registrationName: registrationName(), registrationControl: registrationControl(randomBytes(32).toString("base64url")),
@@ -111,7 +114,7 @@ export class OpenCodeHostAgentTools {
     const previous = this.#sessions.get(key);
     if (previous && previous.result.registrationAdmissionId === location.admissionId && sameTarget(previous.target, target) && JSON.stringify(previous.admission) === JSON.stringify(admission)) return previous.result;
     if (previous) previous.owner.abort();
-    if (!previous && this.#sessions.size >= 1_000) throw denied();
+    if (!previous && this.#sessions.size >= 1_000) throw capacityReached();
     const result = Object.freeze({ registrationAdmissionId: location.admissionId, registrationName: location.name, registrationControl: registrationControl(randomBytes(32).toString("base64url")),
       cliAdmissionId: admission.cli ? randomBytes(32).toString("base64url") : null });
     this.#sessions.set(key, { target: structuredClone(target), admission, result, owner: new AbortController() });
@@ -235,6 +238,7 @@ function sameTarget(a: OpenCodeHostToolTarget, b: OpenCodeHostToolTarget): boole
 }
 function registrationName(): string { return `sedes_${randomBytes(24).toString("hex")}`; }
 function denied(): BackendAgentToolRequestError { return new BackendAgentToolRequestError({ code: "permission_denied", retryable: false, message: "This OpenCode session is not admitted to Sedes tools." }); }
+function capacityReached(): OpenCodeRuntimeError { return new OpenCodeRuntimeError("opencode_agent_tools_capacity_reached"); }
 
 function registrationControl(operationId: string): import("./opencode-native-port.js").OpenCodeMutationControl {
   return Object.freeze({ identity: Object.freeze({ origin: "host", operationId, step: "register-mcp" }), deadlineAt: Date.now() + 60_000 });
