@@ -1,6 +1,9 @@
 import path from "node:path";
 import type { OpenCodeNativeMessage } from "../../src/server/backends/opencode/opencode-native-api.js";
 export const LIVE_GATE_LIMITS = { deadlineMs: 45_000, outputTokens: 256, outputBytes: 16_384 } as const;
+// Stock provider plugins select by native ID and may replace transport or request
+// settings. Keep this qualification on the rehearsed OpenAI-compatible HTTP path.
+export const LIVE_GATE_PROVIDER_ID = "sedes-live-gate";
 
 /** Synchronous admission fence, including a delayed timer callback under load. */
 export function assertLiveGateBudget(deadlineAt: number, signal: AbortSignal, now = Date.now()): void {
@@ -17,8 +20,8 @@ export function parseLiveInput(env: Readonly<Record<string, string | undefined>>
   };
   const executable = required("SEDES_REAL_OPENCODE_EXECUTABLE");
   if (!path.isAbsolute(executable)) throw new Error("Live gate requires an absolute reviewed executable");
-  const provider = required("SEDES_LIVE_OPENCODE_PROVIDER_ID"), model = required("SEDES_LIVE_OPENCODE_MODEL_ID");
-  if (provider.length > 120 || model.length > 120 || provider.includes("/")) throw new Error("Invalid exact provider/model");
+  const model = required("SEDES_LIVE_OPENCODE_MODEL_ID");
+  if (model.length > 120) throw new Error("Invalid exact model");
   let url: URL;
   try { url = new URL(required("SEDES_LIVE_OPENCODE_BASE_URL")); }
   catch { throw new Error("Invalid provider HTTPS base URL"); }
@@ -27,7 +30,7 @@ export function parseLiveInput(env: Readonly<Record<string, string | undefined>>
   if (tokenField !== "max_tokens" && tokenField !== "max_completion_tokens") throw new Error("Unsupported completion limit field");
   const keyName = required("SEDES_LIVE_OPENCODE_API_KEY_ENV");
   if (!/^[A-Z_][A-Z0-9_]{0,127}$/u.test(keyName)) throw new Error("Invalid provider credential environment reference");
-  return { executable, provider, model, baseURL: url.href.replace(/\/$/u, ""), tokenField, keyName };
+  return { executable, model, baseURL: url.href.replace(/\/$/u, ""), tokenField, keyName };
 }
 export function readLiveCredential(input: ReturnType<typeof parseLiveInput>, read: (name: string) => string | undefined): string {
   const value = read(input.keyName);
@@ -37,12 +40,12 @@ export function readLiveCredential(input: ReturnType<typeof parseLiveInput>, rea
 export function liveConfiguration(input: ReturnType<typeof parseLiveInput>, canaryFile: string) {
   return {
     update: "disable", share: "disabled", snapshots: false, compaction: { auto: false },
-    model: `${input.provider}/${input.model}`,
+    model: `${LIVE_GATE_PROVIDER_ID}/${input.model}`,
     // Stock file permissions use location-relative resources for internal files.
     // The runner creates this single file directly beneath its isolated location.
     permissions: [{ action: "*", resource: "*", effect: "deny" }, { action: "read", resource: path.basename(canaryFile), effect: "allow" }],
     agents: { build: { steps: 2, system: "Read the one requested canary file and return its contents. Do nothing else." } },
-    providers: { [input.provider]: {
+    providers: { [LIVE_GATE_PROVIDER_ID]: {
       package: "aisdk:@ai-sdk/openai-compatible",
       settings: { apiKey: "{env:OPENCODE_LIVE_GATE_API_KEY}", baseURL: input.baseURL, timeout: 20_000, chunkTimeout: 10_000 },
       models: { [input.model]: { capabilities: { tools: true, input: ["text"], output: ["text"] },

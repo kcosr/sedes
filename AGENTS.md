@@ -106,15 +106,19 @@ boundary or necessary coverage justifies it. Run E2E through the npm
 coordinator scripts, not raw Playwright, so ports, state, artifacts, and process
 cleanup remain isolated.
 
-Do not run live-provider Pi, Codex, Claude, or Grok suites by default, including
-commands matching `test:real-pi*`, `test:real-codex*`, `test:real-claude*`, or
-`test:real-grok*`. These suites consume live provider capacity and may require
-authenticated external services. When work materially changes a backend's
-protocol handling, streaming, history, lifecycle, tools, or provider
+Do not run live-provider Pi, Codex, Claude, Grok, or OpenCode suites by default.
+These include `test:real-pi*`, `test:real-codex*`, `test:real-claude*`,
+`test:real-grok*`, and `test:live-opencode`. They consume live provider capacity
+and may require authenticated external services. When work materially changes
+a backend's protocol handling, streaming, history, lifecycle, tools, or provider
 integration behavior, ask the user whether to run its relevant live suite
 before doing so. If a relevant live suite is not run, explicitly call that out
 in the final handoff and recommend it as an additional verification step; do
 not imply that the backend was live verified.
+
+OpenCode's separate `test:real-opencode` suite uses an isolated stock binary
+and loopback model/MCP fixtures only; it does not call authenticated providers.
+It does not replace the explicitly authorized `test:live-opencode` gate.
 
 When the user authorizes a real-Pi suite, preserve the `test:real-pi` and
 `test:real-pi-cli` self-gates on exactly one authenticated `xai/grok-4.5`

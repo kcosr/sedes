@@ -262,7 +262,6 @@ environment variable. The command below contains no credential value:
 ```sh
 SEDES_RUN_LIVE_OPENCODE=1 \
   SEDES_REAL_OPENCODE_EXECUTABLE=/absolute/path/to/opencode2 \
-  SEDES_LIVE_OPENCODE_PROVIDER_ID=reviewed-provider \
   SEDES_LIVE_OPENCODE_MODEL_ID=exact-model-id \
   SEDES_LIVE_OPENCODE_BASE_URL=https://provider.example/v1 \
   SEDES_LIVE_OPENCODE_API_KEY_ENV=MY_PROVIDER_API_KEY \
@@ -270,6 +269,8 @@ SEDES_RUN_LIVE_OPENCODE=1 \
 ```
 
 The endpoint must use HTTPS without embedded credentials, query or fragment.
+The native provider ID is fixed to `sedes-live-gate`, so stock built-in provider
+plugins cannot substitute another transport or reshape the rehearsed request.
 Set `SEDES_LIVE_OPENCODE_TOKEN_FIELD` to `max_completion_tokens` if that endpoint
 requires it; the default is `max_tokens`. The gate places a 256-token limit in
 the actual request body, with a 16 KiB observed text limit, two logical model
@@ -279,7 +280,9 @@ setup exhausted that deadline. The test harness reserves additional time for
 bounded native startup settlement and independent cleanup after cancellation.
 Stock 2.0.18 has internal transient retries which cannot be
 disabled through configuration; the first observed retry fails the gate and
-requests Stop. These are exposure limits, **not a guaranteed monetary cap**:
+requests Stop. The gate checks parsed events before closing its observation and
+settles that monitor before success; the local cutoff cannot prove that every
+server-side retry was observed. These are exposure limits, **not a guaranteed monetary cap**:
 interrupted or retried remote requests can still be billed, and endpoint token
 limit behavior remains provider-specific.
 
@@ -295,7 +298,8 @@ It attempts runtime shutdown even if handle/observation cleanup fails, closes
 SQLite independently, and retains native state if process cleanup is unproved.
 
 `tests/real-opencode/live-gate-rehearsal.test.ts` exercises this same runner with
-a loopback model: it checks wire token limits, the allowed read, and a denied
+a loopback model: it checks exclusive wire token-limit fields, canary content
+in the model's tool result after the allowed read, and a denied
 read outside the canary path without external inference. This rehearsal does
 not qualify a real provider or its billing behavior.
 

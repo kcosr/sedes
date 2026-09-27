@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenCodeNativeMessage } from "../../src/server/backends/opencode/opencode-native-api.js";
-import { assertLiveGateBudget, cleanupLiveGate, LIVE_GATE_LIMITS, liveConfiguration, parseLiveInput, readLiveCredential, settledCanaryPeriod, within } from "../support/opencode-live-gate.js";
+import { assertLiveGateBudget, cleanupLiveGate, LIVE_GATE_LIMITS, LIVE_GATE_PROVIDER_ID, liveConfiguration, parseLiveInput, readLiveCredential, settledCanaryPeriod, within } from "../support/opencode-live-gate.js";
 
 const settings = () => ({
   SEDES_RUN_LIVE_OPENCODE: "1",
   SEDES_REAL_OPENCODE_EXECUTABLE: "/reviewed/opencode2",
-  SEDES_LIVE_OPENCODE_PROVIDER_ID: "reviewed-provider",
   SEDES_LIVE_OPENCODE_MODEL_ID: "exact/model",
   SEDES_LIVE_OPENCODE_BASE_URL: "https://provider.example/v1",
   SEDES_LIVE_OPENCODE_API_KEY_ENV: "MY_PROVIDER_KEY",
@@ -23,7 +22,7 @@ describe("live OpenCode preflight", () => {
 
   it.each([
     ["SEDES_REAL_OPENCODE_EXECUTABLE", "opencode2"],
-    ["SEDES_LIVE_OPENCODE_PROVIDER_ID", "provider/alias"],
+    ["SEDES_LIVE_OPENCODE_MODEL_ID", "x".repeat(121)],
     ["SEDES_LIVE_OPENCODE_MODEL_ID", ""],
     ["SEDES_LIVE_OPENCODE_MODEL_ID", "model\nother"],
     ["SEDES_LIVE_OPENCODE_BASE_URL", "http://provider.example/v1"],
@@ -53,12 +52,21 @@ describe("live OpenCode preflight", () => {
   it.each(["max_tokens", "max_completion_tokens"])("bounds native logical steps and the configured %s wire field", tokenField => {
     const input = parseLiveInput({ ...settings(), SEDES_LIVE_OPENCODE_TOKEN_FIELD: tokenField });
     const config = liveConfiguration(input, "/isolated/canary.txt");
-    expect(config.model).toBe("reviewed-provider/exact/model");
+    expect(config.model).toBe(`${LIVE_GATE_PROVIDER_ID}/exact/model`);
     expect(config.permissions).toEqual([{ action: "*", resource: "*", effect: "deny" }, { action: "read", resource: "canary.txt", effect: "allow" }]);
     expect(config.agents.build.steps).toBe(2);
     expect(config.compaction.auto).toBe(false);
-    expect(config.providers[input.provider]!.settings).toMatchObject({ apiKey: "{env:OPENCODE_LIVE_GATE_API_KEY}", timeout: 20_000, chunkTimeout: 10_000 });
-    expect(config.providers[input.provider]!.models[input.model]!.body).toEqual({ [tokenField]: LIVE_GATE_LIMITS.outputTokens });
+    expect(config.providers[LIVE_GATE_PROVIDER_ID].settings).toMatchObject({ apiKey: "{env:OPENCODE_LIVE_GATE_API_KEY}", timeout: 20_000, chunkTimeout: 10_000 });
+    expect(config.providers[LIVE_GATE_PROVIDER_ID].models[input.model]!.body).toEqual({ [tokenField]: LIVE_GATE_LIMITS.outputTokens });
+  });
+
+  it.each(["openai", "xai", "opencode", "openrouter"])("does not let an ambient %s provider ID select native plugins", provider => {
+    const input = parseLiveInput({ ...settings(), SEDES_LIVE_OPENCODE_PROVIDER_ID: provider });
+    const config = liveConfiguration(input, "/isolated/canary.txt");
+    expect(input).not.toHaveProperty("provider");
+    expect(Object.keys(config.providers)).toEqual([LIVE_GATE_PROVIDER_ID]);
+    expect(config.model).toBe(`${LIVE_GATE_PROVIDER_ID}/exact/model`);
+    expect(config.providers[LIVE_GATE_PROVIDER_ID].package).toBe("aisdk:@ai-sdk/openai-compatible");
   });
 });
 

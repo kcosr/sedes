@@ -3500,9 +3500,12 @@ unsupported capability, wrong scope, stale revision/generation, timeout,
 disconnect, shutdown, and recovery.
 
 Then run the deterministic repository sequence in
-[Development](../developer/development.md). Real Pi, Codex, Claude, and Grok
-suites consume provider capacity and require explicit user authorization;
-never cite them as evidence unless they were actually run for the final change.
+[Development](../developer/development.md). Authenticated Pi, Codex, Claude,
+Grok, and OpenCode (`test:live-opencode`) suites consume provider capacity and
+require explicit user authorization; never cite them as evidence unless they
+were actually run for the final change. OpenCode's separate
+`test:real-opencode` suite uses isolated stock binaries and loopback fixtures
+only and does not establish live-provider qualification.
 
 ## Review checklist
 

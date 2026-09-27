@@ -9,7 +9,7 @@ it.runIf(RUN_REAL_OPENCODE)("rehearses the live gate against stock OpenCode with
   const model = await startOpencodeModelFixture();
   try {
     await runOpenCodeReadonlyGate({ executable: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2",
-      provider: "probe", model: "probe-model", baseURL: model.config.providers.probe.settings.baseURL,
+      model: "probe-model", baseURL: model.config.providers.probe.settings.baseURL,
       tokenField: "max_tokens", keyName: "FIXTURE_ONLY" }, "fixture-only", {
       canary: "Fixture response",
       beforeSubmit: ({ canaryFile }) => { model.callToolNextStream(`Read ${canaryFile}`, "read", { path: canaryFile }); },
@@ -19,6 +19,7 @@ it.runIf(RUN_REAL_OPENCODE)("rehearses the live gate against stock OpenCode with
     expect(model.requests.every(request => request.maxTokens === 256 && request.maxCompletionTokens === undefined)).toBe(true);
     expect(model.requests[0]!.toolNames).toEqual(["read"]);
     expect(model.requests[1]!.toolChoice).toBe("none");
+    expect(model.requests[1]!.toolResults.join("\n")).toContain("Fixture response");
   } finally { await model.stop(); }
 });
 
@@ -28,7 +29,7 @@ it.runIf(RUN_REAL_OPENCODE)("fails qualification when the model attempts a read 
     let failure: unknown;
     try {
       await runOpenCodeReadonlyGate({ executable: process.env.SEDES_REAL_OPENCODE_EXECUTABLE ?? "/home/kevin/.local/bin/opencode2",
-        provider: "probe", model: "probe-model", baseURL: model.config.providers.probe.settings.baseURL,
+        model: "probe-model", baseURL: model.config.providers.probe.settings.baseURL,
         tokenField: "max_completion_tokens", keyName: "FIXTURE_ONLY" }, "fixture-only", {
         canary: "Fixture response",
         beforeSubmit: async ({ canaryFile, workspace }) => {
@@ -41,7 +42,7 @@ it.runIf(RUN_REAL_OPENCODE)("fails qualification when the model attempts a read 
     expect(failure).toBeInstanceOf(AggregateError);
     expect((failure as AggregateError).errors).toEqual([expect.objectContaining({ message: "Canary read did not complete" })]);
     expect(model.requestCount).toBe(2);
-    expect(model.requests.every(request => request.maxCompletionTokens === 256)).toBe(true);
+    expect(model.requests.every(request => request.maxCompletionTokens === 256 && request.maxTokens === undefined)).toBe(true);
     expect(model.requests[0]!.toolNames).toEqual(["read"]);
     expect(model.requests[1]!.toolResults.join("\n")).toMatch(/denied|permission|Unable to read/iu);
     expect(model.requests[1]!.toolResults.join("\n")).not.toContain("THIS MUST NOT REACH THE MODEL");

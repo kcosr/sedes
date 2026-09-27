@@ -6,11 +6,12 @@ import path from "node:path";
 import { expect, vi } from "vitest";
 import type { ConversationHandle, SubmitTurnInput } from "../../src/server/backends/contracts.js";
 import { OpenCodeRuntime } from "../../src/server/backends/opencode/opencode-runtime.js";
-import { OpenCodeNativeApi, type OpenCodeNativeObservation } from "../../src/server/backends/opencode/opencode-native-api.js";
+import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-native-api.js";
 import { OpenCodeNativeMutations } from "../../src/server/backends/opencode/opencode-native-mutations.js";
 import { OpenCodeInputEvidenceRepository } from "../../src/server/backends/opencode/opencode-input-evidence.js";
 import { openCodeHistoryTurnId } from "../../src/server/backends/opencode/opencode-history-projection.js";
-import { parseLiveInput, liveConfiguration, settledCanaryPeriod, within, cleanupLiveGate, assertLiveGateBudget, LIVE_GATE_LIMITS } from "./opencode-live-gate.js";
+import { parseLiveInput, liveConfiguration, settledCanaryPeriod, within, cleanupLiveGate, assertLiveGateBudget, LIVE_GATE_LIMITS, LIVE_GATE_PROVIDER_ID } from "./opencode-live-gate.js";
+import { monitorLiveGate } from "./opencode-live-monitor.js";
 import { createOpenCodeConversationFixture, scope, threadID } from "./opencode-conversation-fixture.js";
 
 const { deadlineMs, outputBytes } = LIVE_GATE_LIMITS;
@@ -26,8 +27,8 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
   const canary = options.canary ?? randomBytes(12).toString("hex"), canaryFile = path.join(workspace, "canary.txt");
   const lifetime = new AbortController();
   let runtime: OpenCodeRuntime | undefined, current: ReturnType<typeof createOpenCodeConversationFixture> | undefined;
-  let handle: ConversationHandle | undefined, observation: OpenCodeNativeObservation | undefined;
-  let monitoring: Promise<void> | undefined, monitorFailure: Error | undefined;
+  let handle: ConversationHandle | undefined, monitor: ReturnType<typeof monitorLiveGate> | undefined;
+  let monitorFailure: Error | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined, originalFailure: unknown;
   const reads = new Set<Promise<unknown>>();
   const wait = <T>(work: Promise<T>): Promise<T> => {
@@ -35,15 +36,15 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
     return within(work, lifetime.signal);
   };
   const promptSpy = vi.spyOn(OpenCodeNativeMutations.prototype, "prompt");
-  const fail = (message: string) => {
-    monitorFailure ??= new Error(message); lifetime.abort();
+  const fail = (error: Error) => {
+    monitorFailure ??= error; lifetime.abort(error);
     const stopping = handle?.interrupt({ applicationOperationId: "live-gate-stop", deadlineAt: Date.now() + 5_000 });
     if (stopping) {
       reads.add(stopping);
       void stopping.finally(() => reads.delete(stopping)).catch(() => undefined);
     }
   };
-  timer = setTimeout(() => fail("Live-gate deadline exceeded"), Math.max(0, deadlineAt - Date.now()));
+  timer = setTimeout(() => fail(new Error("Live-gate deadline exceeded")), Math.max(0, deadlineAt - Date.now()));
   try {
     await Promise.all([workspace, config, path.dirname(store), path.join(root, "home")].map(folder => mkdir(folder, { recursive: true, mode: 0o700 })));
     await writeFile(canaryFile, canary, { mode: 0o600 });
@@ -60,12 +61,12 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
     const lease = runtime.acquire();
     try {
       const api = new OpenCodeNativeApi(lease.client), native = new OpenCodeNativeMutations(lease.client);
-      const model = { providerID: input.provider, id: input.model };
+      const model = { providerID: LIVE_GATE_PROVIDER_ID, id: input.model };
       // Stock native provider discovery finishes after the server readiness ACK.
       // Qualify the exact tuple before creating or prompting a session.
       await wait(vi.waitFor(async () => {
         assertLiveGateBudget(deadlineAt, lifetime.signal);
-        expect((await native.listModels(workspace, lifetime.signal)).filter(value => value.providerID === input.provider && value.id === input.model)).toHaveLength(1);
+        expect((await native.listModels(workspace, lifetime.signal)).filter(value => value.providerID === LIVE_GATE_PROVIDER_ID && value.id === input.model)).toHaveLength(1);
       }, { timeout: Math.min(20_000, Math.max(1, deadlineAt - Date.now())), interval: 50 }));
       const session = await wait(native.createSession({ id: `ses_${randomBytes(16).toString("hex")}`, title: "Sedes explicit live qualification", location: { directory: workspace }, model }, lifetime.signal));
       current = createOpenCodeConversationFixture({ native: { client: lease.client, sessionID: session.id, directory: workspace, runtime } });
@@ -74,21 +75,8 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
       // Attach itself has no caller signal; preserve any late handle for cleanup.
       await wait(current.driver.attach(current.target).then(value => { handle = value; }));
       await wait(handle!.establishProjection({ signal: lifetime.signal }));
-      observation = api.observe({ signal: lifetime.signal, include: event => "sessionID" in event.data && event.data.sessionID === session.id });
-      await wait(observation.ready);
-      const feed = observation;
-      monitoring = (async () => {
-        let bytes = 0, steps = 0;
-        while (!lifetime.signal.aborted) {
-          await feed.wait(lifetime.signal);
-          for (const { event, decodedBytes } of feed.drain()) {
-            bytes += decodedBytes;
-            if (bytes > 262_144) throw new Error("Live-gate event limit exceeded");
-            if (event.type === "session.retry.scheduled") throw new Error("Native provider retry is outside this smoke gate");
-            if (event.type === "session.step.started" && ++steps > 2) throw new Error("Live-gate step limit exceeded");
-          }
-        }
-      })().catch(() => { if (!lifetime.signal.aborted) fail("Live-gate native observation failed or exceeded limits"); });
+      monitor = monitorLiveGate({ observe: options => api.observe(options), sessionID: session.id, signal: lifetime.signal, onFailure: fail });
+      await wait(monitor.ready);
       const operation: SubmitTurnInput = { applicationOperationId: "live-canary", mutationId: "live-canary", reconciliationToken: "live-canary", source: { kind: "user" },
         text: `Read ${canaryFile} with the read tool and reply with its exact contents.`, attachments: [], contextExcerpts: [], taskContexts: [] };
       await options.beforeSubmit?.({ canaryFile, workspace });
@@ -152,13 +140,18 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
       reads.add(reconciled); void reconciled.finally(() => reads.delete(reconciled)).catch(() => undefined);
       expect(await within(reconciled, lifetime.signal)).toMatchObject({ status: "accepted" });
       expect(promptSpy).toHaveBeenCalledTimes(1);
+      // Close and settle the observation before success or lifetime cancellation.
+      // The monitor inspects matching events in the pump, so none can remain in
+      // the native observation's queue when close discards it.
+      await monitor.finish();
+      if (monitorFailure) throw monitorFailure;
       // Native cost, if reported, is an estimate. This gate has no bill guarantee.
     } finally { lease.release(); }
-  } catch (error) { originalFailure = error; }
+  } catch (error) { originalFailure = monitorFailure ?? error; }
   finally {
     clearTimeout(timer); lifetime.abort();
     const cleanup = await cleanupLiveGate({
-      observer: async () => { await observation?.close(); await monitoring; },
+      observer: async () => { await monitor?.close(); },
       handle: async () => { await handle?.close(); },
       stopRuntime: async () => { if (runtime) { const result = await runtime.stop(); if (result.cleanup !== "proved") throw new Error("Owned cleanup unproved"); } },
       pendingReads: async () => { await Promise.allSettled([...reads]); await handle?.close(); },
@@ -169,7 +162,7 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
       removeRoot: () => rm(root, { recursive: true, force: true }),
     });
     promptSpy.mockRestore();
-    const failures = [...(originalFailure === undefined ? [] : [originalFailure]), ...cleanup.failures];
-    if (failures.length) throw new AggregateError(failures, `OpenCode live gate failed${cleanup.rootRetained ? `; isolated root retained: ${root}` : ""}`);
+    const failures = [...new Set([...(originalFailure === undefined ? [] : [originalFailure]), ...(monitorFailure ? [monitorFailure] : [])]), ...cleanup.failures];
+    if (failures.length) throw new AggregateError(failures, `OpenCode live gate failed${monitorFailure ? `: ${monitorFailure.message}` : ""}${cleanup.rootRetained ? `; isolated root retained: ${root}` : ""}`);
   }
 }
