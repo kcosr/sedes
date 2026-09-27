@@ -4775,6 +4775,21 @@ class PiConversationHandle implements ConversationHandle {
     for (const item of Object.values(seed.snapshot.itemsById)) {
       this.#emittedItems.set(item.backendItemId, item);
     }
+    // History numbers items across the whole branch. Later live items of a
+    // seeded running turn must follow all of its items and reserved slots,
+    // or they could sort between a viewed image and its child.
+    const activeTurn = this.#activeTurnId
+      ? seed.snapshot.turnsById[this.#activeTurnId]
+      : undefined;
+    for (const itemId of activeTurn?.orderedBackendItemIds ?? []) {
+      const item = seed.snapshot.itemsById[itemId]!;
+      const last =
+        item.sourceOrder + (item.semanticKind === "viewed_image" ? 1 : 0);
+      this.#nextAssistantSourceOrderBase = Math.max(
+        this.#nextAssistantSourceOrderBase,
+        last + 1,
+      );
+    }
     this.#scheduleViewedImageBackfill(
       filled.missing.filter(({ child }) =>
         this.#emittedTurns.has(child.backendTurnId),

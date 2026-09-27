@@ -1076,6 +1076,62 @@ describe("Pi viewed images seeded before their results persist", () => {
     await handle.close();
   });
 
+  it("orders later live items after a seeded running turn and its reserved child slots", async () => {
+    const fixture = await workspace();
+    const recorder = recordingPublisher();
+    const pause = pauseWithResnapshot();
+    const driver = driverWith(fixture, recorder.publisher, [
+      { messages: [[{ read: { id: "shown", path: "shown.png" } }]], beforeResults: pause.beforeResults },
+    ]);
+    const conversation = await created(driver, fixture);
+    const manager = await persisted(fixture, conversation.backendConversationId);
+    // Earlier turns push history's branch-wide order past the live base.
+    for (let turn = 0; turn < 4; turn += 1) {
+      manager.appendMessage({ role: "user", content: [{ type: "text", text: `earlier ${turn}` }], timestamp: Date.now() });
+      manager.appendMessage(
+        assistantMessage(
+          Array.from({ length: 700 }, (_, index) => ({ type: "text", text: `${turn}.${index}` })),
+          "stop",
+        ) as never,
+      );
+    }
+    const handle = await driver.attach(conversation.attach);
+    const first = await follow(handle, conversation.backendConversationId);
+    const submitted = await submit(handle, "look");
+    await pause.atHook;
+    first.unsubscribe();
+    const second = await follow(handle, conversation.backendConversationId);
+    const seededOrders = second.projection.snapshot.turnsById[submitted.backendTurnId!]!.orderedBackendItemIds.map(
+      (id) => second.projection.snapshot.itemsById[id]!.sourceOrder,
+    );
+    expect(Math.min(...seededOrders)).toBeGreaterThan(2_001);
+    pause.resume();
+    await vi.waitFor(async () =>
+      expect(childImages((await driver.read(conversation.attach)).snapshot.itemsById)).toHaveLength(1),
+    );
+    await vi.waitFor(() =>
+      expect(second.events.some(({ event }) => event.type === "turn_completed")).toBe(true),
+    );
+    expect(second.results.filter(({ kind }) => kind === "resnapshot_required")).toEqual([]);
+    const current = (await driver.read(conversation.attach)).snapshot;
+    expect(turnShape(current, submitted.backendTurnId!)).toEqual([
+      "user_message",
+      "viewed:completed:shown.png",
+      "image:provider_input",
+      "assistant_message",
+    ]);
+    const timeline = second.normalized.timeline();
+    const turn = timeline.turnsById[timeline.orderedTurnIds.at(-1)!]!;
+    expect(turn.orderedItemIds.map((id) => timeline.itemsById[id]!.kind)).toEqual([
+      "user_message",
+      "viewed_image",
+      "image",
+      "assistant_message",
+    ]);
+    second.unsubscribe();
+    await handle.close();
+  });
+
   it("interrupts a seeded row whose result never persists before settlement", async () => {
     const fixture = await workspace();
     const recorder = recordingPublisher();
