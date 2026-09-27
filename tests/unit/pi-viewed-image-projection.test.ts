@@ -239,6 +239,25 @@ describe("Pi live viewed-image projection", () => {
     ]);
   });
 
+  it("treats the executor-backed read of remote and sandboxed sessions as the built-in", () => {
+    const projector = new PiLiveToolProjector({
+      identities: new PiToolIdentityCatalog(
+        [tool("read", "sdk", "<sdk:read>")],
+        [],
+        [],
+        new Set(["read"]),
+      ),
+      now: () => "2026-09-27T12:00:00.000Z",
+    });
+    projector.beginAssistantStream({ streamEpoch: "remote", backendTurnId: "turn" });
+    const events = readToCompletion(projector, 0, "call", "/srv/remote/plot.webp", imageResult());
+    expect(events.map(({ type, item }) => [type, item.semanticKind])).toEqual([
+      ["item_started", "viewed_image"],
+      ["item_completed", "viewed_image"],
+    ]);
+    expect(projector.takeViewedImageResults()).toHaveLength(1);
+  });
+
   it("keeps an extension tool named read streaming as a generic tool", () => {
     const projector = live([tool("read", "project", "/workspace/.pi/extensions/read.ts")]);
     const started = items(
