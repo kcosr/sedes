@@ -306,6 +306,7 @@ function assuredTcpIdentity(
 ): EnvironmentAssuredTcpStreamIdentity {
   const authenticationIdentity = createEnvironmentSecretIdentity({
     kind: "environment_secret",
+      purpose: "capability_token",
     scope: identityScope,
     connectionGeneration,
     secretIdentity: `secret-${label}`,
@@ -502,6 +503,7 @@ describe("Codex RPC client", () => {
           connectionGeneration: 1,
           authenticationIdentity: {
             kind: "environment_secret",
+      purpose: "capability_token",
             scope,
             connectionGeneration: 1,
             secretIdentity: "forged-secret",
@@ -553,6 +555,7 @@ describe("Codex RPC client", () => {
   it("rejects forged, stale, wrong-scope, and wrong-generation TCP authentication identities", () => {
     const forgedSecret = {
       kind: "environment_secret" as const,
+      purpose: "capability_token" as const,
       scope,
       connectionGeneration: 1,
       secretIdentity: "forged-secret",
@@ -575,6 +578,7 @@ describe("Codex RPC client", () => {
     const otherScope = { ...scope, principalId: "principal-2" };
     const wrongScopeSecret = createEnvironmentSecretIdentity({
       kind: "environment_secret",
+      purpose: "capability_token",
       scope: otherScope,
       connectionGeneration: 1,
       secretIdentity: "wrong-scope-secret",
@@ -597,6 +601,7 @@ describe("Codex RPC client", () => {
 
     const wrongGenerationSecret = createEnvironmentSecretIdentity({
       kind: "environment_secret",
+      purpose: "capability_token",
       scope,
       connectionGeneration: 2,
       secretIdentity: "wrong-generation-secret",

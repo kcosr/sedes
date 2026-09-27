@@ -43,6 +43,7 @@ export function nativeAgentToolAdapter(
       return "pi_sdk";
     case "codex_app_server":
     case "claude_agent_sdk":
+    case "opencode":
       return "mcp";
     case "grok_build":
       return undefined;

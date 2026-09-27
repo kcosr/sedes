@@ -2204,12 +2204,19 @@ and a server-admitted 30-second deadline. Provider handles publish an independen
 history hydration. The actor manager borrows only that scoped, live generation;
 Stop never opens a query or attaches a new native owner to make control available.
 A failed first projection keeps the same valid handle and environment lease for
-control and later history recovery. No snapshot means unknown readiness, never
-idle. Control borrowers pin owner resources and all cleanup waiters are released
-when the last control borrow ends.
+control and later history recovery within the normal retention grace. Failed
+initial hydration can be reclaimed under runtime-budget pressure and after
+retention; it cannot pin an unreachable owner indefinitely. No snapshot means
+unknown readiness, never idle. Archive still requires proven quiescence, while
+force reset can close the exact retained unprojected generation. Control
+borrowers pin owner resources and all cleanup waiters are released when the
+last control borrow ends.
 
-The mutation gateway serializes initial Stop dispatch with queue-owned Send and
-Steer. Pi and Claude use their native session/query cancellation; Grok selects
+A per-owner native-effect fence serializes Stop with first Send, queue-owned
+Send and Steer. Only the actual provider calls hold it: runtime acquisition,
+history hydration and the queue mailbox never block control admission. A Stop
+whose original deadline expires while waiting on a provider effect cannot
+dispatch later. Pi and Claude use their native session/query cancellation; Grok selects
 one current prompt and requires its cancelled settlement, since writing an ACP
 notification is not acknowledgement. Codex selects its current native turn from
 control metadata and turn shells without hydrating item history, and sends one
@@ -2222,7 +2229,9 @@ worker and persistent capability major 2 are required, without a version-1 parse
 The deadline includes pending-input withdrawal and carrier/SDK acknowledgement.
 An uncertain receipt is reconciled read-only; no internal retry can resend Stop
 or chase later work. Persist and preserve the original deadline on replay and
-startup recovery. Gateway expiry works independently of a stalled driver:
+startup recovery. Expiry wakes preserved queued inputs, including after restart,
+and terminal replay returns its stored diagnostic to the browser. Gateway expiry
+works independently of a stalled driver:
 possibly dispatched unresolved Stop becomes terminal `failed_unknown` with a
 bounded diagnostic, and stops blocking the durable Queue. Late acknowledgements
 cannot reopen it or mark a replacement turn stopping. Confirmed acceptance stays

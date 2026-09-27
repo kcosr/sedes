@@ -132,7 +132,7 @@ function policyRefreshGateway(client: ClaudePersistentRuntimeClient, sessionId: 
     outputArtifacts: {}, agentToolSourceCapabilities: {}, agentTools: {}, childEnvironment: {},
   } as unknown as ConstructorParameters<typeof ClaudeConversationBackendDriver>[0]);
   const coordinator = new ThreadRuntimeCoordinator({
-    actors: { runWithRuntimeRetired: async (input: Parameters<import("../../src/server/conversations/conversation-actor-manager.js").ConversationActorManager["runWithRuntimeRetired"]>[0]) => { await input.detachCoordinatorRuntime(); return input.operation(); } },
+    actors: { captureUnprojectedGeneration: () => undefined, runWithRuntimeRetired: async (input: Parameters<import("../../src/server/conversations/conversation-actor-manager.js").ConversationActorManager["runWithRuntimeRetired"]>[0]) => { await input.detachCoordinatorRuntime(); return input.operation(); } },
     targets: { resolve: async () => ({ scope, binding, workspace, driver,
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) }) },
     bridge: {}, interactions: {}, hubs: new ScopedThreadEventHubRegistry(), retentionMilliseconds: 60_000,
@@ -149,7 +149,7 @@ function policyRefreshGateway(client: ClaudePersistentRuntimeClient, sessionId: 
     bindings: { database }, inventory: { database, assertWorkspaceActive: () => {},
       getThread: () => ({ thread: { availability: "available", backingState: "bound" }, inventory: { inventoryState: "active" } }) },
     lifecycle: {}, forks: { recoverActive: () => undefined }, queue: {},
-    operations: { database, findUncertainThreadOperation: () => undefined, expireInterrupts: () => {} }, completions: { database },
+    operations: { database, findUncertainThreadOperation: () => undefined, expireInterrupts: () => [] }, completions: { database },
     queueGateway: {}, runtimes: coordinator, interactions: {}, presentation: {},
     agentToolPolicies: { database, get: () => policy, update }, actionPersistence: new Map(), publishThreadSnapshot: async () => {},
   } as unknown as ConstructorParameters<typeof ThreadMutationGateway>[0]);
@@ -565,7 +565,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const original = firstClient.createSession(sessionOptions(sessionId));
     await original.start();
     const native = f.sessions[0]!;
-    const input = { applicationOperationId: randomUUID(), deadlineAt: Date.now() + 30_000 };
+    const input = { applicationOperationId: "api-client-stop-operation", deadlineAt: Date.now() + 30_000 };
     await original.interrupt(input);
     await firstClient.close();
     await first.close();
@@ -2149,4 +2149,40 @@ describe("persistent host shutdown evidence", () => {
     expect(await archived(idle)).toEqual([]);
     expect(await archived(await stopped(true))).toHaveLength(2);
   });
+});
+
+it("a full Claude Stop journal cannot disable other sessions and is retired only with its native owner", async () => {
+  const f = await fixture();
+  const attached = await f.attach();
+  const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+  const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+  const listener = vi.fn();
+  const first = randomUUID(), second = randomUUID();
+  const open = (sessionId: string, launch: "new" | "resume" = "new") => host.execute({ ...authority,
+    action: "open", replay: "full", request: { queryId: sessionId, sessionId, cwd: "/workspace", launch, enableCanUseTool: false, environment: {} } }, listener);
+  await open(first);
+  const native = f.sessions[0]!;
+  const request = { queryId: first, startupProbeUuid: native.startupProbeUuid, operationId: "stop-0", timeoutMilliseconds: 30_000 };
+  for (let index = 0; index < 16_384; index++) {
+    await host.execute({ ...authority, action: "interrupt", request: { ...request, operationId: `stop-${index}` } }, listener);
+  }
+  await expect(host.execute({ ...authority, action: "interrupt", request: { ...request, operationId: "over-capacity" } }, listener)).rejects.toMatchObject({ backendCode: "claude_interrupt_capacity", crossedSubmissionBoundary: false });
+  // Tombstones are still authoritative in a live owner; no expiration/pruning
+  // lets an old operation acquire a new deadline and dispatch again.
+  await expect(host.execute({ ...authority, action: "interrupt", request }, listener)).resolves.toEqual({ receipt: null });
+  expect(native.interrupt).toHaveBeenCalledTimes(16_384);
+  await open(second);
+  const secondNative = f.sessions[1]!;
+  await expect(host.execute({ ...authority, action: "interrupt", request: { ...request, queryId: second, startupProbeUuid: secondNative.startupProbeUuid } }, listener)).resolves.toEqual({ receipt: null });
+  expect(secondNative.interrupt).toHaveBeenCalledOnce();
+  await host.execute({ ...authority, action: "detach", request: { sessionId: first } }, listener);
+  await expect(host.execute({ ...authority, action: "retire", request: { sessionId: first, cwd: "/workspace" } }, listener)).resolves.toEqual({ outcome: "retired" });
+  expect(native.closed).toBe(true);
+  await open(first, "resume");
+  const replacement = f.sessions[2]!;
+  expect(replacement.startupProbeUuid).not.toBe(native.startupProbeUuid);
+  await expect(host.execute({ ...authority, action: "interrupt", request }, listener)).rejects.toThrow("claude_persistent_interrupt_owner_changed");
+  await expect(host.execute({ ...authority, action: "interrupt_disposition", request: { queryId: first, startupProbeUuid: native.startupProbeUuid, operationId: request.operationId } }, listener)).resolves.toEqual({ outcome: "unknown" });
+  await expect(host.execute({ ...authority, action: "interrupt", request: { ...request, startupProbeUuid: replacement.startupProbeUuid, operationId: "new-owner-stop" } }, listener)).resolves.toEqual({ receipt: null });
+  expect(replacement.interrupt).toHaveBeenCalledOnce();
 });

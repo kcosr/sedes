@@ -70,7 +70,7 @@ export function BackendEditor({ draft, setDraft, configuration, saving, loading,
               {selectedEditor.renderBackend({ value: draft.backend, onChange: (backend) => setDraft({ ...draft, backend }) })}
               <ConfiguredEnvironmentVariableEditor scope="backend" value={draft.backend.environmentVariables} inherited={environment?.environmentVariables}
                 startupUnavailableReason={draft.backend.kind === "pi" ? "Pi runs in the Sedes process and has no owned backend startup environment."
-                  : draft.backend.kind === "codex_app_server" && draft.backend.moduleConfiguration.connection.ownership === "external" ? "Sedes does not start the externally owned Codex process." : undefined}
+                  : (draft.backend.kind === "codex_app_server" || draft.backend.kind === "opencode") && draft.backend.moduleConfiguration.connection.ownership === "external" ? "Sedes does not start this externally owned process." : undefined}
                 onChange={(environmentVariables) => setDraft({ ...draft, backend: { ...draft.backend, environmentVariables } })} />
               <ModelPolicyEditor value={draft.backend.modelPolicy} supportsProviderIds={selectedEditor.supportsProviderIds}
                 onChange={(modelPolicy) => setDraft({ ...draft, backend: { ...draft.backend, modelPolicy } })} />

@@ -46,6 +46,7 @@ import { ThreadInventoryService } from "../support/schema9/thread-inventory-serv
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
 import { normalizedThreadEventSchema } from "../../src/shared/protocol/conversation.js";
+import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
 
 const configuration = parseResolvedBackendConfiguration({
   schemaVersion: 10,
@@ -615,6 +616,66 @@ function readyCallback(
   return callbacks;
 }
 
+describe("queue dispatch and existing conversation Stop control", () => {
+  it("accepts Stop while real queue recovery holds the conversation hydration gate", async () => {
+    const fixture = createFixture();
+    const threadId = fixture.threadIds[0];
+    const repository = new QueuedInputRepository(fixture.database);
+    const nativeGateway = new FakeGateway();
+    let releaseHydration!: () => void;
+    const hydration = new Promise<void>(resolve => { releaseHydration = resolve; });
+    let hydrationEntered!: () => void;
+    const entered = new Promise<void>(resolve => { hydrationEntered = resolve; });
+    nativeGateway.withConversationGates.push(hydration);
+    nativeGateway.onWithConversationBoundary = hydrationEntered;
+    const { dispatcher: queue } = createDispatcher(repository, nativeGateway, { now: { value: 700 } });
+    const operations = new ConversationOperationRepository(fixture.database);
+    const interrupted = vi.fn(async () => undefined);
+    const releaseControl = vi.fn();
+    const acquireProjection = vi.fn(async () => { throw new Error("Stop must not acquire transcript projection"); });
+    const gateway = new ThreadMutationGateway({
+      bindings: new ConversationBindingRepository(fixture.database), inventory: new InventoryRepository(fixture.database),
+      operations, completions: new SubmissionCompletionRepository(fixture.database), queue, queueGateway: nativeGateway,
+      runtimes: { acquire: acquireProjection, acquireExistingControl: () => ({ control: {
+        generation: "existing-native-owner", lifetime: new AbortController().signal,
+        interrupt: interrupted, reconcileInterrupt: async () => ({ outcome: "unknown" as const }),
+      }, release: releaseControl }) } as never,
+      lifecycle: {} as never, forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("unexpected fork discard"); } },
+      interactions: {} as never, presentation: {} as never,
+      agentToolPolicies: { database: fixture.database, get: () => { throw new Error("unexpected policy read"); }, update: () => { throw new Error("unexpected policy write"); } },
+      actionPersistence: new Map(), publishThreadSnapshot: async () => undefined, now: () => 700,
+    });
+    let recovery: Promise<void> | undefined;
+    try {
+      enqueueUser(fixture, repository, threadId, "queued-before-stop", 650);
+      recovery = queue.recover(fixture.scope);
+      await entered;
+      expect(nativeGateway.submitted).toEqual([]);
+      expect(repository.get(fixture.scope, threadId, "queued-before-stop").state).toBe("pending");
+      let stopped: Awaited<ReturnType<typeof gateway.mutate>> | undefined;
+      const stopping = gateway.mutate(fixture.scope, threadId, { kind: "interrupt", operationId: "stop-during-real-queue-hydration" });
+      void stopping.then(value => { stopped = value; }, () => undefined);
+      // The real dispatcher is still inside withConversation's hydration gate.
+      // A dispatcher-wide Stop fence would deadlock here until the gate opens.
+      await vi.waitFor(() => expect(stopped).toEqual({ status: "accepted", operationId: "stop-during-real-queue-hydration" }));
+      await stopping;
+      expect(interrupted).toHaveBeenCalledOnce();
+      expect(releaseControl).toHaveBeenCalledOnce();
+      expect(acquireProjection).not.toHaveBeenCalled();
+      expect(operations.findInterrupt(fixture.scope, "stop-during-real-queue-hydration")?.state).toBe("accepted");
+      expect(nativeGateway.submitted).toEqual([]);
+      expect(repository.get(fixture.scope, threadId, "queued-before-stop").state).toBe("pending");
+      releaseHydration();
+      await recovery;
+      expect(nativeGateway.submitted).toHaveLength(1);
+    } finally {
+      releaseHydration();
+      await recovery?.catch(() => undefined);
+      await gateway.close(); await queue.close(); fixture.database.close();
+    }
+  });
+});
+
 describe("ConversationOperationRepository interrupt rejection", () => {
   it.each(["prepared", "uncertain"] as const)(
     "deletes a proven-not-applied %s interrupt receipt",
@@ -669,7 +730,7 @@ describe("ConversationOperationRepository interrupt rejection", () => {
           fixture.scope,
           "accepted-stop",
         ),
-      ).toThrow(/accepted interrupt cannot be rejected/i);
+      ).toThrow(/terminal interrupt cannot be rejected/i);
       expect(
         operations.getInterrupt(fixture.scope, "accepted-stop"),
       ).toMatchObject({ state: "accepted" });

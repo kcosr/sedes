@@ -1307,10 +1307,13 @@ export class ThreadClientStore {
   stopActiveTurn(): Promise<void> {
     return this.#mutate(async () => {
       this.#requireOperation("interrupt");
-      await this.#api.operateThread(this.threadId, {
+      const result = await this.#api.operateThread(this.threadId, {
         kind: "interrupt",
         operationId: crypto.randomUUID(),
       });
+      if (result.status === "recovery_required") {
+        throw new Error(result.diagnostic ?? "Stop has no confirmed outcome. You may issue a new Stop.");
+      }
     });
   }
 

@@ -336,10 +336,10 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     }
     if (operation.kind === "interrupt") {
       // Stop borrows existing control, even while another caller is hydrating
-      // history. Native admission shares the dispatcher's per-thread fence.
+      // history. Native effects share the actor owner's fence, never the queue hydration lock.
       return this.#interrupt(scope, applicationThreadId, operation);
     }
-    this.input.operations.expireInterrupts(scope, this.#now(), applicationThreadId);
+    this.#expireInterrupts(scope, this.#now(), applicationThreadId);
     const key = operationKey(scope, applicationThreadId);
     let mailbox = this.#mailboxes.get(key);
     if (!mailbox) {
@@ -473,7 +473,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
   }
 
   async recoverUncertain(scope: RequestScope): Promise<void> {
-    this.input.operations.expireInterrupts(scope, this.#now());
+    this.#expireInterrupts(scope, this.#now());
     for (const operation of this.input.operations.listPreparedDraftSteers(
       scope,
     )) {
@@ -1614,8 +1614,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         // pre-upgrade draft-source receipt may still be prepared, uncertain,
         // or awaiting provider materialization, so resume that durable record
         // through its original boundary instead of creating a second intent.
-        return this.input.queue.withDispatchFence(scope, applicationThreadId, () =>
-          this.#steer(scope, applicationThreadId, operation));
+        return this.#steer(scope, applicationThreadId, operation);
       }
     }
     const queuedReplay = this.input.queue.findComposerDeliveryReplay(
@@ -1896,6 +1895,20 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     };
   }
 
+  #expireInterrupts(scope: RequestScope, now: number, applicationThreadId?: string): void {
+    const affected = this.input.operations.expireInterrupts(scope, now, applicationThreadId);
+    for (const threadId of affected) {
+      void this.#changed(scope, threadId).catch(() => undefined);
+      void this.input.queue.onAuthoritativeSettled(scope, threadId).catch(() => undefined);
+    }
+  }
+
+  #interruptUnconfirmed(scope: RequestScope, operationId: string): ThreadApplicationMutationResult {
+    const receipt = this.input.operations.findInterrupt(scope, operationId);
+    return { status: "recovery_required", retryable: false,
+      diagnostic: receipt?.failureDiagnostic ?? "Stop expired before it could be sent. You may issue a new Stop." };
+  }
+
   async #interrupt(
     scope: RequestScope,
     applicationThreadId: string,
@@ -1908,21 +1921,21 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       throw new DomainError("conflict", "The operation ID is already used by another thread.");
     }
     if (receipt?.state === "accepted") return { status: "accepted", operationId: receipt.applicationOperationId };
-    if (receipt?.state === "failed_unknown") return { status: "recovery_required", retryable: false };
+    if (receipt?.state === "failed_unknown") return this.#interruptUnconfirmed(scope, operation.operationId);
     receipt ??= this.input.operations.prepareInterrupt(scope, applicationThreadId, {
       operationId: operation.operationId, now: this.#now(),
     });
     const deadlineAt = receipt.deadlineAt;
     if (deadlineAt <= this.#now()) {
-      this.input.operations.expireInterrupts(scope, this.#now(), applicationThreadId);
-      return { status: "recovery_required", retryable: false };
+      this.#expireInterrupts(scope, this.#now(), applicationThreadId);
+      return this.#interruptUnconfirmed(scope, operation.operationId);
     }
     const key = operationKey(scope, operation.operationId);
     let deadline = this.#interruptDeadlines.get(key);
     if (!deadline) {
       const controller = new AbortController();
       const timer = setTimeout(() => {
-        this.input.operations.expireInterrupts(scope, Math.max(this.#now(), deadlineAt), applicationThreadId);
+        this.#expireInterrupts(scope, Math.max(this.#now(), deadlineAt), applicationThreadId);
         controller.abort();
         this.#interruptDeadlines.delete(key);
         void this.#changed(scope, applicationThreadId).catch(() => undefined);
@@ -1946,9 +1959,9 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       if (!currentBudget()) aborted();
     });
     const dispatch = async (): Promise<ThreadApplicationMutationResult> => {
-      if (!currentBudget()) return { status: "recovery_required", retryable: false };
+      if (!currentBudget()) return this.#interruptUnconfirmed(scope, operation.operationId);
       const current = this.input.operations.findInterrupt(scope, operation.operationId);
-      if (!current || current.state === "failed_unknown") return { status: "recovery_required", retryable: false };
+      if (!current || current.state === "failed_unknown") return this.#interruptUnconfirmed(scope, operation.operationId);
       if (current.state === "accepted") return { status: "accepted", operationId: current.applicationOperationId };
       const lease = this.input.runtimes.acquireExistingControl(scope, applicationThreadId);
       if (!lease) {
@@ -1966,7 +1979,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           // the established refusal policy may admit a later explicit request,
           // but never retries or retargets inside this operation.
           const outcome = await withinBudget(lease.control.reconcileInterrupt(input));
-          if (!currentBudget()) return { status: "recovery_required", retryable: false };
+          if (!currentBudget()) return this.#interruptUnconfirmed(scope, operation.operationId);
           if (outcome.outcome === "unknown") return { status: "recovery_required", retryable: true };
           if (outcome.outcome === "not_applied") {
             this.input.operations.rejectInterruptProvenNotApplied(scope, operation.operationId);
@@ -1974,13 +1987,13 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
             throw new DomainError("invalid_transition", "The previous Stop was not applied. Issue a new Stop to target current work.");
           }
         } else {
-          if (!currentBudget()) return { status: "recovery_required", retryable: false };
+          if (!currentBudget()) return this.#interruptUnconfirmed(scope, operation.operationId);
           this.input.operations.markInterruptStarted(scope, operation.operationId);
           await withinBudget(lease.control.interrupt(input));
         }
-        if (!currentBudget()) return { status: "recovery_required", retryable: false };
+        if (!currentBudget()) return this.#interruptUnconfirmed(scope, operation.operationId);
         const accepted = this.input.operations.acceptInterrupt(scope, operation.operationId);
-        if (accepted.state !== "accepted") return { status: "recovery_required", retryable: false };
+        if (accepted.state !== "accepted") return this.#interruptUnconfirmed(scope, operation.operationId);
         // The native ACK is authoritative independently of optional Goal work
         // or browser publication. Neither can turn a successful Stop unknown.
         try {
@@ -1998,15 +2011,15 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           throw error;
         }
         if (error instanceof DomainError) throw error;
-        return { status: "recovery_required", retryable: currentBudget() };
+        return currentBudget() ? { status: "recovery_required", retryable: true } : this.#interruptUnconfirmed(scope, operation.operationId);
       } finally { lease.release(); }
     };
     try {
-      return await withinBudget(this.input.queue.withDispatchFence(scope, applicationThreadId, dispatch));
+      return await withinBudget(dispatch());
     } catch (error) {
       const accepted = this.input.operations.findInterrupt(scope, operation.operationId);
       if (accepted?.state === "accepted") return { status: "accepted", operationId: accepted.applicationOperationId };
-      if (!currentBudget()) return { status: "recovery_required", retryable: false };
+      if (!currentBudget()) return this.#interruptUnconfirmed(scope, operation.operationId);
       throw error;
     }
   }

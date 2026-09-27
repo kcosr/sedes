@@ -766,6 +766,9 @@ export class GrokSessionLifecycle {
     if (!prompt || prompt.sessionId !== sessionId || prompt.promptId !== promptId || !prompt.completion) {
       throw new Error("grok_prompt_interrupt_target_changed");
     }
+    // Native terminal evidence can precede the session/prompt reply while its
+    // settlement is still draining. There is no remaining work to cancel.
+    if (prompt.liveTerminal) return;
     const interrupt = (async () => {
       budget?.dispatch();
       await this.connection.cancelSession({ sessionId }, budget ? {

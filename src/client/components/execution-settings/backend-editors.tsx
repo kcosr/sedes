@@ -88,6 +88,18 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
     renderBackend: (props) => props.value.kind === "grok_build" ? <GrokBackendEditor value={props.value} onChange={props.onChange} /> : unsupportedEditor(),
     renderTarget: (props) => props.value.kind === "grok_acp" ? <GrokTargetEditor value={props.value} onChange={props.onChange} /> : unsupportedEditor(),
   },
+  opencode: {
+    label: "OpenCode v2", description: "Use a Sedes-managed OpenCode v2 process or connect to a running authenticated loopback HTTP server. Requires a local Linux environment.",
+    supportsProviderIds: true, supportsRemoteWorkspace: false,
+    createBackend: (id) => ({ ...commonBackend(id), kind: "opencode", moduleConfiguration: {
+      nativeStorePath: "", connection: { ownership: "owned", channel: { type: "process_stdio", executablePath: "", workingDirectory: "" } },
+    } }),
+    createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "opencode_http", moduleConfiguration: {
+      defaults: { model: { type: "catalogDefault" }, variant: { type: "modelDefault" } },
+    } }),
+    renderBackend: (props) => props.value.kind === "opencode" ? <OpenCodeBackendEditor value={props.value} onChange={props.onChange} /> : unsupportedEditor(),
+    renderTarget: (props) => props.value.kind === "opencode_http" ? <OpenCodeTargetEditor value={props.value} onChange={props.onChange} /> : unsupportedEditor(),
+  },
 };
 
 export function allowedEnvironments(backend: BackendDefinition, environments: readonly EnvironmentDefinition[]): EnvironmentDefinition[] {
@@ -212,5 +224,60 @@ function DefaultModelEditor({ value, onChange }: {
     <SelectField label="Default model" value={value.type} options={[{ value: "catalogDefault", label: "Provider catalog default" }, { value: "fixed", label: "Specific model" }]}
       onChange={(type) => onChange(type === "catalogDefault" ? { type } : { type, modelId: "" })} />
     {value.type === "fixed" ? <TextField label="Default model identifier" value={value.modelId} required onChange={(modelId) => onChange({ type: "fixed", modelId })} /> : null}
+  </>;
+}
+
+function OpenCodeBackendEditor({ value, onChange }: { readonly value: BackendOf<"opencode">; readonly onChange: (value: BackendDefinition) => void }): React.JSX.Element {
+  const configuration = value.moduleConfiguration;
+  const channel = configuration.connection.channel;
+  const update = (next: typeof configuration) => onChange({ ...value, moduleConfiguration: next });
+  return <fieldset><legend>OpenCode v2 connection</legend>
+    <SelectField label="Connection ownership" value={channel.type} options={[
+      { value: "process_stdio", label: "Sedes-managed process" }, { value: "http", label: "External HTTP server" },
+    ]} onChange={(type) => update({ ...configuration, connection: type === "process_stdio"
+      ? { ownership: "owned", channel: { type, executablePath: "", workingDirectory: "" } }
+      : { ownership: "external", channel: { type, url: "", authentication: { type: "basic", username: "opencode", secret: { source: "protected_file", path: "" } } } },
+    })} />
+    <TextField label="Native database path" value={configuration.nativeStorePath} required
+      description="Absolute path to this server's OpenCode SQLite database file. Each backend must use its own native store."
+      onChange={(nativeStorePath) => update({ ...configuration, nativeStorePath })} />
+    {channel.type === "process_stdio" ? <>
+      <TextField label="OpenCode v2 executable path" value={channel.executablePath} required
+        description="Absolute path to the qualified opencode2 binary."
+        onChange={(executablePath) => update({ ...configuration, connection: { ownership: "owned", channel: { ...channel, executablePath } } })} />
+      <TextField label="Working directory" value={channel.workingDirectory} required
+        onChange={(workingDirectory) => update({ ...configuration, connection: { ownership: "owned", channel: { ...channel, workingDirectory } } })} />
+      <TextField label="OpenCode configuration directory" value={configuration.configDirectory ?? ""}
+        description="Optional absolute directory. Leave blank to use the server account's native OpenCode configuration."
+        onChange={(configDirectory) => update({ ...configuration, configDirectory: configDirectory || undefined })} />
+    </> : <>
+      <TextField label="HTTP endpoint" value={channel.url} required
+        description="Literal loopback IP address with an explicit port, for example http://127.0.0.1:4096."
+        onChange={(url) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, url } } })} />
+      <SelectField label="Password source" value={channel.authentication.secret.source}
+        options={[{ value: "protected_file", label: "Protected file" }, { value: "environment", label: "Approved environment variable" }]}
+        onChange={(source) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: {
+          type: "basic", username: "opencode", secret: source === "environment" ? { source, variable: "" } : { source, path: "" },
+        } } } })} />
+      {channel.authentication.secret.source === "protected_file" ? <TextField label="Password file reference" value={channel.authentication.secret.path} required
+        description="Approved protected file on the Sedes host; enter its path, never the password."
+        onChange={(path) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: { type: "basic", username: "opencode", secret: { source: "protected_file", path } } } } })} />
+        : <TextField label="Password environment variable" value={channel.authentication.secret.variable} required
+          description="Approved SEDES_OPENCODE_…PASSWORD… variable; enter its name, never the password."
+          onChange={(variable) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: { type: "basic", username: "opencode", secret: { source: "environment", variable } } } } })} />}
+    </>}
+  </fieldset>;
+}
+
+function OpenCodeTargetEditor({ value, onChange }: { readonly value: TargetOf<"opencode_http">; readonly onChange: (value: TargetDefinition) => void }): React.JSX.Element {
+  const defaults = value.moduleConfiguration.defaults;
+  const update = (next: typeof defaults) => onChange({ ...value, moduleConfiguration: { defaults: next } });
+  return <>
+    <DefaultModelEditor value={defaults.model} onChange={(model) => update({ ...defaults, model })} />
+    <SelectField label="Default model variant" value={defaults.variant.type}
+      options={[{ value: "modelDefault", label: "Model default" }, { value: "fixed", label: "Specific variant" }]}
+      onChange={(type) => update({ ...defaults, variant: type === "modelDefault" ? { type } : { type, variantId: "" } })} />
+    {defaults.variant.type === "fixed" ? <TextField label="Variant identifier" value={defaults.variant.variantId} required
+      onChange={(variantId) => update({ ...defaults, variant: { type: "fixed", variantId } })} /> : null}
   </>;
 }

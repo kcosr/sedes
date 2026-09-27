@@ -46,6 +46,7 @@ type InterruptRecord = {
   deadlineAt: number;
   state: "prepared" | "uncertain" | "accepted" | "failed_unknown";
   createdAt: number;
+  failureDiagnostic?: string;
 };
 
 function deliveryHub(
@@ -218,8 +219,10 @@ function fixture(input?: {
     expireInterrupts: vi.fn((_scope: RequestScope, now: number) => {
       if (record && record.deadlineAt <= now) {
         if (record.state === "prepared") record = undefined;
-        else if (record.state === "uncertain") record = { ...record, state: "failed_unknown" };
+        else if (record.state === "uncertain") record = { ...record, state: "failed_unknown", failureDiagnostic: "Stop reached its deadline without a confirmed outcome. You may issue a new Stop." };
+        return ["thread-1"];
       }
+      return [];
     }),
     findUncertainThreadOperation: vi.fn(
       (_scope: RequestScope, threadId: string) =>
@@ -404,7 +407,6 @@ function fixture(input?: {
     } as never,
     forks: { recoverActive: () => undefined, discardActive: input?.discardFork ?? (async () => { throw new Error("test_unexpected_discard"); }) },
     queue: {
-      withDispatchFence: (_scope: RequestScope, _thread: string, effect: () => Promise<unknown>) => effect(),
       reconcileUncertain,
       onAuthoritativeSettled,
       enqueue,
@@ -484,7 +486,7 @@ describe("ThreadMutationGateway pending Steer restart recovery", () => {
     };
     Object.assign(subject.operations, {
       listUncertainSteers: vi.fn(() => [receipt]),
-      expireInterrupts: vi.fn(),
+      expireInterrupts: vi.fn(() => []),
       findUncertainThreadOperation: vi.fn(() => receipt.state === "uncertain" ? {
         operationKind: "conversation_steer", mutationId: receipt.mutationId,
       } : undefined),
@@ -1024,32 +1026,28 @@ describe("ThreadMutationGateway Stop receipts", () => {
       const operation = { kind: "interrupt" as const, operationId: "stalled-stop" };
       const pending = subject.gateway.mutate(scope, "thread-1", operation);
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(await pending).toEqual({ status: "recovery_required", retryable: false });
+      expect(await pending).toMatchObject({ status: "recovery_required", retryable: false, diagnostic: expect.stringContaining("new Stop") });
       expect(subject.getRecord()?.state).toBe("failed_unknown");
       ack.resolve();
       await vi.advanceTimersByTimeAsync(1);
       expect(subject.getRecord()?.state).toBe("failed_unknown");
       expect(subject.operations.acceptInterrupt).not.toHaveBeenCalled();
-      expect(await subject.gateway.mutate(scope, "thread-1", operation)).toEqual({ status: "recovery_required", retryable: false });
+      expect(await subject.gateway.mutate(scope, "thread-1", operation)).toMatchObject({ status: "recovery_required", retryable: false, diagnostic: expect.stringContaining("new Stop") });
       expect(subject.actor.interrupt).toHaveBeenCalledOnce();
       expect(subject.actor.reconcileInterrupt).not.toHaveBeenCalled();
     } finally { ack.resolve(); await subject.gateway.close(); vi.useRealTimers(); }
   });
 
-  it("does not dispatch after its original deadline expires while waiting for the queue fence", async () => {
-    vi.useFakeTimers();
-    const gate = deferred<void>();
-    const subject = fixture({ now: Date.now });
-    subject.gateway.input.queue.withDispatchFence = async (_scope, _thread, effect) => { await gate.promise; return effect(); };
+  it("wakes the preserved queue when startup recovery expires a Stop", async () => {
+    let now = 1_800_000_000_000;
+    const subject = fixture({ now: () => now, interrupt: async () => { throw new Error("lost acknowledgement"); } });
     try {
-      const pending = subject.gateway.mutate(scope, "thread-1", { kind: "interrupt", operationId: "queued-stop" });
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(await pending).toEqual({ status: "recovery_required", retryable: false });
-      expect(subject.getRecord()).toBeUndefined();
-      gate.resolve();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(subject.actor.interrupt).not.toHaveBeenCalled();
-    } finally { gate.resolve(); await subject.gateway.close(); vi.useRealTimers(); }
+      await subject.gateway.mutate(scope, "thread-1", { kind: "interrupt", operationId: "expired-at-restart" });
+      now += 31_000;
+      await subject.gateway.recoverUncertain(scope);
+      expect(subject.getRecord()?.state).toBe("failed_unknown");
+      expect(subject.gateway.input.queue.onAuthoritativeSettled).toHaveBeenCalledWith(scope, "thread-1");
+    } finally { await subject.gateway.close(); }
   });
 
   it("does not extend an uncertain Stop deadline on a read-only retry", async () => {
@@ -1480,7 +1478,7 @@ describe("ThreadMutationGateway several uncertain Steers", () => {
       queue: { steerUserInput, onAuthoritativeSettled: vi.fn(async () => undefined) } as never,
       operations: {
         database,
-        expireInterrupts: vi.fn(),
+        expireInterrupts: vi.fn(() => []),
         findUncertainThreadOperation: vi.fn(() => uncertain[0]
           ? { threadId: "thread-1", mutationId: uncertain[0].mutationId, operationKind: "conversation_steer" }
           : undefined),
@@ -1535,7 +1533,7 @@ describe("ThreadMutationGateway delivery readiness", () => {
       } as never,
       operations: {
         database,
-        expireInterrupts: vi.fn(),
+        expireInterrupts: vi.fn(() => []),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -1648,7 +1646,7 @@ describe("ThreadMutationGateway delivery readiness", () => {
       } as never,
       operations: {
         database,
-        expireInterrupts: vi.fn(),
+        expireInterrupts: vi.fn(() => []),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -1985,7 +1983,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       } as never,
       operations: {
         database,
-        expireInterrupts: vi.fn(),
+        expireInterrupts: vi.fn(() => []),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -2225,7 +2223,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       } as never,
       operations: {
         database,
-        expireInterrupts: vi.fn(),
+        expireInterrupts: vi.fn(() => []),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -2350,7 +2348,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       } as never,
       operations: {
         database,
-        expireInterrupts: vi.fn(),
+        expireInterrupts: vi.fn(() => []),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -2468,7 +2466,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       } as never,
       operations: {
         database,
-        expireInterrupts: vi.fn(),
+        expireInterrupts: vi.fn(() => []),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -2615,7 +2613,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       } as never,
       operations: {
         database,
-        expireInterrupts: vi.fn(),
+        expireInterrupts: vi.fn(() => []),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -2995,7 +2993,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       } as never,
       operations: {
         database,
-        expireInterrupts: vi.fn(),
+        expireInterrupts: vi.fn(() => []),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -3109,7 +3107,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       queue: { findComposerDeliveryReplay: vi.fn(() => undefined) } as never,
       operations: {
         database,
-        expireInterrupts: vi.fn(),
+        expireInterrupts: vi.fn(() => []),
         findUncertainThreadOperation: vi.fn(() => undefined),
         hasPendingMaterializationSteer: vi.fn(() => false),
         hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -3215,7 +3213,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       } as never,
       operations: {
         database,
-        expireInterrupts: vi.fn(),
+        expireInterrupts: vi.fn(() => []),
         findUncertainThreadOperation: vi.fn(() => ({
           threadId: "thread-1",
           mutationId: "prior-steer",
@@ -3331,7 +3329,7 @@ function interactionResponseFixture(input?: {
   const respond = vi.fn(input?.respond ?? (async () => undefined));
   const operations = {
     database,
-    expireInterrupts: vi.fn(),
+    expireInterrupts: vi.fn(() => []),
     findUncertainThreadOperation: vi.fn(() =>
       state === "uncertain"
         ? {
@@ -3765,7 +3763,7 @@ function backendActionFixture(input?: {
   };
   const operations = {
     database,
-    expireInterrupts: vi.fn(),
+    expireInterrupts: vi.fn(() => []),
     findUncertainThreadOperation: vi.fn(() =>
       record?.state === "uncertain"
         ? {
@@ -4008,7 +4006,7 @@ function unboundSettingFixture(input?: {
     queue: {} as never,
     operations: {
       database,
-      expireInterrupts: vi.fn(),
+      expireInterrupts: vi.fn(() => []),
       findUncertainThreadOperation: vi.fn(() => undefined),
       hasPendingMaterializationSteer: vi.fn(() => false),
       hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -4104,7 +4102,7 @@ function boundSettingActionFixture(input?: {
   };
   const operations = {
     database,
-    expireInterrupts: vi.fn(),
+    expireInterrupts: vi.fn(() => []),
     findUncertainThreadOperation: vi.fn(() =>
       record?.state === "uncertain"
         ? {
@@ -4950,7 +4948,7 @@ function providerFeatureMutationFixture(input: {
     queue: {} as never,
     operations: {
       database,
-      expireInterrupts: vi.fn(),
+      expireInterrupts: vi.fn(() => []),
       findUncertainThreadOperation: vi.fn(() => undefined),
       hasPendingMaterializationSteer: vi.fn(() => false),
       hasPendingMaterializationDraftSteer: vi.fn(() => false),
@@ -5157,7 +5155,7 @@ function agentToolPolicyMutationFixture(input: {
     queue: {} as never,
     operations: {
       database,
-      expireInterrupts: vi.fn(),
+      expireInterrupts: vi.fn(() => []),
       findUncertainThreadOperation: vi.fn(() =>
         input.uncertain
           ? {

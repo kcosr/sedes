@@ -372,11 +372,11 @@ export const claudeRuntimeQueryCancelInputResponseSchema = z.strictObject({
   cancelled: z.boolean(),
 });
 export const claudeRuntimeQueryInterruptRequestSchema = z.strictObject({
-  queryId: uuidSchema, operationId: uuidSchema,
+  queryId: uuidSchema, operationId: z.string().min(1).max(160),
   timeoutMilliseconds: z.number().int().min(1).max(30_000),
 });
 export const claudeRuntimeQueryInterruptDispositionRequestSchema = z.strictObject({
-  queryId: uuidSchema, operationId: uuidSchema,
+  queryId: uuidSchema, operationId: z.string().min(1).max(160),
 });
 export const claudeRuntimeQueryInterruptDispositionResponseSchema = z.strictObject({
   outcome: z.enum(["accepted", "unknown"]),

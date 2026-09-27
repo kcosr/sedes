@@ -39,9 +39,9 @@ export class EnvironmentVariablesService {
       FROM saved_agents WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
       .get(scope.tenantId, scope.principalId, agentId) as { variables: string; revision: number; backendTypeId: string } | undefined : undefined;
     if (agentId && !agent) throw new DomainError("not_found", "The Saved Agent was not found.");
-    const agentBackendTypes = { pi: "pi", codex_app_server: "codex", claude_agent_sdk: "claude", grok_build: "grok" } as const;
+    const agentBackendTypes = { pi: "pi", codex_app_server: "codex", claude_agent_sdk: "claude", grok_build: "grok", opencode: "opencode" } as const;
     if (agent && agent.backendTypeId !== agentBackendTypes[backend.kind]) throw new DomainError("conflict", "The Saved Agent uses a different backend type.");
-    const supported = backend.kind !== "pi" && (backend.kind !== "codex_app_server" || backend.moduleConfiguration.connection.ownership === "owned");
+    const supported = backend.kind !== "pi" && ((backend.kind !== "codex_app_server" && backend.kind !== "opencode") || backend.moduleConfiguration.connection.ownership === "owned");
     const result = environmentVariablesPreviewResultSchema.parse({
       snapshot: { version: 1, layers: {
         environment: environment.environmentVariables?.execution ?? {}, backend: backend.environmentVariables?.execution ?? {},

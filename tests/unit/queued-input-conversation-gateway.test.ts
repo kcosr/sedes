@@ -248,7 +248,8 @@ describe("RuntimeBackedQueuedInputConversationGateway", () => {
     let coordinator!: ThreadRuntimeCoordinator;
     coordinator = new ThreadRuntimeCoordinator({
       actors: {
-        acquireExistingControl: vi.fn(() => undefined),        acquire: vi.fn(async () => ({
+        acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),        acquire: vi.fn(async () => ({
           actor,
           release: vi.fn(),
         })),

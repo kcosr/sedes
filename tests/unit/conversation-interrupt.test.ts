@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ConversationInterruptLedger } from "../../src/server/backends/conversation-interrupt.js";
+import { BackendError } from "../../src/server/backends/contracts.js";
 
 const lifetime = () => new AbortController().signal;
 describe("conversation interrupt ledger", () => {
@@ -67,5 +68,36 @@ describe("conversation interrupt ledger", () => {
     authority.abort();
     await expect(stopping).rejects.toMatchObject({ crossedSubmissionBoundary: true });
     expect(ledger.reconcile(input)).toEqual({ outcome: "unknown" });
+  });
+
+  it("retains explicit native nonacceptance after dispatch without replaying the operation", async () => {
+    const ledger = new ConversationInterruptLedger();
+    const input = { applicationOperationId: "rejected", deadlineAt: Date.now() + 1_000 };
+    const rejected = new BackendError({ category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+      backendCode: "native_interrupt_rejected", safeMessage: "The native operation was rejected." });
+    let effects = 0;
+    const effect = async (budget: Parameters<Parameters<typeof ledger.execute>[2]>[0]) => {
+      budget.dispatch(); effects += 1; throw rejected;
+    };
+    await expect(ledger.execute(input, lifetime(), effect)).rejects.toBe(rejected);
+    expect(ledger.reconcile(input)).toEqual({ outcome: "not_applied" });
+    await expect(ledger.execute(input, lifetime(), effect)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    await expect(ledger.execute({ ...input, deadlineAt: input.deadlineAt + 1 }, lifetime(), effect)).rejects.toMatchObject({ backendCode: "interrupt_replay_mismatch" });
+    expect(effects).toBe(1);
+  });
+
+  it("does not turn an uncertain dispatch into nonacceptance on an unclassified or late rejection", async () => {
+    const ledger = new ConversationInterruptLedger();
+    const input = { applicationOperationId: "transport", deadlineAt: Date.now() + 1_000 };
+    await expect(ledger.execute(input, lifetime(), async budget => { budget.dispatch(); throw new Error("connection reset"); })).rejects.toThrow("connection reset");
+    expect(ledger.reconcile(input)).toEqual({ outcome: "unknown" });
+    const late = { applicationOperationId: "late", deadlineAt: Date.now() + 15 };
+    let rejectLate!: (error: Error) => void;
+    const pending = new Promise<void>((_resolve, reject) => { rejectLate = reject; });
+    await expect(ledger.execute(late, lifetime(), async budget => { budget.dispatch(); await pending; })).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    rejectLate(new BackendError({ category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+      backendCode: "native_interrupt_rejected", safeMessage: "The native operation was rejected." }));
+    await Promise.resolve(); await Promise.resolve();
+    expect(ledger.reconcile(late)).toEqual({ outcome: "unknown" });
   });
 });

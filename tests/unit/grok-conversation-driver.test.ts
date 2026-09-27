@@ -1931,6 +1931,25 @@ describe("normalized Grok conversation driver", () => {
     }
   });
 
+  it("accepts Stop after a native terminal without cancelling the still-draining prompt reply", async () => {
+    const sessionId = "abababab-1111-4111-8111-454545454545";
+    const fixtureState = await openDriver([{ ...session(sessionId, "Terminal draining"), promptDelayMs: 10, omitPromptResponse: true }]);
+    const handle = await fixtureState.driver.attach({ scope, workspace: fixtureState.workspace,
+      binding: conversationBinding(sessionId), opaqueBindingDetail: fixtureState.bindingDetail(sessionId) });
+    try {
+      const baseline = await handle.establishProjection({ signal: new AbortController().signal });
+      let terminalObserved!: () => void;
+      const terminal = new Promise<void>(resolve => { terminalObserved = resolve; });
+      baseline.subscribeFromNext(event => { if (event.event.type === "turn_completed") terminalObserved(); });
+      await handle.submit(submitInput());
+      await terminal;
+      const input = { applicationOperationId: "stop-terminal-draining", deadlineAt: Date.now() + 500 };
+      await expect(handle.interrupt(input)).resolves.toBeUndefined();
+      await expect(handle.reconcileInterrupt(input)).resolves.toEqual({ outcome: "accepted" });
+      expect((await readState(fixtureState.workspace.canonicalPath)).sessions[0].cancelCalls ?? 0).toBe(0);
+    } finally { await handle.close().catch(() => undefined); await fixtureState.close(); }
+  });
+
   it("retains immutable interrupt evidence across more than 128 sequential turns", async () => {
     const sessionId = "45454545-3333-4333-8333-454545454545";
     const fixtureState = await openDriver([

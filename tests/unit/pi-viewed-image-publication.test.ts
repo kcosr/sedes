@@ -1075,6 +1075,7 @@ describe("Pi viewed-image backfill bounds", () => {
     manager.appendMessage(assistantMessage([{ type: "text", text: "done" }], "stop") as never);
 
     const handle = await driver.attach(conversation.attach);
+    await handle.establishProjection({ signal: new AbortController().signal });
     await vi.waitFor(() => expect(recorder.published).toHaveLength(32));
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(recorder.published.map(({ publicationKey }) => publicationKey)).toEqual(
@@ -1107,6 +1108,7 @@ describe("Pi viewed-image backfill bounds", () => {
     appendImageReadTurn(manager, conversation.backendConversationId, 1);
     recorder.hold();
     const handle = await driver.attach(conversation.attach);
+    const establishing = handle.establishProjection({ signal: new AbortController().signal });
     await vi.waitFor(() => expect(recorder.published).toHaveLength(1));
     // The older turn's result now names another call.
     const attached = managers.at(-1)!;
@@ -1116,6 +1118,7 @@ describe("Pi viewed-image backfill bounds", () => {
     if (olderResult.type !== "message" || olderResult.message.role !== "toolResult") throw new Error("fixture");
     (olderResult.message as { toolCallId: string }).toolCallId = "another-call";
     recorder.release();
+    await establishing;
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(recorder.published).toHaveLength(1);
     await handle.close();
@@ -1361,6 +1364,7 @@ describe("Pi viewed-image publication and close", () => {
     const handle = await driver.attach(conversation.attach);
     const received: string[] = [];
     handle.subscribe((event) => received.push(event.type));
+    const establishing = handle.establishProjection({ signal: new AbortController().signal });
     await vi.waitFor(() => expect(recorder.published).toHaveLength(1));
 
     let closed = false;
@@ -1370,6 +1374,7 @@ describe("Pi viewed-image publication and close", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(closed).toBe(false);
     recorder.release();
+    await establishing;
     await closing;
     expect(recorder.published).toHaveLength(1);
     expect(received).toEqual([]);

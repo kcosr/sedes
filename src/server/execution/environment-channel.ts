@@ -224,12 +224,16 @@ export type EnvironmentTcpRoute =
       trustPolicy: "platform";
     }>;
 
+/** Closed validation purpose; HTTP passwords must not weaken capability-token admission. */
+export type EnvironmentSecretPurpose = "capability_token" | "http_basic_password";
+
 export type EnvironmentSecretReference =
   | Readonly<{ source: "environment"; variable: string }>
   | Readonly<{ source: "protected_file"; path: string }>;
 
 export interface EnvironmentSecretIdentity {
   readonly kind: "environment_secret";
+  readonly purpose: EnvironmentSecretPurpose;
   readonly scope: EnvironmentChannelScope;
   readonly connectionGeneration: number;
   /** Opaque binding to the reference and exact resolved secret generation. */
@@ -249,6 +253,7 @@ export function createEnvironmentSecretIdentity(
 ): EnvironmentSecretIdentity {
   if (
     input.kind !== "environment_secret" ||
+    (input.purpose !== "capability_token" && input.purpose !== "http_basic_password") ||
     !validEnvironmentChannelScope(input.scope) ||
     !Number.isSafeInteger(input.connectionGeneration) ||
     input.connectionGeneration <= 0 ||
@@ -319,6 +324,7 @@ export function createEnvironmentAssuredTcpStreamIdentity(
     !Number.isSafeInteger(input.connectionGeneration) ||
     input.connectionGeneration <= 0 ||
     !isValidEnvironmentSecretIdentity(input.authenticationIdentity) ||
+    input.authenticationIdentity.purpose !== "capability_token" ||
     input.authenticationIdentity.connectionGeneration !==
       input.connectionGeneration ||
     !sameEnvironmentChannelScope(
@@ -599,6 +605,7 @@ export interface ExecutionEnvironmentChannelProvider {
     reference: EnvironmentSecretReference,
     connectionGeneration: number,
     signal: AbortSignal,
+    purpose: EnvironmentSecretPurpose,
   ): Promise<ResolvedEnvironmentSecret>;
 }
 

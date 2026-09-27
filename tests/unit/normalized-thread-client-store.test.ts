@@ -4909,6 +4909,20 @@ describe("ThreadClientStore normalized operations", () => {
     });
   });
 
+  it("shows the terminal Stop diagnostic and admits a new Stop with a fresh operation ID", async () => {
+    const diagnostic = "Stop reached its deadline without a confirmed outcome. You may issue a new Stop.";
+    const operateThread = vi.fn().mockResolvedValueOnce({ status: "recovery_required", retryable: false, diagnostic })
+      .mockResolvedValueOnce({ status: "accepted", operationId: "second-stop" });
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { operateThread } as unknown as ApiClient, transport);
+    await store.start(); installSnapshot(transport);
+    await expect(store.stopActiveTurn()).rejects.toThrow(diagnostic);
+    await store.stopActiveTurn();
+    expect(operateThread).toHaveBeenCalledTimes(2);
+    expect(operateThread.mock.calls[0]![1].operationId).not.toEqual(operateThread.mock.calls[1]![1].operationId);
+    store.dispose();
+  });
+
   it("acknowledges a visible completion once without dismissing special attention", async () => {
     const dismissThreadAttention = vi.fn(async () => undefined);
     const api = { dismissThreadAttention } as unknown as ApiClient;

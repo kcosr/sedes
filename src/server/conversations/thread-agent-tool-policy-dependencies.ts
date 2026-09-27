@@ -30,6 +30,8 @@ function presentationOptionsForBackend(
         { surface: "native", modes: ["individual", "progressive"] },
         { surface: "cli", modes: ["progressive", "individual"] },
       ];
+    case "opencode":
+      return [{ surface: "native", modes: ["progressive"] }];
     case "grok_build":
       return [
         { surface: "cli", modes: ["progressive", "individual"] },

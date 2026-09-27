@@ -491,6 +491,7 @@ export class CodexConversationHandle implements ConversationHandle {
   readonly #onControlReady: CodexConversationHandleInput["onControlReady"];
   #controlLifetime = new AbortController();
   #controlGeneration = 0;
+  #controlObservationRevision = 0;
   #controlTurn: { generation: number; turnId: string | null } | undefined;
   #acceptedStop: InterruptConversationInput | undefined;
   readonly #submitOperations = new Map<
@@ -1393,6 +1394,7 @@ export class CodexConversationHandle implements ConversationHandle {
             ? this.#lastSettingsObservationInboundSequence
             : 0;
         this.#pendingUsageTuple = { model: executionSettings.model, reasoningEffort: executionSettings.reasoningEffort ?? null };
+        const controlObservationBeforeStart = this.#controlObservationRevision;
         const response = await this.#client.requestWithReceipt(
           codexTurnStartMethod,
           {
@@ -1516,6 +1518,7 @@ export class CodexConversationHandle implements ConversationHandle {
         }
         const acceptedTurn = materializeAcceptedTurn(response.result.turn);
         if (this.#controlGeneration === response.generation && !this.#controlLifetime.signal.aborted &&
+            controlObservationBeforeStart === this.#controlObservationRevision &&
             !this.#nativeThread?.turns.some(turn => turn.id === acceptedTurn.id && turn.status !== "inProgress")) {
           this.#controlTurn = { generation: response.generation, turnId: acceptedTurn.id };
         }
@@ -1875,6 +1878,8 @@ export class CodexConversationHandle implements ConversationHandle {
     const generation = this.#controlGeneration;
     const lifetime = this.#controlLifetime.signal;
     let selected: string | undefined;
+    let dispatched = false;
+    let interrupted = false;
     await this.#interruptOperations.execute(input, lifetime, async budget => {
       this.#assertControlGeneration(generation);
       const known = this.#controlTurn?.generation === generation ? this.#controlTurn : undefined;
@@ -1900,15 +1905,32 @@ export class CodexConversationHandle implements ConversationHandle {
       }
       this.#assertControlGeneration(generation);
       budget.dispatch();
-      const response = await budget.wait(this.#client.requestWithReceipt(codexTurnInterruptMethod,
-        { threadId: this.binding.backendConversationId, turnId: selected! },
-        { timeoutMilliseconds: budget.remainingMilliseconds(), signal: budget.signal }));
+      dispatched = true;
+      let response;
+      try {
+        response = await budget.wait(this.#client.requestWithReceipt(codexTurnInterruptMethod,
+          { threadId: this.binding.backendConversationId, turnId: selected! },
+          { timeoutMilliseconds: budget.remainingMilliseconds(), signal: budget.signal }));
+      } catch (error) {
+        if (error instanceof CodexRpcRemoteError && error.generation === generation &&
+            error.method === codexTurnInterruptMethod.method && error.code === -32600) {
+          // rust-v0.154.0 turn_interrupt_inner emits these before submitting
+          // Op::Interrupt. Match exact native forms, never a general error code.
+          if (error.message === "no active turn to interrupt") return;
+          const prefix = `expected active turn id ${selected!} but found `;
+          if (error.message.startsWith(prefix) && /^[^\s\u0000-\u001f\u007f]{1,160}$/u.test(error.message.slice(prefix.length))) {
+            throw codexError("rejected", "The Codex turn changed before Stop was applied.", "codex_interrupt_target_changed", false, error);
+          }
+        }
+        throw mapCodexMutationError(error, "interrupt");
+      }
       if (response.generation !== generation) throw mutationOutcomeUnknown("generation_changed");
+      interrupted = true;
       // The private target is chosen once. A native stale-target rejection does
       // not authorize chasing another turn, nor does inactivity prove an ACK.
-    }).catch(error => { throw mapCodexMutationError(error, "interrupt"); });
+    }).catch(error => { throw dispatched || error instanceof BackendError ? mapCodexMutationError(error, "interrupt") : mapCodexReadError(error); });
     this.#acceptedStop = input;
-    if (Date.now() < input.deadlineAt && !input.signal?.aborted && !lifetime.aborted && selected &&
+    if (Date.now() < input.deadlineAt && !input.signal?.aborted && !lifetime.aborted && interrupted && selected &&
         this.#snapshotWindow?.activeBackendTurnId === codexBackendTurnId(this.binding.backendConversationId, selected) &&
         !this.#projectionInvalidated) {
       this.#emit({ type: "run_state_changed", state: "stopping",
@@ -1928,19 +1950,24 @@ export class CodexConversationHandle implements ConversationHandle {
     }
   }
 
-  #publishControl(thread: CodexThread, generation: number): void {
+  #publishControl(thread: CodexThread, generation: number, observationBeforeRead: number): void {
     if (thread.status.type !== "active" && thread.status.type !== "idle") return;
     if (this.#controlGeneration === generation && !this.#controlLifetime.signal.aborted) {
       const active = activeNativeTurnId(thread);
-      if (active) this.#controlTurn = { generation, turnId: active };
+      if (observationBeforeRead === this.#controlObservationRevision) {
+        this.#controlTurn = thread.status.type === "idle" ? { generation, turnId: null }
+          : active ? { generation, turnId: active } : undefined;
+      }
       return;
     }
     this.#controlLifetime.abort();
     this.#controlLifetime = new AbortController();
     this.#controlGeneration = generation;
     const active = activeNativeTurnId(thread);
-    this.#controlTurn = thread.status.type === "idle" ? { generation, turnId: null }
-      : active ? { generation, turnId: active } : undefined;
+    if (observationBeforeRead === this.#controlObservationRevision) {
+      this.#controlTurn = thread.status.type === "idle" ? { generation, turnId: null }
+        : active ? { generation, turnId: active } : undefined;
+    }
     this.#acceptedStop = undefined;
     const lifetime = this.#controlLifetime.signal;
     this.#onControlReady?.({
@@ -1959,12 +1986,14 @@ export class CodexConversationHandle implements ConversationHandle {
   }
 
   #observeControlNotification(notification: CodexRpcNotification): void {
-    if (notification.generation !== this.#controlGeneration) return;
+    if (this.#closing || this.#closed || notification.generation !== this.#client.lifecycleSnapshot().generation) return;
     if (isCodexRpcUndecodableNotification(notification)) {
-      if (notification.nativeThreadId === this.binding.backendConversationId) this.#controlTurn = undefined;
+      if (notification.nativeThreadId === this.binding.backendConversationId) { this.#controlObservationRevision++; this.#controlTurn = undefined; }
       return;
     }
     if (notificationThreadId(notification.params) !== this.binding.backendConversationId) return;
+    if (!["turn/started", "turn/completed", "thread/status/changed"].includes(notification.method)) return;
+    this.#controlObservationRevision++;
     try {
       if (notification.method === "turn/started") {
         const parsed = codexC2NotificationSchemas["turn/started"].parse(notification.params);
@@ -2302,8 +2331,10 @@ export class CodexConversationHandle implements ConversationHandle {
       currentState: current.state,
       ...(stop ? { deadlineAt: stop.deadlineAt, signal: stopSignal } : {}),
     });
-    checkBudget();
     if (outcome.kind === "accepted") {
+      // A confirmed Goal response is native state evidence even if this Stop's
+      // budget expired immediately afterwards. Never publish into a new owner.
+      if (stop) this.#assertControlGeneration(generation);
       this.#goalSessions.publishObserved({
         scope,
         applicationThreadId: this.binding.applicationThreadId,
@@ -2316,6 +2347,7 @@ export class CodexConversationHandle implements ConversationHandle {
         projectedState: outcome.state,
       };
     }
+    checkBudget();
     if (outcome.kind === "uncertain") {
       if (outcome.observed) {
         this.#goalSessions.publishObserved({
@@ -2691,6 +2723,7 @@ export class CodexConversationHandle implements ConversationHandle {
           );
         }
 
+        const controlObservationBeforeRead = this.#controlObservationRevision;
         const inspected = await this.#client.requestWithReceipt(
           codexThreadReadMethod,
           {
@@ -2705,7 +2738,7 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#assertEstablishmentMayContinue(signal);
         this.#assertCurrentReceipt(inspected.generation);
         this.#validateThread(inspected.result.thread);
-        this.#publishControl(inspected.result.thread, inspected.generation);
+        this.#publishControl(inspected.result.thread, inspected.generation, controlObservationBeforeRead);
         const historyMode = assertCodexHistoryMode(inspected.result.thread);
 
         const desiredBeforeResume = this.#executionSettings.desiredSettings(
@@ -2713,6 +2746,7 @@ export class CodexConversationHandle implements ConversationHandle {
         );
         let resumed;
         let requestedNativeResume = false;
+        const controlObservationBeforeResume = this.#controlObservationRevision;
         try {
           resumed = await this.#client.persistentSessions?.reattachThread(
             this.binding.backendConversationId,
@@ -2912,7 +2946,7 @@ export class CodexConversationHandle implements ConversationHandle {
             "codex_history_mode_changed",
           );
         }
-        this.#publishControl(resumed.result.thread, resumed.generation);
+        this.#publishControl(resumed.result.thread, resumed.generation, controlObservationBeforeResume);
         if (requestedNativeResume) this.#usageCapture?.resumed({ generation: resumed.generation, sequence: resumed.inboundSequence,
           idle: resumed.result.thread.status.type === "idle" });
         let projection: CodexWindowProjection;
@@ -3224,10 +3258,6 @@ export class CodexConversationHandle implements ConversationHandle {
           (this.#reservedViewedImagesByTurn.get(identity.backendTurnId) ?? 0) + 1);
       }
       this.#projectionSerializedBytes = projectionBytes;
-      if (generation === this.#controlGeneration && !this.#controlLifetime.signal.aborted) {
-        const active = activeNativeTurnId(liveNativeThread);
-        if (active) this.#controlTurn = { generation, turnId: active };
-      }
       this.#nativeThread = retainedSettled;
       const projectedNativeTurnIds = new Set(
         [...projection.projectedItemByNativeCoordinate.values()].map(
@@ -6910,6 +6940,10 @@ function mapCodexMutationError(
     );
   }
   if (error instanceof CodexRpcRemoteError) {
+    if (operation === "interrupt" && error.disposition !== "rejected_not_accepted") {
+      return codexError("submission_unknown", "Codex did not confirm whether Stop was applied.",
+        "codex_interrupt_outcome_unknown", false, error, true);
+    }
     const staleSteerCode = codexStaleSteerRejectionCode(error, operation);
     if (staleSteerCode) {
       return codexSteerTargetUnavailable(

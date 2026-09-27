@@ -15,6 +15,8 @@ const REQUIRED_SHARED_SOURCES = Object.freeze([
 ]);
 
 const ALLOWED_REPOSITORY_SOURCES = new Set([
+  // Normalized error/schema primitives used by the provider-owned Stop journal.
+  "src/server/backends/contracts.ts",
   "src/server/environment-variables/runtime-environment.ts",
   "src/server/config/configuration-fingerprint.ts",
   "src/shared/protocol/environment-variables.ts",
@@ -99,6 +101,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/backends/codex/runtime/codex-runtime-wire.ts",
   "src/server/backends/codex/runtime/codex-sidecar-runtime.ts",
   "src/server/backends/claude/claude-release-guard.ts",
+  "src/server/backends/claude/claude-interrupt-operation.ts",
   "src/server/backends/claude/claude-background-activity.ts",
   "src/server/backends/claude/claude-result-lifecycle.ts",
   "src/server/backends/claude/claude-session-history.ts",

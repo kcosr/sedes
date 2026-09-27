@@ -136,6 +136,7 @@ function resetCoordinator(
   const coordinator = new ThreadRuntimeCoordinator({
     actors: {
       acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
       acquire: vi.fn(async (input: AcquireConversationActorInput) => {
         const index = actorIndex++;
         const actor = actors[index]!;
@@ -247,6 +248,7 @@ function pendingOverlayFixture() {
   const coordinator = new ThreadRuntimeCoordinator({
     actors: {
       acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
       acquire: vi.fn(async () => ({ actor, release: actorRelease })),
       runWithRuntimesStopped: async () => {
         throw new Error("unexpected_explicit_runtime_stop");
@@ -320,6 +322,7 @@ describe("ThreadRuntimeCoordinator", () => {
     const input = {
       actors: {
         acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         acquire: vi.fn(),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
@@ -565,6 +568,7 @@ describe("ThreadRuntimeCoordinator", () => {
     coordinator = new ThreadRuntimeCoordinator({
       actors: {
         acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
         acquire: vi.fn(async () => ({
@@ -658,6 +662,7 @@ describe("ThreadRuntimeCoordinator", () => {
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
         acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         acquire,
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
@@ -731,6 +736,7 @@ describe("ThreadRuntimeCoordinator", () => {
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
         acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         acquire: acquireActor,
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
@@ -1307,6 +1313,7 @@ describe("ThreadRuntimeCoordinator", () => {
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
         acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         acquire: acquireActor,
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: async (input) => {
@@ -1354,6 +1361,7 @@ describe("ThreadRuntimeCoordinator", () => {
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
         acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         acquire: vi.fn(async () => ({
           actor: actor.actor,
           release: actorRelease,
@@ -1457,6 +1465,7 @@ describe("ThreadRuntimeCoordinator", () => {
       const coordinator = new ThreadRuntimeCoordinator({
         actors: {
           acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
           runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
           runWithRuntimeRetired: passThroughActorRetirement,
           acquire: vi.fn(async () => ({ actor, release: actorRelease })),
@@ -1748,6 +1757,7 @@ describe("ThreadRuntimeCoordinator", () => {
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
         acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
         acquire: vi.fn(async () => ({ actor, release: vi.fn() })),
@@ -1856,6 +1866,7 @@ describe("ThreadRuntimeCoordinator", () => {
       const coordinator = new ThreadRuntimeCoordinator({
         actors: {
           acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
           runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
           runWithRuntimeRetired: passThroughActorRetirement,
           acquire: vi.fn(async () => ({
@@ -1943,6 +1954,7 @@ describe("ThreadRuntimeCoordinator", () => {
       const coordinator = new ThreadRuntimeCoordinator({
         actors: {
           acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
           runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
           runWithRuntimeRetired: passThroughActorRetirement,
           acquire: vi.fn(async () => ({
@@ -2033,6 +2045,7 @@ describe("ThreadRuntimeCoordinator", () => {
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
         acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
         acquire: vi.fn(async () => ({
@@ -2141,6 +2154,7 @@ describe("ThreadRuntimeCoordinator", () => {
       const coordinator = new ThreadRuntimeCoordinator({
         actors: {
           acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
           runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
           runWithRuntimeRetired: passThroughActorRetirement,
           acquire: vi.fn(async () => ({
@@ -2244,6 +2258,7 @@ describe("ThreadRuntimeCoordinator", () => {
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
         acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         acquire: vi.fn(),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
@@ -2300,6 +2315,7 @@ describe("ThreadRuntimeCoordinator", () => {
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
         acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
         acquire: vi.fn(async () => ({
@@ -2362,6 +2378,7 @@ describe("ThreadRuntimeCoordinator", () => {
       const coordinator = new ThreadRuntimeCoordinator({
         actors: {
           acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
           runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
           runWithRuntimeRetired: passThroughActorRetirement,
           acquire: vi.fn(async () => ({ actor, release: actorRelease })),
@@ -2421,6 +2438,7 @@ describe("ThreadRuntimeCoordinator", () => {
       const coordinator = new ThreadRuntimeCoordinator({
         actors: {
           acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
           runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
           runWithRuntimeRetired: passThroughActorRetirement,
           acquire: vi.fn(async () => ({ actor, release: actorRelease })),
@@ -2499,6 +2517,7 @@ describe("ThreadRuntimeCoordinator", () => {
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
         acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
         acquire: acquireActor,
@@ -2589,6 +2608,7 @@ describe("ThreadRuntimeCoordinator", () => {
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
         acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         acquire: acquireActor,
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,

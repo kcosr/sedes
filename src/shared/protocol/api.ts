@@ -1264,6 +1264,7 @@ export const threadApplicationMutationResultSchema = z.discriminatedUnion(
     z.strictObject({
       status: z.literal("recovery_required"),
       retryable: z.boolean(),
+      diagnostic: z.string().min(1).max(500).optional(),
       draft: normalizedDraftSchema.optional(),
     }),
     abortedMutationResultSchema,

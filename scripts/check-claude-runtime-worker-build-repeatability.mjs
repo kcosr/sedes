@@ -75,6 +75,11 @@ function exerciseSourceBoundary() {
     },
   });
   assertClaudeRuntimeWorkerSourceOwnership(metafile(), repositoryRoot, outputPath);
+  assertClaudeRuntimeWorkerSourceOwnership(
+    metafile({ "src/server/backends/contracts.ts": {} }),
+    repositoryRoot,
+    outputPath,
+  );
   expectFailure(
     metafile({
       "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/sdk": {},
@@ -83,6 +88,14 @@ function exerciseSourceBoundary() {
   );
   expectFailure(
     metafile({ "src/server/db/database.ts": {} }),
+    "claude_runtime_worker_source_forbidden",
+  );
+  expectFailure(
+    metafile({ "src/server/backends/backend-runtime-registry.ts": {} }),
+    "claude_runtime_worker_source_forbidden",
+  );
+  expectFailure(
+    metafile({ "src/server/conversations/conversation-actor-manager.ts": {} }),
     "claude_runtime_worker_source_forbidden",
   );
 }

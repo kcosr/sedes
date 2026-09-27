@@ -85,6 +85,7 @@ export class CodexGoalSessionRegistry {
     readonly signal?: AbortSignal;
   }): Promise<CodexGoalProjectionRecord> {
     try {
+      input.signal?.throwIfAborted();
       const response = await input.client.request(
         codexThreadGoalGetMethod,
         { threadId: input.nativeThreadId },
@@ -93,6 +94,7 @@ export class CodexGoalSessionRegistry {
           ...(input.signal ? { signal: input.signal } : {}),
         },
       );
+      input.signal?.throwIfAborted();
       const state = projectCodexGoalGetResponse({
         response,
         expectedThreadId: input.nativeThreadId,
@@ -105,6 +107,9 @@ export class CodexGoalSessionRegistry {
         now: this.#now(),
       });
     } catch (error) {
+      // Cancelling this read supplies no new native Goal evidence. Keep the
+      // existing projection untouched and let the control caller stop work.
+      if (input.signal?.aborted) throw error;
       return this.store.withdraw(input.scope, {
         applicationThreadId: input.applicationThreadId,
         nativeThreadId: input.nativeThreadId,

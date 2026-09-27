@@ -69,6 +69,15 @@ assertSidecarSourceOwnership(
   syntheticOutputPath,
 );
 assertSidecarSourceOwnership(
+  ownershipMetafile({
+    ...canonicalInputs,
+    "src/server/backends/contracts.ts": {},
+    "src/server/backends/claude/claude-interrupt-operation.ts": {},
+  }),
+  repositoryRoot,
+  syntheticOutputPath,
+);
+assertSidecarSourceOwnership(
   {
     inputs: canonicalInputs,
     outputs: {
@@ -119,6 +128,8 @@ for (const forbiddenSource of [
   "src/client/workspace-files/WorkspaceFilesPanel.tsx",
   "src/server/normalized-app.ts",
   "src/server/runtime/backend-module-startup.ts",
+  "src/server/conversations/conversation-actor-manager.ts",
+  "src/server/backends/backend-runtime-registry.ts",
 ]) {
   expectOwnershipFailure(
     ownershipMetafile({

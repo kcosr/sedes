@@ -317,7 +317,8 @@ function assertBackendKind(value: BackendKind): void {
     value !== "pi" &&
     value !== "codex_app_server" &&
     value !== "claude_agent_sdk" &&
-    value !== "grok_build"
+    value !== "grok_build" &&
+    value !== "opencode"
   ) {
     throw new Error("provider_feature_backend_kind_invalid");
   }

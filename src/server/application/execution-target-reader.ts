@@ -1,5 +1,5 @@
 import type { NormalizedExecutionTargetDescriptor } from "../../shared/protocol/application.js";
-import { BACKEND_BRANDS } from "../backends/contracts.js";
+import { type BackendKind, BACKEND_BRANDS } from "../backends/contracts.js";
 import type { AgentBackendRegistry } from "../backends/registry.js";
 import type { BackendConfigurationRepository } from "../db/repositories/backend-configuration-repository.js";
 import type { ConnectionProfileRecord } from "../db/repositories/backend-configuration-repository.js";
@@ -301,7 +301,7 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
 
   #environmentDisposition(
     profile: ConnectionProfileRecord,
-    backendKind: "pi" | "codex_app_server" | "claude_agent_sdk" | "grok_build",
+    backendKind: BackendKind,
   ):
     | Readonly<{
         eligible: true;
@@ -339,6 +339,7 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
       case "codex_app_server":
       case "claude_agent_sdk":
       case "grok_build":
+      case "opencode":
         // These compiled backends have no consumer for workspace operations.
         return {
           eligible: true,
@@ -349,7 +350,7 @@ export class DatabaseExecutionTargetReader implements ExecutionTargetReader {
 
   #workspaceExecution(
     profile: ConnectionProfileRecord,
-    backendKind: "pi" | "codex_app_server" | "claude_agent_sdk" | "grok_build",
+    backendKind: BackendKind,
   ): NormalizedExecutionTargetDescriptor["workspaceExecution"] {
     const operations = this.input.environmentOperations?.get(
       profile.executionEnvironmentId,

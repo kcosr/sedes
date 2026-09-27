@@ -82,7 +82,12 @@ export class ConversationInterruptLedger {
       remainingMilliseconds();
       entry.outcome = "accepted";
     } catch (cause) {
-      entry.outcome = dispatched ? "unknown" : "not_applied";
+      // Dispatch alone is not acceptance. An explicit provider proof that the
+      // native request was rejected is stronger than a transport write, while
+      // deadlines, unclassified failures and late replies remain uncertain.
+      const provedNotApplied = cause instanceof BackendError && !cause.crossedSubmissionBoundary &&
+        !signal.aborted && Date.now() < input.deadlineAt;
+      entry.outcome = !dispatched || provedNotApplied ? "not_applied" : "unknown";
       throw cause;
     } finally { clearTimeout(timer); }
   }

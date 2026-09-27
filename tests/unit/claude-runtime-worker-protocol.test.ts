@@ -64,6 +64,14 @@ describe("claude_runtime@2 protocol", () => {
     }
     expect(claudeRuntimeQueryInterruptDispositionRequestSchema.parse({ queryId: QUERY_ID, operationId: OPERATION_ID }))
       .toEqual({ queryId: QUERY_ID, operationId: OPERATION_ID });
+    for (const operationId of ["stop-request-1", "x".repeat(160)]) {
+      expect(claudeRuntimeQueryInterruptRequestSchema.parse({ ...request, operationId }).operationId).toBe(operationId);
+      expect(claudeRuntimeQueryInterruptDispositionRequestSchema.parse({ queryId: QUERY_ID, operationId }).operationId).toBe(operationId);
+    }
+    for (const operationId of ["", "x".repeat(161)]) {
+      expect(claudeRuntimeQueryInterruptRequestSchema.safeParse({ ...request, operationId }).success).toBe(false);
+      expect(claudeRuntimeQueryInterruptDispositionRequestSchema.safeParse({ queryId: QUERY_ID, operationId }).success).toBe(false);
+    }
   });
 
   it("admits bounded permission metadata with explicit false hints", () => {

@@ -1072,13 +1072,15 @@ export class ConversationOperationRepository {
   }
 
   /** Expiry is durable and independent of a provider or projection becoming available. */
-  expireInterrupts(scope: RequestScope, now: number, threadId?: string): void {
-    this.database.transaction(() => {
+  expireInterrupts(scope: RequestScope, now: number, threadId?: string): readonly string[] {
+    return this.database.transaction(() => {
       const parameters = [scope.tenantId, scope.principalId, now, ...(threadId ? [threadId] : [])];
       const predicate = `tenant_id = ? AND principal_id = ?
         AND operation_kind = 'conversation_interrupt'
         AND json_extract(result_json, '$.deadlineAt') <= ?
         ${threadId ? "AND thread_id = ?" : ""}`;
+      const affected = this.database.prepare(`SELECT DISTINCT thread_id AS threadId FROM mutation_receipts
+        WHERE ${predicate} AND result_code IN ('prepared', 'uncertain')`).all(...parameters) as { threadId: string }[];
       // Prepared proves that no provider effect was attempted. Its deletion is
       // the same safe refusal policy used by other undispatched operations.
       this.database.prepare(`DELETE FROM mutation_receipts
@@ -1088,6 +1090,7 @@ export class ConversationOperationRepository {
           result_json = json_set(result_json, '$.failureDiagnostic',
             'Stop reached its deadline without a confirmed outcome. You may issue a new Stop.')
         WHERE ${predicate} AND result_code = 'uncertain'`).run(...parameters);
+      return affected.map(row => row.threadId);
     })();
   }
 

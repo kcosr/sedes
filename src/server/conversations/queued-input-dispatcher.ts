@@ -1992,11 +1992,6 @@ export class QueuedInputDispatcher {
     }
   }
 
-  /** Serialize native Stop admission with queue-owned submit and Steer effects. */
-  withDispatchFence<T>(scope: RequestScope, applicationThreadId: string, operation: () => Promise<T>): Promise<T> {
-    return this.#serialize(scope, applicationThreadId, operation);
-  }
-
   #serialize<T>(
     scope: RequestScope,
     applicationThreadId: string,

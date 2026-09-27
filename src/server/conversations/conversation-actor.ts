@@ -1,3 +1,4 @@
+import { ConversationNativeEffectFence } from "./conversation-native-effect-fence.js";
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
 import type { NonblockingQuestionsPayload } from "../../shared/protocol/questions.js";
 import { hasOutstandingBackgroundActivity } from "../../shared/protocol/background-activity.js";
@@ -225,7 +226,10 @@ export class ConversationActor {
   #synchronousCoalescerOutputs?: ProjectionCoalescerOutput[];
   #snapshotState?: ConversationActorSnapshotState;
 
+  readonly #nativeEffects: ConversationNativeEffectFence;
+
   constructor(input: {
+    readonly nativeEffects?: ConversationNativeEffectFence;
     readonly handle: ConversationHandle;
     /** Installed before establishment so durable observers cannot miss startup events. */
     readonly initialObserver?: ConversationActorListener;
@@ -247,6 +251,7 @@ export class ConversationActor {
     readonly maximumPendingProjectionBytes?: number;
   }) {
     this.#handle = input.handle;
+    this.#nativeEffects = input.nativeEffects ?? new ConversationNativeEffectFence();
     if (input.initialObserver) this.#listeners.add(input.initialObserver);
     this.#environmentLease = input.environmentLease;
     this.#attachmentDelivery = input.attachmentDelivery;
@@ -324,7 +329,14 @@ export class ConversationActor {
   }
 
   /** A resident native owner may allow idle presentation detachment only. */
+  get initialProjectionUnavailable(): boolean {
+    return this.#started && !this.#closing && !this.#closed && !this.#snapshotState && this.#projectionRecoveryRequired;
+  }
+
   get canAutomaticallyEvict(): boolean {
+    // Failed establishment used to close immediately. Retain its control for
+    // recovery, but let the ordinary retention/budget policy bound that grace.
+    if (this.initialProjectionUnavailable) return true;
     return this.#canRetire(this.#handle.automaticEviction === "client_detach");
   }
 
@@ -889,7 +901,7 @@ export class ConversationActor {
   submit(input: ApplicationSubmitTurnInput): Promise<SubmitTurnResult> {
     return this.#runStartingMutation(() =>
       this.#deliverPreparedInput(input, (prepared) =>
-        this.#handle.submit(prepared),
+        this.#nativeEffects.run(() => this.#handle.submit(prepared)),
       ),
     );
   }
@@ -964,7 +976,7 @@ export class ConversationActor {
       }
       const result = await this.#deliverPreparedInput(
         { ...input, target },
-        (prepared) => this.#handle.steer(prepared),
+        (prepared) => this.#nativeEffects.run(() => this.#handle.steer(prepared)),
       );
       if (target.kind === "turn" && result.backendTurnId !== target.turnId) {
         throw new BackendError({
@@ -986,7 +998,13 @@ export class ConversationActor {
         safeMessage: "The existing conversation control is unavailable.",
       }));
     }
-    return this.#handle.interrupt(input);
+    return this.#nativeEffects.run(() => {
+      if (input.signal?.aborted || Date.now() >= input.deadlineAt || this.#closing || this.#closed) {
+        throw new BackendError({ category: "unavailable", retryable: false, crossedSubmissionBoundary: false,
+          safeMessage: "The conversation Stop budget or control expired before dispatch." });
+      }
+      return this.#handle.interrupt(input);
+    });
   }
 
   reconcileInterrupt(input: InterruptConversationInput): Promise<BackendMutationReconciliation> {
@@ -1095,6 +1113,10 @@ export class ConversationActor {
         current.activeTurnId === expected.activeTurnId
       );
     });
+  }
+
+  async closeIfInitialProjectionUnavailable(): Promise<boolean> {
+    return this.#closeConditionally(() => this.initialProjectionUnavailable);
   }
 
   async closeIfAutomaticallyIdle(): Promise<boolean> {

@@ -20,6 +20,7 @@ export function configurationIdentities(document: ConfigurationDocument): Config
       const nativeIdentity = connection ? connection.channel.type === "process_stdio" ? { type: "process_stdio", codexHome: connection.channel.codexHome ?? null }
         : connection.channel.type === "unix_websocket" ? { type: "unix_websocket", socketPath: connection.channel.socketPath }
         : { type: "tcp_websocket", url: connection.channel.url }
+        : backend.kind === "opencode" ? { nativeStorePath: backend.moduleConfiguration.nativeStorePath }
         : backend.kind === "claude_agent_sdk" ? { configDirectory: backend.moduleConfiguration.configDirectory ?? null }
         : { kind: backend.kind };
       return { kind: "backend" as const, id: backend.id,

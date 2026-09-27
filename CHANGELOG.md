@@ -4,6 +4,9 @@
 
 ### Breaking Changes
 
+- Browser and packaged clients now require client protocol 128 for the OpenCode
+  v2 backend identity and terminal Stop diagnostics.
+
 - Claude worker and persistent runtime capabilities now require major 2 for
   bounded, recoverable conversation Stop. Rebuild local helpers and upgrade
   Claude sidecars with this server. Migration 119 closes old unconfirmed Stop
@@ -18,7 +21,7 @@
   browser protocol change is required for this fix. (#15)
 
 - Codex viewed images use a new `viewed_image` transcript item, introduced
-  in client protocol 123. This build requires client protocol 127; see the
+  in client protocol 123. This build requires client protocol 128; see the
   client protocol entries below. (#11, #13, #14)
 
 - Claude backends require Claude Code 2.1.281 or newer and are tested through

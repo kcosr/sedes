@@ -1,3 +1,5 @@
+import { ConversationNativeEffectFence } from "./conversation-native-effect-fence.js";
+import { randomUUID } from "node:crypto";
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
 import type { NonblockingQuestionsPayload } from "../../shared/protocol/questions.js";
 import {
@@ -44,6 +46,7 @@ export interface AcquireConversationActorOptions {
 
 export type ConversationActorRetirementDisposition =
   | { readonly kind: "idle" }
+  | { readonly kind: "unprojected_detach"; readonly expectedGeneration: string }
   | {
       readonly kind: "explicit_detach";
       readonly expected: Parameters<ConversationActor["closeIfCurrent"]>[0];
@@ -105,6 +108,8 @@ export type AuthoritativeSubmissionObserver = (
 ) => void | Promise<void>;
 
 interface ActorEntry {
+  readonly nativeEffects: ConversationNativeEffectFence;
+  readonly unprojectedGeneration: string;
   promise: Promise<ConversationActor>;
   readonly fingerprint: string;
   readonly budgetScope: ConversationRuntimeBudgetScope;
@@ -312,6 +317,8 @@ export class ConversationActorManager {
         const admission = this.#reserveRuntimeSlot(budgetScope);
         const creationAbort = new AbortController();
         const createdEntry = {
+          nativeEffects: new ConversationNativeEffectFence(),
+          unprojectedGeneration: randomUUID(),
           fingerprint,
           budgetScope,
           creationAbort,
@@ -408,6 +415,13 @@ export class ConversationActorManager {
     }
   }
 
+  /** Opaque CAS evidence for an owner retained after failed initial hydration. */
+  captureUnprojectedGeneration(scope: Pick<ExecutionScope, "tenantId" | "principalId">, applicationThreadId: string): string | undefined {
+    const entry = this.#entries.get(scopedActorKey(scope, applicationThreadId));
+    return entry && !entry.eviction && !entry.poisoned && entry.actor?.initialProjectionUnavailable
+      ? entry.unprojectedGeneration : undefined;
+  }
+
   /** Borrow already-published native control without opening or hydrating a conversation. */
   acquireExistingControl(
     scope: Pick<ExecutionScope, "tenantId" | "principalId">,
@@ -434,10 +448,14 @@ export class ConversationActorManager {
     return {
       control: {
         generation: control.generation, lifetime,
-        interrupt: async input => {
+        interrupt: input => entry.nativeEffects.run(async () => {
           assertCurrent();
+          if (input.signal?.aborted || Date.now() >= input.deadlineAt) {
+            throw new BackendError({ category: "unavailable", retryable: false, crossedSubmissionBoundary: false,
+              safeMessage: "The conversation Stop budget expired before dispatch." });
+          }
           await control.interrupt({ ...input, signal: input.signal ? AbortSignal.any([input.signal, lifetime]) : lifetime });
-        },
+        }),
         reconcileInterrupt: async input => {
           assertCurrent();
           return control.reconcileInterrupt({ ...input, signal: input.signal ? AbortSignal.any([input.signal, lifetime]) : lifetime });
@@ -858,7 +876,7 @@ export class ConversationActorManager {
     while (true) {
       const entry = this.#entries.get(key);
       if (!entry) {
-        if (disposition.kind === "explicit_detach") {
+        if (disposition.kind !== "idle") {
           throw new ConversationActorRetirementStaleError();
         }
         return;
@@ -920,6 +938,21 @@ export class ConversationActorManager {
           return;
         }
         continue;
+      }
+      if (disposition.kind === "unprojected_detach") {
+        if (entry.unprojectedGeneration !== disposition.expectedGeneration || !entry.actor.initialProjectionUnavailable) {
+          throw new ConversationActorRetirementStaleError();
+        }
+        try {
+          if (!await entry.actor.closeIfInitialProjectionUnavailable()) throw new ConversationActorRetirementStaleError();
+          if (!entry.actor.replacementSafe) throw new Error("conversation_actor_close_unproven");
+          if (this.#entries.get(key) === entry) this.#entries.delete(key);
+          return;
+        } catch (error) {
+          if (error instanceof ConversationActorRetirementStaleError) throw error;
+          entry.poisoned = error;
+          throw new ConversationActorRetirementUnprovenError(error);
+        }
       }
       if (disposition.kind === "explicit_detach") {
         try {
@@ -1037,7 +1070,7 @@ export class ConversationActorManager {
     if (entry.evictionTimer || entry.eviction || this.#closing) return;
     entry.idleSince ??= Date.now();
     const delay =
-      entry.pendingIdleRelease === "retain"
+      entry.actor?.initialProjectionUnavailable || entry.pendingIdleRelease === "retain"
         ? Math.max(
             0,
             entry.idleSince + this.#retentionMilliseconds - Date.now(),
@@ -1131,6 +1164,7 @@ export class ConversationActorManager {
       });
       actor = new ConversationActor({
         handle,
+        nativeEffects: entry.nativeEffects,
         environmentLease: lease,
         attachmentDelivery: this.#attachmentDelivery,
         ...(this.#deliveryInputSnapshots

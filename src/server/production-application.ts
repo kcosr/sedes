@@ -1,3 +1,4 @@
+import { backendLifecycleActions } from "./configuration-admin/configuration-backend-lifecycle.js";
 import { UsageService } from "./usage/usage-service.js";
 import { mergeEnvironmentVariableOverrides } from "../shared/protocol/environment-variables.js";
 import { EnvironmentVariablesService } from "./environment-variables/environment-variables-service.js";
@@ -736,7 +737,7 @@ export async function startProductionApplication(
     const startupEnvironmentFingerprint = (id: string): string => {
       const document = desiredConfiguration.configuration;
       const backend = document.backends.find(item => item.id === id);
-      if (!backend || backend.kind === "pi" || (backend.kind === "codex_app_server" && backend.moduleConfiguration.connection.ownership === "external")) return configurationFingerprint({});
+      if (!backend || backend.kind === "pi" || ((backend.kind === "codex_app_server" || backend.kind === "opencode") && backend.moduleConfiguration.connection.ownership === "external")) return configurationFingerprint({});
       const target = document.targets.find(item => item.backendInstanceId === id && item.enabled);
       const host = document.executionEnvironments.find(item => item.id === target?.executionEnvironmentId);
       return configurationFingerprint(mergeEnvironmentVariableOverrides(host?.environmentVariables?.startup ?? {}, backend.environmentVariables?.startup ?? {}));
@@ -2075,7 +2076,7 @@ export async function startProductionApplication(
           softwareVersion: null,
           upgradeState: "current",
           activeResources: Math.max(active.length, backendObservation?.state === "active" || backendObservation?.state === "unknown" ? 1 : 0),
-          supportedActions: definition ? definition.enabled ? ["connect", ...(remote ? ["disconnect" as const] : []), "start", "stop", "restart"] : [...(remote ? ["disconnect" as const] : []), "stop"] : [],
+          supportedActions: backendLifecycleActions(definition, remote),
           lastError: recoveryRequired ? sidecarOwnershipRecoveryMessage(recoveryRequired) : backendPreparationFailures.has(id) ? "This backend could not apply its configuration. Check its settings and execution environment." : observationFailures.has(key) ? "Provider state is unavailable; active work and retained outcomes may still exist." : null,
         };
       }

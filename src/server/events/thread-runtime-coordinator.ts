@@ -231,7 +231,7 @@ function canAutomaticallyRelease(runtime: EstablishedRuntime): boolean {
 export class ThreadRuntimeCoordinator {
   readonly #actors: Pick<
     ConversationActorManager,
-    "acquire" | "acquireExistingControl" | "runWithRuntimeRetired" | "runWithRuntimesStopped"
+    "acquire" | "acquireExistingControl" | "captureUnprojectedGeneration" | "runWithRuntimeRetired" | "runWithRuntimesStopped"
   >;
   readonly #targets: ThreadApplicationActorTargetResolver;
   readonly #bridge: ConversationEventBridge;
@@ -256,7 +256,7 @@ export class ThreadRuntimeCoordinator {
   constructor(input: {
     readonly actors: Pick<
       ConversationActorManager,
-      "acquire" | "acquireExistingControl" | "runWithRuntimeRetired" | "runWithRuntimesStopped"
+      "acquire" | "acquireExistingControl" | "captureUnprojectedGeneration" | "runWithRuntimeRetired" | "runWithRuntimesStopped"
     >;
     readonly targets: ThreadApplicationActorTargetResolver;
     readonly bridge: ConversationEventBridge;
@@ -582,11 +582,14 @@ export class ThreadRuntimeCoordinator {
       const result = (async () => {
         await gate;
         try {
+          const unprojected = this.#actors.captureUnprojectedGeneration(scope, applicationThreadId);
           const actorDisposition: ConversationActorRetirementDisposition =
-            disposition.kind === "explicit_detach" &&
-            disposition.expected &&
-            this.#entries.get(key)?.runtime
-              ? { kind: "explicit_detach", expected: disposition.expected }
+            disposition.kind === "explicit_detach" && disposition.expected
+              ? this.#entries.get(key)?.runtime
+                ? { kind: "explicit_detach", expected: disposition.expected }
+                : unprojected === disposition.expected.generation && disposition.expected.runState === "starting"
+                  ? { kind: "unprojected_detach", expectedGeneration: unprojected }
+                  : { kind: "idle" }
               : { kind: "idle" };
           return await this.#actors.runWithRuntimeRetired({
             scope,
@@ -595,7 +598,7 @@ export class ThreadRuntimeCoordinator {
             detachCoordinatorRuntime: async () => {
               try {
                 if (disposition.kind === "explicit_detach") {
-                  await this.#releasePreviewedRuntime(key, disposition.expected);
+                  await this.#releasePreviewedRuntime(key, actorDisposition.kind === "unprojected_detach" ? undefined : disposition.expected);
                 } else {
                   await this.#releaseIdleRuntime(key);
                 }
@@ -962,7 +965,10 @@ export class ThreadRuntimeCoordinator {
   ): Promise<ThreadForceResetConversationRuntimeBlocker | undefined> {
     const key = scopedKey(scope, applicationThreadId);
     const entry = this.#entries.get(key);
-    if (!entry || entry.eviction) return undefined;
+    if (!entry || entry.eviction) {
+      const generation = this.#actors.captureUnprojectedGeneration(scope, applicationThreadId);
+      return generation ? { kind: "conversation_runtime", threadId: applicationThreadId, generation, runState: "starting" } : undefined;
+    }
     if (entry.evictionTimer) {
       clearTimeout(entry.evictionTimer);
       entry.evictionTimer = undefined;
@@ -1009,7 +1015,12 @@ export class ThreadRuntimeCoordinator {
   ): Promise<boolean> {
     const key = scopedKey(scope, applicationThreadId);
     const entry = this.#entries.get(key);
-    if (!entry || entry.eviction) return false;
+    if (!entry || entry.eviction) {
+      const generation = this.#actors.captureUnprojectedGeneration(scope, applicationThreadId);
+      if (!generation || expected.generation !== generation || expected.runState !== "starting" || expected.activeTurnId !== undefined) return false;
+      await this.runWithRuntimeDetached(scope, applicationThreadId, expected, async () => undefined);
+      return true;
+    }
     const runtime = entry.runtime;
     if (
       runtime

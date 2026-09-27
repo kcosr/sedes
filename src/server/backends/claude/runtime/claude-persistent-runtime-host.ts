@@ -19,6 +19,8 @@ import { compactedStreamSequences, historyCandidates, historyCovers, isTransient
 
 type Permission = { event: ClaudePersistentEvent; resolve(value: PermissionResult): void; response?: PermissionResult; cancelled?: boolean };
 type Session = {
+  /** Replay tombstones live exactly as long as this native query incarnation. */
+  interruptOperations: ClaudeInterruptOperations<Awaited<ReturnType<ClaudeRuntimeSession["interrupt"]>>>;
   backgroundActivity: ClaudeBackgroundActivity; backgroundSequence?: number;
   terminalResultSequences: Set<number>; pendingTerminalSequence?: number; model?: string | null; commandsInvalidated: boolean; permissionMode?: import("@anthropic-ai/claude-agent-sdk").PermissionMode; confirmedEffort?: import("@anthropic-ai/claude-agent-sdk").EffortLevel | null;
   id: string; cwd: string; authorityFingerprint: string; runtime: ClaudeOwnedRuntimeSession; starting: Promise<unknown>;
@@ -59,7 +61,6 @@ const STOPPED_HISTORY_BYTES = 64 * 1024 * 1024;
 /** Service-owned sessions never depend on an upstream SSH attachment lifetime. */
 export class ClaudePersistentRuntimeHost {
   readonly runtimeId = randomUUID();
-  readonly #interruptOperations = new ClaudeInterruptOperations<Awaited<ReturnType<ClaudeRuntimeSession["interrupt"]>>>();
   readonly #sessions = new Map<string, Session>();
   /** Running one-shot fork launches by child session; they share the session cap. */
   readonly #forkLaunches = new Map<string, Promise<ClaudeRuntimeForkResult>>();
@@ -468,8 +469,9 @@ export class ClaudePersistentRuntimeHost {
         return { accepted: true };
       }
       case "interrupt_disposition": {
-        const key = `${command.request.queryId}:${command.request.startupProbeUuid}:${command.request.operationId}`;
-        return { outcome: this.#interruptOperations.outcome(key) };
+        const session = this.#sessions.get(command.request.queryId);
+        return { outcome: session?.runtime.startupProbeUuid === command.request.startupProbeUuid
+          ? session.interruptOperations.outcome(command.request.operationId) : "unknown" };
       }
       case "interrupt": {
         const session = this.#session(command.request.queryId);
@@ -480,8 +482,7 @@ export class ClaudePersistentRuntimeHost {
         // This is a duration across hosts, never a comparison of their clocks.
         const input = { applicationOperationId: command.request.operationId,
           deadlineAt: Date.now() + command.request.timeoutMilliseconds };
-        const key = `${session.id}:${command.request.startupProbeUuid}:${command.request.operationId}`;
-        const receipt = await this.#interruptOperations.run({ ...input, applicationOperationId: key }, async signal => {
+        const receipt = await session.interruptOperations.run(input, async signal => {
           const bounded = { ...input, signal };
           await this.#withdrawUnstartedInputs(session, bounded);
           assertClaudeInterruptTime(bounded);
@@ -577,7 +578,7 @@ export class ClaudePersistentRuntimeHost {
       onMessage: message => this.#message(created, message),
       onFailure: () => this.#fail(created, "claude_persistent_query_failed"),
     });
-    created = { backgroundActivity: new ClaudeBackgroundActivity(), id: request.sessionId, cwd: request.cwd, authorityFingerprint: queryAuthorityFingerprint(request), runtime, starting: Promise.resolve(), events: new Map(), replay: new Map(), bytes: 0, replayBytes: 0, sequence: 0,
+    created = { interruptOperations: new ClaudeInterruptOperations(), backgroundActivity: new ClaudeBackgroundActivity(), id: request.sessionId, cwd: request.cwd, authorityFingerprint: queryAuthorityFingerprint(request), runtime, starting: Promise.resolve(), events: new Map(), replay: new Map(), bytes: 0, replayBytes: 0, sequence: 0,
       journalMessageBytes: 0, journalMessageCount: 0, offeredThrough: 0,
       nextHistoryRead: 0, historyBackoff: 0, historyPressure: false, historyCandidatesDirty: true, hasHistoryCandidates: false, rewriteGeneration: 0, streamStopSequence: 0, replayStateSequences: new Map(),
       admissionJournalComplete: request.launch === "new",

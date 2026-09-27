@@ -246,9 +246,9 @@ export class ConfigurationAdminService {
   async #authorizeSecrets(scope: RequestScope, document: ConfigurationDocument) {
     const approved: { environmentId: string; reference: { source: "environment"; variable: string } | { source: "protected_file"; path: string } }[] = [];
     for (const backend of document.backends) {
-      if (backend.kind !== "codex_app_server" || backend.moduleConfiguration.connection.ownership !== "external") continue;
+      if ((backend.kind !== "codex_app_server" && backend.kind !== "opencode") || backend.moduleConfiguration.connection.ownership !== "external") continue;
       const channel = backend.moduleConfiguration.connection.channel;
-      if (channel.type !== "tcp_websocket") continue;
+      if (channel.type !== "tcp_websocket" && channel.type !== "http") continue;
       const environmentId = document.targets.find(target => target.backendInstanceId === backend.id)?.executionEnvironmentId;
       if (!environmentId) throw new DomainError("bad_request", "Credential reference requires an execution environment.");
       const reference = channel.authentication.secret;

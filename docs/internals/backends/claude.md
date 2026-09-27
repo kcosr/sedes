@@ -669,8 +669,10 @@ The local handle and native owner reserve that operation before effects, bound
 withdrawals and interrupt acknowledgement by the remaining budget, and never
 resend an uncertain operation. The persistent wire passes a remaining duration;
 the owner retains its first local deadline without assuming synchronized host
-clocks. The bounded owner journal records an exact native acknowledgement and
-survives main or carrier replacement. Its read-only disposition operation never
+clocks. A separate bounded journal for each native query incarnation records an
+exact native acknowledgement and survives main or carrier replacement. Its
+tombstones remain until that query is proved retired; one full journal cannot
+exhaust other sessions' Stop capacity. Its read-only disposition operation never
 infers acceptance from idle status or disappearance of an old turn. A late
 acknowledgement cannot accept an expired Stop receipt.
 
