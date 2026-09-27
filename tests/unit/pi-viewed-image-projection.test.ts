@@ -203,6 +203,7 @@ describe("Pi live viewed-image projection", () => {
     expect(projector.takeViewedImageResults()).toEqual([
       {
         toolCallId: "call",
+        toolName: "read",
         part: { imageIndex: 1, mimeType: "image/png", data: pixel },
         child: {
           backendItemId: "live:epoch:1:image",

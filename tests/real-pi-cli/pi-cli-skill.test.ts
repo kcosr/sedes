@@ -54,6 +54,7 @@ import {
 } from "../../src/server/backends/pi/pi-tool-access.js";
 import { evaluateModelEligibility } from "../support/model-eligibility.js";
 import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
+import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 
 const requiredProvider = "xai";
 const requiredModelId = "grok-4.5";
@@ -649,6 +650,7 @@ describeRealPiCli("real Pi repository-skill CLI verification", () => {
         agentToolSourceCapabilities: sources,
         toolAccessPolicy: () => "ask",
         modelPolicy: catalogModelPolicy,
+        outputArtifacts: createInMemoryOutputArtifactPublisher(),
         sessionDirectory,
         agentToolCli: {
           availability: "available",

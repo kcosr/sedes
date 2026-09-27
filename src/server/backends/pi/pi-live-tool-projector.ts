@@ -91,6 +91,7 @@ export interface PiAssistantStreamStart {
 /** A completed image read whose child image the handle may publish. */
 export interface PiLiveViewedImageResult {
   readonly toolCallId: string;
+  readonly toolName: string;
   readonly part: PiViewedImagePart;
   readonly child: PiViewedImageChildTarget;
 }
@@ -630,8 +631,12 @@ export class PiLiveToolProjector {
     if (!pending || pending.toolName !== toolName || terminal(pending.phase)) {
       return this.#invalidate("contradictory_state");
     }
+    if (!pending.identity) {
+      return this.#invalidate("ambiguous_correlation");
+    }
     const events: BackendConversationEvent[] = [];
-    if (!pending.published && pending.identity) {
+    // An item that was never published still starts as streaming.
+    if (!pending.published) {
       pending.published = true;
       events.push({ type: "item_started", item: this.#map(pending, "streaming") });
     }
@@ -654,10 +659,6 @@ export class PiLiveToolProjector {
             },
       };
     }
-    if (!pending.published) {
-      pending.published = true;
-      events.push({ type: "item_started", item });
-    }
     events.push({ type: "item_completed", item });
     const part =
       !isError && pending.viewedImage
@@ -666,18 +667,15 @@ export class PiLiveToolProjector {
     if (part) {
       this.#viewedImageResults.push({
         toolCallId: callId,
+        toolName,
         part,
         child: {
           backendItemId: `${pending.provisionalItemId}:image`,
           backendTurnId: item.backendTurnId,
           sourceOrder: pending.sourceOrder + 1,
           viewedItemId: pending.provisionalItemId,
-          ...(pending.completedAt
-            ? {
-                startedAt: pending.completedAt,
-                completedAt: pending.completedAt,
-              }
-            : {}),
+          startedAt: pending.completedAt,
+          completedAt: pending.completedAt,
           ...(pending.viewedImage?.fileName
             ? { fileName: pending.viewedImage.fileName }
             : {}),

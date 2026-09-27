@@ -28,6 +28,7 @@ import type { PiIsolatedWorkspaceResolver } from "./pi-isolated-workspace.js";
  * driver per request would permit two writers for one native session.
  */
 import type { UsageSink } from "../../usage/contracts.js";
+import type { OutputArtifactPublisher } from "../../output-artifacts/contracts.js";
 
 export class PiBackendDriverFactory implements BackendDriverFactory {
   readonly scope: RequestScope;
@@ -51,6 +52,7 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
   readonly #discoverySnapshots = new PiDiscoverySnapshotStore();
   readonly #drivers = new Map<string, PiConversationBackendDriver>();
   readonly #modelPolicy: CompiledBackendModelPolicy;
+  readonly #outputArtifacts: OutputArtifactPublisher;
 
   constructor(input: {
     readonly usage: UsageSink;
@@ -72,6 +74,7 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
     readonly agentToolCli: NonNullable<PiDriverOptions["agentToolCli"]>;
     readonly now?: PiDriverOptions["now"];
     readonly modelPolicy: CompiledBackendModelPolicy;
+    readonly outputArtifacts: OutputArtifactPublisher;
   }) {
     this.#usage = input.usage;
     this.scope = input.scope;
@@ -100,6 +103,7 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
     this.#agentToolSourceCapabilities = input.agentToolSourceCapabilities;
     this.#agentToolCli = input.agentToolCli;
     this.#modelPolicy = input.modelPolicy;
+    this.#outputArtifacts = input.outputArtifacts;
     this.now = input.now;
   }
 
@@ -131,6 +135,7 @@ export class PiBackendDriverFactory implements BackendDriverFactory {
         agentToolSourceCapabilities: this.#agentToolSourceCapabilities,
         agentToolCli: this.#agentToolCli,
         modelPolicy: this.#modelPolicy,
+        outputArtifacts: this.#outputArtifacts,
         ...(this.#resolveRemoteWorkspace
           ? { resolveRemoteWorkspace: this.#resolveRemoteWorkspace }
           : {}),

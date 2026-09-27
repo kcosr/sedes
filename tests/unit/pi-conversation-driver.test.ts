@@ -109,6 +109,7 @@ import {
   type CompiledBackendModelPolicy,
 } from "../../src/server/backends/model-policy.js";
 import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-tool-source-capabilities.js";
+import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 
 const roots: string[] = [];
 const toolProvenanceKey = new Uint8Array(32).fill(0x42);
@@ -125,6 +126,7 @@ class PiConversationBackendDriver extends ProductionPiConversationBackendDriver 
     super({
       modelPolicy: catalogModelPolicy,
       agentToolSourceCapabilities,
+      outputArtifacts: createInMemoryOutputArtifactPublisher(),
       ...options,
     });
   }
@@ -132,10 +134,11 @@ class PiConversationBackendDriver extends ProductionPiConversationBackendDriver 
 
 type PiDriverOptions = Omit<
   ProductionPiDriverOptions,
-  "agentToolSourceCapabilities" | "modelPolicy"
+  "agentToolSourceCapabilities" | "modelPolicy" | "outputArtifacts"
 > & {
   readonly modelPolicy?: CompiledBackendModelPolicy;
   readonly agentToolSourceCapabilities?: ProductionPiDriverOptions["agentToolSourceCapabilities"];
+  readonly outputArtifacts?: ProductionPiDriverOptions["outputArtifacts"];
 };
 
 const noAgentTools = {
