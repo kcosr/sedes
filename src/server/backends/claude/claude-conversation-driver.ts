@@ -42,7 +42,10 @@ import {
   type ClaudeForkBoundaryAuthentication,
 } from "./claude-fork-context-boundary.js";
 import { ClaudeConversationHandle } from "./claude-conversation-handle.js";
-import { ClaudeViewedImagePublications } from "./claude-viewed-images.js";
+import {
+  CLAUDE_VIEWED_IMAGE_INLINE_BUDGET,
+  ClaudeViewedImagePublications,
+} from "./claude-viewed-images.js";
 import type { OutputArtifactPublisher } from "../../output-artifacts/contracts.js";
 import {
   assertClaudeHistorySession,
@@ -198,6 +201,8 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
       ) => ClaudeRuntimeVersionObservation)
     | undefined;
   readonly #handles = new Set<ClaudeConversationHandle>();
+  /** Reads whose remaining images still publish in the background. */
+  readonly #readPublications = new Set<ClaudeViewedImagePublications>();
   #nextQueryGeneration = 0;
 
   constructor(input: ClaudeConversationDriverInput) {
@@ -684,7 +689,12 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
         },
       );
       let projection = project();
-      if (await viewedImages.publish(projection.pendingViewedImages)) projection = project();
+      if (await viewedImages.publish(projection.pendingViewedImages, CLAUDE_VIEWED_IMAGE_INLINE_BUDGET)) {
+        projection = project();
+      }
+      // The rest publish in the background and show on a later read.
+      this.#readPublications.add(viewedImages);
+      void viewedImages.idle().finally(() => this.#readPublications.delete(viewedImages));
       return { snapshot: projection.snapshot, usage: projection.usage ?? {} };
     } catch (error) {
       throw mapClaudeReadError(error);
@@ -1236,6 +1246,8 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
   }
 
   async close(): Promise<void> {
+    for (const publications of this.#readPublications) publications.close();
+    this.#readPublications.clear();
     const handles = [...this.#handles];
     await Promise.allSettled(
       handles.map(async (handle) => await handle.close()),
