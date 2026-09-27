@@ -201,8 +201,11 @@ promote itself to a trusted command, file-read, file-change, or image card.
 Live assistant blocks take source order `base + 2 * contentIndex`, with a
 stride of 2000 per assistant message and content indexes below 1000. The odd
 position after each block is reserved for a child item added later; history
-reserves the same position after each viewed image. Source order never
-reaches the browser.
+reserves the same position after each viewed image. A tool call seen only
+through execution events takes its index from the ended assistant message.
+History numbers items across the whole branch, so a seed taken during a
+running turn advances the next live base past every item and reserved slot of
+that turn. Source order never reaches the browser.
 
 ### Viewed images
 
@@ -269,6 +272,27 @@ tool-result entry and content index that locate the image part.
 - `history()` publishes the missing children of its page before returning,
   newest first and at most 16 per call; a later call continues. `locateTurn`
   and an unattached `read` only look artifacts up.
+- A candidate exists only for non-empty data of a supported output media type.
+  Each handle remembers up to 4096 keys whose publication failed and does not
+  retry them; a new attachment does.
+- No publication starts once the handle is closed. `close()` waits for those
+  already started, which deliver nothing, before it disposes the session.
+- A seed taken during a running turn can include image reads whose results
+  Pi has not persisted yet; with parallel tools, Pi persists a batch's results
+  together once all of them finish. History reports these rows, still
+  `streaming`, and the handle completes each one as history would when its
+  result persists, then publishes its child. At settlement any such row still
+  waiting completes from a persisted result or is interrupted with
+  `pi_tool_result_missing`, so no viewed row stays `streaming`. The image the
+  earlier generation published live is not shown for an interrupted row.
+
+Pi's window and page selection, including its 1000-item turn bound and byte
+budget, measure turns without viewed-image children, so a child never changes
+which turns are transferred or fails a transfer. Each child pairs with a
+counted viewed item, so a turn carries at most 2000 items, well within the
+shared 20000-item limit. Children return with their turns unless they would
+push the payload past Pi's 4 MiB ceiling; the rows are then returned without
+them.
 
 Targeted turn lookup projects the retained authoritative branch once, scans
 turn identities newest-first within the caller's candidate bound, and returns
