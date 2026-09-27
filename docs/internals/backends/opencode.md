@@ -1,10 +1,12 @@
-# OpenCode v2 runtime foundation
+# OpenCode v2 runtime and native history
 
 The OpenCode module and its native runtime are implemented under
 `src/server/backends/opencode`. They are currently exercised through the
 qualification suites and a test catalog. The production module catalog still
-contains Pi, Codex, Claude and Grok; OpenCode conversation methods explicitly
-return unavailable until their history and delivery integration is complete.
+contains Pi, Codex, Claude and Grok. OpenCode discovery, attachment, history,
+recovery and conversation Stop operate in that test catalog; creation, delivery,
+settings and interaction mutations remain explicitly unavailable pending their
+integration and production admission.
 The normalized backend identity is `opencode`, its connection kind is
 `opencode_http`, and the browser brand is `opencode`. Client protocol 128
 includes these closed-enum additions and terminal Stop diagnostics.
@@ -114,6 +116,49 @@ endpoint updates the runtime configuration revision and requires fresh admission
 
 ## Shared control and verification
 
+Native discovery validates the canonical workspace and returns private,
+scope-bound binding details. It performs no native mutation. Attachment requires
+the persisted tenant/principal/thread/backend/connection/environment/store/session
+binding before acquiring the runtime. A native session move or deletion revokes
+that handle and its control without stopping the daemon; fresh binding validation
+is required. Stop independently revalidates session location and native ownership
+even if its event was missed.
+
+The native API validates the pinned official message/event schemas. It waits for
+`server.connected` before reading history, with no SSE replay assumption. EOF,
+malformed events, overflow or historical mutation invalidate the projection.
+Recovery acquires native history, pending inputs, interactions and activity again;
+it never resends a native effect. Lifetime invalidation remains visible on the
+separate raw subscription while snapshot hydration is pending.
+
+Each resident handle retains one complete, disposable native-history projection.
+Initial acquisition reads to a captured finite head, validates continuation
+anchors, and catches up by refreshing unfinished records and following native
+forward cursors. It does not write a transcript mirror. Limits are 16 MiB per
+HTTP response, 64 MiB aggregate decoded acquisition/projection, 100,000 acquisition
+records and 120 seconds through final selection. SSE buffering and the normalized
+event journal are each bounded to 4,096 records/16 MiB. A single whole turn must
+fit the shared 16 MiB page limit and item-count limit. Fixed-limit failures are
+explicit and non-retryable; results are never silently truncated to fit history.
+
+Native idle records close busy periods. A period's opening record gives it a
+stable private turn identity, including settings-only openings. Whole-turn
+pagination and targeted older-turn lookup share that complete retained history.
+Cursors bind scope, projection generation, finite history frontier and selected
+prefix; appending later turns preserves an older cursor, while changing its
+prefix or owner invalidates it. Missing active execution alone cannot settle an
+unfinished period: an orphan remains disconnected/in-progress until native
+terminal evidence arrives. Settings-only suffixes do not claim running ownership.
+
+Text and reasoning use separate native ordinal counters. Observed deltas are
+disposable overlays; final native values replace them, including empty text.
+After prefix loss, the final value repairs the transcript. Native inputs never
+receive invented Sedes delivery provenance. Observed child sessions and attributed
+shells refresh background counts; this is not a complete inventory of native Jobs.
+Idle client eviction releases the handle while keeping either native owner alive.
+Archive/policy residency release refreshes observed activity and refuses busy or
+unknown state without cancellation.
+
 Conversation Stop borrows already-published control before history hydration. A
 per-owner fence serializes native Send/Steer calls with Stop, including first
 Send, while history and queue acquisition stay outside that fence. A failed
@@ -129,5 +174,11 @@ scoped operation evidence. Opt-in isolated native tests use stock `opencode2`
 2.0.18 with fixture-owned state. They verify owned startup, malformed/expired
 readiness, background-shell survival after reference release, external
 Disconnect, detached-descendant cleanup, retained database identity and restart.
+History qualification also exercises the actual driver/handle/actor with native
+multi-turn history and a deterministic loopback model: older-turn lookup during
+streaming, delta/final replacement, stable cursors and native interrupted-idle
+evidence after Stop. Deterministic actor tests cover stalled hydration, request
+cancellation, overflow/reconnect, fixed-limit failures, lifetime revocation and
+background-safe eviction.
 These tests do not require authenticated model requests or use an operator's
 running OpenCode server.

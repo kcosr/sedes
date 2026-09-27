@@ -47,6 +47,8 @@ function nativeFactory() {
       nativeNamespaceKey: openCodeRuntimeNamespaceKey(input.authority.executionEnvironmentId, input.nativeStorePath),
       start: vi.fn(async () => { if (input.connection.ownership === "external") await input.externalPassword!(); state = "ready"; }),
       health: vi.fn(async () => ({ available: state === "ready", checkedAt: new Date().toISOString() })),
+      acquire: vi.fn((): never => { throw new Error("unexpected conversation acquisition in module fixture"); }),
+      assertCurrent: vi.fn(async () => undefined),
       snapshot: () => ({ state, ownership: input.connection.ownership, references: 0, ...(state === "ready" ? { generation: "owner-generation" } : {}) }),
       stop: vi.fn(async () => {
         const nativeInterrupts = state === "stopped" ? "not_owned" as const : "incomplete" as const;
@@ -85,7 +87,7 @@ describe("OpenCode M1 private module foundation", () => {
     const driver = runtime.driverFactory.create(fixture.connection);
     await expect(driver.catalog({} as never)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
     await expect(driver.create({} as never)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
-    await expect(driver.attach({} as never)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    await expect(driver.attach({ scope: { ...scope, principalId: "another-principal" } } as never)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
     expect(() => runtime.savedAgents.validateOverrides({ overrides: [] })).toThrow(/unavailable/u);
     expect(() => runtime.automationExecutionPolicy.assertCanAutomate(scope, "thread")).toThrow(/unavailable/u);
     await expect(runtime.managedProviderTerminals.authorizeAdmission({} as never)).rejects.toMatchObject({ code: "terminal_unavailable" });

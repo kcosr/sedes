@@ -1,4 +1,4 @@
-import { OpenCode, type OpenCodeClient, type ServerInfo, type OpenCodeEvent } from "@opencode/client";
+import { ClientError, OpenCode, type OpenCodeClient, type ServerInfo, type OpenCodeEvent } from "@opencode/client";
 import { isIP } from "node:net";
 import { z } from "zod";
 import { admitOpenCodeRelease, OpenCodeRuntimeError } from "./opencode-release.js";
@@ -8,6 +8,18 @@ const infoSchema = z.object({
   version: z.string().max(64), pid: z.number().int().positive(),
   urls: z.array(z.string().max(2_048)).max(128), paths: z.object({ tmp: z.string().max(4_096) }).strict(),
 }).strict();
+
+function boundedFailure(error: unknown): OpenCodeRuntimeError | undefined {
+  // The generated client wraps response read failures. Preserve our bounded
+  // diagnostic without retaining its body, cause chain, or native error text.
+  let current = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (current instanceof OpenCodeRuntimeError) return current;
+    if (!(current instanceof ClientError)) return undefined;
+    current = current.cause;
+  }
+  return undefined;
+}
 
 /** A declared local HTTP authority; URL parser normalization cannot admit DNS or shorthand IPv4. */
 export function openCodeEndpoint(value: string): string {
@@ -51,7 +63,8 @@ export class OpenCodeHttpClient {
       budget.throwIfAborted();
       return validate(value);
     } catch (error) {
-      if (error instanceof OpenCodeRuntimeError) throw error;
+      const bounded = boundedFailure(error);
+      if (bounded) throw bounded;
       throw new OpenCodeRuntimeError(budget.aborted ? "opencode_request_aborted" : "opencode_request_failed");
     }
   }
@@ -85,8 +98,14 @@ export class OpenCodeHttpClient {
         if (lifetime.aborted) return;
         yield validate(value);
       }
-    } catch {
-      if (!lifetime.aborted) throw new OpenCodeRuntimeError("opencode_event_stream_failed");
+    } catch (error) {
+      if (!lifetime.aborted) {
+        const bounded = boundedFailure(error);
+        if (bounded) throw bounded;
+        if (error instanceof ClientError && error.reason === "MalformedResponse") throw new OpenCodeRuntimeError("opencode_event_malformed");
+        if (error instanceof ClientError && error.reason === "SseEventTooLarge") throw new OpenCodeRuntimeError("opencode_event_overflow");
+        throw new OpenCodeRuntimeError("opencode_event_stream_failed");
+      }
     }
   }
 
@@ -127,9 +146,9 @@ export class OpenCodeHttpClient {
             if (bytes > OPENCODE_MAXIMUM_RESPONSE_BYTES) throw new OpenCodeRuntimeError("opencode_response_too_large");
           }
           controller.enqueue(next.value);
-        } catch {
+        } catch (error) {
           await reader.cancel().catch(() => undefined);
-          controller.error(new OpenCodeRuntimeError("opencode_response_read_failed"));
+          controller.error(error instanceof OpenCodeRuntimeError ? error : new OpenCodeRuntimeError("opencode_response_read_failed"));
         }
       },
       cancel: async () => { await reader.cancel().catch(() => undefined); },

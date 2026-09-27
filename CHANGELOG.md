@@ -224,6 +224,9 @@
 
 ### Fixed
 
+- Conversation recovery now reports fixed history-limit failures without
+  automatically repeating the same expensive acquisition.
+
 - Refresh Native agent tools and CLI presentation settings when an idle
   Codex or Claude thread already has a persistent SSH session, including
   after the server reconnects. Provider release failures leave the saved

@@ -1,0 +1,56 @@
+import { BackendError, type AgentBackendInstance, type AgentConnectionProfile, type AttachConversationInput, type DiscoverConversationsInput } from "../contracts.js";
+import type { RequestScope } from "../../identity/identity-provider.js";
+import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
+import { parseOpenCodeBindingDetail, serializeOpenCodeBindingDetail, type OpenCodeBindingDetail } from "./opencode-binding-detail.js";
+import type { OpenCodeRuntime } from "./opencode-runtime.js";
+import type { OpenCodeThreadRepository } from "./opencode-thread-repository.js";
+
+export type OpenCodeConversationRuntime = Pick<OpenCodeRuntime,
+  "nativeNamespaceKey" | "start" | "health" | "snapshot" | "acquire" | "assertCurrent">;
+
+export interface OpenCodeDriverContext {
+  readonly scope: RequestScope;
+  readonly instance: AgentBackendInstance;
+  readonly connection: AgentConnectionProfile;
+  readonly nativeNamespaceKey: string;
+  readonly repository: OpenCodeThreadRepository;
+  readonly runtime: () => Promise<OpenCodeConversationRuntime>;
+}
+
+/** Reject cross-scope targets before acquiring or launching a native runtime. */
+export function assertOpenCodeWorkspace(context: OpenCodeDriverContext,
+  input: Pick<DiscoverConversationsInput, "scope" | "workspace">): void {
+  if (input.scope.tenantId !== context.scope.tenantId || input.scope.principalId !== context.scope.principalId ||
+      context.instance.tenantId !== context.scope.tenantId || context.instance.kind !== "opencode" || !context.instance.enabled ||
+      context.connection.tenantId !== context.scope.tenantId || context.connection.ownerPrincipalId !== context.scope.principalId ||
+      context.connection.backendInstanceId !== context.instance.id || context.connection.kind !== "opencode_http" || !context.connection.enabled ||
+      input.workspace.summary.environmentId !== context.connection.executionEnvironmentId ||
+      !normalizedAbsolutePath(input.workspace.canonicalPath) || input.workspace.canonicalPath.length > 4_096) {
+    throw openCodeConversationError("opencode_conversation_authority_invalid", "The OpenCode conversation target does not match its authority.", "permission_denied");
+  }
+}
+
+export function requireOpenCodeBinding(context: OpenCodeDriverContext,
+  input: Pick<AttachConversationInput, "scope" | "workspace" | "binding" | "opaqueBindingDetail">): Readonly<OpenCodeBindingDetail> {
+  assertOpenCodeWorkspace(context, input);
+  const binding = input.binding;
+  try {
+    const detail = parseOpenCodeBindingDetail(input.opaqueBindingDetail);
+    if (binding.tenantId !== context.scope.tenantId || binding.ownerPrincipalId !== context.scope.principalId ||
+        binding.backendInstanceId !== context.instance.id || binding.connectionProfileId !== context.connection.id ||
+        binding.executionEnvironmentId !== context.connection.executionEnvironmentId ||
+        detail.tenantId !== binding.tenantId || detail.principalId !== binding.ownerPrincipalId ||
+        detail.backendInstanceId !== binding.backendInstanceId || detail.connectionProfileId !== binding.connectionProfileId ||
+        detail.executionEnvironmentId !== binding.executionEnvironmentId || detail.sessionId !== binding.backendConversationId ||
+        detail.canonicalWorkspacePath !== input.workspace.canonicalPath || detail.nativeNamespaceKey !== context.nativeNamespaceKey ||
+        context.repository.getBinding(input.scope, binding.applicationThreadId) !== serializeOpenCodeBindingDetail(detail)) throw new Error();
+    return detail;
+  } catch {
+    throw openCodeConversationError("opencode_binding_authority_invalid", "The OpenCode conversation binding is unavailable.", "permission_denied");
+  }
+}
+
+export function openCodeConversationError(code: string, message: string,
+  category: BackendError["category"] = "unavailable", retryable = false): BackendError {
+  return new BackendError({ category, retryable, crossedSubmissionBoundary: false, backendCode: code, safeMessage: message });
+}

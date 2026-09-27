@@ -1,7 +1,8 @@
 import type { BackendDriverFactory } from "../registry.js";
-import { BackendError, type AgentBackendInstance, type AgentConnectionProfile, type BackendHealth } from "../contracts.js";
+import { BackendError, type AgentBackendInstance, type AgentConnectionProfile } from "../contracts.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import { OpenCodeConversationBackendDriver } from "./opencode-conversation-driver.js";
+import type { OpenCodeDriverContext } from "./opencode-conversation-context.js";
 
 export class OpenCodeBackendDriverFactory implements BackendDriverFactory {
   readonly connectionKinds = ["opencode_http"] as const;
@@ -9,7 +10,7 @@ export class OpenCodeBackendDriverFactory implements BackendDriverFactory {
   readonly scope: RequestScope;
   readonly instance: AgentBackendInstance;
   readonly #connections: ReadonlyMap<string, AgentConnectionProfile>;
-  constructor(readonly input: { scope: RequestScope; instance: AgentBackendInstance; connections: readonly AgentConnectionProfile[]; health(): Promise<BackendHealth> }) {
+  constructor(readonly input: Omit<OpenCodeDriverContext, "connection"> & { connections: readonly AgentConnectionProfile[] }) {
     this.scope = Object.freeze({ ...input.scope }); this.instance = input.instance;
     this.#connections = new Map(input.connections.map(connection => [connection.id, Object.freeze({ ...connection })]));
   }

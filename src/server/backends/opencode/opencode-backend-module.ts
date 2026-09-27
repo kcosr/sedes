@@ -16,7 +16,7 @@ import { OpenCodeThreadPresentationProvider } from "./opencode-thread-presentati
 import { OpenCodeSavedAgentBackendAdapter } from "./opencode-saved-agent-adapter.js";
 import { OpenCodeAutomationExecutionPolicy } from "./opencode-automation-execution-policy.js";
 
-type NativeRuntime = Pick<OpenCodeRuntime, "nativeNamespaceKey" | "start" | "health" | "snapshot" | "stop" | "close">;
+type NativeRuntime = Pick<OpenCodeRuntime, "nativeNamespaceKey" | "start" | "health" | "snapshot" | "stop" | "close" | "acquire" | "assertCurrent">;
 type NativeRuntimeFactory = (input: OpenCodeRuntimeInput) => NativeRuntime;
 const managedTerminals = Object.freeze({
   async authorizeAdmission(): Promise<never> { throw terminalUnavailable(); },
@@ -118,10 +118,8 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
       return namespace;
     } };
     this.driverFactory = new OpenCodeBackendDriverFactory({ scope: context.scope, instance: context.instance, connections: context.connections,
-      health: async () => {
-        try { const owner = await this.#native(); this.#assertOpen(); await owner.start(); return await owner.health(); }
-        catch { return { available: false, checkedAt: new Date().toISOString() }; }
-      } });
+      nativeNamespaceKey: namespace, repository,
+      runtime: async () => { const owner = await this.#native(); this.#assertOpen(); return owner; } });
     if (configuration.connection.ownership === "owned") {
       this.administration = {
         inspect: async () => this.#inspect(),

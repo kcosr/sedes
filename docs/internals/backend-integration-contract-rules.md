@@ -1501,7 +1501,10 @@ these failures to ordinary HTTP middleware or an opaque reconnect loop.
 Provider-private codes and causes stay on the server; only the normalized API
 error, retryability, and Sedes request ID cross the boundary. Every compiled
 backend must classify invalid authoritative history and an individual normalized
-field that cannot satisfy the product contract as non-retryable. A bounded native
+field that cannot satisfy the product contract as non-retryable. Projection
+recovery honors an explicit non-retryable `BackendError`: the actor reports
+synchronization failure after that attempt instead of repeating a fixed-limit
+acquisition. Retryable failures retain the bounded recovery loop. A bounded native
 acquisition that overflows before retention, and transient timeout, overload, or
 availability failures, are retryable and request-local; they do not fence the
 conversation. Tests must cover both pre-header runtime acquisition and post-header
