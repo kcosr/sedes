@@ -1030,11 +1030,11 @@ function refineNotification<Method extends keyof typeof notificationKeys>(
   } else if (method === "thread/tokenUsage/updated") {
     refineCodexThreadTokenUsage(notification.tokenUsage as never);
   } else if (method === "turn/started" || method === "turn/completed") {
-    refineCodexTurn(notification.turn as never);
+    return { ...value, turn: refineCodexTurn(notification.turn as never) };
   } else if (method === "turn/plan/updated") {
     for (const entry of notification.plan as readonly unknown[]) exactKeys(entry, ["step", "status"]);
   } else if (method === "item/started" || method === "item/completed") {
-    refineCodexThreadItem(notification.item as never);
+    return { ...value, item: refineCodexThreadItem(notification.item as never) };
   } else if (method === "item/fileChange/patchUpdated") {
     for (const change of notification.changes as readonly unknown[]) {
       const parsed = exactKeys(change, ["path", "kind", "diff"]);

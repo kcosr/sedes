@@ -217,7 +217,7 @@ function assertThreadItemClosed(item: OfficialThreadItem): void {
   const keysByType = {
     userMessage: ["type", "id", "clientId", "content"], hookPrompt: ["type", "id", "fragments"], agentMessage: ["type", "id", "text", "phase", "memoryCitation", "delivery", "questions"], functionCallOutput: ["type", "id", "name", "namespace", "output"], plan: ["type", "id", "text"], reasoning: ["type", "id", "summary", "content"],
     commandExecution: ["type", "id", "pluginId", "scriptPath", "command", "cwd", "processId", "source", "status", "commandActions", "aggregatedOutput", "exitCode", "durationMs"], fileChange: ["type", "id", "changes", "status"],
-    mcpToolCall: ["type", "id", "server", "tool", "status", "arguments", "appContext", "mcpAppResourceUri", "pluginId", "readOnlyHint", "result", "error", "durationMs"], dynamicToolCall: ["type", "id", "namespace", "tool", "arguments", "status", "contentItems", "success", "durationMs"],
+    mcpToolCall: ["type", "id", "server", "tool", "status", "arguments", "appContext", "mcpAppResourceUri", "mcpAppUi", "pluginId", "readOnlyHint", "result", "error", "durationMs"], dynamicToolCall: ["type", "id", "namespace", "tool", "arguments", "status", "contentItems", "success", "durationMs"],
     collabAgentToolCall: ["type", "id", "tool", "status", "senderThreadId", "receiverThreadIds", "prompt", "model", "reasoningEffort", "agentsStates"], subAgentActivity: ["type", "id", "kind", "agentThreadId", "agentPath"], webSearch: ["type", "id", "query", "action", "results"], imageView: ["type", "id", "path"], sleep: ["type", "id", "durationMs"], imageGeneration: ["type", "id", "status", "revisedPrompt", "result", "transparentBackground", "failure", "savedPath"], enteredReviewMode: ["type", "id", "review"], exitedReviewMode: ["type", "id", "review"], contextCompaction: ["type", "id"],
   } as const satisfies Record<OfficialThreadItem["type"], readonly string[]>;
   assertExactKeys(item, keysByType[item.type], "thread_item");
@@ -258,6 +258,21 @@ function assertThreadItemClosed(item: OfficialThreadItem): void {
       });
       break;
     case "mcpToolCall":
+      // Reviewed additive descriptor metadata from Codex 0.156.1/0.159.0.
+      // The pinned generated validator does not describe this optional field.
+      if ("mcpAppUi" in item && item.mcpAppUi !== null) {
+        const ui = item.mcpAppUi;
+        assertRecord(ui, "mcp_app_ui");
+        assertExactKeys(ui, ["resourceUri", "preferredModelDisplayMode"], "mcp_app_ui");
+        if (
+          typeof ui.resourceUri !== "string" ||
+          (ui.preferredModelDisplayMode !== "inline" &&
+            ui.preferredModelDisplayMode !== "fullscreen")
+        ) {
+          throw new Error("mcp_app_ui_invalid");
+        }
+        assertNativeString(ui.resourceUri, "mcp_app_ui_resource_uri");
+      }
       if (item.appContext !== null) assertExactKeys(item.appContext, ["connectorId", "linkId", "resourceUri", "appName", "actionName"], "mcp_app_context");
       if (item.result !== null) assertExactKeys(item.result, ["content", "structuredContent", "_meta"], "mcp_result");
       if (item.error !== null) assertExactKeys(item.error, ["message"], "mcp_error");
@@ -478,14 +493,23 @@ function assertTurn(turn: OfficialTurn): void {
   turn.items.forEach(assertThreadItem);
 }
 
+function projectValidatedThreadItem(value: CodexThreadItem): CodexThreadItem {
+  if (value.type === "mcpToolCall" && "mcpAppUi" in value) {
+    // Presentation metadata is not a Sedes capability or transcript field.
+    const { mcpAppUi: _mcpAppUi, ...item } = value;
+    return item;
+  }
+  return value;
+}
+
 export function refineCodexThreadItem(value: CodexThreadItem): CodexThreadItem {
   assertThreadItem(value);
-  return value;
+  return projectValidatedThreadItem(value);
 }
 
 export function refineCodexTurn(value: CodexTurn): CodexTurn {
   assertTurn(value);
-  return value;
+  return { ...value, items: value.items.map(projectValidatedThreadItem) };
 }
 
 export function refineCodexThreadStatus(
@@ -533,7 +557,7 @@ export function projectCodexThread(value: OfficialThread): CodexThread {
     }
   }
   if (value.gitInfo !== null) assertExactKeys(value.gitInfo, ["sha", "branch", "originUrl"], "git_info");
-  value.turns.forEach(assertTurn);
+  const turns = value.turns.map(refineCodexTurn);
   if (typeof value.source === "object" && "subAgent" in value.source) {
     assertExactKeys(value.source, ["subAgent"], "session_source");
     const source = value.source.subAgent;
@@ -581,7 +605,7 @@ export function projectCodexThread(value: OfficialThread): CodexThread {
     agentRole: value.agentRole,
     gitInfo: value.gitInfo,
     name: value.name,
-    turns: value.turns,
+    turns,
   };
 }
 
@@ -753,18 +777,29 @@ function projectThreadItemsListResponse(
     throw new Error("thread_items_backwards_cursor_invalid");
   }
   const itemIdsByTurn = new Map<string, Set<string>>();
-  for (const entry of value.data) {
-    assertExactKeys(entry, ["turnId", "item"], "thread_item_entry");
+  const data = value.data.map((entry) => {
+    assertExactKeys(entry, ["turnId", "item", "startedAtMs", "completedAtMs"], "thread_item_entry");
+    // Optional per-item timestamps added in Codex 0.159.0. Validate them,
+    // then omit them: Sedes does not use them for ordering or usage evidence.
+    for (const timestamp of [
+      "startedAtMs" in entry ? entry.startedAtMs : null,
+      "completedAtMs" in entry ? entry.completedAtMs : null,
+    ]) {
+      if (timestamp !== null && !Number.isSafeInteger(timestamp)) {
+        throw new Error("thread_item_timestamp_invalid");
+      }
+    }
     assertNativeId(entry.turnId, "turn_id");
-    refineCodexThreadItem(entry.item);
+    const item = refineCodexThreadItem(entry.item);
     const itemIds = itemIdsByTurn.get(entry.turnId) ?? new Set<string>();
     if (itemIds.has(entry.item.id)) {
       throw new Error("thread_items_duplicate_coordinate");
     }
     itemIds.add(entry.item.id);
     itemIdsByTurn.set(entry.turnId, itemIds);
-  }
-  return value;
+    return { turnId: entry.turnId, item };
+  });
+  return { data, nextCursor: value.nextCursor, backwardsCursor: value.backwardsCursor };
 }
 
 function assertResumeHistoryFields(value: OfficialThreadResumeResponse): void {
