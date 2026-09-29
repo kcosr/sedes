@@ -212,6 +212,14 @@
 
 ### Fixed
 
+- Load Codex histories containing newer per-item timestamps or MCP display
+  metadata without reporting an invalid protocol response. The fix also covers
+  live MCP events; update the server and remote sidecars.
+
+
+- Allow backends to start after removing a connection, while preserving removed
+  connection records for historical threads. No database migration is required.
+
 - Show repeated runtime notices with identical text and severity only once in
   the client, including notices restored after reconnecting.
 

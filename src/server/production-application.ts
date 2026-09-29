@@ -541,9 +541,15 @@ export async function startProductionApplication(
       database,
       createPrincipalAgentToolClientEligibility(),
     );
-    let profiles = backendConfiguration
-      .listProfiles(scope)
-      .map(connectionProfile);
+    const configuredProfiles = () => {
+      // Removed profiles remain in storage for historical thread bindings, but
+      // must not participate in current runtime construction or recovery.
+      const targetIds = new Set(backendConfigurationFile.targets.map(target => target.id));
+      return backendConfiguration.listProfiles(scope)
+        .filter(profile => targetIds.has(profile.templateId))
+        .map(connectionProfile);
+    };
+    let profiles = configuredProfiles();
     const inventoryRepository = new InventoryRepository(database);
     const notificationLifecycle = new NotificationLifecycleObserver(
       inventoryRepository,
@@ -2118,7 +2124,7 @@ export async function startProductionApplication(
       const previousBackends = new Map(moduleRuntimes);
       desiredConfiguration = configurationRepository.get(scope);
       backendConfigurationFile = resolveDatabaseBackendConfiguration(desiredConfiguration.configuration, compiledBackendModuleCatalog);
-      profiles = backendConfiguration.listProfiles(scope).map(connectionProfile);
+      profiles = configuredProfiles();
       const environmentIds = new Set([...environmentRuntimes.keys(), ...desiredConfiguration.configuration.executionEnvironments.map(item => item.id)]);
       for (const id of environmentIds) {
         const definition = desiredConfiguration.configuration.executionEnvironments.find(item => item.id === id);

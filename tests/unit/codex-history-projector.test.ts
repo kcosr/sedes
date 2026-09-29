@@ -1289,6 +1289,110 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
     ).toThrow();
   });
 
+  it.each([
+    {},
+    { startedAtMs: null, completedAtMs: null },
+    { startedAtMs: 1_790_000_000_000, completedAtMs: 1_790_000_001_000 },
+    { startedAtMs: 0 },
+    { completedAtMs: 1_790_000_001_000 },
+  ])("validates and projects away additive item timestamps: %j", (timestamps) => {
+    const entry = {
+      turnId: "turn-1",
+      item: { type: "plan", id: "item-1", text: "Plan" },
+    };
+    const wire = {
+      data: [{ ...entry, ...timestamps }],
+      nextCursor: null,
+      backwardsCursor: "head",
+    };
+    expect(codexThreadItemsListMethod.decodeResult(wire)).toEqual({
+      ...wire,
+      data: [entry],
+    });
+    expect(wire.data[0]).toEqual({ ...entry, ...timestamps });
+  });
+
+  it.each(["startedAtMs", "completedAtMs"])(
+    "rejects malformed %s without weakening entry closure",
+    (key) => {
+      for (const value of ["123", true, {}, [], 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+        expect(() => codexThreadItemsListMethod.decodeResult({
+          data: [{
+            turnId: "turn-1",
+            item: { type: "plan", id: "item-1", text: "Plan" },
+            [key]: value,
+          }],
+          nextCursor: null,
+          backwardsCursor: null,
+        })).toThrow();
+      }
+      expect(() => codexThreadItemsListMethod.decodeResult({
+        data: [{
+          turnId: "turn-1",
+          item: { type: "plan", id: "item-1", text: "Plan" },
+          [key]: null,
+          unreviewedTimestamp: 0,
+        }],
+        nextCursor: null,
+        backwardsCursor: null,
+      })).toThrow();
+    },
+  );
+
+  it.each([
+    null,
+    { resourceUri: "ui://fixture/view", preferredModelDisplayMode: "inline" },
+    { resourceUri: "ui://fixture/view", preferredModelDisplayMode: "fullscreen" },
+  ])("projects reviewed MCP display metadata out of history and live events: %j", (mcpAppUi) => {
+    const original = stableItems.find(({ item }) => item.type === "mcpToolCall")!.item;
+    const item = { ...original, mcpAppUi };
+    expect(codexThreadItemsListMethod.decodeResult({
+      data: [{ turnId: "turn-1", item }],
+      nextCursor: null,
+      backwardsCursor: null,
+    }).data[0]?.item).toEqual(original);
+    expect(codexThreadReadMethod.decodeResult({
+      thread: thread([turn("turn-1", [item])]),
+    }).thread.turns[0]?.items[0]).toEqual(original);
+    for (const method of ["item/started", "item/completed"] as const) {
+      expect(decodeCodexC2Notification(method, {
+        item, threadId: "thread-1", turnId: "turn-1",
+        [method === "item/started" ? "startedAtMs" : "completedAtMs"]: 0,
+      }).item).toEqual(original);
+    }
+    for (const method of ["turn/started", "turn/completed"] as const) {
+      expect(decodeCodexC2Notification(method, {
+        turn: turn("turn-1", [item]), threadId: "thread-1",
+      }).turn.items[0]).toEqual(original);
+    }
+    expect(item.mcpAppUi).toEqual(mcpAppUi);
+  });
+
+  it.each([
+    true, "ui://fixture/view", [],
+    {},
+    { resourceUri: "ui://fixture/view" },
+    { preferredModelDisplayMode: "inline" },
+    { resourceUri: 123, preferredModelDisplayMode: "inline" },
+    { resourceUri: "ui://fixture/view", preferredModelDisplayMode: "unknown" },
+    { resourceUri: "ui://fixture/view", preferredModelDisplayMode: null },
+    { resourceUri: "ui://fixture/view", preferredModelDisplayMode: "inline", extra: true },
+  ])("rejects malformed or unreviewed MCP display metadata: %j", (mcpAppUi) => {
+    const item = {
+      ...stableItems.find(({ item }) => item.type === "mcpToolCall")!.item,
+      mcpAppUi,
+    };
+    expect(() => codexThreadItemsListMethod.decodeResult({
+      data: [{ turnId: "turn-1", item }],
+      nextCursor: null,
+      backwardsCursor: null,
+    })).toThrow();
+    expect(() => decodeThreadItem(item)).toThrow();
+    expect(() => codexThreadReadMethod.decodeResult({
+      thread: thread([turn("turn-1", [item])]),
+    })).toThrow();
+  });
+
   it("decodes the authoritative Codex 0.153 completed subagent activity kind", () => {
     const completedActivity = {
       type: "subAgentActivity",
