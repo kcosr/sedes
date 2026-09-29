@@ -214,14 +214,14 @@
 
 - Load Codex histories containing newer per-item timestamps or MCP display
   metadata without reporting an invalid protocol response. The fix also covers
-  live MCP events; update the server and remote sidecars.
+  live MCP events; update the server and remote sidecars. (#18)
 
 
 - Allow backends to start after removing a connection, while preserving removed
-  connection records for historical threads. No database migration is required.
+  connection records for historical threads. No database migration is required. (#18)
 
 - Show repeated runtime notices with identical text and severity only once in
-  the client, including notices restored after reconnecting.
+  the client, including notices restored after reconnecting. (#18)
 
 - Refresh Native agent tools and CLI presentation settings when an idle
   Codex or Claude thread already has a persistent SSH session, including
