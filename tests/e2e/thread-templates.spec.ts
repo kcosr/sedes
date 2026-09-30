@@ -35,14 +35,14 @@ async function createAgent(page: Page, name: string) {
     page.getByRole("combobox", { name: "Configure using" }),
     "Pi SDK",
   );
-  await page.getByRole("checkbox", { name: "Override Model" }).click();
-  await page.getByRole("checkbox", { name: "Override Thinking" }).click();
+  await page.getByRole("switch", { name: "Override Model" }).click();
+  await page.getByRole("switch", { name: "Override Thinking" }).click();
   await selectRadixOption(
     page,
     page.getByRole("combobox", { name: "Thinking" }),
     /^High$/u,
   );
-  await page.getByRole("checkbox", { name: "Override Tool access" }).click();
+  await page.getByRole("switch", { name: "Override Tool access" }).click();
   await selectRadixOption(
     page,
     page.getByRole("combobox", { name: "Tool access" }),
