@@ -1,0 +1,520 @@
+/* Settings kit: page, section, field, save bar, entity list and danger zone
+   layouts (components/settings/*). Tokens only. Components carry a
+   data-slot per part; these rules are the kit's only styling. */
+
+/* ── Page ── */
+[data-slot="settings-page"] {
+  container: settings-page / inline-size;
+  display: grid;
+  width: 100%;
+  max-width: var(--settings-page-width);
+  min-width: 0;
+  align-content: start;
+  gap: var(--space-6);
+}
+
+[data-slot="settings-page"][data-width="wide"] {
+  max-width: var(--settings-page-width-wide);
+}
+
+[data-slot="settings-page-header"] {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+[data-slot="settings-page-back"] {
+  display: inline-flex;
+  width: fit-content;
+  min-height: var(--control-xs);
+  align-items: center;
+  gap: var(--space-1);
+  margin-inline-start: calc(-1 * var(--space-1));
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-inline);
+  background: none;
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  transition: color var(--motion-fast);
+}
+
+[data-slot="settings-page-back"]:hover {
+  color: var(--foreground);
+}
+
+[data-slot="settings-page-back"] svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  flex: none;
+}
+
+[data-slot="settings-page-heading"] {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-6);
+}
+
+[data-slot="settings-page-titles"] {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 18rem;
+  gap: var(--space-1);
+}
+
+[data-slot="settings-page-title"] {
+  margin: 0;
+  font-size: var(--text-page);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+[data-slot="settings-page-title"]:focus {
+  outline: none;
+}
+
+[data-slot="settings-page-description"] {
+  max-width: 64ch;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-ui);
+  line-height: var(--leading-normal);
+}
+
+[data-slot="settings-page-actions"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+[data-slot="settings-page-body"] {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: var(--space-8);
+}
+
+/* ── Section ── */
+[data-slot="settings-section"] {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: var(--space-3);
+}
+
+[data-slot="settings-section-header"] {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+}
+
+[data-slot="settings-section-titles"] {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 16rem;
+  gap: var(--space-0-5);
+}
+
+[data-slot="settings-section-title"] {
+  margin: 0;
+  font-size: var(--text-title);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+}
+
+[data-slot="settings-section-description"] {
+  margin: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+[data-slot="settings-section-actions"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+[data-slot="settings-section-body"] {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+}
+
+[data-slot="settings-section-body"][data-card="true"] {
+  padding: var(--space-1) var(--space-4);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
+  background: var(--card);
+}
+
+/* One card level only: a card section inside a card renders flat. */
+[data-card="true"] [data-slot="settings-section-body"][data-card="true"] {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+/* Rows in a section body are divided by a hairline. */
+[data-slot="settings-section-body"] > :is([data-slot="settings-field"], [data-slot="switch-field"]) {
+  padding-block: var(--space-3);
+}
+
+[data-slot="settings-section-body"]
+  > :is([data-slot="settings-field"], [data-slot="switch-field"])
+  + :is([data-slot="settings-field"], [data-slot="switch-field"]) {
+  border-top: 1px solid var(--border-soft);
+}
+
+[data-slot="settings-subgroup"] {
+  display: grid;
+  min-width: 0;
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-soft);
+}
+
+[data-slot="settings-subgroup"]:first-child {
+  margin-top: 0;
+  border-top: 0;
+}
+
+[data-slot="settings-subgroup-title"] {
+  margin: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+}
+
+[data-slot="settings-subgroup-description"] {
+  margin: var(--space-0-5) 0 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+/* ── Field rows ── */
+[data-slot="settings-field"][data-orientation="horizontal"] {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 360px);
+  align-items: start;
+}
+
+/* Center the label's first line on a single-line control. */
+[data-slot="settings-field"][data-orientation="horizontal"] > [data-slot="field-text"] {
+  padding-top: calc((var(--control-default) - var(--text-ui) * var(--leading-snug)) / 2);
+}
+
+[data-slot="switch-field"] {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+@container settings-page (max-width: 639px) {
+  [data-slot="settings-field"][data-orientation="horizontal"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  [data-slot="settings-field"][data-orientation="horizontal"] > [data-slot="field-text"] {
+    padding-top: 0;
+  }
+}
+
+@media (max-width: 819px), (pointer: coarse) {
+  [data-slot="settings-field"][data-orientation="horizontal"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  [data-slot="settings-field"][data-orientation="horizontal"] > [data-slot="field-text"] {
+    padding-top: 0;
+  }
+}
+
+/* ── Save bar ── */
+[data-slot="save-bar"] {
+  position: sticky;
+  z-index: var(--z-sticky);
+  bottom: 0;
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  padding-block: var(--space-3) max(var(--space-3), env(safe-area-inset-bottom));
+  background: var(--background);
+  /* Full bleed across the scroller's gutters and its bottom padding (a
+     sticky box stops at the scroller's padding edge), with a hairline on
+     top. Nothing follows the bar, so the bleed below covers only padding. */
+  box-shadow:
+    0 0 0 100vmax var(--background),
+    0 -1px 0 100vmax var(--border-soft),
+    0 -1px 0 100vmax var(--background);
+  clip-path: inset(-1px -100vmax -100vmax);
+}
+
+[data-slot="save-bar-status"] {
+  display: flex;
+  min-width: 0;
+  min-height: var(--control-md);
+  flex: 1 1 8rem;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted-foreground);
+  font-size: var(--text-ui);
+  line-height: var(--leading-snug);
+}
+
+[data-slot="save-bar-status"] svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  flex: none;
+}
+
+[data-slot="save-bar-status"][data-state="saved"] {
+  color: var(--success);
+}
+
+[data-slot="save-bar-status"][data-state="error"] {
+  color: var(--destructive);
+}
+
+[data-slot="save-bar-dot"] {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+[data-slot="save-bar-actions"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-inline-start: auto;
+}
+
+/* Touch sizing is opted into by the container. */
+@media (max-width: 819px), (pointer: coarse) {
+  [data-slot="save-bar-actions"] [data-slot="button"] {
+    min-height: var(--control-default);
+  }
+}
+
+/* Keyboard focus never lands behind the bar. */
+[data-slot="settings-page"]:has([data-slot="save-bar"])
+  :is(a[href], button, input, select, textarea, [tabindex]) {
+  scroll-margin-bottom: calc(var(--control-default) + 2 * var(--space-3) + var(--space-2));
+}
+
+/* ── Entity list ── */
+[data-slot="entity-list"] {
+  container: entity-list / inline-size;
+  display: grid;
+  min-width: 0;
+  gap: var(--space-0-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Inside a card the rows keep a small inset instead of the card padding. */
+[data-card="true"] > [data-slot="entity-list"] {
+  margin-inline: calc(var(--space-1) - var(--space-4));
+  padding-block: var(--space-0-5);
+}
+
+[data-slot="entity-row"] {
+  display: grid;
+  min-width: 0;
+  min-height: 56px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border-radius: var(--radius-ctl);
+  transition: background-color var(--motion-fast);
+}
+
+[data-slot="entity-row"]:hover {
+  background: var(--hover);
+}
+
+[data-slot="entity-row"][data-selected="true"] {
+  background: var(--selected);
+}
+
+[data-slot="entity-row"]:has(> [data-slot="entity-row-main"]:focus-visible) {
+  box-shadow: var(--focus-ring);
+}
+
+[data-slot="entity-row"][data-disabled="true"] {
+  opacity: var(--disabled-opacity);
+}
+
+[data-slot="entity-row-main"] {
+  display: grid;
+  min-width: 0;
+  min-height: 56px;
+  grid-template-areas: "icon text meta";
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2-5) var(--space-3);
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+[data-slot="entity-row-main"]:focus-visible {
+  outline: none;
+}
+
+[data-slot="entity-row-main"]:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+[data-slot="entity-row-icon"] {
+  display: grid;
+  width: var(--icon-lg);
+  height: var(--icon-lg);
+  grid-area: icon;
+  place-items: center;
+  color: var(--muted-foreground);
+}
+
+[data-slot="entity-row-icon"] svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+[data-slot="entity-row-text"] {
+  display: grid;
+  min-width: 0;
+  grid-area: text;
+  gap: var(--space-0-5);
+}
+
+[data-slot="entity-row-title"],
+[data-slot="entity-row-subtitle"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-slot="entity-row-title"] {
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+}
+
+[data-slot="entity-row-subtitle"] {
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-snug);
+}
+
+[data-slot="entity-row-meta"] {
+  display: flex;
+  min-width: 0;
+  grid-area: meta;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1-5);
+}
+
+[data-slot="entity-row-actions"] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-inline-end: var(--space-2);
+}
+
+@media (max-width: 819px), (pointer: coarse) {
+  [data-slot="entity-row-actions"] [data-slot="button"] {
+    min-width: var(--control-default);
+    min-height: var(--control-default);
+  }
+}
+
+@container entity-list (max-width: 479px) {
+  [data-slot="entity-row-main"] {
+    grid-template-areas:
+      "icon text"
+      "icon meta";
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  [data-slot="entity-row-icon"] {
+    align-self: start;
+  }
+
+  [data-slot="entity-row-meta"] {
+    justify-content: flex-start;
+  }
+}
+
+/* ── Danger zone ── */
+[data-slot="settings-section"][data-variant="danger"] > [data-slot="settings-section-body"][data-card="true"] {
+  border-color: var(--destructive-border);
+  background: none;
+}
+
+[data-slot="danger-zone-item"] {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-6);
+  padding-block: var(--space-3);
+}
+
+[data-slot="danger-zone-item"] + [data-slot="danger-zone-item"] {
+  border-top: 1px solid var(--border-soft);
+}
+
+[data-slot="danger-zone-text"] {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 18rem;
+  gap: var(--space-0-5);
+}
+
+[data-slot="danger-zone-title"] {
+  margin: 0;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+}
+
+[data-slot="danger-zone-description"] {
+  margin: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+[data-slot="danger-zone-action"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
