@@ -375,16 +375,76 @@ describe("AgentsView", () => {
     await waitFor(() => expect(screen.getByRole("link", { name: "Careful reviewer" })).toHaveFocus());
   });
 
-  it("names an unavailable Agent and offers the way back to the list", async () => {
+  it("names an unavailable Agent and keeps saying so after the list refreshes", async () => {
+    let listed!: () => void;
+    const listRefreshed = new Promise<void>((resolve) => { listed = resolve; });
+    const listSavedAgents = vi.fn(async () => {
+      listed();
+      return { items: [summary] };
+    });
     const api = {
-      listSavedAgents: vi.fn().mockResolvedValue({ items: [] }),
+      listSavedAgents,
       getSavedAgent: vi.fn().mockRejectedValue(new ApiError(404, "not_found", "That Agent does not exist.", false)),
     } as unknown as ApiClient;
-    navigate(agentPath(agentId), { replace: true });
+    const missing = "22222222-2222-4222-8222-222222222222";
+    navigate(agentPath(missing), { replace: true });
     render(<AgentsView store={new AgentClientStore(api)} workspaces={[workspace]} />);
     const unavailable = await screen.findByRole("region", { name: "Agent unavailable" });
     expect(within(unavailable).getByRole("alert")).toHaveTextContent("That Agent does not exist.");
     expect(within(unavailable).getByRole("link", { name: "Agents" })).toHaveAttribute("href", agentsPath());
     expect(screen.queryByRole("region", { name: "Agent editor" })).toBeNull();
+    // The debounced list refresh succeeds after the failed load; the
+    // unavailable Agent stays unavailable instead of turning into a loader.
+    await listRefreshed;
+    expect(await screen.findByRole("link", { name: "Careful reviewer" })).toBeVisible();
+    expect(listSavedAgents).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("region", { name: "Agent unavailable" })).toHaveTextContent("That Agent does not exist.");
+    expect(screen.queryByText("Loading Agent…")).toBeNull();
+    // The list's own state is not the Agent's failure.
+    expect(within(screen.getByRole("region", { name: "Saved Agents" })).queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps an unavailable Agent through a failed retry and opens it when a retry succeeds", async () => {
+    let finishRetry!: (value: unknown) => void;
+    const getSavedAgent = vi.fn()
+      .mockRejectedValueOnce(new Error("The server did not respond."))
+      .mockRejectedValueOnce(new Error("Still unreachable."))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishRetry = resolve; }));
+    const api = {
+      listSavedAgents: vi.fn().mockResolvedValue({ items: [summary] }),
+      getSavedAgent,
+      getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "targets", targets: [] }),
+    } as unknown as ApiClient;
+    navigate(agentPath(agentId), { replace: true });
+    render(<AgentsView store={new AgentClientStore(api)} workspaces={[workspace]} />);
+    const unavailable = await screen.findByRole("region", { name: "Agent unavailable" });
+    expect(within(unavailable).getByRole("alert")).toHaveTextContent("The server did not respond.");
+    fireEvent.click(within(unavailable).getByRole("button", { name: "Retry" }));
+    expect(await within(unavailable).findByRole("alert")).toHaveTextContent("Still unreachable.");
+    fireEvent.click(within(unavailable).getByRole("button", { name: "Retry" }));
+    // While the retry runs, the failure stays in place.
+    expect(within(screen.getByRole("region", { name: "Agent unavailable" })).getByRole("button", { name: "Retrying…" })).toBeDisabled();
+    expect(screen.queryByText("Loading Agent…")).toBeNull();
+    act(() => finishRetry(detail));
+    expect(await screen.findByRole("region", { name: "Agent editor" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Agent unavailable" })).toBeNull();
+    expect(getSavedAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it("drops an unavailable Agent's failure when the route opens another Agent", async () => {
+    const other = { ...detail, id: "33333333-3333-4333-8333-333333333333", name: "Other Agent" };
+    const api = {
+      listSavedAgents: vi.fn().mockResolvedValue({ items: [summary] }),
+      getSavedAgent: vi.fn()
+        .mockRejectedValueOnce(new ApiError(404, "not_found", "That Agent does not exist.", false))
+        .mockResolvedValueOnce(other),
+      getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "targets", targets: [] }),
+    } as unknown as ApiClient;
+    navigate(agentPath(agentId), { replace: true });
+    render(<AgentsView store={new AgentClientStore(api)} workspaces={[workspace]} />);
+    await screen.findByRole("region", { name: "Agent unavailable" });
+    act(() => navigate(agentPath(other.id)));
+    expect(screen.queryByRole("region", { name: "Agent unavailable" })).toBeNull();
+    expect(await screen.findByRole("heading", { name: "Other Agent", level: 2 })).toBeVisible();
   });
 });

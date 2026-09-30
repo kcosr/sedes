@@ -16,6 +16,7 @@ import { useDirtyNavigationGuard } from "../../app/use-dirty-navigation-guard.js
 import {
   AgentClientStore,
   useAgentStore,
+  type AgentDetailState,
 } from "../../agents/AgentClientStore.js";
 import { ApiError } from "../../api/ApiClient.js";
 import {
@@ -126,7 +127,7 @@ export function AgentsView({
         value={search}
         onValueChange={setSearch}
       />
-      {state.error && !agentId ? (
+      {state.error ? (
         <Callout tone="danger" role="alert">
           {state.error}
         </Callout>
@@ -205,28 +206,12 @@ export function AgentsView({
           ) : creating ? (
             <AgentEditor store={store} workspaces={workspaces} />
           ) : agentId ? (
-            // Until its load starts or ends, the Agent is loading, not unavailable.
-            state.detailLoading || (state.selected?.id !== agentId && state.error === undefined) ? (
-              <p className="settings-loading" role="status">Loading Agent…</p>
-            ) : state.selected?.id === agentId ? (
-              <AgentEditor
-                key={state.selected.id}
-                store={store}
-                workspaces={workspaces}
-                agent={state.selected}
-              />
-            ) : (
-              <section aria-label="Agent unavailable" className="agents-unavailable">
-                <SettingsDetailHeader
-                  back={<SettingsBackLink stackOnly href={listPath} label="Agents" />}
-                  title="Agent unavailable"
-                  description="It may have been deleted, or the link is out of date."
-                />
-                <Callout tone="danger" role="alert">
-                  {state.error ?? "This Agent is unavailable."}
-                </Callout>
-              </section>
-            )
+            <AgentDetail
+              agentId={agentId}
+              detail={state.detail}
+              store={store}
+              workspaces={workspaces}
+            />
           ) : (
             <EmptyState
               icon={<Bot />}
@@ -238,6 +223,64 @@ export function AgentsView({
       </SettingsPage>
     </div>
   );
+}
+
+/**
+ * The route's Agent: its editor once loaded, or why it is unavailable. The
+ * detail belongs to the Agent it was loaded for, so until this route's load
+ * starts, the Agent is loading; a failure stays until the route changes or
+ * a retry succeeds.
+ */
+function AgentDetail({
+  agentId,
+  detail,
+  store,
+  workspaces,
+}: {
+  readonly agentId: string;
+  readonly detail: AgentDetailState;
+  readonly store: AgentClientStore;
+  readonly workspaces: readonly NormalizedWorkspaceSummary[];
+}): React.JSX.Element {
+  if (detail.status === "ready" && detail.agentId === agentId) {
+    return (
+      <AgentEditor
+        key={detail.agent.id}
+        store={store}
+        workspaces={workspaces}
+        agent={detail.agent}
+      />
+    );
+  }
+  if (detail.status === "error" && detail.agentId === agentId) {
+    return (
+      <section aria-label="Agent unavailable" className="agents-unavailable">
+        <SettingsDetailHeader
+          back={<SettingsBackLink stackOnly href={listPath} label="Agents" />}
+          title="Agent unavailable"
+          description="It may have been deleted, or the link is out of date."
+        />
+        <Callout
+          tone="danger"
+          role="alert"
+          action={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={detail.retrying}
+              onClick={() => void store.loadAgent(agentId)}
+            >
+              {detail.retrying ? "Retrying…" : "Retry"}
+            </Button>
+          }
+        >
+          {detail.error}
+        </Callout>
+      </section>
+    );
+  }
+  return <p className="settings-loading" role="status">Loading Agent…</p>;
 }
 
 function AgentEditor({
