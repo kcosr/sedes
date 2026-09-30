@@ -184,6 +184,7 @@ vi.mock("ghostty-web", () => {
 });
 
 import { GHOSTTY_THEMES, GhosttyEmulator, terminalBufferLines } from "./ghostty-emulator.js";
+import { GHOSTTY_WASM_THEME } from "./ghostty-live-theme.js";
 
 type FakeTerminal = {
   viewportY: number;
@@ -318,7 +319,7 @@ describe("GhosttyEmulator", () => {
     emulator.dispose();
   });
 
-  it("follows a theme change in place and rebuilds later renderers in the new theme", async () => {
+  it("follows a theme change in place and paints later renderers in the new theme", async () => {
     const container = document.createElement("div");
     document.body.append(container);
     const emulator = new GhosttyEmulator({ cursorBlink: true,
@@ -332,7 +333,9 @@ describe("GhosttyEmulator", () => {
       readonly wasmTerm: unknown;
       readonly renderer: { readonly setTheme: ReturnType<typeof vi.fn>; readonly render: ReturnType<typeof vi.fn> };
     };
-    expect(first.options.theme).toBe(GHOSTTY_THEMES.light);
+    // The WASM terminal holds the sentinel palette; the renderer paints the theme.
+    expect(first.options.theme).toBe(GHOSTTY_WASM_THEME);
+    expect(first.renderer.setTheme).toHaveBeenCalledWith(GHOSTTY_THEMES.light);
     expect(first.canvas.style.backgroundColor).toBe("rgb(247, 247, 248)");
 
     emulator.setColorScheme("dark");
@@ -348,9 +351,24 @@ describe("GhosttyEmulator", () => {
     expect(first.renderer.setTheme).not.toHaveBeenCalled();
 
     await emulator.reset();
-    const second = fake.terminals[1] as FakeTerminal & { readonly canvas: HTMLCanvasElement };
-    expect(second.options.theme).toBe(GHOSTTY_THEMES.dark);
+    const second = fake.terminals[1] as FakeTerminal & {
+      readonly canvas: HTMLCanvasElement;
+      readonly renderer: { readonly setTheme: ReturnType<typeof vi.fn> };
+    };
+    expect(second.options.theme).toBe(GHOSTTY_WASM_THEME);
+    expect(second.renderer.setTheme).toHaveBeenCalledWith(GHOSTTY_THEMES.dark);
     expect(second.canvas.style.backgroundColor).toBe("rgb(17, 19, 24)");
+    emulator.dispose();
+  });
+
+  it("keeps explicit truecolor output off the sentinel palette", async () => {
+    const emulator = new GhosttyEmulator({ cursorBlink: true, fontSize: 13, scrollback: 100, colorScheme: "dark" });
+    await emulator.mount(document.createElement("div"));
+    const terminal = fake.terminals[0] as FakeTerminal & { readonly writes: readonly string[] };
+    const sentinel = Number.parseInt(GHOSTTY_WASM_THEME.foreground!.slice(1), 16);
+    const [red, green, blue] = [sentinel >> 16, (sentinel >> 8) & 255, sentinel & 255];
+    emulator.write(new TextEncoder().encode(`\x1b[38;2;${red};${green};${blue}mtext\x1b[38;2;36;39;45m`));
+    expect(terminal.writes.at(-1)).toBe(`\x1b[38;2;${red};${green};${blue ^ 1}mtext\x1b[38;2;36;39;45m`);
     emulator.dispose();
   });
 

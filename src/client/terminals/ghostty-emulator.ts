@@ -1,5 +1,10 @@
 import { installGhosttyRenderScheduling } from "./ghostty-render-scheduling.js";
-import { installGhosttyLiveTheme, type GhosttyLiveTheme } from "./ghostty-live-theme.js";
+import {
+  GHOSTTY_WASM_THEME,
+  GhosttyTruecolorGuard,
+  installGhosttyLiveTheme,
+  type GhosttyLiveTheme,
+} from "./ghostty-live-theme.js";
 import { isWindowsClient } from "./client-platform.js";
 import type { ITheme, Terminal } from "ghostty-web";
 import type { TerminalEmulatorSink } from "./terminal-session.js";
@@ -114,6 +119,7 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
   #fitAddon?: import("ghostty-web").FitAddon;
   #renderScheduling: ReturnType<typeof installGhosttyRenderScheduling> | undefined;
   #liveTheme: GhosttyLiveTheme | undefined;
+  readonly #truecolorGuard = new GhosttyTruecolorGuard();
   #cursorBlink: boolean;
   #colorScheme: TerminalColorScheme;
   #container?: HTMLElement;
@@ -175,7 +181,6 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
     if (!ghostty || !wasm || !container || this.#disposed)
       throw new Error("The terminal renderer is not available.");
     container.replaceChildren();
-    const theme = GHOSTTY_THEMES[this.#colorScheme];
     const terminal = new ghostty.Terminal({
       ...(input
         ? {
@@ -191,13 +196,16 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
       fontSize: this.#options.fontSize,
       scrollback: this.#options.scrollback,
       smoothScrollDuration: 0,
-      theme,
+      // The WASM terminal always holds the sentinel palette; the live theme
+      // paints it in the current theme (see ghostty-live-theme.ts).
+      theme: GHOSTTY_WASM_THEME,
     });
     const fitAddon = new ghostty.FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(container);
     this.#renderScheduling = installGhosttyRenderScheduling(terminal, isWindowsClient());
-    this.#liveTheme = installGhosttyLiveTheme(terminal, theme);
+    this.#liveTheme = installGhosttyLiveTheme(terminal, GHOSTTY_THEMES[this.#colorScheme]);
+    this.#truecolorGuard.reset();
     blankGhosttyBootstrap(terminal);
     terminal.attachCustomKeyEventHandler((event) => {
       if (isImeComposingKeyEvent(event)) return false;
@@ -247,7 +255,7 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
     // responder, so output-originated onData must never return to the PTY.
     this.#applyingOutput = true;
     try {
-      terminal.write(bytes);
+      terminal.write(this.#truecolorGuard.transform(bytes));
       // ghostty-web 0.4.0 unconditionally scrolls to the bottom on write.
       // Restore a reader's viewport synchronously, before its next paint.
       // viewportY is measured backwards from the live screen, so account for
