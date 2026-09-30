@@ -3063,7 +3063,7 @@ describe("InventorySidebar view modes", () => {
       screen.getByRole("combobox", { name: "Directory environment" }),
     );
     await user.click(
-      screen.getByRole("option", { name: "Build host — Unavailable" }),
+      screen.getByRole("option", { name: "Build host Unavailable" }),
     );
     expect(
       screen.getByRole("textbox", { name: "Absolute directory path" }),

@@ -16,8 +16,10 @@ import { Button } from "./ui/button.js";
 import { BackendBrandIcon } from "./brand-icons.js";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
   DialogTrigger,
 } from "./ui/dialog.js";
@@ -98,8 +100,9 @@ export function AdvisoryCenter({
       ) : null}
       <DialogContent
         className="advisory-center-sheet"
-        overlayClassName="advisory-center-sheet-overlay"
         layout="side"
+        size="sm"
+        layer="over-dialog"
         aria-modal="true"
         onCloseAutoFocus={(event) => {
           if (!restoreFallbackFocus.current) return;
@@ -108,13 +111,14 @@ export function AdvisoryCenter({
           fallbackFocusRef.current?.focus();
         }}
       >
-        <header className="advisory-center-header">
+        <DialogHeader>
           <DialogTitle>Warnings</DialogTitle>
           <DialogDescription>
             Active application and backend warnings.
           </DialogDescription>
-        </header>
-        <div className="advisory-center-list">
+        </DialogHeader>
+        <DialogBody>
+        <div>
           {advisories.map((advisory) => {
             const ToneIcon = TONE_ICONS[advisory.tone];
             return (
@@ -154,6 +158,7 @@ export function AdvisoryCenter({
             );
           })}
         </div>
+        </DialogBody>
       </DialogContent>
     </Dialog>
   );

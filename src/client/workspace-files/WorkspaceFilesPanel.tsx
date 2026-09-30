@@ -4045,14 +4045,13 @@ export function WorkspaceFilesPanel({
         submitError={attachError}
         onSubmit={submitAttach}
       >
-        <label>
-          Display label (optional)
+        <Field label="Display label (optional)">
           <Input
             aria-label="Folder display label"
             value={attachLabel}
             onChange={(event) => setAttachLabel(event.target.value)}
           />
-        </label>
+        </Field>
       </DirectoryPickerDialog>
       <ConfirmDialog
         open={context.visible && (pendingDownload !== undefined)}

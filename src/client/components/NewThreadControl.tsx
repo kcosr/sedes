@@ -2,7 +2,7 @@ import { type EnvironmentVariableOverrides } from "../../shared/protocol/environ
 import { EnvironmentVariablesDialog } from "./environment-variables/EnvironmentVariablesDialog.js";
 import { useEnvironmentVariablePreview } from "./environment-variables/use-environment-variable-preview.js";
 import { variableRows } from "./environment-variables/environment-variable-presentation.js";
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_THREAD_TITLE,
   type CreateThreadTemplateRequest,
@@ -19,18 +19,21 @@ import {
 import { navigate, newAgentPath } from "../app/router.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { messageFrom } from "../stores/ApplicationClientStore.js";
-import { useKeyboardInset } from "../app/use-keyboard-inset.js";
 import { usePickerFocus } from "../lib/use-picker-focus.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.js";
-import { useMediaQuery } from "../app/use-media-query.js";
+import { useTouchDensity } from "../app/use-touch-density.js";
 import {
   environmentDisplayLabel,
   targetDisplayLabel,
   workspaceDisplayLabel,
 } from "../app/sidebar-scope-presentation.js";
 import { Button } from "@client/components/ui/button";
+import { Callout } from "@client/components/ui/callout";
+import { Field } from "@client/components/ui/field";
+import { menuDescriptionClass, menuEmptyClass, menuRowClass } from "@client/components/ui/floating";
 import { Input } from "@client/components/ui/input";
-import { ChevronDown, Folder, Plus, SlidersHorizontal } from "lucide-react";
+import { cn } from "@client/lib/utils";
+import { Check, ChevronDown, Folder, Plus, SlidersHorizontal } from "lucide-react";
 import { SearchableSelect, SearchableSelectSearch } from "./ui/searchable-select.js";
 import {
   Select,
@@ -41,8 +44,12 @@ import {
 } from "@client/components/ui/select";
 import {
   Dialog,
+  DialogAlert,
+  DialogBody,
   DialogContent,
   DialogDescription,
+  DialogFooter,
+  DialogHeader,
   DialogTitle,
 } from "@client/components/ui/dialog";
 import {
@@ -51,8 +58,8 @@ import {
 } from "./scope-selector-icons.js";
 
 import { AddProjectDialog } from "./AddProjectDialog.js";
+import "./new-thread-control.css";
 
-const MOBILE_NEW_THREAD_MEDIA_QUERY = "(pointer: coarse), (max-width: 819px)";
 const AGENT_PAGE_SIZE = 50;
 const TEMPLATE_PAGE_SIZE = 100;
 
@@ -171,8 +178,7 @@ export function NewThreadControl({
   const [templateName, setTemplateName] = useState("");
   const [templatePending, setTemplatePending] = useState(false);
   const [deleteTemplateConfirm, setDeleteTemplateConfirm] = useState(false);
-  const mobileShell = useMediaQuery(MOBILE_NEW_THREAD_MEDIA_QUERY);
-  const keyboardInset = useKeyboardInset(mobileShell && pickerOpen);
+  const mobileShell = useTouchDensity();
   // Sidebar scope is an initial manual-selection preference. A template owns
   // its complete scope and must remain selectable from any sidebar filter.
   const selectionScope = selectedTemplate
@@ -1003,10 +1009,10 @@ export function NewThreadControl({
       {pickerOpen && canOpen && (
         <DialogContent
           className="new-thread-target-picker"
-          style={{ "--new-thread-keyboard-inset": `${keyboardInset}px` } as CSSProperties}
-          overlayClassName="new-thread-sheet-overlay"
           id={pickerId}
           layout="side"
+          size="sm"
+          layer={mobileShell ? "over-dialog" : "dialog"}
           showOverlay={mobileShell}
           aria-describedby={`${pickerId}-description`}
           onOpenAutoFocus={(event) => {
@@ -1050,24 +1056,22 @@ export function NewThreadControl({
             closePicker(true);
           }}
         >
-          <header className="new-thread-surface-header">
+          <DialogHeader>
             <DialogTitle ref={surfaceHeadingRef} tabIndex={-1}>
               New thread
             </DialogTitle>
             <DialogDescription id={`${pickerId}-description`}>
               Choose a template or configure a new thread.
             </DialogDescription>
-          </header>
-          <div className="new-thread-surface-body">
-            <label htmlFor={`${pickerId}-template`}>Template</label>
+          </DialogHeader>
+          <DialogBody>
+            <Field label="Template" id={`${pickerId}-template`}>
             <SearchableSelect
               label="Template"
               searchLabel="Search templates"
               emptyLabel="No matching templates"
               value={selectedTemplate?.id ?? "manual"}
               disabled={pending || templatePending || templatesLoading}
-              triggerProps={{ id: `${pickerId}-template` }}
-              contentClassName="new-thread-searchable-content"
               options={[
                 {
                   value: "manual",
@@ -1115,25 +1119,19 @@ export function NewThreadControl({
                 if (template) applyTemplate(template);
               }}
             />
-            {(templateLoadError ||
-              (!templatesLoading &&
-                templatesLoaded &&
-                templates.length === 0)) && (
-              <small
-                className={
-                  templateLoadError
-                    ? "new-thread-target-error"
-                    : "new-thread-agent-status"
-                }
-                role={templateLoadError ? "alert" : undefined}
-              >
-                {templateLoadError || "No templates saved yet."}
-              </small>
+            {!templateLoadError &&
+              !templatesLoading &&
+              templatesLoaded &&
+              templates.length === 0 && (
+                <p className="new-thread-field-note">No templates saved yet.</p>
+              )}
+            </Field>
+            {templateLoadError && (
+              <DialogAlert tone="danger">{templateLoadError}</DialogAlert>
             )}
-            <label htmlFor={`${pickerId}-title`}>Thread name</label>
+            <Field label="Thread name" id={`${pickerId}-title`}>
             <Input
               ref={titleInputRef}
-              id={`${pickerId}-title`}
               type="text"
               value={title}
               maxLength={240}
@@ -1151,9 +1149,9 @@ export function NewThreadControl({
                 }
               }}
             />
+            </Field>
             {needsEnvironmentPicker && (
-              <>
-                <label htmlFor={`${pickerId}-environment`}>Environment</label>
+              <Field label="Environment" id={`${pickerId}-environment`}>
                 <SearchableSelect
                   label="Environment"
                   searchLabel="Search environments"
@@ -1162,10 +1160,8 @@ export function NewThreadControl({
                   placeholder="Choose an environment"
                   disabled={pending}
                   triggerProps={{
-                    id: `${pickerId}-environment`,
                     "data-environment-id": selectedEnvironment?.id ?? "",
                   }}
-                  contentClassName="new-thread-searchable-content"
                   options={creatableEnvironments.map((environment) => ({
                     value: environment.id,
                     label: environmentDisplayLabel(environment, environments),
@@ -1188,11 +1184,10 @@ export function NewThreadControl({
                     setError("");
                   }}
                 />
-              </>
+              </Field>
             )}
             {needsTargetPicker && (
-              <>
-                <label htmlFor={`${pickerId}-target`}>Target</label>
+              <Field label="Target" id={`${pickerId}-target`}>
                 <SearchableSelect
                   label="Target"
                   searchLabel="Search targets"
@@ -1201,10 +1196,8 @@ export function NewThreadControl({
                   placeholder="Choose where to run"
                   disabled={pending}
                   triggerProps={{
-                    id: `${pickerId}-target`,
                     "data-target-id": selectedTarget?.id ?? "",
                   }}
-                  contentClassName="new-thread-searchable-content"
                   options={eligibleTargets.map((target) => ({
                     value: target.id,
                     label: targetDisplayLabel({
@@ -1232,11 +1225,10 @@ export function NewThreadControl({
                     setError("");
                   }}
                 />
-              </>
+              </Field>
             )}
             {needsWorkspacePicker && (
-              <>
-                <label htmlFor={`${pickerId}-workspace`}>Project</label>
+              <Field label="Project" id={`${pickerId}-workspace`}>
                 <SearchableSelect
                   label="Project"
                   searchLabel="Search projects"
@@ -1245,10 +1237,8 @@ export function NewThreadControl({
                   placeholder="Choose a project"
                   disabled={pending}
                   triggerProps={{
-                    id: `${pickerId}-workspace`,
                     "data-workspace-id": selectedWorkspace?.id ?? "",
                   }}
-                  contentClassName="new-thread-searchable-content"
                   options={creatableWorkspaces.map((workspace) => ({
                     value: workspace.id,
                     label: workspaceDisplayLabel({
@@ -1273,7 +1263,7 @@ export function NewThreadControl({
                     setError("");
                   }}
                 />
-              </>
+              </Field>
             )}
             <Button type="button" size="sm" variant="outline" className="new-thread-add-project"
               disabled={pending || Boolean(pendingProject)} onClick={() => setAddProjectOpen(true)}>
@@ -1286,9 +1276,7 @@ export function NewThreadControl({
               onAdded={(id, environmentId) => setPendingProject({ id, environmentId })} />}
             {selectedTarget?.workspaceExecution.kind === "selectable" && (
               <>
-                <label htmlFor={`${pickerId}-workspace-execution`}>
-                  Workspace execution
-                </label>
+                <Field label="Workspace execution" id={`${pickerId}-workspace-execution`}>
                 <Select
                   value={
                     selectedExecutionWorkspace?.kind === "isolated"
@@ -1313,13 +1301,10 @@ export function NewThreadControl({
                     }
                   }}
                 >
-                  <SelectTrigger
-                    id={`${pickerId}-workspace-execution`}
-                    className="w-full"
-                  >
+                  <SelectTrigger className="w-full">
                     <SelectValue placeholder="Choose workspace execution" />
                   </SelectTrigger>
-                  <SelectContent className="new-thread-select-content">
+                  <SelectContent>
                     <SelectItem value="direct">Project directly</SelectItem>
                     <SelectItem value="writable_clone">
                       Writable isolated clone
@@ -1329,11 +1314,9 @@ export function NewThreadControl({
                     </SelectItem>
                   </SelectContent>
                 </Select>
+                </Field>
                 {selectedExecutionWorkspace?.kind === "isolated" && (
-                  <>
-                    <label htmlFor={`${pickerId}-workspace-network`}>
-                      Network
-                    </label>
+                  <Field label="Network" id={`${pickerId}-workspace-network`}>
                     <Select
                       value={selectedExecutionWorkspace.networkProfile}
                       disabled={pending}
@@ -1351,13 +1334,10 @@ export function NewThreadControl({
                         }
                       }}
                     >
-                      <SelectTrigger
-                        id={`${pickerId}-workspace-network`}
-                        className="w-full"
-                      >
+                      <SelectTrigger className="w-full">
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent className="new-thread-select-content">
+                      <SelectContent>
                         {isolatedNetworkProfiles.map((profile) => (
                           <SelectItem key={profile} value={profile}>
                             {profile === "isolated"
@@ -1367,11 +1347,11 @@ export function NewThreadControl({
                         ))}
                       </SelectContent>
                     </Select>
-                  </>
+                  </Field>
                 )}
               </>
             )}
-            <label htmlFor={`${pickerId}-agent`}>Agent</label>
+            <Field label="Agent" id={`${pickerId}-agent`}>
             <Popover open={agentPickerOpen} onOpenChange={(open) => {
               setAgentPickerOpen(open);
               if (!open) setAgentSearch("");
@@ -1409,7 +1389,7 @@ export function NewThreadControl({
                 </Button>
               </PopoverTrigger>
               <PopoverContent
-                className="searchable-select-popover new-thread-searchable-content"
+                className="searchable-select-popover"
                 align="start"
                 sideOffset={6}
                 collisionPadding={8}
@@ -1464,12 +1444,12 @@ export function NewThreadControl({
                     }
                   }}
                 />
-                <div className="new-thread-agent-options">
+                <div className="searchable-select-options">
                   <div
                     id={`${pickerId}-agent-options`}
                     role="listbox"
                     aria-label="Agents"
-                    className="new-thread-agent-list"
+                    className="flex flex-col"
                   >
                     <button
                       id={`${pickerId}-agent-option-0`}
@@ -1477,20 +1457,28 @@ export function NewThreadControl({
                       aria-selected={selection.kind === "custom"}
                       data-active={activeAgentChoiceIndex === 0 || undefined}
                       ref={activeAgentChoiceIndex === 0 ? activeAgentOptionRef : undefined}
-                      className="new-thread-agent-option"
+                      className={cn(menuRowClass, "shrink-0 data-active:bg-(--hover) aria-selected:font-medium")}
                       type="button"
+                      tabIndex={-1}
                       onMouseDown={(event) => event.preventDefault()}
+                      onPointerMove={(event) => {
+                        if (event.pointerType === "mouse") setActiveAgentIndex(0);
+                      }}
                       onClick={() => chooseAgent("custom")}
                     >
-                      <span className="new-thread-agent-option-icon">
-                        <SlidersHorizontal size={14} strokeWidth={1.8} />
-                      </span>
-                      <span className="new-thread-agent-option-copy">
-                        <strong>Custom</strong>
-                        <small>
+                      <SlidersHorizontal aria-hidden="true" />
+                      <span className="min-w-0 flex-1">
+                        Custom{" "}
+                        <span
+                          data-slot="searchable-select-item-description"
+                          className={menuDescriptionClass}
+                        >
                           Use the selected target's current defaults
-                        </small>
+                        </span>
                       </span>
+                      {selection.kind === "custom" && (
+                        <Check className="size-4 text-foreground" aria-hidden="true" />
+                      )}
                     </button>
                     {agents.map((agent, index) => (
                       <button
@@ -1503,38 +1491,50 @@ export function NewThreadControl({
                           selection.kind === "saved_agent" &&
                           selection.agentId === agent.id
                         }
-                        className="new-thread-agent-option"
+                        className={cn(menuRowClass, "shrink-0 data-active:bg-(--hover) aria-selected:font-medium")}
                         type="button"
+                        tabIndex={-1}
                         onMouseDown={(event) => event.preventDefault()}
+                        onPointerMove={(event) => {
+                          if (event.pointerType === "mouse") setActiveAgentIndex(index + 1);
+                        }}
                         onClick={() => chooseAgent(agent.id)}
                       >
-                        <span className="new-thread-agent-option-icon">
+                        <span className="flex shrink-0 items-center text-muted-foreground" aria-hidden="true">
                           <TargetScopeIcon brand={agent.backend.brand} />
                         </span>
-                        <span className="new-thread-agent-option-copy">
-                          <strong>{agent.name}</strong>
-                          <small>
+                        <span className="min-w-0 flex-1">
+                          {agent.name}{" "}
+                          <span
+                            data-slot="searchable-select-item-description"
+                            className={menuDescriptionClass}
+                          >
                             {agent.backend.label.text} · {agent.id.slice(0, 8)}
-                          </small>
+                          </span>
                         </span>
+                        {selection.kind === "saved_agent" &&
+                          selection.agentId === agent.id && (
+                            <Check className="size-4 text-foreground" aria-hidden="true" />
+                          )}
                       </button>
                     ))}
                   </div>
                   {agentsLoading && (
-                    <span className="new-thread-agent-option-status">
+                    <p role="status" className={cn(menuEmptyClass, "m-0")}>
                       Loading Agents…
-                    </span>
+                    </p>
                   )}
                   {!agentsLoading && agentsLoaded && agents.length === 0 && (
-                    <span className="new-thread-agent-option-status">
+                    <p role="status" className={cn(menuEmptyClass, "m-0")}>
                       No saved Agents found.
-                    </span>
+                    </p>
                   )}
                   {nextAgentCursor && !agentsLoading && (
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
+                      className="w-full"
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() =>
                         void loadAgents({
@@ -1551,12 +1551,14 @@ export function NewThreadControl({
                 </div>
               </PopoverContent>
             </Popover>
+            </Field>
             {agentsLoaded && agents.length === 0 && !agentSearch && (
               <div className="new-thread-agent-empty">
                 <span>No saved Agents yet.</span>
                 <Button
                   type="button"
                   size="sm"
+                  variant="outline"
                   onClick={() => chooseAgent("custom")}
                 >
                   Use Custom
@@ -1572,34 +1574,37 @@ export function NewThreadControl({
               </div>
             )}
             {(agentLoadError ||
-              (!templateNeedsAttention && resolutionMessage)) && (
-              <small
-                className={
-                  resolution?.candidates.length === 0 || agentLoadError
-                    ? "new-thread-target-error"
-                    : "new-thread-agent-status"
-                }
-                role={
-                  resolution?.candidates.length === 0 || agentLoadError
-                    ? "alert"
-                    : "status"
-                }
-                aria-live={
-                  resolution?.candidates.length === 0 || agentLoadError
-                    ? "assertive"
-                    : "polite"
-                }
-              >
-                {agentLoadError || resolutionMessage}
-              </small>
-            )}
-            <section className="environment-variable-creation" aria-label="Thread environment variables">
-              <h3>Environment variables</h3>
+              (!templateNeedsAttention && resolutionMessage)) &&
+              (resolution?.candidates.length === 0 || agentLoadError ? (
+                <DialogAlert tone="danger" aria-live="assertive">
+                  {agentLoadError || resolutionMessage}
+                </DialogAlert>
+              ) : (
+                <p className="new-thread-field-note" role="status" aria-live="polite">
+                  {resolutionMessage}
+                </p>
+              ))}
+            <section
+              className="new-thread-variables"
+              aria-labelledby={`${pickerId}-variables`}
+            >
+              <h3 id={`${pickerId}-variables`}>Environment variables</h3>
               <Button ref={variablesTrigger} type="button" variant="outline" disabled={!variablesSnapshot || pending} onClick={() => setVariablesOpen(true)}>
-                <SlidersHorizontal size={16} />{variablesPreview.loading ? "Loading variables…" : `${effectiveVariableCount} effective variables · ${Object.keys(environmentVariables).length} thread changes`}
+                <SlidersHorizontal />{variablesPreview.loading ? "Loading variables…" : `${effectiveVariableCount} effective variables · ${Object.keys(environmentVariables).length} thread changes`}
               </Button>
-              <small>Environment → Backend → Agent → Thread. Review values before creating.</small>
-              {variablesPreview.error && <><p role="alert" className="environment-variable-error">{variablesPreview.error}</p><Button type="button" size="sm" variant="outline" onClick={() => setVariablesRefresh(current => current + 1)}>Retry variable preview</Button></>}
+              <p className="new-thread-field-note">Environment → Backend → Agent → Thread. Review values before creating.</p>
+              {variablesPreview.error && (
+                <DialogAlert
+                  tone="danger"
+                  action={
+                    <Button type="button" size="sm" variant="outline" onClick={() => setVariablesRefresh(current => current + 1)}>
+                      Retry variable preview
+                    </Button>
+                  }
+                >
+                  {variablesPreview.error}
+                </DialogAlert>
+              )}
             </section>
             <section
               className="new-thread-template-actions"
@@ -1691,22 +1696,17 @@ export function NewThreadControl({
                   {templateEditorMode === "update" &&
                     selectedTemplate &&
                     !deleteTemplateConfirm && (
-                      <div
-                        className="new-thread-template-update-confirm"
+                      <Callout
+                        tone="warning"
                         role="alert"
+                        title={`Replace ${selectedTemplate.name}?`}
                       >
-                        <strong>Replace {selectedTemplate.name}?</strong>
-                        <span>
-                          Saving will replace this template with the current
-                          setup. Existing threads are unaffected.
-                        </span>
-                      </div>
+                        Saving will replace this template with the current
+                        setup. Existing threads are unaffected.
+                      </Callout>
                     )}
-                  <label htmlFor={`${pickerId}-template-name`}>
-                    Template name
-                  </label>
+                  <Field label="Template name" id={`${pickerId}-template-name`}>
                   <Input
-                    id={`${pickerId}-template-name`}
                     value={templateName}
                     maxLength={160}
                     disabled={templatePending}
@@ -1720,7 +1720,35 @@ export function NewThreadControl({
                       }
                     }}
                   />
+                  </Field>
                   <div className="new-thread-template-buttons">
+                    {templateEditorMode === "update" &&
+                      selectedTemplate &&
+                      !deleteTemplateConfirm && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="destructive"
+                          className="mr-auto"
+                          disabled={templatePending}
+                          onClick={() => setDeleteTemplateConfirm(true)}
+                        >
+                          Delete template
+                        </Button>
+                      )}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={templatePending}
+                      onClick={() => {
+                        setTemplateEditorMode(undefined);
+                        setTemplateName("");
+                        setDeleteTemplateConfirm(false);
+                      }}
+                    >
+                      Back
+                    </Button>
                     <Button
                       type="button"
                       size="sm"
@@ -1737,81 +1765,44 @@ export function NewThreadControl({
                           ? "Replace template"
                           : "Save template"}
                     </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      disabled={templatePending}
-                      onClick={() => {
-                        setTemplateEditorMode(undefined);
-                        setTemplateName("");
-                        setDeleteTemplateConfirm(false);
-                      }}
-                    >
-                      Back
-                    </Button>
-                    {templateEditorMode === "update" &&
-                      selectedTemplate &&
-                      !deleteTemplateConfirm && (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="destructive"
-                          disabled={templatePending}
-                          onClick={() => setDeleteTemplateConfirm(true)}
-                        >
-                          Delete template
-                        </Button>
-                      )}
                   </div>
                   {deleteTemplateConfirm && selectedTemplate && (
-                    <div
-                      className="new-thread-template-delete-confirm"
+                    <Callout
+                      tone="danger"
                       role="alert"
+                      title={`Delete ${selectedTemplate.name}?`}
+                      action={
+                        <>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={templatePending}
+                            onClick={() => setDeleteTemplateConfirm(false)}
+                          >
+                            Keep template
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="destructive"
+                            disabled={templatePending}
+                            onClick={() => void deleteTemplate()}
+                          >
+                            {templatePending ? "Deleting…" : "Delete"}
+                          </Button>
+                        </>
+                      }
                     >
-                      <span>
-                        Delete {selectedTemplate.name}? Existing threads are
-                        unaffected.
-                      </span>
-                      <div className="new-thread-template-buttons">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="destructive"
-                          disabled={templatePending}
-                          onClick={() => void deleteTemplate()}
-                        >
-                          {templatePending ? "Deleting…" : "Delete"}
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          disabled={templatePending}
-                          onClick={() => setDeleteTemplateConfirm(false)}
-                        >
-                          Keep template
-                        </Button>
-                      </div>
-                    </div>
+                      Existing threads are unaffected.
+                    </Callout>
                   )}
                 </div>
               )}
             </section>
-            {error && (
-              <small className="new-thread-target-error" role="alert">
-                {error}
-              </small>
-            )}
-          </div>
-          <footer className="new-thread-target-actions">
-            <Button
-              type="button"
-              disabled={!canCreate || pending}
-              onClick={() => void create()}
-            >
-              {pending ? "Creating…" : "Create thread"}
-            </Button>
+            {error && <DialogAlert tone="danger">{error}</DialogAlert>}
+          </DialogBody>
+          <DialogFooter>
             <Button
               type="button"
               variant="outline"
@@ -1820,7 +1811,14 @@ export function NewThreadControl({
             >
               Cancel
             </Button>
-          </footer>
+            <Button
+              type="button"
+              disabled={!canCreate || pending}
+              onClick={() => void create()}
+            >
+              {pending ? "Creating…" : "Create thread"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       )}
       {variablesOpen && variablesSnapshot && <EnvironmentVariablesDialog open onOpenChange={setVariablesOpen} snapshot={variablesSnapshot}

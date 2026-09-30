@@ -321,6 +321,11 @@
   [data-slot="dialog-content"] {
     --dialog-close-size: var(--control-touch);
   }
+
+  /* Footer actions take the touch height, like the fields above them. */
+  [data-slot="dialog-footer"] {
+    --control-md: var(--control-touch);
+  }
 }
 
 /* ── Menu presented as a sheet (ui/menu-sheet.tsx) ──

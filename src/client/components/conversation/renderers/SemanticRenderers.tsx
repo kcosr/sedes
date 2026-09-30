@@ -369,7 +369,7 @@ function ExpandableImage({
           </span>
         </button>
       </DialogTrigger>
-      <DialogContent className="attachment-image-dialog sm:max-w-4xl">
+      <DialogContent size="viewer" aria-describedby={undefined}>
         <DialogTitle className="sr-only">{previewLabel}</DialogTitle>
         <ZoomablePreview
           controlsLabel="Image zoom controls"

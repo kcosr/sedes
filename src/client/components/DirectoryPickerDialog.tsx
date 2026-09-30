@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type DirectoryBrowseRequest,
   type DirectoryBrowseResult,
@@ -6,19 +6,22 @@ import {
 } from "../../shared/index.js";
 import { environmentDisplayLabel } from "../app/sidebar-scope-presentation.js";
 import { messageFrom } from "../stores/ApplicationClientStore.js";
-import { useKeyboardInset } from "../app/use-keyboard-inset.js";
 import { Button } from "./ui/button.js";
 import {
   Dialog,
+  DialogAlert,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "./ui/dialog.js";
+import { Field } from "./ui/field.js";
 import { Input } from "./ui/input.js";
 import { SearchableSelect } from "./ui/searchable-select.js";
 import { EnvironmentScopeIcon } from "./scope-selector-icons.js";
+import "./directory-picker-dialog.css";
 import {
   ArrowLeft,
   ChevronRight,
@@ -63,7 +66,6 @@ export function DirectoryPickerDialog({
   environmentId,
   onEnvironmentChange,
   environmentLocked = false,
-  mobileSheet = false,
   path,
   onPathChange,
   pathAriaLabel = "Absolute directory path",
@@ -82,7 +84,6 @@ export function DirectoryPickerDialog({
   readonly environmentId: string;
   readonly onEnvironmentChange: (environmentId: string) => void;
   readonly environmentLocked?: boolean;
-  readonly mobileSheet?: boolean;
   readonly path: string;
   readonly onPathChange: (path: string) => void;
   readonly pathAriaLabel?: string;
@@ -93,7 +94,6 @@ export function DirectoryPickerDialog({
   readonly onSubmit: () => void | Promise<void>;
   readonly children?: React.ReactNode;
 }): React.JSX.Element {
-  const keyboardInset = useKeyboardInset(open && mobileSheet);
   const requestRef = useRef<AbortController | undefined>(undefined);
   const requestGenerationRef = useRef(0);
   const firstEntryRef = useRef<HTMLButtonElement>(null);
@@ -280,20 +280,18 @@ export function DirectoryPickerDialog({
       onOpenChange={(next) => !submitting && onOpenChange(next)}
     >
       <DialogContent
-        data-mobile-sheet={mobileSheet || undefined}
-        style={mobileSheet ? { "--directory-keyboard-inset": `${keyboardInset}px` } as CSSProperties : undefined}
-        showClose={false}
-        overlayClassName="z-(--z-blocking)"
-        className="directory-picker-dialog z-[calc(var(--z-blocking)+1)] grid max-h-[min(90dvh,44rem)] grid-rows-[auto_auto_minmax(8rem,1fr)_auto] sm:max-w-xl"
+        size="md"
+        layer="blocking"
+        dismissible={!submitting}
+        className="directory-picker-dialog"
       >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-3">
-          <label className="grid gap-1">
-            <span>Environment</span>
+        <DialogBody>
+          <Field label="Environment">
             {environmentLocked ? (
               <Input
                 aria-label="Environment"
@@ -308,12 +306,12 @@ export function DirectoryPickerDialog({
                 placeholder="Choose environment"
                 disabled={submitting}
                 value={environmentId}
-                contentClassName="z-[calc(var(--z-blocking)+2)]"
                 options={environments.map((option) => ({
                   value: option.id,
-                  label: `${environmentDisplayLabel(option, environments)}${option.available ? "" : " — Unavailable"}`,
+                  label: environmentDisplayLabel(option, environments),
                   icon: <EnvironmentScopeIcon kind={option.kind} />,
                   searchTerms: [option.kind],
+                  unavailable: !option.available,
                 }))}
                 onValueChange={(nextEnvironmentId) => {
                   if (nextEnvironmentId === environmentId) return;
@@ -323,10 +321,9 @@ export function DirectoryPickerDialog({
                 }}
               />
             )}
-          </label>
+          </Field>
 
-          <label className="grid gap-1">
-            <span>Absolute path</span>
+          <Field label="Absolute path">
             <div className="flex gap-2">
               <Input
                 aria-label={pathAriaLabel}
@@ -340,12 +337,13 @@ export function DirectoryPickerDialog({
                   }
                 }}
                 placeholder="/path/to/directory"
-                autoFocus
+                data-autofocus
               />
               {browsingAvailable && (
                 <Button
                   type="button"
                   variant="outline"
+                  className="h-(--control-default)"
                   disabled={!path.trim() || loading}
                   onClick={browseTypedPath}
                 >
@@ -353,12 +351,11 @@ export function DirectoryPickerDialog({
                 </Button>
               )}
             </div>
-          </label>
+          </Field>
           {children}
-        </div>
 
         <section
-          className="min-h-0 overflow-hidden rounded-lg border"
+          className="directory-picker-browser"
           aria-label="Directory browser"
         >
           {!environmentId ? (
@@ -372,7 +369,7 @@ export function DirectoryPickerDialog({
             </p>
           ) : (
             <div className="flex h-full min-h-0 flex-col">
-              <div className="flex min-h-10 items-center gap-1 border-b px-2">
+              <div className="flex min-h-10 items-center gap-1 border-b border-border px-2">
                 <Button
                   type="button"
                   size="icon-sm"
@@ -540,11 +537,10 @@ export function DirectoryPickerDialog({
           )}
         </section>
 
-        {submitError && (
-          <p className="text-destructive" role="alert">
-            {submitError}
-          </p>
-        )}
+          {submitError && (
+            <DialogAlert tone="danger">{submitError}</DialogAlert>
+          )}
+        </DialogBody>
         <DialogFooter>
           <Button
             type="button"

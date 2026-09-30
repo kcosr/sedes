@@ -864,317 +864,11 @@ textarea:disabled {
   gap: 8px;
 }
 
-.new-thread-target-picker {
-  position: fixed;
-  z-index: calc(var(--z-dialog) + 9);
-  top: 0;
-  bottom: 0;
-  left: var(--sidebar-width, 260px);
-  display: flex;
-  width: min(370px, calc(100vw - var(--sidebar-width, 260px)));
-  min-width: 320px;
-  min-height: 0;
-  flex-direction: column;
-  gap: 0;
-  padding: 0;
-  border: 0;
-  border-right: 1px solid var(--border);
-  border-left: 1px solid var(--border-soft);
-  border-radius: 0;
-  background: var(--popover);
-  box-shadow: var(--shadow);
-}
-
-html[data-sidebar-collapsed="true"] .new-thread-target-picker {
-  left: 0;
-  width: min(370px, 100vw);
-}
-
-.new-thread-surface-header {
-  display: grid;
-  flex: 0 0 auto;
-  gap: 5px;
-  padding: 18px 48px 14px 16px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.new-thread-surface-header [data-slot="dialog-description"] {
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-}
-
-.new-thread-surface-body {
-  display: grid;
-  min-height: 0;
-  flex: 1 1 auto;
-  align-content: start;
-  gap: 8px;
-  padding: 14px 16px 18px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.new-thread-target-picker label {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.new-thread-template-actions {
-  display: grid;
-  gap: 8px;
-  margin-top: 4px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-soft);
-}
-
-.new-thread-template-status,
-.new-thread-template-editor,
-.new-thread-template-delete-confirm,
-.new-thread-template-update-confirm {
-  display: grid;
-  gap: 6px;
-}
-
-.new-thread-template-status strong {
-  font-size: 12.5px;
-}
-
-.new-thread-template-status small,
-.new-thread-template-buttons > small,
-.new-thread-template-delete-confirm > span,
-.new-thread-template-update-confirm > span {
-  color: var(--muted-foreground-2);
-  font-size: 11.5px;
-  line-height: 1.45;
-}
-
-.new-thread-template-buttons {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-
-.new-thread-template-delete-confirm {
-  padding: 9px;
-  border: 1px solid color-mix(in oklch, var(--destructive) 35%, var(--border));
-  border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--destructive) 7%, transparent);
-}
-
-.new-thread-template-update-confirm {
-  padding: 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  background: var(--muted);
-}
-
-.new-thread-target-picker > [data-slot="dialog-close"] {
-  top: 10px;
-  right: 10px;
-}
-
-.new-thread-agent-options {
-  min-height: 0;
-  display: grid;
-  gap: 2px;
-  padding: var(--menu-panel-padding);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.new-thread-agent-option {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  align-items: center;
-  width: 100%;
-  gap: 7px;
-  padding: 7px 8px;
-  border: 0;
-  border-radius: var(--radius-inline);
-  background: transparent;
-  color: var(--foreground);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.new-thread-agent-option-icon {
-  display: grid;
-  place-items: center;
-}
-
-.new-thread-agent-option-copy {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.new-thread-agent-option:hover,
-.new-thread-agent-option:focus-visible,
-.new-thread-agent-option[data-active],
-.new-thread-agent-option[aria-selected="true"] {
-  outline: none;
-  background: var(--secondary);
-}
-
-.new-thread-agent-option strong {
-  overflow: hidden;
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.new-thread-agent-option small {
-  overflow: hidden;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.new-thread-agent-option-status,
-.new-thread-agent-status {
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.new-thread-agent-option-status {
-  padding: 8px;
-}
-
-.new-thread-agent-empty {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-}
-
-.new-thread-agent-empty > span {
-  flex: 1 1 100%;
-}
-
-.new-thread-target-actions {
-  display: flex;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  gap: 7px;
-  padding: 12px 16px max(12px, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--border-soft);
-  background: color-mix(in oklch, var(--popover) 94%, var(--muted));
-}
-
-.new-thread-target-unavailable,
-.new-thread-target-error {
+.new-thread-target-unavailable {
   max-width: 300px;
   color: var(--muted-foreground-2);
   font-size: 12px;
   line-height: 1.35;
-}
-
-.new-thread-target-error {
-  color: var(--destructive);
-}
-
-@media (max-width: 819px), (pointer: coarse) {
-  [data-slot="select-content"].new-thread-select-content,
-  [data-slot="popover-content"].new-thread-searchable-content {
-    z-index: calc(var(--z-over-dialog) + 2);
-  }
-
-  [data-slot="dialog-overlay"].new-thread-sheet-overlay {
-    z-index: var(--z-over-dialog);
-  }
-
-  /* Root this selector so its specificity matches the persisted desktop
-     sidebar-collapse rule above. That state remains on `html` in the mobile
-     shell and must not restore the desktop drawer's 370px width cap. */
-  html [data-slot="dialog-content"].new-thread-target-picker {
-    z-index: calc(var(--z-over-dialog) + 1);
-    top: auto;
-    right: 0;
-    bottom: var(--new-thread-keyboard-inset, 0px);
-    left: 0;
-    width: 100vw;
-    min-width: 0;
-    max-width: none;
-    height: auto;
-    max-height: calc(100dvh - var(--new-thread-keyboard-inset, 0px) - max(16px, env(safe-area-inset-top)));
-    translate: 0 0 !important;
-    transform: none;
-    border: 1px solid var(--border);
-    border-bottom: 0;
-    border-radius: 16px 16px 0 0;
-    animation: new-thread-sheet-in 170ms ease-out;
-  }
-
-  .new-thread-target-picker > [data-slot="dialog-close"] {
-    top: 5px;
-    right: max(5px, env(safe-area-inset-right));
-    width: 44px;
-    height: 44px;
-  }
-
-  .new-thread-surface-header {
-    padding: 15px 52px 12px max(14px, env(safe-area-inset-left));
-  }
-
-  .new-thread-surface-body {
-    padding-right: max(14px, env(safe-area-inset-right));
-    padding-left: max(14px, env(safe-area-inset-left));
-  }
-
-  .new-thread-target-actions {
-    padding-right: max(14px, env(safe-area-inset-right));
-    padding-left: max(14px, env(safe-area-inset-left));
-  }
-
-  .new-thread-target-picker .new-thread-add-project,
-  .directory-picker-dialog button,
-  .directory-picker-dialog input,
-  .new-thread-target-actions [data-slot="button"] {
-    min-height: 44px;
-  }
-
-  [data-slot="dialog-content"].directory-picker-dialog[data-mobile-sheet="true"] {
-    top: auto;
-    right: 0;
-    bottom: var(--directory-keyboard-inset, 0px);
-    left: 0;
-    width: 100vw;
-    max-width: none;
-    max-height: calc(100dvh - var(--directory-keyboard-inset, 0px) - max(16px, env(safe-area-inset-top)));
-    translate: 0 0 !important;
-    transform: none;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    border: 1px solid var(--border);
-    border-bottom: 0;
-    border-radius: 16px 16px 0 0;
-    padding: 16px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
-  }
-}
-
-@keyframes new-thread-sheet-in {
-  from {
-    transform: translateY(24px);
-    opacity: 0;
-  }
-
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
 }
 
 .projects-header {
@@ -2250,57 +1944,17 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   line-height: 1;
 }
 
-[data-slot="dialog-overlay"].advisory-center-sheet-overlay {
-  z-index: var(--z-over-dialog);
-}
-
-[data-slot="dialog-content"].advisory-center-sheet {
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: auto;
-  z-index: calc(var(--z-over-dialog) + 1);
-  display: flex;
-  width: min(420px, calc(100vw - 24px));
-  min-width: 0;
-  max-width: none;
-  translate: 0 0 !important;
-  transform: none;
-  flex-direction: column;
-  gap: 0;
-  padding: 0;
-  border-left: 1px solid var(--border);
-  background: var(--popover);
-  box-shadow: var(--shadow);
-}
-
-.advisory-center-sheet > [data-slot="dialog-close"] {
-  top: 8px;
-  right: max(8px, env(safe-area-inset-right));
-}
-
-.advisory-center-header {
-  flex: 0 0 auto;
-  padding: 18px 52px 16px 18px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.advisory-center-header [data-slot="dialog-description"] {
-  margin-top: 5px;
-}
-
-.advisory-center-list {
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
+/* Warnings: a side dialog (a sheet on touch) listing advisories as
+   hairline-separated rows. */
 .advisory-center-item {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
-  gap: 10px;
-  padding: 16px 18px;
-  border-bottom: 1px solid var(--border-soft);
+  gap: var(--space-2-5);
+  padding: var(--space-3) 0;
+}
+
+.advisory-center-item + .advisory-center-item {
+  border-top: 1px solid var(--border-soft);
 }
 
 .advisory-center-item-icon {
@@ -3514,11 +3168,6 @@ body:has(.thread-settings-sheet[data-state="open"])
   border-radius: var(--radius-card);
   background: var(--sidebar);
   box-shadow: var(--shadow);
-}
-
-.new-thread-agent-list {
-  display: grid;
-  gap: 2px;
 }
 
 .workspace-files-tree-open {
@@ -6124,8 +5773,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 }
 
 @media (max-width: 819px), (pointer: coarse) {
-  .searchable-select-trigger,
-  .new-thread-agent-option {
+  .searchable-select-trigger {
     min-height: 44px;
   }
 
@@ -7870,24 +7518,10 @@ body:has(.thread-settings-sheet[data-state="open"])
   margin-bottom: 0;
 }
 
-.mermaid-diagram-dialog {
-  width: min(1200px, calc(100vw - 32px));
-  max-width: calc(100vw - 32px);
-  height: min(900px, calc(100dvh - 32px));
-  overflow: hidden;
-  padding: 0;
-}
-
-.mermaid-diagram-dialog .zoomable-preview-toolbar {
-  padding-right: 44px;
-}
-
-@media (max-width: 640px) {
-  .mermaid-diagram-dialog {
-    width: calc(100vw - 16px);
-    max-width: calc(100vw - 16px);
-    height: calc(100dvh - 16px);
-  }
+/* Media viewers (the Dialog's viewer size): the zoom toolbar leaves room
+   for the dialog's X. */
+[data-slot="dialog-content"][data-size="viewer"] .zoomable-preview-toolbar {
+  padding-right: calc(var(--dialog-close-size) + var(--space-4));
 }
 
 .markdown hr {
@@ -9822,21 +9456,6 @@ tr.diff-hunk td {
 [data-slot="attachment-trigger"]:hover [data-slot="attachment-media"] {
   opacity: 0.88;
   box-shadow: 0 0 0 1px var(--ring);
-}
-
-.attachment-image-dialog {
-  width: min(920px, calc(100vw - 32px));
-  height: min(760px, calc(100dvh - 48px));
-  overflow: hidden;
-  padding: 0;
-}
-
-@media (max-width: 640px) {
-  .attachment-image-dialog {
-    width: calc(100vw - 16px);
-    max-width: calc(100vw - 16px);
-    height: calc(100dvh - 16px);
-  }
 }
 
 .composer-attachment-error {
@@ -11858,58 +11477,25 @@ tr.diff-hunk td {
   white-space: nowrap;
 }
 
-/* ── Settings dialog: left nav column of category pages + content region.
-   Unlayered rules deliberately override the ui/dialog utility defaults
-   (grid, padding, radius) for the two-region layout. ── */
-/* Sized to its content, not to a fixed 460px: with one setting on the page
-   the old height left ~330px of empty card below the row. The min-height
-   keeps the nav column reading as a column and stops the dialog resizing
-   between the two pages; the max-height takes over once pages grow. */
-.agent-tool-dialog {
-  display: grid;
-  overflow: hidden;
-  width: min(760px, calc(100vw - 24px));
-  max-width: none;
-  max-height: calc(100dvh - 24px);
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
-  gap: 0;
-  padding: 0;
-  border-radius: var(--radius-lg);
-}
-
-.agent-tool-dialog-header,
-.agent-tool-dialog-global,
-.agent-tool-dialog-notices {
-  padding: 16px 18px;
-}
-
-.agent-tool-dialog-header {
-  padding-right: 52px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
+/* ── Agent tools dialog: settings rows (text left, one right-aligned
+   control column) above a two-pane group browser in one hairline card. The
+   dialog body is the scroll region; the group nav stays in view. ── */
 .agent-tool-dialog-global {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 24px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.agent-tool-environment-access-setting {
-  grid-column: 1 / -1;
+  gap: var(--space-3);
 }
 
 .agent-tool-environment-access-setting[data-caution="true"] {
-  padding: 10px;
-  border: 1px solid color-mix(in oklch, var(--warning) 35%, var(--border-soft));
+  margin-inline: calc(-1 * var(--space-2-5) - 1px);
+  padding: var(--space-2) var(--space-2-5);
+  border: 1px solid var(--warning-border);
   border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--warning) 8%, transparent);
+  background: var(--warning-soft);
 }
 
-.agent-tool-dialog-setting.agent-tool-environment-access-setting
-  [data-slot="select-trigger"] {
-  width: 176px;
-  flex: 0 0 176px;
+.agent-tool-dialog-setting [data-slot="select-trigger"] {
+  width: 240px;
+  flex: 0 0 240px;
 }
 
 .agent-tool-environment-access-option {
@@ -11929,24 +11515,26 @@ tr.diff-hunk td {
 .agent-tool-dialog-tool {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--space-2-5);
 }
 
 .agent-tool-dialog-setting {
+  align-items: center;
   justify-content: space-between;
+  gap: var(--space-6);
 }
 
 .agent-tool-dialog-setting > span,
 .agent-tool-dialog-tool > span {
   display: grid;
   min-width: 0;
-  gap: 3px;
+  gap: var(--space-0-5);
 }
 
 .agent-tool-dialog-setting strong,
 .agent-tool-dialog-tool strong {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
 }
 
 .agent-tool-dialog-setting small,
@@ -11954,37 +11542,35 @@ tr.diff-hunk td {
 .agent-tool-group-content header p {
   margin: 0;
   color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: var(--text-meta);
+  line-height: var(--leading-snug);
 }
 
-.agent-tool-dialog-setting [data-slot="select-trigger"] {
-  width: 128px;
-}
-
-.agent-tool-dialog-body {
+.agent-tool-dialog-panes {
   display: grid;
   min-height: 280px;
+  flex: 0 0 auto;
   grid-template-columns: 190px minmax(0, 1fr);
-  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
 }
 
 .agent-tool-group-nav {
+  position: sticky;
+  top: 0;
   display: flex;
+  align-self: start;
   flex-direction: column;
-  gap: 2px;
-  overflow-y: auto;
-  padding: 12px 10px;
-  border-right: 1px solid var(--border-soft);
-  background: var(--card);
+  gap: var(--space-0-5);
+  padding: var(--space-2);
 }
 
 .agent-tool-group-nav-row {
   display: flex;
-  min-height: 34px;
+  min-height: var(--control-md);
   align-items: center;
-  gap: 8px;
-  padding: 3px 7px;
+  gap: var(--space-2);
+  padding: var(--space-0-5) var(--space-1-5);
   border-radius: var(--radius-ctl);
 }
 
@@ -12001,9 +11587,12 @@ tr.diff-hunk td {
   cursor: not-allowed;
 }
 
-.agent-tool-group-nav-row:hover,
+.agent-tool-group-nav-row:hover {
+  background: var(--hover);
+}
+
 .agent-tool-group-nav-row[data-active="true"] {
-  background: var(--secondary);
+  background: var(--selected);
 }
 
 .agent-tool-group-nav-row button:not([data-slot="checkbox"]) {
@@ -12011,8 +11600,8 @@ tr.diff-hunk td {
   flex: 1;
   align-self: stretch;
   color: var(--muted-foreground);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
   text-align: left;
 }
 
@@ -12022,22 +11611,24 @@ tr.diff-hunk td {
 }
 
 .agent-tool-group-content {
-  overflow-y: auto;
-  padding: 16px 18px;
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-left: 1px solid var(--border-soft);
 }
 
 .agent-tool-group-content header h3 {
-  margin: 0 0 4px;
-  font-size: 15px;
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-ui);
+  font-weight: var(--weight-semibold);
 }
 
 .agent-tool-dialog-list {
   display: grid;
-  margin-top: 14px;
+  margin-top: var(--space-2);
 }
 
 .agent-tool-dialog-tool {
-  padding: 11px 0;
+  padding: var(--space-2-5) 0;
 }
 
 .agent-tool-dialog-tool + .agent-tool-dialog-tool {
@@ -12064,24 +11655,8 @@ tr.diff-hunk td {
 
 .agent-tool-dialog-notices {
   display: grid;
-  gap: 5px;
-  border-top: 1px solid var(--border-soft);
-  background: color-mix(in oklch, var(--muted) 45%, transparent);
-}
-
-.agent-tool-dialog-notices p {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
-.agent-tool-dialog-notices [role="alert"] {
-  color: var(--destructive);
-}
-
-.agent-tool-dialog-footer {
-  margin: 0 0 0 auto;
-  padding: 16px 18px;
+  flex: 0 0 auto;
+  gap: var(--space-2);
 }
 
 .application-main {
@@ -13149,30 +12724,35 @@ tr.diff-hunk td {
   }
 }
 
-/* Narrow viewports: single column, nav becomes a horizontal row. */
+/* Narrow viewports: the settings stack and the group nav becomes a
+   horizontal row above the tools. */
 @media (max-width: 520px) {
-  .agent-tool-dialog {
-    width: calc(100vw - 16px);
-    max-height: calc(100dvh - 16px);
+  .agent-tool-dialog-setting {
+    align-items: stretch;
+    flex-direction: column;
+    gap: var(--space-2);
   }
 
-  .agent-tool-dialog-global {
-    grid-template-columns: 1fr;
+  .agent-tool-dialog-setting [data-slot="select-trigger"] {
+    width: 100%;
+    flex-basis: auto;
   }
 
-  .agent-tool-dialog-body {
+  .agent-tool-dialog-panes {
     display: flex;
     min-height: 0;
     flex-direction: column;
   }
 
   .agent-tool-group-nav {
-    flex: 0 0 auto;
+    position: static;
     flex-direction: row;
     overflow-x: auto;
-    overflow-y: hidden;
-    border-right: 0;
     border-bottom: 1px solid var(--border-soft);
+  }
+
+  .agent-tool-group-content {
+    border-left: 0;
   }
 
   .agent-tool-group-nav-row {
@@ -13297,22 +12877,6 @@ tr.diff-hunk td {
   .canned-prompts-list,
   .canned-prompt-editor {
     overflow-y: visible;
-  }
-}
-
-/* On short viewports the fixed rows can exceed the dialog's height before its
-   content row has any usable space. Let the dialog itself scroll so the
-   settings and confirmation actions remain reachable in landscape. */
-@media (max-height: 600px) {
-  .agent-tool-dialog {
-    display: block;
-    overflow-x: hidden;
-    overflow-y: auto;
-  }
-
-  .agent-tool-dialog-body,
-  .agent-tool-group-content {
-    overflow: visible;
   }
 }
 
@@ -14450,36 +14014,6 @@ tr.diff-hunk td {
   .sidebar-footer-advisory-count {
     top: 6px;
     right: 5px;
-  }
-
-  [data-slot="dialog-content"].advisory-center-sheet {
-    top: auto;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    width: 100vw;
-    max-height: min(88dvh, 720px);
-    padding-bottom: env(safe-area-inset-bottom);
-    border: 1px solid var(--border);
-    border-bottom: 0;
-    border-radius: 16px 16px 0 0;
-  }
-
-  .advisory-center-sheet > [data-slot="dialog-close"] {
-    top: 5px;
-    width: 44px;
-    height: 44px;
-  }
-
-  .advisory-center-header {
-    padding-top: 16px;
-    padding-right: 56px;
-    padding-left: max(16px, env(safe-area-inset-left));
-  }
-
-  .advisory-center-item {
-    padding-right: max(16px, env(safe-area-inset-right));
-    padding-left: max(16px, env(safe-area-inset-left));
   }
 
   .materialization-recovery {
