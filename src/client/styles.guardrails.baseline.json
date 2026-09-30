@@ -9,7 +9,6 @@
     "workspace-files/workspace-compare.css": 1
   },
   "fontSizeLiterals": {
-    "components/environment-variables/environment-variables.css": 14,
     "components/execution-settings/execution-settings.css": 45,
     "components/sidebar-view-controls.css": 4,
     "components/tasks/tasks-panel.css": 17,
@@ -25,7 +24,6 @@
     "workspace-files/workspace-revision-picker.css": 10
   },
   "fontWeightLiterals": {
-    "components/environment-variables/environment-variables.css": 2,
     "components/execution-settings/execution-settings.css": 5,
     "components/sidebar-view-controls.css": 2,
     "components/tasks/tasks-panel.css": 3,
@@ -54,7 +52,6 @@
     "usage/usage.css": 2
   },
   "mediaQueries": {
-    "components/environment-variables/environment-variables.css": 1,
     "components/execution-settings/execution-settings.css": 3,
     "styles.css": 11,
     "usage/usage.css": 2,
