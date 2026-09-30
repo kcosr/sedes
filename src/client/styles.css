@@ -457,46 +457,19 @@ textarea:disabled {
   opacity: 0.52;
 }
 
-:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-[data-slot="button"]:focus-visible,
-[data-slot="select-trigger"]:focus-visible,
-[data-slot="native-select"]:focus-visible,
-[data-slot="checkbox"]:focus-visible,
-[data-slot="radio-group-item"]:focus-visible,
-[data-slot="switch"]:focus-visible,
-[data-slot="segmented-control-item"]:focus-visible,
-[data-slot="tabs-trigger"]:focus-visible,
-[data-slot="input"]:focus-visible,
-[data-slot="textarea"]:focus-visible {
-  outline: none;
-}
-
-/* Overlay containers take focus as a starting point (a dialog with nothing
-   to focus, a picker opened by touch, a menu sheet's list); the overlay is
-   the indication, so they draw no ring. */
-[data-slot="dialog-content"]:focus-visible,
-[data-slot="popover-content"]:focus-visible,
-[data-slot="menu-sheet-list"]:focus-visible {
-  outline: none;
-}
-
-/* Menu rows carry highlight as the neutral wash (focus follows Radix's
-   roving highlight); the global ring would double-mark every row. */
-[data-slot="menu-sheet-back"]:focus-visible,
-[data-slot="select-item"]:focus-visible,
-[data-slot="dropdown-menu-item"]:focus-visible,
-[data-slot="dropdown-menu-checkbox-item"]:focus-visible,
-[data-slot="dropdown-menu-radio-item"]:focus-visible,
-[data-slot="dropdown-menu-sub-trigger"]:focus-visible,
-[data-slot="context-menu-item"]:focus-visible,
-[data-slot="context-menu-checkbox-item"]:focus-visible,
-[data-slot="context-menu-radio-item"]:focus-visible,
-[data-slot="context-menu-sub-trigger"]:focus-visible {
-  outline: none;
+/* The one focus ring for anything that draws none of its own. It sits in
+   the base layer so the ui/ primitives' own `outline-none`/`outline-hidden`
+   utilities win without an exemption list: Button and the form controls
+   draw the 3px ring (--focus-ring), menu rows the --hover wash, and overlay
+   containers (a dialog, a popover, a menu sheet's list) are their own
+   indication. Keying on the utility also covers a primitive whose data-slot
+   a Radix `asChild` part restamps (a Button as a menu trigger or the dialog
+   X). Unlayered feature rules still style their own focus. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
 }
 
 ::selection {
