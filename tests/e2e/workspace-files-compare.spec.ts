@@ -4,7 +4,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
-import { capture, selectCustomNewThreadTarget } from "./helpers";
+import { capture, overlaySettled, selectCustomNewThreadTarget } from "./helpers";
 import {
   alphaWorkspace,
   resetWorkspaceFileFixtures,
@@ -282,6 +282,7 @@ test.describe.serial("workspace files compare", () => {
     await page.getByRole("dialog", { name: "Review options", exact: true }).getByRole("button", { name: "Comments (0)", exact: true }).click();
     const review = page.getByRole("dialog", { name: "Review", exact: true });
     await expect(review.getByRole("radio", { name: "Current review", exact: true })).toBeChecked();
+    await overlaySettled(review);
     const reviewBounds = await review.boundingBox();
     expect(reviewBounds!.y).toBeGreaterThanOrEqual(0);
     expect(reviewBounds!.x + reviewBounds!.width).toBeLessThanOrEqual(1440);

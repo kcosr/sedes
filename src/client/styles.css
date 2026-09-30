@@ -7518,10 +7518,16 @@ body:has(.thread-settings-sheet[data-state="open"])
   margin-bottom: 0;
 }
 
-/* Media viewers (the Dialog's viewer size): the zoom toolbar leaves room
-   for the dialog's X. */
+/* Media viewers (the Dialog's viewer size): the dialog's X sits in the zoom
+   toolbar's row, which is tall enough for it and leaves it room. */
 [data-slot="dialog-content"][data-size="viewer"] .zoomable-preview-toolbar {
-  padding-right: calc(var(--dialog-close-size) + var(--space-4));
+  min-height: calc(var(--dialog-close-size) + 2 * var(--space-0-5) + 1px);
+  padding-right: calc(var(--dialog-close-size) + var(--space-2));
+}
+
+[data-slot="dialog-content"][data-size="viewer"] > [data-slot="dialog-close"] {
+  top: var(--space-0-5);
+  right: var(--space-0-5);
 }
 
 .markdown hr {
@@ -12872,7 +12878,7 @@ tr.diff-hunk td {
 
 .automation-editor-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
   align-items: start;
   gap: var(--space-6);
 }
@@ -13175,13 +13181,15 @@ tr.diff-hunk td {
   display: flex;
   width: 100%;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 7px;
+  column-gap: 7px;
 }
 
 .automation-run-head strong {
   font-size: 13px;
   font-weight: 550;
+  white-space: nowrap;
 }
 
 .automation-run-state {
