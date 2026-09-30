@@ -80,7 +80,7 @@ describe("form controls", () => {
     render(<Checkbox aria-label="Pin" />);
     expect(screen.getByRole("checkbox", { name: "Pin" })).toHaveClass(
       "size-(--icon-md)",
-      "rounded-(--radius-inline)",
+      "rounded-(--radius-check)",
       "focus-visible:ring-3",
       "disabled:opacity-(--disabled-opacity)",
     );

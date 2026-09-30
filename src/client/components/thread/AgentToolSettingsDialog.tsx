@@ -10,6 +10,7 @@ import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
 import { messageFrom } from "../../stores/ApplicationClientStore.js";
 import { Button } from "@client/components/ui/button";
 import { Checkbox } from "@client/components/ui/checkbox";
+import { Switch } from "@client/components/ui/switch";
 import {
   Dialog,
   DialogAlert,
@@ -415,15 +416,12 @@ export function AgentToolSettingsDialog({
               <strong>Enable agent tools</strong>
               <small>Expose the selected tools to this thread.</small>
             </span>
-            <Checkbox
+            <Switch
               aria-label="Enable agent tools"
               checked={draft.enabled}
               disabled={!editable}
-              onCheckedChange={(checked) =>
-                setDraft((current) => ({
-                  ...current,
-                  enabled: checked === true,
-                }))
+              onCheckedChange={(enabled) =>
+                setDraft((current) => ({ ...current, enabled }))
               }
             />
           </label>

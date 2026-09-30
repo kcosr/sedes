@@ -55,7 +55,7 @@ test.describe.serial("agent tool policy", () => {
     const settings = page.getByRole("dialog", { name: "Agent tools" });
     await expect(settings).toBeVisible();
     await expect(
-      settings.getByRole("checkbox", { name: "Enable agent tools" }),
+      settings.getByRole("switch", { name: "Enable agent tools" }),
     ).not.toBeChecked();
     await expect(
       settings.getByRole("combobox", { name: "Agent tool surface" }),
@@ -94,7 +94,7 @@ test.describe.serial("agent tool policy", () => {
     });
 
     await settings
-      .getByRole("checkbox", { name: "Enable agent tools" })
+      .getByRole("switch", { name: "Enable agent tools" })
       .click();
     await settings.getByRole("checkbox", { name: "Agent context" }).click();
     await selectRadixOption(
@@ -153,7 +153,7 @@ test.describe.serial("agent tool policy", () => {
     expect(policyMutationCount).toBe(1);
 
     await expect(
-      secondSettings.getByRole("checkbox", { name: "Enable agent tools" }),
+      secondSettings.getByRole("switch", { name: "Enable agent tools" }),
     ).toBeChecked();
     await expect(
       secondSettings.getByRole("checkbox", { name: "Agent context" }),
@@ -182,7 +182,7 @@ test.describe.serial("agent tool policy", () => {
     await persistedSummary.click();
     const reloadedSettings = page.getByRole("dialog", { name: "Agent tools" });
     await expect(
-      reloadedSettings.getByRole("checkbox", { name: "Enable agent tools" }),
+      reloadedSettings.getByRole("switch", { name: "Enable agent tools" }),
     ).toBeChecked();
     await expect(
       reloadedSettings.getByRole("checkbox", { name: "Agent context" }),
@@ -216,7 +216,7 @@ test.describe.serial("agent tool policy", () => {
     const settings = page.getByRole("dialog", { name: "Agent tools" });
     await expect(settings).toBeVisible();
     await expect(
-      settings.getByRole("checkbox", { name: "Enable agent tools" }),
+      settings.getByRole("switch", { name: "Enable agent tools" }),
     ).toBeDisabled();
     await expect(
       settings.getByRole("combobox", { name: "Agent tool surface" }),
@@ -332,14 +332,14 @@ test.describe.serial("agent tool policy", () => {
     await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     try {
       await openSettings();
-      await expect(settings.getByRole("checkbox", { name: "Enable agent tools" })).toBeEnabled();
+      await expect(settings.getByRole("switch", { name: "Enable agent tools" })).toBeEnabled();
       await expect(settings.getByRole("combobox", { name: "Agent tool surface" })).toBeDisabled();
       await expect(settings.getByRole("combobox", { name: "Agent tool presentation" })).toBeDisabled();
-      await settings.getByRole("checkbox", { name: "Enable agent tools" }).check();
+      await settings.getByRole("switch", { name: "Enable agent tools" }).check();
       await settings.getByRole("checkbox", { name: "Agent context" }).check();
       await capture(page, testInfo, "agent-tools-cli-in-flight.png");
       await saveSettings();
-      await expect(secondSettings.getByRole("checkbox", { name: "Enable agent tools" })).toBeChecked();
+      await expect(secondSettings.getByRole("switch", { name: "Enable agent tools" })).toBeChecked();
       await expect(secondSettings.getByRole("checkbox", { name: "Agent context" })).toBeChecked();
 
       await openSettings();
@@ -352,13 +352,13 @@ test.describe.serial("agent tool policy", () => {
       await expect(secondSettings.getByRole("checkbox", { name: "Thread status" })).toBeChecked();
 
       await openSettings();
-      await settings.getByRole("checkbox", { name: "Enable agent tools" }).uncheck();
+      await settings.getByRole("switch", { name: "Enable agent tools" }).uncheck();
       await saveSettings();
-      await expect(secondSettings.getByRole("checkbox", { name: "Enable agent tools" })).not.toBeChecked();
+      await expect(secondSettings.getByRole("switch", { name: "Enable agent tools" })).not.toBeChecked();
       await openSettings();
-      await settings.getByRole("checkbox", { name: "Enable agent tools" }).check();
+      await settings.getByRole("switch", { name: "Enable agent tools" }).check();
       await saveSettings();
-      await expect(secondSettings.getByRole("checkbox", { name: "Enable agent tools" })).toBeChecked();
+      await expect(secondSettings.getByRole("switch", { name: "Enable agent tools" })).toBeChecked();
 
       const session = await (await page.request.get("/api/application/session")).json() as { csrfToken: string };
       const snapshot = normalizedThreadSnapshotSchema.parse(
@@ -409,7 +409,7 @@ test.describe.serial("agent tool policy", () => {
     const settings = page.getByRole("dialog", { name: "Agent tools" });
     await expect(settings).toBeVisible();
     await settings
-      .getByRole("checkbox", { name: "Enable agent tools" })
+      .getByRole("switch", { name: "Enable agent tools" })
       .click();
     const accessBoundary = settings.getByRole("combobox", {
       name: "Access boundary",

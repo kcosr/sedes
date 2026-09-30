@@ -871,7 +871,7 @@ describe("ThreadHeader agent tools", () => {
       within(row).getByText("Off"),
     ).toHaveAttribute("data-slot", "dropdown-menu-item-description");
     expect(
-      screen.queryByRole("checkbox", { name: "Enable agent tools" }),
+      screen.queryByRole("switch", { name: "Enable agent tools" }),
     ).toBeNull();
 
     await userEvent.click(row);

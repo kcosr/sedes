@@ -97,6 +97,9 @@
   --radius-ctl: 8px;
   --radius-card: 12px;
   --radius-lg: 16px;
+  /* A checkbox's corner: square enough on a 16px box that it never reads
+     as a radio. */
+  --radius-check: 4px;
 
   /* measure — the single reading column shared by the transcript, the
      composer/interaction footprint and the archived list. 768 minus the
