@@ -103,7 +103,7 @@ describe("automation routes", () => {
       expect(parseRoute(pathname)).toEqual({ name: "home" });
     }
     expect(parseRoute("/settings/agents")).toEqual({ name: "settings", page: "agents" });
-    expect(parseRoute("/settings/agents/new")).toEqual({ name: "settings", page: "agents", mode: "new" });
+    expect(parseRoute("/settings/agents/~new")).toEqual({ name: "settings", page: "agents", mode: "new" });
     expect(parseRoute("/settings/agents/agent%2Fone")).toEqual({ name: "settings", page: "agents", mode: "view", resourceId: "agent/one" });
   });
 });
@@ -116,7 +116,7 @@ describe("routePath", () => {
     expect(routePath({ name: "usage" })).toBe(usagePath());
     expect(parseRoute(usagePath())).toEqual({ name: "usage" });
     expect(routePath({ name: "settings", page: "agents" })).toBe("/settings/agents");
-    expect(routePath({ name: "settings", page: "agents", mode: "new" })).toBe("/settings/agents/new");
+    expect(routePath({ name: "settings", page: "agents", mode: "new" })).toBe("/settings/agents/~new");
     expect(
       routePath({ name: "settings", page: "agents", mode: "view", resourceId: "agent/one" }),
     ).toBe("/settings/agents/agent%2Fone");

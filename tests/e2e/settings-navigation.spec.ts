@@ -255,18 +255,18 @@ test("dirty settings guard browser Back and return without saving discarded envi
   });
   await settings.getByRole("button", { name: "Add environment", exact: true }).click();
   await settings.getByRole("link", { name: "SSH host", exact: true }).click();
-  await expect(page).toHaveURL("/settings/environments/new/ssh");
+  await expect(page).toHaveURL("/settings/environments/~new/ssh");
   await settings.getByLabel("Environment name", { exact: true }).fill("Discard this draft");
   await page.goBack();
   const discard = page.getByRole("dialog", { name: "Discard unsaved changes?", exact: true });
   await expect(discard).toBeVisible();
   await discard.getByRole("button", { name: "Keep editing", exact: true }).click();
-  await expect(page).toHaveURL("/settings/environments/new/ssh");
+  await expect(page).toHaveURL("/settings/environments/~new/ssh");
   await expect(settings.getByLabel("Environment name", { exact: true })).toHaveValue("Discard this draft");
   await page.goBack();
   await discard.getByRole("button", { name: "Discard changes", exact: true }).click();
   // Back walks the add flow's own steps: the kind chooser, then the list.
-  await expect(page).toHaveURL("/settings/environments/new");
+  await expect(page).toHaveURL("/settings/environments/~new");
   await page.goBack();
   await expect(page).toHaveURL("/settings/environments");
   await page.goBack();
@@ -281,7 +281,7 @@ test("dirty settings guard browser Back and return without saving discarded envi
   await page.getByTestId("desktop-sidebar").getByRole("link", { name: "Backends", exact: true }).click();
   await expect(discard).toBeVisible();
   await discard.getByRole("button", { name: "Keep editing", exact: true }).click();
-  await expect(page).toHaveURL("/settings/environments/new/ssh");
+  await expect(page).toHaveURL("/settings/environments/~new/ssh");
   await page.getByTestId("settings-return").click();
   await expect(discard).toBeVisible();
   await discard.getByRole("button", { name: "Keep editing", exact: true }).click();

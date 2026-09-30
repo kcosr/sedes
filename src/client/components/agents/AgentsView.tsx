@@ -79,7 +79,7 @@ const noWorkspaces: readonly NormalizedWorkspaceSummary[] = [];
 /**
  * Saved Agents on the settings kit's split inventory: the list beside the
  * selected Agent, or one at a time in the stack. An Agent is a small preset,
- * so its detail is its editor (`/settings/agents/:id`); `/new` creates one.
+ * so its detail is its editor (`/settings/agents/:id`); `/~new` creates one.
  */
 export function AgentsView({
   store,

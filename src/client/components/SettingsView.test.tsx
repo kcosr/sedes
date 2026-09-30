@@ -216,7 +216,7 @@ describe("SettingsView", () => {
     fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "Unsaved local" } });
     fireEvent.click(screen.getByTestId("settings-return"));
     expect(screen.getByRole("heading", { name: "Discard unsaved changes?" })).toBeVisible();
-    expect(window.location.pathname).toBe("/settings/environments/new/local");
+    expect(window.location.pathname).toBe("/settings/environments/~new/local");
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(screen.getByLabelText("Environment name")).toHaveValue("Unsaved local");
     const user = userEvent.setup();

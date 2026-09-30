@@ -50,9 +50,9 @@ test("execution settings persist typed configuration and distinguish unreachable
   let settings = await openSettings(page, "Environments");
   await expect(settings.getByText("Pair a host", { exact: true })).toHaveCount(0);
   await settings.getByRole("button", { name: "Add environment", exact: true }).click();
-  await expect(page).toHaveURL("/settings/environments/new");
+  await expect(page).toHaveURL("/settings/environments/~new");
   await settings.getByRole("link", { name: "SSH host", exact: true }).click();
-  await expect(page).toHaveURL("/settings/environments/new/ssh");
+  await expect(page).toHaveURL("/settings/environments/~new/ssh");
   await settings.getByLabel("Environment name", { exact: true }).fill("Temporary build host");
   await settings.getByLabel("SSH host alias", { exact: true }).fill("e2e-unreachable");
   await settings.getByLabel("Workspace root 1", { exact: true }).fill("/work/e2e");
@@ -118,7 +118,7 @@ test("execution settings persist typed configuration and distinguish unreachable
 
   await selectSettingsCategory(page, "backends");
   await settings.getByRole("button", { name: "Add backend", exact: true }).click();
-  await expect(page).toHaveURL("/settings/backends/new");
+  await expect(page).toHaveURL("/settings/backends/~new");
   await expect(settings.getByLabel("Execution environment", { exact: true })).toHaveValue("");
   await expect(settings.getByRole("button", { name: "Save backend", exact: true })).toBeDisabled();
   await settings.getByLabel("Execution environment", { exact: true }).selectOption({ label: "Local" });
@@ -209,7 +209,7 @@ test("execution settings persist typed configuration and distinguish unreachable
   await hostRow.getByRole("link", { name: "Temporary build host", exact: true }).click();
   await details(settings, "Temporary build host").getByRole("tab", { name: /^Backends/u }).click();
   await settings.getByRole("button", { name: "Add backend", exact: true }).click();
-  await expect(page).toHaveURL("/settings/backends/new");
+  await expect(page).toHaveURL("/settings/backends/~new");
   await expect(settings.getByLabel("Execution environment", { exact: true })).toHaveValue(environment!.id);
   await expect(settings.getByLabel("Backend type", { exact: true }).locator('option[value="grok_build"]')).toBeDisabled();
   await settings.getByLabel("Backend type", { exact: true }).selectOption("claude_agent_sdk");
@@ -447,7 +447,7 @@ test("outbound hosts can be paired, edited offline, denied, revoked and reapprov
   await expect(row(awaiting, "Studio outbound")).toContainText(`Code ${registration.correlationCode} · macOS arm64`);
   await expect(row(awaiting, "Studio outbound")).toContainText("Host online");
   await awaiting.getByRole("link", { name: "Studio outbound", exact: true }).click();
-  await expect(page).toHaveURL(`/settings/environments/pending/${registration.id}`);
+  await expect(page).toHaveURL(`/settings/environments/~pending/${registration.id}`);
   const pending = settings.getByRole("region", { name: "Pending Studio outbound" });
   await expect(pending).toContainText(registration.correlationCode);
   await expect(pending).toContainText("macOS · arm64 · operator");

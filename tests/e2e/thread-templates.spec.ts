@@ -27,7 +27,7 @@ async function applicationSnapshot(page: Page) {
 }
 
 async function createAgent(page: Page, name: string) {
-  await page.goto("/settings/agents/new");
+  await page.goto("/settings/agents/~new");
   await page.getByRole("textbox", { name: "Name" }).fill(name);
   await selectProjectIfNeeded(page, repositoryLabel);
   await selectRadixOption(

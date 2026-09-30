@@ -266,7 +266,7 @@ describe("execution configuration administration", () => {
     await user.click(await screen.findByRole("tab", { name: /^Backends/u }));
     expect(screen.getByText("No backends in this environment.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Add backend" }));
-    expect(window.location.pathname).toBe("/settings/backends/new");
+    expect(window.location.pathname).toBe("/settings/backends/~new");
     expect(screen.getByLabelText("Execution environment")).toHaveValue(remoteId);
     expect(within(screen.getByLabelText("Backend type")).getByRole("option", { name: "Grok" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "Remote builder" } });
@@ -536,10 +536,10 @@ describe("execution configuration administration", () => {
     const api = renderAt("/settings/environments");
     await waitFor(() => expect(screen.getByRole("button", { name: "Add environment" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Add environment" }));
-    expect(window.location.pathname).toBe("/settings/environments/new");
+    expect(window.location.pathname).toBe("/settings/environments/~new");
     expect(screen.getByRole("button", { name: "Local machine" })).toBeDisabled();
     fireEvent.click(screen.getByRole("link", { name: "SSH host" }));
-    expect(window.location.pathname).toBe("/settings/environments/new/ssh");
+    expect(window.location.pathname).toBe("/settings/environments/~new/ssh");
     expect(screen.getByRole("heading", { name: "New SSH environment" })).toHaveFocus();
     fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "New host" } });
     fireEvent.change(screen.getByLabelText("SSH host alias"), { target: { value: "new-host" } });
@@ -565,7 +565,7 @@ describe("execution configuration administration", () => {
   });
 
   it("maps schema paths to the edited environment's fields and never carries them to another entity", async () => {
-    const api = renderAt("/settings/environments/new/ssh");
+    const api = renderAt("/settings/environments/~new/ssh");
     fireEvent.change(await screen.findByLabelText("Environment name"), { target: { value: "Broken host" } });
     fireEvent.change(screen.getByLabelText("SSH host alias"), { target: { value: "broken" } });
     fireEvent.change(screen.getByLabelText("Workspace root 1"), { target: { value: "relative/path" } });
@@ -664,7 +664,7 @@ describe("execution configuration administration", () => {
   });
 
   it("explains a token variable name the schema rejects on its own field", async () => {
-    const api = renderAt("/settings/backends/new");
+    const api = renderAt("/settings/backends/~new");
     fireEvent.change(await screen.findByLabelText("Execution environment"), { target: { value: localId } });
     fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "Remote Codex" } });
     fireEvent.change(screen.getByLabelText("Connection transport"), { target: { value: "tcp_websocket" } });
@@ -706,7 +706,7 @@ describe("execution configuration administration", () => {
   });
 
   it.each([localId, remoteId, outboundId])("saves Claude on %s with the execution account's native configuration default", async (environmentId) => {
-    const api = renderAt("/settings/backends/new", controls(configurationWithOutbound()));
+    const api = renderAt("/settings/backends/~new", controls(configurationWithOutbound()));
     fireEvent.change(await screen.findByLabelText("Execution environment"), { target: { value: environmentId } });
     fireEvent.change(screen.getByLabelText("Backend type"), { target: { value: "claude_agent_sdk" } });
     fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "Claude" } });
@@ -774,7 +774,7 @@ describe("execution configuration administration", () => {
   });
 
   it("builds model policy rules from identifier chips and preserves identifier dimensions", async () => {
-    const api = renderAt("/settings/backends/new");
+    const api = renderAt("/settings/backends/~new");
     fireEvent.change(await screen.findByLabelText("Execution environment"), { target: { value: localId } });
     fireEvent.change(screen.getByLabelText("Backend type"), { target: { value: "pi" } });
     fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "Pi SDK" } });

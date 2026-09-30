@@ -53,7 +53,7 @@ function renderAt(path: string, api: ReturnType<typeof fixture>) {
   render(<ExecutionSettings controls={api} />);
   return api;
 }
-const pendingPath = `/settings/environments/pending/${registration.id}`;
+const pendingPath = `/settings/environments/~pending/${registration.id}`;
 
 beforeEach(() => { vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} }); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -73,7 +73,7 @@ describe("outbound host settings", () => {
     expect(screen.queryByRole("link", { name: "Download connector" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Add environment" }));
     fireEvent.click(screen.getByRole("link", { name: "Pair a host" }));
-    expect(window.location.pathname).toBe("/settings/environments/new/pair");
+    expect(window.location.pathname).toBe("/settings/environments/~new/pair");
     const setup = screen.getByRole("region", { name: "Pair a host" });
     expect(within(setup).getByRole("link", { name: "Download connector" })).toHaveAttribute("href", "http://sedes.test:4784/api/outbound/connector/sedes-sidecar.mjs");
     expect(within(setup).getByRole("button", { name: "Copy pairing command" })).toBeVisible();

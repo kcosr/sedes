@@ -37,7 +37,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await expect(page.getByRole("heading", { name: "Agents", level: 1 })).toBeVisible();
     await expect(page.getByText("No Agents yet.")).toBeVisible();
     await page.getByRole("button", { name: "Create Agent" }).click();
-    await expect(page).toHaveURL("/settings/agents/new");
+    await expect(page).toHaveURL("/settings/agents/~new");
 
     await page.getByRole("textbox", { name: "Name" }).fill("Careful reviewer");
     await page
@@ -600,7 +600,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await expect(page.getByRole("main").getByTestId("new-thread-trigger")).toBeVisible();
     await expect(page.getByTestId("settings-view")).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Saved Agents" })).toHaveCount(0);
-    await page.goto("/settings/agents/new");
+    await page.goto("/settings/agents/~new");
     await page.getByRole("textbox", { name: "Name" }).fill("Health probe");
     await selectProjectIfNeeded(page, repositoryLabel);
     await selectRadixOption(
