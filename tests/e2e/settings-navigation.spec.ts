@@ -280,9 +280,10 @@ test.describe("sidebar name filtering preference", () => {
     const selectedThread = await createDraftThread(page);
     const sidebar = page.getByTestId("desktop-sidebar");
     await sidebar.getByTestId("view-options-trigger").click();
-    await page.getByRole("radiogroup", { name: "Group by" }).getByRole("radio", { name: "Timeline" }).click();
+    await page.getByRole("group", { name: "Group by" }).getByRole("menuitemradio", { name: "Timeline" }).click();
+    await expect(page.getByRole("menu", { name: "View options" })).toBeHidden();
     await sidebar.getByTestId("view-options-trigger").click();
-    await page.getByRole("radiogroup", { name: "Density" }).getByRole("radio", { name: "Card", exact: true }).click();
+    await page.getByRole("group", { name: "Density" }).getByRole("menuitemradio", { name: "Card", exact: true }).click();
     await page.keyboard.press("Escape");
     const clearProject = async () => {
       await sidebar.getByTestId("project-filter").click();

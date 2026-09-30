@@ -1,7 +1,7 @@
-import { useKeyboardInset } from "../app/use-keyboard-inset.js";
 import { usePickerFocus } from "../lib/use-picker-focus.js";
 import { runThreadCreation, runThreadFork } from "../operations/thread-creation.js";
-import { Fragment, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { runThreadArchiveCheck } from "../operations/thread-archive.js";
+import { useEffect, useRef, useState } from "react";
 import type {
   NormalizedApplicationThreadSummary,
   NormalizedThreadForkOrigin,
@@ -17,42 +17,54 @@ import type {
   ThreadClientStore,
 } from "../stores/ThreadClientStore.js";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
-import { useMediaQuery } from "../app/use-media-query.js";
-import { SIDEBAR_NAV_MEDIA_QUERY } from "./SidebarNavTrigger.js";
+import { useTouchDensity } from "../app/use-touch-density.js";
+import { shortRelativeTime } from "../lib/time.js";
 import { latestTurnForkDecision } from "../lineage/latest-turn-fork.js";
 import {
+  AlarmClock,
+  AlarmClockOff,
+  Archive,
+  ArchiveRestore,
   ArrowDownToDot,
   ArrowUpFromDot,
-  Clock,
+  CalendarClock,
   Copy,
   CopyPlus,
+  CornerUpLeft,
+  GitCommitVertical,
+  Hash,
+  IndentDecrease,
+  IndentIncrease,
+  Layers3,
+  PencilLine,
   Pin,
   PinOff,
-  PencilLine,
+  Plus,
   RotateCcw,
+  Server,
   Split,
-  Layers3,
+  Ungroup,
 } from "lucide-react";
 import { SnoozeDialog } from "./thread/SnoozeDialog.js";
 import {
-  THREAD_CONFIGURATION_COPY_ACCESSIBLE_LABEL,
   THREAD_CONFIGURATION_COPY_LABEL,
   THREAD_CONFIGURATION_COPY_PENDING_ACCESSIBLE_LABEL,
   THREAD_CONFIGURATION_COPY_TITLE,
 } from "./thread/thread-configuration-copy-labels.js";
-import { ArchiveContextSubmenu } from "./thread/ArchiveThreadChoices.js";
 import { ArchiveChoicesDialog } from "./thread/ArchiveChoicesDialog.js";
 import { ForceResetDialog } from "./thread/ForceResetDialog.js";
 import {
-  ExecutionWorkspaceActions,
   ExecutionWorkspaceDeleteDialog,
   type IsolatedWorkspace,
 } from "./thread/ExecutionWorkspaceActions.js";
+import { ExecutionWorkspaceMenu } from "./thread/ExecutionWorkspaceMenu.js";
+import { contextMenuParts } from "./thread/menu-parts.js";
 import {
   SettleImpactDialog,
   settleNeedsConfirmation,
 } from "./thread/SettleImpactDialog.js";
 import { Button } from "@client/components/ui/button";
+import { Field } from "@client/components/ui/field";
 import { Input } from "@client/components/ui/input";
 import { SearchableSelectList } from "@client/components/ui/searchable-select";
 import {
@@ -62,6 +74,7 @@ import {
 import {
   Dialog,
   DialogAlert,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -72,119 +85,47 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@client/components/ui/context-menu";
 
 type InventoryContextAction =
   "settle" | "unsettle" | "wake" | "archive" | "restore";
 
-const LONG_PRESS_MENU_DELAY_MS = 550;
-const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
-const TOUCH_CONTEXT_MENU_SUPPRESSION_MS = 1_000;
 // Match the 240ms dialog exit motion before installing a sibling modal root.
 const SHEET_DIALOG_HANDOFF_DELAY_MS = 260;
 
-type ThreadActionVariant = "default" | "destructive";
-
-interface ThreadActionDefinition {
-  readonly id: string;
-  readonly label: ReactNode;
-  readonly icon?: ReactNode;
-  readonly disabled?: boolean;
-  readonly variant?: ThreadActionVariant;
-  readonly ariaLabel?: string;
-  readonly ariaDescribedBy?: string;
-  readonly title?: string;
-  readonly onInvoke: () => void;
-  readonly onDesktopInvoke?: () => void;
-  readonly deferUntilSheetCloses?: boolean;
-  readonly desktopContent?: ReactNode;
-}
-
-interface ThreadActionGroup {
-  readonly id: string;
-  readonly actions?: readonly ThreadActionDefinition[];
-  readonly supplementalContent?: ReactNode;
-}
-
-function DesktopThreadActions({
-  groups,
-}: {
-  readonly groups: readonly ThreadActionGroup[];
-}): React.JSX.Element {
-  return (
-    <>
-      {groups.map((group, groupIndex) => (
-        <Fragment key={group.id}>
-          {groupIndex > 0 && <ContextMenuSeparator />}
-          {group.actions?.map((action) =>
-            action.desktopContent ? (
-              <Fragment key={action.id}>{action.desktopContent}</Fragment>
-            ) : (
-              <ContextMenuItem
-                key={action.id}
-                disabled={action.disabled}
-                variant={action.variant}
-                aria-label={action.ariaLabel}
-                aria-describedby={action.ariaDescribedBy}
-                title={action.title}
-                onSelect={action.onDesktopInvoke ?? action.onInvoke}
-              >
-                {action.icon}
-                <span className="thread-action-label">{action.label}</span>
-              </ContextMenuItem>
-            ),
-          )}
-          {group.supplementalContent}
-        </Fragment>
-      ))}
-    </>
-  );
-}
-
-function MobileThreadActions({
-  groups,
-  invoke,
-}: {
-  readonly groups: readonly ThreadActionGroup[];
-  readonly invoke: (action: ThreadActionDefinition) => void;
-}): React.JSX.Element {
-  return (
-    <>
-      {groups.map((group, groupIndex) => (
-        <section className="thread-action-sheet-group" key={group.id}>
-          {groupIndex > 0 && <div role="separator" />}
-          {group.actions?.map((action) => (
-            <Button
-              key={action.id}
-              variant={
-                action.variant === "destructive" ? "destructive" : "ghost"
-              }
-              disabled={action.disabled}
-              aria-label={action.ariaLabel}
-              aria-describedby={action.ariaDescribedBy}
-              title={action.title}
-              onClick={() => invoke(action)}
-            >
-              {action.icon}
-              <span className="thread-action-label">{action.label}</span>
-            </Button>
-          ))}
-          {group.supplementalContent}
-        </section>
-      ))}
-    </>
-  );
+/** "sedes · Claude · updated 12m ago": the row's project, backend and age. */
+function threadMetaLine(
+  thread: NormalizedApplicationThreadSummary,
+  projectLabel: string | undefined,
+): string {
+  const age = shortRelativeTime(thread.lastActivityAt);
+  return [
+    projectLabel,
+    thread.backend.label.text,
+    age === "now" ? "updated just now" : `updated ${age} ago`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /**
- * Context menu for inventory thread rows (right-click or touch long-press).
- * Offers inventory mutations, navigation, and latest-turn forking. The fork
- * command briefly retains the normalized thread store while the menu is open
- * because summaries intentionally carry no per-turn capabilities. Other
+ * Context menu for inventory thread rows (right-click, or a long press that
+ * opens the same rows as a bottom sheet under the touch density). Offers
+ * inventory mutations, navigation, and latest-turn forking. The fork command
+ * briefly retains the normalized thread store while the menu is open because
+ * summaries intentionally carry no per-turn capabilities. Other
  * open-thread-dependent actions (stats, compact, move draft) stay in the
- * thread-actions menu. The server remains authoritative for every mutation.
+ * thread-actions menu, which uses the same groups and order. The server
+ * remains authoritative for every mutation.
  */
 export function ThreadContextMenu({
   thread,
@@ -229,7 +170,8 @@ export function ThreadContextMenu({
   /** Reports portaled menu/dialog activity to an enclosing interactive surface. */
   onInteractionOpenChange?: (open: boolean) => void;
 }): React.JSX.Element {
-  const mobileLayout = useMediaQuery(SIDEBAR_NAV_MEDIA_QUERY);
+  // Under the density switch the menu is a bottom sheet with 44px rows.
+  const sheet = useTouchDensity();
   // Inventory parents already subscribe to the application store. Reading the
   // current snapshot here avoids adding a second subscription requirement to
   // this reusable menu (whose focused test stores intentionally implement only
@@ -239,13 +181,17 @@ export function ThreadContextMenu({
   const targetWorkspaceExecution = application?.snapshot?.executionTargets.find(
     ({ id }) => id === thread.targetId,
   )?.workspaceExecution.kind;
+  const projectLabel = application?.snapshot?.workspaces?.find(
+    ({ id }) => id === thread.workspaceId,
+  )?.label.text;
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [archiveChoicesOpen, setArchiveChoicesOpen] = useState(false);
+  const [archiveInitialImpact, setArchiveInitialImpact] =
+    useState<ThreadArchiveImpact>();
   const [forceResetOpen, setForceResetOpen] = useState(false);
   const [settleChoicesOpen, setSettleChoicesOpen] = useState(false);
   const [settleImpact, setSettleImpact] = useState<ThreadArchiveImpact>();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [sheetOpen, setSheetOpen] = useState(false);
   const [workspaceDeleteTarget, setWorkspaceDeleteTarget] =
     useState<IsolatedWorkspace>();
   const [workspaceDeletePending, setWorkspaceDeletePending] = useState(false);
@@ -254,13 +200,11 @@ export function ThreadContextMenu({
   const [actionError, setActionError] = useState("");
   const [pinPending, setPinPending] = useState(false);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
-  const groupKeyboardInset = useKeyboardInset(groupDialogOpen);
   const groupSearchRef = useRef<HTMLInputElement>(null);
   const groupDialogRef = useRef<HTMLDivElement>(null);
   const groupPickerFocus = usePickerFocus(groupSearchRef);
   const interactionOpen =
     menuOpen ||
-    sheetOpen ||
     groupDialogOpen ||
     snoozeOpen ||
     archiveChoicesOpen ||
@@ -280,22 +224,10 @@ export function ThreadContextMenu({
   const [forkState, setForkState] = useState<ThreadClientState>();
   const forkStore = useRef<ThreadClientStore | undefined>(undefined);
   const forkUnsubscribe = useRef<(() => void) | undefined>(undefined);
-  const longPressTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
-  const suppressClickTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
-  const longPressOrigin = useRef<{ x: number; y: number } | undefined>(
-    undefined,
-  );
-  const suppressContextMenuUntil = useRef(0);
-  const latestPointerType = useRef<string | undefined>(undefined);
   const afterSheetClose = useRef<{
     action: () => void;
     release: () => void;
   } | undefined>(undefined);
-  const suppressNextClick = useRef(false);
   // Rename swaps the row into an autofocused input, so it must start only
   // AFTER the menu has fully closed: entering edit mode from onSelect races
   // the menu teardown (focus restore blurs the input, and blur commits).
@@ -359,7 +291,6 @@ export function ThreadContextMenu({
           onAction?.("settle");
           return;
         }
-        setMenuOpen(false);
         setSettleImpact(impact);
         setSettleChoicesOpen(true);
       })
@@ -372,14 +303,28 @@ export function ThreadContextMenu({
       )
       .finally(() => setPendingAction(undefined));
   };
+  // Archive directly when the authoritative impact leaves nothing to decide;
+  // otherwise hand that impact to the choices dialog.
+  const archiveThread = () => {
+    if (pendingAction) return;
+    setPendingAction("archive");
+    setActionError("");
+    void runThreadArchiveCheck({
+      thread,
+      store,
+      onChoices: (impact) => {
+        setArchiveInitialImpact(impact);
+        setArchiveChoicesOpen(true);
+      },
+      onArchived: () => onAction?.("archive"),
+    }).finally(() => setPendingAction(undefined));
+  };
   const archived = thread.inventoryState === "archived";
   const latestFork = latestTurnForkDecision(forkState);
   const forkUnavailableDescriptionId = `sidebar-fork-unavailable-${thread.id}`;
 
-  const actionsOpen = menuOpen || sheetOpen;
-
   useEffect(() => {
-    if (!actionsOpen || !threadRegistry) return;
+    if (!menuOpen || !threadRegistry) return;
     const retained = threadRegistry.retain(thread.id);
     forkStore.current = retained;
     setForkState(retained.getSnapshot());
@@ -393,76 +338,26 @@ export function ThreadContextMenu({
       forkStore.current = undefined;
       setForkState(undefined);
     };
-  }, [actionsOpen, thread.id, threadRegistry]);
+  }, [menuOpen, thread.id, threadRegistry]);
 
   useEffect(
     () => () => {
       afterSheetClose.current?.release();
       afterSheetClose.current = undefined;
-      if (longPressTimer.current) clearTimeout(longPressTimer.current);
-      if (suppressClickTimer.current) clearTimeout(suppressClickTimer.current);
     },
     [],
   );
 
-  const cancelLongPress = () => {
-    if (longPressTimer.current) clearTimeout(longPressTimer.current);
-    longPressTimer.current = undefined;
-    longPressOrigin.current = undefined;
-  };
-
-  const openActionSheet = () => {
-    cancelLongPress();
-    setMenuOpen(false);
-    setSheetOpen(true);
-  };
-
-  const beginLongPress = (event: React.PointerEvent<HTMLElement>) => {
-    latestPointerType.current = event.pointerType;
-    if (
-      (event.pointerType !== "touch" && event.pointerType !== "pen") ||
-      event.button !== 0
-    ) {
+  /**
+   * On the sheet, an action that opens a dialog, an overlay or the inline
+   * rename waits for the sheet to close: its row closes the sheet, and the
+   * action runs once the sheet's modal layer has gone.
+   */
+  const afterSheet = (action: () => void) => {
+    if (!sheet) {
+      action();
       return;
     }
-    // Claim touch/pen before Radix ContextMenu's bubble handler can start its
-    // separate 700ms timer. Android may also emit a synthetic contextmenu at
-    // any point during the hold, including before our sheet timer completes.
-    event.preventDefault();
-    event.stopPropagation();
-    suppressContextMenuUntil.current =
-      Date.now() + TOUCH_CONTEXT_MENU_SUPPRESSION_MS;
-    cancelLongPress();
-    const point = { x: event.clientX, y: event.clientY };
-    longPressOrigin.current = point;
-    longPressTimer.current = setTimeout(() => {
-      longPressTimer.current = undefined;
-      longPressOrigin.current = undefined;
-      suppressNextClick.current = true;
-      suppressContextMenuUntil.current =
-        Date.now() + TOUCH_CONTEXT_MENU_SUPPRESSION_MS;
-      if (suppressClickTimer.current) clearTimeout(suppressClickTimer.current);
-      suppressClickTimer.current = setTimeout(() => {
-        suppressNextClick.current = false;
-        suppressClickTimer.current = undefined;
-      }, 1_000);
-      openActionSheet();
-    }, LONG_PRESS_MENU_DELAY_MS);
-  };
-
-  const moveLongPress = (event: React.PointerEvent<HTMLElement>) => {
-    const origin = longPressOrigin.current;
-    if (
-      !origin ||
-      Math.hypot(event.clientX - origin.x, event.clientY - origin.y) <=
-        LONG_PRESS_MOVE_TOLERANCE_PX
-    ) {
-      return;
-    }
-    cancelLongPress();
-  };
-
-  const closeSheetBefore = (action: () => void) => {
     afterSheetClose.current?.release();
     // Preserve the menu's live source until the deferred action takes ownership.
     // Otherwise an inactive sidebar thread pauses as the sheet unmounts.
@@ -477,11 +372,10 @@ export function ThreadContextMenu({
         owner?.release(thread.id);
       },
     };
-    setSheetOpen(false);
   };
 
   useEffect(() => {
-    if (sheetOpen || !afterSheetClose.current) return;
+    if (menuOpen || !afterSheetClose.current) return;
     const pending = afterSheetClose.current;
     afterSheetClose.current = undefined;
     // Run only after React has committed the closed state and Radix has
@@ -497,7 +391,7 @@ export function ThreadContextMenu({
       clearTimeout(timer);
       pending.release();
     };
-  }, [sheetOpen]);
+  }, [menuOpen]);
 
   const forkLatest = () => {
     if (!threadRegistry || !latestFork.available || !latestFork.selection)
@@ -531,47 +425,6 @@ export function ThreadContextMenu({
       onNavigate,
     }).finally(() => setConfigurationCopyPending(false));
   };
-  const configurationCopyDefinition: ThreadActionDefinition = {
-    id: "new-from-settings",
-    label: configurationCopyPending
-      ? "Creating thread…"
-      : THREAD_CONFIGURATION_COPY_LABEL,
-    icon: <CopyPlus size={18} strokeWidth={1.8} />,
-    disabled: configurationCopyPending || !thread.available,
-    ariaLabel: configurationCopyPending
-      ? THREAD_CONFIGURATION_COPY_PENDING_ACCESSIBLE_LABEL
-      : THREAD_CONFIGURATION_COPY_ACCESSIBLE_LABEL,
-    ariaDescribedBy: !thread.available
-      ? `sidebar-settings-copy-unavailable-${thread.id}`
-      : undefined,
-    title: THREAD_CONFIGURATION_COPY_TITLE,
-    onInvoke: createWithSameSettings,
-    deferUntilSheetCloses: true,
-  };
-  const archiveDefinition: ThreadActionDefinition = {
-    id: "archive",
-    label: "Archive",
-    variant: "destructive",
-    disabled: pendingAction !== undefined,
-    onInvoke: () => setArchiveChoicesOpen(true),
-    deferUntilSheetCloses: true,
-    desktopContent: (
-      <ArchiveContextSubmenu
-        thread={thread}
-        store={store}
-        descendantCount={familyDescendantCount}
-        disabled={pendingAction !== undefined}
-        onPendingChange={(pending) =>
-          setPendingAction(pending ? "archive" : undefined)
-        }
-        onArchived={(choice, archivedThreadIds) => {
-          onAction?.("archive");
-          if (choice === "all") onArchiveFamily?.(archivedThreadIds);
-        }}
-        onDismiss={() => setMenuOpen(false)}
-      />
-    ),
-  };
   const groupCatalog = application?.snapshot?.groups ?? [];
   const mutateGroup = (operation: () => Promise<unknown>) => {
     if (groupPending) return;
@@ -595,14 +448,6 @@ export function ThreadContextMenu({
     setActionError("");
     setGroupDialogOpen(true);
   };
-  const groupDefinition: ThreadActionDefinition = {
-    id: "group",
-    label: "Move to group",
-    icon: <Layers3 size={18} strokeWidth={1.8} />,
-    disabled: groupPending,
-    deferUntilSheetCloses: true,
-    onInvoke: openGroupDialog,
-  };
   const copySessionId = (id: string) => {
     setActionError("");
     void (async () => {
@@ -620,265 +465,304 @@ export function ThreadContextMenu({
       }
     })();
   };
-  const copyIdDefinition: ThreadActionDefinition = {
-    id: "copy-id",
-    label: "Copy ID",
-    icon: <Copy size={18} strokeWidth={1.8} />,
-    title: "Copy Sedes session ID",
-    onInvoke: () => copySessionId(thread.id),
+  const togglePlacement = () => {
+    if (!placement || placementPending || !origin?.sourceThreadId) return;
+    setPlacementPending(true);
+    setActionError("");
+    void store
+      .updateLineagePlacement(
+        placement,
+        placement.mode === "nested_under_source"
+          ? "top_level"
+          : "nested_under_source",
+      )
+      .catch((error: unknown) =>
+        setActionError(
+          error instanceof Error
+            ? error.message
+            : "The lineage placement could not be updated.",
+        ),
+      )
+      .finally(() => setPlacementPending(false));
   };
   const backendSessionId = thread.backendSessionId;
-  const copyBackendIdDefinition: ThreadActionDefinition = {
-    id: "copy-backend-id",
-    label: "Copy backend ID",
-    icon: <Copy size={18} strokeWidth={1.8} />,
-    title: backendSessionId
-      ? "Copy backend session ID"
-      : "Backend session ID is unavailable",
-    disabled: !backendSessionId,
-    onInvoke: () => {
-      if (backendSessionId) copySessionId(backendSessionId);
-    },
-  };
-  const lifecycleActions: readonly ThreadActionDefinition[] = archived
-    ? [
-        copyIdDefinition,
-        copyBackendIdDefinition,
-        groupDefinition,
-        {
-          id: "restore",
-          label: "Restore to Active",
-          onInvoke: () => mutate("restore"),
-        },
-      ]
-    : [
-        copyIdDefinition,
-        copyBackendIdDefinition,
-        {
-          id: "pin",
-          label: thread.pinned ? "Unpin" : "Pin",
-          icon: thread.pinned ? (
-            <PinOff size={18} strokeWidth={1.8} />
-          ) : (
-            <Pin size={18} strokeWidth={1.8} />
-          ),
-          disabled: pinPending,
-          onInvoke: togglePin,
-        },
-        groupDefinition,
-        ...(onRename
-          ? [
-              {
-                id: "rename",
-                label: "Rename",
-                icon: <PencilLine size={18} strokeWidth={1.8} />,
-                onInvoke: onRename,
-                onDesktopInvoke: () => {
+  const lineage = !archived && origin && placement ? origin : undefined;
+  const forkShortReason =
+    latestFork.attempt?.phase === "pending"
+      ? "Forking…"
+      : !forkState || forkState.status === "loading" || !forkState.snapshot
+        ? "Loading…"
+        : "Unavailable";
+  const title = thread.title.text || "Untitled thread";
+
+  const organizeGroup = (
+    <>
+      {!archived && onRename && (
+        <ContextMenuItem
+          onSelect={
+            sheet
+              ? () => afterSheet(onRename)
+              : () => {
                   renameRequested.current = true;
-                },
-                deferUntilSheetCloses: true,
-              } satisfies ThreadActionDefinition,
-            ]
-          : []),
-        ...(thread.automation
-          ? [
-              {
-                id: "automation",
-                label: "Automation settings…",
-                icon: <Clock size={18} strokeWidth={1.8} />,
-                onInvoke: () => {
-                  navigate(threadAutomationPath(thread.id));
-                  onNavigate?.();
-                },
-              } satisfies ThreadActionDefinition,
-            ]
-          : []),
-        thread.inventoryState === "settled"
-          ? {
-              id: "unsettle",
-              label: "Unsettle",
-              icon: <ArrowUpFromDot size={18} strokeWidth={1.8} />,
-              onInvoke: () => mutate("unsettle"),
-            }
-          : {
-              id: "settle",
-              label: "Settle",
-              icon: <ArrowDownToDot size={18} strokeWidth={1.8} />,
-              onInvoke: requestSettle,
-              deferUntilSheetCloses: true,
-            },
-        thread.inventoryState === "snoozed"
-          ? {
-              id: "wake",
-              label: "Wake now",
-              icon: <Clock size={18} strokeWidth={1.8} />,
-              onInvoke: () => mutate("wake"),
-            }
-          : {
-              id: "snooze",
-              label: "Snooze…",
-              icon: <Clock size={18} strokeWidth={1.8} />,
-              onInvoke: () => setSnoozeOpen(true),
-              deferUntilSheetCloses: true,
-            },
-      ];
-  const creationActions: readonly ThreadActionDefinition[] = [
-    configurationCopyDefinition,
-    ...(threadRegistry
-      ? [
-          {
-            id: "fork",
-            label: "Fork",
-            icon: (
-              <Split className="fork-split-icon" size={18} strokeWidth={1.8} />
-            ),
-            disabled: !latestFork.available,
-            ariaDescribedBy:
-              !latestFork.available && latestFork.unavailableReason
-                ? forkUnavailableDescriptionId
-                : undefined,
-            onInvoke: forkLatest,
-            deferUntilSheetCloses: true,
-          } satisfies ThreadActionDefinition,
-        ]
-      : []),
-  ];
-  const destructiveActions: readonly ThreadActionDefinition[] = archived
-    ? []
-    : [
-        {
-          id: "force-reset",
-          label: "Force reset…",
-          icon: <RotateCcw size={18} strokeWidth={1.8} />,
-          variant: "destructive",
-          onInvoke: () => setForceResetOpen(true),
-          deferUntilSheetCloses: true,
-        },
-        archiveDefinition,
-      ];
-  const lineageActions: readonly ThreadActionDefinition[] =
-    origin && placement
-      ? [
-          {
-            id: "toggle-lineage-placement",
-            label:
-              placement.mode === "nested_under_source"
-                ? "Show as top-level"
-                : "Group under source",
-            disabled: placementPending || !origin.sourceThreadId,
-            onInvoke: () => {
-              if (placementPending || !origin.sourceThreadId) return;
-              setPlacementPending(true);
-              setActionError("");
-              void store
-                .updateLineagePlacement(
-                  placement,
-                  placement.mode === "nested_under_source"
-                    ? "top_level"
-                    : "nested_under_source",
-                )
-                .catch((error: unknown) =>
-                  setActionError(
-                    error instanceof Error
-                      ? error.message
-                      : "The lineage placement could not be updated.",
-                  ),
-                )
-                .finally(() => setPlacementPending(false));
-            },
-          },
-          ...(origin.sourceThreadId
-            ? [
-                {
-                  id: "open-source",
-                  label: (
-                    <>
-                      Open source
-                      {sourceTitle ? (
-                        <span className="thread-action-dynamic-label">
-                          {` “${sourceTitle}”`}
-                        </span>
-                      ) : null}
-                    </>
-                  ),
-                  onInvoke: () => {
-                    openThreadRoute(
-                      origin.sourceThreadId!,
-                      configuredPanelPresentation(),
-                    );
-                    onNavigate?.();
-                  },
-                } satisfies ThreadActionDefinition,
-              ]
-            : []),
-          ...(origin.sourceThreadId && origin.sourceTurnId
-            ? [
-                {
-                  id: "open-fork-point",
-                  label: "Open fork point",
-                  onInvoke: () => {
-                    openThreadRoute(
-                      origin.sourceThreadId!,
-                      configuredPanelPresentation(),
-                      origin.sourceTurnId!,
-                    );
-                    onNavigate?.();
-                  },
-                } satisfies ThreadActionDefinition,
-              ]
-            : []),
-        ]
-      : [];
-  const workspaceActions = archived ? null : (
-    <ExecutionWorkspaceActions
-      threadId={thread.id}
-      store={store}
-      active={actionsOpen}
-      disabled={pendingAction !== undefined}
-      knownDirect={targetWorkspaceExecution === "direct_only"}
-      onRequestDelete={(workspace) => {
-        const openDialog = () => {
-          setWorkspaceDeleteError("");
-          setWorkspaceDeleteTarget(workspace);
-        };
-        if (sheetOpen) closeSheetBefore(openDialog);
-        else openDialog();
-      }}
-    />
+                }
+          }
+        >
+          <PencilLine aria-hidden="true" />
+          Rename
+        </ContextMenuItem>
+      )}
+      {!archived && (
+        <ContextMenuItem disabled={pinPending} onSelect={togglePin}>
+          {thread.pinned ? (
+            <PinOff aria-hidden="true" />
+          ) : (
+            <Pin aria-hidden="true" />
+          )}
+          {thread.pinned ? "Unpin" : "Pin"}
+        </ContextMenuItem>
+      )}
+      <ContextMenuSub>
+        <ContextMenuSubTrigger disabled={groupPending}>
+          <Layers3 aria-hidden="true" />
+          Move to group
+        </ContextMenuSubTrigger>
+        <ContextMenuSubContent>
+          {groupCatalog.length > 0 && (
+            <>
+              <ContextMenuRadioGroup
+                value={thread.groupId ?? ""}
+                onValueChange={(groupId) => {
+                  if (groupId === thread.groupId) return;
+                  mutateGroup(() => store.assignThreadGroup(thread, groupId));
+                }}
+              >
+                {groupCatalog.map((group) => (
+                  <ContextMenuRadioItem key={group.id} value={group.id}>
+                    <Layers3 aria-hidden="true" />
+                    <span className="thread-action-label">{group.name}</span>
+                  </ContextMenuRadioItem>
+                ))}
+              </ContextMenuRadioGroup>
+              <ContextMenuSeparator />
+            </>
+          )}
+          <ContextMenuItem onSelect={() => afterSheet(openGroupDialog)}>
+            <Plus aria-hidden="true" />
+            New group…
+          </ContextMenuItem>
+          {thread.groupId !== null && (
+            <ContextMenuItem
+              onSelect={() =>
+                mutateGroup(() => store.removeThreadGroup(thread))
+              }
+            >
+              <Ungroup aria-hidden="true" />
+              Remove from group
+            </ContextMenuItem>
+          )}
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      {lineage && placement && (
+        <ContextMenuItem
+          disabled={placementPending || !lineage.sourceThreadId}
+          onSelect={togglePlacement}
+        >
+          {placement.mode === "nested_under_source" ? (
+            <IndentDecrease aria-hidden="true" />
+          ) : (
+            <IndentIncrease aria-hidden="true" />
+          )}
+          {placement.mode === "nested_under_source"
+            ? "Show as top-level"
+            : "Group under source"}
+        </ContextMenuItem>
+      )}
+    </>
   );
-  const groups: readonly ThreadActionGroup[] = archived
-    ? [
-        { id: "creation", actions: creationActions },
-        { id: "lifecycle", actions: lifecycleActions },
-      ]
-    : [
-        { id: "lifecycle", actions: lifecycleActions },
-        {
-          id: "creation",
-          actions: creationActions,
-          supplementalContent: workspaceActions,
-        },
-        { id: "destructive", actions: destructiveActions },
-        ...(lineageActions.length > 0
-          ? [{ id: "lineage", actions: lineageActions }]
-          : []),
-      ];
+
+  const lifecycleGroup = archived ? (
+    <ContextMenuItem onSelect={() => mutate("restore")}>
+      <ArchiveRestore aria-hidden="true" />
+      Restore to Active
+    </ContextMenuItem>
+  ) : (
+    <>
+      {thread.inventoryState === "settled" ? (
+        <ContextMenuItem onSelect={() => mutate("unsettle")}>
+          <ArrowUpFromDot aria-hidden="true" />
+          Unsettle
+        </ContextMenuItem>
+      ) : (
+        <ContextMenuItem onSelect={() => afterSheet(requestSettle)}>
+          <ArrowDownToDot aria-hidden="true" />
+          Settle
+        </ContextMenuItem>
+      )}
+      {thread.inventoryState === "snoozed" ? (
+        <ContextMenuItem onSelect={() => mutate("wake")}>
+          <AlarmClockOff aria-hidden="true" />
+          Wake now
+        </ContextMenuItem>
+      ) : (
+        <ContextMenuItem onSelect={() => afterSheet(() => setSnoozeOpen(true))}>
+          <AlarmClock aria-hidden="true" />
+          Snooze…
+        </ContextMenuItem>
+      )}
+      {thread.automation && (
+        <ContextMenuItem
+          onSelect={() => {
+            navigate(threadAutomationPath(thread.id));
+            onNavigate?.();
+          }}
+        >
+          <CalendarClock aria-hidden="true" />
+          Automation settings…
+        </ContextMenuItem>
+      )}
+    </>
+  );
+
+  const createGroup = (
+    <>
+      <ContextMenuItem
+        disabled={configurationCopyPending || !thread.available}
+        aria-label={
+          configurationCopyPending
+            ? THREAD_CONFIGURATION_COPY_PENDING_ACCESSIBLE_LABEL
+            : undefined
+        }
+        aria-describedby={
+          !thread.available
+            ? `sidebar-settings-copy-unavailable-${thread.id}`
+            : undefined
+        }
+        title={THREAD_CONFIGURATION_COPY_TITLE}
+        onSelect={() => afterSheet(createWithSameSettings)}
+      >
+        <CopyPlus aria-hidden="true" />
+        {configurationCopyPending
+          ? "Creating thread…"
+          : THREAD_CONFIGURATION_COPY_LABEL}
+        {!thread.available && (
+          <ContextMenuShortcut aria-hidden="true">Unavailable</ContextMenuShortcut>
+        )}
+      </ContextMenuItem>
+      {threadRegistry && (
+        <ContextMenuItem
+          disabled={!latestFork.available}
+          aria-describedby={
+            !latestFork.available && latestFork.unavailableReason
+              ? forkUnavailableDescriptionId
+              : undefined
+          }
+          title={latestFork.unavailableReason}
+          onSelect={() => afterSheet(forkLatest)}
+        >
+          <Split className="fork-split-icon" aria-hidden="true" />
+          {latestFork.label}
+          {!latestFork.available && (
+            <ContextMenuShortcut aria-hidden="true">
+              {forkShortReason}
+            </ContextMenuShortcut>
+          )}
+        </ContextMenuItem>
+      )}
+      {lineage?.sourceThreadId && (
+        <ContextMenuItem
+          onSelect={() => {
+            openThreadRoute(
+              lineage.sourceThreadId!,
+              configuredPanelPresentation(),
+            );
+            onNavigate?.();
+          }}
+        >
+          <CornerUpLeft aria-hidden="true" />
+          <span className="thread-action-label">
+            Open source
+            {sourceTitle ? (
+              <span className="thread-action-dynamic-label">
+                {` “${sourceTitle}”`}
+              </span>
+            ) : null}
+          </span>
+        </ContextMenuItem>
+      )}
+      {lineage?.sourceThreadId && lineage.sourceTurnId && (
+        <ContextMenuItem
+          onSelect={() => {
+            openThreadRoute(
+              lineage.sourceThreadId!,
+              configuredPanelPresentation(),
+              lineage.sourceTurnId!,
+            );
+            onNavigate?.();
+          }}
+        >
+          <GitCommitVertical aria-hidden="true" />
+          Open fork point
+        </ContextMenuItem>
+      )}
+      <ContextMenuSub>
+        <ContextMenuSubTrigger>
+          <Copy aria-hidden="true" />
+          Copy ID
+        </ContextMenuSubTrigger>
+        <ContextMenuSubContent>
+          <ContextMenuItem
+            title="Copy the Sedes thread ID"
+            onSelect={() => copySessionId(thread.id)}
+          >
+            <Hash aria-hidden="true" />
+            Thread ID
+            <ContextMenuShortcut aria-hidden="true">
+              {thread.id.slice(0, 8)}
+            </ContextMenuShortcut>
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={!backendSessionId}
+            title={
+              backendSessionId
+                ? "Copy the backend session ID"
+                : "The backend session ID is unavailable until the thread starts"
+            }
+            onSelect={() => {
+              if (backendSessionId) copySessionId(backendSessionId);
+            }}
+          >
+            <Server aria-hidden="true" />
+            Backend ID
+            <ContextMenuShortcut aria-hidden="true">
+              {backendSessionId ? backendSessionId.slice(0, 8) : "Unavailable"}
+            </ContextMenuShortcut>
+          </ContextMenuItem>
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      {!archived && (
+        <ExecutionWorkspaceMenu
+          parts={contextMenuParts}
+          threadId={thread.id}
+          store={store}
+          active={menuOpen}
+          disabled={pendingAction !== undefined}
+          knownDirect={targetWorkspaceExecution === "direct_only"}
+          onRequestDelete={(workspace) =>
+            afterSheet(() => {
+              setWorkspaceDeleteError("");
+              setWorkspaceDeleteTarget(workspace);
+            })
+          }
+        />
+      )}
+    </>
+  );
+
   return (
     <>
       <ContextMenu
-        open={menuOpen}
+        presentation={sheet ? "sheet" : "menu"}
         onOpenChange={(open) => {
-          if (open && mobileLayout) {
-            openActionSheet();
-            return;
-          }
-          if (
-            open &&
-            latestPointerType.current !== "mouse" &&
-            Date.now() <= suppressContextMenuUntil.current
-          ) {
-            return;
-          }
           if (open) onInteractionOpenChange?.(true);
           setMenuOpen(open);
         }}
@@ -888,41 +772,9 @@ export function ThreadContextMenu({
             className="thread-context-trigger"
             aria-busy={configurationCopyPending || undefined}
             onPointerDownCapture={(event) => {
-              if (disabled) return;
-              groupPickerFocus.onPointerDown(event);
-              beginLongPress(event);
+              if (!disabled) groupPickerFocus.onPointerDown(event);
             }}
             onKeyDownCapture={groupPickerFocus.onKeyDown}
-            onPointerMove={moveLongPress}
-            onPointerUp={cancelLongPress}
-            onPointerCancel={cancelLongPress}
-            onContextMenuCapture={(event) => {
-              if (disabled) return;
-              if (mobileLayout) {
-                event.preventDefault();
-                event.stopPropagation();
-                openActionSheet();
-                return;
-              }
-              if (
-                latestPointerType.current === "mouse" ||
-                Date.now() > suppressContextMenuUntil.current
-              ) {
-                return;
-              }
-              event.preventDefault();
-              event.stopPropagation();
-            }}
-            onClickCapture={(event) => {
-              if (disabled || !suppressNextClick.current) return;
-              suppressNextClick.current = false;
-              if (suppressClickTimer.current) {
-                clearTimeout(suppressClickTimer.current);
-                suppressClickTimer.current = undefined;
-              }
-              event.preventDefault();
-              event.stopPropagation();
-            }}
           >
             {children}
           </span>
@@ -930,11 +782,16 @@ export function ThreadContextMenu({
         <ContextMenuContent
           onPointerDownCapture={groupPickerFocus.onPointerDown}
           onKeyDownCapture={groupPickerFocus.onKeyDown}
-          className="thread-context-menu min-w-[11rem]"
-          data-testid="thread-context-menu"
-          aria-label={`Actions for ${thread.title.text || "Untitled thread"}`}
-          collisionPadding={12}
+          data-testid={sheet ? "thread-actions-sheet" : "thread-context-menu"}
+          aria-label={`Actions for ${title}`}
+          sheetTitle={title}
+          sheetDescription={threadMetaLine(thread, projectLabel)}
           onCloseAutoFocus={(event) => {
+            if (afterSheetClose.current) {
+              // A deferred action (a dialog, the rename field) takes focus.
+              event.preventDefault();
+              return;
+            }
             if (groupDialogOpen) {
               event.preventDefault();
               if (!groupDialogRef.current?.contains(document.activeElement)) {
@@ -949,57 +806,47 @@ export function ThreadContextMenu({
             }
           }}
         >
-          <DesktopThreadActions groups={groups} />
+          {!sheet && (
+            <>
+              <ContextMenuLabel
+                variant="header"
+                description={threadMetaLine(thread, projectLabel)}
+              >
+                {title}
+              </ContextMenuLabel>
+              <ContextMenuSeparator />
+            </>
+          )}
+          {organizeGroup}
+          <ContextMenuSeparator />
+          {lifecycleGroup}
+          <ContextMenuSeparator />
+          {createGroup}
+          {!archived && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                disabled={pendingAction !== undefined}
+                onSelect={() => afterSheet(archiveThread)}
+              >
+                <Archive aria-hidden="true" />
+                Archive
+              </ContextMenuItem>
+              <ContextMenuItem
+                variant="destructive"
+                onSelect={() => afterSheet(() => setForceResetOpen(true))}
+              >
+                <RotateCcw aria-hidden="true" />
+                Force reset…
+              </ContextMenuItem>
+            </>
+          )}
         </ContextMenuContent>
       </ContextMenu>
-      <Dialog open={sheetOpen} onOpenChange={setSheetOpen}>
-        <DialogContent
-          onPointerDownCapture={groupPickerFocus.onPointerDown}
-          onKeyDownCapture={groupPickerFocus.onKeyDown}
-          className="thread-actions-sheet"
-          style={{ pointerEvents: "auto" }}
-          overlayClassName="thread-actions-sheet-overlay"
-          data-testid="thread-actions-sheet"
-          aria-describedby={`thread-actions-sheet-title-${thread.id}`}
-          onCloseAutoFocus={(event) => {
-            if (afterSheetClose.current) {
-              event.preventDefault();
-              return;
-            }
-            const target = returnFocusRef?.current;
-            if (!target?.isConnected) return;
-            event.preventDefault();
-            target.focus();
-          }}
-        >
-          <DialogTitle>Thread actions</DialogTitle>
-          <DialogDescription
-            id={`thread-actions-sheet-title-${thread.id}`}
-            className="thread-actions-sheet-thread-title"
-            title={thread.title.text || "Untitled thread"}
-          >
-            {thread.title.text || "Untitled thread"}
-          </DialogDescription>
-          <div className="thread-actions-sheet-body">
-            <MobileThreadActions
-              groups={groups}
-              invoke={(action) => {
-                if (action.deferUntilSheetCloses) {
-                  closeSheetBefore(action.onInvoke);
-                  return;
-                }
-                action.onInvoke();
-                setSheetOpen(false);
-              }}
-            />
-          </div>
-        </DialogContent>
-      </Dialog>
       <Dialog open={groupDialogOpen} onOpenChange={setGroupDialogOpen}>
         <DialogContent
           ref={groupDialogRef}
           className="thread-group-dialog z-[calc(var(--z-over-dialog)+1)]"
-          style={{ "--thread-group-keyboard-inset": `${groupKeyboardInset}px` } as CSSProperties}
           overlayClassName="z-(--z-over-dialog)"
           data-testid="thread-group-dialog"
           onOpenAutoFocus={groupPickerFocus.onOpenAutoFocus}
@@ -1036,18 +883,22 @@ export function ThreadContextMenu({
               }
             />
           </div>
-          <label className="thread-group-create-field">
-            <span>Create group</span>
+          <Field label="Create group">
             <Input
               maxLength={120}
               value={groupName}
               onChange={(event) => setGroupName(event.target.value)}
             />
-          </label>
+          </Field>
           {actionError && (
             <DialogAlert tone="danger">{actionError}</DialogAlert>
           )}
           <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline" disabled={groupPending}>
+                Cancel
+              </Button>
+            </DialogClose>
             {thread.groupId !== null && (
               <Button
                 type="button"
@@ -1089,7 +940,11 @@ export function ThreadContextMenu({
       )}
       <ArchiveChoicesDialog
         open={archiveChoicesOpen}
-        onOpenChange={setArchiveChoicesOpen}
+        initialImpact={archiveInitialImpact}
+        onOpenChange={(open) => {
+          setArchiveChoicesOpen(open);
+          if (!open) setArchiveInitialImpact(undefined);
+        }}
         thread={thread}
         store={store}
         descendantCount={familyDescendantCount}

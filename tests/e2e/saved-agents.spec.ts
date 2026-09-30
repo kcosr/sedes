@@ -265,12 +265,16 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       tools.filter(({ enabled }) => enabled).map(({ id }) => id),
     );
     expect(enabledToolIds).toEqual(["agent.context"]);
-    await page.getByRole("button", { name: "Thread actions" }).click();
+    // The open (modal) actions menu hides the composer from role queries.
     await expect(
       page.getByRole("combobox", { name: "Thinking" }),
     ).toContainText("High");
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    await expect(
+      page.getByRole("menu", { name: "Thread actions" }),
+    ).toBeVisible();
     await capture(page, testInfo, "saved-agent-bootstrapped-thread.png");
-    await page.getByRole("button", { name: /Environment variables…/ }).click();
+    await page.getByRole("menuitem", { name: /Environment variables…/ }).click();
     const savedVariables = page.getByRole("dialog", { name: "Environment variables", exact: true });
     await expect(savedVariables.getByText("false", { exact: true })).toBeVisible();
     await expect(savedVariables.getByLabel("Value for CI", { exact: true })).toHaveCount(0);
@@ -406,7 +410,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
         response.status() === 201,
     );
     await page
-      .getByRole("menuitem", { name: "New thread with same settings" })
+      .getByRole("menuitem", { name: "New with same settings" })
       .click();
     await expect(page.getByRole("dialog", { name: "Creating thread…" })).toBeVisible();
     await expect(sourceRow.locator(".thread-row-status")).toHaveCount(0);
@@ -530,7 +534,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     );
     await page
       .getByTestId("thread-actions-menu")
-      .getByRole("button", { name: "New thread with same settings" })
+      .getByRole("menuitem", { name: "New with same settings" })
       .click();
     const headerResult = (await (await headerCopied).json()) as {
       threadId: string;

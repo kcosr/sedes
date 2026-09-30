@@ -110,36 +110,9 @@
   font-size: var(--text-meta);
 }
 .workspace-compare button,
-.workspace-compare select,
 .workspace-compare input {
   font: inherit;
 }
-.workspace-compare-controls label {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-.workspace-compare-controls select {
-  min-width: 0;
-  height: 32px;
-  padding: 0 28px 0 9px;
-  color: var(--foreground);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  background: var(--secondary);
-}
-.workspace-compare-arrow {
-  align-self: end;
-  display: grid;
-  height: 32px;
-  place-items: center;
-  color: var(--muted-foreground-2);
-}
-.workspace-compare-primary,
 .workspace-compare-state button {
   display: inline-flex;
   align-items: center;
@@ -161,41 +134,11 @@
   width: 15px;
   height: 15px;
 }
-.workspace-compare-view-options,
 .workspace-compare-stats {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.workspace-compare-stats {
   color: var(--muted-foreground-2);
-}
-.workspace-compare-view-options {
-  flex: 0 0 auto;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-ctl);
-  background: var(--muted);
-}
-.workspace-compare-view-options button {
-  display: inline-flex;
-  height: 27px;
-  align-items: center;
-  gap: 4px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: var(--radius-inline);
-  color: var(--muted-foreground);
-  background: transparent;
-  font-size: 11px;
-  cursor: pointer;
-}
-.workspace-compare-view-options button:hover,
-.workspace-compare-view-options button.is-active {
-  color: var(--foreground);
-  background: var(--secondary);
-  box-shadow: 0 0 0 1px var(--border-soft);
 }
 .workspace-compare-navigator-search {
   display: flex;
@@ -515,20 +458,6 @@
   color: var(--muted-foreground);
   font-size: 11px;
 }
-.workspace-compare-presets {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 8px 12px 0;
-}
-.workspace-compare-presets button {
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-ctl);
-  padding: 4px 8px;
-  background: var(--secondary);
-  color: var(--muted-foreground);
-  cursor: pointer;
-}
 .workspace-compare-reviewed,
 .workspace-compare-annotation button {
   border: 0;
@@ -544,23 +473,6 @@
 .workspace-compare-status-card strong {
   min-width: 0;
   flex: 1;
-}
-.workspace-compare-repository {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px 0;
-  font-size: 11px;
-  color: var(--muted-foreground);
-}
-.workspace-compare-repository select {
-  min-width: 0;
-  flex: 1;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  padding: 5px 8px;
-  color: var(--foreground);
-  background: var(--secondary);
 }
 
 .workspace-compare-status-label {
@@ -688,69 +600,44 @@
   flex: none;
   margin-left: auto;
 }
+/* Comparison settings: a form popover of primitive controls. */
 .workspace-compare-settings-popover {
   width: min(660px, calc(100vw - 16px));
-  gap: 0;
-  padding: 0;
-  font-size: 12px;
+  gap: 12px;
 }
-.workspace-compare-settings-popover button,
-.workspace-compare-settings-popover select {
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 400;
-  letter-spacing: normal;
+.workspace-compare-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
-.workspace-compare-settings-popover button:disabled {
-  opacity: 0.48;
-  cursor: default;
-}
-.workspace-compare-settings-popover button > svg {
-  width: 15px;
-  height: 15px;
+.workspace-compare-swap {
+  margin-left: auto;
 }
 .workspace-compare-controls {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: end;
-  gap: 8px;
-  padding: 10px 12px;
-  background: var(--popover);
+  gap: 12px 8px;
+}
+.workspace-compare-arrow {
+  display: grid;
+  height: var(--control-default);
+  place-items: center;
+  color: var(--muted-foreground-2);
 }
 .workspace-compare-controls .workspace-compare-strategy {
-  grid-column: 1/3;
+  grid-column: 1 / 3;
 }
-.workspace-compare-controls .workspace-compare-primary {
-  grid-column: 3;
+.workspace-compare-settings-actions {
+  display: flex;
+  justify-content: flex-end;
 }
-.workspace-compare-presets {
-  flex-wrap: wrap;
-}
-@media (max-width: 480px) {
+@media (max-width: 519px) {
   .workspace-compare-controls .workspace-compare-strategy,
-  .workspace-compare-controls .workspace-compare-primary {
+  .workspace-compare-controls .workspace-compare-history {
     grid-column: 1 / -1;
   }
-}
-.workspace-compare-view-popover {
-  width: 160px;
-  padding: 4px;
-}
-.workspace-compare-view-popover .workspace-compare-view-options {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  border: 0;
-  padding: 0;
-  background: transparent;
-}
-.workspace-compare-view-popover .workspace-compare-view-options button {
-  width: 100%;
-  justify-content: flex-start;
-}
-.workspace-compare-view-popover button:disabled {
-  opacity: 0.48;
-  cursor: default;
 }
 .workspace-compare-file-count {
   flex: none;

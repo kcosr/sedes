@@ -10,6 +10,7 @@ import {
   openTerminalMenu,
   revealTerminals,
   terminalContainer,
+  terminalMenuRow,
   terminalPanel,
   transcriptText,
   writeTerminal,
@@ -220,7 +221,7 @@ test("terminal resources outlive panels and transfer control across three client
   await expect(terminalContainer(second)).toBeVisible();
   await expect(terminalContainer(second).getByRole("button", { name: "New terminal", exact: true })).toBeVisible();
   const remainingMenu = await openTerminalMenu(second);
-  await expect(remainingMenu.locator(".thread-terminal-menu-row").filter({ hasText: "E2E shell" })).toHaveCount(0);
+  await expect(terminalMenuRow(remainingMenu, "E2E shell")).toHaveCount(0);
   await second.keyboard.press("Escape");
 
   await second.reload();

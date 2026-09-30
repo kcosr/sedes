@@ -57,13 +57,7 @@ export function SidebarFooterActions({
             <ChevronUp aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent
-          className="sidebar-footer-menu"
-          side="top"
-          align="start"
-          sideOffset={6}
-          collisionPadding={8}
-        >
+        <DropdownMenuContent side="top" align="start" className="min-w-48">
           {experimentalUsageEnabled && <DropdownMenuItem onSelect={onOpenUsage}>
             <ChartColumnBig aria-hidden="true" />
             Usage (Experimental)

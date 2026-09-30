@@ -9,7 +9,7 @@ import {
 import { createPortal } from "react-dom";
 import { parseRoute, pushHistoryEntry, replaceHistoryEntry } from "../app/router.js";
 import {
-  Check,
+  CheckIcon,
   ChevronDown,
   Files,
   MessageSquare,
@@ -40,8 +40,14 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.js";
+import {
+  menuCheckIndicatorClass,
+  menuCheckRowClass,
+} from "../components/ui/floating.js";
+import { cn } from "../lib/utils.js";
 import { PaneResizeHandle } from "../components/PaneResizeHandle.js";
 import { useComposerDraftStaging } from "../context-excerpts/coordinator.js";
 import {
@@ -59,6 +65,7 @@ import {
   TerminalPanel,
   TerminalTabs,
   ThreadTerminalMenu,
+  terminalConnectionLabel,
   terminalTabId,
   terminalTabPanelId,
   type TerminalPanelHandle,
@@ -67,6 +74,7 @@ import {
   type ThreadTerminalMenuHandle,
 } from "../terminals/index.js";
 import {
+  panelDockEdge,
   panelInstances,
   type LayoutNode,
   type PanelInstance,
@@ -1001,6 +1009,7 @@ function PanelLayoutReady({
     onClose: (invoker) => chatPanel && closePanel(chatPanel, invoker),
     onDock: (edge) =>
       chatPanel && store.dockPanel(chatPanel.panelInstanceId, edge),
+    dockEdge: chatPanel && panelDockEdge(tree, chatPanel.panelInstanceId),
   };
 
   const renderPanel = (
@@ -1040,6 +1049,7 @@ function PanelLayoutReady({
               onCollapse: () => collapsePanel(panel),
               onClose: (invoker) => closePanel(panel, invoker),
               onDock: (edge) => store.dockPanel(panel.panelInstanceId, edge),
+              dockEdge: panelDockEdge(tree, panel.panelInstanceId),
               renderMenuItems: renderTenantMenu(tenant, {
                 threadId,
                 workspaceId,
@@ -1084,6 +1094,15 @@ function PanelLayoutReady({
       terminalSessionState.role === "observer" &&
       !terminalSessionState.controlRequestPending &&
       terminal?.lifecycle === "running";
+    const discardInputBlocker = !terminalSessionState
+      ? undefined
+      : terminalSessionState.connection !== "ready"
+        ? terminalConnectionLabel(terminalSessionState)
+        : !terminalSessionState.caughtUp
+          ? "Catching up"
+          : terminalSessionState.role !== "controller"
+            ? "Read only"
+            : undefined;
     return (
       <>
         <PanelChrome
@@ -1159,6 +1178,7 @@ function PanelLayoutReady({
             onCollapse: () => collapsePanel(panel),
             onClose: (invoker) => closePanel(panel, invoker),
             onDock: (edge) => store.dockPanel(panel.panelInstanceId, edge),
+            dockEdge: panelDockEdge(tree, panel.panelInstanceId),
             renderMenuItems: (
               <>
                 {readOnly ? (
@@ -1176,12 +1196,14 @@ function PanelLayoutReady({
                   onSelect={() => terminalPanelRef.current?.openTranscript()}
                 >
                   Transcript
+                  {!terminal ? <DropdownMenuShortcut>No terminal</DropdownMenuShortcut> : null}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   disabled={!terminal}
                   onSelect={() => terminalPanelRef.current?.clearSelection()}
                 >
                   Clear selection
+                  {!terminal ? <DropdownMenuShortcut>No terminal</DropdownMenuShortcut> : null}
                 </DropdownMenuItem>
                 {terminalSessionState?.retryInputAvailable ? (
                   <DropdownMenuItem
@@ -1194,16 +1216,15 @@ function PanelLayoutReady({
                 ) : null}
                 {terminalSessionState?.uncertainInputSeq !== undefined ? (
                   <DropdownMenuItem
-                    disabled={
-                      terminalSessionState.connection !== "ready" ||
-                      !terminalSessionState.caughtUp ||
-                      terminalSessionState.role !== "controller"
-                    }
+                    disabled={discardInputBlocker !== undefined}
                     onSelect={() =>
                       terminalPanelRef.current?.discardUnconfirmedInput()
                     }
                   >
                     Discard unconfirmed input
+                    {discardInputBlocker !== undefined ? (
+                      <DropdownMenuShortcut>{discardInputBlocker}</DropdownMenuShortcut>
+                    ) : null}
                   </DropdownMenuItem>
                 ) : null}
                 {terminalSessionState?.connection === "reconnecting" ? (
@@ -1557,9 +1578,8 @@ function PanelLayoutReady({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent
-                className="workspace-panel-open-menu-content z-[calc(var(--z-drawer)+1)]"
+                className="min-w-[min(300px,calc(100vw-16px))]"
                 align="end"
-                sideOffset={6}
                 onCloseAutoFocus={(event) => {
                   const panelInstanceId = menuFocusTarget.current;
                   if (!panelInstanceId) return;
@@ -1576,10 +1596,13 @@ function PanelLayoutReady({
                 ]).filter(({ available, panel }) => available || panel).map(({ id, title, panel, icon }) => {
                   const status = panel ? statuses.get(panel.panelInstanceId) : undefined;
                   return (
+                    // Selecting a row opens or reveals its panel, so it stays a
+                    // plain item; an open panel takes the checked row's look.
                     <DropdownMenuItem
                       key={id}
-                      className="workspace-panel-open-item"
+                      className={cn(menuCheckRowClass, "data-[collapsed=true]:text-muted-foreground")}
                       data-panel-open={Boolean(panel)}
+                      data-state={panel ? "checked" : "unchecked"}
                       aria-description={panel ? "Open" : "Closed"}
                       data-collapsed={panel ? collapsed.has(panel.panelInstanceId) : false}
                       onSelect={() => {
@@ -1603,13 +1626,17 @@ function PanelLayoutReady({
                       }}
                     >
                       {panel ? panelGlyph(panel, snapshot?.capabilities.backend.brand, 16) : icon}
-                      <span className="workspace-panel-open-item-label">
+                      <span className="min-w-0 flex-1 truncate">
                         {panel ? panelMenuLabel(panel, terminalResources, snapshot?.thread.title.text, snapshot?.workspace.label.text) : title}
                       </span>
                       {status?.dirty ? <span className="workspace-panel-dirty" aria-label="Unsaved changes" /> : null}
                       {status?.busy ? <span className="comet-spinner workspace-panel-spinner" aria-label="Busy" /> : null}
                       {panel && collapsed.has(panel.panelInstanceId) ? <span className="sr-only">Collapsed</span> : null}
-                      {panel ? <Check size={16} aria-hidden="true" /> : null}
+                      {panel ? (
+                        <span className={menuCheckIndicatorClass}>
+                          <CheckIcon aria-hidden="true" className="size-4 text-foreground" />
+                        </span>
+                      ) : null}
                     </DropdownMenuItem>
                   );
                 })}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useImperativeHandle, useRef, useState } 
 import {
   Plus,
   Pencil,
+  RotateCw,
   Terminal as TerminalIcon,
   X,
 } from "lucide-react";
@@ -25,9 +26,12 @@ import { Field } from "../components/ui/field.js";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuEmpty,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.js";
 import { isTerminalProcessLive, terminalStatusLabel, terminalTerminationLabel, terminalTerminationDescription, terminalTerminationPendingLabel } from "./domain.js";
@@ -35,6 +39,10 @@ import {
   resolvePanelPresentation,
   type PanelPresentation,
 } from "../workspace-panels/panel-presentation.js";
+import { cn } from "../lib/utils.js";
+
+/** A row's square icon action (rename, tear down) beside the terminal entry. */
+const TERMINAL_ROW_ACTION_CLASS = "w-(--menu-row-height) justify-center px-0";
 
 interface LifecycleConfirmation {
   readonly terminal: TerminalResource;
@@ -385,9 +393,8 @@ export function ThreadTerminalMenu({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent
-            className="thread-terminal-menu"
+            className="min-w-60"
             align="end"
-            sideOffset={6}
             onCloseAutoFocus={(event) => {
               if (!suppressCloseAutoFocus.current) return;
               event.preventDefault();
@@ -411,23 +418,31 @@ export function ThreadTerminalMenu({
               void create(presentation);
             }}
           >
-            <Plus size={15} aria-hidden="true" />
+            <Plus aria-hidden="true" />
             {creating ? "Creating…" : "New terminal"}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           {loading && terminals.length === 0 ? (
-            <DropdownMenuItem disabled>Loading terminals…</DropdownMenuItem>
+            <DropdownMenuEmpty loading>Loading terminals…</DropdownMenuEmpty>
           ) : terminals.length === 0 ? (
-            <DropdownMenuItem disabled>No terminals for this thread</DropdownMenuItem>
+            message ? null : <DropdownMenuEmpty>No terminals for this thread</DropdownMenuEmpty>
           ) : (
             terminals.map((terminal) => {
               const alreadyDisplayed =
                 displayedTerminalIds?.has(terminal.terminalId) === true;
               const live = isTerminalProcessLive(terminal.lifecycle);
+              const teardownLabel =
+                terminal.terminationEffect === "disconnect_transport" && live
+                  ? `Disconnect and remove ${terminal.displayName}`
+                  : `Tear down and remove ${terminal.displayName}`;
               return (
-                <div className="thread-terminal-menu-row" key={terminal.terminalId}>
+                // One row per terminal: open it, rename it, or tear it down.
+                <DropdownMenuGroup
+                  key={terminal.terminalId}
+                  aria-label={terminal.displayName}
+                  className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-0.5"
+                >
                   <DropdownMenuItem
-                    className="thread-terminal-menu-entry"
                     disabled={terminal.incarnationId === null || alreadyDisplayed}
                     title={
                       alreadyDisplayed
@@ -451,16 +466,17 @@ export function ThreadTerminalMenu({
                       selectedPresentation.current = undefined;
                     }}
                   >
-                    <TerminalIcon size={15} aria-hidden="true" />
-                    <span className="thread-terminal-menu-name">{terminal.displayName}</span>
-                    <span className="thread-terminal-menu-status">
+                    <TerminalIcon aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate">{terminal.displayName}</span>
+                    <DropdownMenuShortcut>
                       {terminalStatusLabel(terminal)}
                       {alreadyDisplayed ? " · Open" : ""}
-                    </span>
+                    </DropdownMenuShortcut>
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    className="thread-terminal-menu-rename"
+                    className={TERMINAL_ROW_ACTION_CLASS}
                     aria-label={`Rename ${terminal.displayName}`}
+                    title={`Rename ${terminal.displayName}`}
                     onSelect={() => {
                       suppressCloseAutoFocus.current = true;
                       setRenameTarget(terminal);
@@ -468,13 +484,15 @@ export function ThreadTerminalMenu({
                       setRenameError(undefined);
                     }}
                   >
-                    <Pencil size={15} aria-hidden="true" />
+                    <Pencil aria-hidden="true" />
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    className="thread-terminal-menu-teardown"
-                    variant="destructive"
-                    aria-label={terminal.terminationEffect === "disconnect_transport" && live ? `Disconnect and remove ${terminal.displayName}` : `Tear down and remove ${terminal.displayName}`}
-                    title={terminal.terminationEffect === "disconnect_transport" && live ? `Disconnect and remove ${terminal.displayName}` : `Tear down and remove ${terminal.displayName}`}
+                    className={cn(
+                      TERMINAL_ROW_ACTION_CLASS,
+                      "data-highlighted:[&_svg]:text-destructive",
+                    )}
+                    aria-label={teardownLabel}
+                    title={teardownLabel}
                     onSelect={() => {
                       suppressCloseAutoFocus.current = true;
                       setLifecycleConfirmation({
@@ -483,19 +501,21 @@ export function ThreadTerminalMenu({
                       });
                     }}
                   >
-                    <X size={15} aria-hidden="true" />
+                    {/* Muted at rest; red only while the row is highlighted. */}
+                    <X aria-hidden="true" className="text-muted-foreground" />
                   </DropdownMenuItem>
-                </div>
+                </DropdownMenuGroup>
               );
             })
           )}
-          {message ? <DropdownMenuItem disabled>{message}</DropdownMenuItem> : null}
+          {message ? <DropdownMenuEmpty role="alert">{message}</DropdownMenuEmpty> : null}
           {entryRetryPresentation ? (
             <DropdownMenuItem
               onSelect={() => {
                 activatePrimaryTrigger(entryRetryPresentation);
               }}
             >
+              <RotateCw aria-hidden="true" />
               Retry
             </DropdownMenuItem>
           ) : null}

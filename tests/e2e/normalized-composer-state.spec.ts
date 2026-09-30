@@ -272,7 +272,7 @@ test.describe.serial("normalized composer state", () => {
     browserDiagnostics.allowNetworkFailures = false;
 
     await page.setViewportSize({ width: 390, height: 844 });
-    const composerSettings = page.locator('.desktop-config[data-variant="pill"]');
+    const composerSettings = page.getByTestId("thread-configuration");
     const reasoning = composerSettings.locator('[data-setting-id="thinking_level"] [role="combobox"]');
     await expect(reasoning).toBeVisible();
     await expect(composerSettings.locator('[data-setting-id="model"]')).toBeHidden();
@@ -380,9 +380,10 @@ test.describe.serial("normalized composer state", () => {
     await expect(reloadedImageCard).toHaveCount(0);
 
     await page.getByRole("button", { name: "Open 1 stashed prompts" }).click();
-    const restore = page.getByRole("menuitem").filter({
-      hasText: "1 attachment",
-    });
+    const restore = page
+      .getByRole("dialog", { name: "Stashed prompts" })
+      .getByRole("button")
+      .filter({ hasText: "1 attachment" });
     await expect(restore).toBeVisible();
     const restored = page.waitForResponse(
       (response) =>
@@ -730,11 +731,15 @@ test.describe.serial("normalized composer state", () => {
         response.ok() &&
         response.request().postDataJSON().kind === "move_draft",
     );
-    await selectRadixOption(
-      page,
-      page.getByRole("combobox", { name: "Draft workspace" }),
-      "src",
-    );
+    // Draft workspace is a submenu of workspace radio rows.
+    const threadActions = page.getByRole("menu", { name: "Thread actions" });
+    await threadActions
+      .getByRole("menuitem", { name: "Draft workspace" })
+      .click();
+    await page
+      .getByRole("menu", { name: "Draft workspace" })
+      .getByRole("menuitemradio", { name: "src", exact: true })
+      .click();
     await moved;
     await expect(page).toHaveURL(threadPath);
     await expect(
@@ -782,13 +787,13 @@ test.describe.serial("normalized composer state", () => {
     await capture(page, testInfo, "thread-pinning-sidebar-desktop.png");
 
     await desktopSidebar.getByRole("button", { name: "View options" }).click();
-    await page.getByRole("checkbox", { name: "Pinned only" }).click();
+    await page.getByRole("menuitemcheckbox", { name: "Pinned only" }).click();
     await page.keyboard.press("Escape");
     await page.reload();
     await expect(pinnedGroup).toContainText("New thread");
     await desktopSidebar.getByRole("button", { name: "View options" }).click();
     await expect(
-      page.getByRole("checkbox", { name: "Pinned only" }),
+      page.getByRole("menuitemcheckbox", { name: "Pinned only" }),
     ).toHaveAttribute("aria-checked", "true");
     await page.keyboard.press("Escape");
 
@@ -807,7 +812,7 @@ test.describe.serial("normalized composer state", () => {
     await expect(pinnedGroup).toHaveCount(0);
 
     await desktopSidebar.getByRole("button", { name: "View options" }).click();
-    await page.getByRole("checkbox", { name: "Pinned only" }).click();
+    await page.getByRole("menuitemcheckbox", { name: "Pinned only" }).click();
     await page.keyboard.press("Escape");
     await expect(
       desktopSidebar.locator(`[data-thread-id="${movedThreadId}"]`),
@@ -815,9 +820,8 @@ test.describe.serial("normalized composer state", () => {
     await desktopSidebar.getByTestId("view-quick-toggle").click();
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page
-      .getByRole("dialog", { name: "Thread actions" })
-      .getByRole("button", { name: "Settle", exact: true })
+    await threadActions
+      .getByRole("menuitem", { name: "Settle", exact: true })
       .click();
     await expect(
       page
@@ -826,9 +830,8 @@ test.describe.serial("normalized composer state", () => {
     ).toContainText("New thread");
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page
-      .getByRole("dialog", { name: "Thread actions" })
-      .getByRole("button", { name: "Unsettle", exact: true })
+    await threadActions
+      .getByRole("menuitem", { name: "Unsettle", exact: true })
       .click();
     await expect(
       page
@@ -837,7 +840,7 @@ test.describe.serial("normalized composer state", () => {
     ).not.toContainText("New thread");
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page.getByRole("button", { name: "Snooze…" }).click();
+    await threadActions.getByRole("menuitem", { name: "Snooze…" }).click();
     const snooze = page.getByRole("dialog", { name: "Snooze this thread" });
     await snooze
       .getByLabel(/Reminder/)
@@ -851,7 +854,7 @@ test.describe.serial("normalized composer state", () => {
     ).toContainText("New thread");
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page.getByRole("button", { name: "Wake now" }).click();
+    await threadActions.getByRole("menuitem", { name: "Wake now" }).click();
     const reminder = page.getByTestId("wake-attention");
     await expect(reminder).toContainText("Return to this preserved draft");
     await page.reload();
@@ -881,8 +884,10 @@ test.describe.serial("normalized composer state", () => {
     await repinned;
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    // Childless threads archive immediately on desktop — no choices menu.
-    await page.getByRole("button", { name: "Archive", exact: true }).click();
+    // Childless threads archive immediately — no choices dialog.
+    await threadActions
+      .getByRole("menuitem", { name: "Archive", exact: true })
+      .click();
     await expect(page).toHaveURL("/");
     await page
       .getByTestId("desktop-sidebar")

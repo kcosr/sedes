@@ -101,7 +101,7 @@ export async function openWorkspaceDirectory(
   // This shared fixture exercises hierarchy-specific inventory controls.
   const sidebar = page.getByTestId("desktop-sidebar");
   await sidebar.getByTestId("view-options-trigger").click();
-  await page.getByRole("radiogroup", { name: "Group by" }).getByRole("radio", { name: "Projects", exact: true }).click();
+  await page.getByRole("group", { name: "Group by" }).getByRole("menuitemradio", { name: "Projects", exact: true }).click();
   await expect(
     page
       .getByTestId("desktop-sidebar")
@@ -207,5 +207,5 @@ export async function expectNoPageOverflow(page: Page): Promise<void> {
 
 export async function selectDeliveryMode(page: Page, mode: "Steer" | "Queue"): Promise<void> {
   await page.getByRole("button", { name: "Delivery mode", exact: true }).click();
-  await page.getByRole("menuitem", { name: mode, exact: true }).click();
+  await page.getByRole("menuitemradio", { name: mode, exact: true }).click();
 }

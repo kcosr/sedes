@@ -91,13 +91,13 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await expect(page).toHaveURL(threadPath);
   await expect(panel.locator(".workpad-document")).toContainText("15-minute timeout");
   await page.getByRole("button", { name: "Workpads panel actions", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Dock bottom", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "Bottom", exact: true }).click();
   await expect.poll(async () => {
     const [chat, workpads] = await Promise.all([chatPane.boundingBox(), pane.boundingBox()]);
     return Boolean(chat && workpads && chat.y + chat.height <= workpads.y + 1);
   }).toBe(true);
   await page.getByRole("button", { name: "Workpads panel actions", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Dock right", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "Right", exact: true }).click();
   await page.getByRole("button", { name: "Collapse Workpads panel", exact: true }).click();
   await expect(panel).toBeHidden();
   await page.getByTestId("workspace-workbench-bar").getByRole("button", { name: "Open Workpads panel", exact: true }).click();

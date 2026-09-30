@@ -103,12 +103,16 @@ test.describe.serial("Tasks panel", () => {
       name: "Tasks panel options",
     });
     await panelOptions.click();
-    const searchContent = page.getByRole("checkbox", {
+    await expect(
+      page.getByRole("menuitemradio", { name: "Thread", exact: true }),
+    ).toBeChecked();
+    const searchContent = page.getByRole("menuitemcheckbox", {
       name: "Search task content",
     });
     await expect(searchContent).not.toBeChecked();
+    // Choosing a menu row closes the menu.
     await searchContent.click();
-    await panelOptions.click();
+    await expect(page.getByRole("menu")).toHaveCount(0);
     await expect(panel.getByRole("radio", { name: "Project" })).toBeEnabled();
     await expect(panel.getByRole("radio", { name: "Thread" })).toBeEnabled();
     await panel.getByRole("radio", { name: "Project" }).click();
@@ -392,9 +396,10 @@ test.describe.serial("Tasks panel", () => {
     ).toBeVisible();
     await panelOptions.click();
     await expect(
-      page.getByRole("checkbox", { name: "Search task content" }),
+      page.getByRole("menuitemcheckbox", { name: "Search task content" }),
     ).toBeChecked();
-    await panelOptions.click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
 
     // On mobile, Tasks is available without expanding the thread toolbar.
     await panel.getByRole("button", { name: "Close Tasks panel" }).click();
@@ -463,7 +468,7 @@ test.describe.serial("Tasks panel", () => {
     await page.getByRole("button", { name: "Thread actions" }).click();
     await page
       .getByTestId("thread-actions-menu")
-      .getByRole("button", { name: "Archive", exact: true })
+      .getByRole("menuitem", { name: "Archive", exact: true })
       .click();
     const dialog = page.getByRole("dialog", { name: "Archive this thread" });
     await expect(dialog).toBeVisible();
@@ -515,7 +520,7 @@ for (const action of ["Settle", "Archive"] as const) {
     }
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page.getByTestId("thread-actions-menu").getByRole("button", { name: action, exact: true }).click();
+    await page.getByTestId("thread-actions-menu").getByRole("menuitem", { name: action, exact: true }).click();
     const dialog = page.getByRole("dialog", { name: `${action} this thread` });
     for (const task of tasks) await expect(dialog.getByText(task.title, { exact: true })).toBeVisible();
     await dialog.getByRole("radio", { name: "Complete all", exact: true }).click();

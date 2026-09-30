@@ -291,7 +291,7 @@ describe("ThreadView loading header", () => {
     const menu = screen.getByRole("button", { name: "Chat panel actions" });
     expect(menu).toBeEnabled();
     fireEvent.keyDown(menu, { key: "Enter" });
-    fireEvent.click(screen.getByRole("menuitem", { name: "Dock right" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Right" }));
     expect(panelControls.onDock).toHaveBeenCalledWith("right");
   });
 
@@ -1137,12 +1137,17 @@ describe("ThreadView backend interaction modes", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    const fork = await screen.findByRole("button", {
+    fireEvent.keyDown(screen.getByRole("button", { name: "Thread actions" }), {
+      key: "Enter",
+    });
+    const menu = await screen.findByRole("menu", { name: "Thread actions" });
+    const fork = within(menu).getByRole("menuitem", {
       name: "Fork",
     });
     const descriptionId = fork.getAttribute("aria-describedby");
-    expect(fork).toBeDisabled();
+    expect(fork).toHaveAttribute("aria-disabled", "true");
+    // A short visible reason; the full one is the row's description.
+    expect(fork).toHaveTextContent(/^ForkUnavailable$/u);
     expect(descriptionId).toBeTruthy();
     expect(document.getElementById(descriptionId!)).toHaveTextContent(
       "Forking is unavailable in this fixture.",
@@ -1188,8 +1193,11 @@ describe("ThreadView backend interaction modes", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Fork" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "Thread actions" }), {
+      key: "Enter",
+    });
+    const menu = await screen.findByRole("menu", { name: "Thread actions" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Fork" }));
     expect(forkTurn).toHaveBeenCalledWith(
       snapshot.forksByTurnId["turn-latest"],
       { restart: false },
@@ -1371,10 +1379,13 @@ describe("ThreadView backend interaction modes", () => {
       screen.queryByRole("button", { name: "Automation settings" }),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    await waitFor(() =>
-      expect(screen.getByText("Session stats")).toBeInTheDocument(),
-    );
+    fireEvent.keyDown(screen.getByRole("button", { name: "Thread actions" }), {
+      key: "Enter",
+    });
+    const menu = await screen.findByRole("menu", { name: "Thread actions" });
+    expect(
+      within(menu).getByRole("menuitem", { name: "Session stats" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Compact context")).not.toBeInTheDocument();
     expect(
       screen.queryByText(/Automate…|Automation settings…/),

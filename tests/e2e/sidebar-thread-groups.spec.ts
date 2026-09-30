@@ -191,16 +191,21 @@ async function transitionInventory(
 }
 
 async function chooseThreadGroups(page: Page, sidebar: Locator): Promise<void> {
+  // Choosing a grouping closes the menu; reopen it only once it has gone,
+  // so the reopening click does not land on the closing menu.
+  const viewOptions = page.getByRole("menu", { name: "View options" });
   await sidebar.getByTestId("view-options-trigger").click();
   await page
-    .getByRole("radiogroup", { name: "Group by" })
-    .getByRole("radio", { name: "Timeline" })
+    .getByRole("group", { name: "Group by" })
+    .getByRole("menuitemradio", { name: "Timeline" })
     .click();
+  await expect(viewOptions).toBeHidden();
   await sidebar.getByTestId("view-options-trigger").click();
   await page
-    .getByRole("radiogroup", { name: "Stack by" })
-    .getByRole("radio", { name: "Thread groups" })
+    .getByRole("group", { name: "Stack by" })
+    .getByRole("menuitemradio", { name: "Thread groups" })
     .click();
+  await expect(viewOptions).toBeHidden();
   await expect(sidebar.getByTestId("view-options-trigger")).toBeVisible();
 }
 
@@ -226,7 +231,7 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
   const desktopSidebar = page.getByTestId("desktop-sidebar");
   await chooseThreadGroups(page, desktopSidebar);
   await desktopSidebar.getByTestId("view-options-trigger").click();
-  const showSnoozed = page.getByRole("checkbox", { name: "Snoozed" });
+  const showSnoozed = page.getByRole("menuitemcheckbox", { name: "Snoozed" });
   await expect(showSnoozed).toBeChecked();
   await showSnoozed.click();
   await page.keyboard.press("Escape");
@@ -513,8 +518,8 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
 
   await desktopSidebar.getByTestId("view-options-trigger").click();
   await page
-    .getByRole("radiogroup", { name: "Stack by" })
-    .getByRole("radio", { name: "Projects" })
+    .getByRole("group", { name: "Stack by" })
+    .getByRole("menuitemradio", { name: "Projects" })
     .click();
   const projectStack = desktopSidebar.locator(
     '[data-testid="project-stack"][data-workspace-id]',
@@ -544,13 +549,14 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
 
   await desktopSidebar.getByTestId("view-options-trigger").click();
   await page
-    .getByRole("radiogroup", { name: "Stack by" })
-    .getByRole("radio", { name: "Thread groups" })
+    .getByRole("group", { name: "Stack by" })
+    .getByRole("menuitemradio", { name: "Thread groups" })
     .click();
+  await expect(page.getByRole("menu", { name: "View options" })).toBeHidden();
   await expect(groupStack).toHaveCount(1);
 
   await desktopSidebar.getByTestId("view-options-trigger").click();
-  await page.getByRole("radio", { name: "Card" }).click();
+  await page.getByRole("menuitemradio", { name: "Card" }).click();
   await page.keyboard.press("Escape");
   await expect(groupStack).toHaveAttribute("data-density", "card");
   await openSettingsPage(page, "appearance");
@@ -756,10 +762,19 @@ test("move to group searches destinations on desktop and mobile", async ({
   const rowLink = row.getByTestId("thread-row-link");
   const dialog = page.getByRole("dialog", { name: "Move to group", exact: true });
   const search = dialog.getByRole("combobox", { name: "Search groups", exact: true });
+  // "Move to group" is a submenu of the groups; its "New group…" row opens
+  // the searchable destination dialog.
   const openDesktopMove = async () => {
     await rowLink.focus();
     await row.click({ button: "right" });
-    await page.getByRole("menuitem", { name: "Move to group", exact: true }).click();
+    await page
+      .getByTestId("thread-context-menu")
+      .getByRole("menuitem", { name: "Move to group", exact: true })
+      .click();
+    await page
+      .getByRole("menu", { name: "Move to group", exact: true })
+      .getByRole("menuitem", { name: "New group…", exact: true })
+      .click();
     await expect(dialog).toBeVisible();
     await expect(search).toBeFocused();
   };
@@ -819,7 +834,8 @@ test("move to group searches destinations on desktop and mobile", async ({
   await mobileRow.click({ button: "right" });
   const actions = page.getByTestId("thread-actions-sheet");
   await expect(actions).toBeVisible();
-  await actions.getByRole("button", { name: "Move to group", exact: true }).click();
+  await actions.getByRole("menuitem", { name: "Move to group", exact: true }).click();
+  await actions.getByRole("menuitem", { name: "New group…", exact: true }).click();
   await expect(dialog).toBeVisible();
   await expect(actions).toBeHidden();
   await expect(dialog).toBeFocused();

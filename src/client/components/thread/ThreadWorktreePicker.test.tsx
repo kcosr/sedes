@@ -147,7 +147,7 @@ describe("ThreadWorktreePicker", () => {
       viewport.height = window.innerHeight - 300;
       viewport.dispatchEvent(new Event("resize"));
     });
-    expect(dialog.style.getPropertyValue("--thread-settings-keyboard-inset")).toBe("300px");
+    expect(dialog.style.getPropertyValue("--keyboard-inset")).toBe("300px");
     fireEvent.change(search, { target: { value: "absent" } });
     expect(search).toHaveFocus();
     await screen.findByText("No matching worktrees.");
@@ -195,17 +195,26 @@ describe("ThreadWorktreePicker", () => {
     const sheet = await screen.findByRole("dialog", {
       name: "Thread worktree",
     });
-    expect(sheet).toHaveClass("thread-settings-sheet", "thread-worktree-sheet");
+    expect(sheet).toHaveAttribute("data-slot", "dialog-content");
+    expect(sheet).toHaveAttribute("data-layout", "sheet");
+    expect(sheet).toHaveAccessibleDescription(
+      "Used by Files, Compare, and relative file links.",
+    );
     expect(within(sheet).getByRole("list", { name: "Worktrees" })).toBeVisible();
-    expect(document.querySelector(".thread-worktree-popover")).toBeNull();
+    expect(document.querySelector('[data-slot="popover-content"]')).toBeNull();
     fireEvent.click(
       await within(sheet).findByRole("button", { name: "Remove feature/mobile" }),
     );
     const confirmation = await screen.findByRole("dialog", {
       name: "Remove linked worktree?",
     });
-    expect(document.querySelector(".thread-settings-sheet")).toBeNull();
-    expect(document.querySelector(".thread-settings-sheet-overlay")).toBeNull();
+    expect(
+      screen.queryByRole("dialog", { name: "Thread worktree" }),
+    ).toBeNull();
+    // Only the confirmation's own backdrop remains.
+    expect(
+      document.querySelectorAll('[data-slot="dialog-overlay"]'),
+    ).toHaveLength(1);
     expect(api.deleteLinkedWorktree).not.toHaveBeenCalled();
     fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel" }));
     expect(api.deleteLinkedWorktree).not.toHaveBeenCalled();
@@ -582,5 +591,98 @@ describe("ThreadWorktreePicker", () => {
     expect(
       screen.getByRole("button", { name: "Thread worktree: Primary" }),
     ).toBeVisible();
+  });
+
+  it("marks the current worktree with a trailing check instead of a status", async () => {
+    const current = linked({ id: "linked-1", branch: "feature/current" });
+    const other = linked({ id: "linked-2", branch: "feature/other", provenance: "same" });
+    const api = fixture([primary, current, other]);
+    render(
+      <ThreadWorktreePicker
+        api={api as never}
+        thread={thread({
+          preferredWorktreeRevision: 1,
+          preferredWorktree: {
+            rootId: workspaceFileLinkedWorktreeRootIdSchema.parse("linked-1"),
+            displayLabel: "feature/current",
+            branch: "feature/current",
+            availability: "available",
+          },
+        })}
+        workspaceId="workspace-1"
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Thread worktree: feature/current" }),
+    );
+
+    const popover = await screen.findByRole("dialog", { name: "Thread worktree" });
+    expect(popover).toHaveAttribute("data-slot", "popover-content");
+    const selected = await within(popover).findByRole("button", {
+      name: "Select feature/current",
+    });
+    expect(selected).toHaveAttribute("aria-current", "true");
+    expect(selected.querySelector(".lucide-check")).not.toBeNull();
+    expect(selected).toHaveAccessibleDescription("/work/feature-current Unmerged");
+    expect(popover).not.toHaveTextContent("Current");
+    const primaryRow = within(popover).getByRole("button", { name: "Select Primary" });
+    expect(primaryRow).not.toHaveAttribute("aria-current");
+    expect(primaryRow.querySelector(".lucide-check")).toBeNull();
+    expect(primaryRow).toHaveAccessibleDescription("/work/sedes");
+    expect(
+      within(popover).getByRole("button", { name: "Remove feature/other" }),
+    ).toHaveAttribute("data-variant", "destructive");
+  });
+
+  it("moves from the search row into the worktrees with the arrow keys", async () => {
+    const missing = linked({
+      id: "missing",
+      branch: "feature/missing",
+      availability: "unavailable",
+    });
+    const api = fixture([
+      primary,
+      linked({ id: "linked-1", branch: "feature/one" }),
+      missing,
+      linked({ id: "linked-2", branch: "feature/two" }),
+    ]);
+    render(<ThreadWorktreePicker api={api as never} thread={thread()} workspaceId="workspace-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Thread worktree: Primary" }));
+    const search = await screen.findByRole("searchbox", { name: "Search worktrees" });
+    const primaryRow = await screen.findByRole("button", { name: "Select Primary" });
+    const one = screen.getByRole("button", { name: "Select feature/one" });
+    const two = screen.getByRole("button", { name: "Select feature/two" });
+    // Unavailable rows are dimmed and skipped; their Forget action stays usable.
+    const unavailable = screen.getByRole("button", { name: "Select feature/missing" });
+    expect(unavailable).toBeDisabled();
+    expect(unavailable).toHaveAttribute("data-disabled", "true");
+    expect(screen.getByRole("button", { name: "Forget feature/missing" })).toBeEnabled();
+
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(primaryRow).toHaveFocus();
+    fireEvent.keyDown(primaryRow, { key: "ArrowDown" });
+    expect(one).toHaveFocus();
+    fireEvent.keyDown(one, { key: "ArrowDown" });
+    expect(two).toHaveFocus();
+    fireEvent.keyDown(two, { key: "Home" });
+    expect(primaryRow).toHaveFocus();
+    search.focus();
+    fireEvent.keyDown(search, { key: "ArrowUp" });
+    expect(two).toHaveFocus();
+  });
+
+  it("shows a loading row until the first discovery settles", async () => {
+    let resolveRoots!: (value: { roots: readonly WorkspaceFileRootDescriptor[] }) => void;
+    const api = fixture([primary]);
+    api.listWorkspaceFileRoots.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveRoots = resolve; }),
+    );
+    render(<ThreadWorktreePicker api={api as never} thread={thread()} workspaceId="workspace-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Thread worktree: Primary" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Loading worktrees…");
+    expect(screen.queryByText("No linked worktrees.")).toBeNull();
+    await act(async () => resolveRoots({ roots: [primary] }));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("button", { name: "Select Primary" })).toBeVisible();
   });
 });

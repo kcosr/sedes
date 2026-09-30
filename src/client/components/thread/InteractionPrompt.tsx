@@ -9,6 +9,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuItemDescription,
   DropdownMenuTrigger,
 } from "@client/components/ui/dropdown-menu";
 import { RadioGroup, RadioGroupItem } from "@client/components/ui/radio-group";
@@ -480,22 +481,30 @@ function ActionMenu({
           <ChevronDown aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        className="interaction-action-menu"
-        side="top"
-      >
+      {/* The action row closes the card, so the menu opens below it and
+          leaves the request it answers in view. */}
+      <DropdownMenuContent align="end" side="bottom">
         {actions.map((action) => (
           <DropdownMenuItem
             key={action.id}
             onSelect={() => onSelect(action.id)}
           >
-            <span className="interaction-action-menu-copy">
-              <span title={action.label.text}>{action.label.text}</span>
+            <span className="min-w-0">
+              <span
+                className="line-clamp-2 wrap-anywhere"
+                title={action.label.text}
+              >
+                {action.label.text}
+              </span>
               {action.description && (
-                <small title={action.description.text}>
-                  {action.description.text}
-                </small>
+                <DropdownMenuItemDescription>
+                  <span
+                    className="line-clamp-2 wrap-anywhere"
+                    title={action.description.text}
+                  >
+                    {action.description.text}
+                  </span>
+                </DropdownMenuItemDescription>
               )}
             </span>
           </DropdownMenuItem>

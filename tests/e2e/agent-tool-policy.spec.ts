@@ -8,6 +8,7 @@ import {
   expectNoPageOverflow,
   fillAndPersistDraft,
   openSedesWorkspace,
+  overlaySettled,
   selectRadixOption,
   sendCurrentDraft,
 } from "./helpers";
@@ -29,18 +30,27 @@ test.describe.serial("agent tool policy", () => {
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    const agentToolsRow = page.getByRole("button", {
-      name: /Agent tools…\s*Off/,
+    const actionsMenu = page.getByRole("menu", { name: "Thread actions" });
+    await expect(actionsMenu).toBeVisible();
+    await overlaySettled(actionsMenu);
+    const agentToolsRow = actionsMenu.getByRole("menuitem", {
+      name: /^Agent tools…\s*Off/,
     });
-    const [labelBounds, summaryBounds] = await Promise.all([
-      agentToolsRow.locator(".agent-tool-menu-label").boundingBox(),
-      agentToolsRow.locator(".agent-tool-menu-summary").boundingBox(),
-    ]);
-    expect(labelBounds).not.toBeNull();
-    expect(summaryBounds).not.toBeNull();
-    expect(summaryBounds!.y).toBeGreaterThanOrEqual(
-      labelBounds!.y + labelBounds!.height,
+    const summary = agentToolsRow.locator(
+      '[data-slot="dropdown-menu-item-description"]',
     );
+    await expect(summary).toHaveText("Off");
+    // The summary is the row's second line, below the "Agent tools…" label.
+    const { labelBottom, summaryTop } = await summary.evaluate((element) => {
+      const label = document.createRange();
+      label.selectNodeContents(element.parentElement!.firstChild!);
+      return {
+        labelBottom: label.getBoundingClientRect().bottom,
+        summaryTop: element.getBoundingClientRect().top,
+      };
+    });
+    expect(labelBottom).toBeGreaterThan(0);
+    expect(summaryTop).toBeGreaterThanOrEqual(labelBottom);
     await agentToolsRow.click();
     const settings = page.getByRole("dialog", { name: "Agent tools" });
     await expect(settings).toBeVisible();
@@ -65,7 +75,7 @@ test.describe.serial("agent tool policy", () => {
 
     await secondPage.getByRole("button", { name: "Thread actions" }).click();
     await secondPage
-      .getByRole("button", { name: /Agent tools…\s*Off/ })
+      .getByRole("menuitem", { name: /^Agent tools…\s*Off/ })
       .click();
     const secondSettings = secondPage.getByRole("dialog", {
       name: "Agent tools",
@@ -165,8 +175,8 @@ test.describe.serial("agent tool policy", () => {
 
     await page.reload();
     await page.getByRole("button", { name: "Thread actions" }).click();
-    const persistedSummary = page.getByRole("button", {
-      name: /Agent tools…\s*1 enabled · Allow without asking/,
+    const persistedSummary = page.getByRole("menuitem", {
+      name: /^Agent tools…\s*1 enabled · Allow without asking/,
     });
     await expect(persistedSummary).toBeVisible();
     await persistedSummary.click();
@@ -202,7 +212,7 @@ test.describe.serial("agent tool policy", () => {
     await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page.getByRole("button", { name: /Agent tools…/ }).click();
+    await page.getByRole("menuitem", { name: /^Agent tools…/ }).click();
     const settings = page.getByRole("dialog", { name: "Agent tools" });
     await expect(settings).toBeVisible();
     await expect(
@@ -283,7 +293,7 @@ test.describe.serial("agent tool policy", () => {
     const settings = page.getByRole("dialog", { name: "Agent tools" });
     const openSettings = async () => {
       await page.getByRole("button", { name: "Thread actions" }).click();
-      await page.getByRole("button", { name: /Agent tools…/ }).click();
+      await page.getByRole("menuitem", { name: /^Agent tools…/ }).click();
       await expect(settings).toBeVisible();
     };
     const saveSettings = async () => {
@@ -312,7 +322,7 @@ test.describe.serial("agent tool policy", () => {
     await secondPage.goto(cliThreadPath);
     await expect(secondPage.getByRole("textbox", { name: "Message Scripted agent" })).toBeVisible();
     await secondPage.getByRole("button", { name: "Thread actions" }).click();
-    await secondPage.getByRole("button", { name: /Agent tools…/ }).click();
+    await secondPage.getByRole("menuitem", { name: /^Agent tools…/ }).click();
     const secondSettings = secondPage.getByRole("dialog", { name: "Agent tools" });
     await expect(secondSettings).toBeVisible();
 
@@ -394,7 +404,7 @@ test.describe.serial("agent tool policy", () => {
     await createDraftThread(page);
     await page.setViewportSize({ width: 390, height: 430 });
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page.getByRole("button", { name: /Agent tools…/ }).click();
+    await page.getByRole("menuitem", { name: /^Agent tools…/ }).click();
 
     const settings = page.getByRole("dialog", { name: "Agent tools" });
     await expect(settings).toBeVisible();

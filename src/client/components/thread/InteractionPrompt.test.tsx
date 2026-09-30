@@ -438,16 +438,23 @@ describe("InteractionPrompt", () => {
     const item = await screen.findByRole("menuitem", {
       name: new RegExp(longLabel),
     });
-    expect(item.closest('[data-slot="dropdown-menu-content"]')).toHaveClass(
-      "interaction-action-menu",
+    // The menu opens below the action row, away from the card it answers.
+    expect(screen.getByRole("menu", { name: "More approval options" })).toHaveAttribute(
+      "data-side",
+      "bottom",
     );
     expect(within(item).getByText(longLabel)).toHaveAttribute(
       "title",
       longLabel,
     );
-    expect(within(item).getByText(longDescription)).toHaveAttribute(
-      "title",
-      longDescription,
+    expect(within(item).getByText(longLabel)).toHaveClass("line-clamp-2");
+    const description = within(item).getByText(longDescription);
+    expect(description).toHaveAttribute("title", longDescription);
+    expect(description).toHaveClass("line-clamp-2");
+    // A two-line row: the description slot widens the menu to its 420px cap.
+    expect(description.closest("[data-slot]")).toHaveAttribute(
+      "data-slot",
+      "dropdown-menu-item-description",
     );
   });
 

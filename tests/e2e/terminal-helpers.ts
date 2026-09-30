@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { expect } from "./fixtures.js";
 
 export interface TerminalFixtureState {
@@ -44,9 +44,19 @@ export async function revealTerminals(page: Page) {
 
 export async function openTerminalMenu(page: Page) {
   await terminalContainer(page).getByRole("button", { name: "Open terminal tab" }).click();
-  const menu = page.locator(".thread-terminal-menu");
+  const menu = page.getByRole("menu", { name: "Open terminal tab" });
   await expect(menu).toBeVisible();
   return menu;
+}
+
+/** A terminal's row in the terminal menu: open, rename and tear-down items. */
+export function terminalMenuRow(menu: Locator, name: string): Locator {
+  return menu.getByRole("group", { name, exact: true });
+}
+
+/** The row item that opens the terminal (named by the terminal, then its status). */
+export function terminalMenuEntry(menu: Locator, name: string): Locator {
+  return terminalMenuRow(menu, name).getByRole("menuitem").first();
 }
 
 export async function createTerminal(
@@ -108,9 +118,8 @@ export async function openExistingTerminal(page: Page, name: string) {
       await page.getByRole("dialog", { name: "Close terminal?" })
         .getByRole("button", { name: "Close tab", exact: true }).click();
     }
-    await openTerminalMenu(page);
-    await page.locator(".thread-terminal-menu-row").filter({ hasText: name })
-      .locator(".thread-terminal-menu-entry").click();
+    const menu = await openTerminalMenu(page);
+    await terminalMenuEntry(menu, name).click();
   }
   await expect(panel).toBeVisible({ timeout: 15_000 });
   await expect(

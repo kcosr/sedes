@@ -3,13 +3,17 @@ import type {
   ProviderFeatureStateEnvelope,
 } from "../../shared/index.js";
 import type { ClientProviderFeatureModule } from "./registry.js";
+import { ShieldCheck } from "lucide-react";
+import { menuDescriptionClass } from "@client/components/ui/floating";
+import { cn } from "@client/lib/utils";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@client/components/ui/select";
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+} from "@client/components/ui/dropdown-menu";
 
 const ref = Object.freeze({
   featureId: "claude.permissions",
@@ -84,41 +88,58 @@ function ClaudePermissionControls({
     });
   };
 
+  const valueId = `claude-permission-mode-${featureState.revision}`;
   return (
-    <div className="claude-permissions" aria-label="Claude permission settings">
-      <p className="claude-permissions-label">Claude permissions</p>
-      <div className="claude-permissions-select">
-        <span className="claude-permissions-row-label">Permission mode</span>
-        <Select
+    <DropdownMenuSub>
+      {/* Openable even when the mode cannot change, so it stays visible. */}
+      <DropdownMenuSubTrigger aria-describedby={valueId}>
+        <ShieldCheck aria-hidden="true" />
+        {/* The label takes the free space so the value sits by the chevron. */}
+        <span className="min-w-0 flex-1">Permission mode</span>
+        <DropdownMenuShortcut id={valueId} aria-hidden="true">
+          {state.desired ? labels[state.desired] : "Choose…"}
+        </DropdownMenuShortcut>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        {unavailable && (
+          <p role="status" className={cn(menuDescriptionClass, "m-0 px-2 py-1.5")}>
+            {capability.availability !== "available"
+              ? (capability.unavailableReason?.text ?? "Can't be changed right now")
+              : "Can't be changed right now"}
+          </p>
+        )}
+        <DropdownMenuRadioGroup
+          aria-label="Permission mode"
           value={state.desired ?? ""}
           onValueChange={(next) => {
             const mode = permissionModes.find(
               (candidate) => candidate === next,
             );
-            if (mode) void apply(mode).catch(() => undefined);
+            if (mode && mode !== state.desired) {
+              void apply(mode).catch(() => undefined);
+            }
           }}
         >
-          <SelectTrigger
-            aria-label="Permission mode"
-            className="w-full min-w-0 h-(--control-md) text-(length:--text-ui)"
-            disabled={unavailable}
-          >
-            <SelectValue placeholder="Choose…" />
-          </SelectTrigger>
-          <SelectContent>
-            {permissionModes.map((mode) => {
-              const available = Boolean(operation(mode));
-              return (
-                <SelectItem key={mode} value={mode} disabled={!available}>
-                  {labels[mode]}
-                  {!available && state.desired === mode ? " (unavailable)" : ""}
-                </SelectItem>
-              );
-            })}
-          </SelectContent>
-        </Select>
-      </div>
-    </div>
+          {permissionModes.map((mode) => {
+            const available = Boolean(operation(mode));
+            return (
+              <DropdownMenuRadioItem
+                key={mode}
+                value={mode}
+                disabled={unavailable || !available}
+              >
+                {labels[mode]}
+                {!unavailable && !available && state.desired === mode && (
+                  <DropdownMenuShortcut aria-hidden="true">
+                    Not allowed
+                  </DropdownMenuShortcut>
+                )}
+              </DropdownMenuRadioItem>
+            );
+          })}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }
 

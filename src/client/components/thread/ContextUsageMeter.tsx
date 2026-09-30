@@ -1,7 +1,13 @@
-import * as Popover from "@radix-ui/react-popover";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import type { UsageSnapshot } from "../../../shared/index.js";
+import { eyebrowClass } from "@client/components/ui/floating";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@client/components/ui/popover";
+import { cn } from "@client/lib/utils";
 
 type ContextUsage = NonNullable<UsageSnapshot["context"]>;
 
@@ -69,8 +75,8 @@ export function ContextUsageMeter({
   };
 
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
         <button
           type="button"
           className="context-usage-meter"
@@ -83,26 +89,23 @@ export function ContextUsageMeter({
           <span className="context-usage-meter-ring" aria-hidden="true" />
           <span className="context-usage-meter-dot" aria-hidden="true" />
         </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          className="context-usage-popover"
-          side="top"
-          align="end"
-          sideOffset={10}
-          collisionPadding={12}
-          role="tooltip"
-          onOpenAutoFocus={(event) => event.preventDefault()}
-          onPointerEnter={openFromHover}
-          onPointerLeave={closeFromHover}
-        >
-          <strong>Context window</strong>
-          <span>{summary}</span>
-          <span>{detail}</span>
-          <Popover.Arrow className="popover-arrow" />
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="end"
+        role="tooltip"
+        className="w-max max-w-[calc(100vw-16px)] gap-1 p-3 whitespace-nowrap"
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        onPointerEnter={openFromHover}
+        onPointerLeave={closeFromHover}
+      >
+        <p className={cn(eyebrowClass, "m-0")}>Context window</p>
+        <p className="m-0 leading-5">{summary}</p>
+        <p className="m-0 text-(length:--text-meta) leading-4 text-muted-foreground">
+          {detail}
+        </p>
+      </PopoverContent>
+    </Popover>
   );
 }
 

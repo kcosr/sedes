@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { ArrowDownRight, ArrowUpRight, Check, ChevronDown } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, ChevronDown } from "lucide-react";
+import { useTouchDensity } from "@client/app/use-touch-density";
 import { Button } from "@client/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger,
@@ -53,15 +54,16 @@ export function StatTile({ label, value, change, changeLabel, detail, trend, tit
   );
 }
 
-export interface MenuOption<T extends string> { readonly value: T; readonly label: string; readonly hint?: string }
-/** Compact labeled dropdown built on the shared menu primitive. */
+export interface MenuOption<T extends string> { readonly value: T; readonly label: string }
+/** Compact labeled dropdown built on the shared menu primitive; long lists become a sheet on touch. */
 export function MenuSelect<T extends string>({ label, value, options, onChange, prefix, align = "start" }: {
   readonly label: string; readonly value: T; readonly options: readonly MenuOption<T>[]; readonly onChange: (value: T) => void;
   readonly prefix?: string; readonly align?: "start" | "end";
 }) {
   const current = options.find((option) => option.value === value);
+  const sheet = useTouchDensity() && options.length > 6;
   return (
-    <DropdownMenu modal={false}>
+    <DropdownMenu modal={false} presentation={sheet ? "sheet" : "menu"}>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="sm" className="usage-select" aria-label={`${label}: ${current?.label ?? value}`}>
           {prefix ? <span className="usage-select-prefix">{prefix}</span> : null}
@@ -69,14 +71,11 @@ export function MenuSelect<T extends string>({ label, value, options, onChange, 
           <ChevronDown aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align={align} className="usage-menu">
-        <DropdownMenuLabel>{label}</DropdownMenuLabel>
+      <DropdownMenuContent align={align} className="usage-menu" sheetTitle={label}>
+        {sheet ? null : <DropdownMenuLabel>{label}</DropdownMenuLabel>}
         <DropdownMenuRadioGroup value={value} onValueChange={(next) => onChange(next as T)}>
           {options.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value}>
-              <span>{option.label}</span>
-              {option.hint ? <span className="usage-menu-hint">{option.hint}</span> : null}
-            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem key={option.value} value={option.value}>{option.label}</DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
@@ -106,5 +105,3 @@ export function DimensionIcon({ dimension, label }: { readonly dimension: UsageA
   if (label.brand && (dimension === "backend" || dimension === "backendKind" || dimension === "thread")) return <BackendBrandIcon brand={label.brand} size={14} />;
   return null;
 }
-
-export function Check16() { return <Check aria-hidden="true" size={16} strokeWidth={2.4} />; }

@@ -1,7 +1,6 @@
 import { createPortal } from "react-dom";
 import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
 import { DismissableLayer } from "@radix-ui/react-dismissable-layer";
-import * as Popover from "@radix-ui/react-popover";
 import {
   Dialog,
   DialogContent,
@@ -60,6 +59,16 @@ import {
   type ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
 import { Button } from "@client/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@client/components/ui/dropdown-menu";
 import { Input } from "@client/components/ui/input";
 import { Textarea } from "@client/components/ui/textarea";
 import { SearchableSelect } from "../ui/searchable-select.js";
@@ -837,8 +846,8 @@ function TasksPanelBody({
               />
             </Button>
           )}
-          <Popover.Root open={active && optionsOpen} onOpenChange={setOptionsOpen}>
-            <Popover.Trigger asChild>
+          <DropdownMenu open={active && optionsOpen} onOpenChange={setOptionsOpen}>
+            <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -846,41 +855,32 @@ function TasksPanelBody({
               >
                 <MoreHorizontal size={16} strokeWidth={1.8} />
               </Button>
-            </Popover.Trigger>
-            <Popover.Portal>
-              <Popover.Content
-                className="menu-popover tasks-panel-menu"
-                align="end"
-                sideOffset={6}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Default view</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                aria-label="Default view"
+                value={preferences.defaultView}
+                onValueChange={(value) => {
+                  const next = VIEW_ORDER.find((candidate) => candidate === value);
+                  if (next) setTasksPanelDefaultView(next);
+                }}
               >
-                <div className="tasks-panel-menu-group">
-                  <span className="tasks-panel-menu-label">Default view</span>
-                  <SegmentedControl
-                    ariaLabel="Default view"
-                    size="small"
-                    value={preferences.defaultView}
-                    options={VIEW_ORDER.map((candidate) => ({
-                      value: candidate,
-                      label: VIEW_LABEL[candidate],
-                    }))}
-                    onChange={(value) =>
-                      setTasksPanelDefaultView(value as TasksView)
-                    }
-                  />
-                </div>
-                <label className="tasks-panel-menu-toggle">
-                  <input
-                    type="checkbox"
-                    checked={preferences.searchContent}
-                    onChange={(event) =>
-                      setTasksPanelSearchContent(event.target.checked)
-                    }
-                  />
-                  Search task content
-                </label>
-              </Popover.Content>
-            </Popover.Portal>
-          </Popover.Root>
+                {VIEW_ORDER.map((candidate) => (
+                  <DropdownMenuRadioItem key={candidate} value={candidate}>
+                    {VIEW_LABEL[candidate]}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={preferences.searchContent}
+                onCheckedChange={setTasksPanelSearchContent}
+              >
+                Search task content
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             variant="ghost"
             size="icon-sm"

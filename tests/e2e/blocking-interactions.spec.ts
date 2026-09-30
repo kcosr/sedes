@@ -1,7 +1,12 @@
 import path from "node:path";
 import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
-import { capture, openSedesWorkspace, selectRadixOption } from "./helpers";
+import {
+  capture,
+  openSedesWorkspace,
+  overlaySettled,
+  selectRadixOption,
+} from "./helpers";
 
 const repositoryDisplayName = path.basename(process.cwd());
 const importedCodexTitle = `Imported Codex history — ${repositoryDisplayName}`;
@@ -103,16 +108,28 @@ test.describe.serial("blocking interaction panel", () => {
     await expect(
       page.getByRole("menuitem", { name: /Approve for session/ }),
     ).toBeVisible();
-    const menu = page.locator(
-      '[data-slot="dropdown-menu-content"].interaction-action-menu',
-    );
-    const [composerBox, menuBox] = await Promise.all([
+    const menu = page.getByRole("menu", { name: "More approval options" });
+    await overlaySettled(menu);
+    // The open menu hides the rest of the page from assistive tech, so the
+    // card is located structurally rather than by role.
+    const card = page.getByTestId("interaction-prompt");
+    const [composerBox, menuBox, headingBox, codeBox] = await Promise.all([
       page.getByTestId("composer").boundingBox(),
       menu.boundingBox(),
+      card.locator("h2").boundingBox(),
+      card.getByTestId("interaction-prompt-code").boundingBox(),
     ]);
     expect(composerBox).not.toBeNull();
     expect(menuBox).not.toBeNull();
-    expect(menuBox!.width).toBeLessThanOrEqual(composerBox!.width + 1);
+    expect(headingBox).not.toBeNull();
+    expect(codeBox).not.toBeNull();
+    // Description rows cap the menu at 420px, never the reading measure.
+    expect(menuBox!.width).toBeLessThanOrEqual(
+      Math.min(420, composerBox!.width) + 1,
+    );
+    // It opens below the action row and leaves the request in view.
+    expect(menuBox!.y).toBeGreaterThanOrEqual(codeBox!.y + codeBox!.height);
+    expect(menuBox!.y).toBeGreaterThanOrEqual(headingBox!.y + headingBox!.height);
     await expect(
       menu.getByText("Approve and remember similar commands", { exact: true }),
     ).toHaveAttribute("title", "Approve and remember similar commands");

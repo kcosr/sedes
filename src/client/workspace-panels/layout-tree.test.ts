@@ -12,6 +12,7 @@ import {
   findStackForPanel,
   normalizePanelLayout,
   openPanel,
+  panelDockEdge,
   panelInstances,
   resizeSplit,
   serializePanelLayout,
@@ -193,6 +194,41 @@ describe("panel-instance layout tree", () => {
     expect((resizeSplit(docked, "dock", [2, 3]) as SplitNode).sizes).toEqual([
       0.4, 0.6,
     ]);
+  });
+
+  it("reports the edge a panel is docked at", () => {
+    const docked = dockPanel(
+      split(stack("left", chatPanelInstance), stack("right", files)),
+      "workspace-files",
+      "left",
+      { splitId: "dock", stackId: "dock-tabs" },
+    );
+    expect(panelDockEdge(docked, "workspace-files")).toBe("left");
+    expect(panelDockEdge(docked, "chat")).toBe("right");
+
+    const column = dockPanel(
+      split(stack("left", chatPanelInstance), stack("right", files)),
+      "chat",
+      "bottom",
+      { splitId: "dock", stackId: "dock-tabs" },
+    );
+    expect(panelDockEdge(column, "chat")).toBe("bottom");
+    expect(panelDockEdge(column, "workspace-files")).toBe("top");
+
+    // Nested panels and shared stacks are not docked at an edge.
+    const nested = split(
+      split(stack("chat-stack", chatPanelInstance), stack("files-stack", files), "inner"),
+      stack("terminal-stack", terminals()),
+    );
+    expect(panelDockEdge(nested, "terminals")).toBe("right");
+    expect(panelDockEdge(nested, "workspace-files")).toBeUndefined();
+    const shared = split(
+      stack("left", chatPanelInstance, terminals()),
+      stack("right", files),
+    );
+    expect(panelDockEdge(shared, "chat")).toBeUndefined();
+    expect(panelDockEdge(defaultPanelLayout, "chat")).toBeUndefined();
+    expect(panelDockEdge(null, "chat")).toBeUndefined();
   });
 
   it("rejects excessive depth and deeply freezes nested terminal tabs", () => {

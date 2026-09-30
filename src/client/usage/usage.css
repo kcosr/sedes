@@ -141,13 +141,6 @@
   min-width: 11rem;
 }
 
-.usage-menu-hint {
-  margin-left: auto;
-  padding-left: 12px;
-  color: var(--muted-foreground-2);
-  font-size: 11.5px;
-}
-
 .usage-segmented {
   display: inline-flex;
   padding: 2px;
@@ -259,75 +252,6 @@
   text-decoration: underline;
 }
 
-/* Range picker: presets as rows, custom range behind a hairline. */
-.usage-range-popover {
-  width: 280px;
-  gap: 0;
-  padding: 5px;
-}
-
-.usage-range-presets {
-  display: grid;
-}
-
-.usage-range-presets button {
-  display: flex;
-  height: 32px;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px 0 4px;
-  border-radius: 6px;
-  font-size: 13px;
-  text-align: left;
-}
-
-.usage-range-presets button:hover,
-.usage-range-presets button:focus-visible {
-  background: var(--accent);
-  outline: none;
-}
-
-.usage-range-presets button[aria-selected="true"] {
-  font-weight: 600;
-}
-
-.usage-range-check {
-  display: inline-grid;
-  width: 20px;
-  place-items: center;
-}
-
-.usage-range-custom {
-  display: grid;
-  gap: 10px;
-  margin-top: 5px;
-  padding: 10px 6px 5px;
-  border-top: 1px solid var(--border-soft);
-}
-
-.usage-range-custom-title {
-  margin: 0;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.usage-range-fields {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.usage-range-fields label {
-  display: grid;
-  gap: 4px;
-  color: var(--muted-foreground-2);
-  font-size: 11.5px;
-}
-
-.usage-range-fields input,
 .usage-inline-search,
 .usage-filter-search {
   height: 30px;
@@ -338,10 +262,6 @@
   color: var(--foreground);
   color-scheme: light dark;
   font-size: 12.5px;
-}
-
-.usage-range-fields input {
-  padding: 0 6px;
 }
 
 .usage-inline-search,
@@ -369,8 +289,7 @@
 }
 
 .usage-inline-search:focus-within,
-.usage-filter-search:focus-within,
-.usage-range-fields input:focus-visible {
+.usage-filter-search:focus-within {
   border-color: var(--ring);
   outline: none;
 }

@@ -101,6 +101,11 @@ export function useThreadPeek(options?: {
   }, [cancelPending]);
 
   const show = useCallback((id: string, anchor: HTMLElement) => {
+    // An open menu or dialog hides the rest of the page from assistive
+    // technology; don't peek at a row sitting under it.
+    if (!anchor.isConnected || anchor.closest('[aria-hidden="true"], [inert]')) {
+      return;
+    }
     const rect = anchor.getBoundingClientRect();
     const preferred = rect.right + PEEK_GAP;
     const left =

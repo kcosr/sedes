@@ -1,7 +1,5 @@
-import { DialogPortalContainerContext } from "../ui/dialog.js";
 import { usePickerFocus } from "../../lib/use-picker-focus.js";
 import { QuestionInboxButton, QuestionInboxPanel } from "./QuestionInbox.js";
-import * as Popover from "@radix-ui/react-popover";
 import {
   useCallback,
   useContext,
@@ -38,7 +36,6 @@ import {
   Check,
   ArchiveRestore,
   Paperclip,
-  Search,
   Sparkles,
   Square,
   TextCursorInput,
@@ -50,12 +47,35 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@client/components/ui/button";
+import { Callout } from "@client/components/ui/callout";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
-  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuShortcut,
 } from "@client/components/ui/dropdown-menu";
+import { EmptyState } from "@client/components/ui/empty-state";
+import {
+  eyebrowClass,
+  menuDescriptionClass,
+  menuEmptyClass,
+  menuListRowClass,
+  menuRowActionClass,
+  menuRowClass,
+} from "@client/components/ui/floating";
+import {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+  PopoverDescription,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@client/components/ui/popover";
+import { SearchableSelectSearch } from "@client/components/ui/searchable-select";
+import { moveListFocus } from "@client/lib/list-focus";
+import { cn } from "@client/lib/utils";
 import { ProviderFeatureComposerActions } from "../../provider-features/registry.js";
 import {
   CodexTuiTerminalControlContext,
@@ -102,9 +122,9 @@ import {
 import { ApiError } from "../../api/ApiClient.js";
 import {
   ComposerPromptPicker,
-  COMPOSER_PROMPT_PICKER_MOBILE_QUERY,
   type ComposerPromptPickerItem,
 } from "./ComposerPromptPicker.js";
+import { useTouchDensity } from "../../app/use-touch-density.js";
 import { useTaskDrag } from "../../tasks/task-drag.js";
 import { OPEN_OVERLAY_SELECTOR } from "../../app/android-back.js";
 
@@ -355,7 +375,8 @@ export function Composer({
   const composerId = useId();
   const stashButtons = useRef<Array<HTMLButtonElement | null>>([]);
   const [stashOpen, setStashOpen] = useState(false);
-  const [activeStashIndex, setActiveStashIndex] = useState(0);
+  const stashTitleId = useId();
+  const stashDescriptionId = useId();
   const [preferredDeliveryMode, setPreferredDeliveryMode] = useState<
     "steer" | "queue"
   >(() => {
@@ -372,7 +393,7 @@ export function Composer({
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const skillSearchRef = useRef<HTMLInputElement>(null);
   const skillPickerFocus = usePickerFocus(skillSearchRef);
-  const dialogContainer = useContext(DialogPortalContainerContext);
+  const skillList = useRef<HTMLDivElement>(null);
   const [skillQuery, setSkillQuery] = useState("");
   const [skills, setSkills] = useState<readonly ComposerSkillDescriptor[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(false);
@@ -381,9 +402,7 @@ export function Composer({
   const composerDraftCoordinator = useComposerDraftCoordinator();
   const taskDrag = useTaskDrag();
   const mobileTerminalLayout = useMediaQuery(MOBILE_TUI_MEDIA_QUERY);
-  const mobileComposerLayout = useMediaQuery(
-    COMPOSER_PROMPT_PICKER_MOBILE_QUERY,
-  );
+  const mobileComposerLayout = useTouchDensity();
   const [tuiSubmissionError, setTuiSubmissionError] = useState<string>();
   const [attachmentInputError, setAttachmentInputError] = useState<string>();
   const [promptInputError, setPromptInputError] = useState<string>();
@@ -1642,7 +1661,6 @@ export function Composer({
 
   useEffect(() => {
     if (!stashOpen) return;
-    setActiveStashIndex(0);
     requestAnimationFrame(() => stashButtons.current[0]?.focus());
   }, [stashOpen, state.stashes.length]);
 
@@ -2413,6 +2431,13 @@ export function Composer({
     requestAnimationFrame(() => textarea.current?.focus());
   };
 
+  const skillRows = () =>
+    Array.from(
+      skillList.current?.querySelectorAll<HTMLElement>(
+        '[data-slot="skill-option"]',
+      ) ?? [],
+    );
+
   const chooseSkill = (skill: ComposerSkillDescriptor) => {
     if (queueRestoreRunning.current) return;
     const triggerQuery = skillTriggerQuery(textRef.current);
@@ -2708,8 +2733,8 @@ export function Composer({
             </div>
           )}
         <QuestionInboxPanel />
-        <Popover.Root open={active && stashOpen} onOpenChange={setStashOpen}>
-          <Popover.Anchor asChild>
+        <Popover open={active && stashOpen} onOpenChange={setStashOpen}>
+          <PopoverAnchor asChild>
             <div className="composer-surface-stack">
               {!tuiActive && !hidePendingInputs && (
                 <PendingInputStrip
@@ -3098,39 +3123,64 @@ export function Composer({
                       <button
                         id={commandOptionId(command, index)}
                         key={`${command.source}:${command.invocation}`}
-                        className={
-                          index === effectiveActiveCommandIndex ? "active" : ""
-                        }
+                        type="button"
                         role="option"
                         aria-selected={index === effectiveActiveCommandIndex}
+                        data-active={
+                          index === effectiveActiveCommandIndex || undefined
+                        }
                         tabIndex={-1}
+                        className={cn(
+                          menuRowClass,
+                          "shrink-0 data-active:bg-(--hover)",
+                        )}
+                        // The pointer moves the one active row, so hover and
+                        // the keyboard share a single wash.
+                        onPointerMove={(event) => {
+                          if (event.pointerType === "mouse") {
+                            setActiveCommandIndex(index);
+                          }
+                        }}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() => chooseCommand(command)}
                       >
-                        <span>
-                          <strong>{command.invocation}</strong>
-                          {command.argumentHint && (
-                            <em>{command.argumentHint.text}</em>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex min-w-0 items-baseline gap-2">
+                            <span className="truncate font-mono">
+                              {command.invocation}
+                            </span>
+                            {command.argumentHint && (
+                              <span className="truncate text-(length:--text-meta) font-normal text-muted-foreground-2">
+                                {command.argumentHint.text}
+                              </span>
+                            )}
+                          </span>
+                          {command.description && (
+                            <span
+                              data-slot="command-menu-item-description"
+                              className={cn(menuDescriptionClass, "truncate")}
+                            >
+                              {command.description.text}
+                            </span>
                           )}
                         </span>
-                        {command.description && (
-                          <small>{command.description.text}</small>
-                        )}
-                        <b>{command.source}</b>
+                        <span className={cn(eyebrowClass, "shrink-0")}>
+                          {command.source}
+                        </span>
                       </button>
                     ))}
                   </div>
                 )}
                 <div className="composer-footer">
                   <div className="composer-tools">
-                    <Popover.Root
+                    <Popover
                       open={active && skillPickerOpen}
                       onOpenChange={(open) => {
                         setSkillPickerOpen(open);
                         if (!open) setSkillQuery("");
                       }}
                     >
-                      <Popover.Trigger asChild>
+                      <PopoverTrigger asChild>
                         <button
                           type="button"
                           onPointerDown={skillPickerFocus.onPointerDown}
@@ -3146,87 +3196,132 @@ export function Composer({
                             aria-hidden="true"
                           />
                         </button>
-                      </Popover.Trigger>
-                      <Popover.Portal container={dialogContainer}>
-                        <Popover.Content
-                          collisionBoundary={dialogContainer ?? undefined}
-                          onOpenAutoFocus={skillPickerFocus.onOpenAutoFocus}
-                          className="skill-popover"
-                          role="dialog"
-                          aria-label="Choose a skill"
-                          side="top"
-                          align="start"
-                          sideOffset={8}
+                      </PopoverTrigger>
+                      <PopoverContent
+                        onOpenAutoFocus={skillPickerFocus.onOpenAutoFocus}
+                        className="skill-popover max-h-[min(var(--radix-popover-content-available-height),440px,70dvh)] gap-0 overflow-hidden p-0"
+                        role="dialog"
+                        aria-label="Choose a skill"
+                        side="top"
+                        align="start"
+                        sideOffset={8}
+                      >
+                        <SearchableSelectSearch
+                          type="search"
+                          value={skillQuery}
+                          ref={skillSearchRef}
+                          aria-label="Search skills"
+                          placeholder="Search skills"
+                          onChange={(event) => setSkillQuery(event.target.value)}
+                          onKeyDown={(event) => {
+                            // Up and Down step from the search into the list.
+                            if (
+                              (event.key === "ArrowDown" ||
+                                event.key === "ArrowUp") &&
+                              moveListFocus(skillRows(), event.key)
+                            ) {
+                              event.preventDefault();
+                            }
+                          }}
+                        />
+                        <div
+                          ref={skillList}
+                          className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-(--menu-panel-padding)"
+                          onKeyDown={(event) => {
+                            if (moveListFocus(skillRows(), event.key)) {
+                              event.preventDefault();
+                            }
+                          }}
                         >
-                          <div className="skill-search">
-                            <Search
-                              size={14}
-                              strokeWidth={1.8}
-                              aria-hidden="true"
-                            />
-                            <input
-                              type="search"
-                              value={skillQuery}
-                              ref={skillSearchRef}
-                              aria-label="Search skills"
-                              placeholder="Search skills"
-                              onChange={(event) =>
-                                setSkillQuery(event.target.value)
-                              }
-                            />
-                          </div>
-                          <div className="skill-list">
-                            {matchingSkills.map((skill) => (
-                              <button
-                                type="button"
-                                key={skill.id}
-                                aria-pressed={skill.id === selectedSkillId}
-                                onClick={() => chooseSkill(skill)}
-                              >
-                                <span>
-                                  <strong>
-                                    {skill.displayName?.text ?? skill.name.text}
-                                  </strong>
-                                </span>
-                                {skill.description && (
-                                  <small>{skill.description.text}</small>
-                                )}
-                              </button>
-                            ))}
-                            {skillsLoading && skills.length === 0 && (
-                              <p className="skill-status">Loading skills…</p>
-                            )}
-                            {!skillsLoading && skillsError && (
-                              <div className="skill-status" role="alert">
-                                <span>{skillsError}</span>
-                                <button
-                                  type="button"
+                          {matchingSkills.length > 0 && (
+                            <ul
+                              aria-label="Skills"
+                              className="m-0 flex list-none flex-col p-0"
+                            >
+                              {matchingSkills.map((skill) => {
+                                const selected = skill.id === selectedSkillId;
+                                return (
+                                  <li key={skill.id} className="flex shrink-0">
+                                    <button
+                                      type="button"
+                                      data-slot="skill-option"
+                                      aria-pressed={selected}
+                                      className={cn(
+                                        menuRowClass,
+                                        "hover:bg-(--hover) focus-visible:bg-(--hover) aria-pressed:font-medium",
+                                      )}
+                                      onClick={() => chooseSkill(skill)}
+                                    >
+                                      <span className="min-w-0 flex-1">
+                                        <span className="block truncate">
+                                          {skill.displayName?.text ??
+                                            skill.name.text}
+                                        </span>
+                                        {skill.description && (
+                                          <span
+                                            data-slot="skill-item-description"
+                                            className={cn(
+                                              menuDescriptionClass,
+                                              "truncate",
+                                            )}
+                                          >
+                                            {skill.description.text}
+                                          </span>
+                                        )}
+                                      </span>
+                                      {selected && (
+                                        <Check
+                                          className="size-4 text-foreground"
+                                          aria-hidden="true"
+                                        />
+                                      )}
+                                    </button>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          )}
+                          {skillsLoading && skills.length === 0 && (
+                            <p className={cn(menuEmptyClass, "m-0")} role="status">
+                              <LoaderCircle aria-hidden="true" />
+                              Loading skills…
+                            </p>
+                          )}
+                          {!skillsLoading && skillsError && (
+                            <Callout
+                              tone="danger"
+                              role="alert"
+                              action={
+                                <Button
+                                  variant="outline"
+                                  size="xs"
                                   onClick={() => void loadSkills()}
                                 >
                                   Retry
-                                </button>
-                              </div>
+                                </Button>
+                              }
+                            >
+                              {skillsError}
+                            </Callout>
+                          )}
+                          {!skillsLoading &&
+                            !skillsError &&
+                            skills.length === 0 && (
+                              <p className={cn(menuEmptyClass, "m-0")}>
+                                No skills available
+                              </p>
                             )}
-                            {!skillsLoading &&
-                              !skillsError &&
-                              skills.length === 0 && (
-                                <p className="skill-status">
-                                  No skills available
-                                </p>
-                              )}
-                            {!skillsLoading &&
-                              !skillsError &&
-                              skills.length > 0 &&
-                              matchingSkills.length === 0 && (
-                                <p className="skill-status">
-                                  No matching skills
-                                </p>
-                              )}
-                          </div>
-                          <Popover.Arrow className="popover-arrow" />
-                        </Popover.Content>
-                      </Popover.Portal>
-                    </Popover.Root>
+                          {!skillsLoading &&
+                            !skillsError &&
+                            skills.length > 0 &&
+                            matchingSkills.length === 0 && (
+                              <p className={cn(menuEmptyClass, "m-0")} role="status">
+                                No matching skills
+                              </p>
+                            )}
+                        </div>
+                      </PopoverContent>
+                    </Popover>
                     <input
                       ref={fileInput}
                       className="sr-only"
@@ -3277,7 +3372,6 @@ export function Composer({
                       store={store}
                       snapshot={snapshot}
                       disabled={effectiveDisabled}
-                      variant="pill"
                     />
                   </div>
                   <div className="send-group">
@@ -3294,7 +3388,7 @@ export function Composer({
                     {promptsInToolbar &&
                       !tuiActive &&
                       renderPromptPicker("toolbar")}
-                    <Popover.Trigger asChild>
+                    <PopoverTrigger asChild>
                       <button
                         className={`stash-button ${state.stashes.length ? "has-stashes" : ""}`}
                         disabled={
@@ -3322,138 +3416,129 @@ export function Composer({
                           </span>
                         )}
                       </button>
-                    </Popover.Trigger>
-                    <Popover.Portal>
-                      <Popover.Content
-                        className="stash-popover"
-                        role="dialog"
-                        aria-label="Stashed prompts"
-                        side="top"
-                        align="end"
-                        sideOffset={8}
-                        onKeyDown={(event) => {
-                          const last = state.stashes.length - 1;
-                          if (last < 0) return;
-                          if (
-                            event.key === "ArrowDown" ||
-                            event.key === "ArrowUp"
-                          ) {
-                            event.preventDefault();
-                            const direction =
-                              event.key === "ArrowDown" ? 1 : -1;
-                            const next =
-                              (activeStashIndex +
-                                direction +
-                                state.stashes.length) %
-                              state.stashes.length;
-                            setActiveStashIndex(next);
-                            stashButtons.current[next]?.focus();
-                          } else if (
-                            event.key === "Home" ||
-                            event.key === "End"
-                          ) {
-                            event.preventDefault();
-                            const next = event.key === "Home" ? 0 : last;
-                            setActiveStashIndex(next);
-                            stashButtons.current[next]?.focus();
-                          }
-                        }}
-                        onOpenAutoFocus={(event) => {
-                          event.preventDefault();
-                          requestAnimationFrame(() =>
-                            stashButtons.current[0]?.focus(),
-                          );
-                        }}
-                      >
-                        <div className="stash-heading">
-                          <div>
-                            <strong>Stashed prompts</strong>
-                            <small>Saved only for this thread</small>
-                          </div>
-                          {hasStashableDraft && (
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              disabled={
-                                draftMutationPending || attachmentUploadPending
-                              }
-                              onClick={() =>
-                                void stash().catch(() => undefined)
-                              }
-                            >
-                              Stash current
-                            </Button>
-                          )}
+                    </PopoverTrigger>
+                    <PopoverContent
+                      className="max-h-[min(var(--radix-popover-content-available-height),430px,70dvh)] w-[min(520px,calc(100vw-16px))] gap-1 overflow-hidden p-(--menu-panel-padding)"
+                      aria-labelledby={stashTitleId}
+                      aria-describedby={stashDescriptionId}
+                      side="top"
+                      align="end"
+                      sideOffset={8}
+                      onOpenAutoFocus={(event) => {
+                        event.preventDefault();
+                        requestAnimationFrame(() =>
+                          stashButtons.current[0]?.focus(),
+                        );
+                      }}
+                    >
+                      <div className="flex min-w-0 shrink-0 items-center justify-between gap-3 px-2 pt-1.5 pb-1">
+                        <div className="min-w-0">
+                          <PopoverTitle id={stashTitleId} className="m-0 leading-5">
+                            Stashed prompts
+                          </PopoverTitle>
+                          <PopoverDescription
+                            id={stashDescriptionId}
+                            className={cn(menuDescriptionClass, "m-0")}
+                          >
+                            Saved only for this thread
+                          </PopoverDescription>
                         </div>
-                        <div
-                          className="stash-list"
-                          role="menu"
+                        {hasStashableDraft && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={
+                              draftMutationPending || attachmentUploadPending
+                            }
+                            onClick={() => void stash().catch(() => undefined)}
+                          >
+                            Stash current
+                          </Button>
+                        )}
+                      </div>
+                      {state.stashes.length > 0 ? (
+                        <ul
                           aria-label="Stashed prompts"
+                          className="m-0 flex min-h-0 flex-1 list-none flex-col overflow-y-auto overscroll-contain p-0"
+                          onKeyDown={(event) => {
+                            const rows = stashButtons.current
+                              .slice(0, state.stashes.length)
+                              .filter(
+                                (button): button is HTMLButtonElement =>
+                                  button !== null,
+                              );
+                            if (moveListFocus(rows, event.key)) {
+                              event.preventDefault();
+                            }
+                          }}
                         >
                           {state.stashes.map((stashItem, index) => (
-                            <div className="stash-item" key={stashItem.id}>
+                            <li key={stashItem.id} className={menuListRowClass}>
                               <button
+                                type="button"
                                 ref={(element) => {
                                   stashButtons.current[index] = element;
                                 }}
-                                className="stash-restore"
-                                role="menuitem"
-                                tabIndex={index === activeStashIndex ? 0 : -1}
+                                className={cn(menuRowClass, "w-auto min-w-0 flex-1")}
                                 disabled={
                                   draftMutationPending ||
                                   attachmentUploadPending
                                 }
-                                onFocus={() => setActiveStashIndex(index)}
                                 onClick={() =>
                                   void restoreStash(stashItem).catch(
                                     () => undefined,
                                   )
                                 }
                               >
-                                <span>{stashPreviewLabel(stashItem)}</span>
-                                <small>
-                                  {relativeTime(stashItem.createdAt)}
-                                  {stashItem.contextExcerpts.length
-                                    ? ` · ${stashItem.contextExcerpts.length} context`
-                                    : ""}
-                                  {stashItem.attachments.length
-                                    ? ` · ${stashItem.attachments.length} ${stashItem.attachments.length === 1 ? "attachment" : "attachments"}`
-                                    : ""}
-                                  {stashItem.taskReferences.length
-                                    ? ` · ${stashItem.taskReferences.length} ${stashItem.taskReferences.length === 1 ? "task" : "tasks"}`
-                                    : ""}
-                                  {" · Restore"}
-                                </small>
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate">
+                                    {stashPreviewLabel(stashItem)}
+                                  </span>
+                                  <span
+                                    data-slot="stash-item-description"
+                                    className={cn(menuDescriptionClass, "truncate")}
+                                  >
+                                    {relativeTime(stashItem.createdAt)}
+                                    {stashItem.contextExcerpts.length
+                                      ? ` · ${stashItem.contextExcerpts.length} context`
+                                      : ""}
+                                    {stashItem.attachments.length
+                                      ? ` · ${stashItem.attachments.length} ${stashItem.attachments.length === 1 ? "attachment" : "attachments"}`
+                                      : ""}
+                                    {stashItem.taskReferences.length
+                                      ? ` · ${stashItem.taskReferences.length} ${stashItem.taskReferences.length === 1 ? "task" : "tasks"}`
+                                      : ""}
+                                    {" · Restore"}
+                                  </span>
+                                </span>
                               </button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="delete-stash"
+                              <button
+                                type="button"
+                                data-variant="destructive"
+                                className={menuRowActionClass}
                                 aria-label="Delete stashed prompt"
+                                title="Delete stashed prompt"
                                 onClick={() =>
                                   void store
                                     .deleteStash(stashItem.id)
                                     .catch(() => undefined)
                                 }
                               >
-                                <Trash2 size={15} strokeWidth={1.8} />
-                              </Button>
-                            </div>
+                                <Trash2 aria-hidden="true" />
+                              </button>
+                            </li>
                           ))}
-                          {state.stashes.length === 0 && (
-                            <div className="stash-empty">
-                              <ArchiveRestore size={18} strokeWidth={1.8} />
-                              <p>No stashed prompts</p>
-                              <small>
-                                Write an idea and press Ctrl/⌘+S to put it
-                                aside.
-                              </small>
-                            </div>
-                          )}
-                        </div>
-                        <Popover.Arrow className="popover-arrow" />
-                      </Popover.Content>
-                    </Popover.Portal>
+                        </ul>
+                      ) : (
+                        <EmptyState
+                          variant="inline"
+                          className="px-2"
+                          icon={<ArchiveRestore />}
+                          title="No stashed prompts"
+                          description="Write an idea and press Ctrl/⌘+S to put it aside."
+                        />
+                      )}
+                    </PopoverContent>
                     {tuiActive ? (
                       <button
                         className="send-button"
@@ -3515,39 +3600,49 @@ export function Composer({
                                 </button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent side="top" align="end">
-                                {supportedBusyDeliveryModes.map((mode) => {
-                                  const id = mode.id as "steer" | "queue";
-                                  return (
-                                    <DropdownMenuItem
-                                      key={id}
+                                <DropdownMenuRadioGroup
+                                  aria-label="Delivery mode"
+                                  value={deliveryMode}
+                                  onValueChange={(value) => {
+                                    if (value !== "steer" && value !== "queue") {
+                                      return;
+                                    }
+                                    setPreferredDeliveryMode(value);
+                                    try {
+                                      localStorage.setItem(
+                                        "sedes-composer-delivery-mode",
+                                        value,
+                                      );
+                                    } catch {
+                                      /* Keep the session choice when storage is unavailable. */
+                                    }
+                                  }}
+                                >
+                                  {supportedBusyDeliveryModes.map((mode) => (
+                                    <DropdownMenuRadioItem
+                                      key={mode.id}
+                                      value={mode.id}
                                       disabled={!mode.available}
-                                      onSelect={() => {
-                                        setPreferredDeliveryMode(id);
-                                        try {
-                                          localStorage.setItem(
-                                            "sedes-composer-delivery-mode",
-                                            id,
-                                          );
-                                        } catch {
-                                          /* Keep the session choice when storage is unavailable. */
-                                        }
-                                      }}
+                                      title={
+                                        mode.available
+                                          ? undefined
+                                          : mode.unavailableReason?.text
+                                      }
                                     >
-                                      {id === "steer" ? (
+                                      {mode.id === "steer" ? (
                                         <Merge aria-hidden="true" />
                                       ) : (
                                         <Layers aria-hidden="true" />
                                       )}
-                                      {id === "steer" ? "Steer" : "Queue"}
-                                      {deliveryMode === id && (
-                                        <Check
-                                          className="ml-auto"
-                                          aria-hidden="true"
-                                        />
+                                      {mode.id === "steer" ? "Steer" : "Queue"}
+                                      {!mode.available && (
+                                        <DropdownMenuShortcut>
+                                          Unavailable
+                                        </DropdownMenuShortcut>
                                       )}
-                                    </DropdownMenuItem>
-                                  );
-                                })}
+                                    </DropdownMenuRadioItem>
+                                  ))}
+                                </DropdownMenuRadioGroup>
                               </DropdownMenuContent>
                             </DropdownMenu>
                           </div>
@@ -3593,8 +3688,8 @@ export function Composer({
                 </div>
               </div>
             </div>
-          </Popover.Anchor>
-        </Popover.Root>
+          </PopoverAnchor>
+        </Popover>
       </div>
     </div>
   );

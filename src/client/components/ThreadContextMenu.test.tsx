@@ -27,9 +27,9 @@ import type {
 } from "../stores/ThreadClientStore.js";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
 import { SIDEBAR_VIEW_DEFAULTS, SIDEBAR_VIEW_STORAGE_KEY } from "../app/sidebar-view-model.js";
+import { TOUCH_DENSITY_QUERY } from "../app/use-touch-density.js";
 import { InventorySidebar } from "./InventorySidebar.js";
 import { ThreadContextMenu } from "./ThreadContextMenu.js";
-import { ArchiveDropdown } from "./thread/ArchiveThreadChoices.js";
 
 // jsdom lacks the pointer-capture and scroll APIs Radix menus rely on.
 beforeEach(() => {
@@ -37,8 +37,8 @@ beforeEach(() => {
   // The row-editing cases exercise the project hierarchy deliberately.
   localStorage.setItem(SIDEBAR_VIEW_STORAGE_KEY, JSON.stringify({ ...SIDEBAR_VIEW_DEFAULTS, groupBy: "project" }));
   window.dispatchEvent(new StorageEvent("storage", { key: SIDEBAR_VIEW_STORAGE_KEY }));
-  // Desktop shell: the mobile media query reports no match, so archive
-  // stays a submenu rather than the mobile dialog.
+  // Desktop density: the density query reports no match, so the menu
+  // floats rather than presenting as the bottom sheet.
   vi.stubGlobal(
     "matchMedia",
     vi.fn(() => ({
@@ -219,6 +219,33 @@ async function openMenu(trigger: HTMLElement): Promise<HTMLElement> {
   return await screen.findByTestId("thread-context-menu");
 }
 
+/**
+ * The touch density (narrow layout or coarse pointer): the menu presents as
+ * the bottom sheet. Stub it before rendering; the density is read on render.
+ */
+function stubTouchDensity(): ReturnType<typeof vi.fn> {
+  const matchMedia = vi.fn(() => ({
+    matches: true,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
+  vi.stubGlobal("matchMedia", matchMedia);
+  return matchMedia;
+}
+
+// The sheet opens after a 700ms hold (ui/menu-sheet.tsx LONG_PRESS_MS).
+const LONG_PRESS_WAIT_MS = 750;
+
+function wait(ms: number): Promise<void> {
+  return act(
+    () =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }),
+  );
+}
+
+/** Long-presses a row under the touch density and returns its action sheet. */
 async function openTouchSheet(
   trigger: HTMLElement,
   pointerType: "touch" | "pen" = "touch",
@@ -229,13 +256,50 @@ async function openTouchSheet(
     clientX: 40,
     clientY: 50,
   });
-  await act(
-    () =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, 575);
-      }),
+  await wait(LONG_PRESS_WAIT_MS);
+  const sheet = screen.getByTestId("thread-actions-sheet");
+  expect(sheet).toHaveAttribute("role", "dialog");
+  expect(sheet).toHaveAttribute("data-layout", "sheet");
+  return sheet;
+}
+
+/** Opens a desktop submenu from its row and returns the submenu. */
+async function openSubmenu(
+  menu: HTMLElement,
+  name: string,
+): Promise<HTMLElement> {
+  await userEvent.click(within(menu).getByRole("menuitem", { name }));
+  return await screen.findByRole("menu", { name });
+}
+
+/** Drills into a sheet submenu; its rows replace the sheet's own. */
+async function drillIn(sheet: HTMLElement, name: string): Promise<void> {
+  await userEvent.click(within(sheet).getByRole("menuitem", { name }));
+  // The back row carries the submenu's name.
+  await waitFor(() =>
+    expect(
+      sheet.querySelector('[data-slot="menu-sheet-back"]'),
+    ).toHaveTextContent(name),
   );
-  return screen.getByRole("dialog", { name: "Thread actions" });
+}
+
+function isolatedWorkspace(allocationRevision = 2) {
+  return {
+    kind: "isolated" as const,
+    workspaceAccess: "writable_clone" as const,
+    state: "ready" as const,
+    allocationRevision,
+    networkProfile: "isolated" as const,
+    hostPaths: { home: "/sandbox", workspace: "/sandbox/repo" },
+    branch: "sedes/thread-1",
+    gitStatus: {
+      available: true as const,
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      upstream: "origin/main",
+      aheadCount: 0,
+    },
+  };
 }
 
 function renderMenu(
@@ -321,7 +385,7 @@ function makeForkRegistry(
 }
 
 describe("ThreadContextMenu content per thread state", () => {
-  it("loads isolated workspace actions for the selected row", async () => {
+  it("loads isolated workspace actions for the selected row and confirms deletion", async () => {
     const store = makeStore();
     store.getSnapshot.mockReturnValue({
       snapshot: {
@@ -337,32 +401,45 @@ describe("ThreadContextMenu content per thread state", () => {
         ],
       },
     } as unknown as ApplicationClientState);
-    store.getThreadExecutionWorkspace.mockResolvedValue({
-      kind: "isolated",
-      workspaceAccess: "writable_clone",
-      state: "ready",
-      allocationRevision: 2,
-      networkProfile: "isolated",
-      hostPaths: { home: "/sandbox", workspace: "/sandbox/repo" },
-      branch: "sedes/thread-1",
-      gitStatus: {
-        available: true,
-        trackedChangeCount: 0,
-        untrackedFileCount: 0,
-        upstream: "origin/main",
-        aheadCount: 0,
-      },
+    store.getThreadExecutionWorkspace.mockResolvedValue(isolatedWorkspace());
+    const deleteThreadExecutionWorkspace = vi.fn().mockResolvedValue({
+      state: "deleted",
+      allocationRevision: 3,
+      operationId: "10000000-0000-4000-8000-000000000001",
     });
+    Object.assign(store, { deleteThreadExecutionWorkspace });
 
     const menu = await openMenu(renderMenu(makeThread(), store));
+    await within(menu).findByRole("menuitem", { name: "Isolated workspace" });
+    const workspace = await openSubmenu(menu, "Isolated workspace");
 
     expect(
-      await within(menu).findByRole("button", { name: "Copy workspace path" }),
+      within(workspace).getByRole("menuitem", { name: "Copy workspace path" }),
     ).toBeVisible();
     expect(store.getThreadExecutionWorkspace).toHaveBeenCalledWith("thread-1");
+    // The irreversible action is red and follows a separator.
+    const remove = within(workspace).getByRole("menuitem", {
+      name: "Delete isolated workspace…",
+    });
+    expect(remove).toHaveAttribute("data-variant", "destructive");
+    expect(remove.previousElementSibling).toHaveAttribute(
+      "data-slot",
+      "context-menu-separator",
+    );
+    await userEvent.click(remove);
+    const dialog = await screen.findByRole("dialog", {
+      name: "Delete isolated workspace?",
+    });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Delete permanently" }),
+    );
+    await waitFor(() =>
+      expect(deleteThreadExecutionWorkspace).toHaveBeenCalledWith("thread-1", 2),
+    );
   });
 
   it("closes the touch sheet before confirming isolated workspace deletion", async () => {
+    stubTouchDensity();
     const store = makeStore();
     store.getSnapshot.mockReturnValue({
       snapshot: {
@@ -378,26 +455,13 @@ describe("ThreadContextMenu content per thread state", () => {
         ],
       },
     } as unknown as ApplicationClientState);
-    store.getThreadExecutionWorkspace.mockResolvedValue({
-      kind: "isolated",
-      workspaceAccess: "writable_clone",
-      state: "ready",
-      allocationRevision: 2,
-      networkProfile: "isolated",
-      hostPaths: { home: "/sandbox", workspace: "/sandbox/repo" },
-      branch: "sedes/thread-1",
-      gitStatus: {
-        available: true,
-        trackedChangeCount: 0,
-        untrackedFileCount: 0,
-        upstream: "origin/main",
-        aheadCount: 0,
-      },
-    });
+    store.getThreadExecutionWorkspace.mockResolvedValue(isolatedWorkspace());
 
     const sheet = await openTouchSheet(renderMenu(makeThread(), store));
+    await within(sheet).findByRole("menuitem", { name: "Isolated workspace" });
+    await drillIn(sheet, "Isolated workspace");
     await userEvent.click(
-      await within(sheet).findByRole("button", {
+      within(sheet).getByRole("menuitem", {
         name: "Delete isolated workspace…",
       }),
     );
@@ -417,17 +481,12 @@ describe("ThreadContextMenu content per thread state", () => {
 
     expect(store.getThreadExecutionWorkspace).not.toHaveBeenCalled();
     expect(
-      screen.queryByRole("button", { name: "Copy workspace path" }),
+      screen.queryByRole("menuitem", { name: "Isolated workspace" }),
     ).not.toBeInTheDocument();
   });
 
-  it("presents mouse right-click as a bottom sheet on mobile layouts", async () => {
-    const matchMedia = vi.fn(() => ({
-      matches: true,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    }));
-    vi.stubGlobal("matchMedia", matchMedia);
+  it("presents mouse right-click as a bottom sheet under the touch density", async () => {
+    const matchMedia = stubTouchDensity();
     const store = makeStore();
     render(
       <>
@@ -435,7 +494,7 @@ describe("ThreadContextMenu content per thread state", () => {
           <div data-testid="row-trigger-one">Row one</div>
         </ThreadContextMenu>
         <ThreadContextMenu
-          thread={makeThread({ id: "thread-2" })}
+          thread={makeThread({ id: "thread-2", title: { text: "Second row" } })}
           store={store}
         >
           <div data-testid="row-trigger-two">Row two</div>
@@ -444,31 +503,25 @@ describe("ThreadContextMenu content per thread state", () => {
     );
 
     fireEvent.contextMenu(screen.getByTestId("row-trigger-one"));
-    expect(
-      await screen.findByRole("dialog", { name: "Thread actions" }),
-    ).toHaveClass("thread-actions-sheet");
-    expect(matchMedia).toHaveBeenCalledWith("(max-width: 819px)");
+    const sheet = await screen.findByRole("dialog", {
+      name: "Review backend contract",
+    });
+    expect(sheet).toHaveAttribute("data-testid", "thread-actions-sheet");
+    expect(sheet).toHaveAttribute("data-layout", "sheet");
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(matchMedia).toHaveBeenCalledWith(TOUCH_DENSITY_QUERY);
     expect(screen.queryByTestId("thread-context-menu")).toBeNull();
 
     await userEvent.keyboard("{Escape}");
     await waitFor(() =>
-      expect(
-        screen.queryByRole("dialog", { name: "Thread actions" }),
-      ).not.toBeInTheDocument(),
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
   });
 
   it.each(["touch", "pen"])(
     "opens from a %s long press without navigating the row",
     async (pointerType) => {
-      vi.stubGlobal(
-        "matchMedia",
-        vi.fn(() => ({
-          matches: true,
-          addEventListener: vi.fn(),
-          removeEventListener: vi.fn(),
-        })),
-      );
+      stubTouchDensity();
       const onClick = vi.fn();
       render(
         <ThreadContextMenu thread={makeThread()} store={makeStore()}>
@@ -485,26 +538,25 @@ describe("ThreadContextMenu content per thread state", () => {
         clientX: 40,
         clientY: 50,
       });
-      await act(
-        () =>
-          new Promise<void>((resolve) => {
-            setTimeout(resolve, 575);
-          }),
-      );
+      await wait(400);
+      // A short hold is not a long press.
+      expect(screen.queryByTestId("thread-actions-sheet")).toBeNull();
+      await wait(LONG_PRESS_WAIT_MS - 400);
 
-      const sheet = screen.getByRole("dialog", { name: "Thread actions" });
+      const sheet = screen.getByRole("dialog", {
+        name: "Review backend contract",
+      });
       expect(sheet).toHaveAttribute("data-state", "open");
-      expect(within(sheet).getByText("Force reset…")).toBeInTheDocument();
       expect(
-        within(sheet).getByText("Review backend contract"),
-      ).toHaveAttribute("title", "Review backend contract");
+        within(sheet).getByRole("menuitem", { name: "Force reset…" }),
+      ).toBeInTheDocument();
+      // The header is the thread's name over its meta line.
+      expect(
+        within(sheet).getByRole("heading", { name: "Review backend contract" }),
+      ).toBeVisible();
+      expect(sheet).toHaveAccessibleDescription(/^Pi · updated /);
       expect(screen.queryByTestId("thread-context-menu")).toBeNull();
-      await act(
-        () =>
-          new Promise<void>((resolve) => {
-            setTimeout(resolve, 175);
-          }),
-      );
+      await wait(175);
       expect(screen.queryByTestId("thread-context-menu")).toBeNull();
       fireEvent.pointerUp(trigger, {
         pointerType,
@@ -512,12 +564,32 @@ describe("ThreadContextMenu content per thread state", () => {
         clientX: 40,
         clientY: 50,
       });
-      fireEvent.click(trigger);
+      // The release lands on the sheet's modal layer, not on the row: the
+      // page behind the sheet takes no pointer events.
+      expect(screen.getByTestId("dialog-overlay")).toBeInTheDocument();
+      expect(document.body.style.pointerEvents).toBe("none");
       expect(onClick).not.toHaveBeenCalled();
     },
   );
 
+  it("opens the floating menu from a touch long press on desktop density", async () => {
+    render(
+      <ThreadContextMenu thread={makeThread()} store={makeStore()}>
+        <button data-testid="row-trigger">Row</button>
+      </ThreadContextMenu>,
+    );
+    fireEvent.pointerDown(screen.getByTestId("row-trigger"), {
+      pointerType: "touch",
+      button: 0,
+      clientX: 40,
+      clientY: 50,
+    });
+    await wait(LONG_PRESS_WAIT_MS);
+    expect(screen.getByTestId("thread-context-menu")).toBeInTheDocument();
+    expect(screen.queryByTestId("thread-actions-sheet")).toBeNull();
+  });
   it("keeps repeated Android synthetic contextmenu events on the touch sheet path", async () => {
+    stubTouchDensity();
     render(
       <ThreadContextMenu thread={makeThread()} store={makeStore()}>
         <button data-testid="row-trigger">Row</button>
@@ -532,22 +604,19 @@ describe("ThreadContextMenu content per thread state", () => {
         clientX: 40,
         clientY: 50,
       });
-      await act(
-        () =>
-          new Promise<void>((resolve) => {
-            setTimeout(resolve, 300);
-          }),
-      );
+      await wait(300);
+      // Android's synthetic contextmenu mid-hold is consumed and opens the
+      // sheet at once.
       expect(fireEvent.contextMenu(trigger)).toBe(false);
-      await act(
-        () =>
-          new Promise<void>((resolve) => {
-            setTimeout(resolve, 275);
-          }),
-      );
-
       expect(
-        screen.getByRole("dialog", { name: "Thread actions" }),
+        screen.getByRole("dialog", { name: "Review backend contract" }),
+      ).toHaveAttribute("data-state", "open");
+      // The hold's own timer is cancelled: nothing reopens or toggles.
+      await wait(LONG_PRESS_WAIT_MS - 300);
+
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      expect(
+        screen.getByRole("dialog", { name: "Review backend contract" }),
       ).toHaveAttribute("data-state", "open");
       expect(screen.queryByTestId("thread-context-menu")).toBeNull();
       fireEvent.pointerUp(trigger, {
@@ -558,14 +627,12 @@ describe("ThreadContextMenu content per thread state", () => {
       });
       await userEvent.keyboard("{Escape}");
       await waitFor(() =>
-        expect(
-          screen.queryByRole("dialog", { name: "Thread actions" }),
-        ).not.toBeInTheDocument(),
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
       );
     }
 
-    // A real mouse right-click remains available even during the touch
-    // suppression window.
+    // Under the touch density a mouse right-click opens the same sheet,
+    // never the floating menu.
     fireEvent.pointerDown(trigger, {
       pointerType: "mouse",
       button: 2,
@@ -573,7 +640,8 @@ describe("ThreadContextMenu content per thread state", () => {
       clientY: 50,
     });
     fireEvent.contextMenu(trigger);
-    expect(await screen.findByTestId("thread-context-menu")).toBeInTheDocument();
+    expect(await screen.findByTestId("thread-actions-sheet")).toBeInTheDocument();
+    expect(screen.queryByTestId("thread-context-menu")).toBeNull();
   });
 
   it("forks from the exact latest capability and navigates to the empty child", async () => {
@@ -655,6 +723,7 @@ describe("ThreadContextMenu content per thread state", () => {
         threadRegistry.release(makeThread().id);
       }
     });
+    stubTouchDensity();
     const trigger = renderMenu(makeThread(), makeStore(), {
       threadRegistry,
       onNavigate,
@@ -662,7 +731,7 @@ describe("ThreadContextMenu content per thread state", () => {
 
     for (const childNumber of [1, 2]) {
       const sheet = await openTouchSheet(trigger);
-      const forkButton = within(sheet).getByRole("button", { name: "Fork" });
+      const forkButton = within(sheet).getByRole("menuitem", { name: "Fork" });
       await waitFor(() => expect(forkButton).toBeEnabled());
       await userEvent.click(forkButton);
       await waitFor(() =>
@@ -687,6 +756,7 @@ describe("ThreadContextMenu content per thread state", () => {
     vi.mocked(threadRegistry.release).mockImplementation(() => {
       leases--;
     });
+    stubTouchDensity();
     const { unmount } = render(
       <ThreadContextMenu
         thread={makeThread()}
@@ -699,7 +769,7 @@ describe("ThreadContextMenu content per thread state", () => {
     const sheet = await openTouchSheet(screen.getByTestId("row-trigger"));
     expect(leases).toBe(1);
 
-    fireEvent.click(within(sheet).getByRole("button", { name: "Fork" }));
+    fireEvent.click(within(sheet).getByRole("menuitem", { name: "Fork" }));
     expect(sheet).not.toBeInTheDocument();
     expect(leases).toBe(1);
     unmount();
@@ -761,6 +831,8 @@ describe("ThreadContextMenu content per thread state", () => {
     });
     const descriptionId = fork.getAttribute("aria-describedby");
     expect(fork).toHaveAttribute("data-disabled");
+    // The disabled row shows a short reason; the full one is its description.
+    expect(fork).toHaveTextContent(/^ForkUnavailable$/u);
     expect(descriptionId).toBeTruthy();
     expect(document.getElementById(descriptionId!)).toHaveTextContent(
       "Wait for the thread to reconnect and receive authoritative history.",
@@ -842,7 +914,7 @@ describe("ThreadContextMenu content per thread state", () => {
     );
   });
 
-  it("offers pin, rename, settle, snooze, force reset, and destructive archive for an active thread", async () => {
+  it("offers pin, rename, settle, snooze, a neutral archive and a destructive force reset for an active thread", async () => {
     const trigger = renderMenu(makeThread(), makeStore(), {
       onRename: vi.fn(),
     });
@@ -851,10 +923,22 @@ describe("ThreadContextMenu content per thread state", () => {
     expect(within(menu).getByText("Rename")).toBeInTheDocument();
     expect(within(menu).getByText("Settle")).toBeInTheDocument();
     expect(within(menu).getByText("Snooze…")).toBeInTheDocument();
-    const forceReset = within(menu).getByText("Force reset…");
-    expect(forceReset.closest("[data-variant=destructive]")).not.toBeNull();
-    const archive = within(menu).getByText("Archive");
-    expect(archive.closest("[data-variant=destructive]")).not.toBeNull();
+    const rows = within(menu).getAllByRole("menuitem");
+    // Force reset is the only red row, and the last one.
+    const forceReset = within(menu).getByRole("menuitem", {
+      name: "Force reset…",
+    });
+    expect(forceReset).toHaveAttribute("data-variant", "destructive");
+    expect(rows.at(-1)).toBe(forceReset);
+    expect(menu.querySelectorAll('[data-variant="destructive"]')).toHaveLength(1);
+    // Archive is reversible, so it is neutral.
+    expect(
+      within(menu).getByRole("menuitem", { name: "Archive" }),
+    ).toHaveAttribute("data-variant", "default");
+    // Every row has an icon, so labels align.
+    for (const row of rows) {
+      expect(row.querySelector("svg")).not.toBeNull();
+    }
     expect(within(menu).queryByText("Automation settings…")).toBeNull();
     expect(within(menu).queryByText("Wake now")).toBeNull();
     expect(within(menu).queryByText("Unsettle")).toBeNull();
@@ -922,30 +1006,57 @@ describe("ThreadContextMenu content per thread state", () => {
   it.each([false, true])(
     "copies the summary backend ID without a thread snapshot or registry (touch: %s)",
     async (touch) => {
+      if (touch) stubTouchDensity();
       const user = userEvent.setup();
       const writeText = vi.spyOn(navigator.clipboard, "writeText");
       const trigger = renderMenu(
         makeThread({ backendSessionId: "provider-session-123" }), makeStore(),
       );
-      const menu = touch ? await openTouchSheet(trigger) : await openMenu(trigger);
-      await user.click(
-        within(menu).getByRole(touch ? "button" : "menuitem", {
-          name: "Copy backend ID",
-        }),
-      );
+      let ids: HTMLElement;
+      if (touch) {
+        ids = await openTouchSheet(trigger);
+        await drillIn(ids, "Copy ID");
+      } else {
+        ids = await openSubmenu(await openMenu(trigger), "Copy ID");
+      }
+      const backend = within(ids).getByRole("menuitem", { name: "Backend ID" });
+      // A short preview of the ID trails the row.
+      expect(backend).toHaveTextContent("provider");
+      await user.click(backend);
       expect(writeText).toHaveBeenCalledWith("provider-session-123");
       expect(writeText).not.toHaveBeenCalledWith("thread-1");
     },
   );
 
+  it("copies the Sedes thread ID from the Copy ID submenu", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    writeText.mockClear();
+    const menu = await openMenu(
+      renderMenu(makeThread({ backendSessionId: "provider-session-123" }), makeStore()),
+    );
+    const ids = await openSubmenu(menu, "Copy ID");
+    expect(
+      within(ids)
+        .getAllByRole("menuitem")
+        .map((row) => row.textContent),
+    ).toEqual(["Thread IDthread-1", "Backend IDprovider"]);
+    await user.click(within(ids).getByRole("menuitem", { name: "Thread ID" }));
+    expect(writeText).toHaveBeenCalledWith("thread-1");
+    expect(writeText).not.toHaveBeenCalledWith("provider-session-123");
+  });
   it("disables backend ID copying for an unbound summary even with a loaded snapshot", async () => {
     const registry = makeForkRegistry(vi.fn());
     registry.get("thread-1").getSnapshot().snapshot!.backendSessionId = "stale-session";
     const trigger = renderMenu(makeThread(), makeStore(), { threadRegistry: registry });
-    const menu = await openMenu(trigger);
+    const ids = await openSubmenu(await openMenu(trigger), "Copy ID");
+    const backend = within(ids).getByRole("menuitem", { name: "Backend ID" });
+    expect(backend).toHaveAttribute("aria-disabled", "true");
+    expect(backend).toHaveTextContent("Unavailable");
+    expect(backend).not.toHaveTextContent("stale");
     expect(
-      within(menu).getByRole("menuitem", { name: "Copy backend ID" }),
-    ).toHaveAttribute("aria-disabled", "true");
+      within(ids).getByRole("menuitem", { name: "Thread ID" }),
+    ).not.toHaveAttribute("aria-disabled");
   });
 
   it("keeps settings copy available beside restore for an archived thread", async () => {
@@ -955,12 +1066,13 @@ describe("ThreadContextMenu content per thread state", () => {
     const menu = await openMenu(trigger);
     const items = within(menu).getAllByRole("menuitem");
     expect(items.map((item) => item.textContent)).toEqual([
-      "New",
-      "Copy ID",
-      "Copy backend ID",
       "Move to group",
       "Restore to Active",
+      "New with same settings",
+      "Copy ID",
     ]);
+    expect(within(menu).queryByText("Archive")).toBeNull();
+    expect(within(menu).queryByText("Force reset…")).toBeNull();
     await userEvent.click(
       within(menu).getByRole("menuitem", { name: "Restore to Active" }),
     );
@@ -968,14 +1080,16 @@ describe("ThreadContextMenu content per thread state", () => {
   });
 
   it("shows group creation failures inside the open group dialog", async () => {
+    stubTouchDensity();
     const store = makeStore();
     const createThreadGroup = vi
       .fn()
       .mockRejectedValue(new Error("A group with this name already exists."));
     Object.assign(store, { createThreadGroup });
     const sheet = await openTouchSheet(renderMenu(makeThread(), store));
+    await drillIn(sheet, "Move to group");
     await userEvent.click(
-      within(sheet).getByRole("button", { name: "Move to group" }),
+      within(sheet).getByRole("menuitem", { name: "New group…" }),
     );
     const dialog = await screen.findByTestId("thread-group-dialog");
     await userEvent.click(
@@ -990,54 +1104,69 @@ describe("ThreadContextMenu content per thread state", () => {
     );
   });
 
-  it("uses the same lifecycle, creation, and destructive section order", async () => {
-    const trigger = renderMenu(makeThread(), makeStore(), {
-      onRename: vi.fn(),
-      threadRegistry: makeForkRegistry(vi.fn()),
-    });
-    const menu = await openMenu(trigger);
-
-    const labels = within(menu)
-      .getAllByRole("menuitem")
-      .map((item) => item.textContent?.trim());
-    expect(labels).toEqual([
-      "Copy ID",
-      "Copy backend ID",
+  it("uses the same organize, lifecycle, creation, and archive section order", async () => {
+    const renderRow = () =>
+      render(
+        <ThreadContextMenu
+          thread={makeThread()}
+          store={makeStore()}
+          onRename={vi.fn()}
+          threadRegistry={makeForkRegistry(vi.fn())}
+        >
+          <div data-testid="row-trigger">Row</div>
+        </ThreadContextMenu>,
+      );
+    // Rows by label and separators as "|", in document order.
+    const sequence = (container: Element) =>
+      Array.from(container.children, (node) =>
+        node.getAttribute("data-slot") === "context-menu-separator"
+          ? "|"
+          : node.getAttribute("role") === "menuitem"
+            ? node.textContent?.trim()
+            : node.getAttribute("data-slot"),
+      );
+    const rows = [
+      "Rename",
       "Pin",
       "Move to group",
-      "Rename",
+      "|",
       "Settle",
       "Snooze…",
-      "New",
+      "|",
+      "New with same settings",
       "Fork",
-      "Force reset…",
+      "Copy ID",
+      "|",
       "Archive",
-    ]);
-    expect(
-      menu.querySelectorAll('[data-slot="context-menu-separator"]'),
-    ).toHaveLength(2);
+      "Force reset…",
+    ];
+
+    const { unmount } = renderRow();
+    const menu = await openMenu(screen.getByTestId("row-trigger"));
+    // The header is the thread's name over its meta line, not "Thread actions".
+    const header = menu.firstElementChild!;
+    expect(header).toHaveAttribute("data-variant", "header");
+    expect(header).toHaveTextContent(/^Review backend contractPi · updated /u);
+    expect(sequence(menu)).toEqual(["context-menu-label", "|", ...rows]);
     const create = within(menu).getByRole("menuitem", {
-      name: "New thread with same settings",
+      name: "New with same settings",
     });
-    expect(create).toHaveTextContent(/^New$/u);
+    expect(create).toHaveTextContent(/^New with same settings$/u);
     expect(create).toHaveAttribute(
       "title",
       "Create a new thread from these settings",
     );
 
     await userEvent.keyboard("{Escape}");
-    const sheet = await openTouchSheet(trigger);
+    unmount();
+    stubTouchDensity();
+    renderRow();
+    const sheet = await openTouchSheet(screen.getByTestId("row-trigger"));
     expect(
-      Array.from(
-        sheet.querySelectorAll(
-          ".thread-action-sheet-group > [data-slot='button']",
-        ),
-        (button) => button.textContent?.trim(),
-      ),
-    ).toEqual(labels);
-    expect(
-      sheet.querySelectorAll(".thread-action-sheet-group > [role='separator']"),
-    ).toHaveLength(2);
+      within(sheet).getByRole("heading", { name: "Review backend contract" }),
+    ).toBeVisible();
+    const pane = sheet.querySelector('[data-slot="menu-sheet-pane"]')!;
+    expect(sequence(pane)).toEqual(rows);
   });
 
   it.each(["running", "failed", "reconciling"] as const)(
@@ -1073,13 +1202,77 @@ describe("searchable Move to group", () => {
     return { thread, store, assignThreadGroup, createThreadGroup, removeThreadGroup };
   }
 
+  /** Move to group › New group… by keyboard opens the searchable dialog. */
   async function openGroups(trigger: HTMLElement) {
     const menu = await openMenu(trigger);
-    const action = within(menu).getByRole("menuitem", { name: "Move to group" });
-    action.focus();
+    within(menu).getByRole("menuitem", { name: "Move to group" }).focus();
+    await userEvent.keyboard("{ArrowRight}");
+    const groups = await screen.findByRole("menu", { name: "Move to group" });
+    within(groups).getByRole("menuitem", { name: "New group…" }).focus();
     await userEvent.keyboard("{Enter}");
     return screen.findByRole("dialog", { name: "Move to group" });
   }
+
+  it("lists the groups as radio rows and assigns only a different group", async () => {
+    const { thread, store, assignThreadGroup, removeThreadGroup } = groupFixture();
+    const trigger = renderMenu(thread, store);
+    let groups = await openSubmenu(await openMenu(trigger), "Move to group");
+    expect(
+      within(groups).getAllByRole("menuitemradio").map((row) => row.textContent),
+    ).toEqual(["Current work", "Backend cleanup", "Release planning"]);
+    expect(
+      within(groups).getByRole("menuitemradio", { name: "Current work" }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(
+      within(groups).getByRole("menuitemradio", { name: "Backend cleanup" }),
+    ).toHaveAttribute("aria-checked", "false");
+    expect(
+      within(groups)
+        .getAllByRole("menuitem")
+        .map((row) => row.textContent),
+    ).toEqual(["New group…", "Remove from group"]);
+    await userEvent.click(
+      within(groups).getByRole("menuitemradio", { name: "Current work" }),
+    );
+    expect(assignThreadGroup).not.toHaveBeenCalled();
+
+    groups = await openSubmenu(await openMenu(trigger), "Move to group");
+    await userEvent.click(
+      within(groups).getByRole("menuitemradio", { name: "Backend cleanup" }),
+    );
+    expect(assignThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, "backend");
+    expect(removeThreadGroup).not.toHaveBeenCalled();
+  });
+
+  it("removes the thread from its group, and offers removal only when grouped", async () => {
+    const grouped = groupFixture();
+    const trigger = renderMenu(grouped.thread, grouped.store);
+    const groups = await openSubmenu(await openMenu(trigger), "Move to group");
+    await userEvent.click(
+      within(groups).getByRole("menuitem", { name: "Remove from group" }),
+    );
+    expect(grouped.removeThreadGroup).toHaveBeenCalledExactlyOnceWith(
+      grouped.thread,
+    );
+    expect(grouped.assignThreadGroup).not.toHaveBeenCalled();
+    cleanup();
+
+    const ungrouped = groupFixture(null);
+    const ungroupedGroups = await openSubmenu(
+      await openMenu(renderMenu(ungrouped.thread, ungrouped.store)),
+      "Move to group",
+    );
+    expect(
+      within(ungroupedGroups).queryByRole("menuitem", {
+        name: "Remove from group",
+      }),
+    ).toBeNull();
+    expect(
+      within(ungroupedGroups)
+        .getAllByRole("menuitemradio")
+        .every((row) => row.getAttribute("aria-checked") === "false"),
+    ).toBe(true);
+  });
 
   it("focuses search from the desktop menu and assigns only the explicitly chosen match", async () => {
     const { thread, store, assignThreadGroup } = groupFixture();
@@ -1127,6 +1320,18 @@ describe("searchable Move to group", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Ungroup" }));
     expect(removeThreadGroup).toHaveBeenCalledExactlyOnceWith(thread);
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
+  });
+
+  it("cancels without changing the group", async () => {
+    const { thread, store, assignThreadGroup, createThreadGroup, removeThreadGroup } = groupFixture();
+    const dialog = await openGroups(renderMenu(thread, store));
+    // The name field is a regular form field: a label over normal-weight text.
+    expect(within(dialog).getByText("Create group")).toHaveAttribute("data-slot", "field-label");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(assignThreadGroup).not.toHaveBeenCalled();
+    expect(createThreadGroup).not.toHaveBeenCalled();
+    expect(removeThreadGroup).not.toHaveBeenCalled();
   });
 
   it("creates from the independent name field when no existing group matches", async () => {
@@ -1195,18 +1400,21 @@ describe("searchable Move to group", () => {
   });
 
   it.each([false, true])("uses the searchable group dialog from the touch action sheet, keyboard override %s", async (keyboard) => {
+    stubTouchDensity();
     const viewport = Object.assign(new EventTarget(), { height: window.innerHeight, offsetTop: 0 });
     vi.stubGlobal("visualViewport", viewport);
     const { thread, store, assignThreadGroup } = groupFixture();
     const sheet = await openTouchSheet(renderMenu(thread, store));
-    const move = within(sheet).getByRole("button", { name: "Move to group" });
+    await drillIn(sheet, "Move to group");
+    const newGroup = within(sheet).getByRole("menuitem", { name: "New group…" });
     if (keyboard) {
-      fireEvent.keyDown(move, { key: "Enter" });
-      fireEvent.click(move);
+      fireEvent.keyDown(newGroup, { key: "Enter" });
+      fireEvent.click(newGroup);
     } else {
-      await userEvent.pointer([{ keys: "[TouchA>]", target: move }, { keys: "[/TouchA]" }]);
+      await userEvent.pointer([{ keys: "[TouchA>]", target: newGroup }, { keys: "[/TouchA]" }]);
     }
     const dialog = await screen.findByRole("dialog", { name: "Move to group" });
+    expect(sheet).not.toBeInTheDocument();
     await waitFor(() => expect(keyboard ? within(dialog).getByRole("combobox", { name: "Search groups" }) : dialog).toHaveFocus());
     await userEvent.type(within(dialog).getByRole("combobox", { name: "Search groups" }), "release");
     expect(within(dialog).getByRole("combobox", { name: "Search groups" })).toHaveFocus();
@@ -1214,7 +1422,7 @@ describe("searchable Move to group", () => {
       viewport.height = window.innerHeight - 300;
       viewport.dispatchEvent(new Event("resize"));
     });
-    expect(dialog.style.getPropertyValue("--thread-group-keyboard-inset")).toBe("300px");
+    expect(dialog.style.getPropertyValue("--keyboard-inset")).toBe("300px");
     expect(within(dialog).getAllByRole("option")).toHaveLength(1);
     await userEvent.click(within(dialog).getByRole("option", { name: /Release planning/ }));
     expect(assignThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, "release");
@@ -1231,7 +1439,7 @@ describe("ThreadContextMenu actions", () => {
 
     await userEvent.click(
       within(menu).getByRole("menuitem", {
-        name: "New thread with same settings",
+        name: "New with same settings",
       }),
     );
 
@@ -1256,7 +1464,7 @@ describe("ThreadContextMenu actions", () => {
 
     await userEvent.click(
       within(menu).getByRole("menuitem", {
-        name: "New thread with same settings",
+        name: "New with same settings",
       }),
     );
 
@@ -1275,9 +1483,14 @@ describe("ThreadContextMenu actions", () => {
     );
 
     const action = within(menu).getByRole("menuitem", {
-      name: "New thread with same settings",
+      name: "New with same settings",
     });
     expect(action).toHaveAttribute("aria-disabled", "true");
+    // A short reason on the row; the full one is its description.
+    expect(action).toHaveTextContent("Unavailable");
+    expect(action).toHaveAccessibleDescription(
+      "The source thread target is unavailable.",
+    );
     await userEvent.click(action);
     expect(store.createThreadFromSettings).not.toHaveBeenCalled();
   });
@@ -1296,7 +1509,7 @@ describe("ThreadContextMenu actions", () => {
 
     await userEvent.click(
       within(menu).getByRole("menuitem", {
-        name: "New thread with same settings",
+        name: "New with same settings",
       }),
     );
     expect(await screen.findByRole("status")).toHaveTextContent(
@@ -1377,14 +1590,27 @@ describe("ThreadContextMenu actions", () => {
       expectedStashedPromptCount: 0,
     });
 
+    // Two descendants leave a choice: Archive hands the checked impact to
+    // the choices dialog, which archives only this thread by default.
     menu = await openMenu(trigger);
-    await userEvent.click(within(menu).getByText("Archive"));
-    await userEvent.click(await screen.findByText("Archive only this thread"));
-    expect(store.getThreadArchiveImpact).toHaveBeenCalledWith(thread.id);
-    expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-      expectedStashedPromptCount: 0,
-      executionWorkspaceDisposition: { kind: "keep" },
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive this thread",
     });
+    expect(store.getThreadArchiveImpact).toHaveBeenCalledWith(thread.id);
+    expect(store.mutateInventory).not.toHaveBeenCalledWith(
+      thread,
+      "archive",
+      expect.anything(),
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+    await waitFor(() =>
+      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
+        expectedStashedPromptCount: 0,
+        executionWorkspaceDisposition: { kind: "keep" },
+      }),
+    );
+    expect(store.archiveThreadFamily).not.toHaveBeenCalled();
   });
 
   it("prompts for open-task disposition before settling", async () => {
@@ -1452,7 +1678,7 @@ describe("ThreadContextMenu actions", () => {
     });
   });
 
-  it("uses authoritative impact and single-thread wording when the snapshot count is zero", async () => {
+  it("archives directly from the authoritative impact when there is nothing to choose", async () => {
     const store = makeStore();
     store.getThreadArchiveImpact.mockResolvedValueOnce({
       descendantCount: 0,
@@ -1464,18 +1690,21 @@ describe("ThreadContextMenu actions", () => {
       archiveAll: { available: true },
     });
     const thread = makeThread();
-    const trigger = renderMenu(thread, store);
+    // The snapshot's count is stale; the authoritative impact decides.
+    const trigger = renderMenu(thread, store, { familyDescendantCount: 2 });
     const menu = await openMenu(trigger);
 
-    await userEvent.click(within(menu).getByText("Archive"));
-    expect(await screen.findByText("Archive this thread")).toBeInTheDocument();
-    expect(screen.queryByText(/Archive thread and/)).not.toBeInTheDocument();
-    expect(store.mutateInventory).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByText("Archive this thread"));
-    expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-      expectedStashedPromptCount: 0,
-      executionWorkspaceDisposition: { kind: "keep" },
-    });
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
+    await waitFor(() =>
+      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
+        expectedStashedPromptCount: 0,
+      }),
+    );
+    expect(store.getThreadArchiveImpact).toHaveBeenCalledWith(thread.id);
+    expect(
+      screen.queryByRole("dialog", { name: "Archive this thread" }),
+    ).not.toBeInTheDocument();
+    expect(store.archiveThreadFamily).not.toHaveBeenCalled();
     await waitFor(() =>
       expect(
         screen.queryByTestId("thread-context-menu"),
@@ -1483,12 +1712,51 @@ describe("ThreadContextMenu actions", () => {
     );
   });
 
-  it.each(["dropdown", "submenu"] as const)(
-    "resets Complete all after cancelling and reopening the archive %s",
+  it("uses single-thread wording when the authoritative impact has no descendants", async () => {
+    const store = makeStore();
+    store.getThreadArchiveImpact.mockResolvedValueOnce({
+      descendantCount: 0,
+      pendingQuestions: { root: 0, descendants: 0 },
+      stashedPrompts: { root: 0, descendants: 0 },
+      openTasks: openTasks(1),
+      executionWorkspace: { kind: "direct" },
+      archiveOnly: { available: true },
+      archiveAll: { available: true },
+    });
+    const thread = makeThread();
+    const menu = await openMenu(
+      renderMenu(thread, store, { familyDescendantCount: 2 }),
+    );
+
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive this thread",
+    });
+    expect(dialog).toHaveAccessibleDescription(
+      "Archived threads leave the inventory until restored.",
+    );
+    expect(
+      within(dialog).queryByRole("checkbox", {
+        name: "Archive child and descendant forks",
+      }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Archive thread and/)).not.toBeInTheDocument();
+    expect(store.mutateInventory).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+    await waitFor(() =>
+      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
+        expectedStashedPromptCount: 0,
+        openTaskDisposition: "move_to_workspace",
+        executionWorkspaceDisposition: { kind: "keep" },
+      }),
+    );
+  });
+
+  it.each(["row archive button", "context menu"] as const)(
+    "resets Complete all after cancelling and reopening the archive dialog from the %s",
     async (surface) => {
       const thread = makeThread();
-      const store = makeStore();
-      store.getThreadArchiveImpact.mockResolvedValue({
+      const impact = {
         descendantCount: 1,
         pendingQuestions: { root: 0, descendants: 0 },
         stashedPrompts: { root: 0, descendants: 0 },
@@ -1496,68 +1764,73 @@ describe("ThreadContextMenu actions", () => {
         executionWorkspace: { kind: "direct" },
         archiveOnly: { available: true },
         archiveAll: { available: true },
-      });
+      };
+      let store: ReturnType<typeof makeStore>;
       let openArchive: () => Promise<void>;
-      if (surface === "dropdown") {
+      if (surface === "row archive button") {
+        const fixture = sidebarFixture(thread, { descendantCount: 1 });
+        store = fixture.store;
+        store.getThreadArchiveImpact.mockResolvedValue(impact);
         render(
-          <ArchiveDropdown thread={thread} store={store} descendantCount={1}>
-            <button type="button">Archive thread</button>
-          </ArchiveDropdown>,
+          <InventorySidebar
+            state={fixture.state}
+            store={store}
+            onNavigate={() => undefined}
+            onOpenSettings={() => undefined}
+          />,
         );
         openArchive = async () => {
-          await userEvent.click(
-            screen.getByRole("button", { name: "Archive thread" }),
-          );
+          await userEvent.click(screen.getByTestId("thread-row-archive"));
         };
       } else {
+        store = makeStore();
+        store.getThreadArchiveImpact.mockResolvedValue(impact);
         const trigger = renderMenu(thread, store, { familyDescendantCount: 1 });
         openArchive = async () => {
-          const menu =
-            screen.queryByTestId("thread-context-menu") ??
-            (await openMenu(trigger));
-          await userEvent.click(within(menu).getByText("Archive"));
+          const menu = await openMenu(trigger);
+          await userEvent.click(
+            within(menu).getByRole("menuitem", { name: "Archive" }),
+          );
         };
       }
       await openArchive();
+      const dialog = await screen.findByRole("dialog", {
+        name: "Archive this thread",
+      });
       await userEvent.click(
-        await screen.findByRole("radio", { name: "Complete all" }),
+        within(dialog).getByRole("radio", { name: "Complete all" }),
       );
-      expect(screen.getByRole("radio", { name: "Complete all" })).toBeChecked();
-      if (surface === "submenu") {
-        // Dismiss only the submenu; its owning context menu stays mounted.
-        // The segmented control keeps arrow keys for its own radios, so
-        // leave from a menu row.
-        screen.getByRole("menuitem", { name: "Archive only this thread" }).focus();
-        await userEvent.keyboard("{ArrowLeft}");
-        expect(screen.getByTestId("thread-context-menu")).toBeVisible();
-        expect(
-          screen.queryByRole("radio", { name: "Complete all" }),
-        ).not.toBeInTheDocument();
-      } else {
-        await userEvent.click(screen.getByRole("menuitem", { name: "Cancel" }));
-      }
+      expect(
+        within(dialog).getByRole("radio", { name: "Complete all" }),
+      ).toBeChecked();
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(dialog).not.toBeInTheDocument());
       expect(store.mutateInventory).not.toHaveBeenCalled();
       expect(store.archiveThreadFamily).not.toHaveBeenCalled();
 
       await openArchive();
+      const reopened = await screen.findByRole("dialog", {
+        name: "Archive this thread",
+      });
       expect(
-        await screen.findByRole("radio", { name: "To project" }),
+        within(reopened).getByRole("radio", { name: "To project" }),
       ).toBeChecked();
       expect(
-        screen.getByRole("radio", { name: "Complete all" }),
+        within(reopened).getByRole("radio", { name: "Complete all" }),
       ).not.toBeChecked();
       await userEvent.click(
-        screen.getByRole("menuitem", { name: "Archive only this thread" }),
+        within(reopened).getByRole("button", { name: "Archive" }),
       );
-      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-        expectedStashedPromptCount: 0,
-        openTaskDisposition: "move_to_workspace",
-        executionWorkspaceDisposition: { kind: "keep" },
-      });
+      await waitFor(() =>
+        expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
+          expectedStashedPromptCount: 0,
+          openTaskDisposition: "move_to_workspace",
+          executionWorkspaceDisposition: { kind: "keep" },
+        }),
+      );
     },
   );
-
-  it("opens archive choices as a submenu for a thread with descendants", async () => {
+  it("opens archive choices in a dialog for a thread with descendants", async () => {
     const store = makeStore();
     store.getThreadArchiveImpact.mockResolvedValue({
       descendantCount: 2,
@@ -1613,52 +1886,71 @@ describe("ThreadContextMenu actions", () => {
     const trigger = renderMenu(thread, store, { familyDescendantCount: 2 });
     const menu = await openMenu(trigger);
 
-    await userEvent.click(within(menu).getByText("Archive"));
-    expect(
-      await screen.findByText("Archive only this thread"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Root warning")).toBeVisible();
-    expect(screen.getByText("Descendant warning")).toBeVisible();
-    expect(screen.getByText("Thread thread-2")).toBeVisible();
-    expect(screen.getByText("1 more task not shown")).toBeVisible();
-    expect(
-      screen.getByText("3 stashed prompts in this thread family"),
-    ).toBeVisible();
-    expect(
-      screen.getByText(
-        "1 on this thread; 2 on descendants. They will remain attached to whichever threads you archive.",
-      ),
-    ).toBeVisible();
-    const deleteWorkspace = screen.getByRole("radio", { name: "Delete" });
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive this thread",
+    });
+    expect(dialog).toHaveAccessibleDescription(
+      "Choose whether this thread's forked descendants should be archived too.",
+    );
+    // Only this thread by default: its own task, prompt and workspace.
+    expect(within(dialog).getByText("Root warning")).toBeVisible();
+    expect(within(dialog).queryByText("Descendant warning")).toBeNull();
+    expect(within(dialog).getByText("1 stashed prompt")).toBeVisible();
+    const deleteWorkspace = within(dialog).getByRole("radio", { name: "Delete" });
     expect(deleteWorkspace).toBeEnabled();
     await userEvent.click(deleteWorkspace);
-    const archiveFamily = screen.getByRole("menuitem", {
-      name: "Archive thread and 2 descendants",
+    expect(deleteWorkspace).toHaveAttribute("aria-checked", "true");
+
+    // Including descendants brings in their tasks and prompts and keeps the
+    // isolated workspace, which only a single-thread archive may delete.
+    const descendants = within(dialog).getByRole("checkbox", {
+      name: "Archive child and descendant forks",
     });
-    expect(archiveFamily).toHaveAttribute("data-disabled");
+    expect(descendants).not.toBeChecked();
+    await userEvent.click(descendants);
+    expect(within(dialog).getByText("Descendant warning")).toBeVisible();
+    expect(within(dialog).getByText("Thread thread-2")).toBeVisible();
+    expect(within(dialog).getByText("1 more task not shown")).toBeVisible();
     expect(
-      screen.getByText("Keep the isolated workspace to archive descendants."),
+      within(dialog).getByText("3 stashed prompts, including 2 on descendants"),
     ).toBeVisible();
     expect(
-      screen.queryByText(
-        "Archive only this thread to delete its isolated workspace.",
-      ),
-    ).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("menuitem", { name: "Cancel" }));
+      within(
+        within(dialog).getByRole("radiogroup", {
+          name: "Isolated workspace handling",
+        }),
+      ).getByRole("radio", { name: "Keep" }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(deleteWorkspace).toBeDisabled();
+    expect(deleteWorkspace).toHaveAttribute(
+      "title",
+      "Delete is available when archiving only this thread",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+
     const reopenedMenu = await openMenu(trigger);
-    await userEvent.click(within(reopenedMenu).getByText("Archive"));
-    const workspaceHandling = await screen.findByRole("radiogroup", {
+    await userEvent.click(
+      within(reopenedMenu).getByRole("menuitem", { name: "Archive" }),
+    );
+    const reopened = await screen.findByRole("dialog", {
+      name: "Archive this thread",
+    });
+    const workspaceHandling = within(reopened).getByRole("radiogroup", {
       name: "Isolated workspace handling",
     });
     expect(
       within(workspaceHandling).getByRole("radio", { name: "Keep" }),
     ).toHaveAttribute("aria-checked", "true");
-    const reopenedArchiveFamily = screen.getByRole("menuitem", {
-      name: "Archive thread and 2 descendants",
+    const reopenedDescendants = within(reopened).getByRole("checkbox", {
+      name: "Archive child and descendant forks",
     });
-    expect(reopenedArchiveFamily).not.toHaveAttribute("data-disabled");
+    expect(reopenedDescendants).not.toBeChecked();
+    await userEvent.click(reopenedDescendants);
+    expect(store.getThreadArchiveImpact).toHaveBeenCalledTimes(2);
     expect(store.getThreadArchiveImpact).toHaveBeenCalledWith(thread.id);
-    await userEvent.click(reopenedArchiveFamily);
+    await userEvent.click(within(reopened).getByRole("button", { name: "Archive" }));
     await waitFor(() =>
       expect(store.archiveThreadFamily).toHaveBeenCalledWith(thread, {
         expectedStashedPromptCount: 3,
@@ -1666,17 +1958,22 @@ describe("ThreadContextMenu actions", () => {
         openTaskDisposition: "move_to_workspace",
       }),
     );
-    expect(store.mutateInventory).not.toHaveBeenCalledWith(thread, "archive");
+    expect(store.mutateInventory).not.toHaveBeenCalledWith(
+      thread,
+      "archive",
+      expect.anything(),
+    );
   });
 
   it("closes the touch sheet before handing archive to its choices dialog", async () => {
     const store = makeStore();
     const thread = makeThread();
+    stubTouchDensity();
     const trigger = renderMenu(thread, store, { familyDescendantCount: 2 });
     const sheet = await openTouchSheet(trigger);
 
     await userEvent.click(
-      within(sheet).getByRole("button", { name: "Archive" }),
+      within(sheet).getByRole("menuitem", { name: "Archive" }),
     );
     const dialog = await screen.findByRole("dialog", {
       name: "Archive this thread",
@@ -1706,10 +2003,11 @@ describe("ThreadContextMenu actions", () => {
   ])(
     "closes the touch sheet before opening the %s confirmation",
     async (actionLabel, dialogName) => {
+      stubTouchDensity();
       const sheet = await openTouchSheet(renderMenu(makeThread(), makeStore()));
 
       await userEvent.click(
-        within(sheet).getByRole("button", { name: actionLabel }),
+        within(sheet).getByRole("menuitem", { name: actionLabel }),
       );
 
       expect(
@@ -1885,7 +2183,7 @@ describe("sidebar row rename (context menu)", () => {
       expect(fireEvent.click(input)).toBe(true);
       expect(fireEvent.doubleClick(input)).toBe(true);
       expect(screen.queryByTestId("thread-context-menu")).toBeNull();
-      expect(screen.queryByRole("dialog", { name: "Thread actions" })).toBeNull();
+      expect(screen.queryByTestId("thread-actions-sheet")).toBeNull();
       expect(input).toHaveFocus();
     },
   );
@@ -2037,13 +2335,12 @@ describe("sidebar row archive control", () => {
     await waitFor(() =>
       expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
         expectedStashedPromptCount: 0,
-        executionWorkspaceDisposition: { kind: "keep" },
       }),
     );
     expect(store.archiveThreadFamily).not.toHaveBeenCalled();
-    await waitFor(() =>
-      expect(screen.queryByRole("menu")).not.toBeInTheDocument(),
-    );
+    expect(
+      screen.queryByRole("dialog", { name: "Archive this thread" }),
+    ).not.toBeInTheDocument();
   });
 
   it("cancels a direct archive preflight without archiving or opening choices", async () => {
@@ -2059,26 +2356,35 @@ describe("sidebar row archive control", () => {
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await act(async () => { pending.resolve(impact); });
     expect(store.mutateInventory).not.toHaveBeenCalled();
-    expect(screen.queryByRole("menu")).toBeNull();
+    expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("keeps a reopened archive check visible until its shared read finishes", async () => {
+  it("keeps a reopened archive check visible until its own read finishes", async () => {
     const thread = makeThread();
     const { state, store } = sidebarFixture(thread, { descendantCount: 2 });
     const impact = await store.getThreadArchiveImpact(thread.id);
-    const pending = deferred<typeof impact>();
+    const cancelled = deferred<typeof impact>();
+    const reopened = deferred<typeof impact>();
     store.getThreadArchiveImpact.mockClear();
-    store.getThreadArchiveImpact.mockReturnValueOnce(pending.promise);
+    store.getThreadArchiveImpact
+      .mockReturnValueOnce(cancelled.promise)
+      .mockReturnValueOnce(reopened.promise);
     render(<InventorySidebar state={state} store={store}
       onNavigate={() => undefined} onOpenSettings={() => undefined} />);
     await userEvent.click(screen.getByTestId("thread-row-archive"));
+    expect(await screen.findByRole("status")).toHaveTextContent("Checking thread activity…");
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await userEvent.click(screen.getByTestId("thread-row-archive"));
+    expect(await screen.findByRole("status")).toHaveTextContent("Checking thread activity…");
+    // The cancelled check's late answer neither ends the reopened check nor
+    // offers choices.
+    await act(async () => { cancelled.resolve(impact); });
     expect(screen.getByRole("status")).toHaveTextContent("Checking thread activity…");
-    expect(store.getThreadArchiveImpact).toHaveBeenCalledOnce();
-    await act(async () => { pending.resolve(impact); });
-    expect(await screen.findByRole("menu")).toBeVisible();
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Archive this thread" })).toBeNull();
+    await act(async () => { reopened.resolve(impact); });
+    expect(await screen.findByRole("dialog", { name: "Archive this thread" })).toBeVisible();
+    expect(store.getThreadArchiveImpact).toHaveBeenCalledTimes(2);
     expect(store.mutateInventory).not.toHaveBeenCalled();
   });
 
@@ -2107,18 +2413,34 @@ describe("sidebar row archive control", () => {
     );
 
     await userEvent.click(screen.getByTestId("thread-row-archive"));
-    const archiveAll = await screen.findByText(
-      "Archive thread and 2 descendants",
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive this thread",
+    });
+    const archive = within(dialog).getByRole("button", { name: "Archive" });
+    await userEvent.click(
+      within(dialog).getByRole("checkbox", {
+        name: "Archive child and descendant forks",
+      }),
     );
-    await waitFor(() =>
-      expect(archiveAll.closest('[role="menuitem"]')).toHaveAttribute(
-        "data-disabled",
-      ),
+    // The family choice is blocked, with its reason as the action's description.
+    expect(archive).toBeDisabled();
+    expect(within(dialog).getByRole("status")).toHaveTextContent(
+      "A descendant is running and cannot be archived.",
     );
-    expect(
-      screen.getByText("A descendant is running and cannot be archived."),
-    ).toBeInTheDocument();
-    await userEvent.click(screen.getByText("Archive only this thread"));
+    expect(archive).toHaveAccessibleDescription(
+      "A descendant is running and cannot be archived.",
+    );
+    await userEvent.click(archive);
+    expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+
+    // Archiving only this thread stays available.
+    await userEvent.click(
+      within(dialog).getByRole("checkbox", {
+        name: "Archive child and descendant forks",
+      }),
+    );
+    expect(archive).toBeEnabled();
+    await userEvent.click(archive);
     await waitFor(() =>
       expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
         expectedStashedPromptCount: 0,
@@ -2202,13 +2524,13 @@ describe("sidebar row archive control", () => {
     await waitFor(() =>
       expect(store.getThreadArchiveImpact).toHaveBeenCalledTimes(2),
     );
+    // The retried check finds nothing to choose and archives directly.
     await waitFor(() =>
       expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
         expectedStashedPromptCount: 0,
-        executionWorkspaceDisposition: { kind: "keep" },
       }),
     );
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Archive this thread" })).not.toBeInTheDocument();
   });
 
   it("does not double-fire archive while a mutation is pending", async () => {
@@ -2282,217 +2604,140 @@ describe("sidebar row archive control", () => {
     await waitFor(() => expect(quick).not.toBeDisabled());
   });
 
-  it("closes the previous archive dropdown when another row opens", async () => {
-    const store = makeStore();
-    store.getThreadArchiveImpact.mockImplementation(
-      async (threadId: string) => ({
-        descendantCount: threadId === "thread-1" ? 1 : 3,
-        pendingQuestions: { root: 0, descendants: 0 },
-        stashedPrompts: { root: 0, descendants: 0 },
-        openTasks: openTasks(),
-        executionWorkspace: { kind: "direct" },
-        archiveOnly: { available: true },
-        archiveAll: { available: true },
-      }),
-    );
-    render(
-      <>
-        <ArchiveDropdown
-          thread={makeThread()}
-          store={store}
-          descendantCount={1}
-        >
-          <button type="button">Archive first</button>
-        </ArchiveDropdown>
-        <ArchiveDropdown
-          thread={makeThread({ id: "thread-2", title: { text: "Second" } })}
-          store={store}
-          descendantCount={3}
-        >
-          <button type="button">Archive second</button>
-        </ArchiveDropdown>
-      </>,
-    );
-
-    await userEvent.click(
-      screen.getByRole("button", { name: "Archive first" }),
-    );
-    expect(
-      await screen.findByRole("menuitem", {
-        name: "Archive thread and 1 descendant",
-      }),
-    ).toBeVisible();
-    await userEvent.click(
-      screen.getByRole("button", { name: "Archive second" }),
-    );
-    expect(
-      await screen.findByRole("menuitem", {
-        name: "Archive thread and 3 descendants",
-      }),
-    ).toBeVisible();
-    expect(
-      screen.queryByRole("menuitem", {
-        name: "Archive thread and 1 descendant",
-      }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("uses choice-neutral stash wording while preserving choice-scoped counts", async () => {
+  it("scopes stash wording and counts to the chosen archive in the dialog", async () => {
     const thread = makeThread();
-    const store = makeStore();
+    const { state, store } = sidebarFixture(thread, { descendantCount: 1 });
     store.getThreadArchiveImpact.mockResolvedValue({
       descendantCount: 1,
       pendingQuestions: { root: 0, descendants: 0 },
       stashedPrompts: { root: 1, descendants: 2 },
       openTasks: openTasks(),
-      executionWorkspace: {
-        kind: "isolated",
-        workspaceAccess: "writable_clone",
-        state: "ready",
-        allocationRevision: 5,
-        networkProfile: "isolated",
-        hostPaths: { home: "/sandbox", workspace: "/sandbox/repo" },
-        branch: "sedes/thread-1",
-        gitStatus: {
-          available: true,
-          trackedChangeCount: 0,
-          untrackedFileCount: 0,
-          upstream: "origin/main",
-          aheadCount: 0,
-        },
-      },
+      executionWorkspace: isolatedWorkspace(5),
       archiveOnly: { available: true },
       archiveAll: { available: true },
     });
     render(
-      <ArchiveDropdown thread={thread} store={store} descendantCount={1}>
-        <button type="button">Archive thread</button>
-      </ArchiveDropdown>,
+      <InventorySidebar
+        state={state}
+        store={store}
+        onNavigate={() => undefined}
+        onOpenSettings={() => undefined}
+      />,
     );
 
-    const trigger = screen.getByRole("button", { name: "Archive thread" });
+    const trigger = screen.getByTestId("thread-row-archive");
     await userEvent.click(trigger);
-
-    expect(
-      await screen.findByText("3 stashed prompts in this thread family"),
-    ).toBeVisible();
-    expect(
-      screen.getByText(
-        "1 on this thread; 2 on descendants. They will remain attached to whichever threads you archive.",
-      ),
-    ).toBeVisible();
-    expect(
-      screen.queryByText(/will remain attached to the archived threads/),
-    ).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("radio", { name: "Delete" }));
-    expect(
-      screen.getByRole("menuitem", {
-        name: "Archive thread and 1 descendant",
-      }),
-    ).toHaveAttribute("data-disabled");
-
-    await userEvent.click(
-      screen.getByRole("menuitem", { name: "Archive only this thread" }),
-    );
-    expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
-      expectedStashedPromptCount: 1,
-      executionWorkspaceDisposition: {
-        kind: "delete",
-        expectedRevision: 5,
-        operationId: expect.any(String),
-      },
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive this thread",
     });
+    // Only this thread: its one prompt, and the workspace may be deleted.
+    expect(within(dialog).getByText("1 stashed prompt")).toBeVisible();
+    expect(
+      within(dialog).getByText("It will remain attached to the archived thread."),
+    ).toBeVisible();
+    expect(
+      within(dialog).queryByText(/whichever threads you archive/),
+    ).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Delete" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+    await waitFor(() =>
+      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
+        expectedStashedPromptCount: 1,
+        executionWorkspaceDisposition: {
+          kind: "delete",
+          expectedRevision: 5,
+          operationId: expect.any(String),
+        },
+      }),
+    );
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
 
     await userEvent.click(trigger);
+    const reopened = await screen.findByRole("dialog", {
+      name: "Archive this thread",
+    });
     expect(
       within(
-        screen.getByRole("radiogroup", {
+        within(reopened).getByRole("radiogroup", {
           name: "Isolated workspace handling",
         }),
       ).getByRole("radio", { name: "Keep" }),
     ).toHaveAttribute("aria-checked", "true");
+    // The family: all three prompts, and the workspace is kept.
     await userEvent.click(
-      await screen.findByRole("menuitem", {
-        name: "Archive thread and 1 descendant",
+      within(reopened).getByRole("checkbox", {
+        name: "Archive child and descendant forks",
       }),
     );
-    expect(store.archiveThreadFamily).toHaveBeenCalledWith(thread, {
-      expectedStashedPromptCount: 3,
-      executionWorkspaceDisposition: { kind: "keep" },
-    });
+    expect(
+      within(reopened).getByText("3 stashed prompts, including 2 on descendants"),
+    ).toBeVisible();
+    expect(
+      within(reopened).getByText("They will remain attached to the archived threads."),
+    ).toBeVisible();
+    expect(within(reopened).getByRole("radio", { name: "Delete" })).toBeDisabled();
+    await userEvent.click(within(reopened).getByRole("button", { name: "Archive" }));
+    await waitFor(() =>
+      expect(store.archiveThreadFamily).toHaveBeenCalledWith(thread, {
+        expectedStashedPromptCount: 3,
+        executionWorkspaceDisposition: { kind: "keep" },
+      }),
+    );
   });
 
-  it("keeps stale archive choices disabled while a reopened menu refreshes", async () => {
-    let resolveRefresh!: (impact: {
-      descendantCount: number;
-      pendingQuestions: { root: number; descendants: number };
-      stashedPrompts: { root: number; descendants: number };
-      openTasks: ReturnType<typeof openTasks>;
-      executionWorkspace: { kind: "direct" };
-      archiveOnly: { available: true };
-      archiveAll: { available: true };
-    }) => void;
-    const refresh = new Promise<{
-      descendantCount: number;
-      pendingQuestions: { root: number; descendants: number };
-      stashedPrompts: { root: number; descendants: number };
-      openTasks: ReturnType<typeof openTasks>;
-      executionWorkspace: { kind: "direct" };
-      archiveOnly: { available: true };
-      archiveAll: { available: true };
-    }>((resolve) => {
-      resolveRefresh = resolve;
-    });
-    const thread = makeThread();
-    const store = makeStore();
-    store.getThreadArchiveImpact
-      .mockResolvedValueOnce({
-        descendantCount: 1,
-        pendingQuestions: { root: 0, descendants: 0 },
-        stashedPrompts: { root: 0, descendants: 0 },
-        openTasks: openTasks(),
-        executionWorkspace: { kind: "direct" },
-        archiveOnly: { available: true },
-        archiveAll: { available: true },
-      })
-      .mockReturnValueOnce(refresh);
-    render(
-      <ArchiveDropdown thread={thread} store={store} descendantCount={1}>
-        <button type="button">Archive thread</button>
-      </ArchiveDropdown>,
-    );
-
-    const trigger = screen.getByRole("button", { name: "Archive thread" });
-    await userEvent.click(trigger);
-    const archiveOnly = await screen.findByRole("menuitem", {
-      name: "Archive only this thread",
-    });
-    await waitFor(() =>
-      expect(archiveOnly).not.toHaveAttribute("data-disabled"),
-    );
-    await userEvent.click(screen.getByRole("menuitem", { name: "Cancel" }));
-
-    await userEvent.click(trigger);
-    const refreshingChoice = await screen.findByRole("menuitem", {
-      name: "Archive only this thread",
-    });
-    expect(refreshingChoice).toHaveAttribute("data-disabled");
-    await userEvent.click(refreshingChoice);
-    expect(store.mutateInventory).not.toHaveBeenCalled();
-    expect(refreshingChoice).toBeVisible();
-
-    resolveRefresh({
+  it("re-checks the impact before offering choices again when reopened", async () => {
+    const choices = {
       descendantCount: 1,
       pendingQuestions: { root: 0, descendants: 0 },
       stashedPrompts: { root: 0, descendants: 0 },
       openTasks: openTasks(),
-      executionWorkspace: { kind: "direct" },
-      archiveOnly: { available: true },
-      archiveAll: { available: true },
+      executionWorkspace: { kind: "direct" as const },
+      archiveOnly: { available: true as const },
+      archiveAll: { available: true as const },
+    };
+    const refresh = deferred<typeof choices>();
+    const thread = makeThread();
+    const { state, store } = sidebarFixture(thread, { descendantCount: 1 });
+    store.getThreadArchiveImpact
+      .mockResolvedValueOnce(choices)
+      .mockReturnValueOnce(refresh.promise);
+    render(
+      <InventorySidebar
+        state={state}
+        store={store}
+        onNavigate={() => undefined}
+        onOpenSettings={() => undefined}
+      />,
+    );
+
+    const trigger = screen.getByTestId("thread-row-archive");
+    await userEvent.click(trigger);
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive this thread",
     });
     await waitFor(() =>
-      expect(refreshingChoice).not.toHaveAttribute("data-disabled"),
+      expect(within(dialog).getByRole("button", { name: "Archive" })).toBeEnabled(),
     );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+
+    // Reopening shows the check, never the earlier (possibly stale) choices.
+    await userEvent.click(trigger);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Checking thread activity…",
+    );
+    expect(
+      screen.queryByRole("dialog", { name: "Archive this thread" }),
+    ).not.toBeInTheDocument();
+    expect(store.mutateInventory).not.toHaveBeenCalled();
+
+    await act(async () => refresh.resolve(choices));
+    const reopened = await screen.findByRole("dialog", {
+      name: "Archive this thread",
+    });
+    expect(within(reopened).getByRole("button", { name: "Archive" })).toBeEnabled();
+    expect(store.getThreadArchiveImpact).toHaveBeenCalledTimes(2);
+    expect(store.mutateInventory).not.toHaveBeenCalled();
   });
 
   it("leaves an archived deep route using server-resolved family membership", async () => {
@@ -2514,8 +2759,20 @@ describe("sidebar row archive control", () => {
     );
 
     await userEvent.click(screen.getByTestId("thread-row-archive"));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive this thread",
+    });
     await userEvent.click(
-      await screen.findByText("Archive thread and 2 descendants"),
+      within(dialog).getByRole("checkbox", {
+        name: "Archive child and descendant forks",
+      }),
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+    await waitFor(() =>
+      expect(store.archiveThreadFamily).toHaveBeenCalledWith(thread, {
+        expectedStashedPromptCount: 0,
+        executionWorkspaceDisposition: { kind: "keep" },
+      }),
     );
     await waitFor(() => expect(window.location.pathname).toBe("/"));
   });

@@ -25,10 +25,14 @@ import {
   FileText,
   ArrowUp,
   ArrowDown,
+  ArrowLeftRight,
+  Columns2,
   PanelLeft,
   ChevronDown,
   LoaderCircle,
   RotateCw,
+  Rows2,
+  WrapText,
   X,
 } from "lucide-react";
 import type {
@@ -77,11 +81,31 @@ import {
   workspaceCompareSupportsMergeBase,
   type WorkspaceComparePreferences,
 } from "./workspace-compare-state.js";
+import { Button } from "../components/ui/button.js";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu.js";
+import { Field } from "../components/ui/field.js";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "../components/ui/popover.js";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select.js";
 import { WorkspaceRevisionPicker } from "./WorkspaceRevisionPicker.js";
 import { WorkspaceChangedFileNavigator } from "./WorkspaceChangedFileNavigator.js";
 import {
@@ -1701,40 +1725,43 @@ export function WorkspaceCompareView({
           >
             {(repositories.length > 1 ||
               (!repositoryId && repositories.length > 0)) && (
-              <label className="workspace-compare-repository">
-                Repository
-                <select
-                  aria-label="Repository"
+              <Field label="Repository">
+                <Select
                   value={repositoryId ?? ""}
-                  onChange={(event) => {
+                  onValueChange={(value) => {
                     restoreRef.current = undefined;
                     anchorRef.current = undefined;
                     returnLocationsRef.current.clear();
-                    setRepositoryId(
-                      event.target.value as WorkspaceDiffRepositoryId,
-                    );
+                    setRepositoryId(value as WorkspaceDiffRepositoryId);
                   }}
                 >
-                  {!repositoryId && (
-                    <option value="">Choose a repository</option>
-                  )}
-                  {repositories.map((repository) => (
-                    <option
-                      key={repository.repositoryId}
-                      value={repository.repositoryId}
-                    >
-                      {repository.displayName}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Choose a repository" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {repositories.map((repository) => (
+                      <SelectItem
+                        key={repository.repositoryId}
+                        value={repository.repositoryId}
+                      >
+                        {repository.displayName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
             )}
-            <div className="workspace-compare-presets">
+            <div
+              className="workspace-compare-presets"
+              role="group"
+              aria-label="Comparison presets"
+            >
               {(["uncommitted", "staged", "branches"] as const).map(
                 (preset) => (
-                  <button
-                    type="button"
+                  <Button
                     key={preset}
+                    variant="outline"
+                    size="sm"
                     onClick={() => {
                       const next = workspaceComparePresetSelections(
                         preset,
@@ -1753,11 +1780,13 @@ export function WorkspaceCompareView({
                       : preset === "staged"
                         ? "Staged"
                         : "Branches"}
-                  </button>
+                  </Button>
                 ),
               )}
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
+                className="workspace-compare-swap"
                 disabled={!base}
                 onClick={() => {
                   if (base) {
@@ -1766,16 +1795,15 @@ export function WorkspaceCompareView({
                   }
                 }}
               >
+                <ArrowLeftRight aria-hidden="true" />
                 Swap sides
-              </button>
+              </Button>
             </div>
             <div className="workspace-compare-controls">
               <WorkspaceRevisionPicker
                 label="Base"
                 selection={base}
                 revisions={revisions}
-                historyScope={historyScope}
-                onHistoryScopeChange={(scope) => void changeHistoryScope(scope)}
                 loading={revisionsLoading}
                 truncated={revisionsTruncated}
                 onChange={changeBase}
@@ -1787,30 +1815,74 @@ export function WorkspaceCompareView({
                 label="Compare"
                 selection={head}
                 revisions={revisions}
-                historyScope={historyScope}
-                onHistoryScopeChange={(scope) => void changeHistoryScope(scope)}
                 loading={revisionsLoading}
                 truncated={revisionsTruncated}
                 onChange={changeHead}
               />
-              <label className="workspace-compare-strategy">
-                <span>Strategy</span>
-                <select
-                  aria-label="Comparison strategy"
+              <Field label="Strategy" className="workspace-compare-strategy">
+                <Select
                   value={mode}
-                  onChange={(event) =>
-                    setMode(event.target.value as typeof mode)
-                  }
+                  onValueChange={(value) => setMode(value as typeof mode)}
                 >
-                  <option value="direct">Differences between sources</option>
-                  <option value="merge_base" disabled={!mergeBaseAllowed}>
-                    Changes introduced by compare branch
-                  </option>
-                </select>
-              </label>
-              <button
-                className="workspace-compare-primary"
-                type="button"
+                  <SelectTrigger
+                    aria-label="Comparison strategy"
+                    className="w-full"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="direct">
+                      Differences between sources
+                    </SelectItem>
+                    <SelectItem
+                      value="merge_base"
+                      disabled={!mergeBaseAllowed}
+                      description={
+                        mergeBaseAllowed
+                          ? undefined
+                          : "Needs a revision on both sides"
+                      }
+                    >
+                      Changes introduced by compare branch
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field
+                label="Commit history"
+                className="workspace-compare-history"
+              >
+                <Select
+                  value={historyScope}
+                  disabled={!repositoryId}
+                  onValueChange={(scope) => void changeHistoryScope(scope)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="head">Current branch (HEAD)</SelectItem>
+                    {revisions
+                      .filter(
+                        (revision) =>
+                          revision.kind === "local_branch" ||
+                          revision.kind === "remote_branch",
+                      )
+                      .map((revision) => (
+                        <SelectItem
+                          key={revision.revisionId}
+                          value={`revision:${revision.revisionId}`}
+                        >
+                          {revision.label}
+                        </SelectItem>
+                      ))}
+                    <SelectItem value="all">All branches</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </div>
+            <div className="workspace-compare-settings-actions">
+              <Button
                 onClick={() => void loadComparison()}
                 disabled={!base || !repositoryId || busy !== "idle"}
               >
@@ -1823,15 +1895,15 @@ export function WorkspaceCompareView({
                   <RotateCw aria-hidden="true" />
                 )}
                 Compare
-              </button>
+              </Button>
             </div>
           </PopoverContent>
         </Popover>
-        <Popover
+        <DropdownMenu
           open={visible && viewOptionsOpen}
           onOpenChange={setViewOptionsOpen}
         >
-          <PopoverTrigger asChild>
+          <DropdownMenuTrigger asChild>
             <button
               type="button"
               className="workspace-compare-toolbar-button"
@@ -1840,73 +1912,53 @@ export function WorkspaceCompareView({
               View
               <ChevronDown aria-hidden="true" />
             </button>
-          </PopoverTrigger>
-          <PopoverContent
-            className="workspace-compare-view-popover"
-            role="dialog"
-            aria-label="Diff view options"
-            align="end"
-          >
-            <div
-              className="workspace-compare-view-options"
-              aria-label="Diff presentation"
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-48">
+            <DropdownMenuLabel>Layout</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={effectivePreferences.diffStyle}
+              onValueChange={(value) =>
+                setPreferences((current) => ({
+                  ...current,
+                  diffStyle: value as WorkspaceComparePreferences["diffStyle"],
+                }))
+              }
             >
-              <button
-                type="button"
-                className={
-                  effectivePreferences.diffStyle === "unified"
-                    ? "is-active"
-                    : ""
-                }
-                aria-pressed={effectivePreferences.diffStyle === "unified"}
-                onClick={() =>
-                  setPreferences((current) => ({
-                    ...current,
-                    diffStyle: "unified",
-                  }))
-                }
-              >
+              <DropdownMenuRadioItem value="unified">
+                <Rows2 aria-hidden="true" />
                 Unified
-              </button>
-              <button
-                type="button"
-                className={
-                  effectivePreferences.diffStyle === "split" ? "is-active" : ""
-                }
-                aria-pressed={effectivePreferences.diffStyle === "split"}
-                onClick={() =>
-                  setPreferences((current) => ({
-                    ...current,
-                    diffStyle: "split",
-                  }))
-                }
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem
+                value="split"
                 disabled={!splitFeasible}
                 title={
-                  !splitFeasible
-                    ? "Split view is unavailable at this width"
-                    : undefined
+                  splitFeasible
+                    ? undefined
+                    : "Split view is unavailable at this width"
                 }
               >
+                <Columns2 aria-hidden="true" />
                 Split
-              </button>
-              <button
-                type="button"
-                className={
-                  effectivePreferences.overflow === "wrap" ? "is-active" : ""
-                }
-                aria-pressed={effectivePreferences.overflow === "wrap"}
-                onClick={() =>
-                  setPreferences((current) => ({
-                    ...current,
-                    overflow: current.overflow === "wrap" ? "scroll" : "wrap",
-                  }))
-                }
-              >
-                Wrap
-              </button>
-            </div>
-          </PopoverContent>
-        </Popover>
+                {!splitFeasible && (
+                  <DropdownMenuShortcut>Too narrow</DropdownMenuShortcut>
+                )}
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              checked={effectivePreferences.overflow === "wrap"}
+              onCheckedChange={(checked) =>
+                setPreferences((current) => ({
+                  ...current,
+                  overflow: checked ? "wrap" : "scroll",
+                }))
+              }
+            >
+              <WrapText aria-hidden="true" />
+              Wrap lines
+            </DropdownMenuCheckboxItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         {filesTruncated && (
           <span
             className="workspace-compare-truncation"

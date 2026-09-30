@@ -93,10 +93,17 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function openReviewMenu(): Promise<void> {
-  const trigger = screen.getByRole("button", { name: "Review controls" });
-  if (trigger.getAttribute("aria-expanded") !== "true") fireEvent.click(trigger);
-  await screen.findByRole("dialog", { name: "Review options" });
+async function openReviewMenu(): Promise<HTMLElement> {
+  // An open menu hides the rest of the page, its trigger included.
+  const open = screen.queryByRole("menu", { name: "Review controls" });
+  if (open) return open;
+  fireEvent.keyDown(screen.getByRole("button", { name: "Review controls" }), { key: "Enter" });
+  return screen.findByRole("menu", { name: "Review controls" });
+}
+
+/** The Review menu's "Start review" row (its name includes the description). */
+function startReviewItem(): HTMLElement {
+  return screen.getByRole("menuitem", { name: /^Start review/ });
 }
 
 function openFileTabs(): HTMLElement[] {
@@ -1132,7 +1139,7 @@ describe("WorkspaceFilesPanel", () => {
       (latestCompareProps?.onFilesChange as (value: unknown) => void)([file]);
     });
     await openReviewMenu();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled());
+    await waitFor(() => expect(startReviewItem()).not.toHaveAttribute("aria-disabled"));
     act(() => { (latestCompareProps?.onReviewedChange as (fileId: string, value: boolean) => void)(file.fileId, true); });
     await waitFor(() => expect(phase === "opening" ? api.openWorkspaceDiffReview : api.setWorkspaceDiffReviewedFile).toHaveBeenCalledOnce());
     act(() => {
@@ -1148,7 +1155,7 @@ describe("WorkspaceFilesPanel", () => {
     expect(latestCompareProps?.annotations).toEqual([]);
     if (phase === "opening") expect(api.setWorkspaceDiffReviewedFile).not.toHaveBeenCalled();
     await openReviewMenu();
-    expect(await screen.findByRole("button", { name: "Start review" })).toBeEnabled();
+    expect(await screen.findByRole("menuitem", { name: /^Start review/ })).not.toHaveAttribute("aria-disabled");
   });
 
   it("locks comment edits during save and retains the draft if its comparison changes", async () => {
@@ -1228,6 +1235,16 @@ describe("WorkspaceFilesPanel", () => {
       expect(screen.getByRole("button", { name: /review/i })).toBeEnabled(),
     );
     expect(screen.getByRole("button", { name: /review/i })).toBeVisible();
+    // Without a review the menu offers to start one; History says why it is off.
+    let menu = await openReviewMenu();
+    await waitFor(() => expect(startReviewItem()).not.toHaveAttribute("aria-disabled"));
+    expect(startReviewItem()).toHaveTextContent("Save comments and reviewed files.");
+    const noHistory = within(menu).getByRole("menuitem", { name: /^History/ });
+    expect(noHistory).toHaveAttribute("aria-disabled", "true");
+    expect(noHistory).toHaveTextContent("None yet");
+    expect(within(menu).queryByRole("menuitem", { name: /^Comments/ })).toBeNull();
+    fireEvent.keyDown(menu, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "Review controls" })).toBeNull());
 
     act(() => {
       (
@@ -1297,6 +1314,22 @@ describe("WorkspaceFilesPanel", () => {
         reviewed: true,
       }),
     );
+    // With a review the status heads the menu (the trigger badge in words)
+    // and Comments shows its count.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Review controls" })).toHaveTextContent("Review0/1"),
+    );
+    menu = await openReviewMenu();
+    expect(within(menu).getByText("0 of 1 files reviewed")).toBeVisible();
+    expect(within(menu).queryByRole("menuitem", { name: /^Start review/ })).toBeNull();
+    const comments = within(menu).getByRole("menuitem", { name: /^Comments/ });
+    expect(comments).toHaveTextContent(/^Comments\d+$/u);
+    expect(comments.querySelector('[data-slot="dropdown-menu-shortcut"]')?.textContent).toMatch(/^\d+$/u);
+    expect(within(menu).getByRole("menuitem", { name: "History" })).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(comments);
+    const inspector = await screen.findByRole("dialog", { name: "Review" });
+    expect(within(inspector).getByRole("radio", { name: "Current review" })).toBeChecked();
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "Review controls" })).toBeNull());
   });
 
   it("hydrates exact review annotations and reviewed files into Compare", async () => {
@@ -1419,11 +1452,11 @@ describe("WorkspaceFilesPanel", () => {
       });
     });
     await openReviewMenu();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled());
+    await waitFor(() => expect(startReviewItem()).not.toHaveAttribute("aria-disabled"));
     expect(latestCompareProps?.annotations).toEqual([]);
     expect((latestCompareProps?.reviewedFileIds as ReadonlySet<string>).size).toBe(0);
     await openReviewMenu();
-    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "History" }));
     const historyDialog = await screen.findByRole("dialog", { name: "Review" });
     await waitFor(() => expect(within(historyDialog).getByText("Looks good")).toBeVisible());
     fireEvent.click(within(historyDialog).getByRole("button", { name: "Edit" }));
@@ -1586,7 +1619,7 @@ describe("WorkspaceFilesPanel", () => {
     );
 
     await openReviewMenu();
-    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "History" }));
     fireEvent.change(
       await screen.findByLabelText("Historical workspace diff review"),
       {
@@ -1748,7 +1781,7 @@ describe("WorkspaceFilesPanel", () => {
     );
 
     await openReviewMenu();
-    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "History" }));
     fireEvent.change(
       await screen.findByLabelText("Historical workspace diff review"),
       { target: { value: historyReview.id } },
@@ -1909,7 +1942,7 @@ describe("WorkspaceFilesPanel", () => {
     );
 
     await openReviewMenu();
-    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "History" }));
     fireEvent.change(
       await screen.findByLabelText("Historical workspace diff review"),
       { target: { value: historyReview.id } },
@@ -2026,7 +2059,7 @@ describe("WorkspaceFilesPanel", () => {
       expect(screen.getByRole("button", { name: /review/i })).toBeEnabled(),
     );
     await openReviewMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    fireEvent.click(startReviewItem());
 
     await waitFor(() =>
       expect(api.openWorkspaceDiffReview).toHaveBeenCalledWith(
@@ -2070,10 +2103,10 @@ describe("WorkspaceFilesPanel", () => {
     });
 
     await openReviewMenu();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled());
+    await waitFor(() => expect(startReviewItem()).not.toHaveAttribute("aria-disabled"));
     expect(screen.queryByText("First review")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    fireEvent.click(startReviewItem());
 
     await waitFor(() =>
       expect(api.openWorkspaceDiffReview).toHaveBeenNthCalledWith(
@@ -2127,7 +2160,7 @@ describe("WorkspaceFilesPanel", () => {
       expect(screen.getByRole("button", { name: /review/i })).toBeEnabled(),
     );
     await openReviewMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    fireEvent.click(startReviewItem());
     await waitFor(() =>
       expect(api.openWorkspaceDiffReview).toHaveBeenCalledWith(
         "workspace-1",
