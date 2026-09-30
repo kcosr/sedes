@@ -596,6 +596,40 @@ describe("ThreadHeader panel chrome", () => {
     expect(settings).toBeVisible();
   });
 
+  it("gives the toolbar toggle to Thread actions on phones below 420px", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.includes("max-width: 819px") || query === "(max-width: 419px)",
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    const onFindOpenChange = vi.fn();
+    renderHeader({ automation: true, withPanelControls: true, onFindOpenChange });
+
+    const toolbar = screen.getByTestId("thread-controls");
+    expect(screen.queryByRole("button", { name: "Show thread toolbar" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Bookmarks" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Automation settings" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Collapse Chat panel" })).toBeVisible();
+    expect(toolbar).toHaveAttribute("hidden");
+
+    await userEvent.click(screen.getByRole("button", { name: "Thread actions" }));
+    const show = await screen.findByRole("menuitemcheckbox", { name: "Show thread toolbar" });
+    expect(show).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(show);
+    expect(toolbar).not.toHaveAttribute("hidden");
+    expect(within(toolbar).getByRole("button", { name: "Find in thread" })).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "Thread actions" }));
+    const hide = await screen.findByRole("menuitemcheckbox", { name: "Show thread toolbar" });
+    expect(hide).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(hide);
+    expect(toolbar).toHaveAttribute("hidden");
+    expect(onFindOpenChange).toHaveBeenCalledWith(false);
+  });
+
   it("reveals the narrow toolbar for a find request and closes find when collapsing it", () => {
     vi.stubGlobal(
       "matchMedia",

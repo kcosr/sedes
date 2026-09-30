@@ -114,8 +114,10 @@
      and panel headers take it as a minimum: they grow with their text
      (Android's WebView text zoom enlarges text, not px heights). */
   --workbench-bar-height: 52px;
-  /* Icon buttons in the bars and panel headers, and their glyphs. */
+  /* Icon buttons in the bars and panel headers, and their glyphs. On touch
+     they are narrower than tall, so a phone header keeps room for its title. */
   --bar-control: var(--control-md);
+  --bar-control-width: var(--bar-control);
   --bar-icon: 18px;
 
   /* motion */
@@ -311,6 +313,7 @@
     --text-input: 16px;
     --workbench-bar-height: 54px;
     --bar-control: 40px;
+    --bar-control-width: var(--control-lg);
     --bar-icon: var(--icon-lg);
   }
 }
@@ -2378,7 +2381,7 @@ textarea:disabled {
 }
 
 /* Icon buttons in the bars and panel headers: --bar-control targets with
-   --bar-icon glyphs (32/18px, and 40/20px under the density switch), so a
+   --bar-icon glyphs (32/18px, and 36x40/20px under the density switch), so a
    bar's controls match their neighbours. The Button base sizes child SVGs
    to 16px unless they carry a size-* class, so the glyphs are set here. */
 .sidebar-nav-trigger,
@@ -2389,7 +2392,7 @@ textarea:disabled {
 .thread-find-trigger,
 .thread-tools-shell > button,
 .workspace-panel-actions > button {
-  width: var(--bar-control);
+  width: var(--bar-control-width);
   height: var(--bar-control);
 }
 
@@ -4446,9 +4449,11 @@ textarea:disabled {
 
 /* Floor so the label never collapses to a bare ellipsis when the header is
    tight: below ~5 characters it carries no information and should shrink no
-   further (the title above keeps taking the pressure). */
+   further (the title above keeps taking the pressure). A pane narrower than
+   the floor still ends the label in an ellipsis, past the 14px folder icon
+   and its 6px gap. */
 .thread-project-name {
-  min-width: 5ch;
+  min-width: min(5ch, calc(100% - 20px));
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -5000,6 +5005,19 @@ textarea:disabled {
 
 .automation-thread-button[data-status="paused"] {
   color: var(--warning);
+}
+
+/* On touch the chip drops its ring and reads as a bare glyph like its
+   neighbours, keeping the phone header's room for the title. */
+@media (max-width: 819px), (pointer: coarse) {
+  .automation-thread-button,
+  .automation-thread-button:hover {
+    border-color: transparent;
+  }
+
+  .automation-thread-button {
+    border-radius: var(--radius-ctl);
+  }
 }
 
 /* ── Thread notices: quiet marker rows on semantic tones (Phase 4).

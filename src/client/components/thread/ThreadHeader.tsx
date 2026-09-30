@@ -41,6 +41,7 @@ import {
   Clock,
   CopyPlus,
   FolderInput,
+  PanelTop,
   RotateCcw,
   Search,
   Settings2,
@@ -51,6 +52,7 @@ import {
 import { Button } from "@client/components/ui/button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuItemDescription,
@@ -89,6 +91,12 @@ import { pointerPanelPresentation } from "../../workspace-panels/thread-panel-na
 import type { PanelPresentation } from "../../workspace-panels/panel-presentation.js";
 import { NavigationControlsContext } from "../../app/navigation-controls.js";
 import { SIDEBAR_NAV_MEDIA_QUERY } from "../SidebarNavTrigger.js";
+
+/**
+ * Below this width a phone header gives its toolbar toggle to Thread
+ * actions, so the title keeps its room beside the touch-sized buttons.
+ */
+const NARROW_HEADER_MEDIA_QUERY = "(max-width: 419px)";
 import {
   SettleImpactDialog,
   settleNeedsConfirmation,
@@ -177,6 +185,7 @@ export const ThreadHeader = memo(function ThreadHeader({
   // rows, and it also carries the thread settings the composer hides.
   const sheet = useTouchDensity();
   const mobileLayout = useMediaQuery(SIDEBAR_NAV_MEDIA_QUERY);
+  const narrowHeader = useMediaQuery(NARROW_HEADER_MEDIA_QUERY);
   const navigationControls = useContext(NavigationControlsContext);
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState(snapshot.thread.title.text);
@@ -184,6 +193,10 @@ export const ThreadHeader = memo(function ThreadHeader({
   useEffect(() => {
     if (findOpen) setMobileToolsOpen(true);
   }, [findOpen]);
+  const setToolbarOpen = (open: boolean) => {
+    if (!open) onFindOpenChange(false);
+    setMobileToolsOpen(open);
+  };
   const [actionsOpen, setActionsOpen] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelSearchFirst, setModelSearchFirst] = useState(false);
@@ -692,6 +705,19 @@ export const ThreadHeader = memo(function ThreadHeader({
                     if (afterActionsClose.current) event.preventDefault();
                   }}
                 >
+                  {narrowHeader && (
+                    <>
+                      <DropdownMenuCheckboxItem
+                        checked={mobileToolsOpen}
+                        aria-controls={`thread-toolbar-${snapshot.thread.id}`}
+                        onCheckedChange={setToolbarOpen}
+                      >
+                        <PanelTop aria-hidden="true" />
+                        Show thread toolbar
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuSeparator />
+                    </>
+                  )}
                   {sheet && snapshot.capabilities.settings.length > 0 && (
                     <>
                       <ThreadSettingsMenuItems
@@ -1023,22 +1049,21 @@ export const ThreadHeader = memo(function ThreadHeader({
                   {latestForkUnavailableReason}
                 </span>
               )}
-            <Button
-              variant={mobileToolsOpen ? "secondary" : "ghost"}
-              size="icon-sm"
-              className="thread-tools-toggle"
-              aria-label={
-                mobileToolsOpen ? "Hide thread toolbar" : "Show thread toolbar"
-              }
-              aria-expanded={mobileToolsOpen}
-              aria-controls={`thread-toolbar-${snapshot.thread.id}`}
-              onClick={() => {
-                if (mobileToolsOpen) onFindOpenChange(false);
-                setMobileToolsOpen((open) => !open);
-              }}
-            >
-              <ChevronDown size={16} strokeWidth={1.8} />
-            </Button>
+            {!narrowHeader && (
+              <Button
+                variant={mobileToolsOpen ? "secondary" : "ghost"}
+                size="icon-sm"
+                className="thread-tools-toggle"
+                aria-label={
+                  mobileToolsOpen ? "Hide thread toolbar" : "Show thread toolbar"
+                }
+                aria-expanded={mobileToolsOpen}
+                aria-controls={`thread-toolbar-${snapshot.thread.id}`}
+                onClick={() => setToolbarOpen(!mobileToolsOpen)}
+              >
+                <ChevronDown size={16} strokeWidth={1.8} />
+              </Button>
+            )}
           </div>
         }
       />
