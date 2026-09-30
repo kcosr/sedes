@@ -189,6 +189,7 @@ function hasColorLiteral(declaration: Declaration): boolean {
   if (HEX_COLOR.test(value) || hasColorFunctionLiteral(value)) return true;
   if (!COLOR_PROPERTIES.test(declaration.prop) && !declaration.prop.startsWith("--")) return false;
   return value
+    .replace(/--[\w-]+/gu, "")
     .toLowerCase()
     .split(/[^a-z]+/u)
     .some((word) => NAMED_COLORS.has(word));
@@ -196,26 +197,87 @@ function hasColorLiteral(declaration: Declaration): boolean {
 
 const GLOBAL_KEYWORDS = new Set(["inherit", "initial", "unset", "revert", "revert-layer"]);
 
+/**
+ * The components of a value outside var() references: numbers (with their
+ * unit), identifiers and function names. A var() fallback only applies when
+ * its token is undefined, which rule 1 already rejects, so it is not a
+ * component here.
+ */
+function componentsOutsideTokens(value: string): string[] {
+  return withoutVarGroups(withoutStringsAndUrls(value.toLowerCase())).match(
+    /[a-z-]+\(|[+-]?(?:\d+\.?\d*|\.\d+)(?:[a-z]+|%)?|[a-z][\w-]*/gu,
+  ) ?? [];
+}
+
+const isFunction = (component: string) => component.endsWith("(");
+const isNumber = (component: string) => /^[+-]?[\d.]/u.test(component);
+const unitOf = (component: string) => component.replace(/^[+-]?[\d.]+/u, "");
+
 function isFontSizeLiteral(declaration: Declaration): boolean {
   const value = declaration.value.trim().toLowerCase();
-  if (value.includes("var(") || GLOBAL_KEYWORDS.has(value)) return false;
-  if (declaration.prop === "font") return /(?:^|\s)[\d.]+(?:px|rem|em|%)(?:\/|\s)/u.test(value);
+  if (GLOBAL_KEYWORDS.has(value)) return false;
   const selector = declaration.parent?.type === "rule" ? declaration.parent.selector : "";
   // Markdown scales with its container on purpose.
-  return !(/\.markdown\b/u.test(selector) && /^[\d.]+(?:em|%)$/u.test(value));
+  const relativeAllowed = /\.markdown(?![\w-])/u.test(selector);
+  return componentsOutsideTokens(value).some((component) => {
+    if (isFunction(component)) return false;
+    if (!isNumber(component)) {
+      // In the `font` shorthand, words are families and styles; elsewhere
+      // they are size keywords such as `small`.
+      return declaration.prop !== "font";
+    }
+    const unit = unitOf(component);
+    // Unitless numbers are calc() factors (or the shorthand's weight).
+    if (unit === "") return false;
+    return !(relativeAllowed && (unit === "em" || unit === "%"));
+  });
 }
+
+function isFontWeightLiteral(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (GLOBAL_KEYWORDS.has(normalized)) return false;
+  return componentsOutsideTokens(normalized).some((component) => !isFunction(component));
+}
+
+/** Splits a value on top-level whitespace and slashes. */
+function topLevelComponents(value: string): string[] {
+  const components: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const character of value) {
+    if (character === "(") depth += 1;
+    else if (character === ")") depth -= 1;
+    if (depth === 0 && /[\s/]/u.test(character)) {
+      if (current) components.push(current);
+      current = "";
+    } else current += character;
+  }
+  if (current) components.push(current);
+  return components;
+}
+
+const ALLOWED_RADIUS_LITERALS = new Set(["0", "0px", "50%", "999px", "9999px"]);
+/** Nested-radius geometry: inner = outer - inset (or outer = inner + inset). */
+const RADIUS_GEOMETRY = /^calc\(var\(--radius-[\w-]+\)[+-]\d+(?:\.\d+)?px\)$/u;
 
 function isBorderRadiusLiteral(declaration: Declaration): boolean {
   const value = declaration.value.trim().toLowerCase();
-  if (value.includes("var(") || GLOBAL_KEYWORDS.has(value)) return false;
-  return !value
-    .split(/[\s/]+/u)
-    .every((part) => ["0", "0px", "50%", "999px", "9999px"].includes(part));
+  if (GLOBAL_KEYWORDS.has(value)) return false;
+  return topLevelComponents(value).some((component) => {
+    if (ALLOWED_RADIUS_LITERALS.has(component)) return false;
+    if (RADIUS_GEOMETRY.test(component.replace(/\s+/gu, ""))) return false;
+    return componentsOutsideTokens(component).some((part) => !isFunction(part));
+  });
 }
+
+/** A layer, or a layer plus or minus a whole offset. */
+const Z_LAYER = /^(?:var\(--z-[\w-]+\)|calc\(var\(--z-[\w-]+\)[+-]\d+\))$/u;
 
 function isZIndexLiteral(value: string): boolean {
   const normalized = value.trim().toLowerCase();
-  if (normalized.includes("var(--z-") || normalized === "auto" || GLOBAL_KEYWORDS.has(normalized)) return false;
+  if (normalized === "auto" || GLOBAL_KEYWORDS.has(normalized)) return false;
+  if (Z_LAYER.test(normalized.replace(/\s+/gu, ""))) return false;
+  // 0 and negative values order things inside one stacking context.
   return !/^-?\d+$/u.test(normalized) || Number(normalized) > 0;
 }
 
@@ -229,10 +291,11 @@ function isAllowedMediaQuery(params: string): boolean {
   );
 }
 
-/** The `{…}` expression after each `style=` in a TSX source. */
+/** The `{…}` expression of each JSX `style` attribute in a TSX source. */
 function styleExpressions(source: string): Array<{ readonly index: number; readonly text: string }> {
   const expressions: Array<{ index: number; text: string }> = [];
-  for (const match of source.matchAll(/\bstyle=\{/gu)) {
+  // JSX allows whitespace, newlines and comments around the `=`.
+  for (const match of source.matchAll(/(?<![\w$.-])style\s*(?:\/\*[\s\S]*?\*\/\s*)*=\s*(?:\/\*[\s\S]*?\*\/\s*)*\{/gu)) {
     const start = match.index + match[0].length - 1;
     let depth = 0;
     for (let index = start; index < source.length; index += 1) {
@@ -287,9 +350,8 @@ function scan(): Scan {
       if ((property === "font-size" || property === "font") && isFontSizeLiteral(declaration)) {
         metrics.fontSizeLiterals.push(offender);
       }
-      if (property === "font-weight") {
-        const value = declaration.value.trim().toLowerCase();
-        if (!value.includes("var(") && !GLOBAL_KEYWORDS.has(value)) metrics.fontWeightLiterals.push(offender);
+      if (property === "font-weight" && isFontWeightLiteral(declaration.value)) {
+        metrics.fontWeightLiterals.push(offender);
       }
       if (/^border(?:-(?:top|bottom|start|end)-(?:left|right|start|end))?-radius$/u.test(property) && isBorderRadiusLiteral(declaration)) {
         metrics.borderRadiusLiterals.push(offender);
@@ -434,13 +496,23 @@ describe("client style guardrails", () => {
         "Fix the new offender. The baseline only goes down; do not raise it to pass.",
       ].join("\n"),
     ).toEqual([]);
+    // Update mode has just written the lower counts.
+    if (UPDATE_BASELINE) return;
+    expect(
+      drops,
+      [
+        `Style guardrail "${metric}" is below its baseline, so the spare allowance would let new offenders in:`,
+        ...drops.map((drop) => `  ${drop}`),
+        `Lock in the improvement (this only ever lowers counts): ${UPDATE_COMMAND}`,
+      ].join("\n"),
+    ).toEqual([]);
   });
 });
 
 describe("style guardrail detectors", () => {
-  const declaration = (text: string) => {
+  const declaration = (text: string, selector = ".component") => {
     let found: Declaration | undefined;
-    postcss.parse(`.markdown-free { ${text} }`).walkDecls((node) => {
+    postcss.parse(`${selector} { ${text} }`).walkDecls((node) => {
       found = node;
     });
     return found!;
@@ -450,7 +522,10 @@ describe("style guardrail detectors", () => {
     for (const literal of ["color: #fff", "box-shadow: 0 1px 2px rgb(0 0 0 / 20%)", "background: oklch(0.5 0.1 250)", "border-color: white", "--series: #123456"]) {
       expect(hasColorLiteral(declaration(literal)), literal).toBe(true);
     }
-    for (const token of ["color: var(--foreground)", "background: oklch(var(--l) var(--c) var(--h) / 0.1)", "mask: radial-gradient(#000, transparent)", "background: color-mix(in oklch, var(--success) 12%, transparent)", "border: 1px solid currentColor", "font-family: Inter"]) {
+    for (const mixed of ["color: var(--x, #fff)", "background: oklch(var(--l) 0.1 var(--h))", "border: 1px solid var(--border, black)"]) {
+      expect(hasColorLiteral(declaration(mixed)), mixed).toBe(true);
+    }
+    for (const token of ["color: var(--red-accent)", "border-color: var(--usage-white)", "color: var(--foreground)", "background: oklch(var(--l) var(--c) var(--h) / 0.1)", "mask: radial-gradient(#000, transparent)", "background: color-mix(in oklch, var(--success) 12%, transparent)", "border: 1px solid currentColor", "font-family: Inter"]) {
       expect(hasColorLiteral(declaration(token)), token).toBe(false);
     }
   });
@@ -468,24 +543,70 @@ describe("style guardrail detectors", () => {
     expect(isAllowedMediaQuery("(max-width: 760px)")).toBe(false);
   });
 
+  it("flags literals mixed with tokens in font sizes and weights", () => {
+    for (const literal of [
+      "font-size: clamp(11px, 2vw, var(--text-ui))",
+      "font-size: max(var(--text-meta), 11px)",
+      "font-size: small",
+      "font-size: 0.9em",
+      "font: 11px var(--font-mono)",
+      "font: 600 11.5px/1.5 var(--font-mono)",
+    ]) {
+      expect(isFontSizeLiteral(declaration(literal)), literal).toBe(true);
+    }
+    for (const token of [
+      "font-size: var(--text-ui)",
+      "font-size: calc(var(--text-ui) * 1.1)",
+      "font-size: var(--text-ui, 13px)",
+      "font-size: inherit",
+      "font: var(--weight-medium) var(--text-meta) / 1.4 var(--font-mono)",
+    ]) {
+      expect(isFontSizeLiteral(declaration(token)), token).toBe(false);
+    }
+    // Markdown sizes relative to its container, but only markdown itself.
+    expect(isFontSizeLiteral(declaration("font-size: 0.9em", ".markdown code"))).toBe(false);
+    expect(isFontSizeLiteral(declaration("font-size: 0.9em", ".markdown-card"))).toBe(true);
+    for (const literal of ["max(var(--weight-medium), 650)", "calc(var(--weight-medium) + 50)", "bold", "600"]) {
+      expect(isFontWeightLiteral(literal), literal).toBe(true);
+    }
+    for (const token of ["var(--weight-semibold)", "inherit"]) {
+      expect(isFontWeightLiteral(token), token).toBe(false);
+    }
+  });
+
+  it("flags literals mixed with tokens in radii and z-indexes", () => {
+    for (const literal of [
+      "border-radius: var(--radius-ctl) 100px",
+      "border-radius: min(var(--radius-card), 7px)",
+      "border-radius: var(--radius-lg) / 4px",
+      "border-top-left-radius: 6px",
+    ]) {
+      expect(isBorderRadiusLiteral(declaration(literal)), literal).toBe(true);
+    }
+    for (const token of [
+      "border-radius: var(--radius-lg) var(--radius-lg) 0 0",
+      "border-radius: calc(var(--radius-ctl) - 2px)",
+      "border-radius: calc(var(--radius-card) + 1.5px)",
+      "border-radius: 50%",
+    ]) {
+      expect(isBorderRadiusLiteral(declaration(token)), token).toBe(false);
+    }
+    for (const literal of ["max(var(--z-dialog), 90)", "calc(var(--z-dialog) + var(--offset))", "var(--offset)", "calc(var(--z-dialog) * 2)"]) {
+      expect(isZIndexLiteral(literal), literal).toBe(true);
+    }
+    expect(isZIndexLiteral("calc( var(--z-dialog) - 1 )")).toBe(false);
+  });
+
   it("finds palette colors, pixel text sizes and style hexes in TSX", () => {
     const source = [
       '<div className="hover:bg-red-500 text-white/80 text-[13px] md:text-[11.5px]" />',
       '<span className="bg-background text-muted-foreground border-border-soft" />',
       '<i style={{ color: "#fff", "--x": `${1}px` }} />',
+      '<b style = {{ background: "#123" }} />',
+      '<em style\n  ={\n    { borderColor: "#abcdef" }} data-style={{ color: "#999" }} />',
     ].join("\n");
     expect([...source.matchAll(TAILWIND_PALETTE)].map((match) => match[0])).toEqual(["hover:bg-red-500", "text-white/80"]);
     expect([...source.matchAll(TAILWIND_ARBITRARY_TEXT_SIZE)].map((match) => match[0])).toEqual(["text-[13px]", "md:text-[11.5px]"]);
-    expect(styleExpressions(source).flatMap((expression) => [...expression.text.matchAll(HEX_COLOR)].map((match) => match[0]))).toEqual(["#fff"]);
+    expect(styleExpressions(source).flatMap((expression) => [...expression.text.matchAll(HEX_COLOR)].map((match) => match[0]))).toEqual(["#fff", "#123", "#abcdef"]);
   });
 });
-    // Update mode has just written the lower counts.
-    if (UPDATE_BASELINE) return;
-    expect(
-      drops,
-      [
-        `Style guardrail "${metric}" is below its baseline, so the spare allowance would let new offenders in:`,
-        ...drops.map((drop) => `  ${drop}`),
-        `Lock in the improvement (this only ever lowers counts): ${UPDATE_COMMAND}`,
-      ].join("\n"),
-    ).toEqual([]);

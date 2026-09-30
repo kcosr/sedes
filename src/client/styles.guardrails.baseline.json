@@ -17,11 +17,11 @@
     "components/thread/question-inbox.css": 9,
     "components/thread/thread-group-roster.css": 2,
     "operations/operation-overlay.css": 1,
-    "styles.css": 396,
+    "styles.css": 397,
     "usage/usage.css": 61,
     "workpads/WorkpadDocument.css": 2,
     "workpads/workpads-panel.css": 7,
-    "workspace-files/workspace-compare.css": 30,
+    "workspace-files/workspace-compare.css": 31,
     "workspace-files/workspace-review-inspector.css": 3,
     "workspace-files/workspace-revision-picker.css": 10
   },
