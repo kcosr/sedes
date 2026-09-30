@@ -50,7 +50,9 @@ function errorMessage(error: unknown): string {
  * The one confirmation dialog: a small card (a centered card on phones too)
  * with no X; Cancel is the way out. Cancel and dismissal lock while the
  * action is pending. Focus opens on the confirm action, or on Cancel when
- * the action is destructive.
+ * the action is destructive, and returns on close to the element that
+ * opened the dialog. When the action removes that element (deleting the
+ * row), pass `fallbackFocus` to name a surviving neighbour.
  */
 function ConfirmDialog({
   open,

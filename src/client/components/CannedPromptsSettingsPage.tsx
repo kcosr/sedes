@@ -69,6 +69,11 @@ export function CannedPromptsSettingsPage({
   const [placement, setPlacementState] = useState(getPromptsPlacement);
   const titleInput = useRef<HTMLInputElement>(null);
   const textInput = useRef<HTMLTextAreaElement>(null);
+  // Where focus lands once a deletion has removed the row that asked for it:
+  // the row now at its place, else the new last row, else "Add prompt".
+  const promptList = useRef<HTMLUListElement>(null);
+  const addPromptButton = useRef<HTMLButtonElement>(null);
+  const deletedIndex = useRef(0);
 
   useEffect(() => {
     void store.load().catch(() => undefined);
@@ -156,6 +161,7 @@ export function CannedPromptsSettingsPage({
       }
       throw new Error(messageFrom(cause, "Could not delete this prompt."));
     }
+    deletedIndex.current = prompts.findIndex(({ id }) => id === prompt.id);
     if (draft?.promptId === prompt.id) setDraft(undefined);
     showNotice("Prompt deleted.");
   };
@@ -206,6 +212,7 @@ export function CannedPromptsSettingsPage({
             <RefreshCw aria-hidden="true" />
           </Button>
           <Button
+            ref={addPromptButton}
             type="button"
             disabled={state.status !== "ready" || pending || atLimit}
             title={atLimit ? `A library holds at most ${CANNED_PROMPT_MAX_ITEMS} prompts.` : undefined}
@@ -307,7 +314,7 @@ export function CannedPromptsSettingsPage({
               className="settings-master-detail-list"
             >
               {prompts.length === 0 ? null : (
-                <EntityList>
+                <EntityList ref={promptList}>
                   {prompts.map((prompt, index) => (
                     <EntityRow
                       key={prompt.id}
@@ -462,6 +469,12 @@ export function CannedPromptsSettingsPage({
         confirmLabel="Delete prompt"
         pendingLabel="Deleting…"
         onConfirm={() => (deleting ? confirmDelete(deleting) : undefined)}
+        fallbackFocus={() => {
+          const rows = promptList.current?.querySelectorAll<HTMLElement>(
+            '[data-slot="entity-row-main"]',
+          ) ?? [];
+          return rows[Math.min(deletedIndex.current, rows.length - 1)] ?? addPromptButton.current;
+        }}
       />
       <DiscardChangesDialog
         open={discarding && Boolean(draft)}

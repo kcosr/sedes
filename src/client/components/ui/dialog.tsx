@@ -139,6 +139,33 @@ function initialFocusTarget(content: HTMLElement): HTMLElement {
   return primary ?? content
 }
 
+/** The element focused when a dialog opened, if it lies outside the dialog. */
+function focusedOutside(content: HTMLElement): HTMLElement | null {
+  const active = document.activeElement
+  if (!(active instanceof HTMLElement) || active === document.body) return null
+  return content.contains(active) ? null : active
+}
+
+/**
+ * Whether focus already sits somewhere a closing dialog must not take it
+ * from, for example a dialog that opened as this one closed. The body, the
+ * closing content and any other dialog that is closing do not count.
+ */
+function focusMovedElsewhere(content: HTMLElement): boolean {
+  const active = document.activeElement
+  if (!active || active === document.body || content.contains(active)) return false
+  return !active.closest('[data-slot="dialog-content"][data-state="closed"]')
+}
+
+type FocusTarget =
+  | React.RefObject<HTMLElement | null>
+  | (() => HTMLElement | null | undefined)
+
+function resolveFocusTarget(target: FocusTarget | undefined): HTMLElement | null {
+  if (!target) return null
+  return (typeof target === "function" ? target() : target.current) ?? null
+}
+
 function DialogContent({
   className,
   children,
@@ -150,6 +177,7 @@ function DialogContent({
   showOverlay = true,
   layer = "dialog",
   returnFocusRef,
+  fallbackFocus,
   style,
   ref,
   onOpenAutoFocus,
@@ -173,11 +201,17 @@ function DialogContent({
   /** The stacking band; raise it for dialogs opened from the drawer, a sheet or a blocking operation. */
   layer?: DialogLayer
   /**
-   * Where focus returns on close. Radix returns it to a DialogTrigger; a
-   * controlled dialog opened from a menu row (which unmounts with its menu)
-   * names its target here, or focus drops to the body.
+   * Where focus returns on close, in place of the element that was focused
+   * when the dialog opened (the default). Name it when that element does not
+   * outlive the dialog, e.g. a menu row that unmounts with its menu.
    */
   returnFocusRef?: React.RefObject<HTMLElement | null>
+  /**
+   * Where focus goes when the return target is gone, e.g. after the action
+   * removed the row that opened the dialog: a surviving neighbour or the
+   * list. A function is read at close, after the removal has rendered.
+   */
+  fallbackFocus?: FocusTarget
 }) {
   const touch = useTouchDensity()
   const keyboardInset = useKeyboardInset(touch)
@@ -185,7 +219,12 @@ function DialogContent({
     ? MOBILE_PRESENTATION[mobile ?? defaultMobile(layout, size)]
     : layout
   const [container, setContainer] = React.useState<HTMLDivElement | null>(null)
+  // The element focused when this opening mounted; focus returns there.
+  const opener = React.useRef<{ content: HTMLElement; element: HTMLElement | null }>(null)
   const contentRef = React.useCallback((node: HTMLDivElement | null) => {
+    if (node && opener.current?.content !== node) {
+      opener.current = { content: node, element: focusedOutside(node) }
+    }
     setContainer(node)
     if (typeof ref === "function") return ref(node)
     if (ref) ref.current = node
@@ -213,9 +252,27 @@ function DialogContent({
           initialFocusTarget(content).focus({ preventScroll: true })
         }}
         onCloseAutoFocus={(event) => {
+          // A handler that prevents the default owns focus.
           onCloseAutoFocus?.(event)
-          const target = returnFocusRef?.current
-          if (event.defaultPrevented || !target?.isConnected) return
+          if (event.defaultPrevented) return
+          const content = event.currentTarget as HTMLElement
+          // A reopening may already have mounted new content; keep its opener.
+          let openedFrom: HTMLElement | null = null
+          if (opener.current?.content === content) {
+            openedFrom = opener.current.element
+            opener.current = null
+          }
+          if (focusMovedElsewhere(content)) {
+            event.preventDefault()
+            return
+          }
+          // The named target, else the opener, else the caller's survivor;
+          // detached elements are skipped. With none, Radix focuses a
+          // DialogTrigger if there is one.
+          const target = [resolveFocusTarget(returnFocusRef), openedFrom]
+            .find((element) => element?.isConnected)
+            ?? resolveFocusTarget(fallbackFocus)
+          if (!target?.isConnected) return
           event.preventDefault()
           target.focus()
         }}
