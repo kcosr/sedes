@@ -173,8 +173,7 @@
 
 - Agents move to **Settings → Execution → Agents** (`/settings/agents`) with
   the same list and detail layout; **More → Agents** and **Create an Agent**
-  open it there. The `/agents` addresses are removed without a redirect and
-  now open the workspace, so update bookmarks.
+  open it there.
 
 - Dialogs share one design: fixed sizes, a pinned title and actions with the
   primary action last, errors shown inside the dialog, and no backdrop blur.
@@ -539,7 +538,10 @@
   for rollback. Persistent sidecar delivery diagnostics keep captures from
   only the four most recent earlier daemon PIDs. Diagnostics remain opt-in.
 
-### Removed (#12)
+### Removed
+
+- The `/agents`, `/agents/new`, and `/agents/<id>` addresses. They now open
+  the workspace without a redirect; update bookmarks to `/settings/agents`.
 
 ## [0.1.1] - 2026-09-21
 
