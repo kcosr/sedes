@@ -705,19 +705,6 @@ export const ThreadHeader = memo(function ThreadHeader({
                     if (afterActionsClose.current) event.preventDefault();
                   }}
                 >
-                  {narrowHeader && (
-                    <>
-                      <DropdownMenuCheckboxItem
-                        checked={mobileToolsOpen}
-                        aria-controls={`thread-toolbar-${snapshot.thread.id}`}
-                        onCheckedChange={setToolbarOpen}
-                      >
-                        <PanelTop aria-hidden="true" />
-                        Show thread toolbar
-                      </DropdownMenuCheckboxItem>
-                      <DropdownMenuSeparator />
-                    </>
-                  )}
                   {sheet && snapshot.capabilities.settings.length > 0 && (
                     <>
                       <ThreadSettingsMenuItems
@@ -731,6 +718,20 @@ export const ThreadHeader = memo(function ThreadHeader({
                           })
                         }
                       />
+                      <DropdownMenuSeparator />
+                    </>
+                  )}
+                  {/* On narrow phones the header's toolbar toggle lives here. */}
+                  {narrowHeader && (
+                    <>
+                      <DropdownMenuCheckboxItem
+                        checked={mobileToolsOpen}
+                        aria-controls={`thread-toolbar-${snapshot.thread.id}`}
+                        onCheckedChange={setToolbarOpen}
+                      >
+                        <PanelTop aria-hidden="true" />
+                        Show thread toolbar
+                      </DropdownMenuCheckboxItem>
                       <DropdownMenuSeparator />
                     </>
                   )}

@@ -104,7 +104,9 @@ test("mobile worktree removal closes its sheet before cancellation or confirmati
   await openWorkspaceDirectory(page, primary);
   await createDraftThread(page);
   await page.setViewportSize({ width: 412, height: 915 });
-  await page.getByRole("button", { name: "Show thread toolbar" }).click();
+  // Below 420px the toolbar toggle is a check row in Thread actions.
+  await page.getByRole("button", { name: "Thread actions" }).click();
+  await page.getByRole("menuitemcheckbox", { name: "Show thread toolbar" }).click();
   const picker = page.getByRole("button", { name: /^Thread worktree:/ });
   await picker.click();
   const sheet = page.getByRole("dialog", { name: "Thread worktree", exact: true });
@@ -339,8 +341,9 @@ test.describe.serial("normalized target and mobile navigation", () => {
       await expect(control).toBeVisible();
       const box = await control.boundingBox();
       expect(box).not.toBeNull();
-      // Touch-sized header targets.
-      expect(box!.width).toBeGreaterThanOrEqual(40);
+      // Touch-sized header targets, narrower than tall so the title keeps
+      // its room.
+      expect(box!.width).toBeGreaterThanOrEqual(36);
       expect(box!.height).toBeGreaterThanOrEqual(40);
       headerBoxes.push(box!);
     }
@@ -361,6 +364,34 @@ test.describe.serial("normalized target and mobile navigation", () => {
     expect(Math.abs(aboveTitle - belowMeta)).toBeLessThanOrEqual(1);
     expect(Math.abs(headerBox!.height - barBox!.height)).toBeLessThanOrEqual(1);
     await capture(page, testInfo, "thread-header-mobile-collapsed.png");
+    // Below 420px the toolbar toggle is a check row in Thread actions, and
+    // the title keeps its full width beside the remaining buttons.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(threadToolbarToggle).toHaveCount(0);
+    for (const control of [bookmarks, settings, collapseChat, closeChat]) {
+      const box = await control.boundingBox();
+      expect(box!.width).toBeGreaterThanOrEqual(36);
+      expect(box!.height).toBeGreaterThanOrEqual(40);
+    }
+    expect(
+      await page.locator(".thread-header h1").evaluate((title) => title.scrollWidth <= title.clientWidth),
+    ).toBe(true);
+    const threadControls = page.getByTestId("thread-controls");
+    await expect(threadControls).toBeHidden();
+    await settings.click();
+    const toolbarRow = page
+      .getByTestId("thread-settings-sheet")
+      .getByRole("menuitemcheckbox", { name: "Show thread toolbar" });
+    await expect(toolbarRow).not.toBeChecked();
+    await toolbarRow.click();
+    await expect(threadControls).toBeVisible();
+    await expect(page.getByRole("button", { name: "Find in thread" })).toBeVisible();
+    await capture(page, testInfo, "thread-header-phone-toolbar.png");
+    await settings.click();
+    await expect(toolbarRow).toBeChecked();
+    await toolbarRow.click();
+    await expect(threadControls).toBeHidden();
+    await page.setViewportSize({ width: 456, height: 844 });
     await threadToolbarToggle.click();
     await expect(
       page.getByRole("button", { name: "Hide thread toolbar" }),
