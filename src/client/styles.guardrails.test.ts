@@ -160,11 +160,23 @@ function balancedArguments(value: string, open: number): string {
   return value.slice(open + 1);
 }
 
-function withoutVarGroups(value: string): string {
+/**
+ * The value with every var() reference removed but its fallback kept: a
+ * fallback is a literal written in the stylesheet, and it renders whenever the
+ * reference does not resolve (rule 1 only checks references without one).
+ */
+function withoutTokenReferences(value: string): string {
   let result = value;
-  for (let start = result.indexOf("var("); start >= 0; start = result.indexOf("var(")) {
+  for (let start = result.indexOf("var("); start >= 0; start = result.indexOf("var(", start)) {
     const inner = balancedArguments(result, start + 3);
-    result = result.slice(0, start) + result.slice(start + 4 + inner.length + 1);
+    let comma = -1;
+    for (let index = 0, depth = 0; index < inner.length && comma < 0; index += 1) {
+      if (inner[index] === "(") depth += 1;
+      else if (inner[index] === ")") depth -= 1;
+      else if (inner[index] === "," && depth === 0) comma = index;
+    }
+    // Continue at the fallback, which may hold nested references.
+    result = result.slice(0, start) + (comma < 0 ? "" : ` ${inner.slice(comma + 1)} `) + result.slice(start + 4 + inner.length + 1);
   }
   return result;
 }
@@ -176,7 +188,7 @@ function withoutVarGroups(value: string): string {
 function hasColorFunctionLiteral(value: string): boolean {
   for (const match of value.matchAll(COLOR_FUNCTION)) {
     const channels = balancedArguments(value, match.index + match[0].length - 1).split("/")[0]!;
-    if (/\d/u.test(withoutVarGroups(channels))) return true;
+    if (/\d/u.test(withoutTokenReferences(channels))) return true;
   }
   return false;
 }
@@ -198,13 +210,11 @@ function hasColorLiteral(declaration: Declaration): boolean {
 const GLOBAL_KEYWORDS = new Set(["inherit", "initial", "unset", "revert", "revert-layer"]);
 
 /**
- * The components of a value outside var() references: numbers (with their
- * unit), identifiers and function names. A var() fallback only applies when
- * its token is undefined, which rule 1 already rejects, so it is not a
- * component here.
+ * The components of a value outside var() references, fallbacks included:
+ * numbers (with their unit), identifiers and function names.
  */
 function componentsOutsideTokens(value: string): string[] {
-  return withoutVarGroups(withoutStringsAndUrls(value.toLowerCase())).match(
+  return withoutTokenReferences(withoutStringsAndUrls(value.toLowerCase())).match(
     /[a-z-]+\(|[+-]?(?:\d+\.?\d*|\.\d+)(?:[a-z]+|%)?|[a-z][\w-]*/gu,
   ) ?? [];
 }
@@ -557,7 +567,6 @@ describe("style guardrail detectors", () => {
     for (const token of [
       "font-size: var(--text-ui)",
       "font-size: calc(var(--text-ui) * 1.1)",
-      "font-size: var(--text-ui, 13px)",
       "font-size: inherit",
       "font: var(--weight-medium) var(--text-meta) / 1.4 var(--font-mono)",
     ]) {
@@ -572,6 +581,26 @@ describe("style guardrail detectors", () => {
     for (const token of ["var(--weight-semibold)", "inherit"]) {
       expect(isFontWeightLiteral(token), token).toBe(false);
     }
+  });
+
+  it("inspects var() fallbacks, which render when the reference does not resolve", () => {
+    for (const literal of [
+      "font-size: var(--x-undefined, 123px)",
+      "font-size: var(--text-ui, var(--x, 13px))",
+      "font: var(--x, 12px) var(--font-mono)",
+      "border-radius: var(--x, 23px)",
+      "border-radius: calc(var(--radius-ctl, 8px) - 2px)",
+    ]) {
+      const declared = declaration(literal);
+      const flagged = declared.prop.includes("radius") ? isBorderRadiusLiteral(declared) : isFontSizeLiteral(declared);
+      expect(flagged, literal).toBe(true);
+    }
+    expect(isFontWeightLiteral("var(--x, 650)")).toBe(true);
+    expect(isZIndexLiteral("var(--z-dialog, 80)")).toBe(true);
+    expect(hasColorLiteral(declaration("background: oklch(var(--l, 0.5) var(--c) var(--h))"))).toBe(true);
+    // A fallback that is itself a token is fine.
+    expect(isFontSizeLiteral(declaration("font-size: var(--x, var(--text-ui))"))).toBe(false);
+    expect(isBorderRadiusLiteral(declaration("border-radius: var(--x, var(--radius-card))"))).toBe(false);
   });
 
   it("flags literals mixed with tokens in radii and z-indexes", () => {
