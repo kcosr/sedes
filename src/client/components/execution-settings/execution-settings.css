@@ -15,7 +15,8 @@
 /* Stack: the list, or the selection with a way back. */
 @container settings-content (width < 960px) {
   .execution-settings[data-selection="none"] .execution-detail-pane { display: none; }
-  .execution-settings:not([data-selection="none"]) :is(.execution-list-pane, .execution-defaults, [data-slot="settings-page-header"]) { display: none; }
+  .execution-settings:not([data-selection="none"]) :is(.execution-list-pane, .execution-defaults),
+  .execution-settings:not([data-selection="none"]) > [data-slot="settings-page"] > [data-slot="settings-page-header"] { display: none; }
 }
 
 /* Split: a list pane beside the detail. A backend editor takes the width. */
@@ -81,18 +82,13 @@
 
 /* ── Detail ── */
 .execution-detail, .execution-editor { display: grid; min-width: 0; align-content: start; gap: var(--space-5); }
-.execution-detail-header { display: grid; min-width: 0; gap: var(--space-2); }
-.execution-detail-heading { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-3) var(--space-4); }
-.execution-detail-titles { display: grid; min-width: 0; flex: 1 1 16rem; gap: var(--space-1); }
+/* Detail and editor headers use the settings page header (DetailHeader);
+   these rules only add the entity's icon, tags and status to its title. */
 .execution-detail-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.execution-detail-title-row > [data-slot="settings-page-title"] { min-width: 0; overflow-wrap: anywhere; }
 .execution-detail-icon { display: grid; place-items: center; color: var(--muted-foreground); }
 .execution-detail-icon svg { width: var(--icon-lg); height: var(--icon-lg); }
-.execution-detail-title { min-width: 0; margin: 0; font-size: var(--text-page); font-weight: var(--weight-semibold); line-height: var(--leading-tight); overflow-wrap: anywhere; }
-.execution-detail-title:focus { outline: none; }
 .execution-detail-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5); }
-.execution-detail-description { max-width: 64ch; margin: 0; color: var(--muted-foreground); font-size: var(--text-ui); line-height: var(--leading-normal); }
-.execution-detail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
-.execution-back { margin-bottom: var(--space-1); }
 .execution-tab { display: grid; gap: var(--space-6); padding-top: var(--space-1); }
 .execution-runtime-feedback { display: grid; gap: var(--space-2); }
 .execution-detail-empty { min-height: 16rem; }

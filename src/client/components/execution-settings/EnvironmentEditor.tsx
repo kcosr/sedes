@@ -7,7 +7,7 @@ import { EntityList, EntityRow } from "../settings/EntityList.js";
 import { SaveBar } from "../settings/SaveBar.js";
 import { SettingsSection } from "../settings/SettingsSection.js";
 import { SwitchField } from "../settings/SettingsField.js";
-import { EditorFrame, followLink, GeneralErrors, type EditorSection } from "./detail-parts.js";
+import { DetailHeader, EditorFrame, followLink, GeneralErrors, type EditorSection } from "./detail-parts.js";
 import { hostPlatform } from "./ExecutionInventory.js";
 import { CheckboxGroup, ListField, ReadOnlyField, TextField } from "./fields.js";
 import type { Configuration, EnvironmentDefinition } from "./types.js";
@@ -79,13 +79,7 @@ export function EnvironmentChooser({ configuration, back, headingRef }: {
   const hasLocal = configuration.executionEnvironments.some((entry) => entry.kind === "local");
   const choice = (kind: "local" | "ssh" | "pair") => settingsPath("environments", { mode: "new", resourceId: kind });
   return <section aria-label="Add environment" className="execution-editor">
-    <header className="execution-detail-header">
-      {back}
-      <div className="execution-detail-titles">
-        <h2 ref={headingRef} tabIndex={-1} className="execution-detail-title" data-execution-heading="">Add environment</h2>
-        <p className="execution-detail-description">Choose where agents will run.</p>
-      </div>
-    </header>
+    <DetailHeader back={back} title="Add environment" headingRef={headingRef} description="Choose where agents will run." />
     <div data-slot="settings-section-body" data-card="true">
       <EntityList aria-label="Environment kinds">
         <EntityRow icon={<Monitor />} title="Local machine" disabled={hasLocal}

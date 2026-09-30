@@ -27,6 +27,10 @@ export function BackLink({ href, label, stackOnly = false }: { readonly href: st
   return <SettingsBackLink label={label} href={href} className="execution-back" data-stack-only={stackOnly || undefined} />;
 }
 
+/**
+ * The header of a detail or editor pane, on the settings page header's
+ * anatomy and rules: in the stacked layout it stands in for the page header.
+ */
 export function DetailHeader({ back, icon, title, headingRef, tags, status, description, actions }: {
   readonly back?: ReactNode;
   readonly icon?: ReactNode;
@@ -37,18 +41,18 @@ export function DetailHeader({ back, icon, title, headingRef, tags, status, desc
   readonly description?: ReactNode;
   readonly actions?: ReactNode;
 }): React.JSX.Element {
-  return <header className="execution-detail-header">
+  return <header data-slot="settings-page-header">
     {back}
-    <div className="execution-detail-heading">
-      <div className="execution-detail-titles">
+    <div data-slot="settings-page-heading">
+      <div data-slot="settings-page-titles">
         <div className="execution-detail-title-row">
           {icon ? <span className="execution-detail-icon" aria-hidden="true">{icon}</span> : null}
-          <h2 ref={headingRef} tabIndex={-1} className="execution-detail-title" data-execution-heading="">{title}</h2>
+          <h2 ref={headingRef} tabIndex={-1} data-slot="settings-page-title" data-execution-heading="">{title}</h2>
           {tags || status ? <span className="execution-detail-meta">{tags}{status}</span> : null}
         </div>
-        {description ? <p className="execution-detail-description">{description}</p> : null}
+        {description ? <p data-slot="settings-page-description">{description}</p> : null}
       </div>
-      {actions ? <div className="execution-detail-actions" role="group" aria-label="Actions">{actions}</div> : null}
+      {actions ? <div data-slot="settings-page-actions" role="group" aria-label="Actions">{actions}</div> : null}
     </div>
   </header>;
 }
@@ -176,13 +180,7 @@ export function EditorFrame({ label, back, title, headingRef, description, secti
   readonly className?: string;
 }): React.JSX.Element {
   return <section aria-label={label} className={cn("execution-editor", className)}>
-    <header className="execution-detail-header">
-      {back}
-      <div className="execution-detail-titles">
-        <h2 ref={headingRef} tabIndex={-1} className="execution-detail-title" data-execution-heading="">{title}</h2>
-        {description ? <p className="execution-detail-description">{description}</p> : null}
-      </div>
-    </header>
+    <DetailHeader back={back} title={title} headingRef={headingRef} description={description} />
     {errors}
     <div className="execution-editor-body">
       {sections && sections.length > 1 ? <SectionAnchors sections={sections} /> : null}
