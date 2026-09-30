@@ -4307,23 +4307,6 @@ body:has(.thread-settings-sheet[data-state="open"])
   }
 }
 
-.settings-native-select {
-  min-width: 132px;
-  height: 34px;
-  padding: 0 30px 0 10px;
-  border: 1px solid var(--input);
-  border-radius: var(--radius-ctl);
-  background: var(--secondary);
-  color: var(--foreground);
-  font: inherit;
-  font-size: 13px;
-}
-
-.settings-native-select:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
 .welcome {
   display: grid;
   width: min(560px, calc(100% - 36px));
@@ -11746,12 +11729,6 @@ tr.diff-hunk td {
   .settings-content {
     padding: var(--space-5) var(--space-4);
   }
-}
-
-.settings-page-title {
-  margin: 0 0 12px;
-  font-size: 14.5px;
-  font-weight: 600;
 }
 
 /* Saved Sedes servers on the packaged client: in Settings and on the

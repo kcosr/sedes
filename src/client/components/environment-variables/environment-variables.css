@@ -38,7 +38,6 @@
 .environment-variable-settings { display: grid; gap: var(--space-3); min-width: 0; }
 .environment-variable-usage { margin: 0 0 var(--space-3); color: var(--muted-foreground-2); font-size: var(--text-meta); line-height: var(--leading-normal); }
 .environment-variable-help { margin: 0; color: var(--muted-foreground-2); font-size: var(--text-meta); line-height: var(--leading-normal); }
-.environment-variable-error { margin: 0; color: var(--destructive); font-size: var(--text-meta); }
 
 @container environment-variables (max-width: 559px) {
   .environment-variable-table-heading { display: none; }
