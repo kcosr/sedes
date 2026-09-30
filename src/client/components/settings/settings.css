@@ -1196,8 +1196,9 @@
   padding: var(--space-4);
 }
 
-.settings-master-detail-pane[data-card="true"] > [data-slot="empty-state"] {
-  padding-block: 0;
+/* "Select …" in an empty editor pane, as in the split inventories. */
+.settings-master-detail-pane > [data-slot="empty-state"] {
+  min-height: 16rem;
 }
 
 .settings-master-detail > [data-sticky="true"] {

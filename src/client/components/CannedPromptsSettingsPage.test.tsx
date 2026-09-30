@@ -110,7 +110,9 @@ describe("Canned prompts settings", () => {
       );
     render(<CannedPromptsSettingsPage store={store({ createCannedPrompt })} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Add prompt" }));
+    // An empty library's empty state carries the one "Add prompt".
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add prompt" }).closest('[data-slot="empty-state"]')).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Add prompt" }));
     fireEvent.click(screen.getAllByRole("button", { name: "Add prompt" })[1]!);
     // Each problem is reported on its own field, and focus goes to the first.
     const title = screen.getByLabelText("Title");

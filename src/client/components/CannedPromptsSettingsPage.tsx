@@ -184,6 +184,8 @@ export function CannedPromptsSettingsPage({
   const atLimit = prompts.length >= CANNED_PROMPT_MAX_ITEMS;
   const startCreate = (): void =>
     openDraft({ mode: "create", title: "", text: "" });
+  // With nothing saved, the empty state carries the one "Add prompt".
+  const empty = state.status === "ready" && prompts.length === 0 && !draft;
 
   return (
     <SettingsPage
@@ -207,16 +209,18 @@ export function CannedPromptsSettingsPage({
           >
             <RefreshCw aria-hidden="true" />
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={state.status !== "ready" || pending || atLimit}
-            title={atLimit ? `A library holds at most ${CANNED_PROMPT_MAX_ITEMS} prompts.` : undefined}
-            onClick={startCreate}
-          >
-            <Plus aria-hidden="true" />
-            Add prompt
-          </Button>
+          {empty ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={state.status !== "ready" || pending || atLimit}
+              title={atLimit ? `A library holds at most ${CANNED_PROMPT_MAX_ITEMS} prompts.` : undefined}
+              onClick={startCreate}
+            >
+              <Plus aria-hidden="true" />
+              Add prompt
+            </Button>
+          )}
         </>
       }
     >
@@ -292,11 +296,17 @@ export function CannedPromptsSettingsPage({
             Loading saved prompts…
           </p>
         ) : null}
-        {state.status === "ready" && prompts.length === 0 && !draft ? (
+        {empty ? (
           <EmptyState
             icon={<MessageSquareText />}
             title="No saved prompts yet"
             description="Add one to offer it from the composer on every client."
+            action={
+              <Button type="button" disabled={pending} onClick={startCreate}>
+                <Plus aria-hidden="true" />
+                Add prompt
+              </Button>
+            }
           />
         ) : null}
         {state.status === "ready" && (prompts.length > 0 || draft) ? (
@@ -373,7 +383,7 @@ export function CannedPromptsSettingsPage({
 
             <section
               className="settings-master-detail-pane"
-              data-card="true"
+              data-card={draft ? "true" : undefined}
               data-sticky="true"
               aria-label="Prompt editor"
             >
@@ -442,8 +452,9 @@ export function CannedPromptsSettingsPage({
                 </form>
               ) : (
                 <EmptyState
-                  variant="inline"
-                  title="Select a prompt to edit it, or add a new prompt."
+                  icon={<MessageSquareText />}
+                  title="Select a prompt"
+                  description="Edit it here, or add a new prompt."
                 />
               )}
             </section>

@@ -416,8 +416,9 @@ export function ToolClientsSettingsPage({
               />
             ) : (
               <EmptyState
-                variant="inline"
-                title="Select a client to inspect it, or create a new one."
+                icon={<KeyRound />}
+                title="Select a client"
+                description="Inspect or edit it here, or create a new one."
               />
             )}
           </section>
