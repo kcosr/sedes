@@ -514,9 +514,11 @@ describe("normalized application components", () => {
     ).toBeInTheDocument();
 
     // Fork grouping now lives in the view-options popover.
-    fireEvent.click(screen.getByTestId("view-options-trigger"));
+    // The View options menu opens from the keyboard (Radix menus open on
+    // pointer down, not click).
+    fireEvent.keyDown(screen.getByTestId("view-options-trigger"), { key: "Enter" });
     fireEvent.click(
-      await screen.findByRole("checkbox", { name: "Group fork families" }),
+      await screen.findByRole("menuitemcheckbox", { name: "Group fork families" }),
     );
     await waitFor(() => {
       expect(

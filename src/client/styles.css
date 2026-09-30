@@ -844,6 +844,12 @@ textarea:disabled {
   padding: 0;
 }
 
+/* The scope pickers stay over the sidebar: exactly their trigger's width,
+   where the shared picker would otherwise spill over the chat. */
+.searchable-select-popover.sidebar-scope-popover {
+  width: var(--radix-popover-trigger-width);
+}
+
 .sidebar-scope-select .searchable-select-field-label {
   color: var(--muted-foreground-2);
   font-size: 9px;
@@ -2380,23 +2386,8 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   height: 14px;
 }
 
-.sidebar-footer-menu {
-  /* DropdownMenu content is portalled; clear the full-screen mobile drawer
-     (z 81) so the menu remains visible and receives touch input. */
-  z-index: calc(var(--z-dialog) + 10);
-  min-width: 190px;
-}
-
-.sidebar-footer-menu [data-slot="dropdown-menu-item"] svg,
-.sidebar-footer-menu [data-slot="dropdown-menu-sub-trigger"] svg {
-  width: 15px;
-  height: 15px;
-  color: var(--muted-foreground-2);
-}
-
 .sidebar-usage-menu,
 .sidebar-usage-detail {
-  z-index: calc(var(--z-dialog) + 11);
   min-width: 232px;
 }
 
@@ -2468,26 +2459,6 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
   padding: 4px 4px 2px;
-}
-
-.sidebar-usage-actions button,
-.sidebar-usage-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  height: 28px;
-  border-radius: var(--radius-ctl);
-  background: var(--accent-soft);
-  color: var(--foreground);
-  font-size: 12.5px;
-  font-weight: 500;
-  text-align: center;
-}
-
-.sidebar-usage-actions button:hover:not(:disabled),
-.sidebar-usage-action[data-highlighted] {
-  background: var(--accent);
 }
 
 .sidebar-usage-detail-body {
@@ -2603,40 +2574,6 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   height: 1px;
   margin: 8px 4px;
   background: var(--border-soft);
-}
-
-[data-slot="dialog-overlay"].sidebar-usage-sheet-overlay {
-  z-index: var(--z-over-dialog);
-}
-
-[data-slot="dialog-content"].sidebar-usage-sheet {
-  top: auto;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: calc(var(--z-over-dialog) + 1);
-  display: flex;
-  width: 100vw;
-  min-width: 0;
-  max-width: none;
-  max-height: min(88dvh, 720px);
-  /* DialogContent is centered with Tailwind's translate longhand. Reset both
-     the utility variables and the emitted longhand so this bottom sheet stays
-     anchored to the viewport instead of shifting half a viewport left/up. */
-  --tw-translate-x: 0 !important;
-  --tw-translate-y: 0 !important;
-  translate: 0 0 !important;
-  transform: none;
-  flex-direction: column;
-  gap: 10px;
-  padding: 16px 12px calc(12px + env(safe-area-inset-bottom));
-  border-radius: 16px 16px 0 0;
-}
-
-.sidebar-usage-sheet-body {
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
 }
 
 .sidebar-usage-sheet .sidebar-usage-summary {

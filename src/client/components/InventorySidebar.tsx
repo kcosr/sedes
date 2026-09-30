@@ -119,6 +119,7 @@ import {
   PinOff,
   Plus,
   Search,
+  Trash2,
   TriangleAlert,
   Terminal as TerminalIcon,
 } from "lucide-react";
@@ -140,12 +141,15 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
   ContextMenuTrigger,
 } from "@client/components/ui/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@client/components/ui/dropdown-menu";
 
@@ -166,7 +170,6 @@ import {
 } from "../lineage/sidebar-group-projections.js";
 import { createThreadSearchMatcher } from "../lineage/sidebar-search.js";
 import { ForkProvenanceButton } from "./lineage/ForkProvenanceButton.js";
-import { ArchiveDropdown } from "./thread/ArchiveThreadChoices.js";
 import { ArchiveChoicesDialog } from "./thread/ArchiveChoicesDialog.js";
 import {
   SettleImpactDialog,
@@ -1487,22 +1490,33 @@ export function InventorySidebar({
                   allValue={ALL_TARGETS_FILTER_VALUE}
                   allLabel="All targets"
                   testId="target-filter"
-                  options={scope.targetOptions.map((target) => ({
-                    id: target.id,
-                    label: targetDisplayLabel({
+                  options={scope.targetOptions.map((target) => {
+                    const displayLabel = targetDisplayLabel({
                       target,
                       targets: scope.targetOptions,
                       environments: nonLocalEnvironments,
                       includeEnvironment:
                         environments.length > 1 && scope.environmentId === null,
-                    }),
-                    available: target.available,
-                    icon: <TargetScopeIcon brand={target.backend.brand} />,
-                    searchTerms: [
-                      target.backend.label.text,
-                      environments.find(({ id }) => id === target.environmentId)?.label.text ?? "",
-                    ],
-                  }))}
+                    });
+                    // The target's own name leads; its backend and host
+                    // qualifiers read as a second line.
+                    const namePrefix = `${target.label.text} · `;
+                    const split = displayLabel.startsWith(namePrefix);
+                    return {
+                      id: target.id,
+                      label: split ? target.label.text : displayLabel,
+                      description: split
+                        ? displayLabel.slice(namePrefix.length)
+                        : undefined,
+                      selectedLabel: displayLabel,
+                      available: target.available,
+                      icon: <TargetScopeIcon brand={target.backend.brand} />,
+                      searchTerms: [
+                        target.backend.label.text,
+                        environments.find(({ id }) => id === target.environmentId)?.label.text ?? "",
+                      ],
+                    };
+                  })}
                   onChange={(value) =>
                     setSidebarInventoryScope(
                       transitionSidebarInventoryScope(
@@ -2254,17 +2268,17 @@ function GroupManagementControl({
             <MoreHorizontal size={15} />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="end"
-          className={elevated ? "z-(--z-over-dialog)" : undefined}
-        >
+        <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={() => open("rename")}>
+            <PencilLine aria-hidden="true" />
             Rename group…
           </DropdownMenuItem>
+          <DropdownMenuSeparator />
           <DropdownMenuItem
             variant="destructive"
             onSelect={() => open("delete")}
           >
+            <Trash2 aria-hidden="true" />
             Delete group…
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -2351,6 +2365,10 @@ function ScopeSelect({
   readonly options: readonly {
     readonly id: string;
     readonly label: string;
+    /** A second line in the picker, e.g. a target's backend and host. */
+    readonly description?: string;
+    /** The trigger's text when this option is selected (label by default). */
+    readonly selectedLabel?: string;
     readonly available: boolean;
     readonly icon?: React.ReactNode;
     readonly searchTerms?: readonly string[];
@@ -2360,6 +2378,7 @@ function ScopeSelect({
   readonly onChange: (value: string) => void;
 }): React.JSX.Element {
   const plural = `${label.toLocaleLowerCase()}s`;
+  const selected = options.find(({ id }) => id === value);
   return (
     <SearchableSelect
       label={`${label} filter`}
@@ -2367,11 +2386,14 @@ function ScopeSelect({
       searchLabel={`Search ${plural}`}
       emptyLabel={`No matching ${plural}`}
       value={value}
+      selectedLabel={selected?.selectedLabel}
       options={[
         { value: allValue, label: allLabel, icon, pinned: true },
         ...options.map((option) => ({
           value: option.id,
-          label: `${option.label}${option.available ? "" : " — Unavailable"}`,
+          label: option.label,
+          description: option.description,
+          unavailable: !option.available,
           icon: option.icon ?? icon,
           searchTerms: option.searchTerms,
           pinned: option.pinned,
@@ -2382,6 +2404,8 @@ function ScopeSelect({
         "data-testid": testId,
         "data-scope-value": value,
       }}
+      // Exactly the trigger's width, so the picker stays over the sidebar.
+      contentClassName="sidebar-scope-popover"
       onValueChange={onChange}
     />
   );
@@ -2872,22 +2896,31 @@ function ThreadStackItem({
           aria-label={`Actions for ${stack.label} stack`}
           collisionPadding={12}
         >
-          <ContextMenuLabel>
-            {stack.label} · {memberCount} threads
+          <ContextMenuLabel
+            variant="header"
+            description={`${memberCount} ${memberCount === 1 ? "thread" : "threads"}`}
+          >
+            {stack.label}
           </ContextMenuLabel>
+          <ContextMenuSeparator />
           <ContextMenuItem onSelect={openRosterFromMenu}>
-            <Layers3 size={18} strokeWidth={1.8} />
+            <Layers3 strokeWidth={1.8} />
             View threads
           </ContextMenuItem>
+          <ContextMenuSeparator />
           {(["settle", "unsettle", "archive"] as const).map((action) => (
             <ContextMenuItem
               key={action}
-              variant={action === "archive" ? "destructive" : "default"}
               disabled={!actionAvailable(action)}
               onSelect={() => requestStackAction(action)}
             >
-              {actionIcon(action, 18)}
+              {actionIcon(action, 16)}
               {capitalize(action)} stack
+              {!actionAvailable(action) && (
+                <ContextMenuShortcut aria-hidden="true">
+                  {action === "unsettle" ? "None settled" : "None active"}
+                </ContextMenuShortcut>
+              )}
             </ContextMenuItem>
           ))}
         </ContextMenuContent>
@@ -3595,43 +3628,17 @@ function FlatRowItemContent(
           <Pin size={15} strokeWidth={1.8} />
         )}
       </button>
-      {archiveDescendantCount > 0 ? (
-        <ArchiveDropdown
-          thread={thread}
-          store={store}
-          descendantCount={archiveDescendantCount}
-          directWhenNoChoices
-          disabled={pendingAction !== undefined}
-          onArchived={() => {
-            if (selected) {
-              navigate("/");
-              onNavigate({ keepDrawerOpen: true });
-            }
-          }}
-        >
-          <button
-            type="button"
-            className="thread-row-archive"
-            data-testid="thread-row-archive"
-            aria-label={`Archive ${thread.title.text || "Untitled thread"}`}
-            title="Archive"
-          >
-            <Archive size={14} strokeWidth={1.8} />
-          </button>
-        </ArchiveDropdown>
-      ) : (
-        <button
-          type="button"
-          className="thread-row-archive"
-          data-testid="thread-row-archive"
-          aria-label={`Archive ${thread.title.text || "Untitled thread"}`}
-          title="Archive"
-          disabled={pendingAction !== undefined}
-          onClick={() => runInventoryAction("archive", "archive")}
-        >
-          <Archive size={14} strokeWidth={1.8} />
-        </button>
-      )}
+      <button
+        type="button"
+        className="thread-row-archive"
+        data-testid="thread-row-archive"
+        aria-label={`Archive ${thread.title.text || "Untitled thread"}`}
+        title="Archive"
+        disabled={pendingAction !== undefined}
+        onClick={() => runInventoryAction("archive", "archive")}
+      >
+        <Archive size={14} strokeWidth={1.8} />
+      </button>
     </>
   );
   const row = renaming ? (
@@ -3786,7 +3793,7 @@ function FlatRowItemContent(
         onOpenChange={setArchiveChoicesOpen}
         thread={thread}
         store={store}
-        descendantCount={0}
+        descendantCount={archiveDescendantCount}
         disabled={pendingAction !== undefined}
         onPendingChange={(pending) => {
           actionPending.current = pending;
@@ -4770,71 +4777,38 @@ function ThreadRow({
                 )}
               </button>
             )}
-            {archiveDescendantCount > 0 ? (
-              <ArchiveDropdown
-                thread={thread}
-                store={store}
-                descendantCount={archiveDescendantCount}
-                directWhenNoChoices
-                side="right"
-                disabled={pendingInventoryAction !== undefined}
-                onPendingChange={(pending) => {
-                  inventoryActionPending.current = pending;
-                  setPendingInventoryAction(pending ? "archive" : undefined);
-                }}
-                onArchived={(_choice, archivedThreadIds) => {
-                  if (
-                    selectedThreadId &&
-                    archivedThreadIds.includes(selectedThreadId)
-                  ) {
-                    navigate("/");
-                    onNavigate({ keepDrawerOpen: true });
-                  }
-                }}
-              >
-                <button
-                  type="button"
-                  className="thread-row-archive"
-                  data-testid="thread-row-archive"
-                  aria-label={`Archive ${thread.title.text || "Untitled thread"}`}
-                  title="Archive"
-                >
-                  <Archive size={14} strokeWidth={1.8} />
-                </button>
-              </ArchiveDropdown>
-            ) : (
-              // No fork descendants: archive immediately, mirroring the flat
-              // row's direct archive. Touch devices never see this button
-              // (row actions are CSS-hidden for coarse pointers).
-              <button
-                type="button"
-                className="thread-row-archive"
-                data-testid="thread-row-archive"
-                aria-label={`Archive ${thread.title.text || "Untitled thread"}`}
-                title="Archive"
-                disabled={pendingInventoryAction !== undefined}
-                onClick={() => {
-                  if (inventoryActionPending.current) return;
-                  inventoryActionPending.current = true;
-                  setPendingInventoryAction("archive");
-                  void runThreadArchiveCheck({
-                    thread, store, onChoices: openArchiveChoices,
-                    onArchived: () => {
-                      if (selected) {
-                        navigate("/");
-                        onNavigate({ keepDrawerOpen: true });
-                      }
-                    },
-                  })
-                    .finally(() => {
-                      inventoryActionPending.current = false;
-                      setPendingInventoryAction(undefined);
-                    });
-                }}
-              >
-                <Archive size={14} strokeWidth={1.8} />
-              </button>
-            )}
+            // Archive directly when there is nothing to choose; otherwise the
+            // choices dialog opens with the checked impact. Touch devices
+            // never see this button (row actions are CSS-hidden for coarse
+            // pointers).
+            <button
+              type="button"
+              className="thread-row-archive"
+              data-testid="thread-row-archive"
+              aria-label={`Archive ${thread.title.text || "Untitled thread"}`}
+              title="Archive"
+              disabled={pendingInventoryAction !== undefined}
+              onClick={() => {
+                if (inventoryActionPending.current) return;
+                inventoryActionPending.current = true;
+                setPendingInventoryAction("archive");
+                void runThreadArchiveCheck({
+                  thread, store, onChoices: openArchiveChoices,
+                  onArchived: () => {
+                    if (selected) {
+                      navigate("/");
+                      onNavigate({ keepDrawerOpen: true });
+                    }
+                  },
+                })
+                  .finally(() => {
+                    inventoryActionPending.current = false;
+                    setPendingInventoryAction(undefined);
+                  });
+              }}
+            >
+              <Archive size={14} strokeWidth={1.8} />
+            </button>
           </div>
         </div>
       )}
@@ -4882,14 +4856,18 @@ function ThreadRow({
         onOpenChange={setArchiveChoicesOpen}
         thread={thread}
         store={store}
-        descendantCount={0}
+        descendantCount={archiveDescendantCount}
         disabled={pendingInventoryAction !== undefined}
         onPendingChange={(pending) => {
           inventoryActionPending.current = pending;
           setPendingInventoryAction(pending ? "archive" : undefined);
         }}
-        onArchived={() => {
-          if (selected) {
+        onArchived={(_choice, archivedThreadIds) => {
+          if (
+            selected ||
+            (selectedThreadId &&
+              archivedThreadIds.includes(selectedThreadId))
+          ) {
             navigate("/");
             onNavigate({ keepDrawerOpen: true });
           }
