@@ -565,7 +565,7 @@ export function ThreadTerminalMenu({
           }
         }}
       >
-        <DialogContent showCloseButton={false}>
+        <DialogContent showClose={false}>
           <DialogHeader>
             <DialogTitle>
               {lifecycleConfirmation?.action === "end"

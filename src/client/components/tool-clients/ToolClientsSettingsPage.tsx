@@ -639,7 +639,7 @@ function CredentialDialog({
     <Dialog open={Boolean(result)} onOpenChange={() => undefined}>
       <DialogContent
         className="tool-client-credential-dialog"
-        showCloseButton={false}
+        showClose={false}
         aria-describedby="tool-client-credential-description"
         onEscapeKeyDown={(event) => event.preventDefault()}
         onPointerDownOutside={(event) => event.preventDefault()}
@@ -715,7 +715,7 @@ function ConfirmationDialog({
   const revoke = confirmation?.kind === "revoke";
   return (
     <Dialog open={Boolean(confirmation)} onOpenChange={(open) => !open && onCancel()}>
-      <DialogContent showCloseButton={false} aria-describedby="tool-client-confirm-description">
+      <DialogContent showClose={false} aria-describedby="tool-client-confirm-description">
         <DialogHeader>
           <DialogTitle>{revoke ? "Revoke tool client?" : "Rotate credential?"}</DialogTitle>
           <DialogDescription id="tool-client-confirm-description">

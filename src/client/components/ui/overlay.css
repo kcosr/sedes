@@ -1,0 +1,458 @@
+/* ───────────────────────────────────────────────────────────────────────
+   Overlay primitives: the Dialog and Sheet anatomy (ui/dialog.tsx) and the
+   motion of every overlay primitive (dialogs, popovers, menus, select).
+
+   styles.css imports this file into `@layer components`, so the defaults
+   here sit below Tailwind utilities and below unlayered feature CSS: a call
+   site can still size or place its dialog with a class.
+
+   DialogContent stamps its presentation on data attributes:
+   - data-layout: modal | side | sheet | fullscreen (the effective layout;
+     under the density switch the `mobile` prop picks card/sheet/fullscreen,
+     and a card is the modal layout);
+   - data-size: sm | md | lg | xl | viewer;
+   - data-close: present when the X is shown.
+   Radix emits data-state/data-side for the motion rules.
+   ─────────────────────────────────────────────────────────────────────── */
+
+/* ── Dialog: backdrop ── */
+[data-slot="dialog-overlay"] {
+  position: fixed;
+  z-index: var(--z-dialog);
+  inset: 0;
+  background: var(--scrim);
+}
+
+/* ── Dialog: surface ──
+   A flex column capped at the viewport. DialogBody is the scroll region;
+   content without a DialogBody scrolls as a whole, so no dialog can grow
+   past the screen. Centering uses auto margins rather than a transform, so
+   floating content portalled into the dialog is never clipped by it. */
+[data-slot="dialog-content"] {
+  --dialog-width: var(--dialog-width-sm);
+  --dialog-close-size: var(--control-sm);
+  --dialog-title-line: calc(var(--text-title) * var(--leading-snug));
+  position: fixed;
+  z-index: calc(var(--z-dialog) + 1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--dialog-padding);
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--dialog-radius);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: var(--elevation-3);
+  font-size: var(--text-ui);
+  outline: none;
+}
+
+[data-slot="dialog-content"][data-size="md"] {
+  --dialog-width: var(--dialog-width-md);
+}
+
+[data-slot="dialog-content"][data-size="lg"] {
+  --dialog-width: var(--dialog-width-lg);
+}
+
+[data-slot="dialog-content"][data-size="xl"] {
+  --dialog-width: var(--dialog-width-xl);
+}
+
+[data-slot="dialog-content"][data-size="viewer"] {
+  --dialog-width: 1200px;
+}
+
+/* A centered card, above the soft keyboard when one is open. */
+[data-slot="dialog-content"][data-layout="modal"] {
+  inset: 0 0 var(--keyboard-inset);
+  width: 100%;
+  max-width: min(
+    var(--dialog-width),
+    calc(100% - 2 * var(--dialog-viewport-margin))
+  );
+  height: fit-content;
+  max-height: calc(
+    100dvh - var(--keyboard-inset) - 2 * var(--dialog-viewport-margin)
+  );
+  margin: auto;
+}
+
+/* A full-height panel on the trailing edge. */
+[data-slot="dialog-content"][data-layout="side"] {
+  inset: 0 0 var(--keyboard-inset) auto;
+  width: min(
+    var(--dialog-width),
+    calc(100% - var(--dialog-viewport-margin))
+  );
+  max-width: none;
+  height: auto;
+  max-height: none;
+  margin: 0;
+  padding-top: max(var(--dialog-padding), env(safe-area-inset-top));
+  padding-right: max(var(--dialog-padding), env(safe-area-inset-right));
+  padding-bottom: max(var(--dialog-padding), env(safe-area-inset-bottom));
+  border-width: 0 0 0 1px;
+  border-radius: 0;
+}
+
+/* A bottom sheet: top corners rounded, safe areas padded, lifted above the
+   soft keyboard. Full width on phones; wider coarse-pointer screens keep the
+   size's width, centered. */
+[data-slot="dialog-content"][data-layout="sheet"] {
+  inset: auto 0 var(--keyboard-inset);
+  width: 100%;
+  max-width: var(--dialog-width);
+  height: auto;
+  max-height: calc(
+    100dvh - var(--keyboard-inset) -
+      max(var(--dialog-viewport-margin), env(safe-area-inset-top))
+  );
+  margin: 0 auto;
+  padding-right: max(var(--dialog-padding), env(safe-area-inset-right));
+  padding-bottom: max(var(--dialog-padding), env(safe-area-inset-bottom));
+  padding-left: max(var(--dialog-padding), env(safe-area-inset-left));
+  border-bottom-width: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+@media (max-width: 819px) {
+  [data-slot="dialog-content"][data-layout="sheet"] {
+    max-width: none;
+  }
+}
+
+[data-slot="dialog-content"][data-layout="fullscreen"] {
+  inset: 0 0 var(--keyboard-inset);
+  width: 100%;
+  max-width: none;
+  height: auto;
+  max-height: none;
+  margin: 0;
+  padding: max(var(--dialog-padding), env(safe-area-inset-top))
+    max(var(--dialog-padding), env(safe-area-inset-right))
+    max(var(--dialog-padding), env(safe-area-inset-bottom))
+    max(var(--dialog-padding), env(safe-area-inset-left));
+  border-width: 0;
+  border-radius: 0;
+}
+
+/* Media viewers: a large fixed stage with no chrome padding. */
+[data-slot="dialog-content"][data-size="viewer"] {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+[data-slot="dialog-content"][data-size="viewer"][data-layout="modal"] {
+  height: min(900px, calc(100dvh - 2 * var(--dialog-viewport-margin)));
+}
+
+/* ── Dialog: close button ──
+   Aligned to the title row: its icon's trailing edge sits on the content
+   edge and its center on the title's first line. Touch density makes it a
+   full touch target. */
+[data-slot="dialog-content"] > [data-slot="dialog-close"] {
+  position: absolute;
+  top: calc(
+    var(--dialog-padding) +
+      (var(--dialog-title-line) - var(--dialog-close-size)) / 2
+  );
+  right: calc(
+    var(--dialog-padding) - (var(--dialog-close-size) - var(--icon-md)) / 2
+  );
+  color: var(--muted-foreground);
+}
+
+[data-slot="dialog-content"][data-layout="side"] > [data-slot="dialog-close"] {
+  top: calc(
+    max(var(--dialog-padding), env(safe-area-inset-top)) +
+      (var(--dialog-title-line) - var(--dialog-close-size)) / 2
+  );
+}
+
+/* Title rows never run under the X. */
+[data-slot="dialog-content"][data-close] > [data-slot="dialog-header"],
+[data-slot="dialog-content"][data-close] > [data-slot="dialog-title"] {
+  padding-inline-end: calc(var(--dialog-close-size) / 2 + var(--space-4));
+}
+
+/* ── Dialog: slots ── */
+[data-slot="dialog-header"] {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+[data-slot="dialog-title"] {
+  margin: 0;
+  font-size: var(--text-title);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  letter-spacing: -0.01em;
+}
+
+[data-slot="dialog-description"] {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-ui);
+  line-height: var(--leading-normal);
+}
+
+[data-slot="dialog-description"] a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+[data-slot="dialog-description"] a:hover {
+  color: var(--foreground);
+}
+
+/* The only scroll region. The small inset gives focus rings room inside the
+   scroll clip. */
+[data-slot="dialog-body"] {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: calc(-1 * var(--space-1));
+  padding: var(--space-1);
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+
+/* Pinned actions: the tertiary start slot, then Cancel, then the primary
+   last. Narrow screens stack them full width with the primary on top. */
+[data-slot="dialog-footer"] {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+[data-slot="dialog-footer-start"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline-end: auto;
+}
+
+@media (max-width: 519px) {
+  [data-slot="dialog-footer"] {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  [data-slot="dialog-footer"] > *,
+  [data-slot="dialog-footer-start"] > * {
+    width: 100%;
+  }
+
+  [data-slot="dialog-footer-start"] {
+    flex-direction: column;
+    align-items: stretch;
+    margin-inline-end: 0;
+  }
+}
+
+@media (max-width: 819px), (pointer: coarse) {
+  [data-slot="dialog-content"] {
+    --dialog-close-size: var(--control-touch);
+  }
+}
+
+/* ── Menu presented as a sheet (ui/menu-sheet.tsx) ──
+   The header is the subject's name with a meta line; the rows sit 8px from
+   the sheet edge with their own 12px inset, so header text and row text
+   share one edge. */
+[data-slot="dialog-content"][data-menu-sheet] {
+  --dialog-title-line: calc(var(--text-sheet-title) * var(--leading-snug));
+  gap: var(--space-2);
+  padding-top: var(--space-4);
+  padding-right: max(var(--space-2), env(safe-area-inset-right));
+  padding-left: max(var(--space-2), env(safe-area-inset-left));
+}
+
+[data-slot="dialog-content"][data-menu-sheet] > [data-slot="dialog-header"] {
+  gap: var(--space-0-5);
+  padding-inline-start: var(--space-3);
+}
+
+[data-slot="dialog-content"][data-menu-sheet] [data-slot="dialog-title"] {
+  font-size: var(--text-sheet-title);
+}
+
+[data-slot="dialog-content"][data-menu-sheet] > [data-slot="dialog-close"] {
+  top: calc(
+    var(--space-4) + (var(--dialog-title-line) - var(--dialog-close-size)) / 2
+  );
+  right: max(var(--space-2), env(safe-area-inset-right));
+}
+
+/* ── Motion ──
+   Hand-rolled on the motion tokens (no tw-animate); Radix emits data-state
+   and data-side on these data-slot nodes. The global reduced-motion rule
+   neutralizes all of it. */
+[data-slot="dialog-overlay"][data-state="open"] {
+  animation: ui-fade-in var(--motion-expand);
+}
+
+[data-slot="dialog-overlay"][data-state="closed"] {
+  animation: ui-fade-out var(--motion-expand) forwards;
+}
+
+[data-slot="dialog-content"][data-state="open"] {
+  animation: ui-dialog-in var(--motion-pop);
+}
+
+[data-slot="dialog-content"][data-state="closed"] {
+  animation: ui-dialog-out var(--motion-pop) forwards;
+}
+
+[data-slot="dialog-content"][data-layout="side"][data-state="open"] {
+  animation: ui-side-in var(--motion-pop);
+}
+
+[data-slot="dialog-content"][data-layout="side"][data-state="closed"] {
+  animation: ui-side-out var(--motion-pop) forwards;
+}
+
+[data-slot="dialog-content"][data-layout="sheet"][data-state="open"] {
+  animation: ui-sheet-in var(--motion-pop);
+}
+
+[data-slot="dialog-content"][data-layout="sheet"][data-state="closed"] {
+  animation: ui-sheet-out var(--motion-pop) forwards;
+}
+
+/* Floating surfaces pop 4px from their trigger side. */
+[data-slot="popover-content"],
+[data-slot="select-content"],
+[data-slot="dropdown-menu-content"],
+[data-slot="dropdown-menu-sub-content"],
+[data-slot="context-menu-content"],
+[data-slot="context-menu-sub-content"] {
+  --ui-pop-x: 0px;
+  --ui-pop-y: -4px;
+}
+
+[data-slot="popover-content"][data-side="top"],
+[data-slot="select-content"][data-side="top"],
+[data-slot="dropdown-menu-content"][data-side="top"],
+[data-slot="dropdown-menu-sub-content"][data-side="top"],
+[data-slot="context-menu-content"][data-side="top"],
+[data-slot="context-menu-sub-content"][data-side="top"] {
+  --ui-pop-x: 0px;
+  --ui-pop-y: 4px;
+}
+
+[data-slot="popover-content"][data-side="left"],
+[data-slot="select-content"][data-side="left"],
+[data-slot="dropdown-menu-content"][data-side="left"],
+[data-slot="dropdown-menu-sub-content"][data-side="left"],
+[data-slot="context-menu-content"][data-side="left"],
+[data-slot="context-menu-sub-content"][data-side="left"] {
+  --ui-pop-x: 4px;
+  --ui-pop-y: 0px;
+}
+
+[data-slot="popover-content"][data-side="right"],
+[data-slot="select-content"][data-side="right"],
+[data-slot="dropdown-menu-content"][data-side="right"],
+[data-slot="dropdown-menu-sub-content"][data-side="right"],
+[data-slot="context-menu-content"][data-side="right"],
+[data-slot="context-menu-sub-content"][data-side="right"] {
+  --ui-pop-x: -4px;
+  --ui-pop-y: 0px;
+}
+
+[data-slot="popover-content"][data-state="open"],
+[data-slot="select-content"][data-state="open"],
+[data-slot="dropdown-menu-content"][data-state="open"],
+[data-slot="dropdown-menu-sub-content"][data-state="open"],
+[data-slot="context-menu-content"][data-state="open"],
+[data-slot="context-menu-sub-content"][data-state="open"] {
+  animation: ui-pop-in var(--motion-pop);
+}
+
+[data-slot="popover-content"][data-state="closed"],
+[data-slot="select-content"][data-state="closed"],
+[data-slot="dropdown-menu-content"][data-state="closed"],
+[data-slot="dropdown-menu-sub-content"][data-state="closed"],
+[data-slot="context-menu-content"][data-state="closed"],
+[data-slot="context-menu-sub-content"][data-state="closed"] {
+  animation: ui-pop-out var(--motion-pop) forwards;
+}
+
+@keyframes ui-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes ui-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes ui-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+@keyframes ui-dialog-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+@keyframes ui-side-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+@keyframes ui-side-out {
+  to {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+@keyframes ui-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes ui-sheet-out {
+  to {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes ui-pop-in {
+  from {
+    opacity: 0;
+    transform: translate(var(--ui-pop-x, 0px), var(--ui-pop-y, -4px));
+  }
+}
+
+@keyframes ui-pop-out {
+  to {
+    opacity: 0;
+    transform: translate(var(--ui-pop-x, 0px), var(--ui-pop-y, -4px));
+  }
+}

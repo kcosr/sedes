@@ -14,6 +14,7 @@ import {
   expectNoPageOverflow,
   fillAndPersistDraft,
   openSedesWorkspace,
+  overlaySettled,
   selectCustomNewThreadTarget,
   selectRadixOption,
   sendCurrentDraft,
@@ -664,6 +665,7 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
   await expect(threadContextSheet).toBeVisible();
   await expect(threadContextSheet).toContainText("Grouped recent sibling");
   await expect(page.getByTestId("thread-context-menu")).toHaveCount(0);
+  await overlaySettled(threadContextSheet);
   const threadContextBox = await threadContextSheet.boundingBox();
   expect(threadContextBox).not.toBeNull();
   expect(

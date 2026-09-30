@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "@fontsource-variable/inter";
+@import "./components/ui/overlay.css" layer(components);
 
 /* The app stamps data-theme on <html> explicitly, even in system mode
    (src/client/app/appearance.ts), so component-level dark styling keys off
@@ -134,6 +135,7 @@
   --text-page: 20px; /* settings page titles */
   --text-display: 24px; /* auth and landing display */
   --text-transcript-meta: 12.5px; /* reference surface, preserved */
+  --text-sheet-title: 17px; /* menu sheet header: the subject's name on touch */
   --text-input: var(--text-ui); /* text inputs; 16px under the density switch */
   --weight-regular: 400;
   --weight-medium: 500;
@@ -367,132 +369,10 @@
 
 /* ───────────────────────────────────────────────────────────────────────
    § BASE AND RESET
-   Document reset, focus policy, and the hand-rolled motion for the owned
-   ui/ primitives (Radix emits data-state/data-side on those data-slot
-   nodes). Buttons live entirely in `ui/button.tsx`.
+   Document reset and focus policy. Overlay primitive anatomy and motion
+   live in `components/ui/overlay.css`; buttons live entirely in
+   `ui/button.tsx`.
    ─────────────────────────────────────────────────────────────────────── */
-
-/* Motion for the owned ui/ primitives (Radix emits data-state on these
-   nodes; keyframes are hand-rolled on the motion tokens — no tw-animate). */
-[data-slot="popover-content"] {
-  --ui-pop-x: 0px;
-  --ui-pop-y: -4px;
-}
-
-[data-slot="popover-content"][data-side="top"] {
-  --ui-pop-x: 0px;
-  --ui-pop-y: 4px;
-}
-
-[data-slot="popover-content"][data-side="left"] {
-  --ui-pop-x: 4px;
-  --ui-pop-y: 0px;
-}
-
-[data-slot="popover-content"][data-side="right"] {
-  --ui-pop-x: -4px;
-  --ui-pop-y: 0px;
-}
-
-[data-slot="dialog-overlay"][data-state="open"],
-[data-slot="dialog-content"][data-state="open"] {
-  animation: ui-fade-in var(--motion-pop);
-}
-
-[data-slot="dialog-overlay"][data-state="closed"],
-[data-slot="dialog-content"][data-state="closed"] {
-  animation: ui-fade-out var(--motion-pop) forwards;
-}
-
-[data-slot="popover-content"][data-state="open"] {
-  animation: ui-pop-in var(--motion-pop);
-}
-
-[data-slot="popover-content"][data-state="closed"] {
-  animation: ui-pop-out var(--motion-pop) forwards;
-}
-
-@keyframes ui-fade-in {
-  from {
-    opacity: 0;
-  }
-}
-
-@keyframes ui-fade-out {
-  to {
-    opacity: 0;
-  }
-}
-
-@keyframes ui-pop-in {
-  from {
-    opacity: 0;
-    transform: translate(var(--ui-pop-x, 0px), var(--ui-pop-y, -4px));
-  }
-}
-
-@keyframes ui-pop-out {
-  to {
-    opacity: 0;
-    transform: translate(var(--ui-pop-x, 0px), var(--ui-pop-y, -4px));
-  }
-}
-
-/* ── Select + DropdownMenu + ContextMenu motion (ui/select.tsx,
-   ui/dropdown-menu.tsx, ui/context-menu.tsx) ──
-   Same hand-rolled pattern as popover-content above: Radix emits
-   data-state/data-side on these data-slot nodes; no tw-animate utilities. */
-[data-slot="select-content"],
-[data-slot="dropdown-menu-content"],
-[data-slot="dropdown-menu-sub-content"],
-[data-slot="context-menu-content"],
-[data-slot="context-menu-sub-content"] {
-  --ui-pop-x: 0px;
-  --ui-pop-y: -4px;
-}
-
-[data-slot="select-content"][data-side="top"],
-[data-slot="dropdown-menu-content"][data-side="top"],
-[data-slot="dropdown-menu-sub-content"][data-side="top"],
-[data-slot="context-menu-content"][data-side="top"],
-[data-slot="context-menu-sub-content"][data-side="top"] {
-  --ui-pop-x: 0px;
-  --ui-pop-y: 4px;
-}
-
-[data-slot="select-content"][data-side="left"],
-[data-slot="dropdown-menu-content"][data-side="left"],
-[data-slot="dropdown-menu-sub-content"][data-side="left"],
-[data-slot="context-menu-content"][data-side="left"],
-[data-slot="context-menu-sub-content"][data-side="left"] {
-  --ui-pop-x: 4px;
-  --ui-pop-y: 0px;
-}
-
-[data-slot="select-content"][data-side="right"],
-[data-slot="dropdown-menu-content"][data-side="right"],
-[data-slot="dropdown-menu-sub-content"][data-side="right"],
-[data-slot="context-menu-content"][data-side="right"],
-[data-slot="context-menu-sub-content"][data-side="right"] {
-  --ui-pop-x: -4px;
-  --ui-pop-y: 0px;
-}
-
-[data-slot="select-content"][data-state="open"],
-[data-slot="dropdown-menu-content"][data-state="open"],
-[data-slot="dropdown-menu-sub-content"][data-state="open"],
-[data-slot="context-menu-content"][data-state="open"],
-[data-slot="context-menu-sub-content"][data-state="open"] {
-  animation: ui-pop-in var(--motion-pop);
-}
-
-[data-slot="select-content"][data-state="closed"],
-[data-slot="dropdown-menu-content"][data-state="closed"],
-[data-slot="dropdown-menu-sub-content"][data-state="closed"],
-[data-slot="context-menu-content"][data-state="closed"],
-[data-slot="context-menu-sub-content"][data-state="closed"] {
-  animation: ui-pop-out var(--motion-pop) forwards;
-}
 
 * {
   box-sizing: border-box;
@@ -595,8 +475,18 @@ textarea:disabled {
   outline: none;
 }
 
+/* Overlay containers take focus as a starting point (a dialog with nothing
+   to focus, a picker opened by touch, a menu sheet's list); the overlay is
+   the indication, so they draw no ring. */
+[data-slot="dialog-content"]:focus-visible,
+[data-slot="popover-content"]:focus-visible,
+[data-slot="menu-sheet-list"]:focus-visible {
+  outline: none;
+}
+
 /* Menu rows carry highlight as the neutral wash (focus follows Radix's
    roving highlight); the global ring would double-mark every row. */
+[data-slot="menu-sheet-back"]:focus-visible,
 [data-slot="select-item"]:focus-visible,
 [data-slot="dropdown-menu-item"]:focus-visible,
 [data-slot="dropdown-menu-checkbox-item"]:focus-visible,
@@ -1120,6 +1010,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   min-height: 0;
   display: grid;
   gap: 2px;
+  padding: var(--menu-panel-padding);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -1746,7 +1637,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
 }
 
 [data-slot="dialog-content"].thread-group-dialog {
-  top: calc((100dvh - var(--thread-group-keyboard-inset, 0px)) / 2);
+  bottom: var(--thread-group-keyboard-inset, 0px);
   display: flex;
   max-height: calc(100dvh - var(--thread-group-keyboard-inset, 0px) - 2rem);
   flex-direction: column;
@@ -2404,6 +2295,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   transform: none;
   flex-direction: column;
   gap: 0;
+  padding: 0;
   border-left: 1px solid var(--border);
   background: var(--popover);
   box-shadow: var(--shadow);
@@ -6248,143 +6140,89 @@ body:has(.thread-settings-sheet[data-state="open"])
   flex-shrink: 0;
 }
 
+/* The searchable picker (ui/searchable-select.tsx): a plain search row over
+   a divider, then the options in the menu row anatomy. At least as wide as
+   its trigger. The New-thread agent picker reuses the popover and search
+   row classes. */
 .searchable-select-popover {
-  width: min(360px, calc(100vw - 16px));
-  max-height: min(var(--radix-popover-content-available-height, 70dvh), 440px, 70dvh);
-  gap: 6px;
-  padding: 5px;
+  width: min(
+    max(var(--radix-popover-trigger-width), 320px),
+    calc(100vw - 16px)
+  );
+  max-height: min(var(--radix-popover-content-available-height), 440px, 70dvh);
+  gap: 0;
+  padding: 0;
   overflow: hidden;
 }
 
 .searchable-select-search {
   display: flex;
+  min-height: 40px;
   flex: 0 0 auto;
   align-items: center;
-  gap: 7px;
-  padding: 2px 4px 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  color: var(--muted-foreground);
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--muted-foreground-2);
 }
 
-.searchable-select-dialog-overlay {
-  z-index: var(--z-blocking);
-}
-
-.searchable-select-dialog {
-  z-index: calc(var(--z-blocking) + 1);
-  left: 50%;
-  bottom: calc(var(--select-keyboard-inset, 0px) + 16px);
-  transform: translateX(-50%);
-  width: min(560px, calc(100vw - 32px));
-  height: min(600px, calc(100dvh - var(--select-keyboard-inset, 0px) - 32px));
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow: hidden;
-  padding: 12px;
-  border-radius: var(--radius-lg);
-  background: var(--popover);
-  color: var(--popover-foreground);
-  box-shadow: var(--shadow);
-  border: 1px solid var(--border);
-}
-
-.searchable-select-dialog-title {
-  flex: 0 0 auto;
-  margin: 0;
-  padding-right: 32px;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.searchable-select-dialog .searchable-select-options {
-  flex: 1 1 auto;
-}
-
-.searchable-select-search:focus-within {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+.searchable-select-search > svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  flex: none;
 }
 
 .searchable-select-search [data-slot="input"] {
-  height: 32px;
+  height: 38px;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0;
   border: 0;
+  border-radius: 0;
   background: transparent;
-  padding-inline: 2px 8px;
   box-shadow: none;
+  color: var(--foreground);
+  font-size: var(--text-input);
 }
 
 .searchable-select-search [data-slot="input"]:focus-visible {
   box-shadow: none;
 }
 
+.searchable-select-search [data-slot="input"]::placeholder {
+  color: var(--muted-foreground-2);
+}
+
 .searchable-select-options {
+  display: flex;
   min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  padding: var(--menu-panel-padding);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 2px;
 }
 
-.searchable-select-options [role="option"] {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
-  border-radius: var(--radius-ctl);
-  color: var(--foreground);
-  font-size: 13px;
-  line-height: 1.3;
-  text-align: left;
+/* As a sheet the picker keeps one height while the list filters, and its
+   search row runs edge to edge. */
+.searchable-select-sheet {
+  height: min(600px, calc(100dvh - var(--keyboard-inset) - 16px));
+  gap: var(--space-2);
 }
 
-.searchable-select-option-copy {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 2px;
-  overflow-wrap: anywhere;
-}
-
-.searchable-select-option-copy small {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-}
-
-.searchable-select-options [role="option"][data-active] {
-  background: var(--accent);
-  color: var(--accent-foreground);
-}
-
-.searchable-select-options [role="option"][aria-disabled="true"] {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.searchable-select-options [role="option"] > svg {
-  flex: 0 0 auto;
-}
-
-.searchable-select-empty {
-  margin: 0;
-  padding: 18px 12px;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  text-align: center;
+.searchable-select-sheet .searchable-select-search {
+  margin-inline: calc(-1 * var(--dialog-padding));
+  padding-inline: var(--dialog-padding);
 }
 
 @media (max-width: 819px), (pointer: coarse) {
   .searchable-select-trigger,
-  .new-thread-agent-option,
-  .searchable-select-options [role="option"] {
+  .new-thread-agent-option {
     min-height: 44px;
   }
 
-  .searchable-select-search [data-slot="input"] {
-    min-height: 40px;
-    font-size: 16px;
+  .searchable-select-search {
+    min-height: var(--control-touch);
   }
 }
 

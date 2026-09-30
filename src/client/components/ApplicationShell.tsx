@@ -437,7 +437,7 @@ export function ApplicationShell({
             if (!open) setWorkspaceNavConfirm(undefined);
           }}
         >
-          <DialogContent showCloseButton={false}>
+          <DialogContent showClose={false}>
             <DialogHeader>
               <DialogTitle>Discard unsaved changes?</DialogTitle>
               <DialogDescription>

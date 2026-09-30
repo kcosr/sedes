@@ -3699,7 +3699,7 @@ export function WorkspaceFilesPanel({
           if (!compareCommentSaving && !open) setCompareCommentDraft(undefined);
         }}
       >
-        <DialogContent showCloseButton={false}>
+        <DialogContent showClose={false}>
           <DialogHeader>
             <DialogTitle>
               {compareCommentDraft?.mode === "edit"
@@ -3789,8 +3789,8 @@ export function WorkspaceFilesPanel({
         }}
       >
         <DialogContent
-          showCloseButton={false}
-          placement="side"
+          showClose={false}
+          layout="side"
           className="workspace-files-compare-details-dialog"
         >
           <DialogHeader>
@@ -4025,7 +4025,7 @@ export function WorkspaceFilesPanel({
           if (!open) setPendingDownload(undefined);
         }}
       >
-        <DialogContent showCloseButton={false}>
+        <DialogContent showClose={false}>
           <DialogHeader>
             <DialogTitle>Download saved version?</DialogTitle>
             <DialogDescription>
@@ -4058,7 +4058,7 @@ export function WorkspaceFilesPanel({
           if (!open) setPendingClose(undefined);
         }}
       >
-        <DialogContent showCloseButton={false}>
+        <DialogContent showClose={false}>
           <DialogHeader>
             <DialogTitle>Discard unsaved changes?</DialogTitle>
             <DialogDescription>
@@ -4092,7 +4092,7 @@ export function WorkspaceFilesPanel({
           if (!open && !removing) setPendingRemove(undefined);
         }}
       >
-        <DialogContent showCloseButton={false}>
+        <DialogContent showClose={false}>
           <DialogHeader>
             <DialogTitle>Remove folder from Files?</DialogTitle>
             <DialogDescription>
@@ -4127,7 +4127,7 @@ export function WorkspaceFilesPanel({
         </DialogContent>
       </Dialog>
       <Dialog open={context.visible && (conflictDialogOpen)} onOpenChange={setConflictDialogOpen}>
-        <DialogContent showCloseButton={false}>
+        <DialogContent showClose={false}>
           <DialogHeader>
             <DialogTitle>File changed on disk</DialogTitle>
             <DialogDescription>
@@ -4157,7 +4157,7 @@ export function WorkspaceFilesPanel({
           if (!open) setPendingRefreshReload(undefined);
         }}
       >
-        <DialogContent showCloseButton={false}>
+        <DialogContent showClose={false}>
           <DialogHeader>
             <DialogTitle>Reload file from disk?</DialogTitle>
             <DialogDescription>

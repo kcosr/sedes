@@ -1833,7 +1833,7 @@ function PanelLayoutReady({
           !open && setTerminalLifecycleConfirmation(undefined)
         }
       >
-        <DialogContent showCloseButton={false}>
+        <DialogContent showClose={false}>
           <DialogHeader>
             <DialogTitle>Close terminal?</DialogTitle>
             <DialogDescription>

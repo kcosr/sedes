@@ -582,7 +582,7 @@ function AgentEditor({
         open={Boolean(guard.pendingRoute)}
         onOpenChange={(open) => !open && guard.cancel()}
       >
-        <DialogContent showCloseButton={false}>
+        <DialogContent showClose={false}>
           <DialogHeader>
             <DialogTitle>Discard unsaved Agent changes?</DialogTitle>
             <DialogDescription>
