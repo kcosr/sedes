@@ -562,9 +562,10 @@ describe("TasksPanel", () => {
     expect(
       screen.queryByRole("checkbox", { name: "Pin task" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete task" })).toHaveAttribute(
-      "data-variant",
-      "destructive",
+    // The trigger only opens the confirmation, so it is a quiet red icon;
+    // the solid destructive fill is kept for the confirming "Delete".
+    expect(screen.getByRole("button", { name: "Delete task" })).toHaveClass(
+      "text-destructive",
     );
   });
 

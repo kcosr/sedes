@@ -1258,8 +1258,9 @@ function TasksPanelBody({
                 <span className="tasks-editor-title">Edit task</span>
                 <div className="tasks-editor-actions">
                   <Button
-                    variant="destructive"
+                    variant="ghost"
                     size="icon-sm"
+                    className="text-destructive hover:text-destructive"
                     aria-label="Delete task"
                     disabled={busy}
                     onClick={() => setConfirmingDelete(true)}

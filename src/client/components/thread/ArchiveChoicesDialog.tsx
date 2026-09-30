@@ -200,7 +200,6 @@ function OpenArchiveChoicesDialog({
                   </Button>
                 </Dialog.Close>
                 <Button
-                  variant="destructive"
                   disabled={Boolean(selectedReason) || Boolean(choices.pending)}
                   aria-describedby={selectedReason ? reasonId : undefined}
                   onClick={archive}

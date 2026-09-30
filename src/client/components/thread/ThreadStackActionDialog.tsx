@@ -182,7 +182,6 @@ export function ThreadStackActionDialog({
               </Button>
             </Dialog.Close>
             <Button
-              variant={action === "archive" ? "destructive" : "default"}
               disabled={loading || pending || unavailable}
               onClick={() =>
                 onConfirm({
