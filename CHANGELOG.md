@@ -5,7 +5,7 @@
 ### Breaking Changes
 
 - Browser and packaged clients must use client protocol 128, which adds
-  reviewed Task snapshots to settle/archive previews and completion requests.
+  reviewed Task snapshots to settle/archive previews and completion requests. (#19)
 
 - Browser and packaged clients must use client protocol 127, which adds
   confirmed live background-work counts to sidebar thread summaries. (#16)
@@ -64,7 +64,7 @@
 
 - Settle, archive, and bulk stack confirmations list their affected open Tasks
   and offer **Complete all**, keeping completed Tasks attached to their threads.
-  Completion requires a fresh preview if Tasks change before confirmation.
+  Completion requires a fresh preview if Tasks change before confirmation. (#19)
 
 - Sidebar thread rows and previews show a slow grey spinner for live subagents
   and a grey dot for remaining background commands. Active turns and unseen
