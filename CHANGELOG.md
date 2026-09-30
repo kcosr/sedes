@@ -5,7 +5,7 @@
 ### Breaking Changes
 
 - Browser and packaged clients must use client protocol 129, which adds
-  optional, runtime-only throughput measurements to completed turns.
+  optional, runtime-only throughput measurements to completed turns. (#20)
 
 - Browser and packaged clients must use client protocol 128, which adds
   reviewed Task snapshots to settle/archive previews and completion requests. (#19)
@@ -68,7 +68,7 @@
 - Completed Pi turns show tokens per second at the left of the turn footer
   when every main-agent response was measured. The rate excludes tool time
   and works without experimental usage accounting. Measurements remain only
-  while the Pi runtime is loaded; older history has no reconstructed rate.
+  while the Pi runtime is loaded; older history has no reconstructed rate. (#20)
 
 - Settle, archive, and bulk stack confirmations list their affected open Tasks
   and offer **Complete all**, keeping completed Tasks attached to their threads.
