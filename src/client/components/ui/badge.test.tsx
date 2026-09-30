@@ -23,7 +23,7 @@ describe("Badge", () => {
     ["info", "soft", ["text-info", "bg-info-soft"]],
     ["success", "soft", ["text-success", "bg-success-soft"]],
     ["warning", "outline", ["text-warning", "border-warning-border", "bg-transparent"]],
-    ["destructive", "outline", ["text-destructive", "border-destructive-border"]],
+    ["danger", "outline", ["text-destructive", "border-destructive-border"]],
     ["neutral", "outline", ["text-muted-foreground", "border-border"]],
   ] as const)("renders tone %s with appearance %s", (tone, appearance, classes) => {
     render(<Badge tone={tone} appearance={appearance}>Label</Badge>);
@@ -47,7 +47,7 @@ describe("StatusPill", () => {
     render(<StatusPill tone={tone}>State</StatusPill>);
     const pill = screen.getByText("State");
     expect(pill).toHaveAttribute("data-slot", "status-pill");
-    expect(pill).toHaveAttribute("data-status", tone);
+    expect(pill).toHaveAttribute("data-tone", tone);
     expect(pill).toHaveClass(color, "rounded-full");
     const dot = pill.querySelector("[data-slot=status-pill-dot]");
     expect(dot).toHaveAttribute("aria-hidden", "true");
@@ -60,15 +60,21 @@ describe("CountBadge", () => {
     render(
       <>
         <CountBadge count={7} data-testid="seven" />
-        <CountBadge count={140} tone="primary" data-testid="many" />
+        <CountBadge count={140} tone="danger" data-testid="many" />
         <CountBadge count={12} max={9} tone="warning" data-testid="capped" />
       </>,
     );
     expect(screen.getByTestId("seven")).toHaveTextContent("7");
-    expect(screen.getByTestId("seven")).toHaveClass("tabular-nums", "text-(length:--text-micro)");
+    expect(screen.getByTestId("seven")).toHaveClass("tabular-nums", "text-(length:--text-micro)", "bg-muted-foreground/12");
     expect(screen.getByTestId("many")).toHaveTextContent("99+");
-    expect(screen.getByTestId("many")).toHaveClass("bg-primary");
+    expect(screen.getByTestId("many")).toHaveAttribute("data-tone", "danger");
+    expect(screen.getByTestId("many")).toHaveClass("bg-(--destructive-solid)", "text-white");
     expect(screen.getByTestId("capped")).toHaveTextContent("9+");
+  });
+
+  it("fills the info tone", () => {
+    render(<CountBadge count={2} tone="info" data-testid="info" />);
+    expect(screen.getByTestId("info")).toHaveClass("bg-info", "text-background");
   });
 });
 

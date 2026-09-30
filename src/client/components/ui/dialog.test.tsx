@@ -226,7 +226,7 @@ describe("Dialog slots", () => {
     ]);
   });
 
-  it("announces destructive alerts and shows a titled notice", () => {
+  it("announces danger alerts and shows a titled notice", () => {
     render(
       <Dialog open>
         <DialogContent aria-describedby={undefined}>
@@ -234,14 +234,36 @@ describe("Dialog slots", () => {
           <DialogAlert tone="warning" title="Not a Git repository">
             Worktrees are unavailable.
           </DialogAlert>
-          <DialogAlert tone="destructive">Could not add the project.</DialogAlert>
+          <DialogAlert tone="danger">Could not add the project.</DialogAlert>
         </DialogContent>
       </Dialog>,
     );
     expect(screen.getByRole("alert")).toHaveTextContent("Could not add the project.");
     const notice = screen.getByText("Not a Git repository").closest('[data-slot="dialog-alert"]');
     expect(notice).toHaveAttribute("data-tone", "warning");
+    expect(notice).not.toHaveAttribute("role");
     expect(notice).toHaveTextContent("Worktrees are unavailable.");
+    // The Callout's anatomy: tone wash, icon, title over a quieter body.
+    expect(notice).toHaveClass("bg-warning-soft", "border-warning-border");
+    expect(notice?.querySelector('[data-slot="callout-title"]')).toHaveTextContent("Not a Git repository");
+    expect(notice?.querySelector('[data-slot="callout-body"]')).toHaveClass("text-muted-foreground");
+  });
+
+  it("defaults DialogAlert to the info tone and lets a caller override the role", () => {
+    render(
+      <Dialog open>
+        <DialogContent aria-describedby={undefined}>
+          <DialogTitle>Add project</DialogTitle>
+          <DialogAlert>Scanning the folder.</DialogAlert>
+          <DialogAlert tone="danger" role="status">Retrying.</DialogAlert>
+        </DialogContent>
+      </Dialog>,
+    );
+    const info = screen.getByText("Scanning the folder.").closest('[data-slot="dialog-alert"]');
+    expect(info).toHaveAttribute("data-tone", "info");
+    expect(info).toHaveClass("bg-info-soft");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("Retrying.");
   });
 });
 

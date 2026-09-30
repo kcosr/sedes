@@ -2,6 +2,7 @@ import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@client/lib/utils"
+import type { Tone } from "@client/components/ui/tone"
 
 const countBadgeVariants = cva(
   "inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-(length:--text-micro) leading-none font-semibold tabular-nums",
@@ -9,16 +10,20 @@ const countBadgeVariants = cva(
     variants: {
       tone: {
         neutral: "bg-muted-foreground/12 text-muted-foreground",
-        primary: "bg-primary text-primary-foreground",
+        info: "bg-info text-background",
         warning: "bg-warning text-background",
-        destructive: "bg-(--destructive-solid) text-white",
-      },
+        danger: "bg-(--destructive-solid) text-white",
+      } satisfies Record<Exclude<Tone, "success">, string>,
     },
     defaultVariants: { tone: "neutral" },
   }
 )
 
-/** A small count (tab totals, unread items). Counts above `max` read "99+". */
+/**
+ * A small count (tab totals, unread items). Counts above `max` read "99+".
+ * Neutral is a soft wash; info, warning and danger are solid fills that
+ * demand attention.
+ */
 function CountBadge({
   count,
   max = 99,

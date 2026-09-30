@@ -1,18 +1,11 @@
 import * as React from "react"
 import { Dialog as DialogPrimitive } from "radix-ui"
-import {
-  CircleAlertIcon,
-  CircleCheckIcon,
-  InfoIcon,
-  TriangleAlertIcon,
-  XIcon,
-} from "lucide-react"
-import { cva } from "class-variance-authority"
+import { XIcon } from "lucide-react"
 
 import { useKeyboardInset } from "@client/app/use-keyboard-inset"
 import { useTouchDensity } from "@client/app/use-touch-density"
 import { Button } from "@client/components/ui/button"
-import { cn } from "@client/lib/utils"
+import { Callout } from "@client/components/ui/callout"
 
 // Floating content opened inside a dialog portals into the dialog node, so
 // it layers above the dialog and stays inside its focus and scroll lock.
@@ -271,73 +264,22 @@ function DialogDescription({
   return <DialogPrimitive.Description data-slot="dialog-description" {...props} />
 }
 
-// A local copy of the Callout look (spec §3 "Callout"): the integration
-// swaps DialogAlert's body for ui/callout.tsx and keeps this API.
-const dialogAlertVariants = cva(
-  "flex items-start gap-2.5 rounded-(--radius-ctl) border px-3 py-2.5 text-(length:--text-ui) leading-5 text-foreground [&>svg]:mt-0.5 [&>svg]:size-4 [&>svg]:shrink-0",
-  {
-    variants: {
-      tone: {
-        info: "border-info-border bg-info-soft [&>svg]:text-info",
-        success: "border-success-border bg-success-soft [&>svg]:text-success",
-        warning: "border-warning-border bg-warning-soft [&>svg]:text-warning",
-        destructive: "border-destructive-border bg-destructive-soft [&>svg]:text-destructive",
-      },
-    },
-    defaultVariants: { tone: "info" },
-  }
-)
-
-type DialogAlertTone = "info" | "success" | "warning" | "destructive"
-
-const DIALOG_ALERT_ICONS: Record<DialogAlertTone, typeof InfoIcon> = {
-  info: InfoIcon,
-  success: CircleCheckIcon,
-  warning: TriangleAlertIcon,
-  destructive: CircleAlertIcon,
-}
-
 /**
- * The one notice and error style inside dialogs. Destructive alerts are
- * announced (role="alert"); pass `role` to change that.
+ * A notice or error inside a dialog: the Callout, info by default. Danger
+ * alerts are announced (role="alert"); pass `role` to change that.
  */
 function DialogAlert({
   tone = "info",
-  title,
-  action,
-  children,
-  className,
+  role,
   ...props
-}: Omit<React.ComponentProps<"div">, "title"> & {
-  tone?: DialogAlertTone
-  title?: React.ReactNode
-  action?: React.ReactNode
-}) {
-  const Icon = DIALOG_ALERT_ICONS[tone]
+}: React.ComponentProps<typeof Callout>) {
   return (
-    <div
+    <Callout
       data-slot="dialog-alert"
-      data-tone={tone}
-      role={tone === "destructive" ? "alert" : undefined}
-      className={cn(dialogAlertVariants({ tone }), className)}
+      tone={tone}
+      role={role ?? (tone === "danger" ? "alert" : undefined)}
       {...props}
-    >
-      <Icon aria-hidden="true" />
-      <div className="grid min-w-0 flex-1 gap-0.5">
-        {title !== undefined && <p className="m-0 font-medium">{title}</p>}
-        {children !== undefined && (
-          <div
-            className={cn(
-              "min-w-0 [overflow-wrap:anywhere]",
-              title !== undefined && "text-(length:--text-meta) leading-4 text-muted-foreground"
-            )}
-          >
-            {children}
-          </div>
-        )}
-      </div>
-      {action !== undefined && <div className="shrink-0 self-center">{action}</div>}
-    </div>
+    />
   )
 }
 
@@ -355,4 +297,4 @@ export {
   DialogTitle,
   DialogTrigger,
 }
-export type { DialogAlertTone, DialogLayout, DialogMobile, DialogSize }
+export type { DialogLayout, DialogMobile, DialogSize }

@@ -33,10 +33,15 @@ describe("Callout", () => {
   it.each([
     ["neutral", "bg-card"],
     ["info", "bg-info-soft"],
+    ["success", "bg-success-soft"],
+    ["warning", "border-warning-border"],
     ["danger", "border-destructive-border"],
   ] as const)("renders the %s tone", (tone, className) => {
     const { container } = render(<Callout tone={tone}>Notice</Callout>);
-    expect(container.querySelector("[data-slot=callout]")).toHaveClass(className);
+    const callout = container.querySelector("[data-slot=callout]");
+    expect(callout).toHaveAttribute("data-tone", tone);
+    expect(callout).toHaveClass(className);
+    expect(callout?.querySelector("[data-slot=callout-icon] svg")).not.toBeNull();
   });
 
   it("renders an action and a custom icon", () => {

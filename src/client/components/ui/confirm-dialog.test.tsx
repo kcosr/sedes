@@ -56,7 +56,7 @@ describe("ConfirmDialog", () => {
     const { unmount } = render(<Harness onConfirm={vi.fn()} />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Remove environment" })).toHaveFocus());
     unmount();
-    render(<Harness tone="destructive" onConfirm={vi.fn()} />);
+    render(<Harness tone="danger" onConfirm={vi.fn()} />);
     const confirm = screen.getByRole("button", { name: "Remove environment" });
     expect(confirm).toHaveAttribute("data-variant", "destructive");
     await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
@@ -86,7 +86,7 @@ describe("ConfirmDialog", () => {
       .mockRejectedValueOnce(new Error("The environment has running threads."))
       .mockResolvedValueOnce(undefined);
     const onOpenChange = vi.fn();
-    render(<Harness tone="destructive" onConfirm={onConfirm} onOpenChange={onOpenChange} />);
+    render(<Harness tone="danger" onConfirm={onConfirm} onOpenChange={onOpenChange} />);
     await user.click(screen.getByRole("button", { name: "Remove environment" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The environment has running threads.");
     expect(onOpenChange).not.toHaveBeenCalled();

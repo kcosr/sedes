@@ -206,7 +206,7 @@ export function RuntimeControls({ controls, revision, resourceKind, resourceId, 
     <div className="execution-settings-status" data-tone={presentation.tone}>
       <div className="execution-settings-status-headline">
         <strong>{presentation.headline}</strong>
-        {presentation.qualifier ? <Badge tone={presentation.tone === "attention" ? "destructive" : "neutral"} appearance={presentation.tone === "attention" ? "soft" : "outline"}>{presentation.qualifier}</Badge> : null}
+        {presentation.qualifier ? <Badge tone={presentation.tone === "attention" ? "danger" : "neutral"} appearance={presentation.tone === "attention" ? "soft" : "outline"}>{presentation.qualifier}</Badge> : null}
       </div>
       <p className="execution-settings-status-detail">{presentation.detail}</p>
       {error || runtime?.lastError ? <div role="alert">

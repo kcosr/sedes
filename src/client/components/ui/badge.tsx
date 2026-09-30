@@ -3,6 +3,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 import * as Slot from "@radix-ui/react-slot"
 
 import { cn } from "@client/lib/utils"
+import type { Tone } from "@client/components/ui/tone"
 
 /**
  * A short label with a tone. `soft` fills with the tone's wash; `outline`
@@ -18,8 +19,8 @@ const badgeVariants = cva(
         info: "text-info",
         success: "text-success",
         warning: "text-warning",
-        destructive: "text-destructive",
-      },
+        danger: "text-destructive",
+      } satisfies Record<Tone, string>,
       appearance: {
         soft: "",
         outline: "bg-transparent",
@@ -34,12 +35,12 @@ const badgeVariants = cva(
       { appearance: "soft", tone: "info", className: "bg-info-soft" },
       { appearance: "soft", tone: "success", className: "bg-success-soft" },
       { appearance: "soft", tone: "warning", className: "bg-warning-soft" },
-      { appearance: "soft", tone: "destructive", className: "bg-destructive-soft" },
+      { appearance: "soft", tone: "danger", className: "bg-destructive-soft" },
       { appearance: "outline", tone: "neutral", className: "border-border" },
       { appearance: "outline", tone: "info", className: "border-info-border" },
       { appearance: "outline", tone: "success", className: "border-success-border" },
       { appearance: "outline", tone: "warning", className: "border-warning-border" },
-      { appearance: "outline", tone: "destructive", className: "border-destructive-border" },
+      { appearance: "outline", tone: "danger", className: "border-destructive-border" },
     ],
     defaultVariants: {
       tone: "neutral",

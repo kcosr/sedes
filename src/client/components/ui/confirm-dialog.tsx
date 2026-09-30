@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@client/components/ui/dialog"
+import type { Tone } from "@client/components/ui/tone"
 
 type ConfirmDialogProps = Omit<
   React.ComponentProps<typeof DialogContent>,
@@ -25,8 +26,8 @@ type ConfirmDialogProps = Omit<
   /** Shown while `onConfirm` runs; defaults to the confirm label with "…". */
   pendingLabel?: string
   cancelLabel?: string
-  /** `destructive` is solid red and only for irreversible actions. */
-  tone?: "default" | "destructive"
+  /** `danger` makes the confirm solid red; only for irreversible actions. */
+  tone?: Extract<Tone, "neutral" | "danger">
   /** Reasons the action cannot run yet; the confirm stays disabled while any remain. */
   blockers?: readonly React.ReactNode[]
   blockersTitle?: React.ReactNode
@@ -59,7 +60,7 @@ function ConfirmDialog({
   confirmLabel,
   pendingLabel,
   cancelLabel = "Cancel",
-  tone = "default",
+  tone = "neutral",
   blockers = [],
   blockersTitle = "Resolve these first",
   children,
@@ -119,7 +120,7 @@ function ConfirmDialog({
                 </ul>
               </DialogAlert>
             )}
-            {error !== undefined && <DialogAlert tone="destructive">{error}</DialogAlert>}
+            {error !== undefined && <DialogAlert tone="danger">{error}</DialogAlert>}
           </DialogBody>
         )}
         <DialogFooter>
@@ -133,7 +134,7 @@ function ConfirmDialog({
           </Button>
           <Button
             type="button"
-            variant={tone === "destructive" ? "destructive" : "default"}
+            variant={tone === "danger" ? "destructive" : "default"}
             disabled={pending || blocked}
             onClick={() => void confirm()}
           >
