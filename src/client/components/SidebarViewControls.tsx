@@ -230,9 +230,9 @@ export function SidebarViewControls({
           aria-label="View options"
           sheetTitle="View options"
           align="end"
-          // The sidebar's width: long hints wrap instead of spilling over
-          // the chat.
-          className="w-60"
+          // As a menu, the sidebar's width: long hints wrap instead of
+          // spilling over the chat. The sheet keeps its own width.
+          className={sheet ? undefined : "w-60"}
         >
           <DropdownMenuLabel>Group by</DropdownMenuLabel>
           <DropdownMenuRadioGroup
