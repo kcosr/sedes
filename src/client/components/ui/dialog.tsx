@@ -346,6 +346,9 @@ function DialogSection({
   )
 }
 
+/** Below 520px dialog footers stack their actions full width (overlay.css). */
+const DIALOG_FOOTER_STACK_QUERY = "(max-width: 519px)"
+
 /**
  * Pinned actions: `start` holds tertiary actions on the leading edge; the
  * children follow as outline Cancel, then the primary action last. Below
@@ -398,6 +401,7 @@ function DialogAlert({
 }
 
 export {
+  DIALOG_FOOTER_STACK_QUERY,
   Dialog,
   DialogAlert,
   DialogBody,

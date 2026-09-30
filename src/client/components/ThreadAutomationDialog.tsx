@@ -22,6 +22,8 @@ import type {
   ThreadAutomationRun,
 } from "../types";
 import { mutationId } from "../lib/ids";
+import { useMediaQuery } from "../app/use-media-query";
+import { Ellipsis, Pause, Play, Power } from "lucide-react";
 import { Button } from "@client/components/ui/button";
 import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
 import {
@@ -34,7 +36,14 @@ import {
   DialogHeader,
   DialogSection,
   DialogTitle,
+  DIALOG_FOOTER_STACK_QUERY,
 } from "@client/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@client/components/ui/dropdown-menu";
 import { StatusPill } from "@client/components/ui/status-pill";
 import { Tag } from "@client/components/ui/tag";
 import { Textarea } from "@client/components/ui/textarea";
@@ -75,6 +84,9 @@ export function ThreadAutomationDialog({
 }): React.JSX.Element {
   const automationSummaryRevision = automationSummary?.revision;
   const [definition, setDefinition] = useState<ThreadAutomationDefinition>();
+  // Where the footer would stack (phones), Run now and Enable/Pause move to
+  // a header menu, so the footer is Cancel and Save.
+  const stackedFooter = useMediaQuery(DIALOG_FOOTER_STACK_QUERY);
   const definitionRef = useRef(definition);
   definitionRef.current = definition;
   const [history, setHistory] = useState<ThreadAutomationRun[]>([]);
@@ -588,14 +600,64 @@ export function ThreadAutomationDialog({
     definition?.lastRun?.state === "uncertain" ||
     liveSummary?.lastRun?.state === "uncertain";
 
+  const runDisabled =
+    saving || snoozed || outcomeUncertain || Boolean(newerSummary);
+  const stateDisabled = saving || Boolean(newerSummary) || outcomeUncertain;
+  const paused = definition?.status === "paused";
+  const runLabel = busy === "run" ? "Running…" : "Run now";
+  const stateLabel =
+    busy === "state"
+      ? paused
+        ? "Enabling…"
+        : "Pausing…"
+      : paused
+        ? "Enable"
+        : "Pause";
+  const toggleState = () => void setState(paused ? "enable" : "pause");
+
   return frame(
     definition ? (
-      <StatusPill
-        tone={definition.status === "enabled" ? "success" : "neutral"}
-        className="capitalize"
-      >
-        {definition.status}
-      </StatusPill>
+      <>
+        <StatusPill
+          tone={definition.status === "enabled" ? "success" : "neutral"}
+          className="capitalize"
+        >
+          {definition.status}
+        </StatusPill>
+        {stackedFooter && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              {/* Sized like the X beside it and centred on the title line. */}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="ml-auto size-(--dialog-close-size) my-[calc((var(--dialog-title-line)-var(--dialog-close-size))/2)] text-muted-foreground"
+                aria-label="More automation actions"
+                title="More automation actions"
+              >
+                <Ellipsis aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                disabled={runDisabled}
+                onSelect={() => void runNow()}
+              >
+                <Play aria-hidden="true" />
+                {runLabel}
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={stateDisabled} onSelect={toggleState}>
+                {paused ? (
+                  <Power aria-hidden="true" />
+                ) : (
+                  <Pause aria-hidden="true" />
+                )}
+                {stateLabel}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </>
     ) : (
       <Tag>New</Tag>
     ),
@@ -754,33 +816,21 @@ export function ThreadAutomationDialog({
     </DialogBody>,
     <DialogFooter
       start={
-        definition ? (
+        definition && !stackedFooter ? (
           <>
             <Button
               variant="outline"
-              disabled={
-                saving || snoozed || outcomeUncertain || Boolean(newerSummary)
-              }
+              disabled={runDisabled}
               onClick={() => void runNow()}
             >
-              {busy === "run" ? "Running…" : "Run now"}
+              {runLabel}
             </Button>
             <Button
               variant="outline"
-              disabled={saving || Boolean(newerSummary) || outcomeUncertain}
-              onClick={() =>
-                void setState(
-                  definition.status === "paused" ? "enable" : "pause",
-                )
-              }
+              disabled={stateDisabled}
+              onClick={toggleState}
             >
-              {busy === "state"
-                ? definition.status === "paused"
-                  ? "Enabling…"
-                  : "Pausing…"
-                : definition.status === "paused"
-                  ? "Enable"
-                  : "Pause"}
+              {stateLabel}
             </Button>
           </>
         ) : undefined
