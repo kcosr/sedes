@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { useRef } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalResource } from "../../shared/index.js";
 import { ThreadTerminalMenu, type ThreadTerminalMenuHandle, type ThreadTerminalMenuProps } from "./ThreadTerminalMenu.js";
@@ -233,10 +233,16 @@ describe("ThreadTerminalMenu", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open Terminals panel" }));
 
-    expect(await screen.findByRole("menuitem", {
-      name: "Terminal inventory is unavailable.",
-    })).toBeVisible();
+    // The failure is a non-focusable row, not a disabled item, and it
+    // replaces the empty row it would contradict.
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Terminal inventory is unavailable.",
+    );
+    expect(screen.getByRole("alert")).toHaveAttribute("data-slot", "dropdown-menu-empty");
+    expect(screen.queryByRole("menuitem", { name: /unavailable/u })).toBeNull();
+    expect(screen.queryByText("No terminals for this thread")).toBeNull();
     expect(client.listTerminals).toHaveBeenCalledOnce();
+    expect(screen.getByRole("menuitem", { name: "Retry" }).querySelector(".lucide-rotate-cw")).not.toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: "Retry" }));
 
     await waitFor(() => expect(onOpen).toHaveBeenCalledWith(terminal, "split"));
@@ -287,9 +293,9 @@ describe("ThreadTerminalMenu", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Open Terminals panel" }));
-    expect(await screen.findByRole("menuitem", {
-      name: "Terminal creation is unavailable.",
-    })).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Terminal creation is unavailable.",
+    );
     fireEvent.click(screen.getByRole("menuitem", { name: "Retry" }));
 
     await waitFor(() => expect(onOpen).toHaveBeenCalledWith(terminal, "split"));
@@ -419,7 +425,7 @@ describe("ThreadTerminalMenu", () => {
     expect(onOpen).toHaveBeenCalledWith(terminal);
   });
 
-  it("disables terminals already open in the current terminal panel", async () => {
+  it("checks terminals already open in the panel and brings one forward when chosen", async () => {
     const otherTerminal: TerminalResource = {
       ...terminal,
       terminalId: "00000000-0000-4000-8000-000000000014",
@@ -442,20 +448,93 @@ describe("ThreadTerminalMenu", () => {
       { button: 0, ctrlKey: false },
     );
     const displayed = await screen.findByRole("menuitem", {
-      name: /Build shell.*Running · Open/u,
+      name: /Build shell.*Running.*open/u,
     });
-    expect(displayed).toHaveAttribute("aria-disabled", "true");
-    expect(displayed).toHaveAttribute(
-      "title",
-      "Already open in this terminal panel",
+    // Marked with a check, not dimmed like a disabled row.
+    expect(displayed).not.toHaveAttribute("aria-disabled");
+    expect(displayed).toHaveAttribute("title", "Open in this terminal panel");
+    expect(displayed.querySelector("svg.lucide-check")).not.toBeNull();
+    // The status sits whole in its value slot.
+    expect(within(displayed).getByText("Running")).toHaveAttribute(
+      "data-slot",
+      "dropdown-menu-item-value",
     );
-    fireEvent.click(displayed);
-    expect(onOpen).not.toHaveBeenCalled();
+    const other = screen.getByRole("menuitem", { name: /Test shell.*Running/u });
+    expect(other.querySelector("svg.lucide-check")).toBeNull();
+    expect(other).not.toHaveAccessibleName(/open/u);
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: /Test shell.*Running/u }),
+    fireEvent.click(displayed);
+    expect(onOpen).toHaveBeenCalledWith(terminal);
+  });
+
+  it("shows loading and empty states as non-focusable rows", async () => {
+    let resolveList!: (value: { terminals: TerminalResource[] }) => void;
+    const client = api([]);
+    client.listTerminals.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveList = resolve;
+      }),
     );
-    expect(onOpen).toHaveBeenCalledWith(otherTerminal);
+    render(
+      <TerminalMenuFixture
+        threadId={terminal.threadId}
+        triggerVariant="tab"
+        api={client as never}
+        onOpen={vi.fn()}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Open terminal tab" }),
+      { button: 0, ctrlKey: false },
+    );
+    const loading = await screen.findByRole("status");
+    expect(loading).toHaveTextContent("Loading terminals…");
+    expect(loading).toHaveAttribute("data-slot", "dropdown-menu-empty");
+    expect(loading).not.toHaveAttribute("tabindex");
+    expect(loading.querySelector(".lucide-loader-circle")).not.toBeNull();
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "New terminal",
+    ]);
+
+    resolveList({ terminals: [] });
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "No terminals for this thread",
+      ),
+    );
+    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+  });
+
+  it("groups each terminal's row actions and keeps tear-down muted at rest", async () => {
+    render(
+      <TerminalMenuFixture
+        threadId={terminal.threadId}
+        triggerVariant="tab"
+        api={api() as never}
+        onOpen={vi.fn()}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Open terminal tab" }),
+      { button: 0, ctrlKey: false },
+    );
+    const row = await screen.findByRole("group", { name: "Build shell" });
+    const [entry, rename, teardown] = within(row).getAllByRole("menuitem");
+    expect(entry).toHaveAccessibleName(/^Build shell/u);
+    expect(entry!.querySelector(".lucide-terminal")).not.toBeNull();
+    expect(within(entry!).getByText("Running")).toHaveAttribute(
+      "data-slot",
+      "dropdown-menu-item-value",
+    );
+    expect(rename).toHaveAccessibleName("Rename Build shell");
+    expect(rename).toHaveAttribute("title", "Rename Build shell");
+    expect(teardown).toHaveAccessibleName("Tear down and remove Build shell");
+    // Not a destructive row: the X is muted until the row is highlighted.
+    expect(teardown).toHaveAttribute("data-variant", "default");
+    expect(teardown!.querySelector(".lucide-x")).toHaveClass("text-muted-foreground");
+    expect(teardown).toHaveClass("data-highlighted:[&_svg]:text-destructive");
   });
 
   it("describes remote teardown as disconnecting without promising process termination", async () => {

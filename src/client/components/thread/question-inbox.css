@@ -5,8 +5,7 @@
 .thread-questions-trigger svg {
   color: var(--warning);
 }
-.thread-questions-count,
-.question-inbox-total {
+.thread-questions-count {
   font-variant-numeric: tabular-nums;
   border-radius: 999px;
   padding: 0.05rem 0.4rem;
@@ -59,19 +58,10 @@
 .question-response-answers dd {
   margin-top: 4px;
 }
-.question-inbox-description,
-.question-inbox-empty,
 .question-inbox-hint {
   color: var(--muted-foreground);
   font-size: 0.8rem;
   line-height: 1.5;
-}
-.question-inbox-list {
-  display: grid;
-  gap: 0.75rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
 }
 .question-inbox-card {
   display: grid;
@@ -82,13 +72,6 @@
 }
 .question-inbox-card[data-selected] {
   border-color: var(--primary);
-}
-.question-inbox-card-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  color: var(--muted-foreground);
-  font-size: 0.7rem;
 }
 .question-inbox-question {
   display: grid;

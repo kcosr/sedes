@@ -1,12 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   PackagedConnectionPreferences,
   PackagedConnectionProfile,
 } from "../app/server-preferences.js";
 import { serverFromPairingInput } from "../authentication/pairing-link.js";
 import { Button } from "./ui/button.js";
+import { Callout } from "./ui/callout.js";
+import { ConfirmDialog } from "./ui/confirm-dialog.js";
+import { Field } from "./ui/field.js";
 import { Input } from "./ui/input.js";
-import { Label } from "./ui/label.js";
+import { Tag } from "./ui/tag.js";
+import { SettingsActionRow } from "./settings/SettingsField.js";
+import { SettingsSection } from "./settings/SettingsSection.js";
 
 export interface ServerSettingsControls {
   readonly connections: PackagedConnectionPreferences;
@@ -16,15 +21,31 @@ export interface ServerSettingsControls {
   readonly remove: (profileId: string) => Promise<void>;
 }
 
-export function ServerSettingsForm({ controls }: {
+/**
+ * The packaged client's saved servers and the form that adds one. Settings
+ * frames the two parts as sections; launch screens show them bare.
+ */
+export function ServerSettingsForm({
+  controls,
+  sections = false,
+}: {
   controls: ServerSettingsControls;
+  sections?: boolean;
 }): React.JSX.Element {
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
   const [status, setStatus] = useState(controls.storageError ?? "");
   const [pending, setPending] = useState(false);
-  const [removing, setRemoving] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<PackagedConnectionProfile>();
   useEffect(() => setStatus(controls.storageError ?? ""), [controls.storageError]);
+  // Where focus lands once a removal has taken the row that asked for it:
+  // the Remove button of the connection now at its place, else of the new
+  // last one, else the add form.
+  const removeButtons = useRef(new Map<string, HTMLButtonElement>());
+  const nameInput = useRef<HTMLInputElement>(null);
+  const latestProfiles = useRef(controls.connections.profiles);
+  latestProfiles.current = controls.connections.profiles;
+  const removedIndex = useRef(0);
 
   const perform = async (operation: () => Promise<void>) => {
     if (pending) return;
@@ -39,81 +60,132 @@ export function ServerSettingsForm({ controls }: {
     }
   };
 
+  const profiles = controls.connections.profiles.map((profile) => (
+    <SettingsActionRow
+      key={profile.id}
+      title={
+        <>
+          <span>{profile.name}</span>
+          {profile.id === controls.connections.selectedProfileId ? (
+            <Tag>Selected</Tag>
+          ) : null}
+        </>
+      }
+      description={profile.baseUrl}
+      actions={
+        <>
+          <Button type="button" variant="ghost" disabled={pending}
+            ref={(button) => {
+              if (button) removeButtons.current.set(profile.id, button);
+              else removeButtons.current.delete(profile.id);
+            }}
+            aria-label={`Remove ${profile.name}`}
+            onClick={() => setRemoving(profile)}>
+            Remove…
+          </Button>
+          <Button type="button" variant="outline" disabled={pending}
+            aria-label={`Connect to ${profile.name}`}
+            onClick={() => void perform(() => controls.connect(profile.id))}>
+            Connect
+          </Button>
+        </>
+      }
+    />
+  ));
+  const insecure = value.trim().toLowerCase().startsWith("http://");
+  const form = (
+    <form className="server-settings-add" onSubmit={(event) => {
+      event.preventDefault();
+      void perform(async () => {
+        const normalized = serverFromPairingInput(value);
+        const profile: PackagedConnectionProfile = {
+          id: crypto.randomUUID(), name: name.trim(), baseUrl: normalized,
+        };
+        if (!profile.name) throw new Error("Enter a connection name.");
+        await controls.save(profile);
+        setName("");
+        setValue("");
+      });
+    }}>
+      <Field id="setting-sedes-name" label="Connection name">
+        <Input ref={nameInput} value={name} maxLength={100}
+          placeholder="Home" disabled={pending}
+          onChange={(event) => setName(event.target.value)} />
+      </Field>
+      <Field
+        id="setting-sedes-server"
+        label="Sedes server URL"
+        description="Add a server, then enter its pairing code to connect. Each connection remembers its own credential securely on this device."
+      >
+        <Input type="url" inputMode="url"
+          autoCapitalize="none" autoCorrect="off" spellCheck={false}
+          placeholder="https://sedes.example" value={value} disabled={pending}
+          onChange={(event) => setValue(event.target.value)} />
+      </Field>
+      {insecure ? (
+        <Callout tone="warning">
+          HTTP is unencrypted. Use it only with a Sedes server on a private
+          network you trust.
+        </Callout>
+      ) : null}
+      <div className="server-settings-actions">
+        <Button type="submit" disabled={pending || !value.trim() || !name.trim()}>
+          {pending ? "Saving…" : "Add & connect"}
+        </Button>
+      </div>
+    </form>
+  );
+  const error = status ? (
+    <Callout tone="danger" role="alert">
+      {status}
+    </Callout>
+  ) : null;
+  const confirm = (
+    <ConfirmDialog
+      open={Boolean(removing)}
+      onOpenChange={(open) => {
+        if (!open) setRemoving(undefined);
+      }}
+      tone="danger"
+      title={`Remove ${removing?.name ?? "connection"}?`}
+      description="This device forgets the server and its credential. Pair again to reconnect."
+      confirmLabel="Remove connection"
+      pendingLabel="Removing…"
+      onConfirm={async () => {
+        if (!removing) return;
+        removedIndex.current = controls.connections.profiles.findIndex(({ id }) => id === removing.id);
+        await controls.remove(removing.id);
+      }}
+      fallbackFocus={() => {
+        const profiles = latestProfiles.current;
+        const survivor = profiles[Math.min(removedIndex.current, profiles.length - 1)];
+        return (survivor && removeButtons.current.get(survivor.id)) ?? nameInput.current;
+      }}
+    />
+  );
+
+  if (sections) {
+    return (
+      <>
+        {error}
+        {profiles.length > 0 ? (
+          <SettingsSection title="Saved connections" card>
+            {profiles}
+          </SettingsSection>
+        ) : null}
+        <SettingsSection title="Add a connection" card>
+          {form}
+        </SettingsSection>
+        {confirm}
+      </>
+    );
+  }
   return (
     <div className="server-settings-form">
-      {controls.connections.profiles.map((profile) => (
-        <div className="settings-row" key={profile.id}>
-          <div className="settings-row-text">
-            <span className="settings-row-label">{profile.name}</span>
-            <p className="settings-row-description">{profile.baseUrl}</p>
-            {profile.id === controls.connections.selectedProfileId && (
-              <p className="settings-row-description">Selected connection</p>
-            )}
-          </div>
-          <div className="server-settings-actions">
-            <Button type="button" variant="outline" disabled={pending}
-              aria-label={`Connect to ${profile.name}`}
-              onClick={() => void perform(() => controls.connect(profile.id))}>
-              Connect
-            </Button>
-            {removing === profile.id ? (
-              <>
-                <Button type="button" variant="destructive" disabled={pending}
-                  aria-label={`Confirm remove ${profile.name}`}
-                  onClick={() => void perform(async () => {
-                    await controls.remove(profile.id);
-                    setRemoving(null);
-                  })}>Confirm remove</Button>
-                <Button type="button" variant="ghost" disabled={pending}
-                  onClick={() => setRemoving(null)}>Cancel</Button>
-              </>
-            ) : (
-              <Button type="button" variant="ghost" disabled={pending}
-                aria-label={`Remove ${profile.name}`}
-                onClick={() => setRemoving(profile.id)}>Remove</Button>
-            )}
-          </div>
-        </div>
-      ))}
-      <form onSubmit={(event) => {
-        event.preventDefault();
-        void perform(async () => {
-          const normalized = serverFromPairingInput(value);
-          const profile: PackagedConnectionProfile = {
-            id: crypto.randomUUID(), name: name.trim(), baseUrl: normalized,
-          };
-          if (!profile.name) throw new Error("Enter a connection name.");
-          await controls.save(profile);
-          setName("");
-          setValue("");
-        });
-      }}>
-        <div className="server-settings-field">
-          <Label htmlFor="setting-sedes-name">Connection name</Label>
-          <Input id="setting-sedes-name" value={name} maxLength={100}
-            placeholder="Home" disabled={pending}
-            onChange={(event) => setName(event.target.value)} />
-          <Label htmlFor="setting-sedes-server">Sedes server URL</Label>
-          <Input id="setting-sedes-server" type="url" inputMode="url"
-            autoCapitalize="none" autoCorrect="off" spellCheck={false}
-            placeholder="https://sedes.example" value={value} disabled={pending}
-            onChange={(event) => setValue(event.target.value)} />
-          <p className="settings-row-description">
-            Add a server, then enter its pairing code to connect. Each connection
-            remembers its own credential securely on this device.
-          </p>
-          {value.trim().toLowerCase().startsWith("http://") && (
-            <p className="notice warning">HTTP is unencrypted. Use it only with a Sedes
-              server on a private network you trust.</p>
-          )}
-        </div>
-        <div className="server-settings-actions">
-          <Button type="submit" disabled={pending || !value.trim() || !name.trim()}>
-            {pending ? "Saving…" : "Add & connect"}
-          </Button>
-        </div>
-      </form>
-      {status && <p className="server-settings-status" role="status">{status}</p>}
+      {profiles.length > 0 ? <div className="server-settings-profiles">{profiles}</div> : null}
+      {form}
+      {error}
+      {confirm}
     </div>
   );
 }

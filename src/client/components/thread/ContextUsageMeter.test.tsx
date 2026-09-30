@@ -38,6 +38,12 @@ describe("ContextUsageMeter", () => {
 
     fireEvent.click(button);
 
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toHaveAttribute("data-slot", "popover-content");
+    expect(tooltip).toHaveAttribute("data-side", "top");
+    expect(tooltip).toHaveTextContent(/^Context window/);
+    // A glance, not a dialog: opening never moves focus into it.
+    expect(tooltip).not.toHaveFocus();
     expect(screen.getByRole("tooltip")).toHaveTextContent(
       "31% used (69% left)",
     );

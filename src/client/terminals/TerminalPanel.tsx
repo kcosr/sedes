@@ -81,6 +81,7 @@ function TerminalPanel({
   const latestTerminalRef = useRef(terminal);
   const [state, setState] = useState<TerminalSessionSnapshot>(() => initialSnapshot(terminal));
   const [colorScheme, setColorScheme] = useState(getResolvedAppearance);
+  const colorSchemeRef = useRef(colorScheme);
   const [preferences, setPreferences] = useState(getTerminalPreferences);
   const preferencesRef = useRef(preferences);
   const appliedFontSizeRef = useRef(preferences.fontSize);
@@ -99,6 +100,7 @@ function TerminalPanel({
   onRemovedRef.current = onRemoved;
   latestTerminalRef.current = terminal;
   preferencesRef.current = preferences;
+  colorSchemeRef.current = colorScheme;
 
   useEffect(() => subscribeResolvedAppearance(setColorScheme), []);
   useEffect(() => subscribeTerminalPreferences(setPreferences), []);
@@ -290,7 +292,7 @@ function TerminalPanel({
       fontSize: mountedPreferences.fontSize,
       cursorBlink: mountedPreferences.cursorBlink,
       scrollback: mountedPreferences.scrollback,
-      colorScheme,
+      colorScheme: colorSchemeRef.current,
     });
     let disposed = false;
     let disposeMountedSession: (() => void) | undefined;
@@ -300,6 +302,7 @@ function TerminalPanel({
         return;
       }
       emulatorRef.current = emulator;
+      emulator.setColorScheme(colorSchemeRef.current);
       emulator.setCursorBlink(preferencesRef.current.cursorBlink);
       const latestFontSize = preferencesRef.current.fontSize;
       if (latestFontSize !== mountedPreferences.fontSize)
@@ -490,11 +493,17 @@ function TerminalPanel({
       sessionRef.current = undefined;
       if (emulatorRef.current === emulator) emulatorRef.current = undefined;
     };
-  }, [api, colorScheme, producerId, terminal.incarnationId, terminal.terminalId, visible]);
+  }, [api, producerId, terminal.incarnationId, terminal.terminalId, visible]);
 
   useEffect(() => {
     if (active) activateSessionRef.current();
   }, [active]);
+
+  // A theme change recolors the mounted renderer. Re-attaching would hide the
+  // output until the server replayed it.
+  useEffect(() => {
+    emulatorRef.current?.setColorScheme(colorScheme);
+  }, [colorScheme]);
 
   useEffect(() => {
     emulatorRef.current?.setCursorBlink(preferences.cursorBlink);

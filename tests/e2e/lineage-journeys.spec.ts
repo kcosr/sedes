@@ -149,8 +149,8 @@ test.describe.serial("normalized lineage browser journeys", () => {
     await page.getByRole("button", { name: "Thread actions" }).click();
     await expect(
       page
-        .getByRole("dialog", { name: "Thread actions" })
-        .getByRole("button", { name: "Fork", exact: true }),
+        .getByRole("menu", { name: "Thread actions" })
+        .getByRole("menuitem", { name: "Fork", exact: true }),
     ).toBeEnabled();
     await page.keyboard.press("Escape");
     const completedTurn = page
@@ -195,8 +195,8 @@ test.describe.serial("normalized lineage browser journeys", () => {
 
     await page.getByRole("button", { name: "Thread actions" }).click();
     const headerLatestFork = page
-      .getByRole("dialog", { name: "Thread actions" })
-      .getByRole("button", { name: "Fork", exact: true });
+      .getByRole("menu", { name: "Thread actions" })
+      .getByRole("menuitem", { name: "Fork", exact: true });
     await expect(headerLatestFork).toBeEnabled();
     await capture(page, testInfo, "lineage-latest-fork-top-menu-desktop.png");
     await page.keyboard.press("Escape");
@@ -280,50 +280,67 @@ test.describe.serial("normalized lineage browser journeys", () => {
     await capture(page, testInfo, "lineage-deep-family-desktop.png");
 
     await page.goto(sourcePath);
-    await page.getByRole("button", { name: "Thread actions" }).click();
+    const threadActionsTrigger = page.getByRole("button", {
+      name: "Thread actions",
+    });
+    await threadActionsTrigger.click();
     const threadActions = page.getByTestId("thread-actions-menu");
-    const headerArchive = threadActions.getByRole("button", {
+    const headerArchive = threadActions.getByRole("menuitem", {
       name: "Archive",
       exact: true,
     });
     await headerArchive.click();
-    await expect(
-      page.getByRole("menuitem", { name: "Archive only this thread" }),
-    ).toBeVisible();
+    // A family with descendants asks first; archiving only this thread is
+    // the default, the family is an opt-in checkbox.
+    const archiveChoices = page.getByRole("dialog", {
+      name: "Archive this thread",
+    });
+    const archiveDescendants = archiveChoices.getByRole("checkbox", {
+      name: "Archive child and descendant forks",
+    });
+    const confirmArchive = archiveChoices.getByRole("button", {
+      name: "Archive",
+      exact: true,
+    });
+    await expect(archiveChoices).toBeVisible();
+    await expect(threadActions).toHaveCount(0);
+    await expect(archiveDescendants).not.toBeChecked();
+    await expect(confirmArchive).toBeVisible();
     await capture(page, testInfo, "lineage-archive-family-header-desktop.png");
-    await page.keyboard.press("Escape");
-    await expect(threadActions).toBeVisible();
-    await expect(headerArchive).toBeFocused();
-    await page.keyboard.press("Escape");
+    await archiveChoices.getByRole("button", { name: "Cancel" }).click();
+    await expect(archiveChoices).toHaveCount(0);
+    await expect(threadActionsTrigger).toBeFocused();
     await page.goto(grandchildPath);
 
     const sourceArchiveRow = sourceRow.getByTestId("thread-row").first();
     await sourceArchiveRow.hover();
     await sourceArchiveRow.getByTestId("thread-row-archive").click();
-    await expect(
-      page.getByRole("menuitem", { name: "Archive only this thread" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("menuitem", {
-        name: /Archive thread and \d+ descendants/,
-      }),
-    ).toBeEnabled();
+    await expect(archiveChoices).toBeVisible();
+    await expect(confirmArchive).toBeVisible();
+    await expect(archiveDescendants).toBeEnabled();
+    await archiveDescendants.check();
+    await expect(confirmArchive).toBeEnabled();
     await capture(
       page,
       testInfo,
       "lineage-archive-family-dropdown-desktop.png",
     );
-    await page.getByRole("menuitem", { name: "Cancel" }).click();
+    await archiveChoices.getByRole("button", { name: "Cancel" }).click();
+    await expect(archiveChoices).toHaveCount(0);
 
     await sourceArchiveRow.click({ button: "right" });
-    const archiveSubmenu = page.getByRole("menuitem", { name: "Archive" });
-    await archiveSubmenu.hover();
-    await expect(
-      page.getByRole("menuitem", { name: "Archive only this thread" }),
-    ).toBeVisible();
+    const contextArchive = page
+      .getByTestId("thread-context-menu")
+      .getByRole("menuitem", { name: "Archive", exact: true });
+    // Archive is a plain row: it asks through the same choices dialog.
+    await expect(contextArchive).not.toHaveAttribute("aria-haspopup", /.+/);
+    await contextArchive.click();
+    await expect(archiveChoices).toBeVisible();
+    await expect(archiveDescendants).not.toBeChecked();
+    await expect(confirmArchive).toBeVisible();
     await capture(page, testInfo, "lineage-archive-family-context-desktop.png");
-    await page.keyboard.press("Escape");
-    await page.keyboard.press("Escape");
+    await archiveChoices.getByRole("button", { name: "Cancel" }).click();
+    await expect(archiveChoices).toHaveCount(0);
 
     await openForkSourceTurn(page, grandchildId);
     await expect(page).toHaveURL(new RegExp(`/threads/${firstChildId}#turn=`));
@@ -531,7 +548,7 @@ test.describe.serial("normalized lineage browser journeys", () => {
     );
     await capture(page, testInfo, "lineage-grouped-panels.png");
     await page.getByRole("button", { name: "View options" }).click();
-    await page.getByRole("checkbox", { name: /Group fork families/ }).click();
+    await page.getByRole("menuitemcheckbox", { name: /Group fork families/ }).click();
     await page.keyboard.press("Escape");
     await expect(childRow(page)).toHaveAttribute("data-lineage-depth", "0");
     await expect(
@@ -555,7 +572,7 @@ test.describe.serial("normalized lineage browser journeys", () => {
     ).toBeVisible();
     await page.getByRole("button", { name: "View options" }).click();
     await expect(
-      page.getByRole("checkbox", { name: /Group fork families/ }),
+      page.getByRole("menuitemcheckbox", { name: /Group fork families/ }),
     ).toHaveAttribute("aria-checked", "false");
     await page.keyboard.press("Escape");
     expect(
@@ -569,7 +586,7 @@ test.describe.serial("normalized lineage browser journeys", () => {
     await page.reload();
     await page.getByRole("button", { name: "View options" }).click();
     await expect(
-      page.getByRole("checkbox", { name: /Group fork families/ }),
+      page.getByRole("menuitemcheckbox", { name: /Group fork families/ }),
     ).toHaveAttribute("aria-checked", "false");
     await page.keyboard.press("Escape");
 
@@ -618,7 +635,7 @@ test.describe.serial("normalized lineage browser journeys", () => {
       await expect(sheet).toBeVisible();
       const forkResponse = touchPage.waitForResponse((response) =>
         response.request().method() === "POST" && response.url().includes("/fork"));
-      await sheet.getByRole("button", { name: "Fork", exact: true }).tap();
+      await sheet.getByRole("menuitem", { name: "Fork", exact: true }).tap();
       expect((await forkResponse).ok()).toBe(true);
       await expect(drawer).toBeHidden();
       await expect(touchPage).not.toHaveURL(recoveredChildPath);
@@ -673,19 +690,19 @@ test.describe.serial("normalized lineage browser journeys", () => {
       .first();
     await activeFamilySourceRow.hover();
     await activeFamilySourceRow.getByTestId("thread-row-archive").click();
-    const blockedArchiveAll = page.getByRole("menuitem", {
-      name: /Archive thread and \d+ descendants/,
-    });
-    await expect(blockedArchiveAll).toBeDisabled();
+    await expect(archiveChoices).toBeVisible();
+    await archiveDescendants.check();
+    await expect(confirmArchive).toBeDisabled();
     await expect(
-      page.getByText("A descendant is running and cannot be archived."),
+      archiveChoices.getByText("A descendant is running and cannot be archived."),
     ).toBeVisible();
     await capture(
       page,
       testInfo,
       "lineage-archive-family-running-disabled-desktop.png",
     );
-    await page.getByRole("menuitem", { name: "Cancel" }).click();
+    await archiveChoices.getByRole("button", { name: "Cancel" }).click();
+    await expect(archiveChoices).toHaveCount(0);
     await page.getByRole("button", { name: "Stop" }).click();
 
     const [cleanupSession, cleanupSnapshot] = await Promise.all([
@@ -725,11 +742,11 @@ test.describe.serial("normalized lineage browser journeys", () => {
       .first();
     await finalSourceRow.hover();
     await finalSourceRow.getByTestId("thread-row-archive").click();
-    const archiveFamily = page.getByRole("menuitem", {
-      name: /Archive thread and \d+ descendants/,
-    });
-    await expect(archiveFamily).toBeEnabled();
-    await archiveFamily.click();
+    await expect(archiveChoices).toBeVisible();
+    await archiveDescendants.check();
+    await expect(confirmArchive).toBeEnabled();
+    await confirmArchive.click();
+    await expect(archiveChoices).toHaveCount(0);
     await expect(
       page
         .getByTestId("desktop-sidebar")

@@ -33,7 +33,7 @@ export function AddProjectDialog({ store, environments, initialEnvironmentId, en
       setPending(false);
     }
   };
-  return <DirectoryPickerDialog open mobileSheet onOpenChange={(open) => { if (!open) onClose(); }}
+  return <DirectoryPickerDialog open onOpenChange={(open) => { if (!open) onClose(); }}
     title="Add project" description="Choose an existing directory to remember as a project, or enter its absolute path."
     environments={environments} environmentId={environmentId} environmentLocked={environmentLocked}
     onEnvironmentChange={(id) => { setEnvironmentId(id); setError(""); }}

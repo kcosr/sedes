@@ -11,15 +11,32 @@ import type {
 import type { ApiClient } from "../api/ApiClient.js";
 import { messageFrom } from "../stores/ApplicationClientStore.js";
 
+/**
+ * The one Agent a page shows, keyed by the Agent it was asked for. It is
+ * separate from the list, so a list refresh never touches a failed load:
+ * that stays until another Agent is asked for or a retry succeeds.
+ */
+export type AgentDetailState =
+  | { readonly status: "none" }
+  | { readonly status: "loading"; readonly agentId: string }
+  | { readonly status: "ready"; readonly agentId: string; readonly agent: SavedAgent }
+  | {
+      readonly status: "error";
+      readonly agentId: string;
+      readonly error: string;
+      /** A retry is in flight; the failure stays until it succeeds. */
+      readonly retrying: boolean;
+    };
+
 export interface AgentClientState {
   readonly status: "idle" | "loading" | "ready" | "error";
   readonly items: readonly SavedAgentSummary[];
   readonly nextCursor?: string;
   readonly search: string;
   readonly loadingMore: boolean;
-  readonly selected?: SavedAgent;
-  readonly detailLoading: boolean;
+  /** The list's failure; the detail keeps its own. */
   readonly error?: string;
+  readonly detail: AgentDetailState;
 }
 
 const initialState: AgentClientState = {
@@ -27,7 +44,7 @@ const initialState: AgentClientState = {
   items: [],
   search: "",
   loadingMore: false,
-  detailLoading: false,
+  detail: { status: "none" },
 };
 
 export class AgentClientStore {
@@ -129,33 +146,29 @@ export class AgentClientStore {
       });
   }
 
+  /**
+   * Loads the Agent a page shows. Asking again for an Agent whose load
+   * failed is a retry: the failure stays, marked retrying, until it succeeds.
+   */
   loadAgent(agentId: string): Promise<void> {
     this.#detailAbort?.abort();
     const abort = new AbortController();
     this.#detailAbort = abort;
     const generation = ++this.#detailGeneration;
-    this.#replace({
-      ...this.#state,
-      selected: undefined,
-      detailLoading: true,
-      error: undefined,
-    });
+    const current = this.#state.detail;
+    this.#setDetail(
+      current.status === "error" && current.agentId === agentId
+        ? { ...current, retrying: true }
+        : { status: "loading", agentId },
+    );
     return this.api.getSavedAgent(agentId, abort.signal).then(
       (agent) => {
         if (generation !== this.#detailGeneration) return;
-        this.#replace({
-          ...this.#state,
-          selected: agent,
-          detailLoading: false,
-        });
+        this.#setDetail({ status: "ready", agentId, agent });
       },
       (cause: unknown) => {
         if (abort.signal.aborted || generation !== this.#detailGeneration) return;
-        this.#replace({
-          ...this.#state,
-          detailLoading: false,
-          error: messageFrom(cause),
-        });
+        this.#setDetail({ status: "error", agentId, error: messageFrom(cause), retrying: false });
       },
     );
   }
@@ -163,12 +176,7 @@ export class AgentClientStore {
   clearSelection(): void {
     this.#detailAbort?.abort();
     this.#detailGeneration += 1;
-    this.#replace({
-      ...this.#state,
-      selected: undefined,
-      detailLoading: false,
-      error: undefined,
-    });
+    this.#setDetail({ status: "none" });
   }
 
   options(
@@ -180,9 +188,7 @@ export class AgentClientStore {
 
   async refreshAgent(agentId: string): Promise<SavedAgent> {
     const agent = await this.api.getSavedAgent(agentId);
-    if (this.#state.selected?.id === agentId) {
-      this.#replace({ ...this.#state, selected: agent, error: undefined });
-    }
+    this.#replaceShown(agent);
     return agent;
   }
 
@@ -197,14 +203,14 @@ export class AgentClientStore {
     input: UpdateSavedAgentRequest,
   ): Promise<SavedAgent> {
     const agent = await this.api.updateSavedAgent(agentId, input);
-    this.#replace({ ...this.#state, selected: agent });
+    this.#replaceShown(agent);
     await this.refresh();
     return agent;
   }
 
   async delete(agentId: string, input: DeleteSavedAgentRequest): Promise<void> {
     await this.api.deleteSavedAgent(agentId, input);
-    if (this.#state.selected?.id === agentId) this.clearSelection();
+    if (this.#shownId() === agentId) this.clearSelection();
     await this.refresh();
   }
 
@@ -212,6 +218,23 @@ export class AgentClientStore {
     this.#listAbort?.abort();
     this.#detailAbort?.abort();
     this.#listeners.clear();
+  }
+
+  #shownId(): string | undefined {
+    const detail = this.#state.detail;
+    return detail.status === "none" ? undefined : detail.agentId;
+  }
+
+  /** A newer copy of the Agent shown (a save or a conflict refresh). */
+  #replaceShown(agent: SavedAgent): void {
+    if (this.#shownId() !== agent.id) return;
+    this.#detailAbort?.abort();
+    this.#detailGeneration += 1;
+    this.#setDetail({ status: "ready", agentId: agent.id, agent });
+  }
+
+  #setDetail(detail: AgentDetailState): void {
+    this.#replace({ ...this.#state, detail });
   }
 
   #replace(state: AgentClientState): void {

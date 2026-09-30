@@ -138,12 +138,15 @@ Open the returned URL and pair the browser. The code is single-use and expires
 after five minutes. See [Pairing clients](../operator/operations.md#pairing-clients)
 for revocation and packaged-client enrollment.
 
-Before creating a project, open **Settings → Environments → Add environment → Local machine** and add **Local**
-with the narrowest practical absolute workspace roots. Open that environment
-and choose **Add backend**, select **Pi SDK**, then **Save backend**. Set its
-**Model policy** and default [target](concepts.md#backend-and-target)
-deliberately; the policy must admit at least one model Pi has authenticated.
-Wait for available runtime status before submitting work.
+Before creating a project, open **Settings → Environments → Add environment →
+Local machine**, name it **Local**, add the narrowest practical absolute
+workspace roots, and choose **Save environment**. On that environment's
+**Backends** tab, choose **Add backend** and select the **Pi SDK** backend
+type. Deliberately choose **Available models** under **Models** and whether its
+connection (its [target](concepts.md#backend-and-target)) is the **Default for
+new threads**, then choose **Save backend**. The model policy must admit at
+least one model Pi has authenticated. Wait for available runtime status before
+submitting work.
 
 These settings belong to your Sedes account on this server and follow you
 across clients. A save can remain pending while runtime application is blocked;

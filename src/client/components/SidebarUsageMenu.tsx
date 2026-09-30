@@ -1,8 +1,7 @@
-import { Gauge } from "lucide-react";
+import { Camera, Gauge, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ApiClient } from "../api/ApiClient.js";
-import { SIDEBAR_NAV_MEDIA_QUERY } from "./SidebarNavTrigger.js";
-import { useMediaQuery } from "../app/use-media-query.js";
+import { useTouchDensity } from "../app/use-touch-density.js";
 import { BackendBrandIcon } from "./brand-icons.js";
 import type { BackendBrand } from "../../shared/index.js";
 import type {
@@ -26,13 +25,17 @@ import {
   usageBand,
   weekElapsedDays,
 } from "../provider-pulse/presentation.js";
+import { Button } from "@client/components/ui/button";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
 } from "@client/components/ui/dialog";
 import {
+  DropdownMenuEmpty,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -41,10 +44,9 @@ import {
   DropdownMenuSubTrigger,
 } from "@client/components/ui/dropdown-menu";
 
+/** Under the touch density the accounts open as a sheet, not a submenu. */
 export function useUsageSheetLayout(): boolean {
-  const mobileLayout = useMediaQuery(SIDEBAR_NAV_MEDIA_QUERY);
-  const coarsePointer = useMediaQuery("(pointer: coarse)");
-  return mobileLayout || coarsePointer;
+  return useTouchDensity();
 }
 
 export function SidebarUsageSheetItem({
@@ -80,15 +82,20 @@ export function SidebarUsageSheet({
   }, [open, pulse.load, pulse.stop]);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
+      {/* Opened from the sidebar, which is the mobile drawer: layer above it. */}
       <DialogContent
+        layout="sheet"
+        size="md"
         className="sidebar-usage-sheet"
-        overlayClassName="sidebar-usage-sheet-overlay"
+        layer="over-dialog"
       >
-        <DialogTitle>Accounts</DialogTitle>
-        <DialogDescription className="sr-only">
-          Remaining provider quota for configured provider accounts.
-        </DialogDescription>
-        <div className="sidebar-usage-sheet-body">
+        <DialogHeader>
+          <DialogTitle>Accounts</DialogTitle>
+          <DialogDescription className="sr-only">
+            Remaining provider quota for configured provider accounts.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody>
           <UsageList
             pulse={pulse}
             expandedId={expandedId}
@@ -99,7 +106,7 @@ export function SidebarUsageSheet({
             }
             inline
           />
-        </div>
+        </DialogBody>
       </DialogContent>
     </Dialog>
   );
@@ -127,11 +134,7 @@ export function SidebarUsageMenu({
         <Gauge aria-hidden="true" />
         Accounts
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent
-        className="sidebar-usage-menu"
-        sideOffset={6}
-        collisionPadding={8}
-      >
+      <DropdownMenuSubContent className="sidebar-usage-menu">
         <UsageList
           pulse={pulse}
           expandedId={expandedId}
@@ -158,15 +161,22 @@ function UsageList({
   readonly inline?: boolean;
 }): React.JSX.Element {
   const accounts = accountsByUpcomingReset(pulse.status?.accounts ?? []);
+  // In the menu, loading and empty states are non-focusable empty rows.
+  const empty = (message: string, loading = false) =>
+    inline ? (
+      <div className="sidebar-usage-empty">{message}</div>
+    ) : (
+      <DropdownMenuEmpty loading={loading}>{message}</DropdownMenuEmpty>
+    );
   return (
     <>
       {inline ? null : <DropdownMenuLabel>Weekly remaining</DropdownMenuLabel>}
       {pulse.loading && !pulse.status ? (
-        <div className="sidebar-usage-empty">Loading usage…</div>
+        empty("Loading usage…", true)
       ) : pulse.error && !pulse.status ? (
-        <div className="sidebar-usage-empty">{pulse.error}</div>
+        empty(pulse.error)
       ) : accounts.length === 0 ? (
-        <div className="sidebar-usage-empty">No provider accounts.</div>
+        empty("No provider accounts.")
       ) : inline ? (
         accounts.map((account) => (
           <MobileAccountBlock
@@ -199,12 +209,10 @@ function UsageList({
       ) : (
         <DropdownMenuSeparator />
       )}
-      {pulse.error && pulse.status ? (
-        <div className="sidebar-usage-empty">{pulse.error}</div>
-      ) : null}
+      {pulse.error && pulse.status ? empty(pulse.error) : null}
       <UsageActions
-        checkLabel={pulse.checkingIds.size > 0 ? "Checking…" : "Check"}
-        snapshotLabel={pulse.snapshotting ? "Saving…" : "Snapshot"}
+        checkLabel={pulse.checkingIds.size > 0 ? "Checking…" : "Check all"}
+        snapshotLabel={pulse.snapshotting ? "Saving…" : "Save snapshot"}
         checkDisabled={pulse.checkingIds.size > 0}
         snapshotDisabled={pulse.snapshotting}
         onCheck={() => void pulse.checkAll()}
@@ -239,11 +247,7 @@ function DesktopAccountSubmenu({
         </span>
         <AccountUsageSummary account={account} />
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent
-        className="sidebar-usage-detail"
-        sideOffset={6}
-        collisionPadding={8}
-      >
+      <DropdownMenuSubContent className="sidebar-usage-detail">
         <AccountDetail
           account={account}
           status={status}
@@ -447,9 +451,10 @@ function AccountDetail({
           ))}
         </>
       )}
+      {menuActions && <DropdownMenuSeparator />}
       <UsageActions
-        checkLabel={checking || account.usage.inFlight ? "Checking…" : "Check"}
-        snapshotLabel={snapshotting ? "Saving…" : "Snapshot"}
+        checkLabel={checking || account.usage.inFlight ? "Checking…" : "Check now"}
+        snapshotLabel={snapshotting ? "Saving…" : "Save snapshot"}
         checkDisabled={checking || account.usage.inFlight}
         snapshotDisabled={snapshotting}
         onCheck={onCheck}
@@ -567,49 +572,52 @@ function UsageActions({
   readonly menu?: boolean;
 }): React.JSX.Element {
   if (menu) {
+    // Menu rows keep the menu open so the result shows in place.
     return (
-      <div className="sidebar-usage-actions">
+      <>
         <DropdownMenuItem
-          className="sidebar-usage-action"
           disabled={checkDisabled}
           onSelect={(event) => {
             event.preventDefault();
             onCheck();
           }}
         >
+          <RefreshCw aria-hidden="true" />
           {checkLabel}
         </DropdownMenuItem>
         <DropdownMenuItem
-          className="sidebar-usage-action"
           disabled={snapshotDisabled}
           onSelect={(event) => {
             event.preventDefault();
             onSnapshot();
           }}
         >
+          <Camera aria-hidden="true" />
           {snapshotLabel}
         </DropdownMenuItem>
-      </div>
+      </>
     );
   }
   return (
     <div className="sidebar-usage-actions">
-      <button
-        type="button"
+      <Button
+        variant="outline"
         disabled={checkDisabled}
         onPointerDown={(event) => event.preventDefault()}
         onClick={onCheck}
       >
+        <RefreshCw aria-hidden="true" />
         {checkLabel}
-      </button>
-      <button
-        type="button"
+      </Button>
+      <Button
+        variant="outline"
         disabled={snapshotDisabled}
         onPointerDown={(event) => event.preventDefault()}
         onClick={onSnapshot}
       >
+        <Camera aria-hidden="true" />
         {snapshotLabel}
-      </button>
+      </Button>
     </div>
   );
 }

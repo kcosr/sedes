@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type {
   NotificationEventKind,
   NotificationSettings,
@@ -9,10 +9,19 @@ import {
   useNotificationSettings,
 } from "../stores/NotificationSettingsStore.js";
 import { Button } from "@client/components/ui/button";
+import { Callout } from "@client/components/ui/callout";
 import { Checkbox } from "@client/components/ui/checkbox";
 import { Input } from "@client/components/ui/input";
 import { Label } from "@client/components/ui/label";
 import { Textarea } from "@client/components/ui/textarea";
+import { SaveBar } from "./settings/SaveBar.js";
+import {
+  SettingsActionRow,
+  SettingsField,
+  SwitchField,
+} from "./settings/SettingsField.js";
+import { SettingsPage } from "./settings/SettingsPage.js";
+import { SettingsSection } from "./settings/SettingsSection.js";
 
 const eventOptions: ReadonlyArray<{
   value: NotificationEventKind;
@@ -78,6 +87,10 @@ interface Draft {
   argumentsText: string;
   timeout: string;
 }
+type TestResult =
+  | { readonly tone: "success"; readonly message: string }
+  | { readonly tone: "danger"; readonly message: string };
+
 function draftFrom(settings: NotificationSettings): Draft {
   return {
     settings,
@@ -85,6 +98,27 @@ function draftFrom(settings: NotificationSettings): Draft {
     timeout: String(settings.timeoutSeconds),
   };
 }
+
+function sortedKey(values: readonly string[]): string {
+  return [...values].sort().join(" ");
+}
+
+/** Whether the draft differs from the saved settings in anything it can save. */
+function draftChanged(draft: Draft, saved: NotificationSettings): boolean {
+  const base = draftFrom(saved);
+  return (
+    draft.settings.enabled !== saved.enabled ||
+    draft.settings.scriptPath !== saved.scriptPath ||
+    draft.argumentsText !== base.argumentsText ||
+    draft.timeout !== base.timeout ||
+    sortedKey(draft.settings.events) !== sortedKey(saved.events) ||
+    sortedKey(draft.settings.assistantResultPhases) !==
+      sortedKey(saved.assistantResultPhases)
+  );
+}
+
+class TimeoutInputError extends Error {}
+
 export function NotificationSettingsPage({
   store,
 }: {
@@ -92,21 +126,26 @@ export function NotificationSettingsPage({
 }): React.JSX.Element {
   const state = useNotificationSettings(store);
   const [draft, setDraft] = useState<Draft>();
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [timeoutError, setTimeoutError] = useState("");
+  const [savedAt, setSavedAt] = useState<number>();
+  const [testResult, setTestResult] = useState<TestResult>();
   const [testing, setTesting] = useState(false);
+  const timeoutInput = useRef<HTMLInputElement>(null);
+  const phasesLabel = useId();
   useEffect(() => {
     void store.refresh();
   }, [store]);
   useEffect(() => {
     if (state.settings && !draft) setDraft(draftFrom(state.settings));
   }, [draft, state.settings]);
-  const patch = (change: Partial<NotificationSettings>) => {
-    setNotice("");
-    setDraft((value) =>
-      value ? { ...value, settings: { ...value.settings, ...change } } : value,
-    );
+  const edit = (next: (value: Draft) => Draft) => {
+    setSaveError("");
+    setTestResult(undefined);
+    setDraft((value) => (value ? next(value) : value));
   };
+  const patch = (change: Partial<NotificationSettings>) =>
+    edit((value) => ({ ...value, settings: { ...value.settings, ...change } }));
   const scriptInput = () => {
     if (!draft) throw new Error("Notification settings are still loading.");
     const timeoutSeconds = Number(draft.timeout);
@@ -115,7 +154,7 @@ export function NotificationSettingsPage({
       timeoutSeconds < 1 ||
       timeoutSeconds > 300
     )
-      throw new Error(
+      throw new TimeoutInputError(
         "Timeout must be a whole number between 1 and 300 seconds.",
       );
     return {
@@ -125,10 +164,25 @@ export function NotificationSettingsPage({
       timeoutSeconds,
     };
   };
+  const invalidTimeout = (cause: unknown): boolean => {
+    if (!(cause instanceof TimeoutInputError)) return false;
+    setTimeoutError(cause.message);
+    timeoutInput.current?.focus();
+    return true;
+  };
+  const reload = async () => {
+    await store.refresh();
+    const latest = store.getSnapshot().settings;
+    if (!latest) return;
+    setDraft(draftFrom(latest));
+    setSaveError("");
+    setTimeoutError("");
+    setTestResult(undefined);
+  };
   const save = async () => {
     if (!draft) return;
-    setError("");
-    setNotice("");
+    setSaveError("");
+    setTestResult(undefined);
     try {
       const result = await store.save({
         ...scriptInput(),
@@ -138,9 +192,10 @@ export function NotificationSettingsPage({
         expectedRevision: draft.settings.revision,
       });
       setDraft(draftFrom(result));
-      setNotice("Notification settings saved.");
+      setSavedAt(Date.now());
     } catch (cause) {
-      setError(
+      if (invalidTimeout(cause)) return;
+      setSaveError(
         cause instanceof ApiError && cause.code === "conflict"
           ? "Notification settings changed in another session. Reload saved settings and review them before saving again."
           : errorMessage(cause),
@@ -148,232 +203,247 @@ export function NotificationSettingsPage({
     }
   };
   const test = async () => {
-    setError("");
-    setNotice("");
+    setTestResult(undefined);
     setTesting(true);
     try {
       const result = await store.test(scriptInput());
-      if (result.success)
-        setNotice("Test notification script completed successfully.");
-      else
-        setError(
-          [
-            result.error ??
-              (result.timedOut
-                ? "Test notification script timed out."
-                : `Test notification script failed (exit ${result.exitCode ?? "unknown"}).`),
-            result.stderr,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        );
+      setTestResult(
+        result.success
+          ? {
+              tone: "success",
+              message: "Test notification script completed successfully.",
+            }
+          : {
+              tone: "danger",
+              message: [
+                result.error ??
+                  (result.timedOut
+                    ? "Test notification script timed out."
+                    : `Test notification script failed (exit ${result.exitCode ?? "unknown"}).`),
+                result.stderr,
+              ]
+                .filter(Boolean)
+                .join("\n"),
+            },
+      );
     } catch (cause) {
-      setError(errorMessage(cause));
+      if (!invalidTimeout(cause)) {
+        setTestResult({ tone: "danger", message: errorMessage(cause) });
+      }
     } finally {
       setTesting(false);
     }
   };
+  const description =
+    "Run a script on the Sedes server when selected events occur. Settings apply across your clients.";
   if (!draft)
     return (
-      <div className="settings-general-page">
-        <h3 className="settings-page-title">Notifications</h3>
+      <SettingsPage title="Notifications" description={description}>
         {state.error ? (
-          <>
-            <p role="alert">{state.error}</p>
-            <Button onClick={() => void store.refresh()}>Retry</Button>
-          </>
+          <Callout
+            tone="danger"
+            role="alert"
+            action={
+              <Button variant="outline" size="sm" onClick={() => void store.refresh()}>
+                Retry
+              </Button>
+            }
+          >
+            {state.error}
+          </Callout>
         ) : (
-          <p role="status">Loading notification settings…</p>
+          <p className="settings-loading" role="status">
+            Loading notification settings…
+          </p>
         )}
-      </div>
+      </SettingsPage>
     );
   const pending = state.pending || testing;
-  const changedElsewhere =
-    state.settings && state.settings.revision !== draft.settings.revision;
+  const saved = state.settings;
+  const changedElsewhere = saved && saved.revision !== draft.settings.revision;
+  const dirty = Boolean(saved && draftChanged(draft, saved));
   return (
-    <div className="settings-general-page notification-settings-page">
-      <h3 className="settings-page-title">Notifications</h3>
-      <p className="settings-row-description">
-        Run a script on the Sedes server when selected events occur. Settings
-        apply across your clients.
-      </p>
+    <SettingsPage title="Notifications" description={description}>
       {state.settings?.silenced ? (
-        <p className="notification-silenced-status" role="status">
-          Notifications silenced. Use the bell in the navigation bar to resume.
-          Resuming sends only new events.
-        </p>
+        <Callout tone="info" role="status" title="Notifications silenced">
+          Use the bell in the navigation bar to resume. Resuming sends only new
+          events.
+        </Callout>
       ) : null}
-      <div className="settings-row">
-        <Label htmlFor="notifications-enabled">Enable notifications</Label>
-        <Checkbox
+      {changedElsewhere ? (
+        <Callout
+          tone="warning"
+          role="status"
+          title="Saved settings changed"
+          action={
+            <Button variant="outline" size="sm" disabled={pending} onClick={() => void reload()}>
+              Reload saved settings
+            </Button>
+          }
+        >
+          Reload them before saving to avoid overwriting another change.
+        </Callout>
+      ) : null}
+      <SettingsSection title="Delivery" card>
+        <SwitchField
           id="notifications-enabled"
+          label="Enable notifications"
+          description="Run the script below for the selected events."
           checked={draft.settings.enabled}
           disabled={pending}
-          onCheckedChange={(checked) => patch({ enabled: checked === true })}
+          onCheckedChange={(enabled) => patch({ enabled })}
         />
-      </div>
-      <fieldset className="notification-settings-fields" disabled={pending}>
-        <legend>Delivery</legend>
-        <Label htmlFor="notification-script">Server script path</Label>
-        <Input
-          id="notification-script"
-          value={draft.settings.scriptPath}
-          placeholder="/usr/local/bin/sedes-notify"
-          onChange={(event) => patch({ scriptPath: event.target.value })}
-        />
-        <Label htmlFor="notification-arguments">Arguments (one per line)</Label>
-        <Textarea
+        <SettingsField id="notification-script" label="Server script path">
+          <Input
+            value={draft.settings.scriptPath}
+            placeholder="/usr/local/bin/sedes-notify"
+            disabled={pending}
+            spellCheck={false}
+            onChange={(event) => patch({ scriptPath: event.target.value })}
+          />
+        </SettingsField>
+        <SettingsField
           id="notification-arguments"
-          rows={3}
-          value={draft.argumentsText}
-          onChange={(event) => {
-            setNotice("");
-            setDraft({ ...draft, argumentsText: event.target.value });
-          }}
-          aria-describedby="notification-arguments-help"
-        />
-        <p
-          id="notification-arguments-help"
-          className="settings-row-description"
+          label="Arguments (one per line)"
+          description="Each line is one literal argument. Do not add shell quotes. Event details arrive as JSON on standard input."
         >
-          Each line is one literal argument. Do not add shell quotes. Event
-          details arrive as JSON on standard input.
-        </p>
-        <Label htmlFor="notification-timeout">Timeout (seconds)</Label>
-        <Input
+          <Textarea
+            rows={3}
+            value={draft.argumentsText}
+            disabled={pending}
+            spellCheck={false}
+            onChange={(event) => {
+              const argumentsText = event.target.value;
+              edit((value) => ({ ...value, argumentsText }));
+            }}
+          />
+        </SettingsField>
+        <SettingsField
           id="notification-timeout"
-          type="number"
-          min={1}
-          max={300}
-          step={1}
-          value={draft.timeout}
-          onChange={(event) => {
-            setNotice("");
-            setDraft({ ...draft, timeout: event.target.value });
-          }}
+          label="Timeout (seconds)"
+          description="Between 1 and 300 seconds."
+          error={timeoutError || undefined}
+        >
+          <Input
+            ref={timeoutInput}
+            type="number"
+            min={1}
+            max={300}
+            step={1}
+            value={draft.timeout}
+            disabled={pending}
+            onChange={(event) => {
+              const timeout = event.target.value;
+              setTimeoutError("");
+              edit((value) => ({ ...value, timeout }));
+            }}
+          />
+        </SettingsField>
+        <SettingsActionRow
+          title="Test the script"
+          description="Runs the values above without saving, even when notifications are disabled or silenced. It sends sample metadata only, without assistant response text."
+          actions={
+            <Button
+              variant="outline"
+              disabled={pending || !draft.settings.scriptPath.trim()}
+              onClick={() => void test()}
+            >
+              {testing ? "Testing…" : "Send test notification"}
+            </Button>
+          }
         />
-      </fieldset>
-      <fieldset className="notification-settings-fields" disabled={pending}>
-        <legend>Events</legend>
-        {eventOptions.map((option) => (
-          <div className="settings-row notification-event" key={option.value}>
-            <div className="notification-event-heading">
-              <div className="settings-row-text">
-                <Label htmlFor={`notification-${option.value}`}>
-                  {option.label}
-                </Label>
-                <p className="settings-row-description">{option.description}</p>
-              </div>
-              <Checkbox
-                id={`notification-${option.value}`}
-                checked={draft.settings.events.includes(option.value)}
-                disabled={pending}
-                onCheckedChange={(checked) =>
-                  patch({
-                    events:
-                      checked === true
-                        ? [...draft.settings.events, option.value]
-                        : draft.settings.events.filter(
-                            (value) => value !== option.value,
-                          ),
-                  })
-                }
-              />
-            </div>
-            {option.value === "turn.completed" ? (
-              <div className="notification-event-option">
-                <span className="notification-result-label" id="notification-response-text-label">
-                  Response text
-                </span>
+        {testResult ? (
+          <Callout
+            tone={testResult.tone}
+            role={testResult.tone === "danger" ? "alert" : "status"}
+            className="notification-test-result"
+          >
+            {testResult.message}
+          </Callout>
+        ) : null}
+      </SettingsSection>
+      <SettingsSection
+        title="Events"
+        description="The events that run the script."
+        card
+      >
+        {eventOptions.map((option) => {
+          const selected = draft.settings.events.includes(option.value);
+          return (
+            <SwitchField
+              key={option.value}
+              id={`notification-${option.value}`}
+              label={option.label}
+              description={option.description}
+              checked={selected}
+              disabled={pending}
+              onCheckedChange={(checked) =>
+                patch({
+                  events: checked
+                    ? [...draft.settings.events, option.value]
+                    : draft.settings.events.filter(
+                        (value) => value !== option.value,
+                      ),
+                })
+              }
+            >
+              {option.value === "turn.completed" ? (
                 <div
-                  className="notification-result-phases"
+                  className="settings-choice-group"
                   role="group"
-                  aria-labelledby="notification-response-text-label"
+                  aria-labelledby={phasesLabel}
                 >
-                  {assistantResultPhaseOptions.map(({ value, label }) => (
-                    <div className="notification-result-phase" key={value}>
-                      <Checkbox
-                        id={`notification-assistant-${value}`}
-                        checked={draft.settings.assistantResultPhases.includes(
-                          value,
-                        )}
-                        disabled={
-                          pending ||
-                          !draft.settings.events.includes("turn.completed")
-                        }
-                        onCheckedChange={(checked) =>
-                          patch({
-                            assistantResultPhases: assistantResultPhaseOptions
-                              .map((option) => option.value)
-                              .filter((phase) =>
-                                phase === value
-                                  ? checked === true
-                                  : draft.settings.assistantResultPhases.includes(
-                                      phase,
-                                    ),
-                              ),
-                          })
-                        }
-                      />
-                      <Label htmlFor={`notification-assistant-${value}`}>
-                        {label}
-                      </Label>
-                    </div>
-                  ))}
+                  <span id={phasesLabel} className="settings-choice-group-label">
+                    Response text
+                  </span>
+                  <div className="settings-choice-group-options">
+                    {assistantResultPhaseOptions.map(({ value, label }) => (
+                      <div className="settings-choice" key={value}>
+                        <Checkbox
+                          id={`notification-assistant-${value}`}
+                          checked={draft.settings.assistantResultPhases.includes(value)}
+                          disabled={pending || !selected}
+                          onCheckedChange={(checked) =>
+                            patch({
+                              assistantResultPhases: assistantResultPhaseOptions
+                                .map((phase) => phase.value)
+                                .filter((phase) =>
+                                  phase === value
+                                    ? checked === true
+                                    : draft.settings.assistantResultPhases.includes(phase),
+                                ),
+                            })
+                          }
+                        />
+                        <Label htmlFor={`notification-assistant-${value}`}>
+                          {label}
+                        </Label>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ) : null}
-          </div>
-        ))}
-      </fieldset>
-      {changedElsewhere ? (
-        <p role="status">
-          Saved settings changed. Reload them before saving to avoid overwriting
-          another change.
-        </p>
-      ) : null}
-      <div className="notification-settings-actions">
-        <Button
-          disabled={pending || Boolean(changedElsewhere)}
-          onClick={() => void save()}
-        >
-          Save notifications
-        </Button>
-        <Button
-          variant="outline"
-          disabled={pending || !draft.settings.scriptPath.trim()}
-          onClick={() => void test()}
-        >
-          {testing ? "Testing…" : "Send test notification"}
-        </Button>
-        <Button
-          variant="ghost"
-          disabled={pending}
-          onClick={async () => {
-            await store.refresh();
-            const latest = store.getSnapshot().settings;
-            if (latest) {
-              setDraft(draftFrom(latest));
-              setError("");
-              setNotice("");
-            }
-          }}
-        >
-          Reload saved settings
-        </Button>
-      </div>
-      <p className="settings-row-description">
-        The test uses the values above without saving and runs even when
-        notifications are disabled or silenced. It sends sample metadata only,
-        without assistant response text.
-      </p>
-      {error ? (
-        <p role="alert" className="notification-test-error">
-          {error}
-        </p>
-      ) : null}
-      {notice ? <p role="status">{notice}</p> : null}
-    </div>
+              ) : null}
+            </SwitchField>
+          );
+        })}
+      </SettingsSection>
+      <SaveBar
+        dirty={dirty}
+        saving={state.pending && !testing}
+        savedAt={savedAt}
+        error={saveError || undefined}
+        saveLabel="Save notifications"
+        saveDisabled={Boolean(changedElsewhere) || testing}
+        onCancel={() => {
+          if (!saved) return;
+          setDraft(draftFrom(saved));
+          setSaveError("");
+          setTimeoutError("");
+          setTestResult(undefined);
+        }}
+        onSave={() => void save()}
+      />
+    </SettingsPage>
   );
 }
 function errorMessage(cause: unknown): string {

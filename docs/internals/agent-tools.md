@@ -36,10 +36,10 @@ backends must also follow the
 
 Agent-tool policy is principal-owned application state attached to a thread,
 not provider session state. Ordinary Custom threads start disabled with no
-selected IDs. A Saved Agent may
-provide the complete initial tool policy, and the thread menu's **New** action
-copies the source thread's complete policy. Both paths create independent thread
-state, so later edits to the Agent or source thread do not alter the new thread.
+selected IDs. A Saved Agent may provide the complete initial tool policy, and
+the thread menu's **New with same settings** action copies the source thread's
+complete policy. Both paths create independent thread state, so later edits to
+the Agent or source thread do not alter the new thread.
 
 UI groups and select-all controls are conveniences. Durable policy stores the
 master flag, exact enabled IDs, one thread-wide environment-access rule,

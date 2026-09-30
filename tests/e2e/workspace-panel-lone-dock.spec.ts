@@ -20,7 +20,10 @@ test("Files panel instance dock menu responds to mouse clicks", async ({
   });
 
   await page.getByRole("button", { name: "Files panel actions" }).click();
-  await page.getByRole("menuitem", { name: "Dock bottom" }).click();
+  await expect(
+    page.getByRole("menuitemradio", { name: "Right", exact: true }),
+  ).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("menuitemradio", { name: "Bottom", exact: true }).click();
   await expect(
     page.locator(
       '[data-testid="workspace-panel-split"][data-orientation="column"]',
@@ -28,7 +31,10 @@ test("Files panel instance dock menu responds to mouse clicks", async ({
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Files panel actions" }).click();
-  await page.getByRole("menuitem", { name: "Dock right" }).click();
+  await expect(
+    page.getByRole("menuitemradio", { name: "Bottom", exact: true }),
+  ).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("menuitemradio", { name: "Right", exact: true }).click();
   await expect(
     page.locator(
       '[data-testid="workspace-panel-split"][data-orientation="row"]',

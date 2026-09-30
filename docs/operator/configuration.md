@@ -140,10 +140,10 @@ copied over the schema-11 bootstrap. Fresh installations use Settings.
 
 ## Environment variables
 
-Sedes startup variables below configure the server itself. Separately,
-**Settings → Environments / Backends → Environment variables** configures
-variables supplied to tools or provider processes; those are principal-owned
-and are described in
+Sedes startup variables below configure the server itself. Separately, the
+**Environment variables** section of an environment or backend editor in
+**Settings** configures variables supplied to tools or provider processes;
+those are principal-owned and are described in
 [Tool and provider environment variables](#tool-and-provider-environment-variables).
 
 ### Core process
@@ -306,13 +306,18 @@ unsupported topologies, and a default that is not enabled.
 
 ### Execution environments
 
-Use **Settings → Environments → Add environment** to add a local or SSH
-environment and its exact workspace roots. Open an environment to browse its
-backends or select **Activity & diagnostics** for runtime controls. The global
-**Backends** inventory also groups backends by environment and supports search
-and environment, provider, and status filters. At most one local environment is supported. Local isolation
-policy can admit Bubblewrap's `isolated` network profile, or explicitly include
-`execution_host`; direct execution is separate from that Linux-only sandbox.
+Use **Settings → Environments → Add environment** to add a **Local machine**
+or **SSH host** environment and its exact workspace roots. Open an environment
+for its **Overview**, **Backends**, and **Activity** tabs; its header holds the
+runtime controls, and **Activity** shows saved and applied revisions and other
+technical details. The **Backends** page also groups backends by environment
+and supports search and environment, provider, and status filters. Each
+environment, backend, and editor has its own address under
+`/settings/environments/` or `/settings/backends/`, as listed in
+[Settings](../user/settings.md#list-and-detail). At most one local environment
+is supported. Local isolation policy can admit Bubblewrap's `isolated` network
+profile, or explicitly include `execution_host`; direct execution is separate
+from that Linux-only sandbox.
 A missing sandbox does not turn an existing isolated thread into direct work.
 
 An SSH environment selects one OpenSSH host alias and remote workspace roots.
@@ -482,10 +487,11 @@ never edit the Sedes server's global environment.
 ### Web search provider
 
 Sedes exposes one provider-neutral `research.web_search` agent tool. Its local
-Grok CLI configuration is principal-owned database state, managed with execution
-settings. A null provider selection disables it. When configured, optional
-`grokHome` is an absolute provider home; native authentication remains outside
-Sedes's database. This auxiliary provider does not create a Grok conversation
+Grok CLI configuration is principal-owned database state, managed with
+execution settings as **Grok CLI research** under **Defaults** on **Settings →
+Backends**. A null provider selection (the switch off) disables it. When
+configured, optional `grokHome` is an absolute provider home; native
+authentication remains outside Sedes's database. This auxiliary provider does not create a Grok conversation
 backend or gain another environment's authority.
 
 Research subprocesses receive a curated environment. They never receive

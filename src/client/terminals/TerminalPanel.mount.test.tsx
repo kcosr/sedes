@@ -26,6 +26,7 @@ const fixture = vi.hoisted(() => ({
   hasFocus: vi.fn(() => true),
   mobile: false,
   setCursorBlink: vi.fn(),
+  setColorScheme: vi.fn(),
   resizeObservers: [] as TestResizeObserver[],
 }));
 
@@ -38,7 +39,7 @@ vi.mock("./ghostty-emulator.js", () => ({
     fit = fixture.fit;
     refreshMetrics = fixture.refreshMetrics;
     resize = fixture.emulatorResize;
-    setColorScheme() {}
+    setColorScheme = fixture.setColorScheme;
     setCursorBlink = fixture.setCursorBlink;
     setFontSize = fixture.setFontSize;
     focus = fixture.focus;
@@ -118,6 +119,7 @@ beforeEach(() => {
   fixture.find.mockReset();
   fixture.clearSelection.mockReset();
   fixture.focus.mockReset();
+  fixture.setColorScheme.mockReset();
   fixture.hasFocus.mockReset().mockReturnValue(true);
   fixture.mobile = false;
   fixture.resizeObservers.length = 0;
@@ -557,15 +559,41 @@ describe("TerminalPanel renderer lifecycle", () => {
     expect(fixture.find).toHaveBeenCalledTimes(1);
   });
 
-  it("remounts and replays through a fresh Ghostty terminal when the theme changes", async () => {
+  it("recolors the mounted terminal on a theme change without re-attaching", async () => {
+    setAppearance("light");
     fixture.mount.mockResolvedValue({ columns: 80, rows: 24 });
-    render(<TerminalPanel terminal={terminal} producerId="producer" api={api} visible />);
+    const { container } = render(
+      <TerminalPanel terminal={terminal} producerId="producer" api={api} visible />,
+    );
     await waitFor(() => expect(fixture.connect).toHaveBeenCalledOnce());
+    act(() => fixture.sessionListeners[0]?.(readySnapshot));
+    const emulator = container.querySelector(".terminal-panel-emulator");
+    expect(emulator).toHaveAttribute("data-restored", "true");
 
     act(() => setAppearance("dark"));
-    await waitFor(() => expect(fixture.connect).toHaveBeenCalledTimes(2));
-    expect(fixture.close).toHaveBeenCalledOnce();
-    expect(fixture.dispose).toHaveBeenCalled();
+
+    expect(fixture.setColorScheme).toHaveBeenLastCalledWith("dark");
+    // Re-attaching would hide the output until the server replayed it.
+    expect(emulator).toHaveAttribute("data-restored", "true");
+    expect(fixture.connect).toHaveBeenCalledOnce();
+    expect(fixture.close).not.toHaveBeenCalled();
+    expect(fixture.dispose).not.toHaveBeenCalled();
+    expect(fixture.mount).toHaveBeenCalledOnce();
+  });
+
+  it("applies the latest theme when it changes during async mount", async () => {
+    setAppearance("light");
+    let resolveMount!: (size: { columns: number; rows: number }) => void;
+    fixture.mount.mockReturnValue(new Promise((resolve) => { resolveMount = resolve; }));
+    render(<TerminalPanel terminal={terminal} producerId="producer" api={api} visible />);
+
+    act(() => setAppearance("dark"));
+    expect(fixture.setColorScheme).not.toHaveBeenCalled();
+    resolveMount({ columns: 80, rows: 24 });
+
+    await waitFor(() => expect(fixture.setColorScheme).toHaveBeenCalledWith("dark"));
+    expect(fixture.mount).toHaveBeenCalledOnce();
+    expect(fixture.connect).toHaveBeenCalledOnce();
   });
 
   it("updates cursor blinking without reconnecting the terminal", async () => {

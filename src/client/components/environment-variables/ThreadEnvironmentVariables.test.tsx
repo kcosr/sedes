@@ -14,7 +14,7 @@ describe("ThreadEnvironmentVariables", () => {
     } } };
     const getThreadEnvironmentVariables = vi.fn().mockResolvedValue(result);
     const onFork = vi.fn();
-    render(<ThreadEnvironmentVariables api={{ getThreadEnvironmentVariables } as unknown as ApiClient} threadId="thread-a" title="Build" onClose={vi.fn()} onFork={onFork} restoreFocus={vi.fn()} />);
+    render(<ThreadEnvironmentVariables api={{ getThreadEnvironmentVariables } as unknown as ApiClient} threadId="thread-a" title="Build" onClose={vi.fn()} onFork={onFork} returnFocusRef={{ current: null }} />);
     expect(await screen.findByText("false")).toBeVisible();
     expect(getThreadEnvironmentVariables).toHaveBeenCalledWith("thread-a", expect.any(AbortSignal));
     expect(screen.queryByLabelText("Value for CI")).toBeNull();
@@ -28,9 +28,24 @@ describe("ThreadEnvironmentVariables", () => {
 
   it("keeps unavailable forks disabled without hiding saved settings", async () => {
     const api = { getThreadEnvironmentVariables: vi.fn().mockResolvedValue({ editable: false, snapshot: { version: 1, layers: { environment: {}, backend: {}, agent: {}, thread: {} } } }) } as unknown as ApiClient;
-    render(<ThreadEnvironmentVariables api={api} threadId="thread-a" title="Build" onClose={vi.fn()} onFork={vi.fn()} forkUnavailableReason="No completed turn to fork." restoreFocus={vi.fn()} />);
+    render(<ThreadEnvironmentVariables api={api} threadId="thread-a" title="Build" onClose={vi.fn()} onFork={vi.fn()} forkUnavailableReason="No completed turn to fork." returnFocusRef={{ current: null }} />);
     expect(await screen.findByText("No user-supplied variables.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Fork with changes…" })).toBeDisabled();
     expect(screen.getByText("No completed turn to fork.")).toBeVisible();
+  });
+
+  it("loads and retries inside the editor's frame", async () => {
+    const snapshot = { editable: false, snapshot: { version: 1, layers: { environment: {}, backend: {}, agent: {}, thread: {} } } };
+    const getThreadEnvironmentVariables = vi.fn()
+      .mockRejectedValueOnce(new Error("Variables unavailable."))
+      .mockResolvedValueOnce(snapshot);
+    render(<ThreadEnvironmentVariables api={{ getThreadEnvironmentVariables } as unknown as ApiClient} threadId="thread-a" title="Build" onClose={vi.fn()} onFork={vi.fn()} returnFocusRef={{ current: null }} />);
+    const dialog = screen.getByRole("dialog", { name: "Environment variables" });
+    expect(dialog).toHaveAttribute("data-size", "lg");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Variables unavailable.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("No user-supplied variables.")).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Environment variables" })).toHaveAttribute("data-size", "lg");
   });
 });

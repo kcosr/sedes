@@ -57,7 +57,8 @@ from top to bottom.
   how to read recorded totals.
 - [Provider features](user/provider-features.md) — model controls, approvals,
   questions, agent tools, skills, and Codex-specific features.
-- [Settings](user/settings.md) — browser-local and principal-owned preferences.
+- [Settings](user/settings.md) — Settings navigation, environments, backends,
+  projects, Agents, and browser-local and principal-owned preferences.
 - [Troubleshooting](user/troubleshooting.md) — safe responses to common visible
   failures and uncertain outcomes.
 
@@ -101,6 +102,9 @@ from top to bottom.
   runtime ABI/glibc admission, and reproducible portable build procedure.
 - [Backend development](developer/backend-development.md) — concise backend
   module anatomy and workflow before entering the normative contract.
+- [UI design system](developer/ui-design-system.md) — tokens, the
+  reference-surface rule, primitives, dialogs and menus, the settings kit,
+  density, z layers, and style guardrails.
 - [E2E testing](developer/e2e-testing.md) — isolated coordinator scheduling,
   artifacts, timing baselines, and authoring rules.
 - [Debug diagnostics](developer/diagnostics.md) — implemented, bounded server

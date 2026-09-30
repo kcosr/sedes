@@ -14,6 +14,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   NormalizedThreadSnapshot,
@@ -286,6 +287,70 @@ function fixture(
   return { applicationStore, threadStore };
 }
 
+/** A header whose thread offers Model and Thinking settings. */
+function renderHeaderWithSettings() {
+  window.HTMLElement.prototype.scrollIntoView = vi.fn();
+  const perform = vi.fn(async () => undefined);
+  const { applicationStore, threadStore } = fixture(0);
+  Object.assign(threadStore, { perform });
+  const snapshot = makeSnapshot();
+  const withSettings = {
+    ...snapshot,
+    capabilities: {
+      ...snapshot.capabilities,
+      settings: [
+        {
+          id: "model",
+          label: { text: "Model" },
+          available: true,
+          requiredForFirstSubmission: true,
+          options: [
+            { value: "model-a", label: { text: "Model A" }, available: true },
+            { value: "model-b", label: { text: "Model B" }, available: true },
+          ],
+        },
+        {
+          id: "thinking_level",
+          label: { text: "Thinking" },
+          available: true,
+          requiredForFirstSubmission: false,
+          options: [
+            { value: "low", label: { text: "Low" }, available: true },
+            { value: "high", label: { text: "High" }, available: true },
+          ],
+        },
+      ],
+    },
+    settings: {
+      revision: 1,
+      values: [
+        { id: "model", desiredValue: "model-a", effectiveValue: "model-a", applicationState: "effective" },
+        { id: "thinking_level", desiredValue: "low", effectiveValue: "low", applicationState: "effective" },
+      ],
+    },
+  } as unknown as NormalizedThreadSnapshot;
+  render(
+    <ThreadHeader
+      store={threadStore}
+      applicationStore={applicationStore}
+      snapshot={withSettings}
+      connection="connected"
+      authoritative
+      forkAttempts={{}}
+      actionPending={false}
+      bookmarks={[]}
+      bookmarkRevision={0}
+      bookmarkStatus="ready"
+      pendingBookmarkTurnIds={[]}
+      onSelectBookmarkTurn={vi.fn()}
+      findOpen={false}
+      findButtonRef={{ current: null }}
+      onFindOpenChange={vi.fn()}
+    />,
+  );
+  return { perform };
+}
+
 function renderHeader({
   environmentCount = 0,
   environmentKind = "ssh",
@@ -361,6 +426,29 @@ function renderHeader({
   return { ...view, applicationStore, panelControls };
 }
 
+/** Opens the desktop Thread actions menu (Radix opens on pointer down). */
+async function openThreadActions(): Promise<HTMLElement> {
+  await userEvent.click(screen.getByRole("button", { name: "Thread actions" }));
+  return await screen.findByRole("menu", { name: "Thread actions" });
+}
+
+/** Visible row labels in order, without their trailing reasons or values. */
+function rowLabels(menu: HTMLElement): string[] {
+  return within(menu)
+    .getAllByRole("menuitem")
+    .map((row) =>
+      Array.from(row.childNodes)
+        .filter(
+          (node) =>
+            !(node instanceof Element) ||
+            node.getAttribute("data-slot")?.endsWith("-item-value") !== true,
+        )
+        .map((node) => node.textContent ?? "")
+        .join("")
+        .trim(),
+    );
+}
+
 describe("ThreadHeader panel chrome", () => {
   it("colors Chat by its environment only when environments are distinguishable", () => {
     renderHeader({ environmentCount: 2 });
@@ -423,6 +511,45 @@ describe("ThreadHeader panel chrome", () => {
     expect(specificActions?.compareDocumentPosition(commonActions!)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
+  });
+
+  it("passes the chat panel's dock edge to its Dock menu", async () => {
+    const { applicationStore, threadStore } = fixture(0);
+    render(
+      <ThreadHeader
+        store={threadStore}
+        applicationStore={applicationStore}
+        snapshot={makeSnapshot()}
+        connection="connected"
+        authoritative
+        forkAttempts={{}}
+        actionPending={false}
+        bookmarks={[]}
+        bookmarkRevision={0}
+        bookmarkStatus="ready"
+        pendingBookmarkTurnIds={[]}
+        onSelectBookmarkTurn={vi.fn()}
+        panelControls={{
+          onCollapse: vi.fn(),
+          onClose: vi.fn(),
+          onDock: vi.fn(),
+          dockEdge: "right",
+        }}
+        findOpen={false}
+        findButtonRef={{ current: null }}
+        onFindOpenChange={vi.fn()}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Chat panel actions" }),
+    );
+    const dock = await screen.findByRole("group", { name: "Dock" });
+    expect(
+      within(dock).getByRole("menuitemradio", { name: "Right" }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(
+      within(dock).getByRole("menuitemradio", { name: "Left" }),
+    ).toHaveAttribute("aria-checked", "false");
   });
 
   it("exposes find expanded state without application-level tools", () => {
@@ -533,6 +660,40 @@ describe("ThreadHeader panel chrome", () => {
     expect(settings).toBeVisible();
   });
 
+  it("gives the toolbar toggle to Thread actions on phones below 420px", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.includes("max-width: 819px") || query === "(max-width: 419px)",
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    const onFindOpenChange = vi.fn();
+    renderHeader({ automation: true, withPanelControls: true, onFindOpenChange });
+
+    const toolbar = screen.getByTestId("thread-controls");
+    expect(screen.queryByRole("button", { name: "Show thread toolbar" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Bookmarks" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Automation settings" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Collapse Chat panel" })).toBeVisible();
+    expect(toolbar).toHaveAttribute("hidden");
+
+    await userEvent.click(screen.getByRole("button", { name: "Thread actions" }));
+    const show = await screen.findByRole("menuitemcheckbox", { name: "Show thread toolbar" });
+    expect(show).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(show);
+    expect(toolbar).not.toHaveAttribute("hidden");
+    expect(within(toolbar).getByRole("button", { name: "Find in thread" })).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "Thread actions" }));
+    const hide = await screen.findByRole("menuitemcheckbox", { name: "Show thread toolbar" });
+    expect(hide).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(hide);
+    expect(toolbar).toHaveAttribute("hidden");
+    expect(onFindOpenChange).toHaveBeenCalledWith(false);
+  });
+
   it("reveals the narrow toolbar for a find request and closes find when collapsing it", () => {
     vi.stubGlobal(
       "matchMedia",
@@ -619,12 +780,14 @@ describe("ThreadHeader project context row", () => {
     expect(screen.queryByTestId("thread-target-context")).toBeNull();
     expect(document.querySelector(".thread-panel-brand")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    expect(screen.getByTestId("thread-settings-sheet")).toHaveTextContent("Execution target: Pi");
+    const sheet = screen.getByTestId("thread-settings-sheet");
+    expect(sheet).toHaveAccessibleName("Header thread");
+    expect(sheet).toHaveAccessibleDescription("sedes · Machine 1 · Pi");
     act(() => {
       viewport.height = window.innerHeight - 300;
       viewport.dispatchEvent(new Event("resize"));
     });
-    expect(screen.getByTestId("thread-settings-sheet").style.getPropertyValue("--thread-settings-keyboard-inset")).toBe("300px");
+    expect(sheet.style.getPropertyValue("--keyboard-inset")).toBe("300px");
   });
 
   it("exposes the thread worktree without discovering until the picker opens", async () => {
@@ -690,20 +853,27 @@ describe("ThreadHeader project context row", () => {
     expect(project).toHaveAttribute("title", "sedes · Pi");
   });
 
-  it("omits Local from draft workspace choices while retaining remote qualifiers", () => {
+  it("omits Local from draft workspace choices while retaining remote qualifiers", async () => {
+    const user = userEvent.setup();
     renderHeader({
       backingState: "unbound",
       environmentCount: 2,
       environmentKind: "local",
     });
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    fireEvent.click(screen.getByRole("combobox", { name: "Draft workspace" }));
+    await openThreadActions();
+    // A workspace label is long by nature: the row shows no inline value,
+    // and the current workspace is the checked row inside.
+    const draftWorkspace = screen.getByRole("menuitem", { name: "Draft workspace" });
+    expect(draftWorkspace).toHaveTextContent(/^Draft workspace$/u);
+    expect(draftWorkspace.querySelector('[data-slot$="item-value"]')).toBeNull();
+    await user.click(draftWorkspace);
 
-    const localChoices = screen.getAllByRole("option");
+    const localChoices = await screen.findAllByRole("menuitemradio");
     expect(localChoices.map(({ textContent }) => textContent)).toEqual([
       "sedes",
       "second",
     ]);
+    expect(localChoices[0]).toHaveAttribute("aria-checked", "true");
 
     cleanup();
     renderHeader({
@@ -711,11 +881,13 @@ describe("ThreadHeader project context row", () => {
       environmentCount: 2,
       environmentKind: "ssh",
     });
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    fireEvent.click(screen.getByRole("combobox", { name: "Draft workspace" }));
+    await openThreadActions();
+    await user.click(screen.getByRole("menuitem", { name: /Draft workspace/ }));
 
     expect(
-      screen.getAllByRole("option").map(({ textContent }) => textContent),
+      (await screen.findAllByRole("menuitemradio")).map(
+        ({ textContent }) => textContent,
+      ),
     ).toEqual(["sedes · Machine 1", "second · Machine 1"]);
   });
 
@@ -788,24 +960,22 @@ describe("ThreadHeader agent tools", () => {
   it("opens the dedicated dialog from one summarized menu row and returns focus", async () => {
     renderHeader();
     const actions = screen.getByRole("button", { name: "Thread actions" });
-    fireEvent.click(actions);
-    expect(screen.getByTestId("thread-actions-menu")).toHaveClass(
-      "thread-actions-popover",
-    );
-    const row = screen.getByRole("button", { name: /Agent tools…\s*Off/ });
+    const menu = await openThreadActions();
+    expect(menu).toHaveAttribute("data-slot", "dropdown-menu-content");
+    const row = within(menu).getByRole("menuitem", { name: "Agent tools… Off" });
     expect(row).toBeVisible();
-    expect(row.querySelector(".agent-tool-menu-label")).toHaveTextContent(
-      "Agent tools…",
-    );
-    expect(row.querySelector(".agent-tool-menu-summary")).toHaveTextContent(
-      "Off",
-    );
+    expect(row).toHaveTextContent("Agent tools…");
     expect(
-      screen.queryByRole("checkbox", { name: "Enable agent tools" }),
+      within(row).getByText("Off"),
+    ).toHaveAttribute("data-slot", "dropdown-menu-item-description");
+    expect(
+      screen.queryByRole("switch", { name: "Enable agent tools" }),
     ).toBeNull();
 
-    fireEvent.click(row);
-    expect(screen.queryByTestId("thread-actions-menu")).toBeNull();
+    await userEvent.click(row);
+    await waitFor(() =>
+      expect(screen.queryByRole("menu", { name: "Thread actions" })).toBeNull(),
+    );
     expect(screen.getByRole("dialog", { name: "Agent tools" })).toBeVisible();
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(actions).toHaveFocus());
@@ -825,24 +995,23 @@ describe("ThreadHeader action menu", () => {
     renderHeader({ runState: "reconciling" });
 
     fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    const sheet = screen.getByRole("dialog", { name: "Thread settings" });
+    const sheet = screen.getByRole("dialog", { name: "Header thread" });
     expect(sheet).toHaveAttribute("data-state", "open");
-    expect(sheet).toHaveTextContent("Header thread");
-    expect(within(sheet).getByTestId("thread-configuration")).toBeVisible();
-    expect(screen.queryByTestId("thread-actions-menu")).toBeNull();
-    const labels = within(sheet)
-      .getAllByRole("button")
-      .map((button) => button.textContent?.trim());
+    expect(sheet).toHaveAttribute("data-menu-sheet");
+    expect(sheet).toHaveAttribute("data-testid", "thread-settings-sheet");
+    expect(screen.queryByRole("menu", { name: "Thread actions" })).toBeVisible();
+    const labels = rowLabels(sheet);
     expect(labels.indexOf("Session stats")).toBeLessThan(
       labels.indexOf("Force reset…"),
     );
+    expect(labels.at(-1)).toBe("Force reset…");
 
     fireEvent.click(
-      within(sheet).getByRole("button", { name: "Force reset…" }),
+      within(sheet).getByRole("menuitem", { name: "Force reset…" }),
     );
     await waitFor(() =>
       expect(
-        screen.queryByRole("dialog", { name: "Thread settings" }),
+        screen.queryByRole("dialog", { name: "Header thread" }),
       ).not.toBeInTheDocument(),
     );
     expect(
@@ -850,44 +1019,142 @@ describe("ThreadHeader action menu", () => {
     ).toBeVisible();
   });
 
-  it("matches the sidebar lifecycle, creation, and destructive section order", () => {
+  it("shows the thread settings as sheet rows and hands the model to its picker", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.includes("pointer: coarse"),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    const { perform } = renderHeaderWithSettings();
+    const trigger = screen.getByRole("button", { name: "Thread actions" });
+    fireEvent.click(trigger);
+    const sheet = screen.getByRole("dialog", { name: "Header thread" });
+    const thinking = within(sheet).getByRole("menuitem", { name: /Thinking/ });
+    expect(thinking).toHaveTextContent("Low");
+    fireEvent.click(thinking);
+    const high = await within(sheet).findByRole("menuitemradio", { name: "High" });
+    expect(
+      within(sheet).getByRole("menuitemradio", { name: "Low" }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(high);
+    expect(perform).toHaveBeenCalledWith({
+      action: "set_setting",
+      settingId: "thinking_level",
+      value: "high",
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Header thread" })).toBeNull(),
+    );
+
+    fireEvent.click(trigger);
+    const model = within(
+      screen.getByRole("dialog", { name: "Header thread" }),
+    ).getByRole("menuitem", { name: /Model/ });
+    expect(model).toHaveAttribute("aria-haspopup", "dialog");
+    expect(model).toHaveTextContent("Model A");
+    fireEvent.click(model);
+    const picker = await screen.findByRole("dialog", { name: "Choose model" });
+    expect(screen.queryByRole("dialog", { name: "Header thread" })).toBeNull();
+    fireEvent.click(within(picker).getByRole("option", { name: "Model B" }));
+    expect(perform).toHaveBeenCalledWith({
+      action: "set_setting",
+      settingId: "model",
+      value: "model-b",
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Choose model" })).toBeNull(),
+    );
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("shows the thread settings in the desktop menu, with the model picker as a dialog", async () => {
+    const { perform } = renderHeaderWithSettings();
+    const trigger = screen.getByRole("button", { name: "Thread actions" });
+    // Model and Thinking lead the menu even though the composer also offers them.
+    const menu = await openThreadActions();
+    expect(rowLabels(menu).slice(0, 2)).toEqual(["Model", "Thinking"]);
+    const thinking = within(menu).getByRole("menuitem", { name: /Thinking/ });
+    expect(thinking).toHaveTextContent("Low");
+    expect(thinking).toHaveAttribute("aria-haspopup", "menu");
+    await userEvent.click(thinking);
+    const levels = await screen.findByRole("menu", { name: /Thinking/ });
+    expect(within(levels).getByRole("menuitemradio", { name: "Low" })).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(within(levels).getByRole("menuitemradio", { name: "High" }));
+    expect(perform).toHaveBeenCalledWith({
+      action: "set_setting",
+      settingId: "thinking_level",
+      value: "high",
+    });
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "Thread actions" })).toBeNull());
+
+    const model = within(await openThreadActions()).getByRole("menuitem", { name: /Model/ });
+    expect(model).toHaveAttribute("aria-haspopup", "dialog");
+    await userEvent.click(model);
+    const picker = await screen.findByRole("dialog", { name: "Choose model" });
+    // A centred dialog on desktop; touch keeps the sheet.
+    expect(picker).toHaveAttribute("data-layout", "modal");
+    expect(screen.queryByRole("menu", { name: "Thread actions" })).toBeNull();
+    await userEvent.click(within(picker).getByRole("option", { name: "Model B" }));
+    expect(perform).toHaveBeenCalledWith({
+      action: "set_setting",
+      settingId: "model",
+      value: "model-b",
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Choose model" })).toBeNull());
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("matches the sidebar lifecycle, creation, and destructive section order", async () => {
     renderHeader();
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    const menu = screen.getByTestId("thread-actions-menu");
-    const labels = within(menu)
-      .getAllByRole("button")
-      .map((button) => button.textContent?.trim());
+    const menu = await openThreadActions();
+    const labels = rowLabels(menu);
 
     const settle = labels.indexOf("Settle");
     const snooze = labels.indexOf("Snooze…");
-    const create = labels.indexOf("New");
+    const create = labels.indexOf("New with same settings");
     const fork = labels.indexOf("Fork");
-    const forceReset = labels.indexOf("Force reset…");
     const archive = labels.indexOf("Archive");
-    expect([settle, snooze, create, fork, forceReset, archive]).not.toContain(
+    const forceReset = labels.indexOf("Force reset…");
+    expect([settle, snooze, create, fork, archive, forceReset]).not.toContain(
       -1,
     );
-    expect([settle, snooze, create, fork, forceReset, archive]).toEqual(
-      [...[settle, snooze, create, fork, forceReset, archive]].sort(
+    expect([settle, snooze, create, fork, archive, forceReset]).toEqual(
+      [...[settle, snooze, create, fork, archive, forceReset]].sort(
         (left, right) => left - right,
       ),
     );
-    expect(menu.querySelectorAll(".thread-actions-separator")).toHaveLength(2);
-    const createAction = within(menu).getByRole("button", {
-      name: "New thread with same settings",
+    expect(forceReset).toBe(labels.length - 1);
+    expect(
+      within(menu).getByRole("menuitem", { name: "Force reset…" }),
+    ).toHaveAttribute("data-variant", "destructive");
+    expect(
+      within(menu).getByRole("menuitem", { name: "Archive" }),
+    ).toHaveAttribute("data-variant", "default");
+    expect(within(menu).getAllByRole("separator")).toHaveLength(3);
+    for (const row of within(menu).getAllByRole("menuitem")) {
+      expect(row.querySelector("svg")).not.toBeNull();
+    }
+    expect(within(menu).queryByText("Thread actions")).toBeNull();
+    const createAction = within(menu).getByRole("menuitem", {
+      name: "New with same settings",
     });
-    expect(createAction).toHaveTextContent(/^New$/u);
     expect(createAction).toHaveAttribute(
       "title",
       "Create a new thread from these settings",
     );
+    const forkAction = within(menu).getByRole("menuitem", { name: "Fork" });
+    expect(forkAction).toHaveAttribute("data-disabled");
+    expect(forkAction).toHaveTextContent("Unavailable");
   });
 
   it("creates an independent thread from the source settings", async () => {
     const { applicationStore } = renderHeader();
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "New thread with same settings" }),
+    const menu = await openThreadActions();
+    await userEvent.click(
+      within(menu).getByRole("menuitem", { name: "New with same settings" }),
     );
 
     await waitFor(() =>
@@ -901,15 +1168,16 @@ describe("ThreadHeader action menu", () => {
     );
   });
 
-  it("keeps an unavailable source action visible with its reason", () => {
+  it("keeps an unavailable source action visible with its reason", async () => {
     renderHeader({ available: false });
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    const action = screen.getByRole("button", {
-      name: "New thread with same settings",
+    const menu = await openThreadActions();
+    const action = within(menu).getByRole("menuitem", {
+      name: "New with same settings",
     });
     const descriptionId = action.getAttribute("aria-describedby");
 
-    expect(action).toBeDisabled();
+    expect(action).toHaveAttribute("data-disabled");
+    expect(action).toHaveTextContent("Unavailable");
     expect(descriptionId).toBeTruthy();
     expect(document.getElementById(descriptionId!)).toHaveTextContent(
       "The source thread target is unavailable.",
@@ -921,15 +1189,15 @@ describe("ThreadHeader action menu", () => {
     applicationStore.createThreadFromSettings.mockRejectedValueOnce(
       new Error("The source settings changed."),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "New thread with same settings" }),
+    const menu = await openThreadActions();
+    await userEvent.click(
+      within(menu).getByRole("menuitem", { name: "New with same settings" }),
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "The source settings changed.",
     );
-    expect(screen.queryByTestId("thread-actions-menu")).toBeNull();
+    expect(screen.queryByRole("menu", { name: "Thread actions" })).toBeNull();
     expect(window.location.pathname).toBe("/");
   });
 
@@ -948,13 +1216,15 @@ describe("ThreadHeader action menu", () => {
     });
     const { applicationStore } = renderHeader();
     applicationStore.createThreadFromSettings.mockReturnValue(pendingCopy);
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "New thread with same settings" }),
+    const menu = await openThreadActions();
+    await userEvent.click(
+      within(menu).getByRole("menuitem", { name: "New with same settings" }),
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent("Creating thread…");
-    expect(screen.queryByTestId("thread-actions-menu")).toBeNull();
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Creating thread…",
+    );
+    expect(screen.queryByRole("menu", { name: "Thread actions" })).toBeNull();
     expect(applicationStore.createThreadFromSettings).toHaveBeenCalledOnce();
 
     resolveCopy({
@@ -971,11 +1241,16 @@ describe("ThreadHeader action menu", () => {
 describe("ThreadHeader force reset", () => {
   it("previews and submits reset from thread actions while reconciling", async () => {
     const { applicationStore } = renderHeader({ runState: "reconciling" });
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
+    const menu = await openThreadActions();
 
-    const resetAction = screen.getByRole("button", { name: "Force reset…" });
-    expect(resetAction).not.toBeDisabled();
-    fireEvent.click(resetAction);
+    const resetAction = within(menu).getByRole("menuitem", {
+      name: "Force reset…",
+    });
+    expect(resetAction).not.toHaveAttribute("data-disabled");
+    expect(
+      within(menu).getByRole("menuitem", { name: "Settle" }),
+    ).toHaveTextContent("Syncing");
+    await userEvent.click(resetAction);
 
     const dialog = await screen.findByRole("dialog", {
       name: "Force reset Sedes state?",

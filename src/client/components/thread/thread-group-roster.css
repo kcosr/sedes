@@ -67,24 +67,6 @@
   opacity: 0.4;
 }
 
-.thread-stack-blockers {
-  display: grid;
-  gap: 6px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--destructive) 28%, var(--border));
-  border-radius: var(--radius-ctl);
-  background: color-mix(in srgb, var(--destructive) 7%, transparent);
-  font-size: 13px;
-}
-
-.thread-stack-blockers ul {
-  display: grid;
-  gap: 3px;
-  margin: 0;
-  padding-left: 18px;
-  color: var(--muted-foreground);
-}
-
 .thread-group-roster-list {
   min-height: 0;
   overflow-x: hidden;
@@ -107,34 +89,15 @@
   background: var(--secondary);
 }
 
-[data-slot="dialog-overlay"].thread-group-roster-sheet-overlay {
-  z-index: 88;
-}
-
+/* The mobile roster is the shared bottom sheet (layout="sheet") with a drag
+   handle instead of an X; the roster header and list own their padding, and
+   the handle drags the sheet down to dismiss it. */
 [data-slot="dialog-content"].thread-group-roster-sheet {
-  top: auto;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 89;
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  max-width: none;
-  max-height: min(78dvh, 680px);
-  --tw-translate-x: 0 !important;
-  --tw-translate-y: 0 !important;
-  translate: 0 0 !important;
-  transform: translateY(var(--thread-group-sheet-drag-offset, 0));
-  transition: transform 140ms ease-out;
-  flex-direction: column;
   gap: 0;
   overflow: hidden;
-  border-radius: 14px 14px 0 0;
-  background: var(--popover);
-  color: var(--popover-foreground);
-  box-shadow: var(--shadow);
-  padding: 0 0 max(8px, env(safe-area-inset-bottom));
+  padding: 0 0 max(var(--space-2), env(safe-area-inset-bottom));
+  transform: translateY(var(--thread-group-sheet-drag-offset, 0));
+  transition: transform var(--duration-fast) ease-out;
 }
 
 [data-slot="dialog-content"].thread-group-roster-sheet.is-dragging {
@@ -161,23 +124,17 @@
   width: 34px;
   height: 4px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--muted-foreground) 48%, transparent);
+  background: color-mix(in oklch, var(--muted-foreground) 48%, transparent);
 }
 
 .thread-group-roster-sheet-handle:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: -3px;
-}
-
-.thread-group-roster-sheet > [data-slot="dialog-close"] {
-  top: 7px;
-  right: 8px;
+  outline: none;
+  box-shadow: inset var(--focus-ring);
 }
 
 .thread-group-roster-sheet .thread-group-roster-header {
   min-height: 46px;
   padding-top: 2px;
-  padding-right: 44px;
 }
 
 .thread-group-roster-sheet .thread-group-roster-list {
@@ -187,19 +144,6 @@
 .thread-group-roster-frame[data-density="card"] .thread-group-roster-list {
   padding-top: 6px;
   padding-bottom: 6px;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  [data-slot="dialog-content"].thread-group-roster-sheet[data-state="open"] {
-    animation: thread-group-roster-sheet-in 170ms ease-out;
-  }
-}
-
-@keyframes thread-group-roster-sheet-in {
-  from {
-    opacity: 0;
-    transform: translateY(18px);
-  }
 }
 
 /* A collapsed group keeps the complete representative row as its face. Two
@@ -252,7 +196,7 @@
 
 .thread-stack-item .flat-row {
   --flat-row-surface: var(--sidebar);
-  z-index: 1;
+  z-index: var(--z-sticky);
   border-color: var(--thread-group-stack-front-edge);
   border-style: solid;
   border-width: 1px;

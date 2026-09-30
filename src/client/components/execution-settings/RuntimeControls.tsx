@@ -1,13 +1,16 @@
-import { useEffect, useLayoutEffect, useId, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ConfigurationLifecycleImpact, ConfigurationLifecycleResult, ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
 import { ApiError } from "../../api/ApiClient.js";
-import { Badge } from "../ui/badge.js";
 import { Button } from "../ui/button.js";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.js";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
+import { Callout } from "../ui/callout.js";
+import { ConfirmDialog } from "../ui/confirm-dialog.js";
+import { DropdownMenuItem } from "../ui/dropdown-menu.js";
+import { KeyValueList, type KeyValueItem } from "../ui/key-value-list.js";
+import { StatusPill } from "../ui/status-pill.js";
+import type { Tone } from "../ui/tone.js";
+import { useFocusReturn } from "../settings/use-focus-return.js";
 import { errorMessage } from "./fields.js";
-import { actionLabels, applyLabels, preferenceLabels, presentRuntime, upgradeLabels, type RuntimeAction } from "./runtime-presentation.js";
+import { actionLabels, applyLabels, atLeast, preferenceLabels, presentRuntime, upgradeLabels, type RuntimeAction, type RuntimeActionPresentation, type RuntimePresentation, type StatusPresentation } from "./runtime-presentation.js";
 import type { ConfigurationControls } from "./useConfiguration.js";
 
 const confirmationNotes: Partial<Record<RuntimeAction, string>> = {
@@ -16,7 +19,7 @@ const confirmationNotes: Partial<Record<RuntimeAction, string>> = {
   stop: "The service stops, and Sedes will not restart it automatically.",
 };
 
-export function RuntimeControls({ controls, revision, resourceKind, resourceId, label, runtime, disabled, disabledReason, enabled = true, onRuntime, onRefresh, showSidecar = resourceKind === "environment" }: {
+export interface RuntimeControllerOptions {
   readonly controls: ConfigurationControls;
   readonly revision: number;
   readonly resourceKind: "environment" | "backend";
@@ -31,28 +34,50 @@ export function RuntimeControls({ controls, revision, resourceKind, resourceId, 
   readonly onRuntime: (runtime: ConfigurationRuntimeState) => void;
   readonly onRefresh: () => Promise<boolean>;
   readonly showSidecar?: boolean;
-}): React.JSX.Element {
+}
+
+export interface RuntimeController {
+  readonly label: string;
+  readonly runtime?: ConfigurationRuntimeState;
+  readonly presentation: RuntimePresentation;
+  readonly showSidecar: boolean;
+  readonly busy: boolean;
+  /** Commands are paused: the page is busy or the caller disabled them. */
+  readonly paused: boolean;
+  readonly disabled: boolean;
+  readonly disabledReason?: string;
+  /** The id of the element explaining why controls are paused, when they are. */
+  readonly reasonId: string;
+  readonly describedBy?: string;
+  readonly error?: { readonly message: string; readonly tone: Tone };
+  readonly notice?: string;
+  /** A command whose outcome is still being checked; other commands wait for it. */
+  readonly unsettled: boolean;
+  readonly awaitingOutcome: boolean;
+  readonly canStopUnknown: boolean;
+  readonly impact?: ConfigurationLifecycleImpact;
+  requestAction(action: RuntimeAction): void;
+  refreshStatus(): void;
+  confirmImpact(): Promise<void>;
+  cancelImpact(): void;
+}
+
+/**
+ * The lifecycle state of one runtime: its command in flight, the receipt of
+ * an unsettled command, and an interruption preview awaiting confirmation.
+ * Keep exactly one mounted per resource, even while its detail is hidden,
+ * so receipts keep settling and a command is never repeated.
+ */
+export function useRuntimeController({ controls, revision, resourceKind, resourceId, label, runtime, disabled, disabledReason, enabled = true, onRuntime, onRefresh, showSidecar = resourceKind === "environment" }: RuntimeControllerOptions): RuntimeController {
   const [busy, setBusy] = useState(false);
   const [impact, setImpact] = useState<ConfigurationLifecycleImpact>();
-  const [error, setError] = useState("");
+  const [error, setErrorState] = useState<{ message: string; tone: Tone }>();
   const [notice, setNotice] = useState("");
   const [unsettledMutationId, setUnsettledMutationId] = useState<string | undefined>(runtime?.lifecycleOperation?.mutationId);
   const [awaitingOutcome, setAwaitingOutcome] = useState(Boolean(runtime?.lifecycleOperation));
   const [outcomeUnknown, setOutcomeUnknown] = useState(runtime?.lifecycleOperation?.state === "unknown");
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const confirmationRef = useRef<HTMLDivElement>(null);
-  const primaryRef = useRef<HTMLButtonElement>(null);
-  const actionsRef = useRef<HTMLButtonElement>(null);
-  const restoreFocus = useRef(false);
-  const initiatedFrom = useRef<"primary" | "actions" | "stop">("actions");
-  const stopRef = useRef<HTMLButtonElement>(null);
-  useLayoutEffect(() => {
-    if (!impact && restoreFocus.current) {
-      restoreFocus.current = false;
-      (initiatedFrom.current === "stop" ? stopRef.current : initiatedFrom.current === "primary" ? primaryRef.current ?? actionsRef.current : actionsRef.current)?.focus();
-    }
-  }, [impact]);
   const reasonId = useId();
+  const setError = (message: string, tone: Tone = "danger") => setErrorState(message ? { message, tone } : undefined);
   const durableOperation = runtime?.lifecycleOperation;
   const durableOperationRef = useRef(durableOperation);
   durableOperationRef.current = durableOperation;
@@ -76,7 +101,7 @@ export function RuntimeControls({ controls, revision, resourceKind, resourceId, 
     setAwaitingOutcome(true);
     setOutcomeUnknown(durableOperation.state === "unknown");
     if (durableOperation.state === "unknown") {
-      setError("The previous operation outcome is unknown. Checking its original receipt does not repeat the command.");
+      setError("The previous operation outcome is unknown. Checking its original receipt does not repeat the command.", "warning");
     } else {
       setNotice(`${actionLabels[durableOperation.action]} is pending. Checking the original operation's outcome.`);
     }
@@ -92,9 +117,6 @@ export function RuntimeControls({ controls, revision, resourceKind, resourceId, 
     const timer = window.setTimeout(expireImpact, remaining);
     return () => window.clearTimeout(timer);
   }, [impact]);
-  useEffect(() => {
-    if (impact) confirmationRef.current?.focus();
-  }, [impact]);
   const showResult = (result: ConfigurationLifecycleResult) => {
     onRuntime(result.runtime);
     setError("");
@@ -103,11 +125,11 @@ export function RuntimeControls({ controls, revision, resourceKind, resourceId, 
     setAwaitingOutcome(result.state === "pending" || result.state === "unknown");
     setOutcomeUnknown(result.state === "unknown");
     if (result.state === "unknown") {
-      setError("The operation outcome is unknown. Check its original status, or Stop to end this runtime once the earlier command can be safely withdrawn.");
+      setError("The operation outcome is unknown. Check its original status, or Stop to end this runtime once the earlier command can be safely withdrawn.", "warning");
     } else if (result.state === "rejected" || result.state === "unavailable") {
-      setError(result.runtime.lastError ?? "The requested operation is unavailable.");
+      setError(result.runtime.lastError ?? "The requested operation is unavailable.", result.state === "rejected" ? "danger" : "warning");
     } else {
-      setNotice(result.state === "pending" ? "Operation pending. Refresh status to check the original operation's outcome." : "Operation applied. The reported status is shown below.");
+      setNotice(result.state === "pending" ? "Operation pending. Refresh status to check the original operation's outcome." : "Operation applied. The reported status is shown above.");
     }
     return result.state !== "pending" && result.state !== "unknown";
   };
@@ -124,7 +146,6 @@ export function RuntimeControls({ controls, revision, resourceKind, resourceId, 
     setBusy(true);
     setError("");
     setNotice("");
-    setImpact(undefined);
     try {
       const result = await controls.configurationLifecycle({
         mutationId, expectedRevision: confirmed?.configurationRevision ?? revision,
@@ -190,80 +211,159 @@ export function RuntimeControls({ controls, revision, resourceKind, resourceId, 
     } catch (cause) { setError(errorMessage(cause, "Could not determine the effect of this operation.")); }
     finally { setBusy(false); }
   };
-  const cancelImpact = () => {
-    setImpact(undefined);
-    restoreFocus.current = true;
-  };
   const presentation = presentRuntime(runtime, { resourceKind, sidecar: showSidecar, enabled });
-  const menuOrder: readonly RuntimeAction[] = ["connect", "start", "restart", "upgrade", "disconnect", "stop"];
-  const menuActions = [ ...(presentation.primary ? [presentation.primary] : []), ...presentation.secondary ]
+  const unsettled = Boolean(unsettledMutationId);
+  return {
+    label, runtime, presentation, showSidecar, busy, paused: disabled || busy, disabled, disabledReason, reasonId,
+    describedBy: disabled && disabledReason ? reasonId : undefined,
+    ...(error ? { error } : {}), ...(notice ? { notice } : {}),
+    unsettled, awaitingOutcome,
+    canStopUnknown: unsettled && outcomeUnknown && Boolean(runtime?.supportedActions.includes("stop")),
+    ...(impact ? { impact } : {}),
+    requestAction: (action) => void requestAction(action),
+    refreshStatus: () => void refreshStatus(),
+    confirmImpact: async () => {
+      if (!impact) return;
+      await execute(impact.action, impact);
+      setImpact(undefined);
+    },
+    cancelImpact: () => setImpact(undefined),
+  };
+}
+
+/** The contextual command: the state's primary action, or Refresh status while a command is unsettled. */
+export function RuntimePrimaryAction({ controller }: { readonly controller: RuntimeController }): React.JSX.Element | null {
+  const { presentation, unsettled, busy, paused, describedBy } = controller;
+  if (unsettled) return <Button type="button" disabled={busy} onClick={controller.refreshStatus}>Refresh status</Button>;
+  const primary = presentation.primary;
+  if (!primary) return null;
+  return <Button type="button" variant={primary.emphasis} disabled={paused} aria-describedby={describedBy}
+    onClick={() => controller.requestAction(primary.action)}>{primary.label}</Button>;
+}
+
+const menuOrder: readonly RuntimeAction[] = ["connect", "start", "restart", "upgrade", "disconnect", "stop"];
+
+/**
+ * The rarer lifecycle commands, as items of the detail's actions menu: the
+ * regular ones, or the destructive ones that the menu puts last, after a
+ * separator.
+ */
+export function RuntimeMenuItems({ controller, emphasis }: { readonly controller: RuntimeController; readonly emphasis: RuntimeActionPresentation["emphasis"] }): React.JSX.Element {
+  const actions = controller.presentation.secondary.filter(entry => entry.emphasis === emphasis)
     .sort((a, b) => menuOrder.indexOf(a.action) - menuOrder.indexOf(b.action));
-  const paused = disabled || busy;
-  const describedBy = disabled && disabledReason ? reasonId : undefined;
-  const unconfirmed = runtime?.connectionState === "unknown" || runtime?.connectionState === "unreachable" || runtime?.connectionState === "recovery_required";
-  const canStopUnknown = Boolean(unsettledMutationId) && outcomeUnknown && runtime?.supportedActions.includes("stop");
-  return <section aria-label={`${label} runtime`} aria-busy={busy || undefined} className="execution-settings-section">
-    <div className="execution-settings-status" data-tone={presentation.tone}>
-      <div className="execution-settings-status-headline">
-        <strong>{presentation.headline}</strong>
-        {presentation.qualifier ? <Badge variant={presentation.tone === "attention" ? "destructive" : "outline"}>{presentation.qualifier}</Badge> : null}
-      </div>
-      <p className="execution-settings-status-detail">{presentation.detail}</p>
-      {error || runtime?.lastError ? <div role="alert">
-        {error ? <p className="execution-settings-error">{error}</p> : null}
-        {runtime?.lastError && runtime.lastError !== error ? <p className="execution-settings-error">{runtime.lastError}</p> : null}
-      </div> : null}
-      {runtime ? <Collapsible open={detailsOpen} onOpenChange={setDetailsOpen} className="execution-settings-status-details">
-        <CollapsibleTrigger asChild>
-          <Button type="button" variant="link" size="xs" aria-label={`${label} runtime details`}>Diagnostics <ChevronDown aria-hidden="true" data-icon="inline-end" /></Button>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <dl>
-            <dt>Connection preference</dt><dd>{preferenceLabels[runtime.preference]}</dd>
-            <dt>Configuration</dt><dd>{runtime.applyState === "pending" && runtime.startupEnvironmentPending ? "Pending restart" : applyLabels[runtime.applyState]}</dd>
-            <dt>Saved revision</dt><dd>{runtime.desiredRevision}</dd>
-            <dt>Applied revision</dt><dd>{runtime.effectiveRevision ?? "Not confirmed"}</dd>
-            <dt>Active or unconfirmed resources</dt><dd>{unconfirmed ? "Not confirmed" : runtime.activeResources}</dd>
-            {showSidecar ? <><dt>Sidecar version</dt><dd>{runtime.softwareVersion ?? "Not reported"}</dd>
-              <dt>Upgrade</dt><dd>{upgradeLabels[runtime.upgradeState]}</dd></> : null}
-            {runtime.incarnation ? <><dt>Service incarnation</dt><dd className="execution-settings-truncate" title={runtime.incarnation}>{runtime.incarnation}</dd></> : null}
-          </dl>
-        </CollapsibleContent>
-      </Collapsible> : null}
-    </div>
-    {impact ? <div ref={confirmationRef} tabIndex={-1} className="execution-settings-confirmation" data-tone="attention" role="group" aria-label="Confirm runtime interruption">
-      <strong>{actionLabels[impact.action]} {label}?</strong>
-      <p>{impact.activeResources} affected resource{impact.activeResources === 1 ? "" : "s"}. Running work will be interrupted; interrupted work is not restarted automatically.</p>
-      <p>Some retained work may have an unknown outcome. Unrecovered output or results may be lost when its runtime stops; completed external changes are not undone.</p>
-      {impact.interruptions.length ? <ul>{impact.interruptions.map((interruption, index) => <li key={index}>{interruption}</li>)}</ul> : null}
-      {confirmationNotes[impact.action] ? <p>{confirmationNotes[impact.action]}</p> : null}
-      <p className="execution-settings-muted">This preview expires in about two minutes.</p>
-      <div className="execution-settings-actions"><Button type="button" variant="destructive" size="sm" disabled={busy || disabled}
-        onClick={() => void execute(impact.action, impact)}>Confirm {actionLabels[impact.action].toLowerCase()}</Button>
-        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={cancelImpact}>Cancel</Button></div>
-    </div> : <div className="execution-settings-actions">
-      {unsettledMutationId
-        ? <Button type="button" size="sm" disabled={busy} onClick={() => void refreshStatus()}>Refresh status</Button>
-        : presentation.primary
-          ? <Button ref={primaryRef} type="button" size="sm" variant={presentation.primary.emphasis} disabled={paused} aria-describedby={describedBy}
-            onClick={() => { initiatedFrom.current = "primary"; void requestAction(presentation.primary!.action); }}>{presentation.primary.label}</Button>
-          : null}
-      {canStopUnknown ? <Button ref={stopRef} type="button" variant="destructive" size="sm" disabled={paused}
-        onClick={() => { initiatedFrom.current = "stop"; void requestAction("stop"); }}>Stop</Button> : null}
-      {<DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button ref={actionsRef} type="button" size="sm" variant="outline" disabled={paused || Boolean(unsettledMutationId) || !menuActions.length} aria-describedby={describedBy} aria-label={`Runtime actions for ${label}`}>
-            Actions <ChevronDown aria-hidden="true" data-icon="inline-end" />
-          </Button>
-        </DropdownMenuTrigger>
-        {/* Settings renders inside a modal dialog whose overlay sits above the menu's default layer. */}
-        <DropdownMenuContent align="start" className="execution-settings-menu z-[100]">
-          {menuActions.map((entry) => <DropdownMenuItem key={entry.action} variant={entry.emphasis} onSelect={() => { initiatedFrom.current = "actions"; void requestAction(entry.action); }}>{entry.label}</DropdownMenuItem>)}
-        </DropdownMenuContent>
-      </DropdownMenu>}
-      {unsettledMutationId ? <span className="execution-settings-muted">{awaitingOutcome ? "Checking the outcome automatically. " : ""}{canStopUnknown ? "Stop checks the earlier command before ending this runtime." : "Other actions wait until this operation settles."}</span> : null}
-    </div>}
-    {disabled && disabledReason ? <p role="status" id={reasonId} className="execution-settings-muted">{disabledReason}</p> : null}
-    {notice ? <p role="status" className="execution-settings-notice">{notice}</p> : null}
+  return <>{actions.map((entry) => <DropdownMenuItem key={entry.action} variant={entry.emphasis}
+    disabled={controller.paused || (controller.unsettled && !stopsUnknown(controller, entry.action))}
+    onSelect={() => controller.requestAction(entry.action)}>{entry.label}</DropdownMenuItem>)}</>;
+}
+
+/** While a command's outcome is unknown, Stop alone stays available: it checks that command first. */
+function stopsUnknown(controller: RuntimeController, action: RuntimeAction): boolean {
+  return action === "stop" && controller.canStopUnknown;
+}
+
+/** Whether the menu has a command available now; otherwise its trigger is disabled. */
+export function hasAvailableRuntimeMenuItems(controller: RuntimeController): boolean {
+  if (controller.paused) return false;
+  return !controller.unsettled || controller.presentation.secondary.some(entry => stopsUnknown(controller, entry.action));
+}
+
+/** Whether the detail's actions menu offers a destructive lifecycle command. */
+export function hasDestructiveRuntimeMenuItems(controller: RuntimeController): boolean {
+  return controller.presentation.secondary.some(entry => entry.emphasis === "destructive");
+}
+
+/** Whether the detail's actions menu has any lifecycle command to offer. */
+export function hasRuntimeMenuItems(controller: RuntimeController): boolean {
+  return controller.presentation.secondary.length > 0;
+}
+
+/**
+ * Command feedback under the detail header, visible on every tab: why
+ * commands are paused, one Callout for what went wrong (the last command's
+ * error over the runtime's own last error), and a command's notice.
+ */
+export function RuntimeFeedback({ controller }: { readonly controller: RuntimeController }): React.JSX.Element | null {
+  const { disabled, disabledReason, error, notice, reasonId, runtime, presentation } = controller;
+  const reason = disabled && disabledReason;
+  const lastError = runtime?.lastError ?? undefined;
+  const commandError = error && error.message !== lastError ? error : undefined;
+  const lastErrorTone: Tone = presentation.tone === "danger" ? "danger" : "warning";
+  const problemTone: Tone = commandError && (!lastError || atLeast(commandError.tone, lastErrorTone)) ? commandError.tone : lastErrorTone;
+  if (!reason && !commandError && !lastError && !notice) return null;
+  return <div className="execution-runtime-feedback">
+    {reason ? <p role="status" id={reasonId} className="execution-muted">{disabledReason}</p> : null}
+    {commandError || lastError ? <Callout tone={problemTone} role="alert" title={commandError && lastError ? commandError.message : undefined}>
+      {lastError ?? commandError?.message}</Callout> : null}
+    {notice ? <Callout tone="info" role="status">{notice}</Callout> : null}
+  </div>;
+}
+
+/**
+ * The top of Overview: what the runtime is doing, in words. The detail
+ * header carries the one status pill and the primary action, and the
+ * feedback under it any error, so this names a runtime state only where it
+ * differs from the header's (a paired host can be online while its runtime
+ * is unknown).
+ */
+export function RuntimeHealth({ controller, status, children }: {
+  readonly controller: RuntimeController;
+  /** The state the detail header's pill shows. */
+  readonly status: StatusPresentation;
+  readonly children?: React.ReactNode;
+}): React.JSX.Element {
+  const { presentation, unsettled, awaitingOutcome, canStopUnknown, label } = controller;
+  const pills = [
+    { label: presentation.headline, tone: presentation.headlineTone },
+    ...(presentation.qualifier ? [{ label: presentation.qualifier, tone: presentation.qualifierTone ?? "neutral" }] : []),
+  ].filter(pill => pill.label !== status.label);
+  return <section aria-label={`${label} status`} className="execution-health">
+    {pills.length ? <div className="execution-health-status">
+      <span className="execution-health-label">Runtime</span>
+      {pills.map(pill => <StatusPill key={pill.label} tone={pill.tone}>{pill.label}</StatusPill>)}
+    </div> : null}
+    <p className="execution-health-detail">{presentation.detail}</p>
+    {unsettled ? <p className="execution-muted">{awaitingOutcome ? "Checking the outcome automatically. " : ""}
+      {canStopUnknown ? "Other actions wait until it settles; Stop is in the actions menu." : "Other actions wait until this operation settles."}</p> : null}
+    {children}
   </section>;
+}
+
+/** Technical runtime details for Activity: preferences, revisions, versions and the incarnation. */
+export function runtimeDiagnostics(controller: RuntimeController): KeyValueItem[] {
+  const { runtime, showSidecar } = controller;
+  if (!runtime) return [];
+  const unconfirmed = runtime.connectionState === "unknown" || runtime.connectionState === "unreachable" || runtime.connectionState === "recovery_required";
+  return [
+    { label: "Connection preference", value: preferenceLabels[runtime.preference] },
+    { label: "Configuration", value: runtime.applyState === "pending" && runtime.startupEnvironmentPending ? "Pending restart" : applyLabels[runtime.applyState] },
+    { label: "Saved revision", value: runtime.desiredRevision, mono: true },
+    { label: "Applied revision", value: runtime.effectiveRevision ?? "Not confirmed", mono: runtime.effectiveRevision !== null },
+    { label: "Active or unconfirmed resources", value: unconfirmed ? "Not confirmed" : runtime.activeResources },
+    ...(showSidecar ? [
+      { label: "Sidecar version", value: runtime.softwareVersion ?? "Not reported", mono: Boolean(runtime.softwareVersion) },
+      { label: "Upgrade", value: upgradeLabels[runtime.upgradeState] },
+    ] : []),
+  ];
+}
+
+/** Confirms a command that interrupts running work, listing exactly what it affects. */
+export function RuntimeImpactDialog({ controller }: { readonly controller: RuntimeController }): React.JSX.Element {
+  const { impact, label } = controller;
+  const focusReturn = useFocusReturn();
+  const [shown, setShown] = useState(impact);
+  // Keep the last preview on screen while the dialog closes.
+  useEffect(() => { if (impact) setShown(impact); }, [impact]);
+  const current = impact ?? shown;
+  const action = current ? actionLabels[current.action] : "";
+  return <ConfirmDialog open={Boolean(impact)} onOpenChange={(open) => { if (!open) controller.cancelImpact(); }}
+    title={`${action} ${label}?`} tone="danger" confirmLabel={`Confirm ${action.toLowerCase()}`}
+    description={current ? `${current.activeResources} affected resource${current.activeResources === 1 ? "" : "s"}. Running work will be interrupted; interrupted work is not restarted automatically.` : undefined}
+    onConfirm={controller.confirmImpact} {...focusReturn}>
+    {current ? <div className="execution-impact">
+      <p>Some retained work may have an unknown outcome. Unrecovered output or results may be lost when its runtime stops; completed external changes are not undone.</p>
+      {current.interruptions.length ? <ul>{current.interruptions.map((interruption, index) => <li key={index}>{interruption}</li>)}</ul> : null}
+      {confirmationNotes[current.action] ? <p>{confirmationNotes[current.action]}</p> : null}
+      <p className="execution-muted">This preview expires in about two minutes.</p>
+    </div> : null}
+  </ConfirmDialog>;
 }

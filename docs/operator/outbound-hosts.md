@@ -1,9 +1,10 @@
 # Outbound hosts
 
 An outbound host runs a Sedes connector that calls your server over HTTP or
-HTTPS. Accept its registration in **Settings → Environments → Review hosts**,
-then configure backends and projects on the resulting environment. No inbound
-SSH connection or stable client IP address is required.
+HTTPS. Accept its registration under **Awaiting approval** in **Settings →
+Environments**, then configure backends and projects on the resulting
+environment. No inbound SSH connection or stable client IP address is
+required.
 
 The connector carries the same sidecar operations as SSH. A separate persistent
 sidecar owns provider processes, terminals, and operation recovery on the host.
@@ -53,8 +54,9 @@ encrypt HTTP. Use the already configured trusted private access boundary in
 
 ## Download and start
 
-In **Settings → Environments → Add environment → Pair a host**, use **Download connector** and
-copy the displayed command. Save `sedes-sidecar.mjs` on the connecting host. The
+In **Settings → Environments → Add environment → Pair a host**
+(`/settings/environments/~new/pair`), use **Download connector** and copy the
+displayed commands. Save `sedes-sidecar.mjs` on the connecting host. The
 single downloaded JavaScript file is sufficient when invoked through Node; it
 does not require an npm installation on that host.
 
@@ -113,20 +115,23 @@ server-side decision. Network failures use bounded reconnection backoff.
 
 ## Approve and configure
 
-1. Open **Settings → Environments → Review hosts** on the server. Compare the
-   registration code with the connector's output and review its reported
+1. Open **Settings → Environments** on the server and select the host under
+   **Awaiting approval**; step 3 of **Pair a host** lists it too. Compare the
+   **Registration code** with the connector's output and review its reported
    hostname, operating system, architecture, and account.
-2. Select **Accept**, enter an environment name and absolute workspace roots on
-   that host, then select the allowed sidecar operations. Examples are
-   `/Users/you/Projects` on macOS, `/home/you/projects` on Linux, and `C:\Projects`
-   on Windows. Accepting creates the environment; it does not install providers.
-3. Enable **Directory browsing** and **Files and comparisons** for normal
-   project navigation and Files. Add **Workspace tools and context** for Pi's
-   remote workspace tools, **Workspace skills** for skill discovery,
-   **Attachment staging** for remote attachments, **Sedes tools for remote
-   agents** for the agent CLI, and **Interactive terminals** when wanted.
-4. Open the paired environment, select **Add backend**, and configure its
-   supported provider endpoint or executable. Add a project
+2. Under **Access to grant**, enter an **Environment name** and absolute
+   **Workspace roots** on that host. Examples are `/Users/you/Projects` on
+   macOS, `/home/you/projects` on Linux, and `C:\Projects` on Windows.
+3. Keep **Enable sidecar operations** on and choose the **Allowed operations**.
+   **Directory browsing** and **Files and comparisons**, selected by default,
+   cover normal project navigation and Files. Add **Workspace tools and
+   context** for Pi's remote workspace tools, **Workspace skills** for skill
+   discovery, **Attachment staging** for remote attachments, **Sedes tools for
+   remote agents** for the agent CLI, and **Interactive terminals** when wanted.
+4. Choose **Accept host**. Accepting creates the environment and opens it; it
+   does not install providers.
+5. On the paired environment's **Backends** tab, select **Add backend**, and
+   configure its supported provider endpoint or executable. Add a project
    beneath one of the saved host roots, then use its available target normally.
 
 Roots and capability grants remain editable environment settings. Grants permit
@@ -178,13 +183,14 @@ a new pending request requiring fresh approval. Earlier approval or denial
 requests cannot act on that new request. A full set of pending or accepted
 registrations still blocks new requests until capacity is available.
 
-- **Deny** rejects a pending registration. An expired or denied unpaired request
-  stays terminal locally. To make a deliberate new request, restart with
-  `--retry-registration`; it keeps the connector ID and creates a new attempt.
-- **Revoke pairing** withdraws server access and disconnects the host. The
-  environment and history remain, but its sidecar credentials are permanently
-  revoked. Revocation does not terminate host-owned
-  processes; stop work first when termination is intended.
+- **Deny**, on the pending host's page, rejects its registration. An expired
+  or denied unpaired request stays terminal locally. To make a deliberate new
+  request, restart with `--retry-registration`; it keeps the connector ID and
+  creates a new attempt.
+- **Revoke pairing**, in the environment's **Danger zone**, withdraws server
+  access and disconnects the host. The environment and history remain, but its
+  sidecar credentials are permanently revoked. Revocation does not terminate
+  host-owned processes; stop work first when termination is intended.
 - **Reapprove pairing** restores the retained binding and saved grants. After
   reapproving in Settings, create a fresh `--sidecar` pairing code on the
   server and restart that same connector with `--resume-pairing`:
@@ -220,10 +226,11 @@ active release, and owned incomplete installations can be repaired.
 
 Compatible reconnection attaches to existing work. An outdated idle sidecar can
 be safely replaced; active work, uncertain outcomes, or unproven cleanup block
-automatic replacement. Use the runtime controls in Settings to inspect, stop,
-restart, or explicitly confirm a disruptive update. A runtime restart can
-interrupt terminals and provider processes. Restarting only the connector does
-not intentionally restart the runtime.
+automatic replacement. Use the environment's runtime controls in **Settings →
+Environments** (its header action and **⋯** menu, with details on the
+**Activity** tab) to inspect, stop, restart, or explicitly confirm a disruptive
+update. A runtime restart can interrupt terminals and provider processes.
+Restarting only the connector does not intentionally restart the runtime.
 
 **Connector upgrades are manual.** Download the newly built connector, stop the
 old connector process, replace its bundle, and restart it with the same state

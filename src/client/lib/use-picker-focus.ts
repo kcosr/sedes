@@ -1,4 +1,5 @@
 import { useRef, type KeyboardEvent, type PointerEvent, type RefObject } from "react";
+import { matchesTouchDensity } from "../app/use-touch-density.js";
 
 /** Search pickers open for browsing on touch screens; typing is an explicit action. */
 export function usePickerFocus(searchRef: RefObject<HTMLInputElement | null>) {
@@ -11,9 +12,8 @@ export function usePickerFocus(searchRef: RefObject<HTMLInputElement | null>) {
     if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) requestSearchFocus();
   };
   const focusPicker = (content: HTMLElement | null) => {
-    const mobile = typeof window.matchMedia === "function" &&
-      window.matchMedia("(pointer: coarse), (max-width: 819px)").matches;
-    const search = modality.current === "keyboard" || (modality.current !== "touch" && !mobile);
+    const search = modality.current === "keyboard" ||
+      (modality.current !== "touch" && !matchesTouchDensity());
     modality.current = undefined;
     (search ? searchRef.current : content)?.focus({ preventScroll: true });
   };

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SearchableSelect, type SearchableSelectOption } from "./searchable-select.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover.js";
 import { Dialog, DialogContent, DialogTitle } from "./dialog.js";
+import { Field } from "./field.js";
 
 const options: readonly SearchableSelectOption[] = [
   { value: "all", label: "All", pinned: true },
@@ -132,7 +133,9 @@ describe("SearchableSelect", () => {
     );
     const trigger = screen.getByRole("combobox", { name: "Task project" });
     await user.click(trigger);
-    expect(screen.getByRole("dialog", { name: "Choose task project" })).toHaveClass("searchable-select-dialog");
+    const sheet = screen.getByRole("dialog", { name: "Choose task project" });
+    expect(sheet).toHaveClass("searchable-select-sheet");
+    expect(sheet).toHaveAttribute("data-layout", "sheet");
     const search = screen.getByRole("combobox", { name: "Search projects" });
     expect(search).toHaveFocus();
     await user.type(search, "remote");
@@ -150,24 +153,103 @@ describe("SearchableSelect", () => {
     expect(onParentOpenChange).not.toHaveBeenCalled();
   });
 
-  it("updates dialog keyboard space as the visual viewport resizes", async () => {
+  it("lifts the sheet above the keyboard as the visual viewport resizes", async () => {
     const user = userEvent.setup();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
     const viewport = Object.assign(new EventTarget(), { height: window.innerHeight, offsetTop: 0 });
     vi.stubGlobal("visualViewport", viewport);
     render(<SearchableSelect presentation="dialog" label="Project" searchLabel="Search projects" emptyLabel="No matching projects" value="local" options={options} onValueChange={vi.fn()} />);
     await user.click(screen.getByRole("combobox", { name: "Project" }));
     const dialog = screen.getByRole("dialog", { name: "Choose project" });
-    expect(dialog.style.getPropertyValue("--select-keyboard-inset")).toBe("0px");
+    expect(dialog.style.getPropertyValue("--keyboard-inset")).toBe("0px");
     act(() => {
       viewport.height = window.innerHeight - 280;
       viewport.dispatchEvent(new Event("resize"));
     });
-    expect(dialog.style.getPropertyValue("--select-keyboard-inset")).toBe("280px");
+    expect(dialog.style.getPropertyValue("--keyboard-inset")).toBe("280px");
     act(() => {
       viewport.height = window.innerHeight;
       viewport.dispatchEvent(new Event("resize"));
     });
-    expect(dialog.style.getPropertyValue("--select-keyboard-inset")).toBe("0px");
+    expect(dialog.style.getPropertyValue("--keyboard-inset")).toBe("0px");
+  });
+
+  it("groups options under labels and marks the selection with a trailing check", async () => {
+    const user = userEvent.setup();
+    render(
+      <SearchableSelect
+        label="Model"
+        searchLabel="Search models"
+        emptyLabel="No matching models"
+        value="astra"
+        options={[
+          { value: "astra", label: "gpt-6-astra", description: "Default · strongest reasoning", group: "Recommended" },
+          { value: "mini", label: "gpt-6-astra-mini", description: "Faster, lower cost", group: "Recommended" },
+          { value: "luna", label: "gpt-5.6-luna", group: "All models" },
+          { value: "legacy", label: "o-legacy", group: "All models", unavailable: true },
+        ]}
+        onValueChange={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("combobox", { name: "Model" }));
+    const recommended = screen.getByRole("group", { name: "Recommended" });
+    expect(recommended).toContainElement(screen.getByRole("option", { name: /gpt-6-astra-mini/ }));
+    expect(screen.getByRole("group", { name: "All models" })).toContainElement(screen.getByRole("option", { name: /o-legacy/ }));
+    const selected = screen.getByRole("option", { name: /^gpt-6-astra Default/ });
+    expect(selected).toHaveAttribute("aria-selected", "true");
+    expect(selected.querySelector("svg.lucide-check")).not.toBeNull();
+    const legacy = screen.getByRole("option", { name: "o-legacy Unavailable" });
+    expect(legacy).toHaveAttribute("data-unavailable");
+    expect(legacy).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("selects an unavailable option but never a disabled one", async () => {
+    const user = userEvent.setup();
+    const onValueChange = vi.fn();
+    render(
+      <SearchableSelect
+        label="Environment"
+        searchLabel="Search environments"
+        emptyLabel="No matching environments"
+        value="local"
+        options={[
+          { value: "local", label: "Local" },
+          { value: "ssh", label: "Build host", unavailable: "Offline" },
+          { value: "gone", label: "Removed host", disabled: true },
+        ]}
+        onValueChange={onValueChange}
+      />,
+    );
+    await user.click(screen.getByRole("combobox", { name: "Environment" }));
+    await user.click(screen.getByRole("option", { name: "Removed host" }));
+    expect(onValueChange).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("option", { name: "Build host Offline" }));
+    expect(onValueChange).toHaveBeenCalledExactlyOnceWith("ssh");
+  });
+
+  it("accepts a custom trigger with header and footer slots", async () => {
+    const user = userEvent.setup();
+    render(
+      <SearchableSelect
+        label="Model"
+        searchLabel="Search models"
+        emptyLabel="No matching models"
+        value="local"
+        options={options}
+        trigger={<button className="composer-pill">gpt-6-astra</button>}
+        header={<p>Pinned models</p>}
+        footer={<button type="button">Load more</button>}
+        onValueChange={vi.fn()}
+      />,
+    );
+    const trigger = screen.getByRole("combobox", { name: "Model" });
+    expect(trigger).toHaveClass("composer-pill");
+    expect(trigger).toHaveAttribute("aria-haspopup", "listbox");
+    await user.click(trigger);
+    const popover = screen.getByRole("dialog", { name: "Choose model" });
+    expect(popover).toContainElement(screen.getByText("Pinned models"));
+    expect(popover).toContainElement(screen.getByRole("button", { name: "Load more" }));
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
   });
 
   it("matches case-insensitive tokens across labels, descriptions and context without selecting", async () => {
@@ -268,5 +350,29 @@ describe("SearchableSelect", () => {
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Search projects" }), { key: "Enter", isComposing: true });
     await user.click(screen.getByRole("option", { name: "Offline project" }));
     expect(onValueChange).not.toHaveBeenCalled();
+  });
+
+  it.each(["popover", "dialog"] as const)("is the enclosing Field's control, and its %s search field is not", async (presentation) => {
+    const user = userEvent.setup();
+    render(
+      <Field label="Project" description="Threads start here." error="Choose a project.">
+        <SearchableSelect presentation={presentation} label="Project" searchLabel="Search projects" emptyLabel="No matching projects" value="" placeholder="Choose" options={options} triggerProps={{ "aria-describedby": "hint" }} onValueChange={vi.fn()} />
+      </Field>,
+    );
+    const trigger = screen.getByRole("combobox", { name: "Project" });
+    const label = screen.getByText("Project", { selector: "label" });
+    expect(label).toHaveAttribute("for", trigger.id);
+    expect(trigger).toHaveAttribute("aria-invalid", "true");
+    const describedBy = trigger.getAttribute("aria-describedby")!.split(" ");
+    expect(describedBy[0]).toBe("hint");
+    expect(describedBy.slice(1).map((id) => document.getElementById(id)?.textContent)).toEqual([
+      "Choose a project.",
+      "Threads start here.",
+    ]);
+    await user.click(trigger);
+    const search = screen.getByRole("combobox", { name: "Search projects" });
+    expect(search.id).not.toBe(trigger.id);
+    expect(search).not.toHaveAttribute("aria-describedby");
+    expect(search).not.toHaveAttribute("aria-invalid");
   });
 });

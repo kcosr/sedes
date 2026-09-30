@@ -9,6 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import type {
   ToolClient,
   ToolClientCredentialResult,
@@ -18,6 +19,7 @@ import {
   ToolClientsSettingsPage,
   type ToolClientSettingsControls,
 } from "./ToolClientsSettingsPage.js";
+import { useSettingsEscape } from "../settings/settings-escape.js";
 
 const clientId = "10000000-0000-4000-8000-000000000001";
 const credential = `hatc1_${clientId}_1_${"a".repeat(43)}`;
@@ -155,6 +157,7 @@ describe("Tool clients settings", () => {
     fireEvent.change(screen.getByLabelText("Tool client name"), {
       target: { value: "External CLI" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Threads" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Thread status" }));
     fireEvent.change(screen.getByLabelText("Default workspace"), {
       target: { value: "workspace-1" },
@@ -232,6 +235,7 @@ describe("Tool clients settings", () => {
     fireEvent.change(screen.getByLabelText("Tool client name"), {
       target: { value: "External CLI" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Threads" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Thread status" }));
     fireEvent.click(screen.getByRole("button", { name: "Create client" }));
 
@@ -261,6 +265,7 @@ describe("Tool clients settings", () => {
     fireEvent.change(screen.getByLabelText("Tool client name"), {
       target: { value: "External CLI" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Threads" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Thread status" }));
     fireEvent.change(screen.getByLabelText("Default environment"), {
       target: { value: "env-remote" },
@@ -281,6 +286,62 @@ describe("Tool clients settings", () => {
           allowedEnvironmentIds: ["env-remote"],
         }),
       ),
+    );
+  });
+
+  it("offers New client from the empty state and keeps a pristine create form clean", async () => {
+    render(<ToolClientsSettingsPage controls={controls()} />);
+
+    expect(await screen.findByText("No tool clients yet")).toBeVisible();
+    // The empty state carries the page's one New client action.
+    const [emptyAction, ...others] = screen.getAllByRole("button", { name: "New client" });
+    expect(others).toHaveLength(0);
+    expect(emptyAction).toHaveAttribute("data-variant", "default");
+    fireEvent.click(emptyAction!);
+
+    const editor = screen.getByRole("region", { name: "Tool client editor" });
+    expect(screen.getByRole("button", { name: "New client" })).toHaveAttribute("data-variant", "outline");
+    expect(within(editor).queryByText("Unsaved changes")).toBeNull();
+    expect(within(editor).getByRole("button", { name: "Create client" })).toBeEnabled();
+    expect(within(editor).getByRole("button", { name: "Cancel" })).toBeEnabled();
+
+    fireEvent.change(within(editor).getByLabelText("Tool client name"), {
+      target: { value: "External CLI" },
+    });
+    expect(within(editor).getByText("Unsaved changes")).toBeVisible();
+    fireEvent.change(within(editor).getByLabelText("Tool client name"), {
+      target: { value: "" },
+    });
+    expect(within(editor).queryByText("Unsaved changes")).toBeNull();
+
+    fireEvent.click(within(editor).getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("No tool clients yet")).toBeVisible();
+  });
+
+  it("summarizes collapsed tool groups and warns about risky grants", async () => {
+    render(<ToolClientsSettingsPage controls={controls()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "New client" }));
+    const threads = screen.getByRole("button", { name: "Threads" });
+    expect(threads).toHaveAttribute("aria-expanded", "false");
+    expect(threads).toHaveAccessibleDescription("0 of 2 tools Inspect and control threads.");
+    expect(screen.queryByText(/marked High risk/u)).toBeNull();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all Threads tools" }));
+    expect(threads).toHaveAccessibleDescription(
+      "2 of 2 tools High risk Inspect and control threads.",
+    );
+    expect(
+      screen
+        .getByText(/Selected tools marked High risk can start model work/u)
+        .closest('[data-slot="callout"]'),
+    ).toHaveAttribute("role", "status");
+
+    fireEvent.click(threads);
+    expect(
+      screen.getByRole("checkbox", { name: "Send message" }),
+    ).toHaveAccessibleDescription(
+      "Send a message and start model work. Starts model execution",
     );
   });
 
@@ -329,7 +390,11 @@ describe("Tool clients settings", () => {
     render(<ToolClientsSettingsPage controls={value} />);
 
     fireEvent.click(await screen.findByRole("button", { name: /External CLI/u }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Enable tool client" }));
+    expect(screen.getByRole("button", { name: "New client" })).toHaveAttribute("data-variant", "outline");
+    // Danger-zone triggers are destructive outlines; only the confirmation is solid red.
+    expect(screen.getByRole("button", { name: "Revoke…" })).toHaveAttribute("data-variant", "destructive-outline");
+    expect(screen.getByRole("button", { name: "Rotate credential…" })).toHaveAttribute("data-variant", "destructive-outline");
+    fireEvent.click(screen.getByRole("switch", { name: "Enable tool client" }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(replaceToolClient).toHaveBeenCalledWith(
@@ -337,8 +402,11 @@ describe("Tool clients settings", () => {
         expect.objectContaining({ expectedRevision: 1, enabled: false }),
       ),
     );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "External CLI" })).toHaveAccessibleDescription(/Disabled/u),
+    );
 
-    fireEvent.click(screen.getByRole("button", { name: "Rotate credential" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate credential…" }));
     const rotateDialog = screen.getByRole("dialog", { name: "Rotate credential?" });
     fireEvent.click(
       within(rotateDialog).getByRole("button", { name: "Rotate credential" }),
@@ -352,7 +420,7 @@ describe("Tool clients settings", () => {
       ).getByRole("button", { name: "I saved it — close" }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+    fireEvent.click(screen.getByRole("button", { name: "Revoke…" }));
     const revokeDialog = screen.getByRole("dialog", { name: "Revoke tool client?" });
     fireEvent.click(
       within(revokeDialog).getByRole("button", { name: "Revoke permanently" }),
@@ -361,6 +429,23 @@ describe("Tool clients settings", () => {
       expect(revokeToolClient).toHaveBeenCalledWith(clientId, 3),
     );
     expect(await screen.findByText(/credentials can no longer be used/u)).toBeVisible();
+  });
+
+  it("reports each validation problem where it applies", async () => {
+    const createToolClient = vi.fn();
+    render(<ToolClientsSettingsPage controls={controls({ createToolClient })} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "New client" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create client" }));
+    const name = screen.getByLabelText("Tool client name");
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(name).toHaveAccessibleDescription("Enter a tool client name.");
+
+    fireEvent.change(name, { target: { value: "External CLI" } });
+    expect(name).not.toHaveAttribute("aria-invalid");
+    fireEvent.click(screen.getByRole("button", { name: "Create client" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Select at least one tool.");
+    expect(createToolClient).not.toHaveBeenCalled();
   });
 
   it("recovers an admitted create without inventing a missing secret", async () => {
@@ -377,6 +462,7 @@ describe("Tool clients settings", () => {
     fireEvent.change(screen.getByLabelText("Tool client name"), {
       target: { value: "External CLI" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Threads" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Thread status" }));
     fireEvent.click(screen.getByRole("button", { name: "Create client" }));
 
@@ -392,6 +478,36 @@ describe("Tool clients settings", () => {
     expect(
       screen.queryByRole("dialog", { name: "Save this credential now" }),
     ).toBeNull();
-    expect(screen.getByRole("button", { name: "Rotate credential" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Rotate credential…" })).toBeVisible();
+  });
+
+  it("closes an open editor on Escape, asking first only when it has edits", async () => {
+    const onReturn = vi.fn();
+    function EscapeHost(): null {
+      useSettingsEscape({ location: { page: "tool_clients" }, navInSidebar: true, onReturn });
+      return null;
+    }
+    render(<><EscapeHost /><ToolClientsSettingsPage controls={controls({
+      listToolClients: vi.fn().mockResolvedValue({ items: [toolClient()] }),
+    })} /></>);
+    const user = userEvent.setup();
+    const editor = await screen.findByRole("region", { name: "Tool client editor" });
+    // An untouched new client closes without asking.
+    await user.click(screen.getByRole("button", { name: "New client" }));
+    expect(within(editor).getByLabelText("Name")).toHaveValue("");
+    await user.keyboard("{Escape}");
+    expect(within(editor).queryByLabelText("Name")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /External CLI/u }));
+    await user.type(within(editor).getByLabelText("Name"), " edited");
+    await user.keyboard("{Escape}{Escape}");
+    await user.click(await screen.findByRole("button", { name: "Keep editing" }));
+    expect(within(editor).getByLabelText("Name")).toHaveValue("External CLI edited");
+    await user.keyboard("{Escape}");
+    await user.click(await screen.findByRole("button", { name: "Discard and close" }));
+    await waitFor(() => expect(within(editor).queryByLabelText("Name")).toBeNull());
+    expect(onReturn).not.toHaveBeenCalled();
+    await user.keyboard("{Escape}");
+    expect(onReturn).toHaveBeenCalledOnce();
   });
 });

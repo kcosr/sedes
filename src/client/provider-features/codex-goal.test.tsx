@@ -149,7 +149,11 @@ describe("codex.goal@1 client feature", () => {
     expect(chip).toBeEnabled();
     fireEvent.click(chip);
 
+    const popover = screen.getByRole("dialog", { name: "Goal" });
+    expect(popover).toHaveAttribute("data-slot", "popover-content");
+    expect(popover).toHaveAttribute("data-side", "top");
     const objective = screen.getByLabelText("Objective");
+    expect(objective).toHaveAttribute("data-slot", "textarea");
     expect(objective).toHaveFocus();
     fireEvent.change(objective, {
       target: { value: "  Finish the migration  " },
@@ -378,7 +382,7 @@ describe("codex.goal@1 client feature", () => {
     expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
   });
 
-  it("uses a modal bottom card on mobile and preserves a dirty objective across dismissal", async () => {
+  it("uses the shared bottom sheet on mobile and preserves a dirty objective across dismissal", async () => {
     renderGoal(
       snapshot({ state: unsetState(), actions: ["create"] }),
       undefined,
@@ -389,7 +393,8 @@ describe("codex.goal@1 client feature", () => {
     fireEvent.click(trigger);
 
     const dialog = screen.getByRole("dialog", { name: "Goal" });
-    expect(dialog).toHaveClass("codex-goal-mobile-card");
+    expect(dialog).toHaveAttribute("data-slot", "dialog-content");
+    expect(dialog).toHaveAttribute("data-layout", "sheet");
     const objective = screen.getByLabelText("Objective");
     expect(objective).toHaveFocus();
     fireEvent.change(objective, { target: { value: "Keep this draft" } });
@@ -422,7 +427,15 @@ describe("codex.goal@1 client feature", () => {
     expect(document.activeElement?.tagName).not.toBe("TEXTAREA");
   });
 
-  it("lifts the mobile card above the visual viewport keyboard inset", async () => {
+  it("lifts the mobile sheet above the visual viewport keyboard inset", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        matches: true,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
     const viewport = new EventTarget() as EventTarget & {
       height: number;
       offsetTop: number;
@@ -448,7 +461,7 @@ describe("codex.goal@1 client feature", () => {
 
     await waitFor(() =>
       expect(screen.getByRole("dialog", { name: "Goal" })).toHaveStyle({
-        "--codex-goal-keyboard-inset": "280px",
+        "--keyboard-inset": "280px",
       }),
     );
 
@@ -457,7 +470,7 @@ describe("codex.goal@1 client feature", () => {
     act(() => viewport.dispatchEvent(new Event("resize")));
     await waitFor(() =>
       expect(screen.getByRole("dialog", { name: "Goal" })).toHaveStyle({
-        "--codex-goal-keyboard-inset": "150px",
+        "--keyboard-inset": "150px",
       }),
     );
   });
@@ -491,7 +504,7 @@ describe("codex.goal@1 client feature", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     const dialog = screen.getByRole("dialog", { name: "Goal" });
-    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
     fireEvent.keyDown(dialog, { key: "Escape" });
     expect(dialog).toBeInTheDocument();
 
@@ -502,7 +515,7 @@ describe("codex.goal@1 client feature", () => {
     expect(
       screen.getByText(/The Goal change could not be confirmed/i),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
   });
 
   it("omits unknown composer features", () => {

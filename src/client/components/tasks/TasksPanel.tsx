@@ -1,16 +1,17 @@
 import { createPortal } from "react-dom";
 import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
-import { useKeyboardInset } from "../../app/use-keyboard-inset.js";
-import * as Dialog from "@radix-ui/react-dialog";
 import { DismissableLayer } from "@radix-ui/react-dismissable-layer";
-import * as Popover from "@radix-ui/react-popover";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from "@client/components/ui/dialog";
 import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type DragEvent as ReactDragEvent,
 } from "react";
 import {
@@ -58,6 +59,16 @@ import {
   type ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
 import { Button } from "@client/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@client/components/ui/dropdown-menu";
 import { Input } from "@client/components/ui/input";
 import { Textarea } from "@client/components/ui/textarea";
 import { SearchableSelect } from "../ui/searchable-select.js";
@@ -835,8 +846,8 @@ function TasksPanelBody({
               />
             </Button>
           )}
-          <Popover.Root open={active && optionsOpen} onOpenChange={setOptionsOpen}>
-            <Popover.Trigger asChild>
+          <DropdownMenu open={active && optionsOpen} onOpenChange={setOptionsOpen}>
+            <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -844,41 +855,32 @@ function TasksPanelBody({
               >
                 <MoreHorizontal size={16} strokeWidth={1.8} />
               </Button>
-            </Popover.Trigger>
-            <Popover.Portal>
-              <Popover.Content
-                className="menu-popover tasks-panel-menu"
-                align="end"
-                sideOffset={6}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Default view</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                aria-label="Default view"
+                value={preferences.defaultView}
+                onValueChange={(value) => {
+                  const next = VIEW_ORDER.find((candidate) => candidate === value);
+                  if (next) setTasksPanelDefaultView(next);
+                }}
               >
-                <div className="tasks-panel-menu-group">
-                  <span className="tasks-panel-menu-label">Default view</span>
-                  <SegmentedControl
-                    ariaLabel="Default view"
-                    size="small"
-                    value={preferences.defaultView}
-                    options={VIEW_ORDER.map((candidate) => ({
-                      value: candidate,
-                      label: VIEW_LABEL[candidate],
-                    }))}
-                    onChange={(value) =>
-                      setTasksPanelDefaultView(value as TasksView)
-                    }
-                  />
-                </div>
-                <label className="tasks-panel-menu-toggle">
-                  <input
-                    type="checkbox"
-                    checked={preferences.searchContent}
-                    onChange={(event) =>
-                      setTasksPanelSearchContent(event.target.checked)
-                    }
-                  />
-                  Search task content
-                </label>
-              </Popover.Content>
-            </Popover.Portal>
-          </Popover.Root>
+                {VIEW_ORDER.map((candidate) => (
+                  <DropdownMenuRadioItem key={candidate} value={candidate}>
+                    {VIEW_LABEL[candidate]}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={preferences.searchContent}
+                onCheckedChange={setTasksPanelSearchContent}
+              >
+                Search task content
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             variant="ghost"
             size="icon-sm"
@@ -1258,8 +1260,9 @@ function TasksPanelBody({
                 <span className="tasks-editor-title">Edit task</span>
                 <div className="tasks-editor-actions">
                   <Button
-                    variant="destructive"
+                    variant="ghost"
                     size="icon-sm"
+                    className="text-destructive hover:text-destructive"
                     aria-label="Delete task"
                     disabled={busy}
                     onClick={() => setConfirmingDelete(true)}
@@ -1444,7 +1447,6 @@ export function TasksPanel({
     target.style.display = "contents";
     return target;
   });
-  const keyboardInset = useKeyboardInset(active && mobile && preferences.open);
   const currentRoute = useRoute();
   const route = retainedRoute ?? currentRoute;
   const rightOffset = usePrimaryRightAnchor(
@@ -1468,49 +1470,43 @@ export function TasksPanel({
   if (!preferences.open) return null;
 
   const surface = mobile ? (
-      <Dialog.Root
+      <Dialog
         open
         onOpenChange={(open) => {
           if (!open) close();
         }}
       >
-        <Dialog.Portal>
-          <Dialog.Overlay className="dialog-overlay" />
-          <Dialog.Content
-            className="tasks-sheet"
-            onCloseAutoFocus={(event) => {
-              if (!activeRef.current) event.preventDefault();
-            }}
-            onInteractOutside={(event) => {
-              // The retained body is portaled into this surface. Its React
-              // event ancestry differs from its physical DOM ancestry.
-              if (bodyTarget.contains(event.detail.originalEvent.target as Node)) event.preventDefault();
-            }}
-            aria-describedby={undefined}
-            onEscapeKeyDown={(event) => {
-              if (
-                document.querySelector(
-                  '.tasks-sheet [data-task-detail-open="true"]',
-                ) !== null
-              ) {
-                // Android hardware Back dispatches this synthetic Escape.
-                // Keep the sheet mounted while its open detail closes; the
-                // next Back follows Radix's normal sheet dismissal path.
-                event.preventDefault();
-                window.dispatchEvent(new Event(CLOSE_TASK_DETAIL_EVENT));
-              }
-            }}
-            style={
-              {
-                "--tasks-keyboard-inset": `${keyboardInset}px`,
-              } as CSSProperties
+        <DialogContent
+          layout="sheet"
+          showClose={false}
+          className="tasks-sheet"
+          onCloseAutoFocus={(event) => {
+            if (!activeRef.current) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            // The retained body is portaled into this surface. Its React
+            // event ancestry differs from its physical DOM ancestry.
+            if (bodyTarget.contains(event.detail.originalEvent.target as Node)) event.preventDefault();
+          }}
+          aria-describedby={undefined}
+          onEscapeKeyDown={(event) => {
+            if (
+              document.querySelector(
+                '.tasks-sheet [data-task-detail-open="true"]',
+              ) !== null
+            ) {
+              // Android hardware Back dispatches this synthetic Escape.
+              // Keep the sheet mounted while its open detail closes; the
+              // next Back follows Radix's normal sheet dismissal path.
+              event.preventDefault();
+              window.dispatchEvent(new Event(CLOSE_TASK_DETAIL_EVENT));
             }
-          >
-            <Dialog.Title className="sr-only">Tasks</Dialog.Title>
-            <StablePaneSlot target={bodyTarget} style={{ display: "contents" }} />
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+          }}
+        >
+          <DialogTitle className="sr-only">Tasks</DialogTitle>
+          <StablePaneSlot target={bodyTarget} style={{ display: "contents" }} />
+        </DialogContent>
+      </Dialog>
     ) : (
     <DismissableLayer
       asChild

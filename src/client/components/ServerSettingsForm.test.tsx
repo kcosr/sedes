@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ServerSettingsForm, type ServerSettingsControls } from "./ServerSettingsForm.js";
 const profile = { id: "10000000-0000-4000-8000-000000000001", name: "Home", baseUrl: "https://sedes.example" };
@@ -16,8 +18,32 @@ describe("Android saved server connections", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Remove Home" })).not.toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "Remove Home" }));
     expect(actions.remove).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm remove Home" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Remove Home?" })).getByRole("button", { name: "Remove connection" }));
     await waitFor(() => expect(actions.remove).toHaveBeenCalledWith(profile.id));
+  });
+  it("returns focus to Remove on cancel and to a surviving connection after removing", async () => {
+    const user = userEvent.setup();
+    const office = { id: "10000000-0000-4000-8000-000000000002", name: "Office", baseUrl: "https://office.example" };
+    function Harness() {
+      const [profiles, setProfiles] = useState([profile, office]);
+      const actions: ServerSettingsControls = {
+        connections: { version: 1, profiles, selectedProfileId: profile.id },
+        save: vi.fn(), connect: vi.fn(),
+        remove: async (id) => setProfiles((current) => current.filter((candidate) => candidate.id !== id)),
+      };
+      return <ServerSettingsForm controls={actions} />;
+    }
+    render(<Harness />);
+    const removeHome = screen.getByRole("button", { name: "Remove Home" });
+    await user.click(removeHome);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(removeHome).toHaveFocus());
+    await user.click(removeHome);
+    await user.click(within(screen.getByRole("dialog", { name: "Remove Home?" })).getByRole("button", { name: "Remove connection" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Remove Office" })).toHaveFocus());
+    await user.click(screen.getByRole("button", { name: "Remove Office" }));
+    await user.click(screen.getByRole("button", { name: "Remove connection" }));
+    await waitFor(() => expect(screen.getByLabelText("Connection name")).toHaveFocus());
   });
   it("adds a normalized named profile without secrets or an unauthenticated API probe", async () => {
     const actions = controls();
@@ -34,7 +60,7 @@ describe("Android saved server connections", () => {
     fireEvent.change(screen.getByLabelText("Connection name"), { target: { value: "Office" } });
     fireEvent.change(screen.getByLabelText("Sedes server URL"), { target: { value: "https://office.example" } });
     fireEvent.click(screen.getByRole("button", { name: "Add & connect" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Storage unavailable");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Storage unavailable");
     expect(screen.getByLabelText("Connection name")).toHaveValue("Office");
   });
 });

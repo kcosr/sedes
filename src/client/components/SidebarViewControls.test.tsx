@@ -70,7 +70,7 @@ function renderControls(overrides?: Partial<SidebarViewPreferences>) {
 
 async function openOptions(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByTestId("view-options-trigger"));
-  return await screen.findByRole("dialog", { name: "View options" });
+  return await screen.findByRole("menu", { name: "View options" });
 }
 
 describe("SidebarViewControls", () => {
@@ -101,19 +101,19 @@ describe("SidebarViewControls", () => {
     expect(handlers.onGroupByChange).toHaveBeenCalledExactlyOnceWith("project");
   });
 
-  it("group-by row selects the view and closes the popover", async () => {
+  it("group-by row selects the view and closes the menu", async () => {
     const user = userEvent.setup();
     const { handlers } = renderControls();
     await openOptions(user);
 
-    const row = screen.getByRole("radio", { name: "Timeline" });
+    const row = screen.getByRole("menuitemradio", { name: "Timeline" });
     expect(row).toHaveAttribute("aria-checked", "false");
     await user.click(row);
 
     expect(handlers.onGroupByChange).toHaveBeenCalledExactlyOnceWith("time");
     await waitFor(() =>
       expect(
-        screen.queryByRole("dialog", { name: "View options" }),
+        screen.queryByRole("menu", { name: "View options" }),
       ).not.toBeInTheDocument(),
     );
   });
@@ -122,9 +122,9 @@ describe("SidebarViewControls", () => {
     const user = userEvent.setup();
     const { handlers } = renderControls({ groupBy: "time" });
     await openOptions(user);
-    const stackOptions = screen.getByRole("radiogroup", { name: "Stack by" });
+    const stackOptions = screen.getByRole("group", { name: "Stack by" });
     await user.click(
-      within(stackOptions).getByRole("radio", { name: "Thread groups" }),
+      within(stackOptions).getByRole("menuitemradio", { name: "Thread groups" }),
     );
     expect(handlers.onStackByChange).toHaveBeenCalledExactlyOnceWith("group");
     expect(handlers.onGroupByChange).not.toHaveBeenCalled();
@@ -134,13 +134,13 @@ describe("SidebarViewControls", () => {
     const user = userEvent.setup();
     renderControls({ groupBy: "project", stackBy: "project" });
     await openOptions(user);
-    const groupOptions = screen.getByRole("radiogroup", { name: "Group by" });
-    const stackOptions = screen.getByRole("radiogroup", { name: "Stack by" });
+    const groupOptions = screen.getByRole("group", { name: "Group by" });
+    const stackOptions = screen.getByRole("group", { name: "Stack by" });
     expect(
-      within(groupOptions).getByRole("radio", { name: "Projects" }),
+      within(groupOptions).getByRole("menuitemradio", { name: "Projects" }),
     ).toHaveAttribute("aria-checked", "true");
     expect(
-      within(stackOptions).getByRole("radio", { name: "Projects" }),
+      within(stackOptions).getByRole("menuitemradio", { name: "Projects" }),
     ).toHaveAttribute("aria-checked", "true");
   });
 
@@ -150,7 +150,7 @@ describe("SidebarViewControls", () => {
     await openOptions(user);
 
     // project mode default: sortBy activity, direction desc.
-    const active = screen.getByRole("radio", {
+    const active = screen.getByRole("menuitemradio", {
       name: "Activity, descending — activate to reverse",
     });
     expect(active).toHaveAttribute("aria-checked", "true");
@@ -159,10 +159,10 @@ describe("SidebarViewControls", () => {
     await user.click(active);
     expect(handlers.onSortChange).toHaveBeenCalledExactlyOnceWith("activity");
     expect(
-      screen.getByRole("dialog", { name: "View options" }),
+      screen.getByRole("menu", { name: "View options" }),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("radio", { name: "Alphabetical" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Alphabetical" }));
     expect(handlers.onSortChange).toHaveBeenLastCalledWith("alpha");
   });
 
@@ -174,18 +174,18 @@ describe("SidebarViewControls", () => {
     // Only the active row carries the direction/flip affordance; inactive
     // rows keep their plain visible label.
     expect(
-      screen.getByRole("radio", {
+      screen.getByRole("menuitemradio", {
         name: "Activity, descending — activate to reverse",
       }),
     ).toHaveAttribute("data-direction", "desc");
     expect(
-      screen.getByRole("radio", { name: "Alphabetical" }),
+      screen.getByRole("menuitemradio", { name: "Alphabetical" }),
     ).toBeInTheDocument();
 
     // Parent flips direction after the re-select; the announcement follows.
     rerender({ modes: { project: { direction: "asc" } } });
     expect(
-      screen.getByRole("radio", {
+      screen.getByRole("menuitemradio", {
         name: "Activity, ascending — activate to reverse",
       }),
     ).toHaveAttribute("data-direction", "asc");
@@ -196,20 +196,20 @@ describe("SidebarViewControls", () => {
     const { handlers } = renderControls({ groupBy: "time" });
     await openOptions(user);
 
-    await user.click(screen.getByRole("radio", { name: "Card" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Card" }));
     expect(handlers.onDensityChange).toHaveBeenCalledExactlyOnceWith("card");
 
     await user.click(
-      screen.getByRole("checkbox", { name: "Peek details on hover" }),
+      screen.getByRole("menuitemcheckbox", { name: "Peek details on hover" }),
     );
     expect(handlers.onPeekToggle).toHaveBeenCalledOnce();
 
-    await user.click(screen.getByRole("checkbox", { name: "Pinned only" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Pinned only" }));
     expect(handlers.onPinnedOnlyToggle).toHaveBeenCalledOnce();
 
-    await user.click(screen.getByRole("checkbox", { name: "Snoozed" }));
-    await user.click(screen.getByRole("checkbox", { name: "Settled" }));
-    await user.click(screen.getByRole("checkbox", { name: "Drafts" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Snoozed" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Settled" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Drafts" }));
     expect(handlers.onShowToggle.mock.calls).toEqual([
       ["snoozed"],
       ["settled"],
@@ -217,7 +217,7 @@ describe("SidebarViewControls", () => {
     ]);
 
     expect(
-      screen.getByRole("dialog", { name: "View options" }),
+      screen.getByRole("menu", { name: "View options" }),
     ).toBeInTheDocument();
   });
 
@@ -226,11 +226,11 @@ describe("SidebarViewControls", () => {
     const { handlers } = renderControls({ groupBy: "time", stackBy: "group" });
     await openOptions(user);
 
-    await user.click(screen.getByRole("radio", { name: "Card" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Card" }));
     await user.click(
-      screen.getByRole("checkbox", { name: "Peek details on hover" }),
+      screen.getByRole("menuitemcheckbox", { name: "Peek details on hover" }),
     );
-    await user.click(screen.getByRole("checkbox", { name: "Pinned only" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Pinned only" }));
 
     expect(handlers.onDensityChange).toHaveBeenCalledExactlyOnceWith("card");
     expect(handlers.onPeekToggle).toHaveBeenCalledOnce();
@@ -242,20 +242,20 @@ describe("SidebarViewControls", () => {
     const { handlers } = renderControls();
     await openOptions(user);
 
-    expect(screen.queryByRole("radio", { name: "Compact" })).toBeNull();
-    expect(screen.queryByRole("radio", { name: "Card" })).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: "Compact" })).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: "Card" })).toBeNull();
     expect(
-      screen.queryByRole("checkbox", { name: "Peek details on hover" }),
+      screen.queryByRole("menuitemcheckbox", { name: "Peek details on hover" }),
     ).toBeNull();
-    expect(screen.queryByRole("checkbox", { name: "Pinned only" })).toBeNull();
+    expect(screen.queryByRole("menuitemcheckbox", { name: "Pinned only" })).toBeNull();
     expect(handlers.onDensityChange).not.toHaveBeenCalled();
     expect(handlers.onPeekToggle).not.toHaveBeenCalled();
 
     // Sort, Show, and fork-families rows stay live in Projects mode.
-    await user.click(screen.getByRole("radio", { name: "Alphabetical" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Alphabetical" }));
     expect(handlers.onSortChange).toHaveBeenCalledExactlyOnceWith("alpha");
     await user.click(
-      screen.getByRole("checkbox", { name: "Group fork families" }),
+      screen.getByRole("menuitemcheckbox", { name: "Group fork families" }),
     );
     expect(handlers.onGroupForksToggle).toHaveBeenCalledOnce();
   });
@@ -265,18 +265,18 @@ describe("SidebarViewControls", () => {
     const { handlers } = renderControls({ groupBy: "time" });
     await openOptions(user);
 
-    const archived = screen.getByRole("checkbox", { name: /Archived/ });
-    expect(archived).toBeDisabled();
+    const archived = screen.getByRole("menuitemcheckbox", { name: /Archived/ });
+    expect(archived).toHaveAttribute("aria-disabled", "true");
     expect(archived).toHaveTextContent(
       "Needs archived threads on the snapshot wire",
     );
     await user.click(archived).catch(() => {});
     expect(handlers.onShowToggle).not.toHaveBeenCalled();
 
-    const forks = screen.getByRole("checkbox", {
+    const forks = screen.getByRole("menuitemcheckbox", {
       name: /Group fork families/,
     });
-    expect(forks).toBeDisabled();
+    expect(forks).toHaveAttribute("aria-disabled", "true");
     expect(forks).toHaveTextContent("Forks list flat outside Projects");
     await user.click(forks).catch(() => {});
     expect(handlers.onGroupForksToggle).not.toHaveBeenCalled();
@@ -322,7 +322,7 @@ describe("SidebarViewControls", () => {
     const { handlers, view } = renderControls();
     await openOptions(user);
 
-    const row = screen.getByRole("checkbox", { name: "Backend icons" });
+    const row = screen.getByRole("menuitemcheckbox", { name: "Backend icons" });
     expect(row).toHaveAttribute("aria-checked", "true");
     await user.click(row);
     expect(handlers.onBackendIconsToggle).toHaveBeenCalledOnce();
@@ -333,7 +333,7 @@ describe("SidebarViewControls", () => {
     expect(screen.getByTestId("view-options-dirty-dot")).toBeInTheDocument();
     await openOptions(user);
     expect(
-      screen.getByRole("checkbox", { name: "Backend icons" }),
+      screen.getByRole("menuitemcheckbox", { name: "Backend icons" }),
     ).toHaveAttribute("aria-checked", "false");
   });
 
@@ -341,11 +341,11 @@ describe("SidebarViewControls", () => {
     const user = userEvent.setup();
     const project = renderControls({});
     await user.click(screen.getByTestId("view-options-trigger"));
-    expect(screen.queryByRole("radiogroup", { name: "Density" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Density" })).toBeNull();
     expect(
-      screen.queryByRole("checkbox", { name: "Peek details on hover" }),
+      screen.queryByRole("menuitemcheckbox", { name: "Peek details on hover" }),
     ).toBeNull();
-    expect(screen.queryByRole("checkbox", { name: "Pinned only" })).toBeNull();
+    expect(screen.queryByRole("menuitemcheckbox", { name: "Pinned only" })).toBeNull();
     project.view.unmount();
 
     // Sort overrides still apply in Projects mode, so they dirty it.
@@ -353,20 +353,20 @@ describe("SidebarViewControls", () => {
     expect(screen.getByTestId("view-options-dirty-dot")).toBeInTheDocument();
   });
 
-  it("reports popover open state through onOptionsOpenChange", async () => {
+  it("reports menu open state through onOptionsOpenChange", async () => {
     const user = userEvent.setup();
     const { handlers } = renderControls();
     await openOptions(user);
 
     expect(handlers.onOptionsOpenChange).toHaveBeenCalledExactlyOnceWith(true);
 
-    // Selecting a group-by row closes the popover and reports the close.
-    await user.click(screen.getByRole("radio", { name: "Timeline" }));
+    // Selecting a group-by row closes the menu and reports the close.
+    await user.click(screen.getByRole("menuitemradio", { name: "Timeline" }));
     expect(handlers.onOptionsOpenChange).toHaveBeenLastCalledWith(false);
     expect(handlers.onOptionsOpenChange.mock.calls).toEqual([[true], [false]]);
     await waitFor(() =>
       expect(
-        screen.queryByRole("dialog", { name: "View options" }),
+        screen.queryByRole("menu", { name: "View options" }),
       ).not.toBeInTheDocument(),
     );
   });
@@ -376,7 +376,56 @@ describe("SidebarViewControls", () => {
     const { handlers } = renderControls();
     await openOptions(user);
 
-    await user.click(screen.getByRole("button", { name: "Reset this view" }));
+    await user.click(screen.getByRole("menuitem", { name: "Reset this view" }));
+    expect(screen.getByRole("menu", { name: "View options" })).toBeInTheDocument();
     expect(handlers.onResetMode).toHaveBeenCalledOnce();
+  });
+
+  it("marks every choice with a trailing check and no leading icons", async () => {
+    const user = userEvent.setup();
+    renderControls({ groupBy: "time" });
+    const menu = await openOptions(user);
+
+    for (const row of within(menu).getAllByRole("menuitemradio")) {
+      expect(row.firstElementChild?.tagName.toLowerCase()).not.toBe("svg");
+    }
+    const timeline = within(
+      within(menu).getByRole("group", { name: "Group by" }),
+    ).getByRole("menuitemradio", { name: "Timeline" });
+    expect(timeline).toHaveAttribute("aria-checked", "true");
+    expect(timeline).toHaveAttribute("data-state", "checked");
+    expect(
+      within(menu).getByRole("menuitemcheckbox", { name: "Snoozed" }),
+    ).toHaveAttribute("data-state", "checked");
+  });
+
+  it("presents the same rows as a sheet under the touch density", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.includes("pointer: coarse"),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    const user = userEvent.setup();
+    const { handlers } = renderControls({ groupBy: "time" });
+    await user.click(screen.getByTestId("view-options-trigger"));
+    const sheet = await screen.findByRole("dialog", { name: "View options" });
+    expect(sheet).toHaveAttribute("data-menu-sheet");
+
+    await user.click(
+      within(sheet).getByRole("menuitemcheckbox", { name: "Snoozed" }),
+    );
+    expect(handlers.onShowToggle).toHaveBeenCalledExactlyOnceWith("snoozed");
+    expect(screen.getByRole("dialog", { name: "View options" })).toBeVisible();
+
+    await user.click(
+      within(sheet).getByRole("menuitemradio", { name: "Flat list" }),
+    );
+    expect(handlers.onGroupByChange).toHaveBeenCalledExactlyOnceWith("none");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "View options" })).toBeNull(),
+    );
   });
 });

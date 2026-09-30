@@ -40,7 +40,9 @@ describe("turn usage popover", () => {
     render(<TurnUsagePopover cache={cache} turnId="turn-1" onOpenChange={onOpenChange} />);
     expect(getUsage).not.toHaveBeenCalled();
     const trigger = screen.getByRole("button", { name: "Turn usage and cost" });
-    fireEvent.focus(trigger); await screen.findByRole("dialog", { name: "Turn usage" });
+    fireEvent.focus(trigger); const dialog = await screen.findByRole("dialog", { name: "Turn usage" });
+    expect(dialog).toHaveAttribute("data-slot", "popover-content");
+    expect(dialog).toHaveTextContent(/^Turn usage \(Experimental\)/);
     await screen.findByText("9,007,199,254,740,993");
     expect(screen.getByText("Cost unavailable")).toBeVisible();
     expect(screen.getByText("Partial")).toBeVisible();

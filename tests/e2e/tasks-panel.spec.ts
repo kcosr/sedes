@@ -4,7 +4,7 @@ import { mkdir } from "node:fs/promises";
 import { loadE2ERunContext } from "./run-context.js";
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
-import { capture, createDraftThread } from "./helpers";
+import { capture, createDraftThread, overlaySettled } from "./helpers";
 import {
   normalizedApplicationSnapshotSchema,
   taskMutationResultSchema,
@@ -103,12 +103,16 @@ test.describe.serial("Tasks panel", () => {
       name: "Tasks panel options",
     });
     await panelOptions.click();
-    const searchContent = page.getByRole("checkbox", {
+    await expect(
+      page.getByRole("menuitemradio", { name: "Thread", exact: true }),
+    ).toBeChecked();
+    const searchContent = page.getByRole("menuitemcheckbox", {
       name: "Search task content",
     });
     await expect(searchContent).not.toBeChecked();
+    // Choosing a menu row closes the menu.
     await searchContent.click();
-    await panelOptions.click();
+    await expect(page.getByRole("menu")).toHaveCount(0);
     await expect(panel.getByRole("radio", { name: "Project" })).toBeEnabled();
     await expect(panel.getByRole("radio", { name: "Thread" })).toBeEnabled();
     await panel.getByRole("radio", { name: "Project" }).click();
@@ -392,15 +396,15 @@ test.describe.serial("Tasks panel", () => {
     ).toBeVisible();
     await panelOptions.click();
     await expect(
-      page.getByRole("checkbox", { name: "Search task content" }),
+      page.getByRole("menuitemcheckbox", { name: "Search task content" }),
     ).toBeChecked();
-    await panelOptions.click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
 
     // On mobile, Tasks is available without expanding the thread toolbar.
     await panel.getByRole("button", { name: "Close Tasks panel" }).click();
     await page.setViewportSize({ width: 412, height: 915 });
-    const toolbarToggle = page.getByRole("button", { name: "Show thread toolbar" });
-    await expect(toolbarToggle).toBeVisible();
+    await expect(page.getByTestId("thread-controls")).toBeHidden();
     await expect(threadTasksToggle).toBeVisible();
     await threadTasksToggle.click();
     const sheet = page.getByRole("dialog", { name: "Tasks", exact: true });
@@ -428,7 +432,7 @@ test.describe.serial("Tasks panel", () => {
     await expect(sheet.getByRole("button", { name: 'View "Global errand"' })).toBeVisible();
     await capture(page, testInfo, "tasks-mobile-header.png");
     await sheet.getByRole("button", { name: "Close Tasks panel" }).click();
-    await expect(toolbarToggle).toBeVisible();
+    await expect(page.getByRole("button", { name: "Thread actions" })).toBeVisible();
     await page.setViewportSize({ width: 1440, height: 900 });
     await threadTasksToggle.click();
 
@@ -463,7 +467,7 @@ test.describe.serial("Tasks panel", () => {
     await page.getByRole("button", { name: "Thread actions" }).click();
     await page
       .getByTestId("thread-actions-menu")
-      .getByRole("button", { name: "Archive", exact: true })
+      .getByRole("menuitem", { name: "Archive", exact: true })
       .click();
     const dialog = page.getByRole("dialog", { name: "Archive this thread" });
     await expect(dialog).toBeVisible();
@@ -515,7 +519,7 @@ for (const action of ["Settle", "Archive"] as const) {
     }
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page.getByTestId("thread-actions-menu").getByRole("button", { name: action, exact: true }).click();
+    await page.getByTestId("thread-actions-menu").getByRole("menuitem", { name: action, exact: true }).click();
     const dialog = page.getByRole("dialog", { name: `${action} this thread` });
     for (const task of tasks) await expect(dialog.getByText(task.title, { exact: true })).toBeVisible();
     await dialog.getByRole("radio", { name: "Complete all", exact: true }).click();
@@ -580,6 +584,7 @@ test("mobile task destinations remain usable with long lists and short viewports
   await expect(chooser.getByRole("option")).toHaveCount(12);
   const options = chooser.getByRole("listbox");
   expect(await options.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  await overlaySettled(chooser);
   const bounds = await chooser.boundingBox();
   expect(bounds!.y).toBeGreaterThanOrEqual(0);
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(915);
@@ -598,6 +603,7 @@ test("mobile task destinations remain usable with long lists and short viewports
   await page.setViewportSize({ width: 412, height: 480 });
   await assignment.getByRole("combobox", { name: "Search projects" }).fill("Chooser project");
   await expect(assignment.getByRole("option")).toHaveCount(12);
+  await overlaySettled(assignment);
   const compactBounds = await assignment.boundingBox();
   expect(compactBounds!.y).toBeGreaterThanOrEqual(0);
   expect(compactBounds!.y + compactBounds!.height).toBeLessThanOrEqual(480);

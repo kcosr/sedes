@@ -1,0 +1,220 @@
+/* Settings › Agents (the settings kit's split inventory) and the exact tool
+   selector shared with Settings › Tool clients. */
+.agents-settings {
+  min-width: 0;
+}
+
+.agents-unavailable {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: var(--space-5);
+}
+
+.agents-list-status {
+  padding-inline: var(--space-3);
+}
+
+.agents-load-more {
+  justify-self: stretch;
+}
+
+.agents-description {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.agent-configuration-description {
+  display: block;
+}
+
+.agent-configuration-resolved {
+  margin: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+/* ── Exact tool selector ──
+   One collapsible item per group: the select-all column, then the trigger
+   (chevron, title · summary, description). Tool checkboxes sit under the
+   chevron, so tool labels line up with the group title. */
+.exact-tool-selector {
+  container: exact-tool-selector / inline-size;
+  display: grid;
+  min-width: 0;
+}
+
+.exact-tool-group {
+  display: grid;
+  min-width: 0;
+}
+
+.exact-tool-group + .exact-tool-group {
+  border-top: 1px solid var(--border-soft);
+}
+
+.exact-tool-group-header {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+}
+
+/* The label around the select-all checkbox widens its target to the row. */
+.exact-tool-group-select {
+  display: flex;
+  width: calc(var(--icon-md) + var(--space-2));
+  flex: none;
+  align-items: center;
+}
+
+.exact-tool-group-trigger {
+  display: flex;
+  min-width: 0;
+  min-height: 3rem;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2-5);
+  padding: var(--space-1-5) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: none;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .exact-tool-group-trigger:hover {
+    background: var(--hover);
+  }
+}
+
+.exact-tool-group-trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.exact-tool-group-trigger > svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  flex: none;
+  color: var(--muted-foreground);
+  transition: transform var(--duration-fast);
+}
+
+.exact-tool-group[data-state="open"] .exact-tool-group-trigger > svg {
+  transform: rotate(90deg);
+}
+
+.exact-tool-group-text {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-0-5);
+}
+
+.exact-tool-group-heading {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1-5);
+}
+
+.exact-tool-group-heading > strong {
+  font-size: var(--text-ui);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+}
+
+.exact-tool-group[data-kind="unavailable"] .exact-tool-group-heading > strong,
+.exact-tool-group-summary > [data-attention="true"] {
+  color: var(--warning);
+}
+
+.exact-tool-group-summary {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-snug);
+}
+
+.exact-tool-group-summary > [data-attention="true"] {
+  font-weight: var(--weight-medium);
+}
+
+/* The description keeps to one line while the group is closed. */
+.exact-tool-group-text > small {
+  overflow: hidden;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exact-tool-group[data-state="open"] .exact-tool-group-text > small {
+  white-space: normal;
+}
+
+.exact-tool-list {
+  display: grid;
+  min-width: 0;
+  column-gap: var(--space-6);
+  padding: 0 0 var(--space-2) calc(var(--icon-md) + var(--space-2) + var(--space-2));
+}
+
+@container exact-tool-selector (width >= 640px) {
+  .exact-tool-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.exact-tool-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding-block: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+}
+
+.exact-tool-row > [data-slot="checkbox"] {
+  margin-top: var(--space-0-5);
+}
+
+.exact-tool-row:has([data-slot="checkbox"]:disabled) > .exact-tool-text {
+  opacity: var(--disabled-opacity);
+}
+
+.exact-tool-text {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-0-5);
+}
+
+.exact-tool-text > strong {
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+}
+
+.exact-tool-text > small {
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+.exact-tool-text > .exact-tool-effect {
+  width: fit-content;
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+}
+
+.exact-tool-text > .exact-tool-effect[data-risk="true"],
+.exact-tool-text > .exact-tool-unavailable {
+  color: var(--warning);
+}

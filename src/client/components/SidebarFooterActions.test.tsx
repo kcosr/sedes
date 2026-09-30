@@ -184,7 +184,9 @@ describe("SidebarFooterActions", () => {
     await user.click(trigger);
 
     const sheet = screen.getByRole("dialog", { name: "Warnings" });
-    expect(sheet).toHaveClass("advisory-center-sheet");
+    // A side panel over the drawer (the sidebar that opened it).
+    expect(sheet).toHaveAttribute("data-layout", "side");
+    expect(sheet).toHaveAttribute("data-layer", "over-dialog");
     expect(sheet).toHaveAttribute("aria-modal", "true");
     expect(sheet).toHaveAccessibleDescription(
       "Active application and backend warnings.",
@@ -418,7 +420,8 @@ describe("SidebarFooterActions", () => {
 
     await user.click(screen.getByRole("button", { name: "More" }));
     await user.click(screen.getByRole("menuitem", { name: "Agents" }));
-    expect(callbacks.onOpenAgents).toHaveBeenCalledOnce();
+    // Agents open in Settings; focus comes back to the More button.
+    expect(callbacks.onOpenAgents).toHaveBeenCalledExactlyOnceWith(screen.getByRole("button", { name: "More" }));
     expect(screen.queryByRole("menu")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "More" }));

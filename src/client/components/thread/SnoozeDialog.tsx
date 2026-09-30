@@ -1,7 +1,18 @@
-import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useState } from "react";
-import { X } from "lucide-react";
 import { Button } from "@client/components/ui/button";
+import {
+  Dialog,
+  DialogAlert,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@client/components/ui/dialog";
+import { Field } from "@client/components/ui/field";
+import { Input } from "@client/components/ui/input";
+import { Textarea } from "@client/components/ui/textarea";
 
 export function SnoozeDialog({
   open,
@@ -17,11 +28,7 @@ export function SnoozeDialog({
     wakeReminder?: string;
   }) => Promise<void>;
   onRemindNow: (wakeReminder: string) => Promise<void>;
-  /**
-   * Radix returns dialog focus to `Dialog.Trigger`; this dialog is controlled
-   * (opened from a menu row that unmounts with its menu), so without an
-   * explicit target closing drops focus to `<body>`.
-   */
+  /** Focus target on close; the opening menu row unmounts with its menu. */
   returnFocusRef?: React.RefObject<HTMLElement | null>;
 }): React.JSX.Element {
   const [snoozeUntil, setSnoozeUntil] = useState(() =>
@@ -29,7 +36,8 @@ export function SnoozeDialog({
   );
   const [wakeReminder, setWakeReminder] = useState("");
   const [error, setError] = useState("");
-  const [pending, setPending] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"snooze" | "remind">();
+  const pending = pendingAction !== undefined;
 
   useEffect(() => {
     if (!open) return;
@@ -42,7 +50,7 @@ export function SnoozeDialog({
       setError("Choose a snooze time in the future.");
       return;
     }
-    setPending(true);
+    setPendingAction("snooze");
     setError("");
     try {
       await onSnooze({
@@ -58,14 +66,14 @@ export function SnoozeDialog({
           : "The thread could not be snoozed.",
       );
     } finally {
-      setPending(false);
+      setPendingAction(undefined);
     }
   };
 
   const remindNow = async () => {
     const reminder = wakeReminder.trim();
     if (!reminder) return;
-    setPending(true);
+    setPendingAction("remind");
     setError("");
     try {
       await onRemindNow(reminder);
@@ -78,126 +86,136 @@ export function SnoozeDialog({
           : "The reminder could not be added.",
       );
     } finally {
-      setPending(false);
+      setPendingAction(undefined);
     }
   };
 
   return (
-    <Dialog.Root
+    <Dialog
       open={open}
       onOpenChange={(next) => {
+        if (pending) return;
         onOpenChange(next);
         if (!next) setError("");
       }}
     >
-      <Dialog.Portal>
-        <Dialog.Overlay
-          className="dialog-overlay over-drawer"
-          data-testid="dialog-overlay"
-        />
-        <Dialog.Content
-          className="dialog-card over-drawer"
-          aria-describedby="snooze-description"
-          onCloseAutoFocus={(event) => {
-            const target = returnFocusRef?.current;
-            if (!target?.isConnected) return;
-            event.preventDefault();
-            target.focus();
-          }}
-        >
-          <Dialog.Title>Snooze this thread</Dialog.Title>
-          <Dialog.Description id="snooze-description">
+      <DialogContent
+        size="md"
+        layer="over-dialog"
+        dismissible={!pending}
+        returnFocusRef={returnFocusRef}
+      >
+        <DialogHeader>
+          <DialogTitle>Snooze this thread</DialogTitle>
+          <DialogDescription>
             Choose when this thread returns to Active, or show its reminder now
             without snoozing.
-          </Dialog.Description>
-          <Dialog.Close asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="dialog-close"
-              aria-label="Close"
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody>
+          <div className="grid gap-2">
+            <Field label="Wake date and time">
+              <Input
+                type="datetime-local"
+                min={localDateTime(new Date(Date.now() + 60_000))}
+                value={snoozeUntil}
+                onChange={(event) => setSnoozeUntil(event.target.value)}
+              />
+            </Field>
+            <div
+              className="flex flex-wrap gap-1.5"
+              role="group"
+              aria-label="Quick picks"
             >
-              <X size={18} strokeWidth={1.8} />
-            </Button>
-          </Dialog.Close>
-          <label className="field">
-            <span>Wake date and time</span>
-            <input
-              type="datetime-local"
-              min={localDateTime(new Date(Date.now() + 60_000))}
-              value={snoozeUntil}
-              onChange={(event) => setSnoozeUntil(event.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>
-              Reminder <small>Optional when snoozing</small>
-            </span>
-            <textarea
-              className="snooze-reminder-input"
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-full"
+                onClick={() =>
+                  setSnoozeUntil(
+                    localDateTime(new Date(Date.now() + 3_600_000)),
+                  )
+                }
+              >
+                1 hour
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-full"
+                onClick={() => setSnoozeUntil(localDateTime(tomorrowMorning()))}
+              >
+                Tomorrow
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-full"
+                onClick={() => setSnoozeUntil(localDateTime(nextWeek()))}
+              >
+                Next week
+              </Button>
+            </div>
+          </div>
+          <Field
+            label={
+              <>
+                Reminder
+                <span className="font-normal text-(length:--text-meta) text-muted-foreground-2">
+                  Optional when snoozing
+                </span>
+              </>
+            }
+          >
+            <Textarea
+              className="min-h-22 resize-y"
               maxLength={1_000}
               value={wakeReminder}
               placeholder="What should I remember when I return?"
               onChange={(event) => setWakeReminder(event.target.value)}
             />
-            <small>{wakeReminder.length.toLocaleString()} / 1,000</small>
-          </label>
-          <div className="preset-row">
+            <span className="justify-self-end text-(length:--text-label) text-muted-foreground-2 tabular-nums">
+              {wakeReminder.length.toLocaleString()} / 1,000
+            </span>
+          </Field>
+          {error && <DialogAlert tone="danger">{error}</DialogAlert>}
+        </DialogBody>
+        <DialogFooter
+          start={
             <Button
               type="button"
-              variant="outline"
-              size="sm"
-              className="rounded-full"
-              onClick={() =>
-                setSnoozeUntil(
-                  localDateTime(new Date(Date.now() + 3_600_000)),
-                )
-              }
-            >
-              1 hour
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="rounded-full"
-              onClick={() => setSnoozeUntil(localDateTime(tomorrowMorning()))}
-            >
-              Tomorrow
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="rounded-full"
-              onClick={() => setSnoozeUntil(localDateTime(nextWeek()))}
-            >
-              Next week
-            </Button>
-          </div>
-          {error && (
-            <p className="notice error" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="dialog-actions">
-            <Dialog.Close asChild>
-              <Button variant="secondary">Cancel</Button>
-            </Dialog.Close>
-            <Button
               variant="outline"
               disabled={pending || !wakeReminder.trim()}
               onClick={() => void remindNow()}
             >
-              Remind now
+              {pendingAction === "remind" ? "Adding reminder…" : "Remind now"}
             </Button>
-            <Button disabled={pending} onClick={() => void snooze()}>
-              {pending ? "Snoozing…" : "Snooze"}
-            </Button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+          }
+        >
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={() => {
+              onOpenChange(false);
+              setError("");
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={pending}
+            onClick={() => void snooze()}
+          >
+            {pendingAction === "snooze" ? "Snoozing…" : "Snooze"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

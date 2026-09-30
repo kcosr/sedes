@@ -1,0 +1,130 @@
+/* New thread: a side dialog on the sidebar's edge on desktop (non-modal, no
+   scrim, sliding out of the sidebar), the shared bottom sheet under the
+   density switch. The dialog slots own the padding, scroll and footer. */
+[data-slot="dialog-content"].new-thread-target-picker[data-layout="side"] {
+  inset: 0 auto 0 var(--sidebar-width, 260px);
+  width: min(var(--dialog-width), calc(100vw - var(--sidebar-width, 260px)));
+  min-width: 320px;
+  border-width: 0 1px 0 0;
+  animation-name: new-thread-side-in;
+}
+
+html[data-sidebar-collapsed="true"]
+  [data-slot="dialog-content"].new-thread-target-picker[data-layout="side"] {
+  left: 0;
+  width: min(var(--dialog-width), 100vw);
+}
+
+[data-slot="dialog-content"].new-thread-target-picker[data-layout="side"][data-state="closed"] {
+  animation-name: new-thread-side-out;
+}
+
+@keyframes new-thread-side-in {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+
+@keyframes new-thread-side-out {
+  to {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+
+.new-thread-target-picker [data-slot="dialog-body"] {
+  gap: var(--space-3);
+}
+
+.new-thread-field-note {
+  margin: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-snug);
+}
+
+.new-thread-add-project {
+  align-self: flex-start;
+}
+
+.new-thread-agent-empty {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+}
+
+.new-thread-agent-empty > span {
+  flex: 1 1 100%;
+}
+
+/* Environment variables: labelled like the fields above, with the summary
+   button as its control. */
+.new-thread-variables {
+  display: grid;
+  gap: var(--space-1-5);
+}
+
+.new-thread-variables > h3 {
+  margin: 0;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+}
+
+.new-thread-variables > [data-slot="button"] {
+  height: auto;
+  min-height: var(--control-default);
+  justify-content: start;
+  white-space: normal;
+  text-align: left;
+}
+
+.new-thread-template-actions {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-soft);
+}
+
+.new-thread-template-status,
+.new-thread-template-editor {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.new-thread-template-status strong {
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+}
+
+.new-thread-template-status small,
+.new-thread-template-buttons > small {
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+.new-thread-template-buttons {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+/* The template editor's own actions: Delete leading, then Back and Save. */
+.new-thread-template-editor > .new-thread-template-buttons {
+  justify-content: flex-end;
+}
+
+@media (max-width: 819px), (pointer: coarse) {
+  .new-thread-add-project,
+  .new-thread-template-buttons > [data-slot="button"] {
+    height: var(--control-touch);
+  }
+}

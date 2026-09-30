@@ -611,7 +611,7 @@ describe("AgentToolSettingsDialog", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "List workspaces" }));
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
-    expect(screen.getByRole("checkbox", { name: "Enable agent tools" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Enable agent tools" })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: "List workspaces" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Access boundary" })).toBeDisabled();
     expect(onOpenChange).not.toHaveBeenCalled();
@@ -662,10 +662,9 @@ describe("AgentToolSettingsDialog", () => {
     await act(async () => mutation.reject(new Error("Policy conflict")));
 
     expect(screen.getByText(/changed in another client/i)).toBeVisible();
-    expect(screen.getByText("Policy conflict")).toHaveAttribute(
-      "role",
-      "alert",
-    );
+    expect(
+      screen.getByText("Policy conflict").closest('[role="alert"]'),
+    ).toHaveAttribute("data-tone", "danger");
     expect(onOpenChange).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: /^Save$/ })).toBeDisabled();
   });
@@ -698,7 +697,9 @@ describe("AgentToolSettingsDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     expect(screen.getByText(NATIVE_TOOL_CACHE_WARNING)).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    // The confirmation step offers Keep editing and Save changes; the X
+    // still dismisses the whole dialog.
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
     const trigger = screen.getByRole("button", { name: "Open agent tools" });
     await waitFor(() => expect(trigger).toHaveFocus());
     fireEvent.click(trigger);
@@ -788,7 +789,7 @@ describe("AgentToolSettingsDialog", () => {
   it("disables editing while the thread is running", () => {
     subject(policySnapshot({ runState: "running" }));
     expect(
-      screen.getByRole("checkbox", { name: "Enable agent tools" }),
+      screen.getByRole("switch", { name: "Enable agent tools" }),
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: /^Save$/ })).toBeDisabled();
     expect(
@@ -807,7 +808,7 @@ describe("AgentToolSettingsDialog", () => {
       }));
       expect(screen.getByRole("combobox", { name: "Agent tool surface" })).toBeDisabled();
       expect(screen.getByRole("combobox", { name: "Agent tool presentation" })).toBeDisabled();
-      fireEvent.click(screen.getByRole("checkbox", { name: "Enable agent tools" }));
+      fireEvent.click(screen.getByRole("switch", { name: "Enable agent tools" }));
       fireEvent.click(screen.getByRole("checkbox", { name: "Select all Context tools" }));
       fireEvent.click(screen.getByRole("combobox", { name: "Access boundary" }));
       fireEvent.click(screen.getByRole("option", { name: /Allow without asking/ }));
@@ -828,7 +829,7 @@ describe("AgentToolSettingsDialog", () => {
       presentationSurface: "cli",
       runState: "running",
     }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Enable agent tools" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Enable agent tools" }));
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() => expect(setAgentToolPolicy).toHaveBeenCalledWith(
       expect.objectContaining({ enabled: false, enabledToolIds: ["agent.context"] }),
@@ -840,7 +841,7 @@ describe("AgentToolSettingsDialog", () => {
     { authoritative: true, disabled: true },
   ])("preserves authority and availability guards for running CLI settings: %j", (options) => {
     subject(policySnapshot({ presentationSurface: "cli", runState: "running" }), options);
-    expect(screen.getByRole("checkbox", { name: "Enable agent tools" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "Enable agent tools" })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: "List workspaces" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Access boundary" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^Save$/ })).toBeDisabled();
@@ -888,10 +889,9 @@ describe("AgentToolSettingsDialog", () => {
     );
     fireEvent.click(screen.getByRole("checkbox", { name: "List workspaces" }));
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
-    expect(await screen.findByText("Policy conflict")).toHaveAttribute(
-      "role",
-      "alert",
-    );
+    expect(
+      (await screen.findByText("Policy conflict")).closest('[role="alert"]'),
+    ).toHaveAttribute("data-tone", "danger");
     expect(screen.getByRole("button", { name: /^Save$/ })).toBeEnabled();
   });
 });

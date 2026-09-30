@@ -316,8 +316,10 @@ export function ThreadGroupRoster<Member extends ThreadGroupRosterMember>(
         {props.anchor}
         <Dialog open={props.open} onOpenChange={props.onOpenChange}>
           <DialogContent
+            layout="sheet"
+            layer="over-dialog"
+            showClose={false}
             className={`thread-group-roster-sheet ${sheetDrag.current ? "is-dragging" : ""} ${props.className ?? ""}`}
-            overlayClassName="thread-group-roster-sheet-overlay"
             style={
               {
                 "--thread-group-sheet-drag-offset": `${sheetDragOffset}px`,

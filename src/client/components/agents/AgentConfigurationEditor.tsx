@@ -2,7 +2,6 @@ import type {
   NormalizedAgentConfigurationDescriptor,
   NormalizedAgentConfigurationOverrides,
 } from "../../../shared/index.js";
-import { Checkbox } from "@client/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -10,13 +9,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@client/components/ui/select";
+import { SwitchField } from "../settings/SettingsField.js";
+import { SettingsSection } from "../settings/SettingsSection.js";
 
 export function AgentConfigurationEditor({
+  id,
   descriptor,
   overrides = descriptor.canonicalOverrides,
   disabled = false,
   onChange,
 }: {
+  /** The section's id, a target for the editor's section anchors. */
+  readonly id?: string;
   readonly descriptor: NormalizedAgentConfigurationDescriptor;
   readonly overrides?: NormalizedAgentConfigurationOverrides;
   readonly disabled?: boolean;
@@ -38,100 +42,97 @@ export function AgentConfigurationEditor({
   };
 
   return (
-    <section
-      className="agent-editor-section"
-      aria-labelledby="agent-configuration-title"
+    <SettingsSection
+      id={id}
+      title="Agent configuration"
+      description="Override only the settings this Agent should carry between targets."
+      card
     >
-      <header>
-        <h2 id="agent-configuration-title">Agent configuration</h2>
-        <p>
-          Override only the settings this Agent should carry between targets.
-        </p>
-      </header>
-      <div className="agent-configuration-fields">
-        {descriptor.fields.map((field) => {
-          const override = overrideById.get(field.id);
-          const currentOption = field.options.find(
-            ({ value }) => value === override?.value,
-          );
-          const currentValue = override?.value ?? "";
-          const defaultLabel = labelForValue(
-            field.currentDefaultValue,
-            field.options,
-          );
-          const resolvedLabel = labelForValue(field.resolvedValue, field.options);
-          return (
-            <fieldset className="agent-configuration-field" key={field.id}>
-              <legend>{field.label.text}</legend>
-              {field.description && <p>{field.description.text}</p>}
-              <label className="agent-editor-toggle">
-                <span>
-                  <strong>Override target default</strong>
-                  <small id={`${field.id}-target-default`}>
-                    {defaultLabel
-                      ? `Current target default: ${defaultLabel}`
-                      : "This target has no complete default."}
-                  </small>
+      {descriptor.fields.map((field) => {
+        const override = overrideById.get(field.id);
+        const currentOption = field.options.find(
+          ({ value }) => value === override?.value,
+        );
+        const currentValue = override?.value ?? "";
+        const defaultLabel = labelForValue(
+          field.currentDefaultValue,
+          field.options,
+        );
+        const resolvedLabel = labelForValue(field.resolvedValue, field.options);
+        return (
+          <SwitchField
+            key={field.id}
+            label={field.label.text}
+            description={
+              <>
+                {field.description ? (
+                  <span className="agent-configuration-description">
+                    {field.description.text}
+                  </span>
+                ) : null}
+                <span className="agent-configuration-description">
+                  {defaultLabel
+                    ? `Current target default: ${defaultLabel}`
+                    : "This target has no complete default."}
                 </span>
-                <Checkbox
-                  aria-label={`Override ${field.label.text}`}
-                  aria-describedby={`${field.id}-target-default`}
-                  checked={Boolean(override)}
-                  disabled={disabled}
-                  onCheckedChange={(checked) => {
-                    if (checked !== true) {
-                      replace(field.id);
-                      return;
-                    }
-                    const initial =
-                      field.resolvedValue ??
-                      field.currentDefaultValue ??
-                      field.options.find(({ available }) => available)?.value;
-                    if (initial) replace(field.id, initial);
-                  }}
-                />
-              </label>
-              {override && (
-                <Select
-                  value={currentValue}
-                  disabled={disabled}
-                  onValueChange={(value) => replace(field.id, value)}
-                >
-                  <SelectTrigger
-                    aria-label={field.label.text}
-                    aria-describedby={`${field.id}-resolved-value`}
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {field.options.map((option) => (
-                      <SelectItem
-                        key={option.value}
-                        value={option.value}
-                        disabled={!option.available}
-                      >
-                        {option.label.text}
-                      </SelectItem>
-                    ))}
-                    {currentValue && !currentOption && (
-                      <SelectItem value={currentValue} disabled>
-                        {currentValue} (unavailable)
-                      </SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-              )}
-              <small
-                id={`${field.id}-resolved-value`}
-                className="agent-configuration-resolved"
+              </>
+            }
+            checked={Boolean(override)}
+            disabled={disabled}
+            switchProps={{ "aria-label": `Override ${field.label.text}` }}
+            onCheckedChange={(checked) => {
+              if (!checked) {
+                replace(field.id);
+                return;
+              }
+              const initial =
+                field.resolvedValue ??
+                field.currentDefaultValue ??
+                field.options.find(({ available }) => available)?.value;
+              if (initial) replace(field.id, initial);
+            }}
+          >
+            {override ? (
+              <Select
+                value={currentValue}
+                disabled={disabled}
+                onValueChange={(value) => replace(field.id, value)}
               >
-                Resolved value: {resolvedLabel ?? "Unavailable"}
-              </small>
-            </fieldset>
-          );
-        })}
-      </div>
-    </section>
+                <SelectTrigger
+                  className="w-full"
+                  aria-label={field.label.text}
+                  aria-describedby={`${field.id}-resolved-value`}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {field.options.map((option) => (
+                    <SelectItem
+                      key={option.value}
+                      value={option.value}
+                      disabled={!option.available}
+                    >
+                      {option.label.text}
+                    </SelectItem>
+                  ))}
+                  {currentValue && !currentOption && (
+                    <SelectItem value={currentValue} disabled>
+                      {currentValue} (unavailable)
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            ) : null}
+            <p
+              id={`${field.id}-resolved-value`}
+              className="agent-configuration-resolved"
+            >
+              Resolved value: {resolvedLabel ?? "Unavailable"}
+            </p>
+          </SwitchField>
+        );
+      })}
+    </SettingsSection>
   );
 }
 

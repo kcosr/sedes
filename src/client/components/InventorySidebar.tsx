@@ -1,4 +1,3 @@
-import { runThreadArchiveCheck } from "../operations/thread-archive.js";
 import { SearchableSelect } from "./ui/searchable-select.js";
 import { useSidebarDisclosure, useSidebarDisclosures } from "../app/sidebar-disclosures.js";
 import * as Collapsible from "@radix-ui/react-collapsible";
@@ -27,12 +26,12 @@ import type {
   ThreadArchiveImpact,
 } from "../../shared/index.js";
 import {
-  agentsPath,
   navigate,
   threadPath,
   threadTurnPath,
   usagePath,
 } from "../app/router.js";
+import type { SettingsPage } from "../app/settings-route.js";
 import {
   resolveModePreferences,
   sidebarEffectiveTimestamp,
@@ -119,6 +118,7 @@ import {
   PinOff,
   Plus,
   Search,
+  Trash2,
   TriangleAlert,
   Terminal as TerminalIcon,
 } from "lucide-react";
@@ -127,25 +127,32 @@ import { SidebarViewControls } from "./SidebarViewControls.js";
 import { ThreadContextMenu } from "./ThreadContextMenu.js";
 import { Button } from "@client/components/ui/button";
 import { Input } from "@client/components/ui/input";
+import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
 import {
   Dialog,
+  DialogAlert,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@client/components/ui/dialog";
+import { Field } from "@client/components/ui/field";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuValue,
   ContextMenuTrigger,
 } from "@client/components/ui/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@client/components/ui/dropdown-menu";
 
@@ -166,8 +173,7 @@ import {
 } from "../lineage/sidebar-group-projections.js";
 import { createThreadSearchMatcher } from "../lineage/sidebar-search.js";
 import { ForkProvenanceButton } from "./lineage/ForkProvenanceButton.js";
-import { ArchiveDropdown } from "./thread/ArchiveThreadChoices.js";
-import { ArchiveChoicesDialog } from "./thread/ArchiveChoicesDialog.js";
+import { useArchiveThreadAction } from "./thread/ArchiveChoicesDialog.js";
 import {
   SettleImpactDialog,
   settleNeedsConfirmation,
@@ -392,7 +398,8 @@ export function InventorySidebar({
   selectedThreadId?: string;
   onSelectThread?: SelectThread;
   onNavigate: (options?: { readonly keepDrawerOpen?: boolean }) => void;
-  onOpenSettings: (trigger: HTMLButtonElement) => void;
+  /** Opens Settings (a page of it, when given); focus returns to `trigger` afterwards. */
+  onOpenSettings: (trigger: HTMLButtonElement, page?: SettingsPage) => void;
   /** Desktop fallback for routes whose navigation trigger is not rendered. */
   showFooterConnectionStatus?: boolean;
   /** Desktop-only detail preview; the full-screen mobile drawer disables it. */
@@ -1487,22 +1494,33 @@ export function InventorySidebar({
                   allValue={ALL_TARGETS_FILTER_VALUE}
                   allLabel="All targets"
                   testId="target-filter"
-                  options={scope.targetOptions.map((target) => ({
-                    id: target.id,
-                    label: targetDisplayLabel({
+                  options={scope.targetOptions.map((target) => {
+                    const displayLabel = targetDisplayLabel({
                       target,
                       targets: scope.targetOptions,
                       environments: nonLocalEnvironments,
                       includeEnvironment:
                         environments.length > 1 && scope.environmentId === null,
-                    }),
-                    available: target.available,
-                    icon: <TargetScopeIcon brand={target.backend.brand} />,
-                    searchTerms: [
-                      target.backend.label.text,
-                      environments.find(({ id }) => id === target.environmentId)?.label.text ?? "",
-                    ],
-                  }))}
+                    });
+                    // The target's own name leads; its backend and host
+                    // qualifiers read as a second line.
+                    const namePrefix = `${target.label.text} · `;
+                    const split = displayLabel.startsWith(namePrefix);
+                    return {
+                      id: target.id,
+                      label: split ? target.label.text : displayLabel,
+                      description: split
+                        ? displayLabel.slice(namePrefix.length)
+                        : undefined,
+                      selectedLabel: displayLabel,
+                      available: target.available,
+                      icon: <TargetScopeIcon brand={target.backend.brand} />,
+                      searchTerms: [
+                        target.backend.label.text,
+                        environments.find(({ id }) => id === target.environmentId)?.label.text ?? "",
+                      ],
+                    };
+                  })}
                   onChange={(value) =>
                     setSidebarInventoryScope(
                       transitionSidebarInventoryScope(
@@ -2117,10 +2135,7 @@ export function InventorySidebar({
               navigate(usagePath());
               onNavigate();
             }}
-            onOpenAgents={() => {
-              navigate(agentsPath());
-              onNavigate();
-            }}
+            onOpenAgents={(trigger) => onOpenSettings(trigger, "agents")}
             onOpenArchivedThreads={() => {
               navigate("/archived");
               onNavigate();
@@ -2210,28 +2225,27 @@ function GroupManagementControl({
   useEffect(() => {
     onInteractionOpenChange?.(menuOpen || dialog !== undefined);
   }, [dialog, menuOpen, onInteractionOpenChange]);
-  const submit = () => {
-    if (pending) return;
+  const rename = () => {
     const nextName = name.trim();
-    if (dialog === "rename" && !nextName) return;
+    if (pending || !nextName) return;
     setPending(true);
     setError("");
-    const operation =
-      dialog === "rename"
-        ? store.renameThreadGroup(group, nextName)
-        : store.deleteThreadGroup(group);
-    void operation
-      .then(() => {
-        if (dialog === "delete") {
-          setSidebarInventoryScope({
-            groupFilterId: null,
-            ungroupedFilter: false,
-          });
-        }
-        setDialog(undefined);
-      })
+    void store
+      .renameThreadGroup(group, nextName)
+      .then(() => setDialog(undefined))
       .catch((cause: unknown) => setError(messageFrom(cause)))
       .finally(() => setPending(false));
+  };
+  const remove = async () => {
+    try {
+      await store.deleteThreadGroup(group);
+    } catch (cause) {
+      throw new Error(messageFrom(cause));
+    }
+    setSidebarInventoryScope({
+      groupFilterId: null,
+      ungroupedFilter: false,
+    });
   };
   return (
     <>
@@ -2254,81 +2268,86 @@ function GroupManagementControl({
             <MoreHorizontal size={15} />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="end"
-          className={elevated ? "z-[100]" : undefined}
-        >
+        <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={() => open("rename")}>
+            <PencilLine aria-hidden="true" />
             Rename group…
           </DropdownMenuItem>
+          <DropdownMenuSeparator />
           <DropdownMenuItem
             variant="destructive"
             onSelect={() => open("delete")}
           >
+            <Trash2 aria-hidden="true" />
             Delete group…
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
       <Dialog
-        open={dialog !== undefined}
+        open={dialog === "rename"}
         onOpenChange={(value) => !value && close()}
       >
         <DialogContent
-          className={elevated ? "z-[101]" : undefined}
-          overlayClassName={elevated ? "z-[100]" : undefined}
+          layer={elevated ? "over-dialog" : "dialog"}
+          dismissible={!pending}
         >
           <DialogHeader>
-            <DialogTitle>
-              {dialog === "rename" ? "Rename group" : "Delete group"}
-            </DialogTitle>
+            <DialogTitle>Rename group</DialogTitle>
             <DialogDescription>
-              {dialog === "delete"
-                ? group.memberCount === 0
-                  ? `Delete “${group.name}”?`
-                  : `Delete “${group.name}” and ungroup ${group.memberCount} thread${group.memberCount === 1 ? "" : "s"}?`
-                : "Group names are shared across all projects in your account."}
+              Group names are shared across all projects in your account.
             </DialogDescription>
           </DialogHeader>
-          {dialog === "rename" && (
-            <Input
-              autoFocus
-              maxLength={120}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") submit();
-              }}
-            />
-          )}
-          {error && (
-            <p className="thread-row-error" role="alert">
-              {error}
-            </p>
-          )}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending}
-              onClick={close}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant={dialog === "delete" ? "destructive" : "default"}
-              disabled={pending || (dialog === "rename" && !name.trim())}
-              onClick={submit}
-            >
-              {pending
-                ? "Saving…"
-                : dialog === "delete"
-                  ? "Delete group"
-                  : "Rename"}
-            </Button>
-          </DialogFooter>
+          <form
+            className="contents"
+            onSubmit={(event) => {
+              event.preventDefault();
+              rename();
+            }}
+          >
+            <DialogBody>
+              <Field label="Group name">
+                <Input
+                  maxLength={120}
+                  value={name}
+                  disabled={pending}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </Field>
+              {error && <DialogAlert tone="danger">{error}</DialogAlert>}
+            </DialogBody>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending}
+                onClick={close}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={pending || !name.trim()}>
+                {pending ? "Renaming…" : "Rename"}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
+      <ConfirmDialog
+        open={dialog === "delete"}
+        onOpenChange={(value) => {
+          if (!value) setDialog(undefined);
+        }}
+        layer={elevated ? "over-dialog" : "dialog"}
+        title={`Delete “${group.name}”?`}
+        description={
+          group.memberCount === 0
+            ? "The group is removed for all projects in your account."
+            : `Its ${group.memberCount} thread${group.memberCount === 1 ? " is" : "s are"} ungrouped, not deleted.`
+        }
+        confirmLabel="Delete group"
+        pendingLabel="Deleting…"
+        tone="danger"
+        onConfirm={remove}
+      />
     </>
   );
 }
@@ -2351,6 +2370,10 @@ function ScopeSelect({
   readonly options: readonly {
     readonly id: string;
     readonly label: string;
+    /** A second line in the picker, e.g. a target's backend and host. */
+    readonly description?: string;
+    /** The trigger's text when this option is selected (label by default). */
+    readonly selectedLabel?: string;
     readonly available: boolean;
     readonly icon?: React.ReactNode;
     readonly searchTerms?: readonly string[];
@@ -2360,6 +2383,7 @@ function ScopeSelect({
   readonly onChange: (value: string) => void;
 }): React.JSX.Element {
   const plural = `${label.toLocaleLowerCase()}s`;
+  const selected = options.find(({ id }) => id === value);
   return (
     <SearchableSelect
       label={`${label} filter`}
@@ -2367,21 +2391,27 @@ function ScopeSelect({
       searchLabel={`Search ${plural}`}
       emptyLabel={`No matching ${plural}`}
       value={value}
+      selectedLabel={selected?.selectedLabel}
       options={[
         { value: allValue, label: allLabel, icon, pinned: true },
         ...options.map((option) => ({
           value: option.id,
-          label: `${option.label}${option.available ? "" : " — Unavailable"}`,
+          label: option.label,
+          description: option.description,
+          unavailable: !option.available,
           icon: option.icon ?? icon,
           searchTerms: option.searchTerms,
           pinned: option.pinned,
         })),
       ]}
       triggerProps={{
-        className: "sidebar-scope-select",
+        // The sidebar's filled controls, like its thread search field.
+        className: "sidebar-scope-select border-border bg-background shadow-none",
         "data-testid": testId,
         "data-scope-value": value,
       }}
+      // Exactly the trigger's width, so the picker stays over the sidebar.
+      contentClassName="sidebar-scope-popover"
       onValueChange={onChange}
     />
   );
@@ -2872,22 +2902,31 @@ function ThreadStackItem({
           aria-label={`Actions for ${stack.label} stack`}
           collisionPadding={12}
         >
-          <ContextMenuLabel>
-            {stack.label} · {memberCount} threads
+          <ContextMenuLabel
+            variant="header"
+            description={`${memberCount} ${memberCount === 1 ? "thread" : "threads"}`}
+          >
+            {stack.label}
           </ContextMenuLabel>
+          <ContextMenuSeparator />
           <ContextMenuItem onSelect={openRosterFromMenu}>
-            <Layers3 size={18} strokeWidth={1.8} />
+            <Layers3 strokeWidth={1.8} />
             View threads
           </ContextMenuItem>
+          <ContextMenuSeparator />
           {(["settle", "unsettle", "archive"] as const).map((action) => (
             <ContextMenuItem
               key={action}
-              variant={action === "archive" ? "destructive" : "default"}
               disabled={!actionAvailable(action)}
               onSelect={() => requestStackAction(action)}
             >
-              {actionIcon(action, 18)}
+              {actionIcon(action, 16)}
               {capitalize(action)} stack
+              {!actionAvailable(action) && (
+                <ContextMenuValue aria-hidden="true">
+                  {action === "unsettle" ? "None settled" : "None active"}
+                </ContextMenuValue>
+              )}
             </ContextMenuItem>
           ))}
         </ContextMenuContent>
@@ -3239,6 +3278,11 @@ function FlatGroupList({
                     {renderRow(entry.thread, {
                       selected: entry.thread.id === selectedThreadId,
                       peekBindings: peekBind(entry.thread.id),
+                      // The row's menu and the dialogs it opens cover the
+                      // peek; close it rather than leave it under them.
+                      onInteractionOpenChange: (open) => {
+                        if (open) onDismissPeek();
+                      },
                     })}
                   </Fragment>
                 ) : (
@@ -3423,8 +3467,6 @@ function FlatRowItemContent(
   const [pendingAction, setPendingAction] = useState<"quick" | "archive">();
   const [pinPending, setPinPending] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [archiveChoicesOpen, setArchiveChoicesOpen] = useState(false);
-  const [archiveInitialImpact, setArchiveInitialImpact] = useState<ThreadArchiveImpact>();
   const [settleChoicesOpen, setSettleChoicesOpen] = useState(false);
   const [settleImpact, setSettleImpact] = useState<ThreadArchiveImpact>();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
@@ -3491,35 +3533,35 @@ function FlatRowItemContent(
         : ("settle" as const);
   const renameGlyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
   const renameGlyphVisible = renameGlyphKind !== "idle";
-  const openArchiveChoices = (impact: ThreadArchiveImpact) => {
-    setArchiveInitialImpact(impact);
-    actionPending.current = false;
-    setPendingAction(undefined);
-    setArchiveChoicesOpen(true);
-  };
-  const runInventoryAction = (
-    kind: "quick" | "archive",
-    action: "wake" | "settle" | "unsettle" | "archive",
-  ) => {
+  // Archive directly when there is nothing to choose; otherwise the choices
+  // dialog opens with the checked impact.
+  const archiveAction = useArchiveThreadAction({
+    thread,
+    store,
+    descendantCount: archiveDescendantCount,
+    disabled: pendingAction !== undefined,
+    onPendingChange: (pending) => {
+      actionPending.current = pending;
+      setPendingAction(pending ? "archive" : undefined);
+    },
+    onArchived: () => {
+      if (selected) {
+        navigate("/");
+        onNavigate({ keepDrawerOpen: true });
+      }
+    },
+    returnFocusRef: rowLink,
+  });
+  const archiveThread = () => {
     if (actionPending.current) return;
-    actionPending.current = true;
-    setPendingAction(kind);
     setActionError("");
-    if (action === "archive") {
-      void runThreadArchiveCheck({
-        thread, store, onChoices: openArchiveChoices,
-        onArchived: () => {
-          if (selected) {
-            navigate("/");
-            onNavigate({ keepDrawerOpen: true });
-          }
-        },
-      }).finally(() => {
-        actionPending.current = false;
-        setPendingAction(undefined);
-      });
-      return;
-    }
+    archiveAction.start();
+  };
+  const runQuickAction = (action: "wake" | "settle" | "unsettle") => {
+    if (actionPending.current) return;
+    setActionError("");
+    actionPending.current = true;
+    setPendingAction("quick");
     const mutation =
       action === "settle"
         ? store.getThreadArchiveImpact(thread.id).then((impact) => {
@@ -3549,7 +3591,7 @@ function FlatRowItemContent(
           aria-label={`${capitalize(quickAction)} ${thread.title.text}`}
           title={capitalize(quickAction)}
           disabled={pendingAction !== undefined}
-          onClick={() => runInventoryAction("quick", quickAction)}
+          onClick={() => runQuickAction(quickAction)}
         >
           {quickAction === "wake" ? (
             "Wake"
@@ -3595,43 +3637,17 @@ function FlatRowItemContent(
           <Pin size={15} strokeWidth={1.8} />
         )}
       </button>
-      {archiveDescendantCount > 0 ? (
-        <ArchiveDropdown
-          thread={thread}
-          store={store}
-          descendantCount={archiveDescendantCount}
-          directWhenNoChoices
-          disabled={pendingAction !== undefined}
-          onArchived={() => {
-            if (selected) {
-              navigate("/");
-              onNavigate({ keepDrawerOpen: true });
-            }
-          }}
-        >
-          <button
-            type="button"
-            className="thread-row-archive"
-            data-testid="thread-row-archive"
-            aria-label={`Archive ${thread.title.text || "Untitled thread"}`}
-            title="Archive"
-          >
-            <Archive size={14} strokeWidth={1.8} />
-          </button>
-        </ArchiveDropdown>
-      ) : (
-        <button
-          type="button"
-          className="thread-row-archive"
-          data-testid="thread-row-archive"
-          aria-label={`Archive ${thread.title.text || "Untitled thread"}`}
-          title="Archive"
-          disabled={pendingAction !== undefined}
-          onClick={() => runInventoryAction("archive", "archive")}
-        >
-          <Archive size={14} strokeWidth={1.8} />
-        </button>
-      )}
+      <button
+        type="button"
+        className="thread-row-archive"
+        data-testid="thread-row-archive"
+        aria-label={`Archive ${thread.title.text || "Untitled thread"}`}
+        title="Archive"
+        disabled={pendingAction !== undefined}
+        onClick={archiveThread}
+      >
+        <Archive size={14} strokeWidth={1.8} />
+      </button>
     </>
   );
   const row = renaming ? (
@@ -3780,26 +3796,7 @@ function FlatRowItemContent(
             wrapper out of layout so FlatThreadRow's CSS applies unchanged. */}
         <div style={{ display: "contents" }}>{row}</div>
       </ThreadContextMenu>
-      <ArchiveChoicesDialog
-        open={archiveChoicesOpen}
-        initialImpact={archiveInitialImpact}
-        onOpenChange={setArchiveChoicesOpen}
-        thread={thread}
-        store={store}
-        descendantCount={0}
-        disabled={pendingAction !== undefined}
-        onPendingChange={(pending) => {
-          actionPending.current = pending;
-          setPendingAction(pending ? "archive" : undefined);
-        }}
-        onArchived={() => {
-          if (selected) {
-            navigate("/");
-            onNavigate({ keepDrawerOpen: true });
-          }
-        }}
-        returnFocusRef={rowLink}
-      />
+      {archiveAction.dialog}
       <SettleImpactDialog
         open={settleChoicesOpen}
         onOpenChange={setSettleChoicesOpen}
@@ -4286,16 +4283,30 @@ function ThreadRow({
   const [settleChoicesOpen, setSettleChoicesOpen] = useState(false);
   const [settleImpact, setSettleImpact] = useState<ThreadArchiveImpact>();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
-  const [archiveChoicesOpen, setArchiveChoicesOpen] = useState(false);
-  const [archiveInitialImpact, setArchiveInitialImpact] = useState<ThreadArchiveImpact>();
   const [placementPending, setPlacementPending] = useState(false);
   const [placementError, setPlacementError] = useState("");
-  const openArchiveChoices = (impact: ThreadArchiveImpact) => {
-    setArchiveInitialImpact(impact);
-    inventoryActionPending.current = false;
-    setPendingInventoryAction(undefined);
-    setArchiveChoicesOpen(true);
-  };
+  // Archive directly when there is nothing to choose; otherwise the choices
+  // dialog opens with the checked impact.
+  const archiveAction = useArchiveThreadAction({
+    thread,
+    store,
+    descendantCount: archiveDescendantCount,
+    disabled: pendingInventoryAction !== undefined,
+    onPendingChange: (pending) => {
+      inventoryActionPending.current = pending;
+      setPendingInventoryAction(pending ? "archive" : undefined);
+    },
+    onArchived: (_choice, archivedThreadIds) => {
+      if (
+        selected ||
+        (selectedThreadId && archivedThreadIds.includes(selectedThreadId))
+      ) {
+        navigate("/");
+        onNavigate({ keepDrawerOpen: true });
+      }
+    },
+    returnFocusRef: rowLink,
+  });
   /**
    * The rename input replaces the row link, so keyboard commit/cancel would
    * otherwise leave focus on a removed node and drop the caret to <body>.
@@ -4770,71 +4781,22 @@ function ThreadRow({
                 )}
               </button>
             )}
-            {archiveDescendantCount > 0 ? (
-              <ArchiveDropdown
-                thread={thread}
-                store={store}
-                descendantCount={archiveDescendantCount}
-                directWhenNoChoices
-                side="right"
-                disabled={pendingInventoryAction !== undefined}
-                onPendingChange={(pending) => {
-                  inventoryActionPending.current = pending;
-                  setPendingInventoryAction(pending ? "archive" : undefined);
-                }}
-                onArchived={(_choice, archivedThreadIds) => {
-                  if (
-                    selectedThreadId &&
-                    archivedThreadIds.includes(selectedThreadId)
-                  ) {
-                    navigate("/");
-                    onNavigate({ keepDrawerOpen: true });
-                  }
-                }}
-              >
-                <button
-                  type="button"
-                  className="thread-row-archive"
-                  data-testid="thread-row-archive"
-                  aria-label={`Archive ${thread.title.text || "Untitled thread"}`}
-                  title="Archive"
-                >
-                  <Archive size={14} strokeWidth={1.8} />
-                </button>
-              </ArchiveDropdown>
-            ) : (
-              // No fork descendants: archive immediately, mirroring the flat
-              // row's direct archive. Touch devices never see this button
-              // (row actions are CSS-hidden for coarse pointers).
-              <button
-                type="button"
-                className="thread-row-archive"
-                data-testid="thread-row-archive"
-                aria-label={`Archive ${thread.title.text || "Untitled thread"}`}
-                title="Archive"
-                disabled={pendingInventoryAction !== undefined}
-                onClick={() => {
-                  if (inventoryActionPending.current) return;
-                  inventoryActionPending.current = true;
-                  setPendingInventoryAction("archive");
-                  void runThreadArchiveCheck({
-                    thread, store, onChoices: openArchiveChoices,
-                    onArchived: () => {
-                      if (selected) {
-                        navigate("/");
-                        onNavigate({ keepDrawerOpen: true });
-                      }
-                    },
-                  })
-                    .finally(() => {
-                      inventoryActionPending.current = false;
-                      setPendingInventoryAction(undefined);
-                    });
-                }}
-              >
-                <Archive size={14} strokeWidth={1.8} />
-              </button>
-            )}
+            {/* Touch devices never see this button (row actions are
+                CSS-hidden for coarse pointers). */}
+            <button
+              type="button"
+              className="thread-row-archive"
+              data-testid="thread-row-archive"
+              aria-label={`Archive ${thread.title.text || "Untitled thread"}`}
+              title="Archive"
+              disabled={pendingInventoryAction !== undefined}
+              onClick={() => {
+                if (inventoryActionPending.current) return;
+                archiveAction.start();
+              }}
+            >
+              <Archive size={14} strokeWidth={1.8} />
+            </button>
           </div>
         </div>
       )}
@@ -4876,26 +4838,7 @@ function ThreadRow({
       >
         {row}
       </ThreadContextMenu>
-      <ArchiveChoicesDialog
-        open={archiveChoicesOpen}
-        initialImpact={archiveInitialImpact}
-        onOpenChange={setArchiveChoicesOpen}
-        thread={thread}
-        store={store}
-        descendantCount={0}
-        disabled={pendingInventoryAction !== undefined}
-        onPendingChange={(pending) => {
-          inventoryActionPending.current = pending;
-          setPendingInventoryAction(pending ? "archive" : undefined);
-        }}
-        onArchived={() => {
-          if (selected) {
-            navigate("/");
-            onNavigate({ keepDrawerOpen: true });
-          }
-        }}
-        returnFocusRef={rowLink}
-      />
+      {archiveAction.dialog}
       <SettleImpactDialog
         open={settleChoicesOpen}
         onOpenChange={setSettleChoicesOpen}

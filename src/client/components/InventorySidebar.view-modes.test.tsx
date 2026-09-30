@@ -52,8 +52,8 @@ type TaskSummary = NonNullable<
 beforeEach(() => {
   render(<OperationOverlayHost />);
   seedViewPreferences({ groupBy: "project" });
-  // Desktop shell: the mobile media query reports no match, so archive
-  // stays a submenu rather than the mobile dialog.
+  // Desktop shell: the density query reports no match, so menus float
+  // rather than opening as sheets.
   vi.stubGlobal(
     "matchMedia",
     vi.fn(() => ({
@@ -325,6 +325,8 @@ function renderSidebar(
     mutateInventory: vi.fn().mockResolvedValue(undefined),
     setThreadPinned: vi.fn().mockResolvedValue(undefined),
     renameThread: vi.fn().mockResolvedValue(undefined),
+    renameThreadGroup: vi.fn().mockResolvedValue(undefined),
+    deleteThreadGroup: vi.fn().mockResolvedValue(undefined),
     archiveThreadFamily: vi.fn().mockResolvedValue([]),
     loadMoreDescendants: vi.fn().mockResolvedValue(undefined),
     getThreadArchiveImpact: vi.fn().mockResolvedValue({
@@ -391,6 +393,8 @@ function renderSidebar(
     refresh: ReturnType<typeof vi.fn>;
     getSnapshot: ReturnType<typeof vi.fn>;
     renameThread: ReturnType<typeof vi.fn>;
+    renameThreadGroup: ReturnType<typeof vi.fn>;
+    deleteThreadGroup: ReturnType<typeof vi.fn>;
     loadMoreDescendants: ReturnType<typeof vi.fn>;
     getBulkInventoryImpact: ReturnType<typeof vi.fn>;
     createBulkInventoryMutationRequest: ReturnType<typeof vi.fn>;
@@ -618,6 +622,46 @@ describe("InventorySidebar view modes", () => {
     await user.click(within(newerMember).getByTestId("thread-row-link"));
     expect(screen.queryByTestId("thread-peek")).toBeNull();
     expect(onSelectThread).toHaveBeenCalledWith(newer.id, "split");
+  });
+
+  it("renames a group in a form dialog and deletes it through a confirmation", async () => {
+    const user = userEvent.setup();
+    seedViewPreferences({ groupBy: "time", stackBy: "group" });
+    const { store } = renderSidebar(
+      [
+        makeThread("thread-older", "Older member", { groupId, lastActivityAt: isoAtNoon(-2) }),
+        makeThread("thread-newer", "Newer member", { groupId, lastActivityAt: isoAtNoon(0) }),
+      ],
+      { groups: [group] },
+    );
+    fireEvent.pointerEnter(screen.getByTestId("thread-group-stack"), { pointerType: "mouse" });
+    const roster = await screen.findByTestId("thread-group-roster");
+    const manage = within(roster).getByRole("button", { name: "Manage group Design review" });
+
+    await user.click(manage);
+    await user.click(await screen.findByRole("menuitem", { name: "Rename group…" }));
+    const rename = await screen.findByRole("dialog", { name: "Rename group" });
+    const name = within(rename).getByRole("textbox", { name: "Group name" });
+    await waitFor(() => expect(name).toHaveFocus());
+    await user.clear(name);
+    await user.type(name, "Design notes{Enter}");
+    expect(store.renameThreadGroup).toHaveBeenCalledWith(
+      expect.objectContaining({ id: groupId }),
+      "Design notes",
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Rename group" })).toBeNull());
+
+    store.deleteThreadGroup.mockRejectedValueOnce(new Error("Group changed elsewhere."));
+    await user.click(manage);
+    await user.click(await screen.findByRole("menuitem", { name: "Delete group…" }));
+    const remove = await screen.findByRole("dialog", { name: "Delete “Design review”?" });
+    expect(remove).toHaveAccessibleDescription("Its 2 threads are ungrouped, not deleted.");
+    expect(within(remove).queryByRole("button", { name: "Close" })).toBeNull();
+    await user.click(within(remove).getByRole("button", { name: "Delete group" }));
+    expect(await within(remove).findByRole("alert")).toHaveTextContent("Group changed elsewhere.");
+    await user.click(within(remove).getByRole("button", { name: "Delete group" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Delete/u })).toBeNull());
+    expect(store.deleteThreadGroup).toHaveBeenCalledTimes(2);
   });
 
   it("confirms every stack lifecycle action against the exact displayed members", async () => {
@@ -2062,13 +2106,16 @@ describe("InventorySidebar view modes", () => {
 
     await user.click(screen.getByRole("combobox", { name: "Target filter" }));
     expect(screen.getByRole("option", { name: "Pi" })).toBeVisible();
+    // The target's name leads; backend and host read as its second line.
+    const hostedCodexTarget = screen.getByRole("option", {
+      name: "Codex SSH Codex · Build host",
+    });
+    expect(hostedCodexTarget).toBeVisible();
     expect(
-      screen.getByRole("option", {
-        name: "Codex SSH · Codex · Build host",
-      }),
-    ).toBeVisible();
+      within(hostedCodexTarget).getByText("Codex · Build host"),
+    ).toHaveAttribute("data-slot", "searchable-select-item-description");
     expect(
-      screen.getByRole("option", { name: "Pi · Build host" }),
+      screen.getByRole("option", { name: "Pi Build host" }),
     ).toBeVisible();
     await user.keyboard("{Escape}");
 
@@ -2100,7 +2147,7 @@ describe("InventorySidebar view modes", () => {
 
     await user.click(screen.getByRole("combobox", { name: "Target filter" }));
     const codexTarget = screen.getByRole("option", {
-      name: "Codex SSH · Codex",
+      name: "Codex SSH Codex",
     });
     expect(
       codexTarget.querySelector('[data-backend-brand="codex"]'),
@@ -2156,7 +2203,10 @@ describe("InventorySidebar view modes", () => {
     expect(screen.getByRole("combobox", { name: "Environment filter" })).toHaveTextContent("All environments");
     expect(JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!)).toMatchObject({ projectFilterName: "Sedes" });
     await user.click(screen.getByRole("combobox", { name: "Environment filter" }));
-    await user.click(screen.getByRole("option", { name: "Remote host — Unavailable" }));
+    const remoteHost = screen.getByRole("option", { name: "Remote host Unavailable" });
+    expect(remoteHost).toHaveAttribute("data-unavailable");
+    expect(remoteHost).not.toHaveAttribute("aria-disabled");
+    await user.click(remoteHost);
     expect(screen.getAllByTestId("project-stack")).toHaveLength(1);
     expect(screen.getByTestId("project-stack")).toHaveAttribute("data-workspace-id", "remote");
     expect(JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!)).toMatchObject({ projectFilterName: "Sedes", environmentFilterId: "remote-env" });
@@ -2223,7 +2273,8 @@ describe("InventorySidebar view modes", () => {
     expect(screen.queryByRole("option", { name: "Other" })).toBeNull();
     expect(project).toHaveTextContent("All projects");
     expect(screen.getByText("Existing work")).toBeVisible();
-    const unavailable = screen.getByRole("option", { name: "Sedes — Unavailable" });
+    const unavailable = screen.getByRole("option", { name: "Sedes Unavailable" });
+    expect(unavailable).toHaveAttribute("data-unavailable");
     expect(unavailable).not.toHaveAttribute("aria-disabled", "true");
     await user.click(unavailable);
     expect(project).toHaveAttribute("data-scope-value", "project-name:Sedes");
@@ -3019,7 +3070,7 @@ describe("InventorySidebar view modes", () => {
       screen.getByRole("combobox", { name: "Directory environment" }),
     );
     await user.click(
-      screen.getByRole("option", { name: "Build host — Unavailable" }),
+      screen.getByRole("option", { name: "Build host Unavailable" }),
     );
     expect(
       screen.getByRole("textbox", { name: "Absolute directory path" }),
@@ -3116,7 +3167,7 @@ describe("InventorySidebar view modes", () => {
 
     await user.click(screen.getByTestId("view-options-trigger"));
     await user.click(
-      await screen.findByRole("checkbox", { name: "Pinned only" }),
+      await screen.findByRole("menuitemcheckbox", { name: "Pinned only" }),
     );
 
     await waitFor(() => expect(screen.queryByText("Plain thread")).toBeNull());
@@ -3130,7 +3181,7 @@ describe("InventorySidebar view modes", () => {
 
     await user.click(screen.getByTestId("view-options-trigger"));
     await user.click(
-      await screen.findByRole("checkbox", { name: "Pinned only" }),
+      await screen.findByRole("menuitemcheckbox", { name: "Pinned only" }),
     );
 
     expect(
@@ -3204,7 +3255,7 @@ describe("InventorySidebar view modes", () => {
     );
 
     await user.click(screen.getByTestId("view-options-trigger"));
-    await user.click(await screen.findByRole("radio", { name: "Card" }));
+    await user.click(await screen.findByRole("menuitemradio", { name: "Card" }));
 
     const row = screen.getByTestId("flat-thread-row");
     expect(row).toHaveAttribute("data-density", "card");
@@ -3263,7 +3314,7 @@ describe("InventorySidebar view modes", () => {
     expect(screen.getByText("Settled exploration")).toBeInTheDocument();
 
     await user.click(screen.getByTestId("view-options-trigger"));
-    await user.click(await screen.findByRole("checkbox", { name: "Settled" }));
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "Settled" }));
 
     await waitFor(() =>
       expect(screen.queryByText("Settled exploration")).toBeNull(),
@@ -3283,7 +3334,7 @@ describe("InventorySidebar view modes", () => {
     expect(screen.getByText("Snoozed exploration")).toBeInTheDocument();
 
     await user.click(screen.getByTestId("view-options-trigger"));
-    await user.click(await screen.findByRole("checkbox", { name: "Snoozed" }));
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "Snoozed" }));
 
     await waitFor(() =>
       expect(screen.queryByText("Snoozed exploration")).toBeNull(),
@@ -3416,20 +3467,19 @@ describe("InventorySidebar view modes", () => {
 
     fireEvent.contextMenu(screen.getByTestId("flat-thread-row"));
     const menu = await screen.findByTestId("thread-context-menu");
-    await user.click(within(menu).getByText("Archive"));
-    const archiveItem = await screen.findByRole("menuitem", {
-      name: "Archive this thread",
-    });
-    await waitFor(() =>
-      expect(archiveItem).not.toHaveAttribute("data-disabled"),
-    );
-    await userEvent.click(archiveItem);
+    const archiveItem = within(menu).getByRole("menuitem", { name: "Archive" });
+    expect(archiveItem).not.toHaveAttribute("aria-haspopup");
+    await user.click(archiveItem);
+    // Nothing to choose: the authoritative impact archives directly.
     await waitFor(() =>
       expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
         expectedStashedPromptCount: 0,
-        executionWorkspaceDisposition: { kind: "keep" },
       }),
     );
+    expect(store.getThreadArchiveImpact).toHaveBeenCalledWith(thread.id);
+    expect(
+      screen.queryByRole("dialog", { name: "Archive this thread" }),
+    ).toBeNull();
   });
 
   it("archives a childless project-view row immediately from its archive button", async () => {
@@ -3590,7 +3640,7 @@ describe("InventorySidebar view modes", () => {
     assertActionOrder(flatRow, ".flat-row-actions");
   });
 
-  it("keeps the archive choice dropdown on a project-view row with descendants", async () => {
+  it("opens the archive choices dialog from a project-view row with descendants", async () => {
     const user = userEvent.setup();
     const thread = makeThread("parent-1", "Parent thread");
     const { store } = renderSidebar([thread], {
@@ -3622,14 +3672,16 @@ describe("InventorySidebar view modes", () => {
 
     await user.click(archive);
 
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive this thread",
+    });
     expect(
-      await screen.findByRole("menuitem", { name: "Archive only this thread" }),
-    ).toBeVisible();
-    expect(
-      screen.getByRole("menuitem", {
-        name: "Archive thread and 2 descendants",
+      within(dialog).getByRole("checkbox", {
+        name: "Archive child and descendant forks",
       }),
     ).toBeVisible();
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(store.getThreadArchiveImpact).toHaveBeenCalledWith("parent-1");
     expect(store.mutateInventory).not.toHaveBeenCalled();
   });
 
@@ -3901,6 +3953,55 @@ describe("InventorySidebar view modes", () => {
     }
   });
 
+  it("closes the peek when the row's context menu opens", async () => {
+    vi.useFakeTimers();
+    try {
+      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
+      renderSidebar([makeThread("thread-1", "Menu peek")]);
+      const item = document.querySelector<HTMLElement>(
+        '[data-thread-id="thread-1"]',
+      )!;
+
+      fireEvent.pointerEnter(item, { pointerType: "mouse" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(screen.getByTestId("thread-peek")).toBeInTheDocument();
+
+      fireEvent.contextMenu(item.querySelector(".flat-row-link")!);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByTestId("thread-context-menu")).toBeInTheDocument();
+      expect(screen.queryByTestId("thread-peek")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not peek at a row hidden under an open modal surface", async () => {
+    vi.useFakeTimers();
+    try {
+      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
+      const { container } = renderSidebar([
+        makeThread("thread-1", "Hidden peek"),
+      ]);
+      const item = document.querySelector<HTMLElement>(
+        '[data-thread-id="thread-1"]',
+      )!;
+      // A modal menu or dialog hides the rest of the page this way.
+      container.setAttribute("aria-hidden", "true");
+
+      fireEvent.pointerEnter(item, { pointerType: "mouse" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(screen.queryByTestId("thread-peek")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("opens peek only for keyboard-visible focus and hides it on blur", async () => {
     vi.useFakeTimers();
     try {
@@ -3929,6 +4030,14 @@ describe("InventorySidebar view modes", () => {
   });
 
   it("reserves touch long-press for the action sheet instead of peek", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.includes("pointer: coarse"),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
     vi.useFakeTimers();
     try {
       seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
@@ -3945,7 +4054,7 @@ describe("InventorySidebar view modes", () => {
         clientY: 30,
       });
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(575);
+        await vi.advanceTimersByTimeAsync(750);
       });
       expect(screen.queryByTestId("thread-peek")).toBeNull();
       expect(screen.getByTestId("thread-actions-sheet")).toBeInTheDocument();

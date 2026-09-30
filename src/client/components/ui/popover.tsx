@@ -1,14 +1,43 @@
 import * as React from "react"
-import * as PopoverPrimitive from "@radix-ui/react-popover"
+import { Popover as PopoverPrimitive } from "radix-ui"
 
+import { FieldControlContext } from "./control.js"
 import { DialogPortalContainerContext } from "./dialog.js"
+import {
+  FLOATING_COLLISION_PADDING,
+  FLOATING_SIDE_OFFSET,
+  floatingSurfaceClass,
+} from "./floating.js"
+import {
+  FloatingOpeningProvider,
+  useFloatingLayer,
+  useFloatingOpening,
+} from "./floating-opening.js"
 
 import { cn } from "@client/lib/utils"
 
+/** Each opening mounts fresh content, even while the last one animates out. */
 function Popover({
+  open: openProp,
+  defaultOpen,
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
-  return <PopoverPrimitive.Root data-slot="popover" {...props} />
+  const { open, setOpen, value } = useFloatingOpening({
+    open: openProp,
+    defaultOpen,
+    onOpenChange,
+  })
+  return (
+    <FloatingOpeningProvider value={value}>
+      <PopoverPrimitive.Root
+        data-slot="popover"
+        {...props}
+        open={open}
+        onOpenChange={setOpen}
+      />
+    </FloatingOpeningProvider>
+  )
 }
 
 function PopoverTrigger({
@@ -20,26 +49,42 @@ function PopoverTrigger({
 function PopoverContent({
   className,
   align = "center",
-  sideOffset = 4,
+  sideOffset = FLOATING_SIDE_OFFSET,
+  collisionPadding = FLOATING_COLLISION_PADDING,
+  children,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Content>) {
   const dialogContainer = React.useContext(DialogPortalContainerContext)
+  const layer = useFloatingLayer({
+    onInteractOutside: props.onInteractOutside,
+    onCloseAutoFocus: props.onCloseAutoFocus,
+  })
   // Wait for the containing dialog node instead of mounting in body then
   // remounting (and refocusing) when its ref becomes available.
   if (dialogContainer === null) return null
   return (
     <PopoverPrimitive.Portal container={dialogContainer}>
       <PopoverPrimitive.Content
+        key={layer.key}
         data-slot="popover-content"
         align={align}
         sideOffset={sideOffset}
+        collisionPadding={collisionPadding}
         collisionBoundary={dialogContainer ?? undefined}
         className={cn(
-          "z-[90] flex max-h-[min(var(--radix-popover-content-available-height),calc(100dvh-16px))] w-72 origin-(--radix-popover-content-transform-origin) flex-col gap-2.5 overflow-y-auto rounded-lg bg-popover p-2.5 text-sm text-popover-foreground shadow-[var(--shadow)] ring-1 ring-foreground/10 outline-hidden",
+          floatingSurfaceClass,
+          // A content container by default (forms, details); list pickers
+          // set their own padding.
+          "flex max-h-[min(var(--radix-popover-content-available-height),calc(100dvh-16px))] w-72 origin-(--radix-popover-content-transform-origin) flex-col gap-2.5 overflow-y-auto p-2.5 text-(length:--text-ui)",
           className
         )}
         {...props}
-      />
+        onInteractOutside={layer.onInteractOutside}
+        onCloseAutoFocus={layer.onCloseAutoFocus}
+      >
+        {/* React context crosses the portal: a control in the popover is not the Field's control. */}
+        <FieldControlContext.Provider value={null}>{children}</FieldControlContext.Provider>
+      </PopoverPrimitive.Content>
     </PopoverPrimitive.Portal>
   )
 }
@@ -54,7 +99,7 @@ function PopoverHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="popover-header"
-      className={cn("flex flex-col gap-0.5 text-sm", className)}
+      className={cn("flex flex-col gap-0.5 text-(length:--text-ui)", className)}
       {...props}
     />
   )
@@ -64,7 +109,7 @@ function PopoverTitle({ className, ...props }: React.ComponentProps<"h2">) {
   return (
     <h2
       data-slot="popover-title"
-      className={cn("text-sm font-medium", className)}
+      className={cn("text-(length:--text-ui) font-medium", className)}
       {...props}
     />
   )

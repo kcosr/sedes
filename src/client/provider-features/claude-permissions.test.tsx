@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -9,6 +9,11 @@ import type {
 } from "../../shared/index.js";
 import type { ThreadClientStore } from "../stores/ThreadClientStore.js";
 import { ProviderFeatureThreadDetails } from "./registry.js";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@client/components/ui/dropdown-menu";
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -97,14 +102,24 @@ function snapshot(
   } as unknown as NormalizedThreadSnapshot;
 }
 
+async function openModes(): Promise<HTMLElement> {
+  await userEvent.click(
+    screen.getByRole("menuitem", { name: "Permission mode" }),
+  );
+  return await screen.findByRole("menu", { name: /Permission mode/ });
+}
+
 describe("claude.permissions@1 client feature", () => {
-  it("renders one ordinary permission-mode dropdown with no confirmation UI", () => {
+  it("renders one permission-mode radio submenu with no confirmation UI", async () => {
     renderFeature(snapshot());
 
-    expect(screen.getByText("Claude permissions")).toBeInTheDocument();
+    const trigger = screen.getByRole("menuitem", { name: "Permission mode" });
+    expect(trigger).toHaveTextContent("Default");
+    const menu = await openModes();
     expect(
-      screen.getByRole("combobox", { name: "Permission mode" }),
-    ).toHaveTextContent("Default");
+      within(menu).getByRole("menuitemradio", { name: "Default" }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(within(menu).getAllByRole("menuitemradio")).toHaveLength(5);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(
       screen.queryByText(/warning|confirm|danger/i),
@@ -113,11 +128,12 @@ describe("claude.permissions@1 client feature", () => {
 
   it("performs the fixed null-argument action at the exact feature revision", async () => {
     const perform = vi.fn().mockResolvedValue(undefined);
-    const user = userEvent.setup();
     renderFeature(snapshot(), perform);
 
-    await user.click(screen.getByRole("combobox", { name: "Permission mode" }));
-    await user.click(screen.getByRole("option", { name: "Accept edits" }));
+    const menu = await openModes();
+    await userEvent.click(
+      within(menu).getByRole("menuitemradio", { name: "Accept edits" }),
+    );
 
     expect(perform).toHaveBeenCalledWith({
       action: "perform_provider_feature",
@@ -129,7 +145,6 @@ describe("claude.permissions@1 client feature", () => {
   });
 
   it("retains a selected mode removed from the deployment allowlist", async () => {
-    const user = userEvent.setup();
     renderFeature(
       snapshot({
         desired: "bypassPermissions",
@@ -139,35 +154,49 @@ describe("claude.permissions@1 client feature", () => {
       }),
     );
 
-    const select = screen.getByRole("combobox", { name: "Permission mode" });
-    expect(select).toHaveTextContent("Bypass permissions");
-    await user.click(select);
     expect(
-      screen.getByRole("option", {
-        name: "Bypass permissions (unavailable)",
-      }),
-    ).toHaveAttribute("data-disabled");
-    expect(screen.getByRole("option", { name: "Default" })).not.toHaveAttribute(
-      "data-disabled",
-    );
+      screen.getByRole("menuitem", { name: "Permission mode" }),
+    ).toHaveTextContent("Bypass permissions");
+    const menu = await openModes();
+    const retained = within(menu).getByRole("menuitemradio", {
+      name: /Bypass permissions/,
+    });
+    expect(retained).toHaveAttribute("data-disabled");
+    expect(retained).toHaveAttribute("aria-checked", "true");
+    expect(retained).toHaveTextContent("Not allowed");
+    expect(
+      within(menu).getByRole("menuitemradio", { name: "Default" }),
+    ).not.toHaveAttribute("data-disabled");
   });
 
-  it("disables selection when the capability or host is unavailable", () => {
+  it("keeps the mode visible but unchangeable when the capability or host is unavailable", async () => {
     const { rerender } = renderFeature(snapshot(), vi.fn(), true);
+    const trigger = screen.getByRole("menuitem", { name: "Permission mode" });
+    expect(trigger).not.toHaveAttribute("data-disabled");
+    expect(trigger).toHaveAccessibleDescription("Default");
+    let menu = await openModes();
+    expect(within(menu).getByRole("status")).toHaveTextContent(
+      "Can't be changed right now",
+    );
+    for (const row of within(menu).getAllByRole("menuitemradio")) {
+      expect(row).toHaveAttribute("data-disabled");
+    }
     expect(
-      screen.getByRole("combobox", { name: "Permission mode" }),
-    ).toBeDisabled();
+      within(menu).getByRole("menuitemradio", { name: "Default" }),
+    ).toHaveAttribute("aria-checked", "true");
 
     rerender(featureElement(snapshot({ availability: "unavailable" })));
-    expect(
-      screen.getByRole("combobox", { name: "Permission mode" }),
-    ).toBeDisabled();
+    menu = screen.getByRole("menu", { name: /Permission mode/ });
+    expect(within(menu).getByRole("status")).toHaveTextContent("Unavailable");
+    for (const row of within(menu).getAllByRole("menuitemradio")) {
+      expect(row).toHaveAttribute("data-disabled");
+    }
   });
 
   it("fails closed on unknown state values or extra provider fields", () => {
     const invalid = snapshot({ desired: "plan" });
     renderFeature(invalid);
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
 
     cleanup();
     const extra = snapshot() as unknown as {
@@ -178,7 +207,7 @@ describe("claude.permissions@1 client feature", () => {
       value: null,
     });
     renderFeature(extra as unknown as NormalizedThreadSnapshot);
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
   });
 });
 
@@ -188,12 +217,17 @@ function featureElement(
   disabled = false,
 ): React.JSX.Element {
   return (
-    <ProviderFeatureThreadDetails
-      store={{ perform } as unknown as ThreadClientStore}
-      snapshot={value}
-      disabled={disabled}
-      mobile
-    />
+    <DropdownMenu defaultOpen>
+      <DropdownMenuTrigger>Thread actions</DropdownMenuTrigger>
+      <DropdownMenuContent aria-label="Thread actions">
+        <ProviderFeatureThreadDetails
+          store={{ perform } as unknown as ThreadClientStore}
+          snapshot={value}
+          disabled={disabled}
+          mobile={false}
+        />
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

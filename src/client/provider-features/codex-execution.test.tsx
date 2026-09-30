@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -9,9 +9,15 @@ import type {
 } from "../../shared/index.js";
 import type { ThreadClientStore } from "../stores/ThreadClientStore.js";
 import { ProviderFeatureThreadDetails } from "./registry.js";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@client/components/ui/dropdown-menu";
+import type { MenuPresentation } from "@client/components/ui/menu-sheet";
 
-// jsdom lacks the pointer-capture and scroll APIs the Radix Select
-// primitive relies on.
+// jsdom lacks the pointer-capture and scroll APIs the Radix menu
+// primitives rely on.
 beforeEach(() => {
   vi.stubGlobal(
     "ResizeObserver",
@@ -112,31 +118,46 @@ function snapshot({
   } as unknown as NormalizedThreadSnapshot;
 }
 
+async function openExecution(): Promise<HTMLElement> {
+  await userEvent.click(
+    screen.getByRole("menuitem", { name: "Codex execution" }),
+  );
+  return await screen.findByRole("menu", { name: "Codex execution" });
+}
+
+function checkedIn(menu: HTMLElement, group: string): string | undefined {
+  return within(within(menu).getByRole("group", { name: group }))
+    .getAllByRole("menuitemradio")
+    .find((row) => row.getAttribute("aria-checked") === "true")
+    ?.textContent ?? undefined;
+}
+
+function radiosIn(menu: HTMLElement, group: string): HTMLElement[] {
+  return within(within(menu).getByRole("group", { name: group })).getAllByRole(
+    "menuitemradio",
+  );
+}
+
 describe("codex.execution@1 client feature", () => {
-  it("renders the four desired next-turn values as plain dropdowns", () => {
+  it("renders the four desired next-turn values as radio groups in a submenu", async () => {
     renderFeature(snapshot());
 
-    expect(screen.getByText("Codex execution")).toBeInTheDocument();
-    expect(screen.getAllByRole("combobox")).toHaveLength(4);
-    expect(screen.getByRole("combobox", { name: "Sandbox" })).toHaveTextContent(
-      "Workspace",
-    );
-    expect(screen.getByRole("combobox", { name: "Network" })).toHaveTextContent(
-      "Disabled",
-    );
-    expect(
-      screen.getByRole("combobox", { name: "Approval policy" }),
-    ).toHaveTextContent("On request");
-    expect(
-      screen.getByRole("combobox", { name: "Approval reviewer" }),
-    ).toHaveTextContent("User");
+    const trigger = screen.getByRole("menuitem", { name: "Codex execution" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    const menu = await openExecution();
+    expect(within(menu).getAllByRole("group")).toHaveLength(4);
+    expect(checkedIn(menu, "Sandbox")).toBe("Workspace");
+    expect(checkedIn(menu, "Network")).toBe("Disabled");
+    expect(checkedIn(menu, "Approval policy")).toBe("On request");
+    expect(checkedIn(menu, "Approval reviewer")).toBe("User");
+    expect(within(menu).queryByRole("combobox")).toBeNull();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(
       screen.queryByText(/current:|next turn|warning/i),
     ).not.toBeInTheDocument();
   });
 
-  it("forces Network to Enabled for Unrestricted and disables only that dependency", () => {
+  it("forces Network to Enabled for Unrestricted and disables only that dependency", async () => {
     renderFeature(
       snapshot({
         desired: {
@@ -147,27 +168,37 @@ describe("codex.execution@1 client feature", () => {
       }),
     );
 
-    expect(screen.getByRole("combobox", { name: "Network" })).toHaveTextContent(
-      "Enabled",
-    );
-    expect(screen.getByRole("combobox", { name: "Network" })).toBeDisabled();
-    expect(screen.getByRole("combobox", { name: "Sandbox" })).toBeEnabled();
+    const menu = await openExecution();
+    expect(checkedIn(menu, "Network")).toBe("Enabled");
+    for (const row of radiosIn(menu, "Network")) {
+      expect(row).toHaveAttribute("data-disabled");
+    }
     expect(
-      screen.getByRole("combobox", { name: "Approval policy" }),
-    ).toBeEnabled();
-    expect(screen.queryByText(/Forced on/i)).not.toBeInTheDocument();
+      within(menu).getByText("Always enabled with an unrestricted sandbox"),
+    ).toBeVisible();
+    for (const row of radiosIn(menu, "Sandbox")) {
+      expect(row).not.toHaveAttribute("data-disabled");
+    }
+    for (const row of radiosIn(menu, "Approval policy")) {
+      expect(row).not.toHaveAttribute("data-disabled");
+    }
   });
 
-  it("disables the reviewer without adding helper copy when approvals are never", () => {
+  it("disables the reviewer with its reason when approvals are never", async () => {
     renderFeature(
       snapshot({ desired: { ...defaultDesired, approvalPolicy: "never" } }),
     );
 
-    expect(screen.getByRole("combobox", { name: "Approval reviewer" })).toBeDisabled();
-    expect(screen.queryByText(/Not used while/i)).not.toBeInTheDocument();
+    const menu = await openExecution();
+    for (const row of radiosIn(menu, "Approval reviewer")) {
+      expect(row).toHaveAttribute("data-disabled");
+    }
+    expect(
+      within(menu).getByText("Not used when approval is never requested"),
+    ).toBeVisible();
   });
 
-  it("keeps desired values in the selects without effective-state helper copy", () => {
+  it("checks the desired values without effective-state helper copy", async () => {
     renderFeature(
       snapshot({
         desired: { ...defaultDesired, sandboxMode: "workspace-write" },
@@ -175,35 +206,40 @@ describe("codex.execution@1 client feature", () => {
       }),
     );
 
-    expect(screen.getByRole("combobox", { name: "Sandbox" })).toHaveTextContent(
-      "Workspace",
-    );
+    const menu = await openExecution();
+    expect(checkedIn(menu, "Sandbox")).toBe("Workspace");
     expect(screen.queryByText(/Current:/)).not.toBeInTheDocument();
     expect(screen.queryByText(/next turn/i)).not.toBeInTheDocument();
   });
 
-  it("disables the reviewer only when the approval policy is Never", () => {
+  it("enables the reviewer again once the approval policy is not Never", async () => {
     const { rerender } = renderFeature(
       snapshot({ desired: { ...defaultDesired, approvalPolicy: "never" } }),
     );
 
-    expect(
-      screen.getByRole("combobox", { name: "Approval reviewer" }),
-    ).toBeDisabled();
+    let menu = await openExecution();
+    expect(radiosIn(menu, "Approval reviewer")[0]).toHaveAttribute(
+      "data-disabled",
+    );
 
     rerender(featureElement(snapshot()));
-    expect(
-      screen.getByRole("combobox", { name: "Approval reviewer" }),
-    ).toBeEnabled();
+    menu = screen.getByRole("menu", { name: "Codex execution" });
+    for (const row of radiosIn(menu, "Approval reviewer")) {
+      expect(row).not.toHaveAttribute("data-disabled");
+    }
   });
 
   it("performs the selected operation against the exact feature revision", async () => {
-    const user = userEvent.setup();
     const perform = vi.fn().mockResolvedValue(undefined);
     renderFeature(snapshot(), perform);
 
-    await user.click(screen.getByRole("combobox", { name: "Network" }));
-    await user.click(screen.getByRole("option", { name: "Enabled" }));
+    const menu = await openExecution();
+    await userEvent.click(
+      within(within(menu).getByRole("group", { name: "Network" })).getByRole(
+        "menuitemradio",
+        { name: "Enabled" },
+      ),
+    );
 
     expect(perform).toHaveBeenCalledWith({
       action: "perform_provider_feature",
@@ -214,18 +250,27 @@ describe("codex.execution@1 client feature", () => {
     });
   });
 
-  it("remains mutable while a turn is active when the feature is available", () => {
+  it("remains mutable while a turn is active when the feature is available", async () => {
     renderFeature(snapshot({ runState: "active" }));
 
-    for (const select of screen.getAllByRole("combobox")) {
-      expect(select).toBeEnabled();
+    const menu = await openExecution();
+    for (const row of within(menu).getAllByRole("menuitemradio")) {
+      if (row.closest('[role="group"]')?.getAttribute("aria-label") === "Network") continue;
+      expect(row).not.toHaveAttribute("data-disabled");
     }
   });
 
-  it("preserves true capability and pending-operation disabling", () => {
+  it("keeps the values visible but unchangeable while pending or unavailable", async () => {
     const { rerender } = renderFeature(snapshot(), vi.fn(), true);
-    for (const select of screen.getAllByRole("combobox")) {
-      expect(select).toBeDisabled();
+    const trigger = screen.getByRole("menuitem", { name: "Codex execution" });
+    expect(trigger).not.toHaveAttribute("data-disabled");
+    let menu = await openExecution();
+    expect(within(menu).getByRole("status")).toHaveTextContent(
+      "Can't be changed right now",
+    );
+    expect(checkedIn(menu, "Sandbox")).toBe("Workspace");
+    for (const row of within(menu).getAllByRole("menuitemradio")) {
+      expect(row).toHaveAttribute("data-disabled");
     }
 
     rerender(
@@ -239,12 +284,32 @@ describe("codex.execution@1 client feature", () => {
         }),
       ),
     );
-    for (const select of screen.getAllByRole("combobox")) {
-      expect(select).toBeDisabled();
+    menu = screen.getByRole("menu", { name: "Codex execution" });
+    expect(within(menu).getByRole("status")).toHaveTextContent(
+      "Connection unavailable",
+    );
+    for (const row of within(menu).getAllByRole("menuitemradio")) {
+      expect(row).toHaveAttribute("data-disabled");
     }
+  });
+
+  it("drills into the same choices on the touch sheet", async () => {
+    const perform = vi.fn().mockResolvedValue(undefined);
+    render(featureElement(snapshot(), perform, false, "sheet"));
+
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Codex execution" }),
+    );
+    const pane = await screen.findByRole("group", { name: "Codex execution" });
     expect(
-      screen.queryByText("Connection unavailable"),
-    ).not.toBeInTheDocument();
+      within(pane).getByRole("menuitemradio", { name: "Workspace" }),
+    ).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(
+      within(pane).getByRole("menuitemradio", { name: "Read-only" }),
+    );
+    expect(perform).toHaveBeenCalledWith(
+      expect.objectContaining({ actionId: "set_sandbox_read_only" }),
+    );
   });
 
   it("renders no explanatory text when native execution state is absent", () => {
@@ -255,7 +320,7 @@ describe("codex.execution@1 client feature", () => {
 
     renderFeature(absent as unknown as NormalizedThreadSnapshot);
 
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
     expect(screen.queryByText(/Codex execution/i)).not.toBeInTheDocument();
   });
 
@@ -276,9 +341,9 @@ describe("codex.execution@1 client feature", () => {
 
     renderFeature(unknown as unknown as NormalizedThreadSnapshot);
 
-    expect(
-      screen.getByText(/unavailable in this client version/i),
-    ).toBeInTheDocument();
+    const row = screen.getByRole("menuitem", { name: /Codex execution/ });
+    expect(row).toHaveAttribute("data-disabled");
+    expect(row).toHaveTextContent("Needs a client update");
     expect(screen.queryByText(/must-not-render/)).not.toBeInTheDocument();
   });
 });
@@ -287,14 +352,20 @@ function featureElement(
   value: NormalizedThreadSnapshot,
   perform = vi.fn().mockResolvedValue(undefined),
   disabled = false,
+  presentation: MenuPresentation = "menu",
 ): React.JSX.Element {
   return (
-    <ProviderFeatureThreadDetails
-      store={{ perform } as unknown as ThreadClientStore}
-      snapshot={value}
-      disabled={disabled}
-      mobile
-    />
+    <DropdownMenu presentation={presentation} defaultOpen>
+      <DropdownMenuTrigger>Thread actions</DropdownMenuTrigger>
+      <DropdownMenuContent aria-label="Thread actions">
+        <ProviderFeatureThreadDetails
+          store={{ perform } as unknown as ThreadClientStore}
+          snapshot={value}
+          disabled={disabled}
+          mobile={presentation === "sheet"}
+        />
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

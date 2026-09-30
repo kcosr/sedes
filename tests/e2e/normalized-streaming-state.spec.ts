@@ -7,6 +7,7 @@ import {
   expectNoPageOverflow,
   fillAndPersistDraft,
   openSedesWorkspace,
+  overlaySettled,
   sendCurrentDraft,
 } from "./helpers";
 
@@ -34,7 +35,7 @@ test.describe.serial("normalized streaming and restored state", () => {
       .getByTestId("composer")
       .getByRole("combobox", { name: "Model" });
     await desktopModelPicker.click();
-    const desktopModelSearch = page.getByRole("searchbox", {
+    const desktopModelSearch = page.getByRole("combobox", {
       name: "Search models",
     });
     await expect(desktopModelSearch).toBeFocused();
@@ -47,7 +48,7 @@ test.describe.serial("normalized streaming and restored state", () => {
     await page.keyboard.press("Escape");
     await expect(desktopModelPicker).toBeFocused();
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await expect(page.getByRole("button", { name: "Automate…" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "Automate…" })).toBeVisible();
     await page.keyboard.press("Escape");
 
     const prompt = "Summarize normalized streaming";
@@ -944,12 +945,12 @@ test.describe.serial("normalized streaming and restored state", () => {
   }, testInfo) => {
     await page.goto(completedThreadPath);
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page.getByRole("button", { name: "Session stats" }).click();
+    await page.getByRole("menuitem", { name: "Session stats" }).click();
     const stats = page.getByRole("dialog", { name: "Session stats" });
     await expect(stats).toBeVisible();
     await expect(stats.getByText("Context used")).toBeVisible();
     await expect(stats.getByText("Compactions")).toBeVisible();
-    await expect(stats.getByRole("heading", { name: "Recorded session usage (Experimental)" })).toBeVisible();
+    await expect(stats.getByRole("heading", { name: "Recorded session usage Experimental" })).toBeVisible();
     await expect(stats.getByText("Estimated cost")).toBeVisible();
     await expect(stats.getByText(/fixture-model/)).toBeVisible();
     await capture(page, testInfo, "restored-session-stats.png");
@@ -977,7 +978,7 @@ test.describe.serial("normalized streaming and restored state", () => {
       await route.fulfill({ response, json: report });
     });
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page.getByRole("button", { name: "Session stats" }).click();
+    await page.getByRole("menuitem", { name: "Session stats" }).click();
     const breakdown = stats.getByRole("table", { name: "Session usage by agent" });
     await expect(breakdown.getByRole("row", { name: "Input 39,609 10,228 49,837" })).toBeVisible();
     await expect(breakdown.getByRole("row", { name: "Output 243 5 248" })).toBeVisible();
@@ -1023,11 +1024,11 @@ test.describe.serial("normalized streaming and restored state", () => {
         response.request().postDataJSON().kind === "perform" &&
         response.request().postDataJSON().operation?.action === "compact",
     );
-    await page.getByRole("button", { name: "Compact context" }).click();
+    await page.getByRole("menuitem", { name: "Compact context" }).click();
     await compactResponse;
     await expect(page.locator('[data-item-kind="compaction"]')).toBeVisible();
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page.getByRole("button", { name: "Session stats" }).click();
+    await page.getByRole("menuitem", { name: "Session stats" }).click();
     await expect(
       page
         .getByRole("dialog", { name: "Session stats" })
@@ -1066,12 +1067,14 @@ test.describe.serial("normalized streaming and restored state", () => {
     await expect(mobileUsage.getByText("Partial", { exact: true })).toBeVisible();
     await expect(mobileUsage.getByText("Cache write")).toHaveCount(0);
     await expect(mobileUsage.getByText(/SDK-normalized|Unknown model/)).toHaveCount(0);
+    await overlaySettled(mobileUsage);
     const bounds = await mobileUsage.boundingBox();
     expect(bounds).not.toBeNull();
-    expect(bounds!.x).toBeGreaterThanOrEqual(12);
-    expect(bounds!.y).toBeGreaterThanOrEqual(12);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(378);
-    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(832);
+    // Floating surfaces keep the shared 8px collision padding from the edges.
+    expect(bounds!.x).toBeGreaterThanOrEqual(8);
+    expect(bounds!.y).toBeGreaterThanOrEqual(8);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(382);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(836);
     expect(bounds!.height).toBeLessThan(310);
     expect(await mobileUsage.evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true);
     await capture(page, testInfo, "mobile-recorded-turn-usage.png");

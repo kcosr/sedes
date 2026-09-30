@@ -23,7 +23,8 @@ import {
 export interface SidebarFooterActionsProps {
   readonly onOpenSettings: (trigger: HTMLButtonElement) => void;
   readonly onOpenUsage: () => void;
-  readonly onOpenAgents: () => void;
+  /** Opens Settings › Agents; `trigger` is the More button, where focus returns. */
+  readonly onOpenAgents: (trigger: HTMLButtonElement) => void;
   readonly onOpenArchivedThreads: () => void;
   readonly connection?: ConnectionState;
   readonly api?: ApiClient;
@@ -47,23 +48,18 @@ export function SidebarFooterActions({
   const useSheet = useUsageSheetLayout();
   const [usageSheetOpen, setUsageSheetOpen] = useState(false);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
+  const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const usageApi = providerPulseEnabled ? api : undefined;
   return (
     <div className="sidebar-footer-actions">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" className="sidebar-footer-menu-trigger">
+          <Button ref={moreTriggerRef} variant="ghost" className="sidebar-footer-menu-trigger">
             More
             <ChevronUp aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent
-          className="sidebar-footer-menu"
-          side="top"
-          align="start"
-          sideOffset={6}
-          collisionPadding={8}
-        >
+        <DropdownMenuContent side="top" align="start" className="min-w-48">
           {experimentalUsageEnabled && <DropdownMenuItem onSelect={onOpenUsage}>
             <ChartColumnBig aria-hidden="true" />
             Usage (Experimental)
@@ -76,7 +72,10 @@ export function SidebarFooterActions({
             )
           ) : null}
           {(experimentalUsageEnabled || usageApi) && <DropdownMenuSeparator />}
-          <DropdownMenuItem onSelect={onOpenAgents}>
+          <DropdownMenuItem onSelect={() => {
+            const trigger = moreTriggerRef.current;
+            if (trigger) onOpenAgents(trigger);
+          }}>
             <Bot aria-hidden="true" />
             Agents
           </DropdownMenuItem>
