@@ -97,6 +97,18 @@
   gap: var(--space-2);
 }
 
+/* Page and detail header actions take the touch size on every settings page
+   (menu triggers carry the trigger's data-slot, so match both). */
+@media (max-width: 819px), (pointer: coarse) {
+  [data-slot="settings-page-actions"] :is([data-slot="button"], [data-slot="dropdown-menu-trigger"]):not([data-size="icon-xs"]) {
+    min-height: var(--control-default);
+  }
+
+  [data-slot="settings-page-actions"] :is([data-slot="button"], [data-slot="dropdown-menu-trigger"])[data-size^="icon"]:not([data-size="icon-xs"]) {
+    min-width: var(--control-default);
+  }
+}
+
 [data-slot="settings-page-body"] {
   display: grid;
   min-width: 0;
@@ -755,6 +767,12 @@
   /* Beside its list, the list is the way back. */
   [data-slot="settings-page-back"][data-stack-only] {
     display: none;
+  }
+
+  /* Under the page title, a selection's title is a panel title (stacked, it
+     stands in for the page title and keeps the page size). */
+  [data-slot="settings-split-detail"] [data-slot="settings-detail-title-row"] > [data-slot="settings-page-title"] {
+    font-size: var(--text-title);
   }
 
   /* A long editor takes the width; its list gives way. */
