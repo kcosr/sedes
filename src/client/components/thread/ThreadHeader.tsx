@@ -742,7 +742,10 @@ export const ThreadHeader = memo(function ThreadHeader({
                             .catch(() => undefined)
                         }
                       >
-                        <SelectTrigger size="sm" aria-label="Draft workspace">
+                        <SelectTrigger
+                          aria-label="Draft workspace"
+                          className="h-(--control-md) text-(length:--text-ui)"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent position="popper">

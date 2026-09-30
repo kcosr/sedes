@@ -221,8 +221,7 @@ function ExecutionSelect<Value extends string>({
       >
         <SelectTrigger
           aria-label={label}
-          className="w-full min-w-0"
-          size="sm"
+          className="w-full min-w-0 h-(--control-md) text-(length:--text-ui)"
           disabled={disabled}
         >
           <SelectValue placeholder="Choose…" />

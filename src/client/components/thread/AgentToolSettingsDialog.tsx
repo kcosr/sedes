@@ -454,7 +454,7 @@ export function AgentToolSettingsDialog({
                   }));
                 }}
               >
-                <SelectTrigger size="sm" aria-label="Agent tool surface">
+                <SelectTrigger aria-label="Agent tool surface">
                   <SelectValue>
                     {surfaceLabels[draft.presentation.surface]}
                   </SelectValue>
@@ -490,10 +490,7 @@ export function AgentToolSettingsDialog({
                   }))
                 }
               >
-                <SelectTrigger
-                  size="sm"
-                  aria-label="Agent tool presentation"
-                >
+                <SelectTrigger aria-label="Agent tool presentation">
                   <SelectValue>
                     {draft.presentation.mode === "progressive"
                       ? "Progressive"
@@ -535,10 +532,7 @@ export function AgentToolSettingsDialog({
                 }))
               }
             >
-              <SelectTrigger
-                size="sm"
-                aria-label="Access boundary"
-              >
+              <SelectTrigger aria-label="Access boundary">
                 <SelectValue>
                   {{
                     thread: "Ask outside this thread",

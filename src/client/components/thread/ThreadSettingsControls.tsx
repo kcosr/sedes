@@ -69,12 +69,12 @@ export function ThreadSettingsControls({
             onValueChange={performSettingUpdate}
           >
             <SelectTrigger
-              size="sm"
+              size={variant === "pill" ? "sm" : "default"}
               aria-label={setting.label.text}
               className={
                 variant === "pill"
                   ? "gap-1 rounded-full border-transparent bg-transparent px-2.5 text-xs font-medium text-muted-foreground shadow-none hover:bg-accent hover:text-foreground dark:bg-transparent dark:hover:bg-accent data-[size=sm]:h-6 [&_svg:not([class*='size-'])]:size-3"
-                  : undefined
+                  : "h-(--control-md) text-(length:--text-ui)"
               }
             >
               <SelectValue

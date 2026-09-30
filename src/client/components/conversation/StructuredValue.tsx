@@ -16,7 +16,7 @@ export function TruncationNotice({
       ? undefined
       : Math.max(0, truncation.originalBytes - truncation.retainedBytes);
   return (
-    <Badge className="truncation-chip" role="note" variant="outline">
+    <Badge className="truncation-chip" role="note" appearance="outline">
       {omitted === undefined
         ? "Output truncated"
         : `Output truncated · ${omitted.toLocaleString()} bytes omitted`}
