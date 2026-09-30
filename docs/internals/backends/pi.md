@@ -491,9 +491,10 @@ client; destination model work still uses the destination thread's own
 Pi/Sedes policy. Pi CLI spawn hygiene removes any ambient Tool client token
 before installing the thread source reference.
 
-The thread menu's **New** action captures the same complete durable tuple from
-an available source thread, revision-fences it, and revalidates it against the
-current Pi catalog and policy before creating an independent empty draft.
+The thread menu's **New with same settings** action captures the same
+complete durable tuple from an available source thread, revision-fences it, and
+revalidates it against the current Pi catalog and policy before creating an
+independent empty draft.
 
 ## Verification and change contract
 

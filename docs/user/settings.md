@@ -1,31 +1,61 @@
 # Settings
 
-Open **Settings** from the sidebar footer. Some settings follow the Sedes user
-through the server; many appearance and interaction choices belong only to the
-current browser or packaged client.
+Open **Settings** with the gear button in the sidebar footer. Some settings
+follow the Sedes user through the server; many appearance and interaction
+choices belong only to the current browser or packaged client.
 
-Settings opens as a page in the main workspace. On desktop, use the category
-list on the left. On phones, choose a category from the Settings home page or
-use the **Settings category** picker at the top; it stays visible while you
-scroll. **All settings** returns to the category list.
+## Move around Settings
 
-Categories have direct links, such as `/settings/backends`, and support browser
-Back and Forward. The Back control inside an environment or backend returns to
-its list or detail. **Back to chat** returns to the thread you were viewing,
-keeping its draft, uploads, scroll position, and terminal sessions. Running work
-continues while Settings is open. Opening Settings directly offers **Back to
-workspace** instead.
+Settings opens as a page in the main workspace. The thread you were viewing
+stays loaded behind it, with its draft, uploads, scroll position, and terminal
+sessions, and running work continues.
 
-Category navigation and the return destination are local to the current client
-session; they do not change ownership or persistence of the settings below.
+Pages are grouped. A page appears only where this client can use it; for
+example, **Connection** exists only in the Electron app and **Server** only in
+the Android app.
 
-**Click project and environment names to filter** (General) is off by default
-and saved on this client. Enable it to click or tap an underlined project or
-environment name on a sidebar thread card to filter the thread list without
-opening the thread. Keyboard users can focus a name and press Enter or Space.
-Back clears active sidebar filters as usual. Environment names, including Local,
-appear when there are multiple environments; they are hidden when there is only
-one or the current scope already identifies the environment.
+| Group | Pages |
+| --- | --- |
+| Preferences | General, Appearance, Mobile, Terminal |
+| Account | Prompts, Notifications |
+| Execution | Environments, Backends, Projects, Agents |
+| Access | Tool clients, Paired clients, Connection or Server |
+| Support | Diagnostics |
+
+**With the desktop sidebar showing**, the sidebar lists the Settings pages by
+group in place of your threads. The thread list is kept as it was and returns
+when you leave. The row at the top, **Back to chat**, returns to the thread you
+were viewing; it reads **Back to workspace** when you did not come from a
+thread. Opening `/settings` goes to the page you last viewed in this browser
+tab, or to **General**; it opens that page's list, never an item or editor you
+left open.
+
+**On a phone, or with the desktop sidebar hidden**, `/settings` shows every
+page in a grouped list with a one-line description, and the return control sits
+at the top of the list. Each page has a **‹ Settings** link back to the list.
+The menu button at the top left opens thread navigation on a phone; on desktop
+it shows the sidebar again, which then lists the Settings pages.
+
+Every page has its own address, such as `/settings/backends`, and browser or
+Android Back and Forward walk the same path as the **‹** links. Page
+navigation and the return destination are local to the current client session;
+they do not change ownership or persistence of the settings below.
+
+### Escape goes up one level
+
+Press Escape to go up one level, the same way as the **‹** links:
+
+- an editor returns to the item it edits, and an item returns to its list;
+- a page returns to the Settings list on a phone or with the sidebar hidden;
+- the Settings list, or any page while the sidebar lists Settings, returns to
+  the workspace.
+
+An open dialog, menu, picker, popover, or sheet takes Escape first and only
+closes. In a text field, the first Escape only leaves the field (a search field
+may also clear); press Escape again to go up. Holding the key down never
+skips several levels. With unsaved edits, Sedes asks before discarding them, as
+it does for the **‹** links and Back. On **Prompts** and **Tool clients**,
+Escape closes an open editor before it leaves the page.
 
 ## Which settings follow you
 
@@ -40,51 +70,125 @@ one or the current scope already identifies the environment.
 
 ## Environments, backends, and targets
 
-Use **Environments** to browse local, SSH, and paired outbound environments.
-Search by name, host alias, or associated backend, and filter runtime states.
-Open an environment to see its **Backends**, edit
-**Configuration**, or inspect **Activity & diagnostics**. **Add backend** in that view uses the selected
-environment. **Add environment** offers Local machine, SSH host, and Pair a host;
-connector setup instructions appear only in the pairing flow. When a host awaits
-approval, choose **Review hosts** from the environment directory.
+**Environments** lists this machine, SSH hosts, and paired outbound hosts.
+**Backends** lists the Pi SDK, Codex, Claude, and local Grok backends, grouped
+by environment. Both pages show a list and the selected item.
 
-The global **Backends** view groups Pi SDK, Codex, Claude, and local Grok
-configurations by environment. Search backend or connection names, hosts, and
-provider types; combine environment, provider, and status filters. **Needs
-attention** includes pending or unapplied configuration, runtime errors, upgrades,
-and unknown operation outcomes. Returning from a detail or editor preserves
-inventory filters and scroll. **Edit** and the row action menu stay visible.
-On phones, compact rows keep more backends in view. Tap **Filters** to open
-the full-width filter controls; its badge shows how many filters are active.
+### List and detail
+
+When the Settings content area is at least 960 pixels wide, the list stays on
+the left and the selected item opens beside it. On narrower windows and on
+phones the page stacks: the list, then the selected item on its own with a
+**‹ Environments** or **‹ Backends** link back. Returning to the list restores
+its filters, its scroll position, and focus on the row you left.
+
+Each item, editor, and add step has its own address, so a link opens it
+directly and browser or Android Back walks back through it:
+
+| Address | Opens |
+| --- | --- |
+| `/settings/environments/ID` | One environment |
+| `/settings/environments/ID/edit` | Its editor |
+| `/settings/environments/new` | The **Add environment** chooser |
+| `/settings/environments/new/local`, `…/new/ssh`, `…/new/pair` | One kind of new environment |
+| `/settings/environments/pending/ID` | A host awaiting approval |
+| `/settings/backends/ID`, `…/ID/edit`, `/settings/backends/new` | A backend, its editor, a new backend |
+
+A link to a removed item, or to a host that was already accepted, denied, or
+has expired, says the item is unavailable.
+
+Each row shows an icon, the name, a summary (where an environment runs and how
+many backends it has; a backend's provider and how many connections it has),
+one status, and a **⋯** menu with **Edit**, **View activity**, and **Remove…**.
+Search environments by name, host, or backend, and filter them by status.
+Search backends by name, provider, environment, host, or connection name, and
+filter them by environment, provider, and status. In a narrow list, **Filters**
+opens these controls and shows how many are active. The **Needs attention**
+status filter includes pending or unapplied configuration, runtime errors,
+upgrades, unreachable hosts, and unknown operation outcomes. Hosts waiting for
+approval are listed first, under **Awaiting approval**.
+
+### An environment or backend
+
+The header shows the name, its kind (**Local**, **SSH**, or **Paired**, or the
+backend's provider with **Default** or **Disabled** where they apply), one
+status, the action the current state calls for (such as **Retry connection**),
+**Edit**, and a **⋯** menu with the other lifecycle commands. A destructive
+command such as **Stop** comes last in that menu. Three tabs follow:
+
+- **Overview** starts with a health summary: the runtime state, its last error,
+  and the action to take, so an unreachable host is visible on the first tab.
+  An environment then shows **Host**, **Workspace access**, and **Environment
+  variables**. A backend shows **Provider and connection**, **Policy**,
+  **Models**, and **Environment variables**. **Danger zone** comes last, with
+  **Remove environment** or **Remove backend** and, for a paired host,
+  **Revoke pairing** or **Reapprove pairing**. Each asks for confirmation.
+- **Backends** (on an environment) lists the backends that run there, with
+  **Add backend** for that environment. **Connections** (on a backend) lists
+  its named connections and marks the **Default for new threads**.
+- **Activity** shows the runtime state and **Technical details**: connection
+  preference, configuration state, saved and applied revisions, active or
+  unconfirmed resources, and for a remote host the sidecar version and upgrade
+  state. Internal identifiers such as environment, backend, pairing, and
+  installation IDs appear only here, each with a copy button. A remote
+  environment also offers **Recovered operations** here.
+
+### Edit and add
+
+**Edit** opens the editor in the detail pane. A backend editor takes the full
+width of the page. Links at the top jump to its sections: **General**,
+**Access**, **Operations**, and **Variables** for an environment; **General**,
+**Connection**, **Policy**, **Models**, **Connections**, and **Variables** for a
+backend. Executable paths, home directories, and timeouts sit in a collapsed
+**Advanced** group. Each connection and model rule can be collapsed. The bar at
+the bottom shows whether there are unsaved changes and offers **Cancel** and
+**Save environment** or **Save backend**; **Saved** appears there briefly after
+a save. An error appears on the field that needs fixing; an error that belongs
+to no single field is described in words above the form. Errors clear when you
+move to another item. Runtime commands pause while an editor is open.
+
+**Add environment** opens a chooser in the detail pane: **Local machine** (one
+per account), **SSH host**, or **Pair a host**. Local and SSH open their form
+in the same pane. **Pair a host** shows the pairing commands, a **Download
+connector** link, and the hosts already waiting. A registered host appears
+under **Awaiting approval**; select it, compare its registration code, set the
+access under **Access to grant**, and choose **Accept host**, or choose
+**Deny**. See [Outbound hosts](../operator/outbound-hosts.md).
+
+**Add backend** opens a new backend form; from an environment's **Backends**
+tab it starts in that environment. Choose the **Execution environment** before
+the **Backend type**; types that environment cannot run are disabled. All named
+connections for one backend share its environment, and existing environment
+bindings remain fixed.
+
+Above the backend list, **Defaults** holds two account-wide settings: **Default
+connection for new threads**, whose choices read Environment / Backend /
+Connection, and **Grok CLI research**, the local research tool on Sedes, which
+is configured separately from environment backends. On a narrow page they fold
+into one summary line; select it to change them, then choose **Save defaults**.
 
 Provider executables and authentication must already be installed for their
 execution account. Pi's SDK and provider connection run on Sedes; a remote Pi
 environment supplies workspace tools. Credential fields refer only to approved
 host-scoped credentials; Settings never displays their values.
 
-Choose an environment before a backend type when adding from the global view.
-Unsupported types are disabled for that environment. All named connections for
-one backend share its environment, and existing environment bindings remain
-fixed. **Default connection for new threads** is account-wide; its chooser names
-Environment / Backend / Connection. **Research provider** configures the local
-research tool on Sedes separately from environment backend groups.
+### Saving and runtime state
 
 Configuration saves follow this Sedes user across clients and restarts. The
 saved revision is the desired setting; the applied revision and status show
 what the runtime has confirmed. Another client's edit can cause a conflict:
-refresh and review before saving again. Leaving unsaved edits asks whether to
-discard them. Existing thread identities cannot be redirected to a different
-host, provider home, or native store by editing labels. Create a new target
-identity for different execution authority.
+refresh and review before saving again. Leaving unsaved edits, by a link, Back,
+Escape, or selecting another item, asks whether to discard them. Existing
+thread identities cannot be redirected to a different host, provider home, or
+native store by editing labels. Create a new target identity for different
+execution authority.
 
-Inventory runtime state, configuration application, and host connection have
-separate labels: an online host need not have a connected provider, and a disabled
-backend can still own a running runtime. Open a backend, or an environment's
-**Activity & diagnostics**, for the explanation and **Actions** menu. A relevant
-primary action such as **Retry connection** may also appear. The menu stays in a
-consistent location and order, offering only supported actions for the current
-state. **Diagnostics** reveals saved/applied revisions, version and upgrade
-state, connection preference, and active resources.
+Runtime state, configuration application, and host connection are reported
+separately: an online host need not have a connected provider, and a disabled
+backend can still own a running runtime. A row and a header show the one status
+that needs the most attention; the item's **Overview** explains it. The **⋯**
+menu stays in the same place and order, offering only the actions supported in
+the current state.
 
 **Stop** remains available while a host is unreachable or requires recovery. It
 records that the service must not start automatically; host shutdown and cleanup
@@ -134,10 +238,10 @@ here** to remove a variable from the effective environment, or **Remove** to
 remove a variable defined only at the current scope. An empty literal value
 keeps the variable present with an empty value.
 
-Add literal values or secret references. An **Environment reference** names a
-variable on the execution host. A **Protected file reference** names an absolute
-file path there. Secret values are resolved by the host and are never returned
-to the editor. References remain visible so you can review which credential is
+Add a **Literal value** or a secret reference. An **Environment reference**
+names a variable on the execution host. A **Protected file** reference names an
+absolute file path there. Secret values are resolved by the host and are never
+returned to the editor. References remain visible so you can review which credential is
 selected. Literal values are stored and displayed as text; use a secret
 reference for credentials. Values are not shell expressions and are not
 expanded with `${...}`.
@@ -154,16 +258,20 @@ Review a thread under **Thread actions → Environment variables…**, then use
 ## Projects
 
 Open **Settings → Projects** (or `/settings/projects`) to manage remembered
-directories. This page includes removed projects and projects on unavailable
-environments. Search by name or path, or use the searchable environment and
-project status selectors. On mobile, choose **Filters** to open these selectors.
+directories. This page is one list; it includes removed projects and projects
+on unavailable environments. Each row shows the project's name, path,
+environment, thread count, and whether it is available, with **Remove** or
+**Restore** beside it. Search by name or path, or use the searchable
+environment and project status selectors. In a narrow list, choose **Filters**
+to open these selectors.
 
 Choose **Add project** to browse an existing directory or enter its absolute
 path. On mobile, Add project opens as a bottom sheet. The same action is available
 beside **New thread** in every sidebar view and inside the New thread form.
 Adding from the form preserves your inputs and
 selects the project after it becomes available. Allowed workspace roots are
-access grants configured separately in the environment's **Configuration**.
+access grants configured separately in the environment's editor, under
+**Workspace access**.
 
 **Remove** hides the project and its threads from the working inventory and
 creation choices. The confirmation shows its thread count. Files, history,
@@ -177,12 +285,29 @@ access; unavailable hosts or revoked roots may require attention first. Paused
 schedules stay paused. See [Manage projects](organize-work.md#manage-projects)
 for the retention behavior.
 
+## Agents
+
+**Settings → Agents** (`/settings/agents`) manages saved Agents. **More →
+Agents** in the sidebar footer opens the same page, and **Create an Agent** in
+**New thread** opens its create form. Like Environments, the page shows the
+list of Agents beside the selected Agent at wide sizes, and stacks the two with
+a **‹ Agents** link on narrow ones. Each row shows the Agent's backend, name,
+override count, and Sedes tool policy.
+
+An Agent's editor is its detail: `/settings/agents/ID` opens it, and
+`/settings/agents/new` (**Create Agent**) starts a new one. Links at the top of
+the editor jump to its sections, the bar at the bottom saves or cancels, and
+**Danger zone** holds **Delete Agent**. The old `/agents` addresses now open
+the workspace instead; update bookmarks to `/settings/agents`. See
+[Manage saved Agents](organize-work.md#manage-saved-agents) for what an Agent
+stores and how threads use it.
+
 ## Notifications
 
 Configure **Settings → Notifications** to invoke one executable script on the
-Sedes server when a selected event occurs. Enter its absolute **Script path**,
-optional **Arguments** (one argument per line), and **Timeout**, choose events,
-then enable notifications and save. Settings follow the current Sedes user
+Sedes server when a selected event occurs. Enter its absolute **Server script
+path**, optional **Arguments (one per line)**, and **Timeout (seconds)**, choose
+events, then turn on **Enable notifications** and save. Settings follow the current Sedes user
 across clients and server restarts.
 
 Available events are **Turn completed**, **Turn failed**, **Turn interrupted**,
@@ -224,6 +349,16 @@ For the JSON input contract and server-side execution behavior, see
 [Notification scripts](../operator/configuration.md#notification-scripts).
 
 ## General
+
+### Click project and environment names to filter
+
+This setting is off by default and saved on this client. Enable it to click or
+tap an underlined project or environment name on a sidebar thread card to
+filter the thread list without opening the thread. Keyboard users can focus a
+name and press Enter or Space. Back clears active sidebar filters as usual.
+Environment names, including Local, appear when there are multiple
+environments; they are hidden when there is only one or the current scope
+already identifies the environment.
 
 ### Opening panels
 
@@ -309,8 +444,8 @@ effects even when their toggles are on.
 2. Give it a short title and the exact text to insert.
 3. Save, then reorder the library as desired.
 
-Edit or delete prompts from the same page. Choose **Refresh** if another client
-has changed the library. Titles and text follow the Sedes user across clients;
+Edit or delete prompts from the same page. Choose the **Refresh prompts**
+button if another client has changed the library. Titles and text follow the Sedes user across clients;
 there is no per-prompt desktop/mobile assignment.
 
 Enable **Show Prompts** to make the library available from this client's
@@ -369,9 +504,11 @@ terminal**.
 
 ## Server and connection
 
-Android exposes **Server** settings for its one locally saved direct endpoint.
-Enter the complete HTTP or HTTPS origin, choose **Test**, then **Save &
-connect**. Paths and embedded credentials are not accepted.
+Android exposes **Server** settings for its saved direct connections. Under
+**Add a connection**, enter a **Connection name** and the complete HTTP or HTTPS
+**Sedes server URL**, choose **Add & connect**, then enter the server's pairing
+code. Paths and embedded credentials are not accepted. **Saved connections**
+marks the **Selected** one and offers **Connect** and **Remove…** for each.
 
 Electron instead exposes **Connection** settings. The current connection is
 shown there; choose **Switch connection** to leave the current server and open
@@ -408,9 +545,8 @@ client.
 
 ## Related controls outside Settings
 
-Saved Agents and thread templates are managed through **More > Agents** and
-**New thread**, not the Settings page. See
-[Organize and reuse work](organize-work.md#manage-saved-agents).
+Thread templates are managed from **New thread**. See
+[Manage thread templates](organize-work.md#manage-thread-templates).
 
 Per-thread Sedes tool policy is managed through **Thread actions > Agent
 tools…**. See [Let an agent use Sedes tools](provider-features.md#let-an-agent-use-sedes-tools).

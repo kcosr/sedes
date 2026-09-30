@@ -137,10 +137,10 @@ the Sedes title together. Renaming never creates a thread or changes history.
 
 ### Create an empty thread with the same settings
 
-From an existing thread, choose **New** in **Thread actions** or in the
-thread's sidebar context menu. Sedes creates an independent empty draft in the
-same project and target and copies the source thread's eligible next-turn
-settings and agent-tool policy.
+From an existing thread, choose **New with same settings** in **Thread
+actions** or in the thread's sidebar context menu. Sedes creates an independent
+empty draft in the same project and target and copies the source thread's
+eligible next-turn settings and agent-tool policy.
 
 It does not copy the source title, draft, stashes, attachments, Task
 references, pending input, automation, transcript, Goal, terminal, runtime, or

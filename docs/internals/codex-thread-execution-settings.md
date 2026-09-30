@@ -215,7 +215,7 @@ postcondition match. Otherwise the receipt remains recovery-required and the
 UI reports that uncertainty instead of blindly retrying.
 
 Goal is provider state, not a Sedes Task, automation, execution setting, or
-composer draft. The thread menu's same-settings **New** action copies the
+composer draft. The thread menu's **New with same settings** action copies the
 execution tuple and agent-tool policy, but not Goal or managed-TUI state.
 
 ## Automations, saved Agents, and forks
@@ -228,9 +228,10 @@ automation makes interactive execution-setting and Fast controls read-only to
 prevent configuration races.
 
 Saved Agents can carry the complete tuple, subject to the destination target's
-current policy and catalog. The same-settings **New** action revision-fences the
-source tuple and initializes an independent unbound draft; it does not copy
-provider history, Goal, TUI lifecycle, or runtime observations.
+current policy and catalog. The **New with same settings** action
+revision-fences the source tuple and initializes an independent unbound draft;
+it does not copy provider history, Goal, TUI lifecycle, or runtime
+observations.
 
 Native Codex fork capability requires a complete recognized effective tuple
 confirmed by the current daemon generation and still admitted by policy. The
