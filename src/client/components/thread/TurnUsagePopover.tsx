@@ -2,6 +2,8 @@ import { ChatViewVisibilityContext } from "./chat-view-visibility.js";
 import { CircleDollarSign } from "lucide-react";
 import { useContext, useEffect, useId, useRef, useState } from "react";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover.js";
+import { eyebrowClass } from "../ui/floating.js";
+import { cn } from "@client/lib/utils";
 import type { UsageQueryCache } from "../../stores/UsageQueryCache.js";
 import { RecordedUsage } from "./RecordedUsage.js";
 
@@ -41,7 +43,7 @@ export function TurnUsagePopover({ cache, turnId, onOpenChange }: {
       onClick={() => { clearTimeout(timer.current); if (modeRef.current === "pinned") dismiss(); else { dismissed.current = false; change("pinned"); } }}>
       <CircleDollarSign size={16} aria-hidden="true" />
     </button></PopoverAnchor>
-    <PopoverContent ref={content} id={contentId} className="context-usage-popover turn-usage-popover" side="top" align="end" sideOffset={10} collisionPadding={12}
+    <PopoverContent ref={content} id={contentId} className="w-66 max-w-[calc(100vw-16px)] gap-2 p-3" side="top" align="end"
       aria-label="Turn usage" onOpenAutoFocus={event => event.preventDefault()}
       onCloseAutoFocus={event => { event.preventDefault(); if (restoreFocus.current) trigger.current?.focus(); restoreFocus.current = false; }}
       onEscapeKeyDown={() => { restoreFocus.current = modeRef.current === "pinned" || Boolean(trigger.current?.contains(document.activeElement) || content.current?.contains(document.activeElement)); dismiss(); }}
@@ -49,7 +51,7 @@ export function TurnUsagePopover({ cache, turnId, onOpenChange }: {
       onPointerEnter={event => { if (event.pointerType !== "mouse") return; hovered.current = true; clearTimeout(timer.current); }}
       onPointerLeave={event => { if (event.pointerType !== "mouse") return; hovered.current = false; scheduleClose(); }}
       onFocusCapture={() => clearTimeout(timer.current)} onBlurCapture={scheduleClose}>
-      <strong className="turn-usage-heading">Turn usage (Experimental)</strong>
+      <p className={cn(eyebrowClass, "m-0")}>Turn usage (Experimental)</p>
       {open && <RecordedUsage cache={cache} turnId={turnId} />}
     </PopoverContent>
   </Popover>;

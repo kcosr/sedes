@@ -1,23 +1,27 @@
-import * as Popover from "@radix-ui/react-popover";
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type {
   BoundedValue,
   ProviderFeatureStateEnvelope,
 } from "../../shared/index.js";
 import type { ClientProviderFeatureModule } from "./registry.js";
 import { Button } from "@client/components/ui/button";
+import { Callout } from "@client/components/ui/callout";
 import {
   Dialog,
   DialogContent,
+  DialogHeader,
   DialogTitle,
   DialogTrigger,
 } from "@client/components/ui/dialog";
+import { eyebrowClass } from "@client/components/ui/floating";
+import { Label } from "@client/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@client/components/ui/popover";
+import { Textarea } from "@client/components/ui/textarea";
+import { cn } from "@client/lib/utils";
 
 const ref = Object.freeze({
   featureId: "codex.goal",
@@ -79,7 +83,6 @@ function CodexGoalComposerControl({
   const objectiveId = useId();
   const errorId = useId();
   const objectiveRef = useRef<HTMLTextAreaElement | null>(null);
-  const keyboardInset = useKeyboardInset(mobile && open);
 
   useEffect(() => {
     if (open && state?.state === "unset") {
@@ -189,22 +192,20 @@ function CodexGoalComposerControl({
 
   const body = (
     <>
-      <p className="codex-goal-popover-title" aria-hidden="true">
-        Goal
-      </p>
       {state.state === "unset" ? (
         <form
-          className="codex-goal-create"
+          className="flex flex-col gap-2"
           onSubmit={(event) => {
             event.preventDefault();
             submitCreate();
           }}
         >
-          <label htmlFor={objectiveId}>Objective</label>
-          <textarea
+          <Label htmlFor={objectiveId}>Objective</Label>
+          <Textarea
             id={objectiveId}
             ref={objectiveRef}
             rows={4}
+            className="max-h-64 min-h-24 resize-y"
             value={objective}
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? errorId : undefined}
@@ -223,7 +224,7 @@ function CodexGoalComposerControl({
               }
             }}
           />
-          <div className="codex-goal-actions">
+          <div className="flex flex-wrap justify-end gap-2">
             <Button
               type="submit"
               size="sm"
@@ -238,12 +239,14 @@ function CodexGoalComposerControl({
           </div>
         </form>
       ) : (
-        <div className="codex-goal-details">
-          <p className="codex-goal-status-line">
+        <div className="flex flex-col gap-2">
+          <p className="m-0 text-(length:--text-meta) font-medium text-muted-foreground">
             Status: {statusLabels[state.status]}
           </p>
-          <p className="codex-goal-full-objective">{state.objective}</p>
-          <div className="codex-goal-actions">
+          <p className="m-0 leading-(--leading-normal) whitespace-pre-wrap [overflow-wrap:anywhere]">
+            {state.objective}
+          </p>
+          <div className="flex flex-wrap justify-end gap-2">
             {operation("clear") && (
               <Button
                 type="button"
@@ -282,14 +285,17 @@ function CodexGoalComposerControl({
         </div>
       )}
       {pendingAction && (
-        <p className="codex-goal-pending" role="status">
+        <p
+          className="m-0 text-(length:--text-meta) text-muted-foreground-2"
+          role="status"
+        >
           Updating Goal…
         </p>
       )}
       {error && (
-        <p className="codex-goal-error" id={errorId} role="alert">
+        <Callout tone="danger" role="alert" id={errorId}>
           {error}
-        </p>
+        </Callout>
       )}
     </>
   );
@@ -299,20 +305,27 @@ function CodexGoalComposerControl({
       {mobile ? (
         <Dialog open={open} onOpenChange={setPresentationOpen}>
           <DialogTrigger asChild>{trigger}</DialogTrigger>
+          {/* The first field takes focus; a set Goal opens without the keyboard. */}
           <DialogContent
-            className="codex-goal-mobile-card"
+            layout="sheet"
             aria-describedby={undefined}
-            showClose={pendingAction === null}
-            style={
-              {
-                "--codex-goal-keyboard-inset": `${keyboardInset}px`,
-              } as CSSProperties
-            }
-            onOpenAutoFocus={(event) => {
-              if (state.state !== "unset") return;
-              event.preventDefault();
-              objectiveRef.current?.focus();
-            }}
+            dismissible={pendingAction === null}
+          >
+            <DialogHeader>
+              <DialogTitle>Goal</DialogTitle>
+            </DialogHeader>
+            {body}
+          </DialogContent>
+        </Dialog>
+      ) : (
+        <Popover open={open} onOpenChange={setPresentationOpen}>
+          <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+          <PopoverContent
+            role="dialog"
+            aria-label="Goal"
+            side="top"
+            align="end"
+            className="w-[min(340px,calc(100vw-16px))] p-3"
             onEscapeKeyDown={(event) => {
               if (pendingAction !== null) event.preventDefault();
             }}
@@ -320,62 +333,15 @@ function CodexGoalComposerControl({
               if (pendingAction !== null) event.preventDefault();
             }}
           >
-            <DialogTitle className="sr-only">Goal</DialogTitle>
+            <p className={cn(eyebrowClass, "m-0")} aria-hidden="true">
+              Goal
+            </p>
             {body}
-          </DialogContent>
-        </Dialog>
-      ) : (
-        <Popover.Root open={open} onOpenChange={setPresentationOpen}>
-          <Popover.Trigger asChild>{trigger}</Popover.Trigger>
-          <Popover.Portal>
-            <Popover.Content
-              className="codex-goal-popover"
-              role="dialog"
-              aria-label="Goal"
-              side="top"
-              align="end"
-              sideOffset={8}
-              onEscapeKeyDown={(event) => {
-                if (pendingAction !== null) event.preventDefault();
-              }}
-              onPointerDownOutside={(event) => {
-                if (pendingAction !== null) event.preventDefault();
-              }}
-            >
-              {body}
-              <Popover.Arrow className="popover-arrow" />
-            </Popover.Content>
-          </Popover.Portal>
-        </Popover.Root>
+          </PopoverContent>
+        </Popover>
       )}
     </div>
   );
-}
-
-/** Lift the inset mobile card above Android's resized visual viewport. */
-function useKeyboardInset(enabled: boolean): number {
-  const [inset, setInset] = useState(0);
-  useEffect(() => {
-    if (!enabled) return undefined;
-    const viewport = window.visualViewport;
-    if (!viewport) return undefined;
-    const update = () => {
-      setInset(
-        Math.max(
-          0,
-          Math.round(window.innerHeight - viewport.height - viewport.offsetTop),
-        ),
-      );
-    };
-    update();
-    viewport.addEventListener("resize", update);
-    viewport.addEventListener("scroll", update);
-    return () => {
-      viewport.removeEventListener("resize", update);
-      viewport.removeEventListener("scroll", update);
-    };
-  }, [enabled]);
-  return enabled ? inset : 0;
 }
 
 function accessibleIndicatorName(state: GoalState): string {

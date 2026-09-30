@@ -195,11 +195,10 @@ export function ReasoningSummaryStatus({
         <PopoverContent
           align="start"
           aria-label="Reasoning summary"
-          className="reasoning-summary-status-popover"
+          className="reasoning-summary-status-popover p-3"
           data-testid="reasoning-summary-popover"
           role="dialog"
           side="top"
-          sideOffset={8}
         >
           <MarkdownContent enableMermaid={false} streaming={false}>
             {presentation.current.text}

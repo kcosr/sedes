@@ -53,9 +53,15 @@ export const menuCheckRowClass = "pr-8 data-[state=checked]:font-medium"
 export const menuCheckIndicatorClass =
   "pointer-events-none absolute top-1/2 right-2 flex size-4 -translate-y-1/2 items-center justify-center text-foreground [&_svg]:text-foreground"
 
+/**
+ * The one eyebrow recipe: 11px/600 uppercase on `--tracking-label`, muted.
+ * Info popovers use it bare for their title; never used for user text.
+ */
+export const eyebrowClass =
+  "text-(length:--text-label) leading-4 font-semibold tracking-(--tracking-label) text-muted-foreground-2 uppercase"
+
 /** The 11px uppercase section label; never used for user text. */
-export const menuLabelClass =
-  "px-2 pt-2 pb-1 text-(length:--text-label) leading-4 font-semibold tracking-(--tracking-label) text-muted-foreground-2 uppercase"
+export const menuLabelClass = `px-2 pt-2 pb-1 ${eyebrowClass}`
 
 /** The non-uppercase header for names (a stack, a thread, a group). */
 export const menuHeaderClass =
@@ -76,3 +82,25 @@ export const menuDescriptionClass =
 /** A non-focusable empty or loading row. */
 export const menuEmptyClass =
   "flex min-h-(--menu-row-height) items-center justify-center gap-2 px-2 py-2 text-center text-(length:--text-meta) leading-4 text-muted-foreground-2 [&_svg]:size-3.5 [&_svg]:animate-spin"
+
+/**
+ * A row of a custom (non-Radix) list that carries a trailing action, such
+ * as a bookmark or worktree with its remove button. Its main button takes
+ * `menuRowClass`; the row draws the one `--hover` wash for pointer hover
+ * and for keyboard focus on either part (neither draws a focus ring).
+ */
+export const menuListRowClass =
+  "group/row flex min-w-0 shrink-0 items-center rounded-(--menu-row-radius) hover:bg-(--hover) has-[:focus-visible]:bg-(--hover)"
+
+/**
+ * A row's trailing glyph action (remove, forget): muted until its row is
+ * hovered or focused, then its own wash when it is hovered or focused
+ * itself, turning red when `data-variant="destructive"`. A square as tall
+ * as a one-line row, so a 44px target under the density switch.
+ */
+export const menuRowActionClass =
+  "flex size-(--menu-row-height) shrink-0 items-center justify-center rounded-(--menu-row-radius) text-muted-foreground-2 outline-hidden " +
+  "group-hover/row:text-muted-foreground group-has-[:focus-visible]/row:text-muted-foreground " +
+  "hover:bg-(--hover) hover:text-foreground focus-visible:bg-(--hover) focus-visible:text-foreground " +
+  "data-[variant=destructive]:hover:text-destructive data-[variant=destructive]:focus-visible:text-destructive " +
+  "disabled:pointer-events-none disabled:opacity-(--disabled-opacity) [&_svg]:size-4"

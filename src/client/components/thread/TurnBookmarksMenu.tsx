@@ -1,16 +1,34 @@
-import * as Popover from "@radix-ui/react-popover";
 import { Bookmark, LoaderCircle, Trash2 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { TurnBookmark } from "../../../shared/index.js";
 import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
-import { Button } from "../ui/button.js";
+import { Button } from "@client/components/ui/button";
+import { Callout } from "@client/components/ui/callout";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
+  DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "../ui/dialog.js";
+} from "@client/components/ui/dialog";
+import {
+  menuDescriptionClass,
+  menuEmptyClass,
+  menuHeaderClass,
+  menuListRowClass,
+  menuRowActionClass,
+  menuRowClass,
+} from "@client/components/ui/floating";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@client/components/ui/popover";
+import { moveListFocus } from "@client/lib/list-focus";
+import { cn } from "@client/lib/utils";
 
 function BookmarkList({
   bookmarks,
@@ -18,6 +36,7 @@ function BookmarkList({
   error,
   pendingTurnIds,
   store,
+  className,
   onSelectTurn,
 }: {
   readonly bookmarks: readonly TurnBookmark[];
@@ -25,33 +44,38 @@ function BookmarkList({
   readonly error?: string;
   readonly pendingTurnIds: readonly string[];
   readonly store: ThreadClientStore;
+  readonly className?: string;
   readonly onSelectTurn: (turnId: string) => void;
 }): React.JSX.Element {
   if (status === "loading" && bookmarks.length === 0) {
     return (
-      <p className="turn-bookmarks-empty" role="status">
-        <LoaderCircle className="turn-bookmark-spinner" size={16} /> Loading
-        bookmarks…
+      <p className={cn(menuEmptyClass, "m-0")} role="status">
+        <LoaderCircle aria-hidden="true" /> Loading bookmarks…
       </p>
     );
   }
   if (status === "error" && bookmarks.length === 0) {
     return (
-      <div className="turn-bookmarks-empty" role="alert">
-        <p>{error ?? "Bookmarks could not be loaded."}</p>
-        <Button
-          variant="outline"
-          size="xs"
-          onClick={() => void store.loadBookmarks()}
-        >
-          Try again
-        </Button>
-      </div>
+      <Callout
+        tone="danger"
+        role="alert"
+        action={
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => void store.loadBookmarks()}
+          >
+            Try again
+          </Button>
+        }
+      >
+        {error ?? "Bookmarks could not be loaded."}
+      </Callout>
     );
   }
   if (bookmarks.length === 0) {
     return (
-      <p className="turn-bookmarks-empty">
+      <p className={cn(menuEmptyClass, "m-0")}>
         Bookmark a user message to find that turn here.
       </p>
     );
@@ -59,36 +83,59 @@ function BookmarkList({
   return (
     <>
       {error && (
-        <p className="turn-bookmarks-error" role="alert">
+        <Callout tone="danger" role="alert" className="shrink-0">
           {error}
-        </p>
+        </Callout>
       )}
-      <ol className="turn-bookmarks-list">
+      <ol
+        className={cn(
+          "m-0 flex min-h-0 flex-1 list-none flex-col overflow-y-auto overscroll-contain p-0",
+          className,
+        )}
+        onKeyDown={(event) => {
+          const links = Array.from(
+            event.currentTarget.querySelectorAll<HTMLElement>(
+              '[data-slot="turn-bookmark-link"]',
+            ),
+          );
+          if (moveListFocus(links, event.key)) event.preventDefault();
+        }}
+      >
         {bookmarks.map((bookmark) => {
           const pending =
             status !== "ready" || pendingTurnIds.includes(bookmark.turnId);
           return (
-            <li key={bookmark.turnId} className="turn-bookmark-row">
+            <li key={bookmark.turnId} className={menuListRowClass}>
               <button
                 type="button"
-                className="turn-bookmark-link"
+                data-slot="turn-bookmark-link"
+                className={cn(menuRowClass, "w-auto min-w-0 flex-1")}
                 onClick={() => onSelectTurn(bookmark.turnId)}
               >
-                <span className="turn-bookmark-user-preview">
-                  <span className="sr-only">You: </span>
-                  {bookmark.userPreview}
-                </span>
-                <span
-                  className="turn-bookmark-assistant-preview"
-                  data-response-state={bookmark.responseState}
-                >
-                  <span className="sr-only">Assistant: </span>
-                  {bookmark.assistantPreview ?? "No assistant response."}
+                <span className="min-w-0 flex-1">
+                  <span
+                    data-slot="turn-bookmark-item-title"
+                    className="block truncate"
+                  >
+                    <span className="sr-only">You: </span>
+                    {bookmark.userPreview}
+                  </span>
+                  <span
+                    data-slot="turn-bookmark-item-description"
+                    data-response-state={bookmark.responseState}
+                    className={cn(
+                      menuDescriptionClass,
+                      "truncate data-[response-state=no_response]:italic",
+                    )}
+                  >
+                    <span className="sr-only">Assistant: </span>
+                    {bookmark.assistantPreview ?? "No assistant response."}
+                  </span>
                 </span>
               </button>
               <button
                 type="button"
-                className="turn-bookmark-remove"
+                className={menuRowActionClass}
                 aria-label={`Remove bookmark: ${bookmark.userPreview}`}
                 title="Remove bookmark"
                 disabled={pending}
@@ -102,13 +149,9 @@ function BookmarkList({
                 }
               >
                 {pending ? (
-                  <LoaderCircle
-                    className="turn-bookmark-spinner"
-                    size={15}
-                    aria-hidden="true"
-                  />
+                  <LoaderCircle className="animate-spin" aria-hidden="true" />
                 ) : (
-                  <Trash2 size={15} aria-hidden="true" />
+                  <Trash2 aria-hidden="true" />
                 )}
               </button>
             </li>
@@ -119,6 +162,11 @@ function BookmarkList({
   );
 }
 
+/**
+ * The thread's bookmarked turns: a list popover from the header, or the
+ * shared bottom sheet under the density switch. Choosing a turn closes the
+ * surface first and scrolls to the turn once focus would return.
+ */
 export function TurnBookmarksMenu({
   bookmarks,
   status,
@@ -137,6 +185,7 @@ export function TurnBookmarksMenu({
   readonly onSelectTurn: (turnId: string) => boolean;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
+  const titleId = useId();
   const pendingSelectionRef = useRef<string | undefined>(undefined);
   const selectTurn = (turnId: string) => {
     pendingSelectionRef.current = turnId;
@@ -164,13 +213,14 @@ export function TurnBookmarksMenu({
       <Bookmark size={19} strokeWidth={1.8} aria-hidden="true" />
     </Button>
   );
-  const body = (
+  const list = (className?: string) => (
     <BookmarkList
       bookmarks={bookmarks}
       status={status}
       error={error}
       pendingTurnIds={pendingTurnIds}
       store={store}
+      className={className}
       onSelectTurn={selectTurn}
     />
   );
@@ -180,32 +230,34 @@ export function TurnBookmarksMenu({
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogTrigger asChild>{trigger}</DialogTrigger>
         <DialogContent
-          className="thread-settings-sheet turn-bookmarks-sheet"
-          overlayClassName="thread-settings-sheet-overlay"
+          layout="sheet"
+          size="md"
           onCloseAutoFocus={completePendingSelection}
         >
-          <DialogTitle>Bookmarks</DialogTitle>
-          <DialogDescription>Saved turns in this thread.</DialogDescription>
-          <div className="thread-settings-sheet-body">{body}</div>
+          <DialogHeader>
+            <DialogTitle>Bookmarks</DialogTitle>
+            <DialogDescription>Saved turns in this thread.</DialogDescription>
+          </DialogHeader>
+          {/* Rows reach into the inset so their text lines up with the title. */}
+          <DialogBody>{list("-mx-2")}</DialogBody>
         </DialogContent>
       </Dialog>
     );
   }
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild>{trigger}</Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          className="turn-bookmarks-popover"
-          align="end"
-          sideOffset={8}
-          onCloseAutoFocus={completePendingSelection}
-        >
-          <h2>Bookmarks</h2>
-          {body}
-          <Popover.Arrow className="popover-arrow" />
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverContent
+        align="end"
+        aria-labelledby={titleId}
+        className="max-h-[min(var(--radix-popover-content-available-height),70dvh)] w-[min(380px,calc(100vw-16px))] gap-1 overflow-hidden p-(--menu-panel-padding)"
+        onCloseAutoFocus={completePendingSelection}
+      >
+        <PopoverTitle id={titleId} className={cn(menuHeaderClass, "m-0")}>
+          Bookmarks
+        </PopoverTitle>
+        {list()}
+      </PopoverContent>
+    </Popover>
   );
 }

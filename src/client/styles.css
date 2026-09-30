@@ -5442,204 +5442,10 @@ body:has(.thread-settings-sheet[data-state="open"])
   }
 }
 
-.thread-worktree-popover {
-  z-index: var(--z-floating);
-  width: min(390px, calc(100vw - 16px));
-  max-height: min(520px, var(--radix-popover-content-available-height), calc(100dvh - 24px));
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  color: var(--popover-foreground);
-  background: var(--popover);
-  box-shadow: var(--shadow);
-}
-
-.thread-worktree-sheet .thread-worktree-popover-heading {
-  padding-right: 42px;
-}
-
-.thread-worktree-sheet .thread-worktree-list {
-  max-height: min(55dvh, 480px);
-}
-
-.thread-worktree-popover-heading {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 3px 4px 8px;
-}
-
-.thread-worktree-popover-heading > div {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.thread-worktree-popover-heading strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.thread-worktree-popover-heading span {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-}
-
-.thread-worktree-search {
-  flex-shrink: 0;
-  position: relative;
-  display: block;
-  margin-bottom: 6px;
-}
-
-.thread-worktree-search > svg {
-  position: absolute;
-  z-index: var(--z-sticky);
-  top: 50%;
-  left: 9px;
-  color: var(--muted-foreground-2);
-  pointer-events: none;
-  transform: translateY(-50%);
-}
-
-.thread-worktree-search input {
-  height: 32px;
-  padding-left: 30px;
-  font-size: 12px;
-}
-
-.thread-worktree-list {
-  overscroll-behavior: contain;
-  min-height: 0;
-  flex: 1 1 auto;
-  max-height: 340px;
-  overflow-y: auto;
-}
-
-.thread-worktree-row {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  border-radius: var(--radius-ctl);
-}
-
-.thread-worktree-row:hover,
-.thread-worktree-row[data-current="true"] {
-  background: color-mix(in oklch, var(--foreground) 6%, transparent);
-}
-
-.thread-worktree-select {
-  display: flex;
-  min-width: 0;
-  min-height: 48px;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  color: var(--foreground);
-  background: transparent;
-  text-align: left;
-}
-
-.thread-worktree-select:focus-visible,
-.thread-worktree-delete:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: -2px;
-}
-
-.thread-worktree-select:disabled {
-  cursor: default;
-}
-
-.thread-worktree-select > svg {
-  flex: 0 0 auto;
-  color: var(--muted-foreground-2);
-}
-
-.thread-worktree-row-copy {
-  display: grid;
-  min-width: 0;
-  flex: 1 1 auto;
-  gap: 2px;
-}
-
-.thread-worktree-row-copy strong,
-.thread-worktree-row-copy small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thread-worktree-row-copy strong {
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.thread-worktree-row-copy small {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-}
-
-.thread-worktree-status {
-  flex: 0 0 auto;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-}
-
-.thread-worktree-row[data-current="true"] .thread-worktree-status {
-  color: var(--foreground);
-  font-weight: 550;
-}
-
-.thread-worktree-delete {
-  flex: 0 0 auto;
-  margin-right: 4px;
-  color: var(--muted-foreground-2);
-  opacity: 0;
-}
-
-.thread-worktree-row:hover .thread-worktree-delete,
-.thread-worktree-row:focus-within .thread-worktree-delete {
-  opacity: 1;
-}
-
-.thread-worktree-delete:hover:not(:disabled) {
-  color: var(--destructive);
-}
-
 @media (pointer: coarse) {
   .thread-worktree-trigger {
     height: 28px;
   }
-
-  .thread-worktree-delete {
-    opacity: 1;
-  }
-}
-
-.thread-worktree-empty,
-.thread-worktree-error {
-  margin: 0;
-  padding: 16px 9px;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  text-align: center;
-}
-
-.thread-worktree-error {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-block: 7px 3px;
-  color: var(--destructive);
-  text-align: left;
 }
 
 .thread-controls {
@@ -5719,115 +5525,6 @@ body:has(.thread-settings-sheet[data-state="open"])
 .thread-bookmarks-trigger[data-has-items="true"],
 .tasks-panel-toggle[data-has-items="true"] {
   color: var(--info);
-}
-
-.turn-bookmarks-popover,
-.turn-bookmarks-sheet {
-  z-index: calc(var(--z-floating) + 2);
-  width: min(390px, calc(100vw - 24px));
-  max-height: min(70vh, 620px);
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--popover);
-  box-shadow: var(--elevation-3);
-}
-
-.turn-bookmarks-popover h2 {
-  margin: 2px 4px 10px;
-  font-size: 14px;
-}
-
-.turn-bookmarks-list {
-  display: grid;
-  max-height: min(58vh, 520px);
-  gap: 5px;
-  margin: 0;
-  padding: 0;
-  overflow-y: auto;
-  list-style: none;
-}
-
-.turn-bookmark-row {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) 32px;
-  align-items: center;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-ctl);
-  background: var(--card);
-}
-
-.turn-bookmark-link {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-  padding: 9px 10px;
-  text-align: left;
-}
-
-.turn-bookmark-user-preview,
-.turn-bookmark-assistant-preview {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.turn-bookmark-user-preview {
-  color: var(--foreground);
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.turn-bookmark-assistant-preview {
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
-.turn-bookmark-assistant-preview[data-response-state="no_response"] {
-  color: var(--muted-foreground-2);
-  font-style: italic;
-}
-
-.turn-bookmark-link:hover,
-.turn-bookmark-link:focus-visible {
-  background: var(--muted);
-  outline: none;
-}
-
-.turn-bookmark-remove {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-inline);
-  color: var(--muted-foreground-2);
-}
-
-.turn-bookmark-remove:hover,
-.turn-bookmark-remove:focus-visible {
-  background: var(--muted);
-  color: var(--destructive);
-  outline: 2px solid var(--ring);
-}
-
-.turn-bookmarks-empty {
-  display: flex;
-  min-height: 84px;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: 12.5px;
-  text-align: center;
-}
-
-.turn-bookmarks-error {
-  margin: 0 4px 8px;
-  color: var(--destructive);
-  font-size: 12px;
 }
 
 .thread-find-bar {
@@ -6176,7 +5873,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 }
 
 /* As a sheet the picker keeps one height while the list filters, and its
-   search row runs edge to edge. */
+   search row runs edge to edge. The thread worktree picker's sheet shares it. */
 .searchable-select-sheet {
   height: min(600px, calc(100dvh - var(--keyboard-inset) - 16px));
   gap: var(--space-2);
@@ -7244,15 +6941,6 @@ body:has(.thread-settings-sheet[data-state="open"])
     width: 44px;
     height: 44px;
     opacity: 1;
-  }
-
-  .turn-bookmark-remove {
-    width: 44px;
-    height: 44px;
-  }
-
-  .turn-bookmark-row {
-    grid-template-columns: minmax(0, 1fr) 48px;
   }
 }
 
@@ -9201,7 +8889,12 @@ tr.diff-hunk td {
 }
 
 .reasoning-summary-status-popover {
-  width: min(32rem, calc(100vw - 24px));
+  width: min(32rem, calc(100vw - 16px));
+}
+
+/* The full summary reads at the popover's UI step, not the transcript's. */
+.reasoning-summary-status-popover .markdown {
+  font-size: var(--text-ui);
 }
 
 .reasoning-summary-status-popover p {
@@ -9975,43 +9668,6 @@ tr.diff-hunk td {
   border-radius: 999px;
   background: var(--context-meter-color);
   opacity: 0.72;
-}
-
-.context-usage-popover {
-  z-index: var(--z-floating);
-  display: grid;
-  width: max-content;
-  max-width: calc(100vw - 24px);
-  gap: 5px;
-  padding: 11px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--popover);
-  color: var(--foreground);
-  text-align: center;
-  box-shadow: var(--shadow);
-  animation: context-popover-in 140ms ease-out;
-}
-
-.context-usage-popover strong {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.context-usage-popover span {
-  font-size: 12.5px;
-  line-height: 1.3;
-  white-space: nowrap;
-}
-
-@keyframes context-popover-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
 }
 
 .composer textarea {
@@ -14210,137 +13866,6 @@ tr.diff-hunk td {
   color: var(--success);
 }
 
-.codex-goal-popover {
-  z-index: var(--z-floating);
-  display: grid;
-  width: min(340px, calc(100vw - 24px));
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--popover);
-  color: var(--foreground);
-  box-shadow: var(--shadow);
-  max-height: calc(100dvh - 16px);
-  overflow-y: auto;
-}
-
-.codex-goal-popover[data-state="open"] {
-  animation: ui-pop-in var(--motion-pop);
-}
-
-.codex-goal-popover[data-side="top"] {
-  --ui-pop-y: 4px;
-}
-
-.codex-goal-mobile-card {
-  inset: auto 8px
-    calc(
-      8px + env(safe-area-inset-bottom) + var(--codex-goal-keyboard-inset, 0px)
-    );
-  display: grid;
-  width: auto;
-  max-width: none;
-  max-height: min(
-    70dvh,
-    calc(100dvh - 16px - var(--codex-goal-keyboard-inset, 0px))
-  );
-  translate: none;
-  gap: 10px;
-  overflow-y: auto;
-  border-radius: var(--radius-card);
-  padding: 14px;
-  background: var(--popover);
-  color: var(--foreground);
-  box-shadow: var(--shadow);
-  overscroll-behavior: contain;
-}
-
-/* 11px eyebrow — same voice as .menu-label. */
-.codex-goal-popover-title {
-  margin: 0;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.codex-goal-create,
-.codex-goal-details {
-  display: grid;
-  gap: 8px;
-}
-
-.codex-goal-create label {
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.codex-goal-create textarea {
-  width: 100%;
-  min-height: 96px;
-  resize: vertical;
-  padding: 8px 10px;
-  border: 1px solid var(--input);
-  border-radius: var(--radius-ctl);
-  background: var(--background);
-  color: var(--foreground);
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.5;
-  transition: border-color var(--motion-fast);
-}
-
-.codex-goal-create textarea:focus-visible {
-  border-color: var(--ring);
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-
-.codex-goal-status-line {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.codex-goal-full-objective {
-  margin: 0;
-  color: var(--foreground);
-  font-size: 13px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.codex-goal-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.codex-goal-pending,
-.codex-goal-error {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.codex-goal-pending {
-  color: var(--muted-foreground-2);
-}
-
-.codex-goal-error {
-  color: var(--destructive);
-}
-
-.provider-feature-control {
-  display: contents;
-}
-
 .provider-feature-unavailable {
   max-width: 20rem;
   margin: 0;
@@ -15851,20 +15376,6 @@ tr.diff-hunk td {
   .settings-view-heading { display: none; }
 }
 
-/* Persisted accounting uses the same compact overlay as context occupancy. */
-.turn-usage-popover {
-  box-sizing: border-box;
-  width: min(264px, calc(100dvw - 24px));
-  max-width: min(calc(100dvw - 24px), var(--radix-popover-content-available-width));
-  max-height: min(calc(100dvh - 24px), var(--radix-popover-content-available-height));
-  overflow: auto;
-  gap: 8px;
-  padding: 12px 14px;
-  text-align: left;
-  font-size: 12px;
-  line-height: 1.4;
-}
-.turn-usage-heading { display: block; }
 .recorded-usage { display: grid; gap: 9px; min-width: 0; font-size: 12px; line-height: 1.4; }
 .recorded-usage p { margin: 0; overflow-wrap: anywhere; }
 .recorded-usage-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
