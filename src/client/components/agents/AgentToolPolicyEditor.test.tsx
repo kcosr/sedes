@@ -69,12 +69,12 @@ describe("AgentToolPolicyEditor", () => {
     );
 
     expect(
-      screen.getByRole("checkbox", { name: "Use default tool policy" }),
+      screen.getByRole("switch", { name: "Use default tool policy" }),
     ).toHaveAccessibleDescription(
       "Use the selected target’s ordinary new-thread settings.",
     );
     expect(
-      screen.getByRole("checkbox", { name: "Enable Sedes tools" }),
+      screen.getByRole("switch", { name: "Enable Sedes tools" }),
     ).toHaveAccessibleDescription("Expose the selected tools on new threads.");
     expect(
       screen.getByRole("checkbox", { name: "Select all Threads tools" }),
@@ -85,7 +85,7 @@ describe("AgentToolPolicyEditor", () => {
     const onChange = vi.fn();
     render(<AgentToolPolicyEditor catalog={catalog} onChange={onChange} />);
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Use default tool policy" }),
+      screen.getByRole("switch", { name: "Use default tool policy" }),
     );
     expect(onChange).toHaveBeenCalledWith({
       enabled: false,
@@ -152,7 +152,7 @@ describe("AgentToolPolicyEditor", () => {
     expect(
       screen.getByRole("combobox", { name: "Access boundary" }),
     ).toHaveAccessibleDescription(
-      "For each thread created from this Agent, that thread’s execution environment is treated as its current environment.",
+      "For each thread created from this Agent, that thread’s execution environment is treated as its current environment. Thread access asks before accessing project, global, or other-thread resources.",
     );
 
     view.rerender(

@@ -1,0 +1,161 @@
+/* Saved Agents (a Workbench page built from the settings kit) and the exact
+   tool selector shared with Settings › Tool clients. The page scrolls as
+   one surface, so its header never scrolls out from under an inner pane. */
+.agents-view {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-content: start;
+  padding: var(--space-8) var(--space-8) 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Bottom breathing room that the sticky SaveBar can bleed into. */
+.agents-view::after {
+  height: var(--space-8);
+  content: "";
+}
+
+@media (max-width: 819px) {
+  .agents-view {
+    padding: var(--space-5) var(--space-4) 0;
+  }
+
+  .agents-view::after {
+    height: var(--space-5);
+  }
+}
+
+.agents-list-pane {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+}
+
+.agents-search {
+  position: relative;
+  display: block;
+}
+
+.agents-search > svg {
+  position: absolute;
+  top: 50%;
+  left: var(--space-2-5);
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted-foreground-2);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.agents-search > [data-slot="input"] {
+  padding-inline-start: calc(var(--space-2-5) + var(--icon-sm) + var(--space-2));
+}
+
+.agents-list-status {
+  padding-inline: var(--space-3);
+}
+
+.agents-load-more {
+  justify-self: stretch;
+}
+
+.agents-description {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.agent-configuration-description {
+  display: block;
+}
+
+.agent-configuration-resolved {
+  margin: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+/* ── Exact tool selector ── */
+.exact-tool-selector {
+  display: grid;
+  min-width: 0;
+}
+
+.exact-tool-group {
+  display: grid;
+  min-width: 0;
+  padding-block: var(--space-3);
+}
+
+.exact-tool-group + .exact-tool-group {
+  border-top: 1px solid var(--border-soft);
+}
+
+.exact-tool-list {
+  display: grid;
+  min-width: 0;
+  padding-inline-start: calc(var(--icon-md) + var(--space-3));
+}
+
+.exact-tool-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding-block: var(--space-2);
+}
+
+.exact-tool-row > [data-slot="checkbox"] {
+  margin-top: var(--space-0-5);
+}
+
+.exact-tool-list > .exact-tool-row + .exact-tool-row {
+  border-top: 1px solid var(--border-soft);
+}
+
+.exact-tool-row:has([data-slot="checkbox"]:disabled) > .exact-tool-text {
+  opacity: var(--disabled-opacity);
+}
+
+.exact-tool-text {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-0-5);
+}
+
+.exact-tool-text > strong {
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+}
+
+.exact-tool-row[data-kind="group"] .exact-tool-text > strong {
+  font-weight: var(--weight-semibold);
+}
+
+.exact-tool-text > small {
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+.exact-tool-text > .exact-tool-effect {
+  width: fit-content;
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+}
+
+.exact-tool-text > .exact-tool-effect[data-risk="true"] {
+  color: var(--warning);
+}
+
+.exact-tool-text > .exact-tool-unavailable {
+  color: var(--warning);
+}
+
+.exact-tool-group[data-kind="unavailable"] .exact-tool-text > strong {
+  color: var(--warning);
+}

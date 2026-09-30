@@ -32,7 +32,7 @@ describe("AgentConfigurationEditor", () => {
       <AgentConfigurationEditor descriptor={descriptor} onChange={onChange} />,
     );
     expect(screen.getByText("Current target default: Default model")).toBeVisible();
-    fireEvent.click(screen.getByRole("checkbox", { name: "Override Model" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Override Model" }));
     expect(onChange).toHaveBeenCalledWith([
       { id: "model", value: "default-model" },
     ]);
@@ -58,7 +58,7 @@ describe("AgentConfigurationEditor", () => {
     expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent(
       "removed-model",
     );
-    fireEvent.click(screen.getByRole("checkbox", { name: "Override Model" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Override Model" }));
     expect(onChange).toHaveBeenCalledWith([]);
   });
 });

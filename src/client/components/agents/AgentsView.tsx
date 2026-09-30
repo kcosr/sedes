@@ -1,3 +1,4 @@
+import "./agents.css";
 import { type EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import { EnvironmentVariableEditor } from "../environment-variables/EnvironmentVariableEditor.js";
 import { useEnvironmentVariablePreview } from "../environment-variables/use-environment-variable-preview.js";
@@ -24,18 +25,13 @@ import {
 } from "../../agents/AgentClientStore.js";
 import { ApiError } from "../../api/ApiClient.js";
 import { messageFrom } from "../../stores/ApplicationClientStore.js";
-import { ArrowLeft, Bot, Plus, Search, Trash2 } from "lucide-react";
+import { Bot, ChevronLeft, Plus, Search, Trash2 } from "lucide-react";
 import { Button } from "@client/components/ui/button";
+import { Callout } from "@client/components/ui/callout";
+import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
+import { EmptyState } from "@client/components/ui/empty-state";
 import { Input } from "@client/components/ui/input";
 import { Textarea } from "@client/components/ui/textarea";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@client/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -43,6 +39,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@client/components/ui/select";
+import { DangerZone, DangerZoneItem } from "../settings/DangerZone.js";
+import { EntityList, EntityRow } from "../settings/EntityList.js";
+import { SaveBar } from "../settings/SaveBar.js";
+import { SettingsActionRow, SettingsField } from "../settings/SettingsField.js";
+import { isPlainClick } from "../settings/SettingsNav.js";
+import { SettingsPage } from "../settings/SettingsPage.js";
+import { SettingsSection } from "../settings/SettingsSection.js";
 import { AgentConfigurationEditor } from "./AgentConfigurationEditor.js";
 import { AgentToolPolicyEditor } from "./AgentToolPolicyEditor.js";
 
@@ -73,26 +76,34 @@ export function AgentsView({
 
   return (
     <section className="agents-view">
-      <header className="agents-header">
-        <div>
-          <p className="eyebrow">Reusable configuration</p>
-          <h1>Agents</h1>
-          <p>
-            Save model, execution, and Sedes tool choices for new threads.
-          </p>
-        </div>
-        {!route.create && (
-          <Button onClick={() => navigate(newAgentPath())}>
-            <Plus size={16} aria-hidden="true" /> Create Agent
-          </Button>
-        )}
-      </header>
-      <div className="agents-layout" data-editor-open={editorOpen || undefined}>
-        <aside className="agents-list-pane" aria-label="Saved Agents">
-          <label className="agents-list-controls">
-            <span className="sr-only">Search Agents</span>
-            <span className="search-box">
-              <Search size={14} aria-hidden="true" />
+      <SettingsPage
+        title="Agents"
+        description="Save model, execution, and Sedes tool choices for new threads."
+        width="wide"
+        actions={
+          !route.create ? (
+            <Button onClick={() => navigate(newAgentPath())}>
+              <Plus aria-hidden="true" /> Create Agent
+            </Button>
+          ) : undefined
+        }
+      >
+        {state.error && !route.agentId ? (
+          <Callout tone="danger" role="alert">
+            {state.error}
+          </Callout>
+        ) : null}
+        <div
+          className="settings-master-detail agents-layout"
+          data-detail-open={editorOpen || undefined}
+        >
+          <section
+            className="settings-master-detail-list agents-list-pane"
+            data-sticky="true"
+            aria-label="Saved Agents"
+          >
+            <label className="agents-search">
+              <Search aria-hidden="true" />
               <Input
                 type="search"
                 value={search}
@@ -101,81 +112,84 @@ export function AgentsView({
                 aria-label="Search Agents"
                 onChange={(event) => setSearch(event.target.value)}
               />
-            </span>
-          </label>
-          <div className="agents-list">
-            {state.items.map((agent) => (
-              <button
-                type="button"
-                className="agents-list-item"
-                key={agent.id}
-                aria-current={route.agentId === agent.id ? "page" : undefined}
-                onClick={() => navigate(agentPath(agent.id))}
-              >
-                <strong>{agent.name}</strong>
-                <small>
-                  {agent.backend.label.text} · {agent.overrideCount} override
-                  {agent.overrideCount === 1 ? "" : "s"}
-                </small>
-                <small>{toolSummary(agent.sedesTools)}</small>
-                {agent.descriptionExcerpt && (
-                  <small>{agent.descriptionExcerpt}</small>
-                )}
-              </button>
-            ))}
+            </label>
+            {state.items.length > 0 ? (
+              <EntityList>
+                {state.items.map((agent) => (
+                  <EntityRow
+                    key={agent.id}
+                    icon={<Bot />}
+                    title={agent.name}
+                    subtitle={`${agent.backend.label.text} · ${agent.overrideCount} override${agent.overrideCount === 1 ? "" : "s"} · ${toolSummary(agent.sedesTools)}`}
+                    selected={route.agentId === agent.id}
+                    href={agentPath(agent.id)}
+                    onSelect={(event) => {
+                      if (!isPlainClick(event)) return;
+                      event.preventDefault();
+                      navigate(agentPath(agent.id));
+                    }}
+                  />
+                ))}
+              </EntityList>
+            ) : null}
             {(state.status === "idle" || state.status === "loading") &&
               state.items.length === 0 && (
-                <p className="agents-list-status" role="status">
+                <p className="settings-loading agents-list-status" role="status">
                   Loading Agents…
                 </p>
               )}
             {state.status !== "idle" &&
               state.status !== "loading" &&
               state.items.length === 0 && (
-                <div className="agents-list-status">
-                  <Bot size={22} aria-hidden="true" />
-                  <p>
-                    {search ? "No Agents match this search." : "No Agents yet."}
-                  </p>
-                </div>
+                <EmptyState
+                  variant="inline"
+                  className="agents-list-status"
+                  icon={<Bot />}
+                  title={search ? "No Agents match this search." : "No Agents yet."}
+                />
               )}
             {state.nextCursor && (
               <Button
                 variant="ghost"
+                className="agents-load-more"
                 disabled={state.loadingMore}
                 onClick={() => void store.loadMore()}
               >
                 {state.loadingMore ? "Loading…" : "Load more"}
               </Button>
             )}
-          </div>
-        </aside>
-        <main className="agents-editor">
-          {route.create ? (
-            <AgentEditor store={store} workspaces={workspaces} />
-          ) : route.agentId ? (
-            state.detailLoading ? (
-              <p role="status">Loading Agent…</p>
-            ) : state.selected?.id === route.agentId ? (
-              <AgentEditor
-                key={state.selected.id}
-                store={store}
-                workspaces={workspaces}
-                agent={state.selected}
-              />
+          </section>
+          <section
+            className="settings-master-detail-pane agents-editor"
+            aria-label="Agent editor"
+          >
+            {route.create ? (
+              <AgentEditor store={store} workspaces={workspaces} />
+            ) : route.agentId ? (
+              state.detailLoading ? (
+                <p className="settings-loading" role="status">Loading Agent…</p>
+              ) : state.selected?.id === route.agentId ? (
+                <AgentEditor
+                  key={state.selected.id}
+                  store={store}
+                  workspaces={workspaces}
+                  agent={state.selected}
+                />
+              ) : (
+                <Callout tone="danger" role="alert">
+                  {state.error ?? "This Agent is unavailable."}
+                </Callout>
+              )
             ) : (
-              <p role="alert">{state.error ?? "This Agent is unavailable."}</p>
-            )
-          ) : (
-            <div className="large-empty">
-              <Bot size={22} aria-hidden="true" />
-              <h2>Select an Agent</h2>
-              <p>Choose an Agent to inspect or edit its saved configuration.</p>
-            </div>
-          )}
-        </main>
-      </div>
-      {state.error && !route.agentId && <p role="alert">{state.error}</p>}
+              <EmptyState
+                icon={<Bot />}
+                title="Select an Agent"
+                description="Choose an Agent to inspect or edit its saved configuration."
+              />
+            )}
+          </section>
+        </div>
+      </SettingsPage>
     </section>
   );
 }
@@ -219,6 +233,7 @@ function AgentEditor({
   const [optionsLoading, setOptionsLoading] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const [nameError, setNameError] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const optionsAbort = useRef<AbortController | undefined>(undefined);
   const optionsGeneration = useRef(0);
@@ -329,7 +344,7 @@ function AgentEditor({
   const save = async (): Promise<void> => {
     const normalizedName = name.trim();
     if (!normalizedName) {
-      setError("Enter an Agent name.");
+      setNameError("Enter an Agent name.");
       nameRef.current?.focus();
       return;
     }
@@ -381,74 +396,103 @@ function AgentEditor({
     }
   };
 
+  const reset = (): void => {
+    setName(agent?.name ?? "");
+    setDescription(agent?.description ?? "");
+    setEnvironmentVariables(agent?.environmentVariables ?? {});
+    setOverrides(agent?.backendOverrides ?? []);
+    setSedesTools(agent?.sedesTools);
+    setError("");
+    setNameError("");
+    if (workspaceId && targetId) {
+      loadOptions(workspaceId, targetId, agent?.backendOverrides ?? [], agent?.sedesTools);
+    }
+  };
+
+  const deleteAgent = async (): Promise<void> => {
+    if (!agent) return;
+    setPending(true);
+    setError("");
+    try {
+      await store.delete(agent.id, { expectedRevision: agent.revision });
+      guard.proceed(agentsPath(), { replace: true });
+    } catch (cause) {
+      if (await recoverConflict(cause)) return;
+      throw new Error(messageFrom(cause));
+    } finally {
+      setPending(false);
+    }
+  };
+
   return (
     <>
       <form
-        className="agents-editor-form"
+        className="settings-pane-form agents-editor-form"
+        noValidate
         onSubmit={(event) => {
           event.preventDefault();
           void save();
         }}
       >
-        <header className="agents-editor-header">
-          <div>
-            <Button
-              className="agents-editor-mobile-back"
-              type="button"
-              variant="ghost"
-              onClick={() => navigate(agentsPath())}
-            >
-              <ArrowLeft size={16} aria-hidden="true" /> Agents
-            </Button>
-            <h1>{agent ? agent.name : "Create Agent"}</h1>
-            <p>
-              Project and Configure using validate settings; they are not saved.
-            </p>
-          </div>
-          {agent && (
-            <Button
-              ref={deleteTrigger}
-              type="button"
-              variant="destructive"
-              disabled={pending}
-              onClick={() => setDeleteOpen(true)}
-            >
-              <Trash2 size={15} aria-hidden="true" /> Delete
-            </Button>
-          )}
+        <header className="settings-pane-header">
+          <Button
+            className="settings-master-detail-back"
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => navigate(agentsPath())}
+          >
+            <ChevronLeft aria-hidden="true" /> Agents
+          </Button>
+          <h2 className="settings-pane-title">{agent ? agent.name : "Create Agent"}</h2>
+          <p className="settings-pane-meta">
+            Project and Configure using validate settings; they are not saved.
+          </p>
         </header>
-        <div className="agents-editor-fields">
-          <label className="agent-editor-field">
-            <span>Name</span>
+        {error ? (
+          <Callout tone="danger" role="alert">
+            {error}
+          </Callout>
+        ) : null}
+        <SettingsSection title="Details" card>
+          <SettingsField label="Name" error={nameError || undefined}>
             <Input
               ref={nameRef}
               value={name}
               maxLength={160}
               disabled={pending}
               autoComplete="off"
-              onChange={(event) => setName(event.target.value)}
+              onChange={(event) => {
+                setName(event.target.value);
+                setNameError("");
+              }}
             />
-          </label>
-          <label className="agent-editor-field">
-            <span>Description</span>
+          </SettingsField>
+          <SettingsField label="Description" description="Optional. Shown when choosing an Agent.">
             <Textarea
+              className="agents-description"
               value={description}
               maxLength={4096}
               disabled={pending}
               onChange={(event) => setDescription(event.target.value)}
             />
-          </label>
+          </SettingsField>
           {agent && (
-            <div className="agent-editor-field">
-              <span>Backend</span>
-              <p>{agent.backend.label.text}</p>
-            </div>
+            <SettingsActionRow
+              title="Backend"
+              description={agent.backend.label.text}
+            />
           )}
-          <label className="agent-editor-field">
-            <span>Project</span>
-            <small id="agent-project-description">
-              Temporary workspace used to validate current catalogs.
-            </small>
+        </SettingsSection>
+        <SettingsSection
+          title="Validate against"
+          description="A project and target supply the current catalogs while you edit."
+          card
+        >
+          <SettingsField
+            label="Project"
+            description="Temporary workspace used to validate current catalogs."
+          >
             <Select
               value={workspaceId}
               disabled={pending}
@@ -460,11 +504,7 @@ function AgentEditor({
                 loadOptions(nextWorkspaceId, "");
               }}
             >
-              <SelectTrigger
-                ref={projectRef}
-                aria-label="Project"
-                aria-describedby="agent-project-description"
-              >
+              <SelectTrigger ref={projectRef} className="w-full" aria-label="Project">
                 <SelectValue placeholder="Choose a Project" />
               </SelectTrigger>
               <SelectContent>
@@ -475,12 +515,11 @@ function AgentEditor({
                 ))}
               </SelectContent>
             </Select>
-          </label>
-          <label className="agent-editor-field">
-            <span>Configure using</span>
-            <small id="agent-target-description">
-              This target supplies options but is not saved.
-            </small>
+          </SettingsField>
+          <SettingsField
+            label="Configure using"
+            description="This target supplies options but is not saved."
+          >
             <Select
               value={targetId}
               disabled={pending || !workspaceId || optionsLoading}
@@ -504,11 +543,7 @@ function AgentEditor({
                 loadOptions(workspaceId, nextTargetId);
               }}
             >
-              <SelectTrigger
-                ref={targetRef}
-                aria-label="Configure using"
-                aria-describedby="agent-target-description"
-              >
+              <SelectTrigger ref={targetRef} className="w-full" aria-label="Configure using">
                 <SelectValue placeholder="Choose a target" />
               </SelectTrigger>
               <SelectContent>
@@ -521,13 +556,13 @@ function AgentEditor({
                 ))}
               </SelectContent>
             </Select>
-          </label>
-        </div>
-        {optionsLoading && (
-          <p role="status" aria-live="polite">
-            Refreshing available settings…
-          </p>
-        )}
+          </SettingsField>
+          {optionsLoading && (
+            <p className="settings-loading agents-options-status" role="status" aria-live="polite">
+              Refreshing available settings…
+            </p>
+          )}
+        </SettingsSection>
         {configuration && (
           <AgentConfigurationEditor
             descriptor={configuration}
@@ -539,18 +574,27 @@ function AgentEditor({
             }}
           />
         )}
-        <section className="agent-editor-section" aria-label="Agent environment variables">
-          <header><h2>Environment variables</h2><p>Reusable overrides for threads created with this Agent. Inherited values are resolved when a thread is created.</p></header>
-          {!targetId && <p className="environment-variable-help">Choose a Configure using target to preview inherited values.</p>}
-          {variablesPreview.loading && <p role="status">Loading inherited variables…</p>}
-          {variablesPreview.error && <p role="alert" className="environment-variable-error">{variablesPreview.error}</p>}
+        <SettingsSection
+          title="Environment variables"
+          description="Reusable overrides for threads created with this Agent. Inherited values are resolved when a thread is created. Only this Agent’s overrides and unsets are saved; existing threads keep their saved snapshots."
+        >
+          {!targetId && (
+            <p className="settings-loading">
+              Choose a Configure using target to preview inherited values.
+            </p>
+          )}
+          {variablesPreview.loading && (
+            <p className="settings-loading" role="status">Loading inherited variables…</p>
+          )}
+          {variablesPreview.error && (
+            <Callout tone="danger" role="alert">{variablesPreview.error}</Callout>
+          )}
           <EnvironmentVariableEditor scope="agent" value={environmentVariables} disabled={pending}
             inherited={variablesPreview.result ? [
               { scope: "environment", values: variablesPreview.result.snapshot.layers.environment },
               { scope: "backend", values: variablesPreview.result.snapshot.layers.backend },
             ] : []} onChange={setEnvironmentVariables} />
-          <p className="environment-variable-help">Only this Agent’s overrides and unsets are saved. Existing threads keep their saved snapshots.</p>
-        </section>
+        </SettingsSection>
         {toolCatalog && (
           <AgentToolPolicyEditor
             catalog={toolCatalog}
@@ -562,93 +606,62 @@ function AgentEditor({
             }}
           />
         )}
-        {error && <p role="alert">{error}</p>}
-        <div className="agents-editor-actions">
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={pending}
-            onClick={() => navigate(agentsPath())}
-          >
-            Cancel
-          </Button>
-          <Button type="submit" disabled={pending || (agent ? !dirty : false)}>
-            {pending ? "Saving…" : agent ? "Save" : "Create Agent"}
-          </Button>
-        </div>
+        {agent && (
+          <DangerZone>
+            <DangerZoneItem
+              title="Delete Agent"
+              description="Removes only the saved preset. Existing threads are unchanged; thread templates that use it will need attention."
+              action={
+                <Button
+                  ref={deleteTrigger}
+                  type="button"
+                  variant="destructive"
+                  disabled={pending}
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  <Trash2 aria-hidden="true" /> Delete…
+                </Button>
+              }
+            />
+          </DangerZone>
+        )}
+        <SaveBar
+          dirty={agent ? dirty : true}
+          saving={pending}
+          saveLabel={agent ? "Save" : "Create Agent"}
+          onCancel={() => (agent ? reset() : navigate(agentsPath()))}
+        />
       </form>
 
-      <Dialog
+      <ConfirmDialog
         open={Boolean(guard.pendingRoute)}
-        onOpenChange={(open) => !open && guard.cancel()}
-      >
-        <DialogContent showClose={false}>
-          <DialogHeader>
-            <DialogTitle>Discard unsaved Agent changes?</DialogTitle>
-            <DialogDescription>
-              Your local Agent edits have not been saved.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={guard.cancel}>
-              Keep editing
-            </Button>
-            <Button variant="destructive" onClick={guard.discardAndContinue}>
-              Discard
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onOpenChange={(open) => {
+          if (!open) guard.cancel();
+        }}
+        tone="danger"
+        title="Discard unsaved Agent changes?"
+        description="Your local Agent edits have not been saved."
+        cancelLabel="Keep editing"
+        confirmLabel="Discard"
+        onConfirm={guard.discardAndContinue}
+      />
 
       {agent && (
-        <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-          <DialogContent
-            onCloseAutoFocus={(event) => {
-              if (!deleteTrigger.current?.isConnected) return;
-              event.preventDefault();
-              deleteTrigger.current.focus();
-            }}
-          >
-            <DialogHeader>
-              <DialogTitle>Delete {agent.name}?</DialogTitle>
-              <DialogDescription>
-                This removes only the saved preset. Existing threads are
-                unchanged. Thread templates that use this Agent will need
-                attention.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setDeleteOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                disabled={pending}
-                onClick={() => {
-                  setPending(true);
-                  setError("");
-                  void store
-                    .delete(agent.id, { expectedRevision: agent.revision })
-                    .then(
-                      () => {
-                        setDeleteOpen(false);
-                        guard.proceed(agentsPath(), { replace: true });
-                      },
-                      async (cause: unknown) => {
-                        if (!(await recoverConflict(cause))) {
-                          setError(messageFrom(cause));
-                        }
-                        setPending(false);
-                        setDeleteOpen(false);
-                      },
-                    );
-                }}
-              >
-                Delete Agent
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <ConfirmDialog
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          tone="danger"
+          title={`Delete ${agent.name}?`}
+          description="This removes only the saved preset. Existing threads are unchanged. Thread templates that use this Agent will need attention."
+          confirmLabel="Delete Agent"
+          pendingLabel="Deleting…"
+          onConfirm={deleteAgent}
+          onCloseAutoFocus={(event) => {
+            if (!deleteTrigger.current?.isConnected) return;
+            event.preventDefault();
+            deleteTrigger.current.focus();
+          }}
+        />
       )}
     </>
   );
