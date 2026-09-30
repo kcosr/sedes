@@ -47,8 +47,13 @@ interface MenuSheetState {
   readonly setOpen: (open: boolean) => void
   /** Opens the sheet, returning focus to `opener` when it closes. */
   readonly openFrom: (opener: HTMLElement | null) => void
-  /** Where focus returns when the sheet closes and nothing else took it. */
+  /** A context menu's opener: the element focused when it opened. */
   readonly returnFocus: React.RefObject<HTMLElement | null>
+  /**
+   * A dropdown's trigger, registered by its ref: where focus returns however
+   * the sheet opened (a click, controlled `open` or `defaultOpen`).
+   */
+  readonly triggerRef: React.RefObject<HTMLElement | null>
   readonly stack: readonly MenuSheetLevel[]
   readonly drillIn: (level: MenuSheetLevel) => void
   readonly back: () => void
@@ -112,6 +117,7 @@ export function MenuSheetRoot({
   const [stack, setStack] = React.useState<readonly MenuSheetLevel[]>([])
   const [pane, setPane] = React.useState<HTMLElement | null>(null)
   const returnFocus = React.useRef<HTMLElement | null>(null)
+  const triggerRef = React.useRef<HTMLElement | null>(null)
   React.useEffect(() => {
     if (!open) setStack([])
   }, [open])
@@ -123,6 +129,7 @@ export function MenuSheetRoot({
         setOpen(true)
       },
       returnFocus,
+      triggerRef,
       stack,
       drillIn: (level) => setStack((current) => [...current, level]),
       back: () => setStack((current) => current.slice(0, -1)),
@@ -140,20 +147,24 @@ export function MenuSheetRoot({
   )
 }
 
-/** The sheet-mode dropdown trigger: a click opens the sheet. */
+/**
+ * The sheet-mode dropdown trigger: a click opens the sheet, and the sheet
+ * returns focus here when it closes.
+ */
 export function MenuSheetTrigger({
-  onClick,
+  ref,
   ...props
 }: React.ComponentProps<typeof DialogTrigger>) {
-  const state = useMenuSheet()
-  return (
-    <DialogTrigger
-      {...props}
-      onClick={composeHandlers(onClick, (event) => {
-        if (state) state.returnFocus.current = event.currentTarget
-      })}
-    />
+  const triggerRef = useMenuSheet()?.triggerRef
+  const register = React.useCallback(
+    (node: HTMLButtonElement | null) => {
+      if (triggerRef) triggerRef.current = node
+      if (typeof ref === "function") return ref(node)
+      if (ref) ref.current = node
+    },
+    [ref, triggerRef]
   )
+  return <DialogTrigger {...props} ref={register} />
 }
 
 const LONG_PRESS_MS = 700
@@ -346,7 +357,7 @@ export function MenuSheetContent({
         const content = event.currentTarget as HTMLElement
         const active = document.activeElement
         const focusLost = !active || active === document.body || content.contains(active)
-        const opener = state?.returnFocus.current
+        const opener = state?.returnFocus.current ?? state?.triggerRef.current
         if (focusLost && opener?.isConnected) opener.focus()
       }}
     >

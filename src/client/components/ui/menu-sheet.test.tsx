@@ -619,3 +619,78 @@ describe("sheet presentation keeps the content's props", () => {
     await waitFor(() => expect(row).toHaveFocus());
   });
 });
+
+describe("dropdown sheets opened without a trigger click", () => {
+  function ControlledMenu({
+    open,
+    defaultOpen,
+    onOpenChange,
+  }: {
+    readonly open?: boolean;
+    readonly defaultOpen?: boolean;
+    readonly onOpenChange?: (open: boolean) => void;
+  }) {
+    return (
+      <DropdownMenu presentation="sheet" open={open} defaultOpen={defaultOpen} onOpenChange={onOpenChange}>
+        <DropdownMenuTrigger>Thread actions</DropdownMenuTrigger>
+        <DropdownMenuContent sheetTitle="MCP events">
+          <DropdownMenuItem>Pin</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
+
+  it("returns focus to the trigger after a controlled open", async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <ControlledMenu open={open} onOpenChange={setOpen} />
+          <button type="button" onKeyDown={(event) => event.key === "o" && setOpen(true)}>
+            Shortcut
+          </button>
+        </>
+      );
+    }
+    render(<Harness />);
+    const trigger = screen.getByRole("button", { name: "Thread actions" });
+    const shortcut = screen.getByRole("button", { name: "Shortcut" });
+    shortcut.focus();
+    fireEvent.keyDown(shortcut, { key: "o" });
+    expect(screen.getByRole("dialog", { name: "MCP events" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("returns focus to the trigger after opening with defaultOpen", async () => {
+    const user = userEvent.setup();
+    render(<ControlledMenu defaultOpen />);
+    expect(screen.getByRole("dialog", { name: "MCP events" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Thread actions" })).toHaveFocus());
+  });
+
+  it("skips a trigger that is no longer in the document", async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      const [showTrigger, setShowTrigger] = useState(true);
+      return (
+        <DropdownMenu presentation="sheet" open={open} onOpenChange={setOpen}>
+          {showTrigger && <DropdownMenuTrigger>Thread actions</DropdownMenuTrigger>}
+          <DropdownMenuContent sheetTitle="MCP events">
+            <DropdownMenuItem onSelect={() => setShowTrigger(false)}>Archive</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      );
+    }
+    render(<Harness />);
+    await user.click(screen.getByRole("menuitem", { name: "Archive" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("button", { name: "Thread actions" })).toBeNull();
+    expect(document.body).toHaveFocus();
+  });
+});
