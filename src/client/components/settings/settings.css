@@ -1178,8 +1178,6 @@
 
 .settings-master-detail-back {
   display: none;
-  justify-self: start;
-  margin-inline-start: calc(-1 * var(--space-2));
 }
 
 @container settings-page (max-width: 899px) {

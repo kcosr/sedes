@@ -482,9 +482,15 @@ describe("SettingsView", () => {
     await user.click(screen.getByRole("button", { name: "Edit Local" }));
     expect(window.location.pathname).toBe(settingsPath("environments", { mode: "edit", resourceId: local.id }));
     const length = window.history.length;
-    // Each "‹" link goes up one level through the entries it came down.
-    await user.click(within(screen.getByRole("region", { name: "Environment editor" })).getByRole("link", { name: "Local" }));
+    // The compact header holds the one "‹" link: the page's own, in place of
+    // "‹ Settings". Each goes up one level through the entries it came down.
+    const header = () => document.querySelector<HTMLElement>(".settings-view-header")!;
+    expect(within(screen.getByRole("region", { name: "Environment editor" })).queryByRole("link", { name: "Local" })).toBeNull();
+    await user.click(within(header()).getByRole("link", { name: "Local" }));
     await waitFor(() => expect(window.location.pathname).toBe(settingsPath("environments", { mode: "view", resourceId: local.id })));
+    await user.click(within(header()).getByRole("link", { name: "Environments" }));
+    await waitFor(() => expect(window.location.pathname).toBe(settingsPath("environments")));
+    expect(header().querySelector(".settings-view-back-slot")).toBeEmptyDOMElement();
     await user.click(screen.getByTestId("settings-list-link"));
     await waitFor(() => expect(window.location.pathname).toBe("/settings"));
     expect(await screen.findByRole("heading", { name: "Settings", level: 1 })).toBeVisible();

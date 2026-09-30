@@ -9836,11 +9836,24 @@ tr.diff-hunk td {
   border-bottom: 1px solid var(--border-soft);
 }
 
-.settings-view-back {
+/* A page's own "‹" link (SettingsBackLink) renders into the slot and then
+   replaces "‹ Settings", so the bar shows one way up. */
+.settings-view-back-slot {
+  display: contents;
+}
+
+.settings-view-back-slot:not(:empty) ~ .settings-view-back {
+  display: none;
+}
+
+.settings-view-back,
+.settings-view-back-slot > [data-slot="settings-page-back"] {
   display: inline-flex;
+  width: auto;
   min-height: var(--control-default);
   align-items: center;
   gap: var(--space-1-5);
+  margin: 0;
   padding: 0 var(--space-2);
   border-radius: var(--radius-ctl);
   color: var(--foreground);
@@ -9850,16 +9863,23 @@ tr.diff-hunk td {
   transition: background var(--motion-fast);
 }
 
-.settings-view-back:hover {
-  background: var(--hover);
+/* Touch keeps :hover after a tap, and the bar's link changes in place
+   ("‹ Settings" becomes "Back to workspace"): only a pointer hovers. */
+@media (hover: hover) {
+  .settings-view-back:hover,
+  .settings-view-back-slot > [data-slot="settings-page-back"]:hover {
+    background: var(--hover);
+  }
 }
 
-.settings-view-back:focus-visible {
+.settings-view-back:focus-visible,
+.settings-view-back-slot > [data-slot="settings-page-back"]:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
 
-.settings-view-back svg {
+.settings-view-back svg,
+.settings-view-back-slot > [data-slot="settings-page-back"] svg {
   width: var(--icon-md);
   height: var(--icon-md);
   flex: none;

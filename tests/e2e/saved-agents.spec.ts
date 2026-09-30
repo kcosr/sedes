@@ -188,7 +188,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await expectNoPageOverflow(page);
     // A phone stacks: the editor alone, with the way back to the list.
     await expect(savedAgents).toBeHidden();
-    await expect(agentEditor.getByRole("link", { name: "Agents", exact: true })).toBeVisible();
+    await expect(page.getByTestId("settings-view").locator(".settings-view-header").getByRole("link")).toHaveText(["Agents"]);
     await capture(page, testInfo, "saved-agent-editor-mobile.png");
     await page.setViewportSize({ width: 390, height: 430 });
     await expectNoPageOverflow(page);

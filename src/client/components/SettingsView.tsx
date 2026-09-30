@@ -2,7 +2,7 @@ import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js
 import { AuthenticationSettings, useAuthenticationControls } from "../authentication/AuthenticationSettings.js";
 import { NotificationSettingsPage } from "./NotificationSettingsPage.js";
 import type { NotificationSettingsStore } from "../stores/NotificationSettingsStore.js";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ChevronLeft } from "lucide-react";
 import { Button } from "@client/components/ui/button";
 import { navigate, navigateUp, settingsPath, useRoute } from "../app/router.js";
@@ -25,7 +25,7 @@ import { ProjectsSettingsPage } from "./execution-settings/ProjectsSettingsPage.
 import type { HostPairingControls } from "./execution-settings/useHostPairings.js";
 import type { ConfigurationControls } from "./execution-settings/useConfiguration.js";
 import { EntityList, EntityRow } from "./settings/EntityList.js";
-import { SettingsPage as SettingsPageLayout } from "./settings/SettingsPage.js";
+import { SettingsBackSlotContext, SettingsPage as SettingsPageLayout } from "./settings/SettingsPage.js";
 import { SettingsSection } from "./settings/SettingsSection.js";
 import { isPlainClick, openSettingsEntry } from "./settings/SettingsNav.js";
 import {
@@ -114,6 +114,7 @@ export function SettingsView({
   // Escape goes up a level, to the same places as the "‹" links and the return control.
   useSettingsEscape({ location: route.name === "settings" ? route : { page }, navInSidebar, onReturn });
   const content = useRef<HTMLElement>(null);
+  const [backSlot, setBackSlot] = useState<HTMLElement | null>(null);
   const available = page === undefined || pages.some(entry => entry.id === page);
   const pageIds = pages.map(entry => entry.id).join(" ");
   useLayoutEffect(() => {
@@ -158,6 +159,9 @@ export function SettingsView({
       {navInSidebar ? null : (
         <header className="settings-view-header">
           <SidebarNavTrigger />
+          {/* A page's own "‹" link (an entity's list, an editor's entity) renders
+              here and stands in for "‹ Settings": one way up, where Escape goes. */}
+          <div ref={setBackSlot} className="settings-view-back-slot" />
           {current ? (
             <a className="settings-view-back" href={settingsPath()} data-testid="settings-list-link"
               onClick={(event) => {
@@ -176,42 +180,44 @@ export function SettingsView({
           )}
         </header>
       )}
-      <section ref={content} className="settings-content" tabIndex={-1} aria-label={current?.label ?? "Settings"}>
-        {showList ? <SettingsHome pages={pages} onOpen={openSettingsEntry} /> : null}
-        {page === "general" ? (
-          <GeneralSettingsPage applicationPreferences={applicationPreferences} />
-        ) : page === "diagnostics" ? (
-          <DiagnosticsSettingsPage applicationStore={applicationStore} />
-        ) : page === "appearance" ? (
-          <AppearanceSettingsPage />
-        ) : page === "prompts" && cannedPrompts ? (
-          <CannedPromptsSettingsPage store={cannedPrompts} />
-        ) : page === "notifications" && notifications ? (
-          <NotificationSettingsPage store={notifications} />
-        ) : page === "mobile" ? (
-          <MobileSettingsPage />
-        ) : page === "terminal" ? (
-          <TerminalSettingsPage />
-        ) : page === "projects" && applicationStore ? (
-          <ProjectsSettingsPage store={applicationStore} />
-        ) : page === "agents" && applicationStore ? (
-          <AgentsSettingsPage applicationStore={applicationStore} />
-        ) : page === "tool_clients" && toolClients ? (
-          <ToolClientsSettingsPage controls={toolClients} />
-        ) : page === "paired_clients" ? (
-          <AuthenticationSettings />
-        ) : page === "connection" && electronConnectionSettings ? (
-          <ElectronConnectionSettings
-            controls={electronConnectionSettings}
-            onSwitched={onReturn}
-          />
-        ) : page === "server" && available && serverSettings ? (
-          <ServerSettingsPage controls={serverSettings} />
-        ) : null}
-        {configuration ? <div hidden={!isExecutionPage(page)}>
-          <ExecutionSettings controls={configuration} />
-        </div> : null}
-      </section>
+      <SettingsBackSlotContext.Provider value={navInSidebar ? null : backSlot}>
+        <section ref={content} className="settings-content" tabIndex={-1} aria-label={current?.label ?? "Settings"}>
+          {showList ? <SettingsHome pages={pages} onOpen={openSettingsEntry} /> : null}
+          {page === "general" ? (
+            <GeneralSettingsPage applicationPreferences={applicationPreferences} />
+          ) : page === "diagnostics" ? (
+            <DiagnosticsSettingsPage applicationStore={applicationStore} />
+          ) : page === "appearance" ? (
+            <AppearanceSettingsPage />
+          ) : page === "prompts" && cannedPrompts ? (
+            <CannedPromptsSettingsPage store={cannedPrompts} />
+          ) : page === "notifications" && notifications ? (
+            <NotificationSettingsPage store={notifications} />
+          ) : page === "mobile" ? (
+            <MobileSettingsPage />
+          ) : page === "terminal" ? (
+            <TerminalSettingsPage />
+          ) : page === "projects" && applicationStore ? (
+            <ProjectsSettingsPage store={applicationStore} />
+          ) : page === "agents" && applicationStore ? (
+            <AgentsSettingsPage applicationStore={applicationStore} />
+          ) : page === "tool_clients" && toolClients ? (
+            <ToolClientsSettingsPage controls={toolClients} />
+          ) : page === "paired_clients" ? (
+            <AuthenticationSettings />
+          ) : page === "connection" && electronConnectionSettings ? (
+            <ElectronConnectionSettings
+              controls={electronConnectionSettings}
+              onSwitched={onReturn}
+            />
+          ) : page === "server" && available && serverSettings ? (
+            <ServerSettingsPage controls={serverSettings} />
+          ) : null}
+          {configuration ? <div hidden={!isExecutionPage(page)}>
+            <ExecutionSettings controls={configuration} />
+          </div> : null}
+        </section>
+      </SettingsBackSlotContext.Provider>
     </main>
   );
 }

@@ -353,12 +353,17 @@ test("environment and backend routes live inside the settings shell: nav, histor
   await list.getByRole("link", { name: local.label, exact: true }).click();
   await expect(page).toHaveURL(localPath);
   await expect(list).toBeHidden();
+  // The compact header's one back link goes up a level, as Escape does.
+  const headerBack = settings.locator(".settings-view-header").getByRole("link");
+  await expect(headerBack).toHaveText(["Environments"]);
   await detail.getByRole("button", { name: `Edit ${local.label}`, exact: true }).click();
   await expect(page).toHaveURL(`${localPath}/edit`);
-  await editorBack.click();
+  await expect(headerBack).toHaveText([local.label]);
+  await headerBack.click();
   await expect(page).toHaveURL(localPath);
-  await detail.getByRole("link", { name: "Environments", exact: true }).click();
+  await headerBack.click();
   await expect(page).toHaveURL("/settings/environments");
+  await expect(headerBack).toHaveText(["Settings"]);
   await expect(list).toBeVisible();
   await settings.getByTestId("settings-list-link").click();
   await expect(page).toHaveURL("/settings");

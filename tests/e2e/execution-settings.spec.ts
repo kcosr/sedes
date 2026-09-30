@@ -338,7 +338,10 @@ test("entity routes deep-link, walk back, and split or stack with the settings c
     expect(listBox.x + listBox.width).toBeLessThanOrEqual(detailBox.x);
     expect(listBox.width).toBeGreaterThanOrEqual(300);
     expect(listBox.width).toBeLessThanOrEqual(340);
-    await expect(detail.locator('a[data-slot="settings-page-back"]')).toBeHidden();
+    // The compact header's one back link goes up to the list, as Escape does.
+    await expect(settings.getByTestId("settings-list-link")).toBeHidden();
+    await expect(settings.locator(".settings-view-header").getByRole("link", { name: "Environments", exact: true })).toBeVisible();
+    await expect(detail.locator('a[data-slot="settings-page-back"]')).toHaveCount(0);
   }
   await capture(page, testInfo, "execution-settings-split-collapsed-1024.png");
   // Restoring the sidebar at 1024 leaves a 700px column: the panes stack.
@@ -353,8 +356,11 @@ test("entity routes deep-link, walk back, and split or stack with the settings c
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(list).toBeHidden();
   await expect(detail).toBeVisible();
-  await detail.getByRole("link", { name: "Environments", exact: true }).click();
+  // One way back, in the compact header: up to the list instead of "‹ Settings".
+  await expect(settings.getByTestId("settings-list-link")).toBeHidden();
+  await settings.locator(".settings-view-header").getByRole("link", { name: "Environments", exact: true }).click();
   await expect(page).toHaveURL("/settings/environments");
+  await expect(settings.getByTestId("settings-list-link")).toBeVisible();
   await expect(list).toBeVisible();
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "execution-settings-stack-mobile.png");

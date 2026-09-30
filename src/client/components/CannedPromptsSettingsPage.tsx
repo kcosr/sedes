@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronLeft, MessageSquareText, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, MessageSquareText, Plus, RefreshCw, Trash2 } from "lucide-react";
 import {
   CANNED_PROMPT_MAX_ITEMS,
   CANNED_PROMPT_TEXT_MAX_BYTES,
@@ -36,7 +36,7 @@ import { Textarea } from "@client/components/ui/textarea";
 import { EntityList, EntityRow } from "./settings/EntityList.js";
 import { SaveBar } from "./settings/SaveBar.js";
 import { SettingsField, SwitchField } from "./settings/SettingsField.js";
-import { SettingsPage } from "./settings/SettingsPage.js";
+import { SettingsBackLink, SettingsPage } from "./settings/SettingsPage.js";
 import { SettingsSection } from "./settings/SettingsSection.js";
 import { useTransientNotice } from "./settings/use-transient-notice.js";
 import { useSettingsEscapeLevel } from "./settings/settings-escape.js";
@@ -105,7 +105,9 @@ export function CannedPromptsSettingsPage({
     clearMessages();
   };
   // Escape closes an open editor (its "‹ Prompts"), asking first when it has edits.
-  useSettingsEscapeLevel(draft ? () => (dirty ? setDiscarding(true) : openDraft(undefined)) : undefined);
+  // Its "‹ Prompts" and Escape close the editor, asking first when it has edits.
+  const closeEditor = (): void => (dirty ? setDiscarding(true) : openDraft(undefined));
+  useSettingsEscapeLevel(draft ? closeEditor : undefined);
 
   const handleMutationError = (cause: unknown, fallback: string): void => {
     if (cause instanceof ApiError && cause.code === "conflict") {
@@ -384,16 +386,11 @@ export function CannedPromptsSettingsPage({
                   }}
                 >
                   <header className="settings-pane-header">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
+                    <SettingsBackLink
+                      label="Prompts"
                       className="settings-master-detail-back"
-                      onClick={() => openDraft(undefined)}
-                    >
-                      <ChevronLeft aria-hidden="true" />
-                      Prompts
-                    </Button>
+                      onNavigate={closeEditor}
+                    />
                     <h3 className="settings-pane-title">
                       {draft.mode === "create" ? "New prompt" : "Edit prompt"}
                     </h3>
