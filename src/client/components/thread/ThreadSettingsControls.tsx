@@ -226,7 +226,7 @@ export function ThreadSettingsMenuItems({
   readonly store: ThreadClientStore;
   readonly snapshot: NormalizedThreadSnapshot;
   readonly disabled: boolean;
-  /** Hands off to the model sheet; `viaKeyboard` asks it to focus search. */
+  /** Hands off to the model picker; `viaKeyboard` asks it to focus search. */
   readonly onChooseModel: (viaKeyboard: boolean) => void;
 }): React.JSX.Element {
   const keyboardChoice = useRef(false);
@@ -263,7 +263,7 @@ export function ThreadSettingsMenuItems({
                 <SettingIcon id={setting.id} />
                 {setting.label.text}
                 {current}
-                {/* Leads on to the model sheet, like the drill-in rows. */}
+                {/* Leads on to the model picker, like the submenu rows. */}
                 <ChevronRight aria-hidden="true" />
               </DropdownMenuItem>
             );
@@ -306,10 +306,11 @@ export function ThreadSettingsMenuItems({
 }
 
 /**
- * The searchable model picker as its own sheet, opened from the Thread
- * actions sheet once that sheet has closed. Focus returns to `returnFocusRef`.
+ * The searchable model picker, opened from Thread actions once that menu has
+ * closed: a dialog on desktop and a sheet on touch. Focus returns to
+ * `returnFocusRef`.
  */
-export function ThreadModelPickerSheet({
+export function ThreadModelPickerDialog({
   store,
   snapshot,
   disabled,
@@ -337,7 +338,6 @@ export function ThreadModelPickerSheet({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        layout="sheet"
         size="md"
         className="searchable-select-sheet"
         aria-describedby={undefined}

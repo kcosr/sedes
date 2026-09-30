@@ -462,7 +462,9 @@ For picker behavior, see
 
 The composer shows the same compact reasoning selector as desktop, such as
 **High**, when the selected backend offers it. Model and other settings remain
-available through thread settings.
+available through **Thread actions**, which lists the thread's settings on
+every device. When the composer's controls do not fit, the reasoning selector
+steps aside until there is room again.
 
 **Refocus composer after sending** returns focus to the message field after
 Send, Queue, or Steer in a mobile layout so the on-screen keyboard remains

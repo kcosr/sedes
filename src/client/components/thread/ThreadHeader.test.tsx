@@ -287,6 +287,70 @@ function fixture(
   return { applicationStore, threadStore };
 }
 
+/** A header whose thread offers Model and Thinking settings. */
+function renderHeaderWithSettings() {
+  window.HTMLElement.prototype.scrollIntoView = vi.fn();
+  const perform = vi.fn(async () => undefined);
+  const { applicationStore, threadStore } = fixture(0);
+  Object.assign(threadStore, { perform });
+  const snapshot = makeSnapshot();
+  const withSettings = {
+    ...snapshot,
+    capabilities: {
+      ...snapshot.capabilities,
+      settings: [
+        {
+          id: "model",
+          label: { text: "Model" },
+          available: true,
+          requiredForFirstSubmission: true,
+          options: [
+            { value: "model-a", label: { text: "Model A" }, available: true },
+            { value: "model-b", label: { text: "Model B" }, available: true },
+          ],
+        },
+        {
+          id: "thinking_level",
+          label: { text: "Thinking" },
+          available: true,
+          requiredForFirstSubmission: false,
+          options: [
+            { value: "low", label: { text: "Low" }, available: true },
+            { value: "high", label: { text: "High" }, available: true },
+          ],
+        },
+      ],
+    },
+    settings: {
+      revision: 1,
+      values: [
+        { id: "model", desiredValue: "model-a", effectiveValue: "model-a", applicationState: "effective" },
+        { id: "thinking_level", desiredValue: "low", effectiveValue: "low", applicationState: "effective" },
+      ],
+    },
+  } as unknown as NormalizedThreadSnapshot;
+  render(
+    <ThreadHeader
+      store={threadStore}
+      applicationStore={applicationStore}
+      snapshot={withSettings}
+      connection="connected"
+      authoritative
+      forkAttempts={{}}
+      actionPending={false}
+      bookmarks={[]}
+      bookmarkRevision={0}
+      bookmarkStatus="ready"
+      pendingBookmarkTurnIds={[]}
+      onSelectBookmarkTurn={vi.fn()}
+      findOpen={false}
+      findButtonRef={{ current: null }}
+      onFindOpenChange={vi.fn()}
+    />,
+  );
+  return { perform };
+}
+
 function renderHeader({
   environmentCount = 0,
   environmentKind = "ssh",
@@ -964,65 +1028,7 @@ describe("ThreadHeader action menu", () => {
         removeEventListener: vi.fn(),
       })),
     );
-    window.HTMLElement.prototype.scrollIntoView = vi.fn();
-    const perform = vi.fn(async () => undefined);
-    const { applicationStore, threadStore } = fixture(0);
-    Object.assign(threadStore, { perform });
-    const snapshot = makeSnapshot();
-    const withSettings = {
-      ...snapshot,
-      capabilities: {
-        ...snapshot.capabilities,
-        settings: [
-          {
-            id: "model",
-            label: { text: "Model" },
-            available: true,
-            requiredForFirstSubmission: true,
-            options: [
-              { value: "model-a", label: { text: "Model A" }, available: true },
-              { value: "model-b", label: { text: "Model B" }, available: true },
-            ],
-          },
-          {
-            id: "thinking_level",
-            label: { text: "Thinking" },
-            available: true,
-            requiredForFirstSubmission: false,
-            options: [
-              { value: "low", label: { text: "Low" }, available: true },
-              { value: "high", label: { text: "High" }, available: true },
-            ],
-          },
-        ],
-      },
-      settings: {
-        revision: 1,
-        values: [
-          { id: "model", desiredValue: "model-a", effectiveValue: "model-a", applicationState: "effective" },
-          { id: "thinking_level", desiredValue: "low", effectiveValue: "low", applicationState: "effective" },
-        ],
-      },
-    } as unknown as NormalizedThreadSnapshot;
-    render(
-      <ThreadHeader
-        store={threadStore}
-        applicationStore={applicationStore}
-        snapshot={withSettings}
-        connection="connected"
-        authoritative
-        forkAttempts={{}}
-        actionPending={false}
-        bookmarks={[]}
-        bookmarkRevision={0}
-        bookmarkStatus="ready"
-        pendingBookmarkTurnIds={[]}
-        onSelectBookmarkTurn={vi.fn()}
-        findOpen={false}
-        findButtonRef={{ current: null }}
-        onFindOpenChange={vi.fn()}
-      />,
-    );
+    const { perform } = renderHeaderWithSettings();
     const trigger = screen.getByRole("button", { name: "Thread actions" });
     fireEvent.click(trigger);
     const sheet = screen.getByRole("dialog", { name: "Header thread" });
@@ -1061,6 +1067,43 @@ describe("ThreadHeader action menu", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Choose model" })).toBeNull(),
     );
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("shows the thread settings in the desktop menu, with the model picker as a dialog", async () => {
+    const { perform } = renderHeaderWithSettings();
+    const trigger = screen.getByRole("button", { name: "Thread actions" });
+    // Model and Thinking lead the menu even though the composer also offers them.
+    const menu = await openThreadActions();
+    expect(rowLabels(menu).slice(0, 2)).toEqual(["Model", "Thinking"]);
+    const thinking = within(menu).getByRole("menuitem", { name: /Thinking/ });
+    expect(thinking).toHaveTextContent("Low");
+    expect(thinking).toHaveAttribute("aria-haspopup", "menu");
+    await userEvent.click(thinking);
+    const levels = await screen.findByRole("menu", { name: /Thinking/ });
+    expect(within(levels).getByRole("menuitemradio", { name: "Low" })).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(within(levels).getByRole("menuitemradio", { name: "High" }));
+    expect(perform).toHaveBeenCalledWith({
+      action: "set_setting",
+      settingId: "thinking_level",
+      value: "high",
+    });
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "Thread actions" })).toBeNull());
+
+    const model = within(await openThreadActions()).getByRole("menuitem", { name: /Model/ });
+    expect(model).toHaveAttribute("aria-haspopup", "dialog");
+    await userEvent.click(model);
+    const picker = await screen.findByRole("dialog", { name: "Choose model" });
+    // A centred dialog on desktop; touch keeps the sheet.
+    expect(picker).toHaveAttribute("data-layout", "modal");
+    expect(screen.queryByRole("menu", { name: "Thread actions" })).toBeNull();
+    await userEvent.click(within(picker).getByRole("option", { name: "Model B" }));
+    expect(perform).toHaveBeenCalledWith({
+      action: "set_setting",
+      settingId: "model",
+      value: "model-b",
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Choose model" })).toBeNull());
     await waitFor(() => expect(trigger).toHaveFocus());
   });
 

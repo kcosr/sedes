@@ -151,17 +151,6 @@
 
 ### Changed
 
-- Automatically hide the composer's reasoning selector when controls no longer
-  fit, restoring it when space returns; it remains available in Thread actions.
-- Keep the composer unfocused when opening threads on touch tablets or by
-  touch/pen on hybrid devices, while preserving desktop mouse/keyboard focus.
-- Balance chat header rows vertically when the worktree picker is shown.
-- Add space after the chat header backend icon and enlarge the expandable
-  mobile Search and worktree controls.
-- Enlarge composer buttons and model/reasoning selectors.
-- Reduce chat header action icons slightly while preserving their tap targets.
-- Add space between sidebar thread metadata and its group label.
-
 - Settings has a new navigation. On desktop the sidebar lists its pages in
   five groups while Settings is open, under **Back to chat** or **Back to
   workspace**, and `/settings` opens the last page viewed or **General**. On
@@ -205,11 +194,25 @@
   dialog only when forks, open Tasks, stashed prompts, pending questions, or an
   isolated workspace need a choice. **Move to group** is a searchable list that
   can create a Group from the search, and **New group…** asks only for a name.
+  **Thread actions** starts with the thread's settings, such as the model and
+  reasoning level, on every device, even though the composer also shows them.
 
 - The workbench bar and panel headers grow with their text, so a title no
   longer crowds the top edge under Android text zoom. They are slightly taller
-  (52px, or 54px on touch), and toolbar icons are larger (18px, or 20px in
-  40px targets on touch).
+  (52px, or 54px on touch), and toolbar icons are larger (18px, or 20px on
+  touch); the chat header's action icons are one step smaller. The chat
+  header's title and project rows are evenly balanced beside the worktree
+  picker, the phone's expandable Search and worktree row is larger, and the
+  sidebar separates a thread's details from its Group label.
+
+- The composer's buttons and model and reasoning selectors are larger. When
+  the composer's controls do not fit, for example during a turn in a narrow
+  window, the reasoning selector steps aside and returns when there is room;
+  it is always available in **Thread actions**.
+
+- Opening a thread on a touch tablet, or by touch or pen on a hybrid device, no
+  longer focuses the composer and raises the on-screen keyboard. Mouse and
+  keyboard use on desktop still focus it.
 
 - Codex archives now unsubscribe Sedes from the native conversation and refuse
   while a native turn or goal is active. Archiving or changing tools also

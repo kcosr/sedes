@@ -35,7 +35,9 @@ match them, not the reverse.
   surfaces; they use the shared menu system below.
 - The workbench bar and panel headers take `--workbench-bar-height` as a
   minimum and grow with their text (Android text zoom enlarges text, not
-  heights). Their icon buttons use `--bar-control` and `--bar-icon`.
+  heights). Their icon buttons use `--bar-control` and `--bar-icon`; the chat
+  header's action glyphs are one step quieter (`--bar-icon` − 2px) on the same
+  hit areas.
 
 ## Tokens
 
@@ -68,7 +70,8 @@ reads the tokens the switch sets; TypeScript uses `useTouchDensity()` or
 `matchesTouchDensity()` from `app/use-touch-density.ts`. Under the switch,
 `--control-default` and `--menu-row-height` become 44px, `--dialog-padding`
 16px, and text inputs 16px so iOS does not zoom. `--workbench-bar-height` becomes 54px (52px otherwise),
-`--bar-control` 40px (32px), and `--bar-icon` 20px (18px).
+`--bar-control` 40px tall and `--bar-control-width` 36px (both 32px), and
+`--bar-icon` 20px (18px).
 
 Inputs, `NativeSelect`, `SelectTrigger`, tabs, and switch hit areas follow
 `--control-default`. Buttons keep fixed heights; a container opts its buttons

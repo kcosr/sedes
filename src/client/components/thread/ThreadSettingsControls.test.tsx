@@ -23,7 +23,7 @@ import {
   DropdownMenuTrigger,
 } from "@client/components/ui/dropdown-menu";
 import {
-  ThreadModelPickerSheet,
+  ThreadModelPickerDialog,
   ThreadSettingsControls,
   ThreadSettingsMenuItems,
 } from "./ThreadSettingsControls.js";
@@ -130,7 +130,7 @@ function ModelSheetHarness({
       <button ref={returnFocusRef} onClick={() => setOpen(true)}>
         Thread actions
       </button>
-      <ThreadModelPickerSheet
+      <ThreadModelPickerDialog
         store={{ perform } as unknown as ThreadClientStore}
         snapshot={snapshot}
         disabled={false}
@@ -184,7 +184,7 @@ function ActionsSheetHarness({
           />
         </DropdownMenuContent>
       </DropdownMenu>
-      <ThreadModelPickerSheet
+      <ThreadModelPickerDialog
         store={store}
         snapshot={snapshot}
         disabled={false}

@@ -71,7 +71,7 @@ import { useTouchDensity } from "../../app/use-touch-density.js";
 import { SessionStatsDialog } from "./SessionStatsDialog.js";
 import { SnoozeDialog } from "./SnoozeDialog.js";
 import {
-  ThreadModelPickerSheet,
+  ThreadModelPickerDialog,
   ThreadSettingsMenuItems,
 } from "./ThreadSettingsControls.js";
 import {
@@ -705,7 +705,7 @@ export const ThreadHeader = memo(function ThreadHeader({
                     if (afterActionsClose.current) event.preventDefault();
                   }}
                 >
-                  {sheet && snapshot.capabilities.settings.length > 0 && (
+                  {snapshot.capabilities.settings.length > 0 && (
                     <>
                       <ThreadSettingsMenuItems
                         store={store}
@@ -1122,7 +1122,7 @@ export const ThreadHeader = memo(function ThreadHeader({
         }}
       />
       {active && archiveAction.dialog}
-      <ThreadModelPickerSheet
+      <ThreadModelPickerDialog
         store={store}
         snapshot={snapshot}
         disabled={disabled}
