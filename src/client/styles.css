@@ -10845,29 +10845,6 @@ tr.diff-hunk td {
   gap: 6px;
 }
 
-.interaction-field > input,
-.interaction-field > select {
-  width: 100%;
-  min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--input);
-  border-radius: var(--radius-ctl);
-  background: var(--code);
-  color: var(--foreground);
-  font: inherit;
-}
-
-.interaction-field > input:focus-visible,
-.interaction-field > select:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-
-.interaction-field input:disabled,
-.interaction-field select:disabled {
-  opacity: 0.55;
-}
-
 .interaction-field-options {
   display: grid;
   gap: 6px;
@@ -10883,8 +10860,6 @@ tr.diff-hunk td {
 }
 
 @media (max-width: 819px), (pointer: coarse) {
-  .interaction-field > input,
-  .interaction-field > select,
   .interaction-field-inclusion,
   .interaction-field-options label {
     min-height: 44px;
