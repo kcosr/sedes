@@ -3,7 +3,6 @@ import type { Terminal } from "ghostty-web";
 import { GHOSTTY_THEMES } from "./ghostty-emulator.js";
 import {
   GHOSTTY_WASM_THEME,
-  GhosttyTruecolorGuard,
   installGhosttyLiveTheme,
   themeColorMap,
   type ThemedCell,
@@ -48,8 +47,6 @@ function fakeTerminal() {
   };
 }
 
-const bytes = (text: string) => new TextEncoder().encode(text);
-const text = (value: Uint8Array) => new TextDecoder().decode(value);
 const wasm = GHOSTTY_WASM_THEME;
 
 describe("ghostty live theme", () => {
@@ -102,56 +99,5 @@ describe("ghostty live theme", () => {
     expect(fake.renderer.renderLine).not.toBe(fake.originalRenderLine);
     live.dispose();
     expect(fake.renderer.renderLine).toBe(fake.originalRenderLine);
-  });
-});
-
-describe("ghostty truecolor guard", () => {
-  const [sr, sg, sb] = rgb(wasm.red!);
-
-  it("passes output without escapes through untouched", () => {
-    const guard = new GhosttyTruecolorGuard();
-    const input = bytes("plain output\r\n");
-    expect(guard.transform(input)).toBe(input);
-  });
-
-  it("nudges only truecolor that equals a sentinel, in every SGR form", () => {
-    const guard = new GhosttyTruecolorGuard();
-    const nudged = String(sb ^ 1);
-    expect(text(guard.transform(bytes(`a\x1b[1;38;2;${sr};${sg};${sb};48;2;1;2;3mb`))))
-      .toBe(`a\x1b[1;38;2;${sr};${sg};${nudged};48;2;1;2;3mb`);
-    expect(text(guard.transform(bytes(`\x1b[48;2;${sr};${sg};${sb}m`)))).toBe(`\x1b[48;2;${sr};${sg};${nudged}m`);
-    expect(text(guard.transform(bytes(`\x1b[38:2::${sr}:${sg}:${sb}m`)))).toBe(`\x1b[38:2::${sr}:${sg}:${nudged}m`);
-    expect(text(guard.transform(bytes(`\x1b[38:2:${sr}:${sg}:${sb}m`)))).toBe(`\x1b[38:2:${sr}:${sg}:${nudged}m`);
-    for (const untouched of [
-      "\x1b[38;2;36;39;45;48;2;255;255;255m",
-      `\x1b[38;5;${sb}m`,
-      `\x1b[38;5;1;38;2;${sr};${sg};${sb + 1}m`,
-      `\x1b[>4;2m\x1b[${sr};${sg};${sb}H`,
-      `\x1b]8;;https://example.test/38;2;${sr};${sg};${sb}m\x07link\x1b]8;;\x1b\\`,
-      `\x1bP1;38;2;${sr};${sg};${sb}m\x1b\\`,
-    ]) {
-      expect(text(guard.transform(bytes(untouched)))).toBe(untouched);
-    }
-  });
-
-  it("handles sequences split across writes at any point", () => {
-    const stream = `ok \x1b[38;2;${sr};${sg};${sb}mred\x1b]0;title 38;2;${sr};${sg};${sb}m\x07 é \x1b[0m`;
-    const expected = text(new GhosttyTruecolorGuard().transform(bytes(stream)));
-    expect(expected).toContain(`38;2;${sr};${sg};${sb ^ 1}m`);
-    expect(expected).toContain(`title 38;2;${sr};${sg};${sb}m`);
-    const input = bytes(stream);
-    for (let split = 0; split <= input.length; split += 1) {
-      const guard = new GhosttyTruecolorGuard();
-      const first = guard.transform(input.subarray(0, split));
-      const second = guard.transform(input.subarray(split));
-      expect(text(Uint8Array.from([...first, ...second])), `split at ${split}`).toBe(expected);
-    }
-  });
-
-  it("drops a held partial sequence on reset", () => {
-    const guard = new GhosttyTruecolorGuard();
-    expect(text(guard.transform(bytes("before\x1b[38;2")))).toBe("before\x1b[");
-    guard.reset();
-    expect(text(guard.transform(bytes("after")))).toBe("after");
   });
 });

@@ -368,7 +368,10 @@ describe("GhosttyEmulator", () => {
     const sentinel = Number.parseInt(GHOSTTY_WASM_THEME.foreground!.slice(1), 16);
     const [red, green, blue] = [sentinel >> 16, (sentinel >> 8) & 255, sentinel & 255];
     emulator.write(new TextEncoder().encode(`\x1b[38;2;${red};${green};${blue}mtext\x1b[38;2;36;39;45m`));
-    expect(terminal.writes.at(-1)).toBe(`\x1b[38;2;${red};${green};${blue ^ 1}mtext\x1b[38;2;36;39;45m`);
+    // The guard appends a correcting SGR right after the one that set a sentinel.
+    expect(terminal.writes.at(-1)).toBe(
+      `\x1b[38;2;${red};${green};${blue}m\x1b[38;2;${red};${green};${blue ^ 1}mtext\x1b[38;2;36;39;45m`,
+    );
     emulator.dispose();
   });
 

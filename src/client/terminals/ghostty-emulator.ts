@@ -1,10 +1,11 @@
 import { installGhosttyRenderScheduling } from "./ghostty-render-scheduling.js";
 import {
+  GHOSTTY_SENTINEL_COLORS,
   GHOSTTY_WASM_THEME,
-  GhosttyTruecolorGuard,
   installGhosttyLiveTheme,
   type GhosttyLiveTheme,
 } from "./ghostty-live-theme.js";
+import { GhosttyTruecolorGuard } from "./ghostty-truecolor-guard.js";
 import { isWindowsClient } from "./client-platform.js";
 import type { ITheme, Terminal } from "ghostty-web";
 import type { TerminalEmulatorSink } from "./terminal-session.js";
@@ -119,7 +120,7 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
   #fitAddon?: import("ghostty-web").FitAddon;
   #renderScheduling: ReturnType<typeof installGhosttyRenderScheduling> | undefined;
   #liveTheme: GhosttyLiveTheme | undefined;
-  readonly #truecolorGuard = new GhosttyTruecolorGuard();
+  readonly #truecolorGuard = new GhosttyTruecolorGuard(GHOSTTY_SENTINEL_COLORS);
   #cursorBlink: boolean;
   #colorScheme: TerminalColorScheme;
   #container?: HTMLElement;
