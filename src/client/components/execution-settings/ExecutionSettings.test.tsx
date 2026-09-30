@@ -418,6 +418,28 @@ describe("execution configuration administration", () => {
     expect(screen.queryByRole("link", { name: "Build host" })).toBeNull();
   });
 
+  it("closes a removal confirmation when navigation leaves its resource, and keeps it closed on return", async () => {
+    const api = renderAt(environmentPath(remoteId), controls());
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Remove Build host" }));
+    expect(screen.getByRole("dialog", { name: "Remove Build host?" })).toBeVisible();
+    // Another settings page: this page stays mounted but hidden.
+    act(() => navigate("/settings/general"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove Build host?" })).toBeNull());
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.pathname).toBe(environmentPath(remoteId)));
+    expect(await screen.findByRole("button", { name: "Remove Build host" })).toBeVisible();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    // Another location of the same page, from a row menu's confirmation.
+    await user.click(screen.getByRole("button", { name: "Actions for Local" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Remove…" }));
+    expect(screen.getByRole("dialog", { name: "Remove Local?" })).toBeVisible();
+    act(() => navigate("/settings/environments"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove Local?" })).toBeNull());
+    expect(api.saveConfiguration).not.toHaveBeenCalled();
+  });
+
   it("offers removal from a row menu and lists what blocks it", async () => {
     const document = configuration();
     document.backends.push(backendEditors.pi.createBackend("pi-local"));

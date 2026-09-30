@@ -367,6 +367,46 @@ test("environment and backend routes live inside the settings shell: nav, histor
   await expect(page).toHaveURL("/");
 });
 
+test("a resource's confirmation closes when Back or the settings nav leaves it", async ({ page }) => {
+  const { configuration } = configurationSnapshotSchema.parse(await (await page.request.get("/api/configuration")).json());
+  const local = configuration.executionEnvironments[0]!;
+  const localPath = `/settings/environments/${local.id}`;
+  const settings = page.getByTestId("settings-view");
+  const navigation = page.getByTestId("desktop-sidebar").getByRole("navigation", { name: "Settings pages", exact: true });
+  const list = settings.getByRole("region", { name: "Configured environments", exact: true });
+  const detail = settings.getByRole("region", { name: `${local.label} details`, exact: true });
+  const confirmation = page.getByRole("dialog", { name: `Remove ${local.label}?`, exact: true });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/settings/environments");
+  await list.getByRole("link", { name: local.label, exact: true }).click();
+  await expect(page).toHaveURL(localPath);
+  await detail.getByRole("button", { name: `Remove ${local.label}`, exact: true }).click();
+  await expect(confirmation).toBeVisible();
+  // Browser Back leaves the resource: its confirmation closes and stays closed.
+  await page.goBack();
+  await expect(page).toHaveURL("/settings/environments");
+  await expect(confirmation).toBeHidden();
+  await page.goForward();
+  await expect(page).toHaveURL(localPath);
+  await expect(detail).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // A modal blocks pointer input, so dispatch the nav link's click as a
+  // programmatic navigation would; General then owns the page and focus.
+  await list.getByRole("button", { name: `Actions for ${local.label}`, exact: true }).click();
+  await page.getByRole("menuitem", { name: "Remove…", exact: true }).click();
+  await expect(confirmation).toBeVisible();
+  await navigation.getByRole("link", { name: "General", exact: true }).dispatchEvent("click");
+  await expect(page).toHaveURL("/settings/general");
+  await expect(confirmation).toBeHidden();
+  await expect(settings.getByRole("heading", { name: "General", level: 1 })).toBeFocused();
+  await page.goBack();
+  await expect(page).toHaveURL(localPath);
+  await expect(detail).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
 test("Escape goes up one Settings level after open layers and focused fields, through the discard guard", async ({ page }) => {
   const { configuration } = configurationSnapshotSchema.parse(await (await page.request.get("/api/configuration")).json());
   const local = configuration.executionEnvironments[0]!;
