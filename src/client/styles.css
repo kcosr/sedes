@@ -8539,9 +8539,9 @@ tr.diff-hunk td {
 .composer-footer :is(.skill-button, .attachment-button, .stash-button,
   .context-usage-meter, .composer-prompt-toolbar, .codex-goal-indicator,
   .codex-fast-mode-toggle) {
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
+  width: var(--control-lg);
+  min-width: var(--control-lg);
+  height: var(--control-lg);
 }
 
 .composer-footer .send-button {
@@ -8556,15 +8556,15 @@ tr.diff-hunk td {
 }
 
 .composer-footer .thread-setting-pill > :is(button, [role="combobox"]) {
-  height: 32px;
+  height: var(--control-md);
   min-width: 0;
   max-width: 100%;
-  font-size: 13px;
+  font-size: var(--text-ui);
 }
 
 .composer-footer .thread-setting-pill > :is(button, [role="combobox"]) svg {
-  width: 14px;
-  height: 14px;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
 }
 
 .composer-footer .delivery-split {
@@ -8581,7 +8581,7 @@ tr.diff-hunk td {
 }
 
 .composer-footer .delivery-split-menu {
-  width: 28px;
+  width: var(--control-sm);
 }
 
 .composer-tools {
@@ -10835,9 +10835,9 @@ tr.diff-hunk td {
 
   /* Roomier controls in the expandable mobile toolbar. */
   .thread-controls > .thread-find-trigger {
-    width: 44px;
-    height: 44px;
-    flex: 0 0 44px;
+    width: var(--control-touch);
+    height: var(--control-touch);
+    flex: 0 0 var(--control-touch);
   }
 
   .thread-controls > .thread-find-trigger svg {
@@ -10876,7 +10876,7 @@ tr.diff-hunk td {
   }
 
   .thread-controls > .thread-worktree-trigger {
-    height: 44px;
+    height: var(--control-touch);
     min-width: 0;
     max-width: none;
     flex: 1 1 auto;
