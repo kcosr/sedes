@@ -261,7 +261,9 @@ describe("execution configuration administration", () => {
     fireEvent.change(screen.getByLabelText("Filter by status"), { target: { value: "attention" } });
     const row = rowOf("Disabled but running");
     expect(within(row).getByText("Backend disabled")).toBeVisible();
-    expect(within(row).getByText("Disabled")).toBeVisible();
+    // Fixed attributes read in the subtitle; the status is the row's one pill.
+    expect(within(row).getByText("Pi SDK · 1 connection · Disabled")).toBeVisible();
+    expect(within(row).getByTitle("Backend disabled")).toHaveAttribute("data-slot", "status-pill");
   });
 
   it("prefills scoped backend creation and opens the new backend after saving every connection in its environment", async () => {

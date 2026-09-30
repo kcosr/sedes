@@ -20,14 +20,18 @@
   .execution-filters, .execution-toolbar[data-filters="open"] .execution-filters { display: contents; }
   .execution-filters { padding: 0; border: 0; }
 }
-.execution-list-count { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: var(--control-xs); padding-inline: var(--space-1); }
+.execution-list-count { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: var(--control-xs); padding-inline: var(--space-3); }
 .execution-list-count p { margin: 0; color: var(--muted-foreground-2); font-size: var(--text-meta); }
 .execution-group { display: grid; gap: var(--space-0-5); min-width: 0; }
 .execution-group + .execution-group, .execution-group + [data-slot="empty-state"] { margin-top: var(--space-2); }
 .execution-group-header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-3) var(--space-1); }
 .execution-group-header h3 { min-width: 0; margin: 0; color: var(--muted-foreground); font-size: var(--text-meta); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
 .execution-group-header span { flex: none; color: var(--muted-foreground-2); font-size: var(--text-meta); }
-/* A narrow row puts the status beside the title and gives the subtitle the full width. */
+/* A row without a kebab keeps its place, so statuses share one right edge. */
+.execution-row-actions-spacer { display: block; width: var(--control-sm); }
+/* A narrow row puts the status beside the title and gives the subtitle the
+   full width; the status shrinks to its dot (RowStatus), so the name keeps
+   the width. */
 @container entity-list (width < 480px) {
   .execution-settings [data-slot="entity-row-main"] {
     grid-template-areas: "icon title meta" "icon subtitle subtitle";
@@ -39,6 +43,8 @@
   .execution-settings [data-slot="entity-row-subtitle"] { grid-area: subtitle; }
   .execution-settings [data-slot="entity-row-meta"] { grid-area: meta; justify-content: flex-end; flex-wrap: nowrap; }
   .execution-settings [data-slot="entity-row-icon"] { align-self: start; }
+  .execution-row-status { width: var(--space-5); padding-inline: 0; }
+  .execution-row-status-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
 
 /* ── Detail ── */
@@ -220,7 +226,7 @@
   .execution-settings :is([data-slot="button"], [data-slot="dropdown-menu-trigger"]):not([data-size="icon-xs"]) { min-height: var(--control-default); }
   .execution-settings :is([data-slot="button"], [data-slot="dropdown-menu-trigger"])[data-size^="icon"]:not([data-size="icon-xs"]) { min-width: var(--control-default); }
   .execution-advanced-trigger, .execution-item-trigger, .execution-token button { min-height: var(--control-default); }
-  .execution-token button { min-width: var(--control-default); }
+  .execution-token button, .execution-row-actions-spacer { min-width: var(--control-default); }
 }
 
 /* ── Projects ── */

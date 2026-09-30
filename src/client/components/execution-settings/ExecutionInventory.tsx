@@ -11,7 +11,6 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { EmptyState } from "../ui/empty-state.js";
 import { NativeSelect } from "../ui/native-select.js";
 import { StatusPill } from "../ui/status-pill.js";
-import { Tag } from "../ui/tag.js";
 import { useTouchDensity } from "../../app/use-touch-density.js";
 import { backendEditors } from "./backend-editors.js";
 import { followLink } from "../settings/SettingsNav.js";
@@ -130,6 +129,20 @@ export function RowActions({ label, actions }: { readonly label: string; readonl
   </DropdownMenu>;
 }
 
+/**
+ * A row's one live state. Where the row is narrow (the split list pane, a
+ * phone) the pill shrinks to its dot so the name keeps the width; the label
+ * stays its accessible text and its tooltip.
+ */
+function RowStatus({ status }: { readonly status: StatusPresentation }): React.JSX.Element {
+  return <StatusPill tone={status.tone} title={status.label} className="execution-row-status">
+    <span className="execution-row-status-label">{status.label}</span>
+  </StatusPill>;
+}
+
+/** Keeps a row without a kebab (a pending host) on the rows' status column. */
+const noRowActions = <span className="execution-row-actions-spacer" aria-hidden="true" />;
+
 function StatusFilter({ kind, value, onChange }: { readonly kind: "environments" | "backends"; readonly value: string; readonly onChange: (value: string) => void }): React.JSX.Element {
   return <NativeSelect aria-label="Filter by status" value={value} onChange={event => onChange(event.currentTarget.value)}>
     <option value="">All statuses</option><option value="attention">Needs attention</option><option value="connected">Connected</option>
@@ -137,11 +150,11 @@ function StatusFilter({ kind, value, onChange }: { readonly kind: "environments"
   </NativeSelect>;
 }
 
-/** A group of rows under a light header with a labeled count. */
-export function InventoryGroup({ label, title, count, children }: { readonly label: string; readonly title: ReactNode; readonly count: string; readonly children: ReactNode }): React.JSX.Element {
+/** A group of rows under a light header with a labeled count (none while a filter counts the results). */
+export function InventoryGroup({ label, title, count, children }: { readonly label: string; readonly title: ReactNode; readonly count?: string; readonly children: ReactNode }): React.JSX.Element {
   const id = useId();
   return <section aria-label={label} className="execution-group">
-    <div className="execution-group-header"><h3 id={id}>{title}</h3><span>{count}</span></div>
+    <div className="execution-group-header"><h3 id={id}>{title}</h3>{count ? <span>{count}</span> : null}</div>
     {children}
   </section>;
 }
@@ -171,7 +184,8 @@ export function EnvironmentList({ snapshot, filters, onFilters, hosts, stale, se
     const text = [environment.label, environmentDescription(environment), ...environmentBackends(configuration, environment.id).map(backend => `${backend.label} ${backendEditors[backend.kind].label}`)].join(" ").toLocaleLowerCase();
     return text.includes(term) && matchesStatus(runtimeFor(snapshot, "environment", environment.id), filters.status);
   });
-  const pending = (hosts?.registrations ?? []).filter(registration => registration.state === "pending");
+  const pending = (hosts?.registrations ?? []).filter(registration => registration.state === "pending"
+    && [registration.metadata.hostname, registration.correlationCode, hostPlatform(registration.metadata.platform)].join(" ").toLocaleLowerCase().includes(term));
   const clear = () => { onFilters(emptyFilters); search.current?.focus(); };
   const rows = <EntityList>{entries.map(environment => {
     const backends = environmentBackends(configuration, environment.id).length;
@@ -179,7 +193,7 @@ export function EnvironmentList({ snapshot, filters, onFilters, hosts, stale, se
     const path = settingsPath("environments", { mode: "view", resourceId: environment.id });
     return <EntityRow key={environment.id} data-resource-id={environment.id} icon={<EnvironmentIcon kind={environment.kind} />}
       title={environment.label} subtitle={`${environmentDescription(environment)} · ${countLabel(backends, "backend")}`}
-      status={<StatusPill tone={status.tone}>{status.label}</StatusPill>} selected={environment.id === selectedId}
+      status={<RowStatus status={status} />} selected={environment.id === selectedId}
       href={path} onSelect={event => followLink(event, path)}
       actions={<RowActions label={environment.label} actions={actions(environment)} />} />;
   })}</EntityList>;
@@ -193,7 +207,7 @@ export function EnvironmentList({ snapshot, filters, onFilters, hosts, stale, se
     </InventoryGroup> : null}
     {!configuration.executionEnvironments.length ? <EmptyState icon={<Server />} title="No execution environments"
       description="Add this machine, an SSH host, or pair a host to choose where agents run." />
-      : pending.length ? <InventoryGroup label="Environments" title="Environments" count={entries.length === configuration.executionEnvironments.length ? countLabel(entries.length, "environment") : `${entries.length} of ${configuration.executionEnvironments.length}`}>
+      : pending.length ? <InventoryGroup label="Environments" title="Environments" count={filtered ? undefined : countLabel(entries.length, "environment")}>
         {filtered ? <ResultCount shown={entries.length} total={configuration.executionEnvironments.length} noun="environment" onClear={clear} /> : null}
         {rows}
       </InventoryGroup>
@@ -206,8 +220,8 @@ function PendingHostRow({ registration, selected }: { readonly registration: Hos
   const path = settingsPath("environments", { mode: "pending", resourceId: registration.id });
   return <EntityRow data-resource-id={registration.id} icon={<Link2 />} title={registration.metadata.hostname}
     subtitle={`Code ${registration.correlationCode} · ${hostPlatform(registration.metadata.platform)} ${registration.metadata.architecture}`}
-    status={registration.connected ? <StatusPill tone="success">Host online</StatusPill> : <StatusPill tone="warning">Host offline</StatusPill>}
-    selected={selected} href={path} onSelect={event => followLink(event, path)} />;
+    status={<RowStatus status={registration.connected ? { label: "Host online", tone: "success" } : { label: "Host offline", tone: "warning" }} />}
+    selected={selected} href={path} onSelect={event => followLink(event, path)} actions={noRowActions} />;
 }
 
 /** Pending registrations as rows, for places other than the environment list. */
@@ -226,9 +240,11 @@ export function BackendRow({ backend, snapshot, selected, actions }: {
   const path = settingsPath("backends", { mode: "view", resourceId: backend.id });
   const isDefault = targets.some(target => target.id === configuration.defaultTargetId);
   return <EntityRow data-resource-id={backend.id} icon={<BackendBrandIcon brand={backendBrand(backend.kind)} />}
-    title={backend.label} subtitle={`${backendEditors[backend.kind].label} · ${countLabel(targets.length, "connection")}`}
-    tags={<>{isDefault ? <Tag>Default</Tag> : null}{backend.enabled ? null : <Tag>Disabled</Tag>}</>}
-    status={<StatusPill tone={status.tone}>{status.label}</StatusPill>} selected={selected}
+    title={backend.label}
+    // Fixed attributes read in the subtitle, so the name keeps the width beside the status.
+    subtitle={[backendEditors[backend.kind].label, countLabel(targets.length, "connection"), isDefault ? "Default" : undefined, backend.enabled ? undefined : "Disabled"]
+      .filter(Boolean).join(" · ")}
+    status={<RowStatus status={status} />} selected={selected}
     href={path} onSelect={event => followLink(event, path)}
     actions={actions ? <RowActions label={backend.label} actions={actions} /> : undefined} />;
 }
