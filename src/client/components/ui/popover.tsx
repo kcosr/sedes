@@ -10,7 +10,6 @@ import {
 } from "./floating.js"
 import {
   FloatingOpeningProvider,
-  useControllableOpen,
   useFloatingLayer,
   useFloatingOpening,
 } from "./floating-opening.js"
@@ -24,14 +23,13 @@ function Popover({
   onOpenChange,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
-  const [open, setOpen] = useControllableOpen({
+  const { open, setOpen, value } = useFloatingOpening({
     open: openProp,
     defaultOpen,
     onOpenChange,
   })
-  const opening = useFloatingOpening(open)
   return (
-    <FloatingOpeningProvider value={opening}>
+    <FloatingOpeningProvider value={value}>
       <PopoverPrimitive.Root
         data-slot="popover"
         {...props}

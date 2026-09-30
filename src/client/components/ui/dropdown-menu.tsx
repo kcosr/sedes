@@ -25,7 +25,6 @@ import {
 } from "@client/components/ui/floating"
 import {
   FloatingOpeningProvider,
-  useControllableOpen,
   useFloatingLayer,
   useFloatingOpening,
 } from "@client/components/ui/floating-opening"
@@ -67,14 +66,13 @@ function DropdownMenu({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Root> & {
   presentation?: MenuPresentation
 }) {
-  const [open, setOpen] = useControllableOpen({
+  const { open, setOpen, value } = useFloatingOpening({
     open: openProp,
     defaultOpen,
     onOpenChange,
   })
-  const opening = useFloatingOpening(open)
   return (
-    <FloatingOpeningProvider value={opening}>
+    <FloatingOpeningProvider value={value}>
       {presentation === "sheet" ? (
         <MenuSheetRoot open={open} onOpenChange={setOpen}>
           {props.children}

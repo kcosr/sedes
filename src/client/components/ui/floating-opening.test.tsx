@@ -224,6 +224,38 @@ describe("reopening a floating surface during its exit motion", () => {
     expect(screen.getByRole("textbox", { name: "Search saved prompts" })).toHaveFocus();
   });
 
+  it("leaves focus where a press during the exit put it", async () => {
+    render(
+      <>
+        <Popover>
+          <PopoverTrigger>Project filter</PopoverTrigger>
+          <PopoverContent aria-label="Projects">
+            <input aria-label="Search projects" />
+          </PopoverContent>
+        </Popover>
+        <input aria-label="Thread name" />
+      </>,
+    );
+    const trigger = screen.getByRole("button", { name: "Project filter" });
+    press(trigger);
+    await settle();
+    const search = screen.getByRole("textbox", { name: "Search projects" });
+    fireEvent.keyDown(search, { key: "Escape" });
+    const closing = screen.getByRole("dialog", { name: "Projects", hidden: true });
+    expect(closing).toHaveAttribute("data-state", "closed");
+    await settle();
+    // While the popover fades out, a press elsewhere moves focus (a dialog
+    // opening, a field taking focus).
+    const threadName = screen.getByRole("textbox", { name: "Thread name" });
+    press(threadName);
+    act(() => threadName.focus());
+    await settle();
+    finishExitMotion(closing);
+    await settle();
+    expect(closing).not.toBeInTheDocument();
+    expect(threadName).toHaveFocus();
+  });
+
   it("reopens a menu sheet from its trigger with fresh content", async () => {
     render(<ViewOptions presentation="sheet" />);
     const trigger = screen.getByRole("button", { name: "View options", hidden: true });

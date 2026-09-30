@@ -22,7 +22,6 @@ import {
 } from "@client/components/ui/floating"
 import {
   FloatingOpeningProvider,
-  useControllableOpen,
   useFloatingLayer,
   useFloatingOpening,
 } from "@client/components/ui/floating-opening"
@@ -65,10 +64,9 @@ function ContextMenu({
 }) {
   // Radix owns a context menu's open state and reports every change, so
   // following those reports keeps this count in step with it.
-  const [open, setOpen] = useControllableOpen({ onOpenChange })
-  const opening = useFloatingOpening(open)
+  const { open, setOpen, value } = useFloatingOpening({ onOpenChange })
   return (
-    <FloatingOpeningProvider value={opening}>
+    <FloatingOpeningProvider value={value}>
       {presentation === "sheet" ? (
         <MenuSheetRoot open={open} onOpenChange={setOpen}>
           {props.children}
