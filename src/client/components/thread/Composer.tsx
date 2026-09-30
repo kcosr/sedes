@@ -5,8 +5,10 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
+  type RefObject,
 } from "react";
 import { recordComposerInputDiagnostic } from "../../app/diagnostics.js";
 import { flushSync } from "react-dom";
@@ -58,6 +60,7 @@ import {
 } from "@client/components/ui/dropdown-menu";
 import { EmptyState } from "@client/components/ui/empty-state";
 import {
+  FLOATING_SIDE_OFFSET,
   eyebrowClass,
   menuDescriptionClass,
   menuEmptyClass,
@@ -375,6 +378,19 @@ export function Composer({
   const composerId = useId();
   const stashButtons = useRef<Array<HTMLButtonElement | null>>([]);
   const [stashOpen, setStashOpen] = useState(false);
+  const [deliveryMenuOpen, setDeliveryMenuOpen] = useState(false);
+  // Surfaces that open upward from inside the stack clear all of it, so
+  // they never cover the Prompts tab above the composer.
+  const composerStack = useRef<HTMLDivElement>(null);
+  const surfaceStack = useRef<HTMLDivElement>(null);
+  const deliveryMenuTrigger = useRef<HTMLButtonElement>(null);
+  const stashOffset = useOffsetAboveStack(composerStack, surfaceStack, stashOpen, 8);
+  const deliveryMenuOffset = useOffsetAboveStack(
+    composerStack,
+    deliveryMenuTrigger,
+    deliveryMenuOpen,
+    FLOATING_SIDE_OFFSET,
+  );
   const stashTitleId = useId();
   const stashDescriptionId = useId();
   const [preferredDeliveryMode, setPreferredDeliveryMode] = useState<
@@ -2711,6 +2727,7 @@ export function Composer({
         </div>
       )}
       <div
+        ref={composerStack}
         className="composer-stack"
         onClickCapture={(event) => {
           if (
@@ -2735,7 +2752,7 @@ export function Composer({
         <QuestionInboxPanel />
         <Popover open={active && stashOpen} onOpenChange={setStashOpen}>
           <PopoverAnchor asChild>
-            <div className="composer-surface-stack">
+            <div ref={surfaceStack} className="composer-surface-stack">
               {!tuiActive && !hidePendingInputs && (
                 <PendingInputStrip
                   store={store}
@@ -2751,7 +2768,8 @@ export function Composer({
               )}
               {/* The stash popover is anchored to the complete surface stack,
                   not to its button or the height-changing composer card. This
-                  keeps one stable gap above every pending-input configuration. */}
+                  keeps one stable gap above every pending-input configuration,
+                  and its offset also clears the Prompts tab rail above. */}
               <div
                 className={`composer ${draftEditingDisabled ? "disabled" : ""}${
                   attachmentDragActive ? " attachment-drag-active" : ""
@@ -3423,7 +3441,7 @@ export function Composer({
                       aria-describedby={stashDescriptionId}
                       side="top"
                       align="end"
-                      sideOffset={8}
+                      sideOffset={stashOffset}
                       onOpenAutoFocus={(event) => {
                         event.preventDefault();
                         requestAnimationFrame(() =>
@@ -3584,9 +3602,13 @@ export function Composer({
                                 <Layers size={16} aria-hidden="true" />
                               )}
                             </button>
-                            <DropdownMenu>
+                            <DropdownMenu
+                              open={deliveryMenuOpen}
+                              onOpenChange={setDeliveryMenuOpen}
+                            >
                               <DropdownMenuTrigger asChild>
                                 <button
+                                  ref={deliveryMenuTrigger}
                                   className="delivery-split-menu"
                                   aria-label="Delivery mode"
                                   title="Delivery mode"
@@ -3599,7 +3621,11 @@ export function Composer({
                                   <ChevronDown size={12} aria-hidden="true" />
                                 </button>
                               </DropdownMenuTrigger>
-                              <DropdownMenuContent side="top" align="end">
+                              <DropdownMenuContent
+                                side="top"
+                                align="end"
+                                sideOffset={deliveryMenuOffset}
+                              >
                                 <DropdownMenuRadioGroup
                                   aria-label="Delivery mode"
                                   value={deliveryMode}
@@ -3693,6 +3719,31 @@ export function Composer({
       </div>
     </div>
   );
+}
+
+/**
+ * The side offset that lifts a surface opening upward from `anchor` clear of
+ * the whole composer `stack` (the Prompts tab rail included), `gap` above
+ * it. Measured as the surface opens.
+ */
+function useOffsetAboveStack(
+  stack: RefObject<HTMLElement | null>,
+  anchor: RefObject<HTMLElement | null>,
+  open: boolean,
+  gap: number,
+): number {
+  const [offset, setOffset] = useState(gap);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const stackTop = stack.current?.getBoundingClientRect().top;
+    const anchorTop = anchor.current?.getBoundingClientRect().top;
+    setOffset(
+      stackTop === undefined || anchorTop === undefined
+        ? gap
+        : gap + Math.max(0, anchorTop - stackTop),
+    );
+  }, [anchor, gap, open, stack]);
+  return offset;
 }
 
 function matchingCommands(
