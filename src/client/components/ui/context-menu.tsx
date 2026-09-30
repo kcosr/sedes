@@ -21,6 +21,12 @@ import {
   menuShortcutClass,
 } from "@client/components/ui/floating"
 import {
+  FloatingOpeningProvider,
+  useControllableOpen,
+  useFloatingLayer,
+  useFloatingOpening,
+} from "@client/components/ui/floating-opening"
+import {
   MenuScope,
   MenuSheetCheckboxItem,
   MenuSheetContent,
@@ -47,22 +53,36 @@ import { cn } from "@client/lib/utils"
  * `presentation="sheet"` opens the same parts as the shared bottom Sheet on
  * a secondary click or a touch long press (see ui/menu-sheet.tsx); give
  * ContextMenuContent a `sheetTitle` and `sheetDescription` for its header.
+ * Each opening mounts fresh content, even while the last one animates out
+ * (see ui/floating-opening.tsx).
  */
 function ContextMenu({
   presentation = "menu",
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Root> & {
   presentation?: MenuPresentation
 }) {
-  if (presentation === "sheet") {
-    return (
-      <MenuSheetRoot onOpenChange={props.onOpenChange}>{props.children}</MenuSheetRoot>
-    )
-  }
+  // Radix owns a context menu's open state and reports every change, so
+  // following those reports keeps this count in step with it.
+  const [open, setOpen] = useControllableOpen({ onOpenChange })
+  const opening = useFloatingOpening(open)
   return (
-    <MenuScope>
-      <ContextMenuPrimitive.Root data-slot="context-menu" {...props} />
-    </MenuScope>
+    <FloatingOpeningProvider value={opening}>
+      {presentation === "sheet" ? (
+        <MenuSheetRoot open={open} onOpenChange={setOpen}>
+          {props.children}
+        </MenuSheetRoot>
+      ) : (
+        <MenuScope>
+          <ContextMenuPrimitive.Root
+            data-slot="context-menu"
+            {...props}
+            onOpenChange={setOpen}
+          />
+        </MenuScope>
+      )}
+    </FloatingOpeningProvider>
   )
 }
 
@@ -230,6 +250,10 @@ function ContextMenuContent({
 }) {
   const sheet = useMenuSheet()
   const dialogContainer = React.useContext(DialogPortalContainerContext)
+  const layer = useFloatingLayer({
+    onInteractOutside: props.onInteractOutside,
+    onCloseAutoFocus: props.onCloseAutoFocus,
+  })
   if (sheet) {
     return (
       <MenuSheetContent
@@ -248,6 +272,7 @@ function ContextMenuContent({
   return (
     <ContextMenuPrimitive.Portal container={dialogContainer}>
       <ContextMenuPrimitive.Content
+        key={layer.key}
         data-slot="context-menu-content"
         collisionPadding={collisionPadding}
         className={cn(
@@ -256,6 +281,8 @@ function ContextMenuContent({
           className
         )}
         {...props}
+        onInteractOutside={layer.onInteractOutside}
+        onCloseAutoFocus={layer.onCloseAutoFocus}
       >
         {/* React context crosses the portal: a control in the menu is not the Field's control. */}
         <FieldControlContext.Provider value={null}>{children}</FieldControlContext.Provider>

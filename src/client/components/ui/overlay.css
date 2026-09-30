@@ -455,13 +455,25 @@
   animation: ui-pop-in var(--motion-pop);
 }
 
+/* Select content closes at once: Radix Select keeps outside pointer events
+   off until its content unmounts, so an exit motion would hold the whole
+   page (the trigger included) unresponsive while it ran. */
 [data-slot="popover-content"][data-state="closed"],
-[data-slot="select-content"][data-state="closed"],
 [data-slot="dropdown-menu-content"][data-state="closed"],
 [data-slot="dropdown-menu-sub-content"][data-state="closed"],
 [data-slot="context-menu-content"][data-state="closed"],
 [data-slot="context-menu-sub-content"][data-state="closed"] {
   animation: ui-pop-out var(--motion-pop) forwards;
+}
+
+/* A closing surface lets the pointer through, so a press on what lies
+   under its exit motion (the trigger that reopens it, the page) lands
+   there (see ui/floating-opening.tsx). A floating surface's positioning
+   wrapper would take the press otherwise. */
+[data-slot="dialog-overlay"][data-state="closed"],
+[data-slot="dialog-content"][data-state="closed"],
+[data-radix-popper-content-wrapper]:has(> [data-state="closed"]) {
+  pointer-events: none;
 }
 
 @keyframes ui-fade-in {

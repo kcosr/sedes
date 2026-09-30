@@ -23,6 +23,7 @@ import {
   menuEmptyClass,
   menuShortcutClass,
 } from "@client/components/ui/floating"
+import { useFloatingLayer } from "@client/components/ui/floating-opening"
 import { cn } from "@client/lib/utils"
 
 /**
@@ -93,27 +94,19 @@ export function MenuScope({ children }: { children?: React.ReactNode }) {
   return <MenuSheetContext.Provider value={null}>{children}</MenuSheetContext.Provider>
 }
 
-/** The sheet-mode root: a Dialog that owns the open state and drill-in stack. */
+/**
+ * The sheet-mode root: a Dialog with the drill-in stack. The menu root
+ * above it owns the open state and counts its openings.
+ */
 export function MenuSheetRoot({
-  open: controlledOpen,
-  defaultOpen = false,
-  onOpenChange,
+  open,
+  onOpenChange: setOpen,
   children,
 }: {
-  open?: boolean
-  defaultOpen?: boolean
-  onOpenChange?: (open: boolean) => void
+  open: boolean
+  onOpenChange: (open: boolean) => void
   children?: React.ReactNode
 }) {
-  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen)
-  const open = controlledOpen ?? uncontrolledOpen
-  const setOpen = React.useCallback(
-    (next: boolean) => {
-      if (controlledOpen === undefined) setUncontrolledOpen(next)
-      onOpenChange?.(next)
-    },
-    [controlledOpen, onOpenChange]
-  )
   const [stack, setStack] = React.useState<readonly MenuSheetLevel[]>([])
   const [pane, setPane] = React.useState<HTMLElement | null>(null)
   const returnFocus = React.useRef<HTMLElement | null>(null)
@@ -344,22 +337,28 @@ export function MenuSheetContent({
   React.useEffect(() => {
     if (depth > 0) focusRow(list.current, "first")
   }, [depth])
+  const layer = useFloatingLayer({
+    onInteractOutside: props.onInteractOutside,
+    onCloseAutoFocus: (event: Event) => {
+      onCloseAutoFocus?.(event)
+      if (event.defaultPrevented) return
+      event.preventDefault()
+      const content = event.currentTarget as HTMLElement
+      const active = document.activeElement
+      const focusLost = !active || active === document.body || content.contains(active)
+      const opener = state?.returnFocus.current ?? state?.triggerRef.current
+      if (focusLost && opener?.isConnected) opener.focus()
+    },
+  })
   return (
     <DialogContent
+      key={layer.key}
       layout="sheet"
       data-menu-sheet=""
       {...(description === undefined ? { "aria-describedby": undefined } : {})}
       {...props}
-      onCloseAutoFocus={(event) => {
-        onCloseAutoFocus?.(event)
-        if (event.defaultPrevented) return
-        event.preventDefault()
-        const content = event.currentTarget as HTMLElement
-        const active = document.activeElement
-        const focusLost = !active || active === document.body || content.contains(active)
-        const opener = state?.returnFocus.current ?? state?.triggerRef.current
-        if (focusLost && opener?.isConnected) opener.focus()
-      }}
+      onInteractOutside={layer.onInteractOutside}
+      onCloseAutoFocus={layer.onCloseAutoFocus}
     >
       <DialogHeader className={title === undefined ? "sr-only" : undefined}>
         <DialogTitle>{title ?? label ?? "Actions"}</DialogTitle>

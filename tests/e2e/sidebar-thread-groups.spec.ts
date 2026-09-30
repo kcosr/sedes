@@ -191,21 +191,19 @@ async function transitionInventory(
 }
 
 async function chooseThreadGroups(page: Page, sidebar: Locator): Promise<void> {
-  // Choosing a grouping closes the menu; reopen it only once it has gone,
-  // so the reopening click does not land on the closing menu.
-  const viewOptions = page.getByRole("menu", { name: "View options" });
+  // Choosing a grouping closes the menu; the next press on the trigger
+  // reopens it even while the closing menu still fades out.
   await sidebar.getByTestId("view-options-trigger").click();
   await page
     .getByRole("group", { name: "Group by" })
     .getByRole("menuitemradio", { name: "Timeline" })
     .click();
-  await expect(viewOptions).toBeHidden();
   await sidebar.getByTestId("view-options-trigger").click();
   await page
     .getByRole("group", { name: "Stack by" })
     .getByRole("menuitemradio", { name: "Thread groups" })
     .click();
-  await expect(viewOptions).toBeHidden();
+  await expect(page.getByRole("menu", { name: "View options" })).toBeHidden();
   await expect(sidebar.getByTestId("view-options-trigger")).toBeVisible();
 }
 
@@ -552,7 +550,6 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
     .getByRole("group", { name: "Stack by" })
     .getByRole("menuitemradio", { name: "Thread groups" })
     .click();
-  await expect(page.getByRole("menu", { name: "View options" })).toBeHidden();
   await expect(groupStack).toHaveCount(1);
 
   await desktopSidebar.getByTestId("view-options-trigger").click();

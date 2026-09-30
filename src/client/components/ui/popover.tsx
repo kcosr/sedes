@@ -8,13 +8,38 @@ import {
   FLOATING_SIDE_OFFSET,
   floatingSurfaceClass,
 } from "./floating.js"
+import {
+  FloatingOpeningProvider,
+  useControllableOpen,
+  useFloatingLayer,
+  useFloatingOpening,
+} from "./floating-opening.js"
 
 import { cn } from "@client/lib/utils"
 
+/** Each opening mounts fresh content, even while the last one animates out. */
 function Popover({
+  open: openProp,
+  defaultOpen,
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
-  return <PopoverPrimitive.Root data-slot="popover" {...props} />
+  const [open, setOpen] = useControllableOpen({
+    open: openProp,
+    defaultOpen,
+    onOpenChange,
+  })
+  const opening = useFloatingOpening(open)
+  return (
+    <FloatingOpeningProvider value={opening}>
+      <PopoverPrimitive.Root
+        data-slot="popover"
+        {...props}
+        open={open}
+        onOpenChange={setOpen}
+      />
+    </FloatingOpeningProvider>
+  )
 }
 
 function PopoverTrigger({
@@ -32,12 +57,17 @@ function PopoverContent({
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Content>) {
   const dialogContainer = React.useContext(DialogPortalContainerContext)
+  const layer = useFloatingLayer({
+    onInteractOutside: props.onInteractOutside,
+    onCloseAutoFocus: props.onCloseAutoFocus,
+  })
   // Wait for the containing dialog node instead of mounting in body then
   // remounting (and refocusing) when its ref becomes available.
   if (dialogContainer === null) return null
   return (
     <PopoverPrimitive.Portal container={dialogContainer}>
       <PopoverPrimitive.Content
+        key={layer.key}
         data-slot="popover-content"
         align={align}
         sideOffset={sideOffset}
@@ -51,6 +81,8 @@ function PopoverContent({
           className
         )}
         {...props}
+        onInteractOutside={layer.onInteractOutside}
+        onCloseAutoFocus={layer.onCloseAutoFocus}
       >
         {/* React context crosses the portal: a control in the popover is not the Field's control. */}
         <FieldControlContext.Provider value={null}>{children}</FieldControlContext.Provider>

@@ -24,6 +24,12 @@ import {
   menuShortcutClass,
 } from "@client/components/ui/floating"
 import {
+  FloatingOpeningProvider,
+  useControllableOpen,
+  useFloatingLayer,
+  useFloatingOpening,
+} from "@client/components/ui/floating-opening"
+import {
   MenuScope,
   MenuSheetCheckboxItem,
   MenuSheetContent,
@@ -49,29 +55,41 @@ import { cn } from "@client/lib/utils"
 /**
  * `presentation="sheet"` renders the same parts as the shared bottom Sheet
  * (see ui/menu-sheet.tsx); give DropdownMenuContent a `sheetTitle` and
- * `sheetDescription` for its header.
+ * `sheetDescription` for its header. Each opening mounts fresh content,
+ * even while the last one animates out (see ui/floating-opening.tsx).
  */
 function DropdownMenu({
   presentation = "menu",
+  open: openProp,
+  defaultOpen,
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Root> & {
   presentation?: MenuPresentation
 }) {
-  if (presentation === "sheet") {
-    return (
-      <MenuSheetRoot
-        open={props.open}
-        defaultOpen={props.defaultOpen}
-        onOpenChange={props.onOpenChange}
-      >
-        {props.children}
-      </MenuSheetRoot>
-    )
-  }
+  const [open, setOpen] = useControllableOpen({
+    open: openProp,
+    defaultOpen,
+    onOpenChange,
+  })
+  const opening = useFloatingOpening(open)
   return (
-    <MenuScope>
-      <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />
-    </MenuScope>
+    <FloatingOpeningProvider value={opening}>
+      {presentation === "sheet" ? (
+        <MenuSheetRoot open={open} onOpenChange={setOpen}>
+          {props.children}
+        </MenuSheetRoot>
+      ) : (
+        <MenuScope>
+          <DropdownMenuPrimitive.Root
+            data-slot="dropdown-menu"
+            {...props}
+            open={open}
+            onOpenChange={setOpen}
+          />
+        </MenuScope>
+      )}
+    </FloatingOpeningProvider>
   )
 }
 
@@ -122,6 +140,10 @@ function DropdownMenuContent({
 }) {
   const sheet = useMenuSheet()
   const dialogContainer = React.useContext(DialogPortalContainerContext)
+  const layer = useFloatingLayer({
+    onInteractOutside: props.onInteractOutside,
+    onCloseAutoFocus: props.onCloseAutoFocus,
+  })
   if (sheet) {
     return (
       <MenuSheetContent
@@ -140,6 +162,7 @@ function DropdownMenuContent({
   return (
     <DropdownMenuPrimitive.Portal container={dialogContainer}>
       <DropdownMenuPrimitive.Content
+        key={layer.key}
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
@@ -149,6 +172,8 @@ function DropdownMenuContent({
           className
         )}
         {...props}
+        onInteractOutside={layer.onInteractOutside}
+        onCloseAutoFocus={layer.onCloseAutoFocus}
       >
         {/* React context crosses the portal: a control in the menu is not the Field's control. */}
         <FieldControlContext.Provider value={null}>{children}</FieldControlContext.Provider>
