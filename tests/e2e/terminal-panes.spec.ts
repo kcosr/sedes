@@ -275,3 +275,37 @@ test("Windows terminals stop idle painting and toggle blink without reconnecting
   await expectIdleTerminalCanvas(canvas);
   expect(sockets).toBe(connections);
 });
+
+test("a live theme switch recolors terminal output without reconnecting", async ({ page }) => {
+  await openSedesWorkspace(page);
+  await createDraftThread(page);
+  let sockets = 0;
+  page.on("websocket", (socket) => { if (new URL(socket.url()).pathname === "/api/terminal") sockets++; });
+  const id = await createTerminal(page, "Themed terminal");
+  await emitTerminalOutput(page, id, "themed terminal output\r\n$ ");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  const emulator = terminalPanel(page, "Themed terminal").locator(".terminal-panel-emulator");
+  const canvas = emulator.locator("canvas");
+  // Ghostty paints solid glyph cores in the theme foreground (#24272d light,
+  // #e5e7eb dark) on the theme background (#f7f7f8 light, #111318 dark).
+  const paintedColors = () => canvas.evaluate((node) => {
+    const element = node as HTMLCanvasElement;
+    const pixels = element.getContext("2d")!.getImageData(0, 0, element.width, element.height).data;
+    const colors = new Set<string>();
+    for (let index = 0; index < pixels.length; index += 4) colors.add(`${pixels[index]},${pixels[index + 1]},${pixels[index + 2]}`);
+    return ["36,39,45", "247,247,248", "229,231,235", "17,19,24"].filter((color) => colors.has(color));
+  });
+  await expect.poll(paintedColors).toEqual(["36,39,45", "247,247,248"]);
+  const connections = sockets;
+  const canvasHandle = await canvas.elementHandle();
+
+  const settings = await openSettingsPage(page, "appearance");
+  await settings.getByRole("radio", { name: "Dark", exact: true }).click();
+  await returnFromSettings(page);
+
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(emulator).toHaveAttribute("data-restored", "true");
+  expect(await canvas.evaluate((node, previous) => node === previous, canvasHandle)).toBe(true);
+  await expect.poll(paintedColors).toEqual(["229,231,235", "17,19,24"]);
+  expect(sockets).toBe(connections);
+});

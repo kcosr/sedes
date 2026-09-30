@@ -1,4 +1,5 @@
 import { installGhosttyRenderScheduling } from "./ghostty-render-scheduling.js";
+import { installGhosttyLiveTheme, type GhosttyLiveTheme } from "./ghostty-live-theme.js";
 import { isWindowsClient } from "./client-platform.js";
 import type { ITheme, Terminal } from "ghostty-web";
 import type { TerminalEmulatorSink } from "./terminal-session.js";
@@ -112,7 +113,9 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
   #terminal?: Terminal;
   #fitAddon?: import("ghostty-web").FitAddon;
   #renderScheduling: ReturnType<typeof installGhosttyRenderScheduling> | undefined;
+  #liveTheme: GhosttyLiveTheme | undefined;
   #cursorBlink: boolean;
+  #colorScheme: TerminalColorScheme;
   #container?: HTMLElement;
   #inputCallback?: (data: string) => void;
   #inputDisposable?: { dispose(): void };
@@ -127,6 +130,7 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
   constructor(options: GhosttyEmulatorOptions) {
     this.#options = options;
     this.#cursorBlink = options.cursorBlink;
+    this.#colorScheme = options.colorScheme;
   }
 
   async mount(
@@ -171,6 +175,7 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
     if (!ghostty || !wasm || !container || this.#disposed)
       throw new Error("The terminal renderer is not available.");
     container.replaceChildren();
+    const theme = GHOSTTY_THEMES[this.#colorScheme];
     const terminal = new ghostty.Terminal({
       ...(input
         ? {
@@ -186,12 +191,13 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
       fontSize: this.#options.fontSize,
       scrollback: this.#options.scrollback,
       smoothScrollDuration: 0,
-      theme: GHOSTTY_THEMES[this.#options.colorScheme],
+      theme,
     });
     const fitAddon = new ghostty.FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(container);
     this.#renderScheduling = installGhosttyRenderScheduling(terminal, isWindowsClient());
+    this.#liveTheme = installGhosttyLiveTheme(terminal, theme);
     blankGhosttyBootstrap(terminal);
     terminal.attachCustomKeyEventHandler((event) => {
       if (isImeComposingKeyEvent(event)) return false;
@@ -226,9 +232,7 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
       },
       (data) => terminal.input(data, true),
     );
-    const background = GHOSTTY_THEMES[this.#options.colorScheme].background;
-    const canvas = terminal.renderer?.getCanvas();
-    if (canvas) canvas.style.backgroundColor = background ?? "transparent";
+    this.#paintCanvasBackground(terminal);
     const size = this.fit();
     return { columns: size.columns, rows: size.rows };
   }
@@ -258,6 +262,19 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
       this.#applyingOutput = false;
       this.#renderScheduling?.request();
     }
+  }
+
+  /**
+   * Follows a theme change in place. The session, screen and scrollback stay
+   * attached; only the colors change.
+   */
+  setColorScheme(colorScheme: TerminalColorScheme): void {
+    if (colorScheme === this.#colorScheme) return;
+    this.#colorScheme = colorScheme;
+    const terminal = this.#terminal;
+    if (!terminal) return;
+    this.#liveTheme?.setTheme(GHOSTTY_THEMES[colorScheme]);
+    this.#paintCanvasBackground(terminal);
   }
 
   setCursorBlink(enabled: boolean): void {
@@ -441,6 +458,8 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
   #disposeTerminal(): void {
     this.#renderScheduling?.dispose();
     this.#renderScheduling = undefined;
+    this.#liveTheme?.dispose();
+    this.#liveTheme = undefined;
     this.#cancelDelayedFocus();
     this.#touchCleanup?.();
     this.#imeCleanup?.();
@@ -466,6 +485,13 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
     this.#inputDisposable = terminal.onData((data) => {
       if (!this.#applyingOutput) callback(data);
     });
+  }
+
+  #paintCanvasBackground(terminal: Terminal): void {
+    const canvas = terminal.renderer?.getCanvas();
+    if (canvas)
+      canvas.style.backgroundColor =
+        GHOSTTY_THEMES[this.#colorScheme].background ?? "transparent";
   }
 
   #requireTerminal(): Terminal {

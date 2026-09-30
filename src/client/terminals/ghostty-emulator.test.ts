@@ -82,6 +82,7 @@ vi.mock("ghostty-web", () => {
       setTheme: vi.fn(),
       clear: vi.fn(),
       render: vi.fn(),
+      renderLine: vi.fn(),
     };
     selectionManager = {
       selectionStart: null as { col: number; absoluteRow: number } | null,
@@ -182,7 +183,7 @@ vi.mock("ghostty-web", () => {
   return { Terminal, FitAddon, Ghostty };
 });
 
-import { GhosttyEmulator, terminalBufferLines } from "./ghostty-emulator.js";
+import { GHOSTTY_THEMES, GhosttyEmulator, terminalBufferLines } from "./ghostty-emulator.js";
 
 type FakeTerminal = {
   viewportY: number;
@@ -314,6 +315,42 @@ describe("GhosttyEmulator", () => {
     expect(container.querySelectorAll("canvas")).toHaveLength(1);
     expect(first.writes).toContain("\u001bc\u001b[3J\u001b[2J\u001b[H");
     expect(second.writes).toContain("\u001bc\u001b[3J\u001b[2J\u001b[H");
+    emulator.dispose();
+  });
+
+  it("follows a theme change in place and rebuilds later renderers in the new theme", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const emulator = new GhosttyEmulator({ cursorBlink: true,
+      fontSize: 13,
+      scrollback: 100,
+      colorScheme: "light",
+    });
+    await emulator.mount(container);
+    const first = fake.terminals[0] as FakeTerminal & {
+      readonly canvas: HTMLCanvasElement;
+      readonly wasmTerm: unknown;
+      readonly renderer: { readonly setTheme: ReturnType<typeof vi.fn>; readonly render: ReturnType<typeof vi.fn> };
+    };
+    expect(first.options.theme).toBe(GHOSTTY_THEMES.light);
+    expect(first.canvas.style.backgroundColor).toBe("rgb(247, 247, 248)");
+
+    emulator.setColorScheme("dark");
+
+    expect(fake.terminals).toHaveLength(1);
+    expect(first.canvas.isConnected).toBe(true);
+    expect(first.renderer.setTheme).toHaveBeenCalledWith(GHOSTTY_THEMES.dark);
+    expect(first.renderer.render).toHaveBeenCalledWith(first.wasmTerm, true, first.viewportY, first, 0);
+    expect(first.canvas.style.backgroundColor).toBe("rgb(17, 19, 24)");
+
+    first.renderer.setTheme.mockClear();
+    emulator.setColorScheme("dark");
+    expect(first.renderer.setTheme).not.toHaveBeenCalled();
+
+    await emulator.reset();
+    const second = fake.terminals[1] as FakeTerminal & { readonly canvas: HTMLCanvasElement };
+    expect(second.options.theme).toBe(GHOSTTY_THEMES.dark);
+    expect(second.canvas.style.backgroundColor).toBe("rgb(17, 19, 24)");
     emulator.dispose();
   });
 
