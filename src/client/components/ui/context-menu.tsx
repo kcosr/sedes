@@ -238,10 +238,6 @@ function ContextMenuContent({
         data-testid={(props as { "data-testid"?: string })["data-testid"]}
         onCloseAutoFocus={props.onCloseAutoFocus}
         onEscapeKeyDown={props.onEscapeKeyDown}
-        // The rows' input modality (keyboard, touch) decides what a dialog
-        // opened from a row focuses first.
-        onPointerDownCapture={props.onPointerDownCapture}
-        onKeyDownCapture={props.onKeyDownCapture}
       >
         {children}
       </MenuSheetContent>
