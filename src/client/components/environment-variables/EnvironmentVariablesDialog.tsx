@@ -1,10 +1,10 @@
-import { useState, type ReactNode } from "react";
+import { useState, type ReactNode, type RefObject } from "react";
 import type { EnvironmentVariableOverrides, EnvironmentVariablesSnapshot } from "../../../shared/protocol/environment-variables.js";
 import { Button } from "../ui/button.js";
 import { Dialog, DialogAlert, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogSection, DialogTitle } from "../ui/dialog.js";
 import { EnvironmentVariableEditor } from "./EnvironmentVariableEditor.js";
 
-export function EnvironmentVariablesDialog({ open, onOpenChange, snapshot, description, context, readOnly = false, onApply, onFork, forkUnavailableReason, pending = false, error, startupReason, restoreFocus }: {
+export function EnvironmentVariablesDialog({ open, onOpenChange, snapshot, description, context, readOnly = false, onApply, onFork, forkUnavailableReason, pending = false, error, startupReason, returnFocusRef }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly snapshot: EnvironmentVariablesSnapshot;
@@ -17,13 +17,14 @@ export function EnvironmentVariablesDialog({ open, onOpenChange, snapshot, descr
   readonly pending?: boolean;
   readonly error?: string;
   readonly startupReason?: string;
-  readonly restoreFocus?: () => void;
+  /** Where focus returns when the dialog closes. */
+  readonly returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
   // The parent mounts a fresh dialog for every edit transaction. Cancel never
   // changes the caller's draft, including a previously accepted override map.
   const [draft, setDraft] = useState(snapshot.layers.thread);
   return <Dialog open={open} onOpenChange={next => { if (!pending) onOpenChange(next); }}>
-    <DialogContent size="lg" layer="over-dialog" dismissible={!pending} onCloseAutoFocus={event => { if (restoreFocus) { event.preventDefault(); restoreFocus(); } }}>
+    <DialogContent size="lg" layer="over-dialog" dismissible={!pending} returnFocusRef={returnFocusRef}>
       <DialogHeader>
         <DialogTitle>Environment variables</DialogTitle>
         <DialogDescription>{description}</DialogDescription>

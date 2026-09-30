@@ -1048,7 +1048,7 @@ export const ThreadHeader = memo(function ThreadHeader({
         }
       />
       {active && environmentVariablesOpen && <ThreadEnvironmentVariables key={snapshot.thread.id} api={applicationStore.api} threadId={snapshot.thread.id}
-        title={snapshot.thread.title.text || "Untitled thread"} onClose={() => setEnvironmentVariablesOpen(false)} restoreFocus={() => actionsTrigger.current?.focus()}
+        title={snapshot.thread.title.text || "Untitled thread"} onClose={() => setEnvironmentVariablesOpen(false)} returnFocusRef={actionsTrigger}
         forkUnavailableReason={variableForkNeedsRecovery ? "Resolve the existing fork attempt before forking with changed variables." : disabled ? "The thread must be connected and available to fork." : !latestFork.available ? latestForkUnavailableReason ?? "This thread cannot be forked right now." : undefined}
         onFork={environmentVariables => {
           if (disabled || variableForkNeedsRecovery || !latestFork.available || !latestFork.selection) return;

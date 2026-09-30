@@ -1823,7 +1823,7 @@ export function NewThreadControl({
       )}
       {variablesOpen && variablesSnapshot && <EnvironmentVariablesDialog open onOpenChange={setVariablesOpen} snapshot={variablesSnapshot}
         description="Review values before creating this thread." context={<p className="environment-variable-help">{selectedEnvironment?.label.text} · {selectedTarget?.label.text} · {selectedAgentSummary?.name ?? "Custom"}</p>}
-        startupReason={variablesPreview.result?.startup.reason} restoreFocus={() => variablesTrigger.current?.focus()}
+        startupReason={variablesPreview.result?.startup.reason} returnFocusRef={variablesTrigger}
         onApply={next => { setEnvironmentVariables(next); setVariablesOpen(false); }} />}
       {!canOpen && (
         <small className="new-thread-target-unavailable" role="alert">

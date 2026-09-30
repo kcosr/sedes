@@ -655,11 +655,7 @@ function AgentEditor({
           confirmLabel="Delete Agent"
           pendingLabel="Deleting…"
           onConfirm={deleteAgent}
-          onCloseAutoFocus={(event) => {
-            if (!deleteTrigger.current?.isConnected) return;
-            event.preventDefault();
-            deleteTrigger.current.focus();
-          }}
+          returnFocusRef={deleteTrigger}
         />
       )}
     </>
