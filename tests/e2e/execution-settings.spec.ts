@@ -382,12 +382,13 @@ test("unknown lifecycle receipts survive remount and retain confirmed Stop contr
   await page.goto("/");
   await expect(page.getByTestId("desktop-sidebar")).toBeVisible();
   let settings = await openSettings(page, "Environments");
-  // Stop is in the runtime actions menu; while the earlier outcome is unknown it is the one command left.
+  // Stop is in the runtime actions menu; while the earlier outcome is unknown it is the one
+  // lifecycle command left (beside the host's Recovered operations).
   const runtimeMenu = () => settings.getByRole("button", { name: "Runtime actions for Uncertain lifecycle host", exact: true });
   const expectStopAlone = async () => {
     await runtimeMenu().click();
     await expect(page.getByRole("menuitem", { name: "Stop", exact: true })).toBeEnabled();
-    await expect(page.getByRole("menuitem", { disabled: false })).toHaveText(["Stop"]);
+    await expect(page.getByRole("menuitem", { disabled: false })).toHaveText(["Recovered operations…", "Stop"]);
     await page.keyboard.press("Escape");
     await expect(page.getByRole("menu")).toHaveCount(0);
   };

@@ -377,7 +377,6 @@ test("a resource's confirmation closes when Back or the settings nav leaves it",
   const local = configuration.executionEnvironments[0]!;
   const localPath = `/settings/environments/${local.id}`;
   const settings = page.getByTestId("settings-view");
-  const navigation = page.getByTestId("desktop-sidebar").getByRole("navigation", { name: "Settings pages", exact: true });
   const list = settings.getByRole("region", { name: "Configured environments", exact: true });
   const detail = settings.getByRole("region", { name: `${local.label} details`, exact: true });
   const confirmation = page.getByRole("dialog", { name: `Remove ${local.label}?`, exact: true });
@@ -397,12 +396,13 @@ test("a resource's confirmation closes when Back or the settings nav leaves it",
   await expect(detail).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
-  // A modal blocks pointer input, so dispatch the nav link's click as a
-  // programmatic navigation would; General then owns the page and focus.
+  // A modal blocks pointer input and hides the rest of the page from the
+  // accessibility tree, so dispatch the nav link's click as a programmatic
+  // navigation would; General then owns the page and focus.
   await list.getByRole("button", { name: `Actions for ${local.label}`, exact: true }).click();
   await page.getByRole("menuitem", { name: "Remove…", exact: true }).click();
   await expect(confirmation).toBeVisible();
-  await navigation.getByRole("link", { name: "General", exact: true }).dispatchEvent("click");
+  await page.getByTestId("desktop-sidebar").locator('a[href="/settings/general"]').dispatchEvent("click");
   await expect(page).toHaveURL("/settings/general");
   await expect(confirmation).toBeHidden();
   await expect(settings.getByRole("heading", { name: "General", level: 1 })).toBeFocused();
