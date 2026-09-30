@@ -468,6 +468,74 @@ describe("SettingsView", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/threads/retained-thread"));
   });
 
+  it("walks Escape from an editor to its entity, its list and the workspace, as the ‹ links and return control do", async () => {
+    const { controls, snapshot } = executionControls();
+    const local = snapshot.configuration.executionEnvironments[0]!;
+    const viewPath = settingsPath("environments", { mode: "view", resourceId: local.id });
+    navigate("/threads/retained-thread", { replace: true });
+    navigate(settingsPath("environments"));
+    render(<RoutedSettings configuration={controls} onReturn={() => navigate("/threads/retained-thread")} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("link", { name: "Local" }));
+    await user.click(screen.getByRole("button", { name: "Edit Local" }));
+    const name = await screen.findByLabelText("Environment name");
+    const length = window.history.length;
+    // A focused field keeps the first Escape: it only loses focus.
+    name.focus();
+    await user.keyboard("{Escape}");
+    expect(name).not.toHaveFocus();
+    expect(window.location.pathname).toBe(settingsPath("environments", { mode: "edit", resourceId: local.id }));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(window.location.pathname).toBe(viewPath));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Local", level: 2 })).toHaveFocus());
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(window.location.pathname).toBe(settingsPath("environments")));
+    // Up went back through history, like the ‹ links, instead of stacking entries.
+    expect(window.history.length).toBe(length);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(window.location.pathname).toBe("/threads/retained-thread"));
+    expect(await screen.findByText("Workspace")).toBeVisible();
+  });
+
+  it("sends Escape from a dirty editor through the discard guard, and lets an open dialog take Escape first", async () => {
+    const { controls, snapshot } = executionControls();
+    const local = snapshot.configuration.executionEnvironments[0]!;
+    const editPath = settingsPath("environments", { mode: "edit", resourceId: local.id });
+    navigate(editPath, { replace: true });
+    render(<RoutedSettings configuration={controls} onReturn={() => navigate("/")} />);
+    const user = userEvent.setup();
+    await user.clear(await screen.findByLabelText("Environment name"));
+    await user.type(screen.getByLabelText("Environment name"), "Escaped draft");
+    await user.keyboard("{Escape}{Escape}");
+    const discard = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
+    expect(window.location.pathname).toBe(editPath);
+    // Escape closes the dialog and does nothing else.
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(discard).not.toBeInTheDocument());
+    expect(window.location.pathname).toBe(editPath);
+    expect(screen.getByLabelText("Environment name")).toHaveValue("Escaped draft");
+    expect(controls.saveConfiguration).not.toHaveBeenCalled();
+    screen.getByLabelText("Environment name").blur();
+    await user.keyboard("{Escape}");
+    await user.click(await screen.findByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(window.location.pathname).toBe(settingsPath("environments", { mode: "view", resourceId: local.id })));
+    expect(controls.saveConfiguration).not.toHaveBeenCalled();
+  });
+
+  it("walks Escape from a page to the Settings list, then the workspace, without the sidebar nav", async () => {
+    navigate("/threads/retained-thread", { replace: true });
+    navigate(settingsPath());
+    render(<RoutedSettings compact onReturn={() => navigate("/threads/retained-thread")} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("link", { name: "Appearance" }));
+    expect(window.location.pathname).toBe("/settings/appearance");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(window.location.pathname).toBe("/settings"));
+    expect(screen.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(window.location.pathname).toBe("/threads/retained-thread"));
+  });
+
   it("redirects /settings to the last page shown when the sidebar nav is visible", async () => {
     renderSettings({ page: "terminal" });
     expect(sessionStorage.getItem("sedes-settings-last-page")).toBe("terminal");

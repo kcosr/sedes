@@ -9,6 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import type {
   ToolClient,
   ToolClientCredentialResult,
@@ -18,6 +19,7 @@ import {
   ToolClientsSettingsPage,
   type ToolClientSettingsControls,
 } from "./ToolClientsSettingsPage.js";
+import { useSettingsEscape } from "../settings/settings-escape.js";
 
 const clientId = "10000000-0000-4000-8000-000000000001";
 const credential = `hatc1_${clientId}_1_${"a".repeat(43)}`;
@@ -413,5 +415,35 @@ describe("Tool clients settings", () => {
       screen.queryByRole("dialog", { name: "Save this credential now" }),
     ).toBeNull();
     expect(screen.getByRole("button", { name: "Rotate credential…" })).toBeVisible();
+  });
+
+  it("closes an open editor on Escape, asking first only when it has edits", async () => {
+    const onReturn = vi.fn();
+    function EscapeHost(): null {
+      useSettingsEscape({ location: { page: "tool_clients" }, navInSidebar: true, onReturn });
+      return null;
+    }
+    render(<><EscapeHost /><ToolClientsSettingsPage controls={controls({
+      listToolClients: vi.fn().mockResolvedValue({ items: [toolClient()] }),
+    })} /></>);
+    const user = userEvent.setup();
+    const editor = await screen.findByRole("region", { name: "Tool client editor" });
+    // An untouched new client closes without asking.
+    await user.click(screen.getByRole("button", { name: "New client" }));
+    expect(within(editor).getByLabelText("Name")).toHaveValue("");
+    await user.keyboard("{Escape}");
+    expect(within(editor).queryByLabelText("Name")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /External CLI/u }));
+    await user.type(within(editor).getByLabelText("Name"), " edited");
+    await user.keyboard("{Escape}{Escape}");
+    await user.click(await screen.findByRole("button", { name: "Keep editing" }));
+    expect(within(editor).getByLabelText("Name")).toHaveValue("External CLI edited");
+    await user.keyboard("{Escape}");
+    await user.click(await screen.findByRole("button", { name: "Discard and close" }));
+    await waitFor(() => expect(within(editor).queryByLabelText("Name")).toBeNull());
+    expect(onReturn).not.toHaveBeenCalled();
+    await user.keyboard("{Escape}");
+    expect(onReturn).toHaveBeenCalledOnce();
   });
 });

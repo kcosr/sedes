@@ -367,6 +367,86 @@ test("environment and backend routes live inside the settings shell: nav, histor
   await expect(page).toHaveURL("/");
 });
 
+test("Escape goes up one Settings level after open layers and focused fields, through the discard guard", async ({ page }) => {
+  const { configuration } = configurationSnapshotSchema.parse(await (await page.request.get("/api/configuration")).json());
+  const local = configuration.executionEnvironments[0]!;
+  const localPath = `/settings/environments/${local.id}`;
+  const settings = page.getByTestId("settings-view");
+  const list = settings.getByRole("region", { name: "Configured environments", exact: true });
+  const detail = settings.getByRole("region", { name: `${local.label} details`, exact: true });
+  const name = settings.getByRole("region", { name: "Environment editor", exact: true }).getByLabel("Environment name", { exact: true });
+  const discard = page.getByRole("dialog", { name: "Discard unsaved changes?", exact: true });
+  const blur = () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  const environments = await openSettingsPage(page, "environments");
+  await expect(page).toHaveURL("/settings/environments");
+  // A focused search field keeps the first Escape: it loses focus, and its
+  // own Escape (Chromium clears a search field) still runs. Settings stays.
+  const search = list.getByRole("searchbox", { name: "Search environments", exact: true });
+  await search.fill("no such environment");
+  await expect(list.getByRole("link", { name: local.label, exact: true })).toBeHidden();
+  await page.keyboard.press("Escape");
+  await expect(search).not.toBeFocused();
+  await expect(search).toHaveValue("");
+  await expect(page).toHaveURL("/settings/environments");
+  await list.getByRole("link", { name: local.label, exact: true }).click();
+  await detail.getByRole("button", { name: `Edit ${local.label}`, exact: true }).click();
+  await expect(page).toHaveURL(`${localPath}/edit`);
+
+  // A dirty editor goes through the discard guard; the dialog takes Escape first.
+  await name.fill(`${local.label} escaped`);
+  await page.keyboard.press("Escape");
+  await expect(name).not.toBeFocused();
+  await expect(page).toHaveURL(`${localPath}/edit`);
+  await page.keyboard.press("Escape");
+  await expect(discard).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(discard).toBeHidden();
+  await expect(page).toHaveURL(`${localPath}/edit`);
+  await expect(name).toHaveValue(`${local.label} escaped`);
+  await blur();
+  await page.keyboard.press("Escape");
+  await discard.getByRole("button", { name: "Discard changes", exact: true }).click();
+  await expect(page).toHaveURL(localPath);
+  await expect(detail.getByRole("heading", { name: local.label, level: 2 })).toBeFocused();
+
+  // An open menu takes Escape and closes; nothing else happens.
+  await list.getByRole("button", { name: `Actions for ${local.label}`, exact: true }).click();
+  const menu = page.getByRole("menu", { name: `Actions for ${local.label}`, exact: true });
+  await expect(menu).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+  await expect(page).toHaveURL(localPath);
+  await expect(detail).toBeVisible();
+
+  // Then editor → entity → list → workspace, as the ‹ links and Back to workspace go.
+  await detail.getByRole("button", { name: `Edit ${local.label}`, exact: true }).click();
+  await expect(page).toHaveURL(`${localPath}/edit`);
+  await blur();
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL(localPath);
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL("/settings/environments");
+  await expect(detail).toBeHidden();
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL("/");
+  await expect(environments).toBeHidden();
+
+  // Without the sidebar nav: a page goes to the Settings list, the list to the workspace.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openSettingsPage(page, "appearance");
+  await expect(settings).toHaveAttribute("data-nav", "compact");
+  await blur();
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL("/settings");
+  await expect(settings.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL("/");
+  await expect(settings).toBeHidden();
+});
+
 test.describe("sidebar name filtering preference", () => {
   test.use({ hasTouch: true });
 

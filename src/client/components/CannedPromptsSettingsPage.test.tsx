@@ -9,6 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import type {
   CannedPrompt,
   CannedPromptLibrary,
@@ -17,6 +18,7 @@ import type {
 import { ApiError, type ApiClient } from "../api/ApiClient.js";
 import { CannedPromptClientStore } from "../stores/CannedPromptClientStore.js";
 import { CannedPromptsSettingsPage } from "./CannedPromptsSettingsPage.js";
+import { useSettingsEscape } from "./settings/settings-escape.js";
 
 function prompt(
   id: string,
@@ -227,5 +229,37 @@ describe("Canned prompts settings", () => {
     expect(screen.getByText("Changed elsewhere")).toBeVisible();
     expect(screen.queryByLabelText("Prompt")).toBeNull();
     expect(listCannedPrompts).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes an open editor on Escape before leaving the page, asking first when it has edits", async () => {
+    const onReturn = vi.fn();
+    function EscapeHost(): null {
+      useSettingsEscape({ location: { page: "prompts" }, navInSidebar: true, onReturn });
+      return null;
+    }
+    render(<><EscapeHost /><CannedPromptsSettingsPage store={store({
+      listCannedPrompts: vi.fn().mockResolvedValue(library([prompt("prompt-1", "Review", "Review changes.", 0)])),
+    })} /></>);
+    const user = userEvent.setup();
+    await user.click((await screen.findByText("Review")).closest("button")!);
+    const editor = screen.getByRole("region", { name: "Prompt editor" });
+    expect(within(editor).getByLabelText("Title")).toHaveValue("Review");
+    await user.keyboard("{Escape}");
+    expect(within(editor).queryByLabelText("Title")).toBeNull();
+    expect(onReturn).not.toHaveBeenCalled();
+
+    await user.click(screen.getByText("Review").closest("button")!);
+    await user.type(within(editor).getByLabelText("Title"), " again");
+    // The field keeps the first Escape; the next asks before discarding.
+    await user.keyboard("{Escape}{Escape}");
+    await user.click(await screen.findByRole("button", { name: "Keep editing" }));
+    expect(within(editor).getByLabelText("Title")).toHaveValue("Review again");
+    await user.keyboard("{Escape}");
+    await user.click(await screen.findByRole("button", { name: "Discard and close" }));
+    await waitFor(() => expect(within(editor).queryByLabelText("Title")).toBeNull());
+    expect(onReturn).not.toHaveBeenCalled();
+    // With the editor closed, Escape leaves the page.
+    await user.keyboard("{Escape}");
+    expect(onReturn).toHaveBeenCalledOnce();
   });
 });
