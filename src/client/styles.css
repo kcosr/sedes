@@ -6172,25 +6172,24 @@ body:has(.thread-settings-sheet[data-state="open"])
   flex: none;
 }
 
-.searchable-select-search [data-slot="input"] {
-  height: 38px;
+/* A plain input (no control box); the open picker is its focus indication.
+   It stretches to the row so the whole row takes the pointer. */
+.searchable-select-search > input {
   min-width: 0;
   flex: 1 1 auto;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
+  align-self: stretch;
   color: var(--foreground);
   font-size: var(--text-input);
+  outline: none;
 }
 
-.searchable-select-search [data-slot="input"]:focus-visible {
-  box-shadow: none;
-}
-
-.searchable-select-search [data-slot="input"]::placeholder {
+.searchable-select-search > input::placeholder {
   color: var(--muted-foreground-2);
+}
+
+.searchable-select-search > input:disabled {
+  cursor: not-allowed;
+  opacity: var(--disabled-opacity);
 }
 
 .searchable-select-options {

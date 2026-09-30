@@ -13,7 +13,6 @@ import { Slot } from "radix-ui";
 import { Check, ChevronDown, Search } from "lucide-react";
 import { Button } from "./button.js";
 import { useFieldControl } from "./control.js";
-import { Input } from "./input.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover.js";
 import {
   Dialog,
@@ -326,6 +325,26 @@ function groupRuns(visible: readonly VisibleOption[]): VisibleOption[][] {
   return runs;
 }
 
+/**
+ * The picker's search row: a leading icon and a plain input over a divider,
+ * not a bordered form control. Every searchable picker uses it.
+ */
+export function SearchableSelectSearch(
+  props: ComponentProps<"input">,
+): React.JSX.Element {
+  return (
+    <div className="searchable-select-search">
+      <Search aria-hidden="true" />
+      <input
+        type="text"
+        autoComplete="off"
+        data-slot="searchable-select-input"
+        {...props}
+      />
+    </div>
+  );
+}
+
 /** Inline searchable choices for popovers, sheets and dialogs. */
 export function SearchableSelectList({
   label,
@@ -455,41 +474,37 @@ export function SearchableSelectList({
 
   return (
     <>
-      <div className="searchable-select-search">
-        <Search aria-hidden="true" />
-        <Input
-          ref={searchInputRef}
-          disabled={disabled}
-          role="combobox"
-          aria-label={searchLabel}
-          aria-autocomplete="list"
-          aria-expanded="true"
-          aria-controls={listboxId}
-          aria-activedescendant={activeId}
-          value={query}
-          placeholder={searchLabel}
-          autoComplete="off"
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setActiveValue(undefined);
-            setOpeningDirection("first");
-          }}
-          onKeyDown={(event) => {
-            if (event.nativeEvent.isComposing) return;
-            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-              event.preventDefault();
-              move(event.key === "ArrowDown" ? 1 : -1);
-            } else if (event.key === "Enter") {
-              event.preventDefault();
-              if (active) choose(active.option);
-            } else if (event.key === "Tab" && onTab) {
-              // Continue tab navigation from the closed field, without applying search.
-              event.preventDefault();
-              onTab(event.shiftKey ? -1 : 1);
-            }
-          }}
-        />
-      </div>
+      <SearchableSelectSearch
+        ref={searchInputRef}
+        disabled={disabled}
+        role="combobox"
+        aria-label={searchLabel}
+        aria-autocomplete="list"
+        aria-expanded="true"
+        aria-controls={listboxId}
+        aria-activedescendant={activeId}
+        value={query}
+        placeholder={searchLabel}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setActiveValue(undefined);
+          setOpeningDirection("first");
+        }}
+        onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing) return;
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            move(event.key === "ArrowDown" ? 1 : -1);
+          } else if (event.key === "Enter") {
+            event.preventDefault();
+            if (active) choose(active.option);
+          } else if (event.key === "Tab" && onTab) {
+            // Continue tab navigation from the closed field, without applying search.
+            event.preventDefault();
+            onTab(event.shiftKey ? -1 : 1);
+          }
+        }}
+      />
       <div
         className="searchable-select-options"
         id={listboxId}

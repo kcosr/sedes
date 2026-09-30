@@ -30,8 +30,8 @@ import {
 } from "../app/sidebar-scope-presentation.js";
 import { Button } from "@client/components/ui/button";
 import { Input } from "@client/components/ui/input";
-import { ChevronDown, Folder, Plus, Search, SlidersHorizontal } from "lucide-react";
-import { SearchableSelect } from "./ui/searchable-select.js";
+import { ChevronDown, Folder, Plus, SlidersHorizontal } from "lucide-react";
+import { SearchableSelect, SearchableSelectSearch } from "./ui/searchable-select.js";
 import {
   Select,
   SelectContent,
@@ -1422,51 +1422,48 @@ export function NewThreadControl({
                   setAgentSearch("");
                 }}
               >
-                <div className="searchable-select-search">
-                  <Search size={15} aria-hidden="true" />
-                  <Input
-                    ref={agentInputRef}
-                    role="combobox"
-                    aria-label="Search Agents"
-                    placeholder="Search Agents"
-                    aria-autocomplete="list"
-                    aria-expanded="true"
-                    aria-controls={`${pickerId}-agent-options`}
-                    aria-activedescendant={`${pickerId}-agent-option-${activeAgentChoiceIndex}`}
-                    value={agentSearch}
-                    maxLength={160}
-                    autoComplete="off"
-                    disabled={pending}
-                    onChange={(event) => {
-                      setAgentSearch(event.target.value);
+                <SearchableSelectSearch
+                  ref={agentInputRef}
+                  role="combobox"
+                  aria-label="Search Agents"
+                  placeholder="Search Agents"
+                  aria-autocomplete="list"
+                  aria-expanded="true"
+                  aria-controls={`${pickerId}-agent-options`}
+                  aria-activedescendant={`${pickerId}-agent-option-${activeAgentChoiceIndex}`}
+                  value={agentSearch}
+                  maxLength={160}
+                  autoComplete="off"
+                  disabled={pending}
+                  onChange={(event) => {
+                    setAgentSearch(event.target.value);
+                    setAgentPickerOpen(true);
+                    setActiveAgentIndex(0);
+                    if (selection.kind !== "unselected") {
+                      setSelection({ kind: "unselected" });
+                      setSelectedAgentSummary(undefined);
+                      setResolution(undefined);
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.nativeEvent.isComposing) return;
+                    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                      event.preventDefault();
                       setAgentPickerOpen(true);
-                      setActiveAgentIndex(0);
-                      if (selection.kind !== "unselected") {
-                        setSelection({ kind: "unselected" });
-                        setSelectedAgentSummary(undefined);
-                        setResolution(undefined);
-                      }
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.nativeEvent.isComposing) return;
-                      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                        event.preventDefault();
-                        setAgentPickerOpen(true);
-                        setActiveAgentIndex((current) => {
-                          const delta = event.key === "ArrowDown" ? 1 : -1;
-                          return Math.max(
-                            0,
-                            Math.min(agentChoices.length - 1, Math.min(current, agentChoices.length - 1) + delta),
-                          );
-                        });
-                      } else if (event.key === "Enter" && agentPickerOpen) {
-                        event.preventDefault();
-                        const choice = activeAgentChoice;
-                        if (choice) chooseAgent(choice);
-                      }
-                    }}
-                  />
-                </div>
+                      setActiveAgentIndex((current) => {
+                        const delta = event.key === "ArrowDown" ? 1 : -1;
+                        return Math.max(
+                          0,
+                          Math.min(agentChoices.length - 1, Math.min(current, agentChoices.length - 1) + delta),
+                        );
+                      });
+                    } else if (event.key === "Enter" && agentPickerOpen) {
+                      event.preventDefault();
+                      const choice = activeAgentChoice;
+                      if (choice) chooseAgent(choice);
+                    }
+                  }}
+                />
                 <div className="new-thread-agent-options">
                   <div
                     id={`${pickerId}-agent-options`}
