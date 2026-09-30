@@ -388,7 +388,7 @@
   right: max(var(--space-2), env(safe-area-inset-right));
 }
 
-/* ── Floating menus: scroll cue ──
+/* ── Floating menus and picker lists: scroll cue ──
    A menu taller than the room it has scrolls; a soft shade at an edge
    shows more rows lie beyond it. The shades stay with the panel (scroll)
    while popover-coloured covers ride with the rows (local) and hide each
@@ -396,7 +396,8 @@
 [data-slot="dropdown-menu-content"],
 [data-slot="dropdown-menu-sub-content"],
 [data-slot="context-menu-content"],
-[data-slot="context-menu-sub-content"] {
+[data-slot="context-menu-sub-content"],
+.searchable-select-options {
   background-image:
     linear-gradient(var(--popover) 40%, transparent),
     linear-gradient(transparent, var(--popover) 60%),
@@ -405,10 +406,10 @@
   background-position: top, bottom, top, bottom;
   background-repeat: no-repeat;
   background-size:
-    100% var(--space-6),
-    100% var(--space-6),
-    100% var(--space-3),
-    100% var(--space-3);
+    100% var(--space-8),
+    100% var(--space-8),
+    100% var(--space-4),
+    100% var(--space-4);
   background-attachment: local, local, scroll, scroll;
 }
 
