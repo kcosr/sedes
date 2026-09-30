@@ -563,14 +563,17 @@ textarea:disabled {
 }
 
 /* Settings overlays its nav on the sidebar slot; the inventory stays mounted
-   underneath (inert) so its scroll and virtualization state survive. */
+   underneath (inert) so its scroll and virtualization state survive.
+   Opacity, not visibility: an inherited visibility change would start the
+   controls' transitions, and a control is not focusable until its
+   transition leaves "hidden", so focus could not return to the gear. */
 .desktop-sidebar-inventory {
   height: 100%;
   min-height: 0;
 }
 
 .desktop-sidebar[data-mode="settings"] > .desktop-sidebar-inventory {
-  visibility: hidden;
+  opacity: 0;
 }
 
 .sidebar-inner {

@@ -64,7 +64,7 @@ export function AuthenticationSettings(): React.JSX.Element | null {
           {clients.map((client) => (
             <SettingsActionRow
               key={client.id}
-              title={<>{client.name}{current(client) ? <Tag>This connection</Tag> : null}</>}
+              title={<><span>{client.name}</span>{current(client) ? <Tag>This connection</Tag> : null}</>}
               description={`${client.kind === "sidecar" ? "Sidecar" : "Application client"} · Paired ${new Date(client.createdAt).toLocaleDateString()}`}
               actions={
                 <Button variant="outline" onClick={() => setUnpairing(client)}>

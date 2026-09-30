@@ -63,7 +63,7 @@ export function ElectronConnectionSettings({
         <SettingsActionRow
           title={
             <>
-              {profile.name}
+              <span>{profile.name}</span>
               {profile.kind === "local" && controls.authenticationRequired === false ? (
                 <Tag>Authentication disabled</Tag>
               ) : null}

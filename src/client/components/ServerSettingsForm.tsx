@@ -57,7 +57,7 @@ export function ServerSettingsForm({
       key={profile.id}
       title={
         <>
-          {profile.name}
+          <span>{profile.name}</span>
           {profile.id === controls.connections.selectedProfileId ? (
             <Tag>Selected</Tag>
           ) : null}
