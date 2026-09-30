@@ -3372,7 +3372,6 @@ export function Composer({
                       store={store}
                       snapshot={snapshot}
                       disabled={effectiveDisabled}
-                      variant="pill"
                     />
                   </div>
                   <div className="send-group">

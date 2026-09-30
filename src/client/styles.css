@@ -426,7 +426,7 @@ body {
   [data-slot="dropdown-menu-content"],
   [data-slot="dropdown-menu-sub-content"],
   .thread-context-trigger,
-  .thread-actions-sheet,
+  [data-menu-sheet],
   .settings-nav,
   .settings-category-list
 ) {
@@ -488,7 +488,7 @@ textarea:disabled {
   border: 0;
 }
 
-/* One section-label voice, shared with `.menu-label` / `.op-body h4` /
+/* One section-label voice, shared with `.op-body h4` /
    `.automation-section-label`: 11px, 600, 0.07em, muted. Three of the four
    `.eyebrow` call sites already overrode the old branded 760/0.14em/primary
    treatment to exactly this; the fourth (`.thread-fatal`) was the only place
@@ -1595,11 +1595,6 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   display: contents;
 }
 
-.thread-context-menu {
-  width: max-content;
-  max-width: min(20rem, calc(100dvw - 24px));
-}
-
 .thread-action-label {
   display: flex;
   min-width: 0;
@@ -1613,14 +1608,6 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-[data-slot="dialog-content"].thread-group-dialog {
-  bottom: var(--thread-group-keyboard-inset, 0px);
-  display: flex;
-  max-height: calc(100dvh - var(--thread-group-keyboard-inset, 0px) - 2rem);
-  flex-direction: column;
-  overflow-y: auto;
 }
 
 .thread-group-dialog > :not(.thread-group-search) {
@@ -2580,228 +2567,6 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   column-gap: 24px;
 }
 
-/* Touch/pen long-press uses a viewport-anchored action sheet instead of a
-   pointer-positioned menu. */
-[data-slot="dialog-overlay"].thread-actions-sheet-overlay {
-  z-index: var(--z-over-dialog);
-}
-
-[data-slot="dialog-content"].thread-actions-sheet {
-  top: auto;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: calc(var(--z-over-dialog) + 1);
-  display: flex;
-  width: 100vw;
-  min-width: 0;
-  max-width: none;
-  max-height: min(88dvh, 720px);
-  --tw-translate-x: 0 !important;
-  --tw-translate-y: 0 !important;
-  translate: 0 0 !important;
-  transform: none;
-  flex-direction: column;
-  gap: 4px;
-  padding: 14px max(12px, env(safe-area-inset-right))
-    calc(12px + env(safe-area-inset-bottom))
-    max(12px, env(safe-area-inset-left));
-  border-radius: 16px 16px 0 0;
-}
-
-.thread-actions-sheet > [data-slot="dialog-title"] {
-  padding-right: 48px;
-  font-size: 15px;
-  font-weight: 650;
-}
-
-.thread-actions-sheet-thread-title {
-  min-width: 0;
-  padding-right: 48px;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thread-actions-sheet > [data-slot="dialog-close"] {
-  top: 4px;
-  right: max(4px, env(safe-area-inset-right));
-  width: 44px;
-  height: 44px;
-}
-
-.thread-actions-sheet-body {
-  min-height: 0;
-  margin-top: 8px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.thread-action-sheet-group {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-
-.thread-action-sheet-group > [role="separator"] {
-  height: 1px;
-  margin: 7px 4px;
-  background: var(--border-soft);
-}
-
-.thread-action-sheet-group > [data-slot="button"],
-.thread-action-sheet-group .execution-workspace-actions > [data-slot="button"] {
-  width: 100%;
-  min-width: 0;
-  min-height: 44px;
-  flex: 0 0 auto;
-  justify-content: flex-start;
-  padding-inline: 10px;
-  font-weight: 450;
-}
-
-.thread-action-sheet-group > [data-slot="button"][data-variant="destructive"],
-.thread-action-sheet-group
-  .execution-workspace-actions
-  > [data-slot="button"][data-variant="destructive"] {
-  background: transparent;
-  color: var(--destructive);
-}
-
-/* The chat header's mixed configuration/action surface becomes a modal sheet
-   on coarse pointers and narrow layouts; desktop retains its anchored popover. */
-[data-slot="dialog-overlay"].thread-settings-sheet-overlay {
-  z-index: var(--z-over-dialog);
-}
-
-[data-slot="dialog-content"].thread-settings-sheet {
-  top: auto;
-  right: 0;
-  bottom: var(--thread-settings-keyboard-inset, 0px);
-  left: 0;
-  z-index: calc(var(--z-over-dialog) + 1);
-  display: flex;
-  width: 100vw;
-  min-width: 0;
-  max-width: none;
-  max-height: calc(100dvh - var(--thread-settings-keyboard-inset, 0px) - max(16px, env(safe-area-inset-top)));
-  --tw-translate-x: 0 !important;
-  --tw-translate-y: 0 !important;
-  translate: 0 0 !important;
-  transform: none;
-  flex-direction: column;
-  gap: 4px;
-  padding: 14px max(12px, env(safe-area-inset-right))
-    calc(12px + env(safe-area-inset-bottom))
-    max(12px, env(safe-area-inset-left));
-  border-radius: 16px 16px 0 0;
-}
-
-.thread-settings-sheet > [data-slot="dialog-title"] {
-  padding-right: 48px;
-  font-size: 15px;
-  font-weight: 650;
-}
-
-.thread-settings-sheet-thread-title {
-  min-width: 0;
-  padding-right: 48px;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thread-settings-sheet > [data-slot="dialog-close"] {
-  top: 4px;
-  right: max(4px, env(safe-area-inset-right));
-  width: 44px;
-  height: 44px;
-}
-
-.thread-settings-sheet-body {
-  min-height: 0;
-  margin-top: 8px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.thread-settings-sheet-body > .menu-label {
-  display: none;
-}
-
-.thread-settings-sheet-body .mobile-config {
-  display: grid;
-  gap: 10px;
-  padding: 4px 5px 12px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.thread-settings-sheet-body .mobile-config [data-slot="thread-setting-row"] {
-  display: grid;
-  grid-template-columns: minmax(76px, 0.35fr) minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  padding-left: 5px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.thread-settings-sheet-body [data-slot="button"],
-.thread-settings-sheet-body
-  .execution-workspace-actions
-  > [data-slot="button"] {
-  min-width: 0;
-  min-height: 44px;
-}
-
-.thread-settings-sheet-body > [data-slot="button"],
-.thread-settings-sheet-body
-  .execution-workspace-actions
-  > [data-slot="button"] {
-  width: 100%;
-  justify-content: flex-start;
-  padding-inline: 10px;
-  font-weight: 450;
-  text-align: left;
-}
-
-.thread-settings-sheet-body > [data-slot="button"][data-variant="destructive"],
-.thread-settings-sheet-body
-  .execution-workspace-actions
-  > [data-slot="button"][data-variant="destructive"] {
-  background: transparent;
-  color: var(--destructive);
-}
-
-.thread-settings-sheet-body .thread-actions-separator {
-  margin-block: 7px;
-}
-
-/* Radix settings pickers portal to document.body. Lift those sibling layers
-   above the modal scrim while this sheet is open so options remain tappable. */
-body:has(.thread-settings-sheet[data-state="open"])
-  [data-slot="select-content"],
-body:has(.thread-settings-sheet[data-state="open"])
-  [data-model-picker-content] {
-  z-index: var(--z-blocking);
-}
-
-@media (max-width: 819px) {
-  .sidebar-usage-menu,
-  .sidebar-usage-detail {
-    width: min(320px, calc(100vw - 16px));
-    max-height: min(70vh, 560px);
-  }
-}
 
 .connection-dot.reconnecting {
   background: var(--warning);
@@ -5625,15 +5390,6 @@ body:has(.thread-settings-sheet[data-state="open"])
   display: contents;
 }
 
-/* Setting triggers fill the control row like the native selects they
-   replaced (ThreadSettingsControls, draft workspace — Phase 1). */
-.mobile-config [data-slot="select-trigger"],
-.mobile-config [data-slot="model-picker-trigger"],
-.draft-location [data-slot="select-trigger"] {
-  width: 100%;
-  min-width: 0;
-}
-
 [data-slot="model-picker-value"] {
   min-width: 0;
   overflow: hidden;
@@ -5770,98 +5526,6 @@ body:has(.thread-settings-sheet[data-state="open"])
   .searchable-select-search {
     min-height: var(--control-touch);
   }
-}
-
-.model-picker-popover {
-  width: min(360px, calc(100vw - 16px));
-  max-height: min(
-    var(--radix-popover-content-available-height, 70dvh),
-    440px,
-    70dvh
-  );
-  gap: 6px;
-  padding: 5px;
-  overflow: hidden;
-}
-
-.model-picker-search {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 7px;
-  padding: 2px 4px 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  color: var(--muted-foreground);
-}
-
-.model-picker-search:focus-within {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
-}
-
-.model-picker-search [data-slot="input"] {
-  height: 32px;
-  border: 0;
-  background: transparent;
-  padding-inline: 2px 8px;
-  box-shadow: none;
-}
-
-.model-picker-search [data-slot="input"]:focus-visible {
-  box-shadow: none;
-}
-
-.model-picker-options {
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 2px;
-}
-
-.model-picker-options [role="option"] {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 7px 8px;
-  border-radius: var(--radius-ctl);
-  color: var(--foreground);
-  font-size: 13px;
-  line-height: 1.3;
-  text-align: left;
-}
-
-.model-picker-options [role="option"] > span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.model-picker-options [role="option"][data-active] {
-  background: var(--accent);
-  color: var(--accent-foreground);
-}
-
-.model-picker-options [role="option"][aria-disabled="true"] {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.model-picker-options [role="option"] > svg {
-  flex: 0 0 auto;
-}
-
-.model-picker-empty {
-  display: flex;
-  min-height: 76px;
-  align-items: center;
-  justify-content: center;
-  padding: 12px;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  text-align: center;
 }
 
 .thread-settings-button {
@@ -9055,10 +8719,10 @@ tr.diff-hunk td {
   position: absolute;
   inset: 52px 8px 8px;
   z-index: calc(var(--z-sticky) + 19);
-  display: flex;
+  display: grid;
   place-items: center;
   border: 2px dashed var(--primary);
-  border-radius: var(--menu-panel-radius);
+  border-radius: var(--radius-card);
   background: color-mix(in oklch, var(--background) 86%, transparent);
   color: var(--foreground);
   font-size: 14px;
@@ -9379,14 +9043,14 @@ tr.diff-hunk td {
    floating, so it keeps an inset --muted well; its rows are the menu row
    anatomy (ui/floating.ts). */
 .command-menu {
-  display: grid;
+  display: flex;
   max-height: min(280px, 38dvh);
   flex-direction: column;
   margin: 0 var(--space-2) var(--space-2);
   padding: var(--menu-panel-padding);
   overflow-y: auto;
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-card);
+  border-radius: var(--menu-panel-radius);
   background: var(--muted);
   box-shadow: var(--elevation-2);
 }
@@ -9815,341 +9479,6 @@ tr.diff-hunk td {
     calc(var(--measure) - 18px),
     calc(100vw - clamp(14px, 4vw, 48px) - clamp(14px, 4vw, 48px) - 18px)
   );
-  padding: 5px;
-  overflow: hidden;
-}
-
-.skill-search {
-  flex-shrink: 0;
-  display: flex;
-  height: 36px;
-  align-items: center;
-  gap: 8px;
-  margin: 2px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  color: var(--muted-foreground-2);
-}
-
-.skill-search:focus-within {
-  border-color: var(--ring);
-}
-
-.skill-search input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--foreground);
-  font-size: 13px;
-}
-
-.skill-list {
-  min-height: 0;
-  overscroll-behavior: contain;
-  max-height: min(340px, 55dvh);
-  margin-top: 4px;
-  overflow-y: auto;
-}
-
-.skill-list > button {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  gap: 2px;
-  padding: 8px 10px;
-  border-radius: var(--radius-ctl);
-  text-align: left;
-}
-
-.skill-list > button:hover,
-.skill-list > button[aria-pressed="true"] {
-  background: var(--accent);
-}
-
-.skill-list > button > span {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.skill-list strong {
-  overflow: hidden;
-  color: var(--foreground);
-  font-size: 13px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.skill-list small {
-  overflow: hidden;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.skill-status {
-  display: flex;
-  min-height: 70px;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 12px;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  text-align: center;
-}
-
-.skill-status button {
-  color: var(--primary);
-  font-weight: 600;
-}
-
-.mobile-config {
-  display: none;
-}
-
-.draft-location {
-  display: grid;
-  gap: 4px;
-  padding: 6px 10px 8px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
-.stash-popover {
-  width: min(520px, calc(100vw - 28px));
-  max-height: min(430px, 70dvh);
-  padding: 5px;
-  overflow: hidden;
-}
-
-.stash-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 6px 10px 8px;
-}
-
-.stash-heading > div {
-  display: grid;
-  gap: 1px;
-}
-
-.stash-heading strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.stash-heading small {
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-}
-
-.stash-list {
-  max-height: 330px;
-  overflow-y: auto;
-}
-
-.stash-item {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 2px;
-  padding: 0 2px;
-}
-
-.stash-item + .stash-item {
-  border-top: 1px solid var(--border-soft);
-}
-
-/* Menu-row anatomy (radius-ctl, neutral wash, 13px label over 12px meta). */
-.stash-restore {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 1px;
-  padding: 7px 8px;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  text-align: left;
-}
-
-.stash-restore:hover {
-  background: var(--accent);
-}
-
-.stash-restore span {
-  overflow: hidden;
-  color: var(--foreground);
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.stash-restore small {
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-}
-
-.delete-stash {
-  color: var(--muted-foreground-2);
-}
-
-.delete-stash:hover:not(:disabled) {
-  color: var(--destructive);
-}
-
-.stash-empty {
-  display: grid;
-  justify-items: center;
-  padding: 30px 15px;
-  color: var(--muted-foreground-2);
-  text-align: center;
-}
-
-.stash-empty p {
-  margin: 8px 0 3px;
-  color: var(--foreground);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.stash-empty small {
-  font-size: 12px;
-}
-
-.menu-popover {
-  width: 264px;
-  padding: 5px;
-  border-radius: var(--radius-card);
-  background: var(--popover);
-}
-
-.thread-actions-popover {
-  width: min(360px, calc(100vw - 16px));
-}
-
-.thread-actions-separator {
-  height: 1px;
-  margin: 5px 4px;
-  background: var(--border-soft);
-}
-
-.menu-label {
-  margin: 0;
-  padding: 6px 10px 4px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.agent-tool-menu-item {
-  height: auto;
-  min-height: 48px;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: center;
-  gap: 2px;
-  white-space: normal;
-}
-
-.agent-tool-menu-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.agent-tool-menu-summary {
-  margin-left: 24px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
-/* Legacy native menu rows; guarded so they never fight the Button primitive
-   items now used by ThreadHeader's thread-actions menu (Phase 1). */
-.menu-popover > button:not([data-slot="button"]) {
-  display: flex;
-  width: 100%;
-  min-height: 32px;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  color: var(--foreground);
-  font-size: 13px;
-  text-align: left;
-}
-
-.menu-popover > button:not([data-slot="button"]):hover:not(:disabled) {
-  background: color-mix(in oklch, var(--foreground) 6%, transparent);
-}
-
-.menu-popover > button:not([data-slot="button"]).danger {
-  color: var(--destructive);
-}
-
-/* Button-primitive menu items keep the menu's row layout (ThreadHeader).
-   Font size comes from the Button primitive (13px) — the ramp lives there. */
-.menu-popover > [data-slot="button"] {
-  width: 100%;
-  justify-content: flex-start;
-  padding-inline: 10px;
-  font-weight: 450;
-  text-align: left;
-}
-
-/* ── Reserved icon column (menus) ──
-   Iconed and un-iconed rows must start their labels on the same x, or the
-   menu grows a ragged left edge. The gutter is the icon box (16px, from the
-   primitives' `[&_svg:not([class*='size-'])]:size-4`) plus the row gap the
-   iconed sibling already spends. Only menus that actually contain an icon
-   reserve the column, so an all-text menu keeps its tight inset. */
-.menu-popover:has([data-slot="button"] > svg)
-  > [data-slot="button"]:not(:has(> svg)) {
-  /* Button size="default": padding-inline 10px above, gap-1.5 = 6px. */
-  padding-left: calc(10px + 16px + 6px);
-}
-
-[data-slot="context-menu-content"]:has([data-slot="context-menu-item"] > svg)
-  [data-slot="context-menu-item"]:not(:has(> svg)),
-[data-slot="dropdown-menu-content"]:has([data-slot="dropdown-menu-item"] > svg)
-  [data-slot="dropdown-menu-item"]:not(:has(> svg)):not(.sidebar-usage-action) {
-  /* Menu items: px-2.5 = 10px, gap-2 = 8px. */
-  padding-left: calc(10px + 16px + 8px);
-}
-
-.menu-popover > [data-slot="button"][data-variant="ghost"]:hover {
-  background: color-mix(in oklch, var(--foreground) 6%, transparent);
-  color: var(--foreground);
-}
-
-/* Destructive rows in menus (Archive) hover with the SAME neutral wash as
-   every other row — only the text/icon carries `--destructive`. The filled
-   red treatment stays reserved for standalone destructive buttons. */
-.menu-popover > [data-slot="button"][data-variant="destructive"] {
-  background: transparent;
-  color: var(--destructive);
-}
-
-.menu-popover
-  > [data-slot="button"][data-variant="destructive"]:hover:not(:disabled) {
-  background: color-mix(in oklch, var(--foreground) 6%, transparent);
-  color: var(--destructive);
 }
 
 .menu-error {
@@ -10157,30 +9486,6 @@ tr.diff-hunk td {
   color: var(--destructive);
   font-size: 12px;
   line-height: 1.35;
-}
-
-.execution-workspace-actions {
-  display: flex;
-  flex-direction: column;
-}
-
-.execution-workspace-actions > [data-slot="button"] {
-  width: 100%;
-  justify-content: flex-start;
-  padding-inline: 10px;
-  font-weight: 450;
-}
-
-.execution-workspace-actions
-  > [data-slot="button"][data-variant="destructive"] {
-  background: transparent;
-  color: var(--destructive);
-}
-
-.execution-workspace-actions > p[role="status"] {
-  margin: 4px 10px;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
 }
 
 .execution-workspace-git-warnings {
@@ -10203,23 +9508,6 @@ tr.diff-hunk td {
 
 .archive-workspace-disposition > p {
   margin: 0;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.archive-choice-menu {
-  z-index: calc(var(--z-dialog) + 10);
-  width: min(300px, calc(100vw - 16px));
-}
-
-.archive-choice-menu [data-slot$="-item"] {
-  white-space: normal;
-}
-
-.archive-choice-menu .archive-menu-status {
-  display: grid;
-  gap: 2px;
   color: var(--muted-foreground-2);
   font-size: 12px;
   line-height: 1.35;
@@ -13272,99 +12560,6 @@ tr.diff-hunk td {
   font-size: 12px;
 }
 
-/* Codex execution settings — a labelled section of the thread-actions menu,
-   row rhythm matched to the ThreadSettingsControls mobile rows (11px
-   uppercase label column + select). */
-.codex-execution {
-  display: grid;
-  gap: 6px;
-  padding: 6px 5px 8px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.codex-execution-label {
-  margin: 0;
-  padding: 0 5px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.codex-execution-select {
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  align-items: center;
-  gap: 2px 7px;
-  padding-left: 5px;
-}
-
-.codex-execution-row-label {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-/* Forced/disabled selects stay legible in both themes: the stock 50%
-   opacity over the popover surface washes the value text out. */
-.codex-execution [data-slot="select-trigger"]:disabled {
-  opacity: 1;
-  border-style: dashed;
-  color: var(--muted-foreground);
-}
-
-.codex-execution [data-slot="select-trigger"]:disabled svg {
-  opacity: 0.4;
-}
-
-/* Claude's provider-private permission mode uses the same compact settings
-   rhythm as Codex without sharing either backend's semantic contract. */
-.claude-permissions {
-  display: grid;
-  gap: 6px;
-  padding: 6px 5px 8px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.claude-permissions-label {
-  margin: 0;
-  padding: 0 5px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.claude-permissions-select {
-  display: grid;
-  grid-template-columns: 110px minmax(0, 1fr);
-  align-items: center;
-  gap: 2px 7px;
-  padding-left: 5px;
-}
-
-.claude-permissions-row-label {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.claude-permissions [data-slot="select-trigger"]:disabled {
-  opacity: 1;
-  border-style: dashed;
-  color: var(--muted-foreground);
-}
-
-.claude-permissions [data-slot="select-trigger"]:disabled svg {
-  opacity: 0.4;
-}
-
 /* ───────────────────────────────────────────────────────────────────────
    § UTILITIES AND KEYFRAMES
    Shared single-purpose classes and every global animation. Keyframes
@@ -13609,8 +12804,7 @@ tr.diff-hunk td {
 
   /* Keep the existing reasoning shortcut on mobile; other settings remain
      reachable through the thread actions menu. */
-  .desktop-config[data-variant="pill"]
-    > :not([data-setting-id="thinking_level"]) {
+  .desktop-config > :not([data-setting-id="thinking_level"]) {
     display: none;
   }
 
@@ -13622,28 +12816,8 @@ tr.diff-hunk td {
     margin: 8px 10px 0;
   }
 
-  .mobile-config {
-    display: grid;
-    gap: 6px;
-    padding: 6px 5px 8px;
-    border-bottom: 1px solid var(--border-soft);
-  }
-
   .session-stats-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .mobile-config [data-slot="thread-setting-row"] {
-    display: grid;
-    grid-template-columns: 72px minmax(0, 1fr);
-    align-items: center;
-    gap: 7px;
-    padding-left: 5px;
-    color: var(--muted-foreground-2);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
   }
 
   .message-content {
