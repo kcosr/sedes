@@ -7,6 +7,7 @@ import {
   taskQuerySchema,
   taskScopeModeSchema,
   taskTitleSchema,
+  type OpenTaskDisposition,
   type TaskListProjection,
   type TaskScope,
   type TaskScopeMode,
@@ -42,6 +43,7 @@ export type OpenThreadTaskSummary = Pick<
 };
 
 export type OpenThreadTaskSummaryCollection = {
+  readonly snapshot: string;
   readonly items: readonly OpenThreadTaskSummary[];
   readonly total: number;
   readonly omitted: number;
@@ -995,71 +997,153 @@ export class TaskRepository {
     threadIds: readonly string[],
     limit: number,
   ): OpenThreadTaskSummaryCollection {
-    if (!Number.isInteger(limit) || limit < 0) {
-      throw new Error("open_thread_task_summary_limit_invalid");
-    }
-    if (threadIds.length === 0) {
-      return { items: [], total: 0, omitted: 0 };
-    }
-    const placeholders = threadIds.map(() => "?").join(", ");
-    const countRow = this.database
-      .prepare(
-        `
-          SELECT COUNT(*) AS total
-          FROM tasks
-          WHERE tenant_id = ? AND owner_principal_id = ?
-            AND scope_kind = 'thread'
-            AND thread_id IN (${placeholders})
-            AND completed_at IS NULL
-        `,
-      )
-      .get(scope.tenantId, scope.principalId, ...threadIds) as {
-      readonly total: number;
-    };
-    const items = this.database
-      .prepare(
-        `
-          SELECT id, title, thread_id AS threadId
-          FROM tasks
-          WHERE tenant_id = ? AND owner_principal_id = ?
-            AND scope_kind = 'thread'
-            AND thread_id IN (${placeholders})
-            AND completed_at IS NULL
-          ORDER BY created_at ASC, id ASC
-          LIMIT ?
-        `,
-      )
-      .all(
-        scope.tenantId,
-        scope.principalId,
-        ...threadIds,
+    return this.database.transaction(() => {
+      if (!Number.isInteger(limit) || limit < 0) {
+        throw new Error("open_thread_task_summary_limit_invalid");
+      }
+      if (threadIds.length === 0) {
+        return {
+          items: [],
+          total: 0,
+          omitted: 0,
+          snapshot: this.openThreadTaskSnapshot(scope, threadIds),
+        };
+      }
+      const placeholders = threadIds.map(() => "?").join(", ");
+      const countRow = this.database
+        .prepare(
+          `
+            SELECT COUNT(*) AS total
+            FROM tasks
+            WHERE tenant_id = ? AND owner_principal_id = ?
+              AND scope_kind = 'thread'
+              AND thread_id IN (${placeholders})
+              AND completed_at IS NULL
+          `,
+        )
+        .get(scope.tenantId, scope.principalId, ...threadIds) as {
+        readonly total: number;
+      };
+      const items = this.database
+        .prepare(
+          `
+            SELECT id, title, thread_id AS threadId
+            FROM tasks
+            WHERE tenant_id = ? AND owner_principal_id = ?
+              AND scope_kind = 'thread'
+              AND thread_id IN (${placeholders})
+              AND completed_at IS NULL
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+          `,
+        )
+        .all(
+          scope.tenantId,
+          scope.principalId,
+          ...threadIds,
+          limit,
+        ) as OpenThreadTaskSummary[];
+      return {
+        items,
+        total: countRow.total,
+        omitted: countRow.total - items.length,
+        snapshot: this.openThreadTaskSnapshot(scope, threadIds),
+      };
+    })();
+  }
+
+  /** Keep displayed titles and both confirmation choices in one read snapshot. */
+  listOpenThreadTaskFamilySummaries(
+    scope: RequestScope,
+    threadIds: readonly string[],
+    limit: number,
+  ) {
+    return this.database.transaction(() => ({
+      root: this.listOpenThreadTaskSummaries(scope, threadIds.slice(0, 1), limit),
+      descendants: this.listOpenThreadTaskSummaries(
+        scope,
+        threadIds.slice(1),
         limit,
-      ) as OpenThreadTaskSummary[];
-    return {
-      items,
-      total: countRow.total,
-      omitted: countRow.total - items.length,
-    };
+      ),
+      familySnapshot: this.openThreadTaskSnapshot(scope, threadIds),
+    }))();
+  }
+
+  /** Hash every open task revision, including rows beyond the visible summary limit. */
+  openThreadTaskSnapshot(
+    scope: RequestScope,
+    threadIds: readonly string[],
+  ): string {
+    const canonicalThreadIds = [...new Set(threadIds)].sort();
+    const hash = createHash("sha256").update(
+      JSON.stringify([scope.tenantId, scope.principalId, canonicalThreadIds]),
+    );
+    if (canonicalThreadIds.length > 0) {
+      const placeholders = canonicalThreadIds.map(() => "?").join(", ");
+      const rows = this.database
+        .prepare(`
+          SELECT id, revision FROM tasks
+          WHERE tenant_id = ? AND owner_principal_id = ? AND scope_kind = 'thread'
+            AND thread_id IN (${placeholders}) AND completed_at IS NULL
+          ORDER BY id ASC
+        `)
+        .iterate(scope.tenantId, scope.principalId, ...canonicalThreadIds);
+      for (const row of rows) hash.update(JSON.stringify(row));
+    }
+    return hash.digest("hex");
+  }
+
+  /** Called inside the inventory transaction, before any inventory/task writes. */
+  assertOpenThreadTaskSnapshot(
+    scope: RequestScope,
+    threadIds: readonly string[],
+    disposition: OpenTaskDisposition,
+    expectedSnapshot: string | undefined,
+  ): void {
+    if (disposition === "complete" && expectedSnapshot === undefined) {
+      throw new DomainError(
+        "bad_request",
+        "Completing tasks requires a reviewed open-task snapshot.",
+      );
+    }
+    if (
+      expectedSnapshot !== undefined &&
+      expectedSnapshot !== this.openThreadTaskSnapshot(scope, threadIds)
+    ) {
+      throw new DomainError(
+        "conflict",
+        "Open tasks changed while this action was being confirmed. Review the updated impact and try again.",
+      );
+    }
   }
 
   /**
    * Archive-time disposition of the archive set's open thread tasks. Runs
    * inside the caller's archive transaction (better-sqlite3 nests as a
    * savepoint); the enclosing inventory mutation receipt covers it, so no
-   * task receipt is written here. Returns the moved task ids for post-commit
-   * publication.
+   * task receipt is written here. Completion keeps ownership intact. Returns
+   * changed task ids for post-commit publication.
    */
-  moveOpenThreadTasks(
+  applyOpenThreadTaskDisposition(
     scope: RequestScope,
     threadIds: readonly string[],
-    disposition: "move_to_workspace" | "move_to_global",
+    disposition: Exclude<OpenTaskDisposition, "keep">,
     now: number,
   ): readonly string[] {
     if (threadIds.length === 0) return [];
     const placeholders = threadIds.map(() => "?").join(", ");
-    const moveSql =
-      disposition === "move_to_global"
+    const dispositionSql =
+      disposition === "complete"
         ? `
+          UPDATE tasks
+          SET completed_at = ?, revision = revision + 1, updated_at = ?
+          WHERE tenant_id = ? AND owner_principal_id = ?
+            AND scope_kind = 'thread' AND thread_id IN (${placeholders})
+            AND completed_at IS NULL
+          RETURNING id
+        `
+        : disposition === "move_to_global"
+          ? `
           UPDATE tasks
           SET scope_kind = 'global', environment_id = NULL,
             workspace_id = NULL, thread_id = NULL,
@@ -1069,7 +1153,7 @@ export class TaskRepository {
             AND completed_at IS NULL
           RETURNING id
         `
-        : `
+          : `
           UPDATE tasks
           SET scope_kind = 'workspace',
             environment_id = (
@@ -1092,12 +1176,18 @@ export class TaskRepository {
           RETURNING id
         `;
     return this.database.transaction(() => {
-      const moved = this.database
-        .prepare(moveSql)
-        .all(now, scope.tenantId, scope.principalId, ...threadIds) as readonly {
+      const changed = this.database
+        .prepare(dispositionSql)
+        .all(
+          ...(disposition === "complete" ? [now] : []),
+          now,
+          scope.tenantId,
+          scope.principalId,
+          ...threadIds,
+        ) as readonly {
         readonly id: string;
       }[];
-      return moved.map(({ id }) => id);
+      return changed.map(({ id }) => id);
     })();
   }
 

@@ -446,6 +446,7 @@ export const ThreadHeader = memo(function ThreadHeader({
       readonly snoozedUntil?: string;
       readonly wakeReminder?: string;
       readonly openTaskDisposition?: OpenTaskDisposition;
+      readonly expectedOpenTaskSnapshot?: string;
       readonly expectedStashedPromptCount?: number;
     },
   ) => {

@@ -84,7 +84,9 @@ export class ThreadBulkInventoryService {
       readonly publications: Pick<InventoryService, "publishCommitted">;
       readonly tasks: Pick<
         TaskRepository,
-        "listOpenThreadTaskSummaries" | "moveOpenThreadTasks"
+        | "listOpenThreadTaskSummaries"
+        | "applyOpenThreadTaskDisposition"
+        | "assertOpenThreadTaskSnapshot"
       >;
       readonly taskPublications: TaskChangePublisher;
       readonly now?: () => number;
@@ -185,6 +187,13 @@ export class ThreadBulkInventoryService {
         ...input,
         blockedThreadIds: new Set(blocked.keys()),
         now,
+        assertOpenTasks: (ids) =>
+          this.input.tasks.assertOpenThreadTaskSnapshot(
+            scope,
+            ids,
+            disposition,
+            input.action === "unsettle" ? undefined : input.expectedOpenTaskSnapshot,
+          ),
         ...(input.action === "unsettle"
           ? {}
           : {
@@ -198,8 +207,8 @@ export class ThreadBulkInventoryService {
         ...(disposition === "keep"
           ? {}
           : {
-              moveOpenTasks: (threadIds: readonly string[]) =>
-                this.input.tasks.moveOpenThreadTasks(
+              applyOpenTasks: (threadIds: readonly string[]) =>
+                this.input.tasks.applyOpenThreadTaskDisposition(
                   scope,
                   threadIds,
                   disposition,

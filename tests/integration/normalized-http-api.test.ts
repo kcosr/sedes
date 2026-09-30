@@ -4521,17 +4521,20 @@ describe("normalized HTTP application contract", () => {
           ),
         )
         .expect(200)
-        .expect({
-          descendantCount: 0,
-          pendingQuestions: { root: 0, descendants: 0 },
-          stashedPrompts: { root: 0, descendants: 0 },
-          openTasks: {
-            root: { items: [], total: 0, omitted: 0 },
-            descendants: { items: [], total: 0, omitted: 0 },
-          },
-          executionWorkspace: { kind: "direct" },
-          archiveOnly: { available: true },
-          archiveAll: { available: true },
+        .expect(({ body }) => {
+          expect(body).toEqual({
+            descendantCount: 0,
+            pendingQuestions: { root: 0, descendants: 0 },
+            stashedPrompts: { root: 0, descendants: 0 },
+            openTasks: {
+              familySnapshot: expect.stringMatching(/^[a-f0-9]{64}$/),
+              root: { snapshot: expect.stringMatching(/^[a-f0-9]{64}$/), items: [], total: 0, omitted: 0 },
+              descendants: { snapshot: expect.stringMatching(/^[a-f0-9]{64}$/), items: [], total: 0, omitted: 0 },
+            },
+            executionWorkspace: { kind: "direct" },
+            archiveOnly: { available: true },
+            archiveAll: { available: true },
+          });
         });
       await current
         .withHost(

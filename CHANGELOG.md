@@ -4,6 +4,9 @@
 
 ### Breaking Changes
 
+- Browser and packaged clients must use client protocol 128, which adds
+  reviewed Task snapshots to settle/archive previews and completion requests. (#19)
+
 - Browser and packaged clients must use client protocol 127, which adds
   confirmed live background-work counts to sidebar thread summaries. (#16)
 
@@ -13,7 +16,7 @@
   browser protocol change is required for this fix. (#15)
 
 - Codex viewed images use a new `viewed_image` transcript item, introduced
-  in client protocol 123. This build requires client protocol 127; see the
+  in client protocol 123. This build requires client protocol 128; see the
   client protocol entries below. (#11, #13, #14)
 
 - Claude backends require Claude Code 2.1.281 or newer and are tested through
@@ -58,6 +61,10 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Settle, archive, and bulk stack confirmations list their affected open Tasks
+  and offer **Complete all**, keeping completed Tasks attached to their threads.
+  Completion requires a fresh preview if Tasks change before confirmation. (#19)
 
 - Sidebar thread rows and previews show a slow grey spinner for live subagents
   and a grey dot for remaining background commands. Active turns and unseen

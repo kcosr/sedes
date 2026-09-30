@@ -13,7 +13,8 @@ import {
 export interface AgentThreadArchiveInput {
   readonly threadId: string;
   readonly includeDescendants: boolean;
-  readonly openTaskDisposition?: OpenTaskDisposition;
+  // Agent archive has no reviewed task snapshot; completion is available in the browser.
+  readonly openTaskDisposition?: Exclude<OpenTaskDisposition, "complete">;
   readonly mutationId: string;
   readonly environmentAuthority: TrustedEnvironmentAuthorityGrant;
 }

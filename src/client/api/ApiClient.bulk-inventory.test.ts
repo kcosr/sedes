@@ -34,7 +34,7 @@ describe("ApiClient bulk inventory", () => {
     affectedCount: 1,
     unchangedCount: 1,
     blockers: { items: [], total: 0, omitted: 0 },
-    openTasks: { items: [], total: 0, omitted: 0 },
+    openTasks: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
     stashedPromptCount: 0,
     available: true,
   };

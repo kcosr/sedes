@@ -264,8 +264,9 @@ working set but should remain readily accessible.
 
 Settled is a manual label, not a claim about provider success. Starting new
 manual or automated input automatically returns the thread to Active. Stashes
-remain attached. If open Tasks exist, review the settlement preview and choose
-their disposition explicitly.
+remain attached. If open Tasks exist, the settlement preview lists them. Choose
+whether to move them to the project or global list, keep them open, or
+**Complete all** while leaving them attached to the thread.
 
 ## Archive finished work
 
@@ -279,8 +280,9 @@ not deletion.
 
 Fork families can have descendant Tasks and stashes. The archive preview lets
 you choose the supported family scope and requires an explicit disposition for
-open Tasks. Read the preview instead of assuming that archiving a parent also
-archives or completes its descendants.
+open Tasks. **Complete all** completes the open Tasks in that selected scope
+and leaves them attached to their owning threads. Read the preview instead of
+assuming that archiving a parent also archives or completes its descendants.
 
 An active automation run prevents archiving until that run leaves its unsafe
 dispatch state.

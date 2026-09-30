@@ -648,7 +648,7 @@ describe("ApplicationClientStore bulk inventory", () => {
     affectedCount: 1,
     unchangedCount: 1,
     blockers: { items: [], total: 0, omitted: 0 },
-    openTasks: { items: [], total: 0, omitted: 0 },
+    openTasks: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
     stashedPromptCount: 2,
     available: true,
   };
@@ -697,4 +697,81 @@ describe("ApplicationClientStore bulk inventory", () => {
     expect(api.mutateBulkInventory).toHaveBeenNthCalledWith(1, request);
     expect(api.mutateBulkInventory).toHaveBeenNthCalledWith(2, request);
   });
+  it("freezes the reviewed task snapshot in completion requests and replaces it only on a new confirmation", () => {
+    const store = new ApplicationClientStore(
+      {} as ApiClient,
+      {} as EventStreamTransport,
+    );
+    const reviewed = {
+      ...impact,
+      openTasks: { snapshot: "a".repeat(64), items: [], total: 1, omitted: 1 },
+    };
+    const request = store.createBulkInventoryMutationRequest(reviewed, {
+      openTaskDisposition: "complete",
+    });
+    expect(request).toMatchObject({
+      openTaskDisposition: "complete",
+      expectedOpenTaskSnapshot: "a".repeat(64),
+    });
+    reviewed.openTasks.snapshot = "b".repeat(64);
+    expect(request).toMatchObject({ expectedOpenTaskSnapshot: "a".repeat(64) });
+    const refreshed = store.createBulkInventoryMutationRequest(reviewed, {
+      openTaskDisposition: "complete",
+    });
+    expect(refreshed).toMatchObject({ expectedOpenTaskSnapshot: "b".repeat(64) });
+    expect(refreshed.mutationId).not.toBe(request.mutationId);
+  });
+
+  it.each(["settle", "archive"] as const)(
+    "passes the reviewed completion snapshot to a single-thread %s",
+    async (action) => {
+      const api = {
+        mutateInventory: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ApiClient;
+      const store = new ApplicationClientStore(api, {} as EventStreamTransport);
+      const thread = { id: "thread-a", inventoryRevision: 3 } as Parameters<
+        ApplicationClientStore["mutateInventory"]
+      >[0];
+      await store.mutateInventory(thread, action, {
+        expectedStashedPromptCount: 0,
+        openTaskDisposition: "complete",
+        expectedOpenTaskSnapshot: "a".repeat(64),
+      });
+      expect(api.mutateInventory).toHaveBeenCalledWith(
+        "thread-a",
+        expect.objectContaining({
+          action,
+          openTaskDisposition: "complete",
+          expectedOpenTaskSnapshot: "a".repeat(64),
+        }),
+      );
+    },
+  );
+
+  it("passes the reviewed family completion snapshot to the archive API", async () => {
+    const api = {
+      archiveThreads: vi
+        .fn()
+        .mockResolvedValue({ archivedThreadIds: ["thread-a", "thread-b"] }),
+    } as unknown as ApiClient;
+    const store = new ApplicationClientStore(api, {} as EventStreamTransport);
+    const thread = { id: "thread-a", inventoryRevision: 3 } as Parameters<
+      ApplicationClientStore["archiveThreadFamily"]
+    >[0];
+    await store.archiveThreadFamily(thread, {
+      expectedStashedPromptCount: 0,
+      openTaskDisposition: "complete",
+      expectedOpenTaskSnapshot: "b".repeat(64),
+      executionWorkspaceDisposition: { kind: "keep" },
+    });
+    expect(api.archiveThreads).toHaveBeenCalledWith(
+      "thread-a",
+      expect.objectContaining({
+        action: "archive_family",
+        openTaskDisposition: "complete",
+        expectedOpenTaskSnapshot: "b".repeat(64),
+      }),
+    );
+  });
+
 });

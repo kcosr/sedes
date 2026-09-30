@@ -332,8 +332,9 @@ function renderSidebar(
       pendingQuestions: { root: 0, descendants: 0 },
       stashedPrompts: { root: 0, descendants: 0 },
       openTasks: {
-        root: { items: [], total: 0, omitted: 0 },
-        descendants: { items: [], total: 0, omitted: 0 },
+        familySnapshot: "b".repeat(64),
+        root: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
+        descendants: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
       },
       executionWorkspace: { kind: "direct" },
       archiveOnly: { available: true },
@@ -355,7 +356,7 @@ function renderSidebar(
         pendingQuestionCount: 0,
         unchangedCount: 0,
         blockers: { items: [], total: 0, omitted: 0 },
-        openTasks: { items: [], total: 0, omitted: 0 },
+        openTasks: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
         stashedPromptCount: 0,
         available: true,
       }),
@@ -3460,7 +3461,9 @@ describe("InventorySidebar view modes", () => {
       pendingQuestions: { root: 0, descendants: 0 },
       stashedPrompts: { root: 0, descendants: 0 },
       openTasks: {
+        familySnapshot: "b".repeat(64),
         root: {
+          snapshot: "a".repeat(64),
           items: [
             {
               id: "task-project-1",
@@ -3471,7 +3474,7 @@ describe("InventorySidebar view modes", () => {
           total: 1,
           omitted: 0,
         },
-        descendants: { items: [], total: 0, omitted: 0 },
+        descendants: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
       },
       executionWorkspace: { kind: "direct" },
       archiveOnly: { available: true },
@@ -3507,7 +3510,9 @@ describe("InventorySidebar view modes", () => {
       pendingQuestions: { root: 0, descendants: 0 },
       stashedPrompts: { root: 0, descendants: 0 },
       openTasks: {
+        familySnapshot: "b".repeat(64),
         root: {
+          snapshot: "a".repeat(64),
           items: [
             {
               id: "task-flat-1",
@@ -3523,7 +3528,7 @@ describe("InventorySidebar view modes", () => {
           total: 2,
           omitted: 0,
         },
-        descendants: { items: [], total: 0, omitted: 0 },
+        descendants: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
       },
       executionWorkspace: { kind: "direct" },
       archiveOnly: { available: true },
@@ -3596,8 +3601,9 @@ describe("InventorySidebar view modes", () => {
       pendingQuestions: { root: 0, descendants: 0 },
       stashedPrompts: { root: 0, descendants: 0 },
       openTasks: {
-        root: { items: [], total: 0, omitted: 0 },
-        descendants: { items: [], total: 0, omitted: 0 },
+        familySnapshot: "b".repeat(64),
+        root: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
+        descendants: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
       },
       executionWorkspace: { kind: "direct" },
       archiveOnly: { available: true },

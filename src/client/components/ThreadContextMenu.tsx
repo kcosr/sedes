@@ -303,6 +303,7 @@ export function ThreadContextMenu({
     action: InventoryContextAction,
     options?: {
       readonly openTaskDisposition?: OpenTaskDisposition;
+      readonly expectedOpenTaskSnapshot?: string;
       readonly expectedStashedPromptCount?: number;
     },
   ) => {
