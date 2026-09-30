@@ -1,9 +1,17 @@
 // @vitest-environment jsdom
 
+import { useState } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigurationOperationRecoveryDetails } from "../../../shared/protocol/configuration-operation-recovery.js";
 import { RecoveredOperations, type OperationRecoveryControls } from "./RecoveredOperations.js";
+
+/** Opened from a button, as the environment detail's Activity tab and actions menu do. */
+function Recovery(props: { readonly controls: OperationRecoveryControls; readonly environmentId: string; readonly label: string }) {
+  const [open, setOpen] = useState(false);
+  return <><button type="button" onClick={() => setOpen(true)}>Recovered operations</button>
+    <RecoveredOperations {...props} open={open} onOpenChange={setOpen} /></>;
+}
 
 const details: ConfigurationOperationRecoveryDetails = {
   kind: "shell", receiptId: "30000000-0000-4000-8000-000000000001", state: "succeeded", summary: "Build workspace",
@@ -21,11 +29,14 @@ afterEach(cleanup);
 describe("retained operation recovery", () => {
   it("requires inspection before explicit acknowledgment and renders bounded output as text", async () => {
     const api = controls();
-    render(<RecoveredOperations controls={api} environmentId="environment" label="Build host" disabled={false} />);
+    render(<Recovery controls={api} environmentId="environment" label="Build host" />);
     expect(api.listConfigurationOperations).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Recovered operations" }));
     fireEvent.click(await screen.findByRole("button", { name: "Inspect Build workspace" }));
     expect(await screen.findByText(details.stdout)).toBeVisible();
+    // The receipt identifier is a copyable technical detail of the inspected result.
+    expect(screen.getByText(details.receiptId)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Copy receipt ID" })).toBeVisible();
     expect(screen.getByText(/128 output bytes were omitted/)).toBeVisible();
     expect(document.querySelector("pre script")).toBeNull();
     expect(api.acknowledgeConfigurationOperation).not.toHaveBeenCalled();
@@ -37,7 +48,7 @@ describe("retained operation recovery", () => {
 
   it("keeps unknown outcomes retained without an acknowledgment action", async () => {
     const api = controls({ ...details, state: "unknown", acknowledgeable: false });
-    render(<RecoveredOperations controls={api} environmentId="environment" label="Build host" disabled={false} />);
+    render(<Recovery controls={api} environmentId="environment" label="Build host" />);
     fireEvent.click(screen.getByRole("button", { name: "Recovered operations" }));
     fireEvent.click(await screen.findByRole("button", { name: "Inspect Build workspace" }));
     expect(await screen.findByText(/does not have an acknowledgeable final result/)).toBeVisible();
@@ -47,7 +58,7 @@ describe("retained operation recovery", () => {
 
   it("requires an explicit workspace review before releasing an acknowledgeable unknown outcome", async () => {
     const api = controls({ ...details, kind: "file", state: "unknown", acknowledgeable: true });
-    render(<RecoveredOperations controls={api} environmentId="environment" label="Build host" disabled={false} />);
+    render(<Recovery controls={api} environmentId="environment" label="Build host" />);
     fireEvent.click(screen.getByRole("button", { name: "Recovered operations" }));
     fireEvent.click(await screen.findByRole("button", { name: "Inspect Build workspace" }));
     const release = await screen.findByRole("button", { name: "Release inspected unknown outcome" });
@@ -67,7 +78,7 @@ describe("retained operation recovery", () => {
       signal = requestedSignal;
       return new Promise<{ receipts: [] }>(() => {});
     });
-    const view = render(<RecoveredOperations controls={{ ...api, listConfigurationOperations: list }} environmentId="environment" label="Build host" disabled={false} />);
+    const view = render(<Recovery controls={{ ...api, listConfigurationOperations: list }} environmentId="environment" label="Build host" />);
     fireEvent.click(screen.getByRole("button", { name: "Recovered operations" }));
     await waitFor(() => expect(list).toHaveBeenCalledOnce());
     expect(signal?.aborted).toBe(false);
@@ -79,7 +90,7 @@ describe("retained operation recovery", () => {
   it("does not retry an uncertain acknowledgment before a fresh inspection", async () => {
     const api = controls();
     api.acknowledgeConfigurationOperation.mockRejectedValueOnce(new Error("Connection lost"));
-    render(<RecoveredOperations controls={api} environmentId="environment" label="Build host" disabled={false} />);
+    render(<Recovery controls={api} environmentId="environment" label="Build host" />);
     fireEvent.click(screen.getByRole("button", { name: "Recovered operations" }));
     fireEvent.click(await screen.findByRole("button", { name: "Inspect Build workspace" }));
     fireEvent.click(await screen.findByRole("button", { name: "Acknowledge and release result" }));

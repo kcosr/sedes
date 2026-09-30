@@ -1,6 +1,13 @@
 import { useSyncExternalStore } from "react";
 import { beginThreadLoadAttempt } from "./thread-load-diagnostics.js";
-import { settingsPageSlugs, type SettingsPage } from "./settings-route.js";
+import {
+  isSettingsResourcePage,
+  parseSettingsResource,
+  settingsPageSlugs,
+  settingsResourceSuffix,
+  type SettingsPage,
+  type SettingsResourceRoute,
+} from "./settings-route.js";
 
 export type Route =
   | { name: "home" }
@@ -13,7 +20,7 @@ export type Route =
     }
   | { name: "archived" }
   | { name: "usage" }
-  | { name: "settings"; page?: SettingsPage };
+  | ({ name: "settings"; page?: SettingsPage } & SettingsResourceRoute);
 
 let currentRoute = parseRoute(window.location.pathname, window.location.hash);
 if (currentRoute.name === "thread") {
@@ -47,6 +54,14 @@ export function parseRoute(pathname: string, hash = ""): Route {
   const settingsPage = (Object.keys(settingsPageSlugs) as SettingsPage[])
     .find(page => pathname === `/settings/${settingsPageSlugs[page]}`);
   if (settingsPage) return { name: "settings", page: settingsPage };
+  const resourcePage = (Object.keys(settingsPageSlugs) as SettingsPage[])
+    .filter(isSettingsResourcePage)
+    .find(page => pathname.startsWith(`/settings/${settingsPageSlugs[page]}/`));
+  if (resourcePage) {
+    const segments = pathname.slice(`/settings/${settingsPageSlugs[resourcePage]}/`.length).split("/");
+    const resource = parseSettingsResource(resourcePage, segments);
+    if (resource) return { name: "settings", page: resourcePage, ...resource };
+  }
   if (pathname === "/archived") return { name: "archived" };
   if (pathname === "/usage") return { name: "usage" };
   if (pathname === "/agents") return { name: "agents", create: false };
@@ -237,8 +252,10 @@ export function threadPath(threadId: string): string {
   return `/threads/${encodeURIComponent(threadId)}`;
 }
 
-export function settingsPath(page?: SettingsPage): string {
-  return page ? `/settings/${settingsPageSlugs[page]}` : "/settings";
+export function settingsPath(page?: SettingsPage, resource: SettingsResourceRoute = {}): string {
+  if (!page) return "/settings";
+  const base = `/settings/${settingsPageSlugs[page]}`;
+  return isSettingsResourcePage(page) ? `${base}${settingsResourceSuffix(resource)}` : base;
 }
 
 export function agentsPath(): string {
@@ -270,7 +287,7 @@ export function routePath(route: Route): string {
   if (route.name === "home") return "/";
   if (route.name === "archived") return "/archived";
   if (route.name === "usage") return usagePath();
-  if (route.name === "settings") return settingsPath(route.page);
+  if (route.name === "settings") return settingsPath(route.page, route);
   if (route.name === "agents") {
     if (route.create) return newAgentPath();
     return route.agentId ? agentPath(route.agentId) : agentsPath();

@@ -56,7 +56,7 @@ describe("ProjectsSettingsPage", () => {
     await user.keyboard("{Enter}");
     expect(screen.getByText("No projects match these filters.")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
-    expect(screen.getByRole("textbox", { name: "Search projects" })).toHaveFocus();
+    expect(screen.getByRole("searchbox", { name: "Search projects" })).toHaveFocus();
     expect(screen.getByText("Sedes")).toBeVisible();
     expect(screen.getByText("Retired project")).toBeVisible();
     expect(screen.getByRole("combobox", { name: "Project environment" })).toHaveTextContent("All environments");

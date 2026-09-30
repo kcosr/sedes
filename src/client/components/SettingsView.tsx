@@ -5,8 +5,8 @@ import type { NotificationSettingsStore } from "../stores/NotificationSettingsSt
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { ArrowLeft, ChevronLeft } from "lucide-react";
 import { Button } from "@client/components/ui/button";
-import { installNavigationBlocker, navigate, settingsPath } from "../app/router.js";
-import type { SettingsPage } from "../app/settings-route.js";
+import { navigate, settingsPath } from "../app/router.js";
+import { isSettingsResourcePage, type SettingsPage } from "../app/settings-route.js";
 import { SidebarNavTrigger } from "./SidebarNavTrigger.js";
 import type { ServerSettingsControls } from "./ServerSettingsForm.js";
 import {
@@ -19,7 +19,7 @@ import {
   ElectronConnectionSettings,
   type ElectronConnectionSettingsControls,
 } from "./ElectronConnectionSettings.js";
-import { ExecutionSettings, type ExecutionSettingsNavigation } from "./execution-settings/ExecutionSettings.js";
+import { ExecutionSettings } from "./execution-settings/ExecutionSettings.js";
 import { ProjectsSettingsPage } from "./execution-settings/ProjectsSettingsPage.js";
 import type { HostPairingControls } from "./execution-settings/useHostPairings.js";
 import type { ConfigurationControls } from "./execution-settings/useConfiguration.js";
@@ -108,10 +108,7 @@ export function SettingsView({
   } = sources;
   const pages = useSettingsPages(sources);
   const navInSidebar = useSettingsNavInSidebar();
-  const executionNavigation = useRef<ExecutionSettingsNavigation>(null);
   const content = useRef<HTMLElement>(null);
-  const internalPageChange = useRef<SettingsPage | undefined>(undefined);
-  const internalNavigation = useRef(false);
   // The page path last opened from the compact list: its back link returns
   // through history instead of stacking another list entry.
   const listOrigin = useRef<string | undefined>(undefined);
@@ -133,13 +130,6 @@ export function SettingsView({
   useEffect(() => {
     if (page !== undefined && available) rememberSettingsPage(page);
   }, [page, available]);
-  useEffect(() => installNavigationBlocker((_current, _next, proceed) => {
-    const execution = executionNavigation.current;
-    // Internal execution navigation has already passed its draft guard.
-    if (internalNavigation.current || !execution?.blocksNavigation()) return true;
-    execution.requestLeave(proceed);
-    return false;
-  }), []);
   const focusPageStart = useCallback(() => {
     content.current?.scrollTo?.({ top: 0 });
     const heading = content.current?.querySelector<HTMLElement>("h1, h2, h3");
@@ -147,21 +137,16 @@ export function SettingsView({
     (heading ?? content.current)?.focus({ preventScroll: true });
   }, []);
   useEffect(() => {
-    if (!available) return;
-    const internal = internalPageChange.current === page;
-    internalPageChange.current = undefined;
-    if (page === "environments" || page === "backends") {
-      if (!internal) executionNavigation.current?.openPage(page);
-    } else if (page !== undefined || !navInSidebar) {
-      focusPageStart();
-    }
+    // Environments and Backends route their own selection, scroll and focus.
+    if (!available || isSettingsResourcePage(page)) return;
+    if (page !== undefined || !navInSidebar) focusPageStart();
     // Only a page change moves focus; the nav moving in or out does not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, available, focusPageStart]);
+  // The nav link of the page already shown, at its root, returns it to its
+  // start. From one of its entities the link is a route to the list instead.
   useEffect(() => installSettingsPageReselectListener(window, (selected) => {
-    if (selected !== page) return;
-    if (selected === "environments" || selected === "backends") executionNavigation.current?.openPage(selected);
-    else focusPageStart();
+    if (selected === page) focusPageStart();
   }), [page, focusPageStart]);
   const openFromList = (entry: SettingsEntry) => {
     if (entry.kind === "page") listOrigin.current = settingsEntryHref(entry);
@@ -225,17 +210,8 @@ export function SettingsView({
         ) : page === "server" && available && serverSettings ? (
           <ServerSettingsPage controls={serverSettings} />
         ) : null}
-        {configuration ? <div hidden={page !== "environments" && page !== "backends"}>
-          <ExecutionSettings controls={configuration} initialPage={page === "backends" ? "backends" : "environments"}
-            visible={page === "environments" || page === "backends"}
-            navigationRef={executionNavigation} onPageChange={next => {
-              if (next === page) return;
-              internalPageChange.current = next;
-              internalNavigation.current = true;
-              try { navigate(settingsPath(next)); }
-              finally { internalNavigation.current = false; }
-              if (window.location.pathname !== settingsPath(next)) internalPageChange.current = undefined;
-            }} />
+        {configuration ? <div hidden={!isSettingsResourcePage(page)}>
+          <ExecutionSettings controls={configuration} />
         </div> : null}
       </section>
     </main>

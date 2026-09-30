@@ -101,6 +101,7 @@ beforeEach(() => {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
     matches: false, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn(),
   })));
+  vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
 });
 
 afterEach(() => {
@@ -142,15 +143,15 @@ describe("SettingsView", () => {
     const applicationStore = { api: { listProjects }, getSnapshot: () => state, subscribe: () => () => {} } as unknown as ApplicationClientStore;
     renderSettings({ configuration: controls, applicationStore, page: "projects" });
 
-    expect(await screen.findByText("No projects yet. Add a directory to start a thread.")).toBeVisible();
+    expect(await screen.findByText("No projects yet")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Projects" })).toBeVisible();
     expect(screen.getByRole("region", { name: "Projects" })).toBeVisible();
     expect(navLink("Projects")).toHaveAttribute("aria-current", "page");
 
     fireEvent.click(navLink("Environments"));
-    fireEvent.click(await screen.findByRole("button", { name: "Local details" }));
-    const sections = screen.getByRole("navigation", { name: "Environment sections" });
-    expect(within(sections).queryByRole("button", { name: "Projects" })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("link", { name: "Local" }));
+    const sections = screen.getByRole("tablist", { name: "Environment sections" });
+    expect(within(sections).queryByRole("tab", { name: "Projects" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Projects" })).not.toBeInTheDocument();
 
     fireEvent.click(navLink("Projects"));
@@ -172,7 +173,7 @@ describe("SettingsView", () => {
     expect(screen.getByRole("heading", { name: "Backends" })).toBeVisible();
     expect(await screen.findByText(/Add an execution environment first/)).toBeVisible();
     fireEvent.click(navLink("Environments"));
-    expect(await screen.findByRole("heading", { name: "Execution environments" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Environments", level: 1 })).toBeVisible();
     expect(screen.queryByLabelText(/principal/i)).toBeNull();
   });
 
@@ -188,31 +189,31 @@ describe("SettingsView", () => {
     renderSettings({ configuration, page: "environments" });
     await waitFor(() => expect(screen.getByRole("button", { name: "Add environment" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Add environment" }));
-    fireEvent.click(screen.getByRole("button", { name: /^Local machine/ }));
+    fireEvent.click(screen.getByRole("link", { name: "Local machine" }));
     fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "Unsaved local" } });
     fireEvent.click(screen.getByTestId("settings-return"));
     expect(screen.getByRole("heading", { name: "Discard unsaved changes?" })).toBeVisible();
-    expect(window.location.pathname).toBe("/settings/environments");
+    expect(window.location.pathname).toBe("/settings/environments/new/local");
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(screen.getByLabelText("Environment name")).toHaveValue("Unsaved local");
     const user = userEvent.setup();
     await user.click(navLink("Backends"));
     await user.click(screen.getByRole("button", { name: "Discard changes" }));
-    expect(screen.getByRole("heading", { name: "Backends" })).toHaveFocus();
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Backends", level: 1 })).toHaveFocus());
     act(() => navigate(settingsPath("environments")));
-    expect(screen.getByRole("heading", { name: "Execution environments" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Environments", level: 1 })).toBeVisible();
   });
 
   it("keeps a dirty execution draft on browser Back and resumes the original traversal after discard", async () => {
-    const { controls } = executionControls();
+    const { controls, snapshot } = executionControls();
+    const editPath = settingsPath("environments", { mode: "edit", resourceId: snapshot.configuration.executionEnvironments[0]!.id });
     navigate("/threads/retained-thread", { replace: true });
-    navigate(settingsPath("environments"));
+    navigate(editPath);
     render(<RoutedSettings configuration={controls} onReturn={() => navigate("/threads/retained-thread")} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Local" }));
-    fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "Browser draft" } });
+    fireEvent.change(await screen.findByLabelText("Environment name"), { target: { value: "Browser draft" } });
     act(() => window.history.back());
     expect(await screen.findByRole("heading", { name: "Discard unsaved changes?" })).toBeVisible();
-    await waitFor(() => expect(window.location.pathname).toBe("/settings/environments"));
+    await waitFor(() => expect(window.location.pathname).toBe(editPath));
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(screen.getByLabelText("Environment name")).toHaveValue("Browser draft");
     act(() => window.history.back());
@@ -220,8 +221,9 @@ describe("SettingsView", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/threads/retained-thread"));
     expect(await screen.findByText("Workspace")).toBeVisible();
     act(() => window.history.forward());
-    expect(await screen.findByRole("heading", { name: "Execution environments" })).toBeVisible();
-    expect(window.location.pathname).toBe("/settings/environments");
+    expect(await screen.findByRole("heading", { name: "Edit Local" })).toBeVisible();
+    expect(window.location.pathname).toBe(editPath);
+    expect(screen.getByLabelText("Environment name")).toHaveValue("Local");
   });
 
   it("normalizes unavailable categories to the grouped list without the sidebar nav", async () => {
@@ -249,7 +251,7 @@ describe("SettingsView", () => {
     expect(controls.listHostRegistrations).not.toHaveBeenCalled();
     fireEvent.click(navLink("Environments"));
     await act(async () => {});
-    expect(screen.getByRole("button", { name: "Local details" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Local" })).toBeVisible();
     const initialReads = controls.readConfiguration.mock.calls.length;
     const initialHostReads = controls.listHostRegistrations.mock.calls.length;
     expect(initialReads).toBeGreaterThan(0);
@@ -299,7 +301,8 @@ describe("SettingsView", () => {
     let finishSave!: (value: ConfigurationSnapshot) => void;
     controls.saveConfiguration.mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve; }));
     renderSettings({ configuration: controls, page: "environments" });
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Local" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Local" }));
     fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "Saved local name" } });
     fireEvent.click(screen.getByRole("button", { name: "Save environment" }));
     expect(controls.saveConfiguration).toHaveBeenCalledOnce();
@@ -321,7 +324,8 @@ describe("SettingsView", () => {
     let rejectSave!: (reason: Error) => void;
     controls.saveConfiguration.mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject; }));
     renderSettings({ configuration: controls, page: "environments" });
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Local" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Local" }));
     fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "Retained draft" } });
     fireEvent.click(screen.getByRole("button", { name: "Save environment" }));
     fireEvent.click(navLink("Appearance"));
@@ -339,7 +343,8 @@ describe("SettingsView", () => {
     controls.saveConfiguration.mockResolvedValueOnce(saved);
     fireEvent.click(screen.getByRole("button", { name: "Save environment" }));
     await waitFor(() => expect(controls.saveConfiguration).toHaveBeenCalledTimes(2));
-    expect(await screen.findByRole("heading", { name: "Retained draft" })).toBeVisible();
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByTestId("settings-view")).toHaveAttribute("data-page", "environments");
   });
 
@@ -348,19 +353,21 @@ describe("SettingsView", () => {
     let finishSave!: (value: ConfigurationSnapshot) => void;
     controls.saveConfiguration.mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve; }));
     renderSettings({ configuration: controls, page: "environments" });
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Local" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Local" }));
     fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "Saved local name" } });
     fireEvent.click(screen.getByRole("button", { name: "Save environment" }));
     fireEvent.click(navLink("Appearance"));
     await userEvent.setup().click(screen.getByRole("button", { name: "Stay here" }));
-    expect(screen.getByRole("heading", { name: "Edit Saved local name", level: 3 })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "Edit Saved local name", level: 2 })).toHaveFocus();
     expect(screen.queryByRole("button", { name: "Stay here" })).toBeNull();
     expect(screen.queryByText(/Waiting .* finish/i)).toBeNull();
     const saved = structuredClone(snapshot);
     saved.revision = 1;
     saved.configuration.executionEnvironments[0]!.label = "Saved local name";
     await act(async () => { finishSave(saved); });
-    expect(await screen.findByRole("heading", { name: "Saved local name" })).toBeVisible();
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(screen.getByLabelText("Environment name")).toHaveValue("Saved local name");
     expect(screen.getByTestId("settings-view")).toHaveAttribute("data-page", "environments");
     expect(controls.saveConfiguration).toHaveBeenCalledOnce();
   });

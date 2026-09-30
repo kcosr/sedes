@@ -1,14 +1,23 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { RefreshCw, Search, SlidersHorizontal } from "lucide-react";
+import { Folder, Plus, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
 import type { ProjectSummary } from "../../../shared/index.js";
 import { useApplicationStore, messageFrom, type ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import { AddProjectDialog } from "../AddProjectDialog.js";
+import { SettingsPage } from "../settings/SettingsPage.js";
 import { Button } from "../ui/button.js";
+import { Callout } from "../ui/callout.js";
+import { ConfirmDialog } from "../ui/confirm-dialog.js";
+import { EmptyState } from "../ui/empty-state.js";
 import { Input } from "../ui/input.js";
 import { SearchableSelect } from "../ui/searchable-select.js";
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from "../ui/dialog.js";
+import { Skeleton } from "../ui/skeleton.js";
+import { StatusPill } from "../ui/status-pill.js";
+import { Tag } from "../ui/tag.js";
+import { useFocusReturn } from "./detail-parts.js";
+import { countLabel } from "./ExecutionInventory.js";
 import "./execution-settings.css";
 
+/** Remembered directories across environments: remove hides a project, restore brings it back. */
 export function ProjectsSettingsPage({ store }: {
   readonly store: ApplicationClientStore;
 }): React.JSX.Element {
@@ -16,6 +25,7 @@ export function ProjectsSettingsPage({ store }: {
   const environments = application.snapshot?.environments ?? [];
   const [projects, setProjects] = useState<readonly ProjectSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [mutationError, setMutationError] = useState("");
   const [notice, setNotice] = useState("");
@@ -30,6 +40,7 @@ export function ProjectsSettingsPage({ store }: {
   const searchInput = useRef<HTMLInputElement>(null);
   const filterToggle = useRef<HTMLButtonElement>(null);
   const request = useRef<AbortController | undefined>(undefined);
+  const focusReturn = useFocusReturn();
   // Refetch on catalog/identity changes, without issuing requests for streaming tokens.
   const publication = JSON.stringify([
     application.snapshot?.workspaces,
@@ -45,7 +56,7 @@ export function ProjectsSettingsPage({ store }: {
     setError("");
     try {
       const result = await store.api.listProjects(controller.signal);
-      if (!controller.signal.aborted) setProjects(result.projects);
+      if (!controller.signal.aborted) { setProjects(result.projects); setLoaded(true); }
     } catch (cause) {
       if (!controller.signal.aborted) setError(messageFrom(cause));
     } finally {
@@ -53,16 +64,28 @@ export function ProjectsSettingsPage({ store }: {
     }
   }, [store]);
   useEffect(() => { void refresh(); return () => request.current?.abort(); }, [refresh, publication]);
-  const mutate = async (project: ProjectSummary, action: "remove" | "restore") => {
+  const remove = async (project: ProjectSummary) => {
+    setPendingId(project.id);
+    setNotice("");
+    try {
+      await store.api.removeProject(project.id, { expectedRevision: project.revision });
+      setNotice(`Removed project ${project.label}. Files and history are retained.`);
+      await refresh();
+    } catch (cause) {
+      await refresh();
+      throw new Error(messageFrom(cause));
+    } finally {
+      setPendingId(undefined);
+    }
+  };
+  const restore = async (project: ProjectSummary) => {
     if (pendingId) return;
     setPendingId(project.id);
     setMutationError("");
     setNotice("");
     try {
-      if (action === "remove") await store.api.removeProject(project.id, { expectedRevision: project.revision });
-      else await store.reopenWorkspace(project.id);
-      setRemoving(undefined);
-      setNotice(action === "restore" ? `Restored project ${project.label}.` : `Removed project ${project.label}. Files and history are retained.`);
+      await store.reopenWorkspace(project.id);
+      setNotice(`Restored project ${project.label}.`);
       await refresh();
     } catch (cause) {
       setMutationError(messageFrom(cause));
@@ -79,49 +102,60 @@ export function ProjectsSettingsPage({ store }: {
     && (status === "all" || (status === "removed" ? project.removed : !project.removed))
     && `${project.label} ${project.path} ${project.environmentLabel}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
   const activeFilters = Number(Boolean(filter)) + Number(status !== "all");
-  return <div className="execution-settings-page" data-view="list">
-    <header className="execution-settings-header"><div><h3 className="settings-page-title" tabIndex={-1}>Projects</h3><p>Manage remembered directories across your environments.</p></div>
-      <div className="execution-settings-actions">
-        <Button className="execution-settings-refresh" size="sm" variant="outline" disabled={loading || Boolean(pendingId)} onClick={() => void refresh()} aria-label="Refresh projects"><RefreshCw size={15} aria-hidden="true" /><span>Refresh</span></Button>
-        <Button size="sm" aria-label="Add project" disabled={Boolean(pendingId) || !environments.length} onClick={() => setAddOpen(true)}><span>Add<span className="execution-settings-add-kind"> project</span></span></Button>
-      </div>
-    </header>
-    <div className="execution-inventory-toolbar">
-      <div className="execution-inventory-search"><Search size={15} aria-hidden="true" />
-        <Input ref={searchInput} aria-label="Search projects" placeholder="Search projects…" value={search} onChange={event => setSearch(event.currentTarget.value)} />
-      </div>
-      <Button ref={filterToggle} className="execution-inventory-filter-toggle" size="sm" variant="outline"
-        aria-expanded={filtersOpen} aria-controls={filterPanelId} onClick={() => setFiltersOpen(open => !open)}>
-        <SlidersHorizontal size={15} aria-hidden="true" />Filters{activeFilters ? ` (${activeFilters})` : ""}
-      </Button>
-      <div id={filterPanelId} className="execution-inventory-filters" data-expanded={filtersOpen}>
-        <div className="execution-inventory-filter"><span>Environment</span><SearchableSelect label="Project environment" searchLabel="Search environments" emptyLabel="No matching environments"
-          value={filter} onValueChange={setFilter} triggerProps={{ className: "projects-settings-filter" }}
-          options={[{ value: "", label: "All environments", pinned: true }, ...Array.from(environmentOptions).sort((left, right) => left[1].localeCompare(right[1])).map(([value, label]) => ({ value, label }))]} />
+  const filtered = Boolean(search || activeFilters);
+  const clear = () => { setSearch(""); setFilter(""); setStatus("all"); searchInput.current?.focus(); };
+  return <SettingsPage width="wide" className="projects-settings" title="Projects" description="Directories remembered across your environments."
+    actions={<>
+      <Button type="button" variant="ghost" size="icon" aria-label="Refresh projects" title="Refresh" disabled={loading || Boolean(pendingId)} onClick={() => void refresh()}><RefreshCw /></Button>
+      <Button type="button" aria-label="Add project" disabled={Boolean(pendingId) || !environments.length} onClick={() => setAddOpen(true)}><Plus />Add project</Button>
+    </>}>
+    {notice ? <Callout tone="success" role="status">{notice}</Callout> : null}
+    {error ? <Callout tone="danger" role="alert" action={<Button type="button" size="sm" variant="outline" onClick={() => void refresh()}>Retry</Button>}>{error}</Callout> : null}
+    {mutationError ? <Callout tone="danger" role="alert">{mutationError}</Callout> : null}
+    <section className="projects-list" aria-label="Remembered projects">
+      <div className="execution-toolbar projects-toolbar" data-filters={filtersOpen ? "open" : "closed"}>
+        <div className="execution-search"><Search aria-hidden="true" />
+          <Input ref={searchInput} type="search" aria-label="Search projects" placeholder="Search projects…" value={search} onChange={event => setSearch(event.currentTarget.value)} />
         </div>
-        <div className="execution-inventory-filter"><span>Status</span><SearchableSelect label="Project status" searchLabel="Search project statuses" emptyLabel="No matching statuses"
-          value={status} onValueChange={setStatus} triggerProps={{ className: "projects-settings-filter" }}
-          options={[{ value: "all", label: "All projects", pinned: true }, { value: "active", label: "Remembered projects" }, { value: "removed", label: "Removed projects" }]} />
+        <Button ref={filterToggle} type="button" variant="outline" className="execution-filter-toggle" aria-expanded={filtersOpen} aria-controls={filterPanelId}
+          onClick={() => setFiltersOpen(open => !open)}><SlidersHorizontal />Filters{activeFilters ? ` (${activeFilters})` : ""}</Button>
+        <div id={filterPanelId} className="execution-filters">
+          <div className="execution-filter"><span className="execution-filter-label">Environment</span><SearchableSelect label="Project environment" searchLabel="Search environments" emptyLabel="No matching environments"
+            value={filter} onValueChange={setFilter}
+            options={[{ value: "", label: "All environments", pinned: true }, ...Array.from(environmentOptions).sort((left, right) => left[1].localeCompare(right[1])).map(([value, label]) => ({ value, label }))]} />
+          </div>
+          <div className="execution-filter"><span className="execution-filter-label">Status</span><SearchableSelect label="Project status" searchLabel="Search project statuses" emptyLabel="No matching statuses"
+            value={status} onValueChange={setStatus}
+            options={[{ value: "all", label: "All projects", pinned: true }, { value: "active", label: "Remembered projects" }, { value: "removed", label: "Removed projects" }]} />
+          </div>
+          <Button type="button" className="execution-filter-done" onClick={() => { setFiltersOpen(false); filterToggle.current?.focus(); }}>Show results</Button>
         </div>
-        <Button className="execution-inventory-filter-done" size="sm" onClick={() => { setFiltersOpen(false); filterToggle.current?.focus(); }}>Show results</Button>
       </div>
-      {search || activeFilters ? <Button size="sm" variant="ghost" className="execution-inventory-clear" onClick={() => {
-        setSearch(""); setFilter(""); setStatus("all"); searchInput.current?.focus();
-      }}>Clear filters</Button> : null}
-    </div>
-    {notice && <p role="status">{notice}</p>}
-    {loading && <p role="status">Loading projects…</p>}
-    {error && <p role="alert" className="execution-settings-error">{error}</p>}
-    {mutationError && !removing && <p role="alert" className="execution-settings-error">{mutationError}</p>}
-    {!loading && !error && <p className="execution-settings-muted" role="status">{visible.length} of {projects.length} projects</p>}
-    {!loading && !error && !visible.length && <p>{projects.length ? "No projects match these filters." : "No projects yet. Add a directory to start a thread."}</p>}
-    <ul className="projects-settings-list">{visible.map((project) => <li key={project.id}>
-      <div className="projects-settings-description"><strong>{project.label}</strong><span className="projects-settings-path">{project.path}</span><small>{project.environmentLabel} · {project.removed ? "Removed" : project.available ? "Available" : "Unavailable"}{project.removed && !project.available ? " · Unavailable" : ""} · {project.threadCount} thread{project.threadCount === 1 ? "" : "s"}</small></div>
-      <Button variant="outline" size="sm" disabled={Boolean(pendingId)} aria-label={`${project.removed ? "Restore" : "Remove"} project ${project.label}`}
-        onClick={() => { setMutationError(""); if (project.removed) void mutate(project, "restore"); else setRemoving(project); }}>
-        {pendingId === project.id ? "Saving…" : project.removed ? "Restore" : "Remove"}
-      </Button>
-    </li>)}</ul>
+      {loading && !loaded ? <div className="execution-loading" role="status" aria-label="Loading projects"><Skeleton className="h-14" /><Skeleton className="h-14" /></div> : null}
+      {loaded ? <div className="execution-list-count">
+        <p role="status">{visible.length === projects.length ? countLabel(projects.length, "project") : `${visible.length} of ${countLabel(projects.length, "project")}`}</p>
+        {filtered ? <Button type="button" variant="link" size="xs" onClick={clear}>Clear filters</Button> : null}
+      </div> : null}
+      {loaded && !projects.length ? <EmptyState icon={<Folder />} title="No projects yet" description="Add a directory to start a thread in it."
+        action={environments.length ? <Button type="button" variant="outline" onClick={() => setAddOpen(true)}><Plus />Add project</Button> : undefined} /> : null}
+      {loaded && projects.length && !visible.length ? <EmptyState variant="inline" title="No projects match these filters." /> : null}
+      {visible.length ? <ul className="projects-rows">{visible.map((project) => <li key={project.id} className="projects-row" data-removed={project.removed || undefined}>
+        <span className="projects-row-icon" aria-hidden="true"><Folder /></span>
+        <span className="projects-row-text">
+          <span className="projects-row-title">{project.label}{project.removed ? <Tag>Removed</Tag> : null}</span>
+          <span className="projects-row-path" title={project.path}>{project.path}</span>
+          <span className="projects-row-meta">{project.environmentLabel} · {countLabel(project.threadCount, "thread")}</span>
+        </span>
+        <span className="projects-row-status">{project.available
+          ? <StatusPill tone="success">Available</StatusPill> : <StatusPill tone="warning">Unavailable</StatusPill>}</span>
+        <span className="projects-row-actions">
+          <Button type="button" variant="outline" size="sm" disabled={Boolean(pendingId)} aria-label={`${project.removed ? "Restore" : "Remove"} project ${project.label}`}
+            onClick={() => { setMutationError(""); if (project.removed) void restore(project); else setRemoving(project); }}>
+            {pendingId === project.id ? "Saving…" : project.removed ? "Restore" : "Remove"}
+          </Button>
+        </span>
+      </li>)}</ul> : null}
+    </section>
     {addOpen && <AddProjectDialog store={store} environments={environments} initialEnvironmentId={filter || undefined}
       onClose={() => setAddOpen(false)} onAdded={(id, addedEnvironmentId) => {
         const restored = projects.find((project) => project.id === id && project.removed);
@@ -129,13 +163,9 @@ export function ProjectsSettingsPage({ store }: {
         if (filter && filter !== addedEnvironmentId) setFilter("");
         void refresh();
       }} />}
-    <Dialog open={Boolean(removing)} onOpenChange={(open) => { if (!open && !pendingId) { setRemoving(undefined); setMutationError(""); } }}>
-      <DialogContent className="projects-settings-removal"><DialogTitle>Remove project {removing?.label}?</DialogTitle>
-        <DialogDescription>Hide this project and its {removing?.threadCount ?? 0} thread{removing?.threadCount === 1 ? "" : "s"} from the working inventory. Files, conversation history, and saved application data are retained. You can restore the project here. Stop running work, pause schedules, and end terminals before removal.</DialogDescription>
-        {mutationError && <p role="alert" className="execution-settings-error">{mutationError}</p>}
-        <div className="execution-settings-actions"><Button variant="outline" disabled={Boolean(pendingId)} onClick={() => setRemoving(undefined)}>Cancel</Button>
-          <Button variant="destructive" disabled={Boolean(pendingId)} onClick={() => { if (removing) void mutate(removing, "remove"); }}>Remove project</Button></div>
-      </DialogContent>
-    </Dialog>
-  </div>;
+    <ConfirmDialog open={Boolean(removing)} onOpenChange={(open) => { if (!open) setRemoving(undefined); }}
+      title={`Remove project ${removing?.label ?? ""}?`} confirmLabel="Remove project" pendingLabel="Removing…"
+      description={`Hide this project and its ${countLabel(removing?.threadCount ?? 0, "thread")} from the working inventory. Files, conversation history, and saved application data are retained, and you can restore the project here. Stop running work, pause schedules, and end terminals before removal.`}
+      onConfirm={async () => { if (removing) await remove(removing); }} {...focusReturn} />
+  </SettingsPage>;
 }
