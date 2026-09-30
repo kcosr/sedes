@@ -126,6 +126,7 @@ function terminalResource(
 }
 
 let mobile = false;
+let coarsePointer = false;
 let mediaListeners = new Set<(event: MediaQueryListEvent) => void>();
 let toggleSidebar = vi.fn();
 let terminalPanelInstanceSequence = 0;
@@ -183,6 +184,7 @@ beforeEach(() => {
   threadListeners = new Set();
   applicationListeners = new Set();
   mobile = false;
+  coarsePointer = false;
   mediaListeners = new Set();
   toggleSidebar = vi.fn();
   terminalPanelInstanceSequence = 0;
@@ -200,6 +202,9 @@ beforeEach(() => {
   };
   vi.stubGlobal("matchMedia", (query: string) => ({
     get matches() {
+      if (query === "(min-width: 820px) and (pointer: fine)") {
+        return !mobile && !coarsePointer;
+      }
       return mobile;
     },
     media: query,
@@ -2217,8 +2222,9 @@ describe("PanelLayout singleton surfaces", () => {
     expect(store.getSnapshot().focusRequest).toBeUndefined();
   });
 
-  it("does not carry cold-thread composer focus onto mobile", async () => {
-    mobile = true;
+  it.each(["phone", "touch tablet"])("does not carry cold-thread composer focus onto a %s", async (device) => {
+    mobile = device === "phone";
+    coarsePointer = true;
     const store = setup({ chatUnmountedUntilReady: true });
 
     act(() => {
@@ -2239,6 +2245,28 @@ describe("PanelLayout singleton surfaces", () => {
 
     const composer = await screen.findByRole("textbox", { name: "Chat draft" });
     expect(composer).not.toHaveFocus();
+  });
+
+  it.each(["touch", "pen"])("focuses the chat panel instead of its composer after %s selection on a hybrid desktop", async (pointerType) => {
+    const store = setup({ chatUnmountedUntilReady: true });
+    const pointer = new Event("pointerdown", { bubbles: true });
+    Object.defineProperty(pointer, "pointerType", { value: pointerType });
+    fireEvent(document.body, pointer);
+    act(() => store.openPanel("chat", { focus: true }));
+    await waitFor(() => expect(store.getSnapshot().focusRequest).toBeUndefined());
+    act(() => publishThreadState({
+      ...initialThreadState,
+      status: "ready",
+      connection: "connected",
+      authoritative: true,
+    }));
+    const composer = await screen.findByRole("textbox", { name: "Chat draft" });
+    expect(composer).not.toHaveFocus();
+    expect(screen.getByRole("region", { name: "Chat panel content" })).toHaveFocus();
+
+    fireEvent.keyDown(document.body, { key: "Enter" });
+    act(() => store.openPanel("chat", { focus: true }));
+    await waitFor(() => expect(composer).toHaveFocus());
   });
 
   it("keeps route-scoped Chat focus pending until the destination composer mounts", async () => {

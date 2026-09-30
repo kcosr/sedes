@@ -151,6 +151,8 @@
 
 ### Changed
 
+- Keep the composer unfocused when opening threads on touch tablets or by
+  touch/pen on hybrid devices, while preserving desktop mouse/keyboard focus.
 - Balance chat header rows vertically when the worktree picker is shown.
 - Add space after the chat header backend icon and enlarge the expandable
   mobile Search and worktree controls.

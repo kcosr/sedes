@@ -39,7 +39,7 @@ import {
 } from "./thread/Transcript.js";
 import { Button } from "@client/components/ui/button";
 import { CodexTuiThreadPresentation } from "../provider-features/codex-tui.js";
-import { useMediaQuery } from "../app/use-media-query.js";
+import { useChatAutofocus } from "../app/use-chat-autofocus.js";
 import {
   currentThreadLoadAttempt,
   recordThreadLoadDiagnostic,
@@ -47,7 +47,6 @@ import {
 import type { PanelChromeControls } from "../workspace-panels/PanelChrome.js";
 import { useTaskDrag } from "../tasks/task-drag.js";
 
-const DESKTOP_CHAT_AUTOFOCUS_QUERY = "(min-width: 820px) and (pointer: fine)";
 const CONNECTING_BANNER_DELAY_MS = 5_000;
 
 export function ThreadView({
@@ -73,7 +72,7 @@ export function ThreadView({
     [registry, threadId],
   );
   const state = useThreadStore(store);
-  const desktopChatAutofocus = useMediaQuery(DESKTOP_CHAT_AUTOFOCUS_QUERY);
+  const desktopChatAutofocus = useChatAutofocus();
   const taskDrag = useTaskDrag();
   const focusAtThreadOpen = useRef(
     typeof document === "undefined" ? null : document.activeElement,

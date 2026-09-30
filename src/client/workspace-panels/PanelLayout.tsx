@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useChatAutofocus } from "../app/use-chat-autofocus.js";
 import { parseRoute, pushHistoryEntry, replaceHistoryEntry } from "../app/router.js";
 import {
   CheckIcon,
@@ -230,6 +231,7 @@ function PanelLayoutReady({
     | undefined
   >(undefined);
   const closeMobileTerminalRef = useRef<() => void>(() => undefined);
+  const chatAutofocus = useChatAutofocus();
   const [desktop, setDesktop] = useState(
     () => !window.matchMedia(MOBILE_QUERY).matches,
   );
@@ -709,11 +711,11 @@ function PanelLayoutReady({
       return;
     // A cold Chat route initially contains only ThreadLoading. Focusing the
     // portal target at that point would consume the request before the
-    // preferred composer mounts. Keep the desktop request pending instead;
+    // preferred composer mounts. Keep an eligible autofocus request pending;
     // the interaction listeners below still abandon it if the user chooses a
     // different target while the thread loads.
     if (
-      desktop &&
+      chatAutofocus &&
       focusRequest.panelInstanceId === "chat" &&
       threadState.status === "loading" &&
       preferredFocusTarget(chatTarget) === undefined
@@ -738,7 +740,12 @@ function PanelLayoutReady({
         filesTarget,
         workpadsTarget,
       );
-      if (!focusInside(target, desktop)) return;
+      if (
+        !focusInside(
+          target,
+          focusRequest.panelInstanceId === "chat" ? chatAutofocus : desktop,
+        )
+      ) return;
       const focused = document.activeElement;
       requestAnimationFrame(() => {
         if (cancelled) return;
@@ -766,6 +773,7 @@ function PanelLayoutReady({
   }, [
     active,
     chatTarget,
+    chatAutofocus,
     desktop,
     filesTarget,
     workpadsTarget,
