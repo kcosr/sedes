@@ -1081,7 +1081,7 @@ describe("ThreadContextMenu content per thread state", () => {
     expect(store.mutateInventory).toHaveBeenCalledWith(thread, "restore");
   });
 
-  it("shows group creation failures inside the open group dialog", async () => {
+  it("shows group creation failures on the New group name field", async () => {
     stubTouchDensity();
     const store = makeStore();
     const createThreadGroup = vi
@@ -1093,12 +1093,11 @@ describe("ThreadContextMenu content per thread state", () => {
     await userEvent.click(
       within(sheet).getByRole("menuitem", { name: "New group…" }),
     );
-    const dialog = await screen.findByTestId("thread-group-dialog");
-    await userEvent.click(
-      within(dialog).getByRole("button", { name: "Create and move" }),
-    );
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "A group with this name already exists.",
+    const dialog = await screen.findByRole("dialog", { name: "New group" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    const name = within(dialog).getByRole("textbox", { name: "Group name" });
+    await waitFor(() =>
+      expect(name).toHaveAccessibleDescription("A group with this name already exists."),
     );
     expect(createThreadGroup).toHaveBeenCalledWith(
       expect.objectContaining({ id: "thread-1" }),
@@ -1204,24 +1203,23 @@ describe("searchable Move to group", () => {
     return { thread, store, assignThreadGroup, createThreadGroup, removeThreadGroup };
   }
 
-  /** Move to group › New group… by keyboard opens the searchable dialog. */
+  /** Opens Move to group by keyboard and returns the submenu. */
   async function openGroups(trigger: HTMLElement) {
     const menu = await openMenu(trigger);
     within(menu).getByRole("menuitem", { name: "Move to group" }).focus();
     await userEvent.keyboard("{ArrowRight}");
-    const groups = await screen.findByRole("menu", { name: "Move to group" });
-    within(groups).getByRole("menuitem", { name: "New group…" }).focus();
-    await userEvent.keyboard("{Enter}");
-    return screen.findByRole("dialog", { name: "Move to group" });
+    return screen.findByRole("menu", { name: "Move to group" });
   }
 
-  it("lists the groups as radio rows and assigns only a different group", async () => {
+  const groupRows = (container: HTMLElement) =>
+    within(container).queryAllByRole("menuitemradio").map((row) => row.textContent);
+
+  it("lists the groups as radio rows, checks the current one, and assigns only a different group", async () => {
     const { thread, store, assignThreadGroup, removeThreadGroup } = groupFixture();
     const trigger = renderMenu(thread, store);
     let groups = await openSubmenu(await openMenu(trigger), "Move to group");
-    expect(
-      within(groups).getAllByRole("menuitemradio").map((row) => row.textContent),
-    ).toEqual(["Current work", "Backend cleanup", "Release planning"]);
+    expect(within(groups).getByRole("searchbox", { name: "Search groups" })).toHaveValue("");
+    expect(groupRows(groups)).toEqual(["Current work", "Backend cleanup", "Release planning"]);
     expect(
       within(groups).getByRole("menuitemradio", { name: "Current work" }),
     ).toHaveAttribute("aria-checked", "true");
@@ -1229,9 +1227,7 @@ describe("searchable Move to group", () => {
       within(groups).getByRole("menuitemradio", { name: "Backend cleanup" }),
     ).toHaveAttribute("aria-checked", "false");
     expect(
-      within(groups)
-        .getAllByRole("menuitem")
-        .map((row) => row.textContent),
+      within(groups).getAllByRole("menuitem").map((row) => row.textContent),
     ).toEqual(["New group…", "Remove from group"]);
     await userEvent.click(
       within(groups).getByRole("menuitemradio", { name: "Current work" }),
@@ -1253,9 +1249,7 @@ describe("searchable Move to group", () => {
     await userEvent.click(
       within(groups).getByRole("menuitem", { name: "Remove from group" }),
     );
-    expect(grouped.removeThreadGroup).toHaveBeenCalledExactlyOnceWith(
-      grouped.thread,
-    );
+    expect(grouped.removeThreadGroup).toHaveBeenCalledExactlyOnceWith(grouped.thread);
     expect(grouped.assignThreadGroup).not.toHaveBeenCalled();
     cleanup();
 
@@ -1265,9 +1259,7 @@ describe("searchable Move to group", () => {
       "Move to group",
     );
     expect(
-      within(ungroupedGroups).queryByRole("menuitem", {
-        name: "Remove from group",
-      }),
+      within(ungroupedGroups).queryByRole("menuitem", { name: "Remove from group" }),
     ).toBeNull();
     expect(
       within(ungroupedGroups)
@@ -1276,126 +1268,165 @@ describe("searchable Move to group", () => {
     ).toBe(true);
   });
 
-  it("focuses search from the desktop menu and assigns only the explicitly chosen match", async () => {
+  it("focuses the search as the submenu opens and filters the groups as you type", async () => {
     const { thread, store, assignThreadGroup } = groupFixture();
-    const dialog = await openGroups(renderMenu(thread, store));
-    const search = within(dialog).getByRole("combobox", { name: "Search groups" });
+    const groups = await openGroups(renderMenu(thread, store));
+    const search = within(groups).getByRole("searchbox", { name: "Search groups" });
+    await waitFor(() => expect(search).toHaveFocus());
+    await userEvent.keyboard(" CLEANUP back ");
+    expect(search).toHaveValue(" CLEANUP back ");
     expect(search).toHaveFocus();
-    expect(search).not.toHaveAttribute("aria-activedescendant");
-    await userEvent.keyboard("{Enter}");
-    expect(assignThreadGroup).not.toHaveBeenCalled();
-    const current = within(dialog).getByRole("option", { name: /Current work/ });
-    expect(current).toHaveAttribute("aria-disabled", "true");
-    await userEvent.click(current);
-    expect(assignThreadGroup).not.toHaveBeenCalled();
-    await userEvent.type(search, " CLEANUP back ");
-    expect(within(dialog).queryByRole("option", { name: /Release planning/ })).toBeNull();
-    const match = within(dialog).getByRole("option", { name: /Backend cleanup/ });
-    expect(match).toHaveTextContent("4");
+    expect(groupRows(groups)).toEqual(["Backend cleanup"]);
+    // New group… stays; nothing is chosen by typing alone.
+    expect(within(groups).getByRole("menuitem", { name: "New group…" })).toBeVisible();
     expect(assignThreadGroup).not.toHaveBeenCalled();
     await userEvent.keyboard("{Enter}");
     expect(assignThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, "backend");
-    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await waitFor(() => expect(groups).not.toBeInTheDocument());
   });
 
-  it.each(["current", null])("requires navigation before choosing an unfiltered destination from %s", async (groupId) => {
-    const { thread, store, assignThreadGroup } = groupFixture(groupId);
-    const dialog = await openGroups(renderMenu(thread, store));
-    const search = within(dialog).getByRole("combobox", { name: "Search groups" });
-    expect(search).not.toHaveAttribute("aria-activedescendant");
+  it("picks nothing on Enter with an empty search", async () => {
+    const { thread, store, assignThreadGroup, createThreadGroup } = groupFixture(null);
+    const groups = await openGroups(renderMenu(thread, store));
+    await waitFor(() =>
+      expect(within(groups).getByRole("searchbox", { name: "Search groups" })).toHaveFocus(),
+    );
     await userEvent.keyboard("{Enter}");
     expect(assignThreadGroup).not.toHaveBeenCalled();
+    expect(createThreadGroup).not.toHaveBeenCalled();
+    expect(groups).toBeInTheDocument();
+  });
+
+  it("moves between the search and the results with the arrow keys, and types from a row", async () => {
+    const { thread, store, assignThreadGroup } = groupFixture(null);
+    const groups = await openGroups(renderMenu(thread, store));
+    const search = within(groups).getByRole("searchbox", { name: "Search groups" });
+    await waitFor(() => expect(search).toHaveFocus());
+    await userEvent.keyboard("{ArrowDown}");
+    expect(within(groups).getByRole("menuitemradio", { name: "Current work" })).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(within(groups).getByRole("menuitemradio", { name: "Backend cleanup" })).toHaveFocus();
+    // Typing on a row goes to the search, not to the menu's typeahead.
+    await userEvent.keyboard("r");
+    expect(search).toHaveFocus();
+    expect(search).toHaveValue("r");
+    expect(groupRows(groups)).toEqual(["Current work", "Release planning"]);
+    await userEvent.keyboard("{ArrowDown}");
+    expect(within(groups).getByRole("menuitemradio", { name: "Current work" })).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}");
+    expect(search).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}");
+    expect(within(groups).getByRole("menuitem", { name: "New group…" })).toHaveFocus();
     await userEvent.keyboard("{ArrowUp}{Enter}");
     expect(assignThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, "release");
   });
 
-  it("keeps create and ungroup reachable for an unmatched search without assigning on Enter", async () => {
-    const { thread, store, assignThreadGroup, createThreadGroup, removeThreadGroup } = groupFixture();
-    const dialog = await openGroups(renderMenu(thread, store));
-    await userEvent.type(within(dialog).getByRole("combobox", { name: "Search groups" }), "unmatched{Enter}");
-    expect(within(dialog).getByRole("status")).toHaveTextContent("No matching groups");
-    expect(within(dialog).queryAllByRole("option")).toHaveLength(0);
+  it("creates a group from a search that matches none, and moves the thread in one step", async () => {
+    const { thread, store, assignThreadGroup, createThreadGroup } = groupFixture();
+    const trigger = renderMenu(thread, store);
+    let groups = await openGroups(trigger);
+    await userEvent.type(within(groups).getByRole("searchbox", { name: "Search groups" }), "  Design review ");
+    expect(groupRows(groups)).toEqual([]);
+    const create = within(groups).getByRole("menuitem", { name: "Create group “Design review”" });
+    expect(
+      within(groups).getAllByRole("menuitem").map((row) => row.textContent),
+    ).toEqual(["Create group “Design review”", "New group…", "Remove from group"]);
+    await userEvent.click(create);
+    expect(createThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, "Design review");
     expect(assignThreadGroup).not.toHaveBeenCalled();
-    expect(createThreadGroup).not.toHaveBeenCalled();
-    expect(within(dialog).getByRole("textbox", { name: "Create group" })).toHaveValue(thread.title.text);
-    expect(within(dialog).getByRole("button", { name: "Create and move" })).toBeEnabled();
-    await userEvent.click(within(dialog).getByRole("button", { name: "Ungroup" }));
-    expect(removeThreadGroup).toHaveBeenCalledExactlyOnceWith(thread);
-    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await waitFor(() => expect(groups).not.toBeInTheDocument());
+
+    // Enter from the search takes the Create row too.
+    groups = await openGroups(trigger);
+    await userEvent.type(within(groups).getByRole("searchbox", { name: "Search groups" }), "Ops{Enter}");
+    expect(createThreadGroup).toHaveBeenLastCalledWith(thread, "Ops");
+    expect(createThreadGroup).toHaveBeenCalledTimes(2);
   });
 
-  it("prompts to create the first group instead of an empty search", async () => {
-    const { thread, store, createThreadGroup } = groupFixture(null, []);
-    const dialog = await openGroups(renderMenu(thread, store));
-    expect(within(dialog).getByText("No groups yet")).toBeVisible();
-    expect(within(dialog).queryByRole("combobox", { name: "Search groups" })).toBeNull();
-    expect(within(dialog).queryByText("No matching groups")).toBeNull();
-    const name = within(dialog).getByRole("textbox", { name: "Create group" });
-    await waitFor(() => expect(name).toHaveFocus());
-    await userEvent.click(within(dialog).getByRole("button", { name: "Create and move" }));
-    expect(createThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, thread.title.text);
-  });
-
-  it("cancels without changing the group", async () => {
-    const { thread, store, assignThreadGroup, createThreadGroup, removeThreadGroup } = groupFixture();
-    const dialog = await openGroups(renderMenu(thread, store));
-    // The name field is a regular form field: a label over normal-weight text.
-    expect(within(dialog).getByText("Create group")).toHaveAttribute("data-slot", "field-label");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(dialog).not.toBeInTheDocument());
-    expect(assignThreadGroup).not.toHaveBeenCalled();
-    expect(createThreadGroup).not.toHaveBeenCalled();
-    expect(removeThreadGroup).not.toHaveBeenCalled();
-  });
-
-  it("creates from the independent name field when no existing group matches", async () => {
-    const { thread, store, assignThreadGroup, createThreadGroup } = groupFixture(null);
-    const dialog = await openGroups(renderMenu(thread, store));
-    await userEvent.type(within(dialog).getByRole("combobox", { name: "Search groups" }), "missing");
-    const name = within(dialog).getByRole("textbox", { name: "Create group" });
-    await userEvent.clear(name);
-    await userEvent.type(name, "  New team  ");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Create and move" }));
-    expect(createThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, "New team");
-    expect(assignThreadGroup).not.toHaveBeenCalled();
-    await waitFor(() => expect(dialog).not.toBeInTheDocument());
-  });
-
-  it("keeps a failed assignment open with its query and allows retry", async () => {
+  it("shows a failed move under the row, keeping the menu's other actions", async () => {
     const { thread, store, assignThreadGroup } = groupFixture();
     assignThreadGroup.mockRejectedValueOnce(new Error("Group changed; try again."));
-    const dialog = await openGroups(renderMenu(thread, store));
-    const search = within(dialog).getByRole("combobox", { name: "Search groups" });
-    await userEvent.type(search, "release");
-    await userEvent.click(within(dialog).getByRole("option", { name: /Release planning/ }));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Group changed; try again.");
-    expect(search).toHaveValue("release");
-    await userEvent.click(within(dialog).getByRole("option", { name: /Release planning/ }));
+    const trigger = renderMenu(thread, store);
+    const groups = await openSubmenu(await openMenu(trigger), "Move to group");
+    await userEvent.click(within(groups).getByRole("menuitemradio", { name: "Release planning" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Group changed; try again.");
+    const retry = await openSubmenu(await openMenu(trigger), "Move to group");
+    await userEvent.click(within(retry).getByRole("menuitemradio", { name: "Release planning" }));
     expect(assignThreadGroup).toHaveBeenCalledTimes(2);
-    expect(assignThreadGroup).toHaveBeenLastCalledWith(thread, "release");
-    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 
-  it("blocks duplicate assignments and other mutations while saving", async () => {
+  it("blocks group changes while one is saving", async () => {
     const { thread, store, assignThreadGroup, createThreadGroup, removeThreadGroup } = groupFixture();
     const pending = deferred<void>();
     assignThreadGroup.mockReturnValueOnce(pending.promise);
-    const dialog = await openGroups(renderMenu(thread, store));
-    const choice = within(dialog).getByRole("option", { name: /Backend cleanup/ });
-    await userEvent.click(choice);
-    expect(choice).toHaveAttribute("aria-disabled", "true");
-    expect(within(dialog).getByRole("button", { name: "Ungroup" })).toBeDisabled();
-    expect(within(dialog).getByRole("button", { name: "Saving…" })).toBeDisabled();
-    await userEvent.click(choice);
+    const trigger = renderMenu(thread, store);
+    const groups = await openSubmenu(await openMenu(trigger), "Move to group");
+    await userEvent.click(within(groups).getByRole("menuitemradio", { name: "Backend cleanup" }));
+    const menu = await openMenu(trigger);
+    expect(within(menu).getByRole("menuitem", { name: "Move to group" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     expect(assignThreadGroup).toHaveBeenCalledOnce();
     expect(createThreadGroup).not.toHaveBeenCalled();
     expect(removeThreadGroup).not.toHaveBeenCalled();
     await act(async () => pending.resolve());
+    await userEvent.keyboard("{Escape}");
+    const reopened = await openMenu(trigger);
+    expect(within(reopened).getByRole("menuitem", { name: "Move to group" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
+  it("opens New group… as a create-only dialog prefilled with the search text", async () => {
+    const { thread, store, createThreadGroup, assignThreadGroup } = groupFixture();
+    const groups = await openGroups(renderMenu(thread, store));
+    await userEvent.type(within(groups).getByRole("searchbox", { name: "Search groups" }), "Ops");
+    await userEvent.click(within(groups).getByRole("menuitem", { name: "New group…" }));
+    const dialog = await screen.findByRole("dialog", { name: "New group" });
+    const name = within(dialog).getByRole("textbox", { name: "Group name" });
+    expect(name).toHaveValue("Ops");
+    await waitFor(() => expect(name).toHaveFocus());
+    // Only the name: no existing groups, no search.
+    expect(within(dialog).queryByRole("searchbox")).toBeNull();
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+    expect(within(dialog).queryByRole("option")).toBeNull();
+    expect(within(dialog).queryByText("Backend cleanup")).toBeNull();
+    const footer = dialog.querySelector<HTMLElement>('[data-slot="dialog-footer"]')!;
+    expect(
+      within(footer).getAllByRole("button").map((button) => button.textContent),
+    ).toEqual(["Cancel", "Create"]);
+    await userEvent.clear(name);
+    await userEvent.type(name, "  Ops rotation {Enter}");
+    expect(createThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, "Ops rotation");
+    expect(assignThreadGroup).not.toHaveBeenCalled();
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
   });
 
-  it("returns focus to the row on cancellation and clears search when reopened", async () => {
-    const { thread, store, assignThreadGroup } = groupFixture();
+  it("prefills New group… with the thread title and keeps empty and duplicate names on the field", async () => {
+    const { thread, store, createThreadGroup } = groupFixture(null);
+    const groups = await openGroups(renderMenu(thread, store));
+    await userEvent.click(within(groups).getByRole("menuitem", { name: "New group…" }));
+    const dialog = await screen.findByRole("dialog", { name: "New group" });
+    const name = within(dialog).getByRole("textbox", { name: "Group name" });
+    expect(name).toHaveValue(thread.title.text);
+    await userEvent.clear(name);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(name).toHaveAccessibleDescription("Enter a name for the group.");
+    await userEvent.type(name, "backend CLEANUP ");
+    expect(name).not.toHaveAttribute("aria-invalid");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    expect(name).toHaveAccessibleDescription("A group named “backend CLEANUP” already exists.");
+    expect(name).toHaveFocus();
+    expect(createThreadGroup).not.toHaveBeenCalled();
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it("shows the server's rejection on the name field and returns focus to the row on cancel", async () => {
+    const { thread, store, createThreadGroup } = groupFixture();
+    createThreadGroup.mockRejectedValueOnce(new Error("A group with this name already exists."));
     const returnFocusRef = { current: null as HTMLButtonElement | null };
     render(
       <ThreadContextMenu thread={thread} store={store} returnFocusRef={returnFocusRef}>
@@ -1403,44 +1434,54 @@ describe("searchable Move to group", () => {
       </ThreadContextMenu>,
     );
     const trigger = screen.getByRole("button", { name: "Groupable thread" });
-    const dialog = await openGroups(trigger);
-    await userEvent.type(within(dialog).getByRole("combobox", { name: "Search groups" }), "release{Escape}");
+    const groups = await openGroups(trigger);
+    await userEvent.click(within(groups).getByRole("menuitem", { name: "New group…" }));
+    const dialog = await screen.findByRole("dialog", { name: "New group" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    const name = within(dialog).getByRole("textbox", { name: "Group name" });
+    await waitFor(() =>
+      expect(name).toHaveAccessibleDescription("A group with this name already exists."),
+    );
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
     await waitFor(() => expect(trigger).toHaveFocus());
+    // Reopening starts with an empty search.
     const reopened = await openGroups(trigger);
-    expect(within(reopened).getByRole("combobox", { name: "Search groups" })).toHaveValue("");
-    expect(within(reopened).getAllByRole("option")).toHaveLength(3);
-    expect(assignThreadGroup).not.toHaveBeenCalled();
+    expect(within(reopened).getByRole("searchbox", { name: "Search groups" })).toHaveValue("");
+    expect(groupRows(reopened)).toHaveLength(3);
   });
 
-  it.each([false, true])("uses the searchable group dialog from the touch action sheet, keyboard override %s", async (keyboard) => {
+  it("searches, creates from the search and opens New group… from the touch sheet", async () => {
     stubTouchDensity();
-    const viewport = Object.assign(new EventTarget(), { height: window.innerHeight, offsetTop: 0 });
-    vi.stubGlobal("visualViewport", viewport);
-    const { thread, store, assignThreadGroup } = groupFixture();
-    const sheet = await openTouchSheet(renderMenu(thread, store));
+    const { thread, store, assignThreadGroup, createThreadGroup } = groupFixture();
+    const trigger = renderMenu(thread, store);
+    let sheet = await openTouchSheet(trigger);
     await drillIn(sheet, "Move to group");
-    const newGroup = within(sheet).getByRole("menuitem", { name: "New group…" });
-    if (keyboard) {
-      fireEvent.keyDown(newGroup, { key: "Enter" });
-      fireEvent.click(newGroup);
-    } else {
-      await userEvent.pointer([{ keys: "[TouchA>]", target: newGroup }, { keys: "[/TouchA]" }]);
-    }
-    const dialog = await screen.findByRole("dialog", { name: "Move to group" });
-    expect(sheet).not.toBeInTheDocument();
-    await waitFor(() => expect(keyboard ? within(dialog).getByRole("combobox", { name: "Search groups" }) : dialog).toHaveFocus());
-    await userEvent.type(within(dialog).getByRole("combobox", { name: "Search groups" }), "release");
-    expect(within(dialog).getByRole("combobox", { name: "Search groups" })).toHaveFocus();
-    act(() => {
-      viewport.height = window.innerHeight - 300;
-      viewport.dispatchEvent(new Event("resize"));
-    });
-    expect(dialog.style.getPropertyValue("--keyboard-inset")).toBe("300px");
-    expect(within(dialog).getAllByRole("option")).toHaveLength(1);
-    await userEvent.click(within(dialog).getByRole("option", { name: /Release planning/ }));
+    const search = within(sheet).getByRole("searchbox", { name: "Search groups" });
+    // The sheet opens for browsing: the search waits for a tap.
+    expect(search).not.toHaveFocus();
+    await userEvent.type(search, "release");
+    expect(groupRows(sheet)).toEqual(["Release planning"]);
+    await userEvent.click(within(sheet).getByRole("menuitemradio", { name: "Release planning" }));
     expect(assignThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, "release");
-    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await waitFor(() => expect(sheet).not.toBeInTheDocument());
+
+    sheet = await openTouchSheet(trigger);
+    await drillIn(sheet, "Move to group");
+    await userEvent.type(within(sheet).getByRole("searchbox", { name: "Search groups" }), "Ops");
+    await userEvent.click(within(sheet).getByRole("menuitem", { name: "Create group “Ops”" }));
+    expect(createThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, "Ops");
+    await waitFor(() => expect(sheet).not.toBeInTheDocument());
+
+    sheet = await openTouchSheet(trigger);
+    await drillIn(sheet, "Move to group");
+    await userEvent.type(within(sheet).getByRole("searchbox", { name: "Search groups" }), "Night");
+    await userEvent.click(within(sheet).getByRole("menuitem", { name: "New group…" }));
+    const dialog = await screen.findByRole("dialog", { name: "New group" });
+    expect(sheet).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("textbox", { name: "Group name" })).toHaveValue("Night");
+    expect(within(dialog).queryByRole("searchbox")).toBeNull();
   });
 });
 

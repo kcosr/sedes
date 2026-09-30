@@ -331,6 +331,19 @@ function groupRuns(visible: readonly VisibleOption[]): VisibleOption[][] {
 }
 
 /**
+ * The one search rule for pickers: every whitespace-separated term of the
+ * query occurs, case-insensitively, somewhere in the texts.
+ */
+export function matchesSearchQuery(
+  query: string,
+  texts: readonly string[],
+): boolean {
+  const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  const text = texts.join(" ").toLocaleLowerCase();
+  return terms.every((term) => text.includes(term));
+}
+
+/**
  * The picker's search row: a leading icon and a plain input over a divider,
  * not a bordered form control. Every searchable picker uses it.
  */
@@ -369,16 +382,12 @@ export function SearchableSelectList({
   const [query, setQuery] = useState("");
   const [activeValue, setActiveValue] = useState<string>();
   const [openingDirection, setOpeningDirection] = useState(initialDirection);
-  const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  const matches = (option: SearchableSelectOption): boolean => {
-    const text = [
+  const matches = (option: SearchableSelectOption): boolean =>
+    matchesSearchQuery(query, [
       option.label,
       option.description ?? "",
       ...(option.searchTerms ?? []),
-    ].join(" ")
-      .toLocaleLowerCase();
-    return terms.every((term) => text.includes(term));
-  };
+    ]);
   const visible = options
     .map((option, index) => ({ option, index, matches: matches(option) }))
     .filter(({ option, matches }) => option.pinned || matches);

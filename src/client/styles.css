@@ -1215,16 +1215,20 @@ textarea:disabled {
   text-overflow: ellipsis;
 }
 
-.thread-group-dialog > :not(.thread-group-search) {
-  flex-shrink: 0;
+/* Move to group (MoveToGroupMenu.tsx): the search row runs edge to edge at
+   the top of the submenu and stays in view while the groups scroll; in the
+   touch sheet's drill-in it sits on the rows' inset. */
+.thread-group-picker-search {
+  position: sticky;
+  z-index: var(--z-sticky);
+  top: 0;
+  margin: 0 calc(-1 * var(--menu-panel-padding)) var(--space-1);
+  background: var(--popover);
 }
 
-.thread-group-search {
-  display: flex;
-  min-height: 100px;
-  max-height: 280px;
-  flex-direction: column;
-  gap: 6px;
+.thread-group-picker-search[data-sheet] {
+  position: static;
+  margin: 0 0 var(--space-1);
 }
 
 /* Inline rename (context menu → Rename): the row link swaps to a form so
