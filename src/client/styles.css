@@ -698,29 +698,6 @@ textarea:disabled {
   color: var(--muted-foreground);
 }
 
-.sidebar-project-filter {
-  width: 100%;
-  min-width: 0;
-  justify-content: flex-start;
-  gap: 7px;
-  border-color: var(--border-soft);
-  background: transparent;
-}
-
-.sidebar-project-filter > span {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-project-filter svg {
-  flex: 0 0 auto;
-  color: var(--muted-foreground-2);
-}
-
 .sidebar-scope {
   display: grid;
   min-width: 0;
@@ -908,26 +885,6 @@ textarea:disabled {
   text-transform: uppercase;
 }
 
-.projects-add {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 auto;
-  place-items: center;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  color: var(--muted-foreground-2);
-  transition:
-    background var(--motion-fast),
-    color var(--motion-fast);
-}
-
-.projects-add:hover,
-.projects-add[data-state="open"] {
-  background: var(--secondary);
-  color: var(--foreground);
-}
-
 .project-row-shell {
   display: flex;
   min-width: 0;
@@ -1032,82 +989,6 @@ textarea:disabled {
   to {
     height: 0;
   }
-}
-
-/* Surface, motion, and dismissal come from the ui/popover primitive; the
-   z-index lifts the portalled content above the mobile drawer (z 81). */
-.workspace-popover {
-  z-index: calc(var(--z-dialog) + 10);
-  width: min(280px, calc(100vw - 16px));
-}
-
-.workspace-open {
-  display: grid;
-  gap: 8px;
-}
-
-.remembered-workspaces {
-  display: grid;
-  max-height: 190px;
-  gap: 2px;
-  overflow-y: auto;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.remembered-workspaces button {
-  display: grid;
-  min-width: 0;
-  min-height: 40px;
-  gap: 1px;
-  padding: 5px 8px;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  text-align: left;
-  transition: background var(--motion-fast);
-}
-
-.remembered-workspaces button:hover {
-  background: color-mix(in oklch, var(--foreground) 6%, transparent);
-}
-
-.remembered-workspaces button.selected {
-  background: var(--accent-soft);
-}
-
-.remembered-workspaces span,
-.remembered-workspaces small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-error {
-  margin: 0;
-  padding: 7px 8px;
-  border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--destructive) 12%, transparent);
-  color: var(--destructive);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.remembered-workspaces span {
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.remembered-workspaces small {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-}
-
-.workspace-open label {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
 }
 
 .field input {
@@ -3231,18 +3112,6 @@ textarea:disabled {
 }
 
 /* ── Panel instances and remote terminals ───────────────────────────── */
-.workspace-terminal-count {
-  min-width: 1.25rem;
-  padding: 0 0.35rem;
-  border-radius: 999px;
-  background: var(--muted);
-  color: var(--muted-foreground);
-  font-size: 0.72rem;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.25rem;
-  text-align: center;
-}
-
 .workspace-panel-tablist {
   display: flex;
   min-height: 32px;
@@ -4576,10 +4445,6 @@ textarea:disabled {
   text-overflow: ellipsis;
 }
 
-.thread-project-env {
-  flex: 0 0 auto;
-}
-
 .thread-location-context {
   gap: 6px;
 }
@@ -5212,14 +5077,6 @@ textarea:disabled {
 .thread-attention [data-slot="button"] {
   flex: 0 0 auto;
   margin-left: auto;
-}
-
-.thread-attention.queue-failure::before {
-  background: var(--destructive);
-}
-
-.thread-attention.queue-failure p {
-  color: var(--destructive);
 }
 
 .materialization-recovery {
@@ -11002,7 +10859,6 @@ tr.diff-hunk td {
   .shelf-trigger,
   .project-row,
   .project-filter-shortcut,
-  .sidebar-project-filter,
   .sidebar-scope-select,
   .sidebar-create-action,
   .back-button,

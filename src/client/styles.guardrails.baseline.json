@@ -11,13 +11,13 @@
   "fontSizeLiterals": {
     "components/tasks/tasks-panel.css": 15,
     "components/thread/flat-thread-row.css": 12,
-    "components/thread/question-inbox.css": 9,
+    "components/thread/question-inbox.css": 8,
     "components/thread/thread-group-roster.css": 1,
-    "styles.css": 250,
+    "styles.css": 245,
     "usage/usage.css": 23,
     "workpads/WorkpadDocument.css": 2,
     "workpads/workpads-panel.css": 7,
-    "workspace-files/workspace-compare.css": 21,
+    "workspace-files/workspace-compare.css": 20,
     "workspace-files/workspace-review-inspector.css": 1
   },
   "fontWeightLiterals": {
@@ -25,7 +25,7 @@
     "components/thread/flat-thread-row.css": 5,
     "components/thread/question-inbox.css": 2,
     "components/thread/thread-group-roster.css": 1,
-    "styles.css": 86,
+    "styles.css": 84,
     "usage/usage.css": 16,
     "workpads/workpads-panel.css": 2,
     "workspace-files/workspace-compare.css": 2
