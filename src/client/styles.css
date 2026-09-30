@@ -489,7 +489,7 @@ textarea:disabled {
 }
 
 /* One section-label voice, shared with `.menu-label` / `.op-body h4` /
-   `.automation-section-label`: 11px, 600, 0.07em, muted. Three of the four
+   the dialog section label: 11px, 600, 0.07em, muted. Three of the four
    `.eyebrow` call sites already overrode the old branded 760/0.14em/primary
    treatment to exactly this; the fourth (`.thread-fatal`) was the only place
    the branded voice still shipped, and it was the odd one out. */
@@ -11088,31 +11088,6 @@ tr.diff-hunk td {
   font-size: 12px;
 }
 
-.execution-workspace-git-warnings {
-  margin: 8px 0;
-  padding-left: 22px;
-  color: var(--destructive);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.archive-workspace-disposition {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px;
-  margin: 2px 0;
-  border: 1px solid var(--border-soft, var(--border));
-  border-radius: var(--radius-ctl);
-}
-
-.archive-workspace-disposition > p {
-  margin: 0;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
 .archive-choice-menu {
   z-index: calc(var(--z-dialog) + 10);
   width: min(300px, calc(100vw - 16px));
@@ -11794,82 +11769,21 @@ tr.diff-hunk td {
    run-history sections.
    ─────────────────────────────────────────────────────────────────────── */
 
-.dialog-overlay {
-  position: fixed;
-  z-index: calc(var(--z-floating) + 10);
-  inset: 0;
-  background: var(--scrim);
-  animation: fade-in 130ms ease-out;
-}
-
-.dialog-card {
-  position: fixed;
-  z-index: calc(var(--z-floating) + 11);
-  top: 50%;
-  left: 50%;
-  width: min(420px, calc(100vw - 30px));
-  padding: 20px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--secondary);
-  box-shadow: var(--shadow);
-  transform: translate(-50%, -50%);
-  max-height: calc(100dvh - 24px);
-  overflow-y: auto;
-  animation: dialog-in var(--motion-pop);
-}
-
-/* Dialogs launched from a drawer or popover must clear both interactive
-   surfaces so their scrim and card remain modal at every viewport width. */
-.dialog-overlay.over-drawer {
-  z-index: var(--z-over-dialog);
-}
-
-.dialog-card.over-drawer {
-  z-index: calc(var(--z-over-dialog) + 1);
-}
-
-.dialog-card h2 {
+.force-reset-status {
   margin: 0;
-  font-size: 14.5px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  color: var(--muted-foreground);
 }
 
-.dialog-card > p {
-  margin: 4px 0 16px;
+.force-reset-list {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: var(--space-4);
+  list-style: disc;
+}
+
+.force-reset-list li::marker {
   color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.force-reset-dialog {
-  width: min(460px, calc(100vw - 30px));
-}
-
-.force-reset-impact {
-  display: grid;
-  gap: 10px;
-  margin-bottom: 16px;
-  font-size: 12.5px;
-  line-height: 1.45;
-}
-
-.force-reset-impact h3,
-.force-reset-impact p,
-.force-reset-impact ul {
-  margin: 0;
-}
-
-.force-reset-impact h3 {
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.force-reset-impact > ul {
-  display: grid;
-  gap: 4px;
-  padding-left: 20px;
 }
 
 .force-reset-threads {
@@ -11878,126 +11792,36 @@ tr.diff-hunk td {
 }
 
 .force-reset-threads li {
-  display: grid;
   overflow-wrap: anywhere;
 }
 
 .force-reset-threads small {
-  color: var(--destructive);
+  display: block;
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
 }
 
 .force-reset-warnings {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid color-mix(in oklch, var(--destructive) 35%, var(--border));
-  border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--destructive) 10%, transparent);
-  color: var(--destructive);
+  margin-top: var(--space-1-5);
 }
 
-.force-reset-warnings ul {
-  display: grid;
-  gap: 5px;
-  padding-left: 17px;
-}
-
-.dialog-close {
-  position: absolute;
-  top: 9px;
-  right: 9px;
-}
-
-.field {
-  display: grid;
-  gap: 6px;
-}
-
-.field > span {
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.field > span small {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 400;
-}
-
-/* Quick-pick chips (SnoozeDialog presets): outline pills on the grey-wash
-   hover language; the Button primitive supplies the interactive states. */
-.preset-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 7px;
-  margin-top: 20px;
-}
-
-/* datetime-local stays native (correct mobile pickers — Phase 1 decision);
-   only its box is normalized onto the token system (SnoozeDialog). */
-.dialog-card .field input[type="datetime-local"] {
-  min-height: 34px;
-  padding: 6px 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  background: var(--background);
-  color: var(--foreground);
-  font-size: 13px;
-}
-
-.snooze-reminder-input {
-  min-height: 88px;
-  resize: vertical;
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  background: var(--background);
-  color: var(--foreground);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.dialog-card .field + .field {
-  margin-top: 12px;
-}
-
-.session-stats-dialog {
-  width: min(640px, calc(100vw - 28px));
-}
-
-.session-identifiers {
-  margin-top: 16px;
-  padding: 11px 14px 5px;
+/* Session stats: DialogSection labels over hairline cards; stat cards
+   title themselves inside. */
+.session-stats-card {
+  min-width: 0;
+  padding: var(--space-1) var(--space-3);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-card);
   background: var(--card);
 }
 
-.session-identifiers h3 {
-  margin: 0 0 3px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
 .session-identifier-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px 10px;
+  gap: var(--space-1) var(--space-2-5);
   align-items: center;
   min-width: 0;
-  padding: 5px 0;
+  padding: var(--space-1-5) 0;
 }
 
 .session-identifier-row + .session-identifier-row {
@@ -12007,14 +11831,14 @@ tr.diff-hunk td {
 .session-identifier-label {
   grid-column: 1 / -1;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-meta);
 }
 
 .session-identifier-row code {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--text-meta);
   user-select: text;
 }
 
@@ -12022,21 +11846,13 @@ tr.diff-hunk td {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--foreground);
-  font-size: 12px;
-}
-
-.session-identifier-copy {
-  height: 26px;
-  gap: 4px;
-  padding-inline: 7px;
-  font-size: 11px;
+  font-size: var(--text-meta);
 }
 
 .session-stats-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 12px;
-  margin-top: 16px;
+  gap: var(--space-2-5) var(--space-3);
 }
 
 /* An odd card count left a hole in the last row (the five-group case:
@@ -12047,32 +11863,30 @@ tr.diff-hunk td {
 }
 
 .session-stats-empty {
-  margin: 16px 0 4px;
-  padding: 22px 12px;
+  margin: 0;
+  padding: var(--space-5) var(--space-3);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-card);
   color: var(--muted-foreground-2);
-  font-size: 12.5px;
+  font-size: var(--text-meta);
   text-align: center;
 }
 
-/* Stat groups: 11px uppercase label over hairline definition rows,
-   values in tabular-nums (dialog card-group language). */
+/* Stat groups: a titled hairline card of definition rows, values in
+   tabular-nums. */
 .session-stat-group {
   min-width: 0;
-  padding: 11px 14px 5px;
+  padding: var(--space-2-5) var(--space-3) var(--space-1);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-card);
   background: var(--card);
 }
 
-.session-stat-group h3 {
-  margin: 0 0 3px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
+.session-stat-group h4 {
+  margin: 0 0 var(--space-0-5);
+  color: var(--foreground);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-semibold);
 }
 
 .session-stat-group dl {
@@ -12085,8 +11899,8 @@ tr.diff-hunk td {
   min-width: 0;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
-  padding: 5px 0;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
 }
 
 .session-stat-group dl > div + div {
@@ -12095,14 +11909,14 @@ tr.diff-hunk td {
 
 .session-stat-group dt {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-meta);
 }
 
 .session-stat-group dd {
   overflow: hidden;
   margin: 0;
   color: var(--foreground);
-  font-size: 12.5px;
+  font-size: var(--text-meta);
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -13566,129 +13380,32 @@ tr.diff-hunk td {
   }
 }
 
-/* `--editor-pad` is the editor's padding origin; the pinned close control
-   (a sibling of the editor, so it inherits from `.automation-dialog`) is
-   positioned on the same value, which is what puts it on Save's baseline. */
-.automation-dialog {
-  --editor-pad: clamp(18px, 3vw, 36px);
-}
-
-.automation-editor {
-  width: 100%;
-  max-width: 1280px;
-  min-width: 0;
-  height: 100%;
-  overflow: auto;
-  margin: 0 auto;
-  padding: var(--editor-pad, clamp(18px, 3vw, 36px));
-}
-
-.automation-editor-header {
+/* Automation editor: a side dialog (layout="side", size="lg"; a sheet on
+   touch) whose body sets the form beside the run-history rail. Sections are
+   DialogSection labels over hairline cards. */
+.automation-dialog-title {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 20px;
-}
-
-.automation-editor-header h1 {
-  margin: 3px 0 4px;
-  font-size: 20px;
-  font-weight: 650;
-  letter-spacing: -0.015em;
-}
-
-.automation-dialog {
-  position: fixed;
-  z-index: calc(var(--z-floating) + 12);
-  inset: 0 0 0 auto;
-  width: min(860px, calc(100vw - 260px));
   min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  border-left: 1px solid var(--border);
-  background: var(--background);
-  box-shadow: var(--shadow);
-  animation: automation-dialog-in var(--motion-pop);
+  align-items: center;
+  gap: var(--space-2);
 }
 
-.automation-dialog .automation-editor {
-  max-width: none;
-}
-
-/* The close control is pinned to the panel (the editor beneath it scrolls),
-   but it must still read as part of the header's action row. It is placed on
-   the editor's own padding origin — `--editor-pad`, the same clamp the editor
-   uses — so its top and right edges line up with Save's, and the header
-   reserves a gutter the width of the button plus enough clearance that the
-   two focus rings can never overlap. */
-.automation-dialog-close {
-  position: absolute;
-  z-index: calc(var(--z-sticky) + 1);
-  top: var(--editor-pad);
-  right: var(--editor-pad);
-}
-
-.automation-dialog .automation-editor-header {
-  /* 32px icon button + 12px clearance. */
-  padding-right: 44px;
-}
-
-.automation-thread-title {
+.automation-loading {
   margin: 0;
   color: var(--muted-foreground-2);
-  font-size: 12px;
-}
-
-@keyframes automation-dialog-in {
-  from {
-    transform: translateX(20px);
-    opacity: 0;
-  }
-}
-
-.automation-editor.loading {
-  display: grid;
-  place-items: center;
-  color: var(--muted-foreground-2);
-}
-
-.automation-editor-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
 }
 
 .automation-editor-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
   align-items: start;
-  gap: 24px;
+  gap: var(--space-6);
 }
 
 .automation-form {
   display: grid;
   min-width: 0;
-  gap: 16px;
-}
-
-/* ── Section language: 11px uppercase label above a hairline card group
-   (radius-card), replacing the old fieldset-with-legend panels. ── */
-.automation-section {
-  display: grid;
-  min-width: 0;
-  gap: 7px;
-}
-
-.automation-section-label {
-  margin: 0;
-  padding-left: 2px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
+  gap: var(--space-4);
 }
 
 .automation-section-card {
@@ -13701,26 +13418,33 @@ tr.diff-hunk td {
 
 .automation-section-card.padded {
   display: grid;
-  gap: 12px;
-  padding: 14px;
+  gap: var(--space-3);
+  padding: var(--space-3);
 }
 
-.automation-section-card .field {
-  display: grid;
-  min-width: 0;
-  gap: 6px;
+.automation-help {
+  margin: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
 }
 
-.automation-section-card input:not([type="radio"]):not([type="checkbox"]),
-.automation-section-card textarea {
-  width: 100%;
-  min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  background: var(--background);
-  color: var(--foreground);
-  font-size: 13px;
+/* The Field primitive's error line, for controls their section names. */
+.automation-field-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  margin: 0;
+  color: var(--destructive);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+.automation-field-error svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  flex-shrink: 0;
+  margin-top: 1px;
 }
 
 /* Anchor-thread note leading the run-mode card. */
@@ -13805,12 +13529,8 @@ tr.diff-hunk td {
 .precheck-options {
   display: grid;
   grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr);
-  align-items: center;
+  align-items: end;
   gap: 14px;
-}
-
-.precheck-test-button {
-  justify-self: start;
 }
 
 .precheck-test-result {
@@ -13869,53 +13589,11 @@ tr.diff-hunk td {
   line-height: 1.5;
 }
 
-.automation-section-card small,
-.schedule-timezone {
+.automation-section-card small {
   margin: 0;
   color: var(--muted-foreground-2);
   font-size: 12px;
   line-height: 1.45;
-}
-
-/* Schedule-kind segmented control: inset track, raised selected segment.
-   Selection is aria-pressed + .selected (e2e contract unchanged). */
-.segmented-control {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  gap: 2px;
-  padding: 3px;
-  border-radius: var(--radius-ctl);
-  background: var(--code);
-}
-
-/* Nested step: the track is radius-ctl with a 3px inset, so the geometric
-   inner radius is 8 − 3 = 5; the ramp's 6px nested step is the value that
-   keeps the segment concentric with the track. */
-.segmented-control button {
-  min-height: 30px;
-  padding: 5px 8px;
-  border-radius: var(--radius-inline);
-  background: transparent;
-  color: var(--muted-foreground);
-  font-size: 12.5px;
-  font-weight: 550;
-  transition:
-    background var(--motion-fast),
-    color var(--motion-fast),
-    box-shadow var(--motion-fast);
-}
-
-.segmented-control button:hover {
-  color: var(--foreground);
-}
-
-.segmented-control button.selected {
-  background: var(--secondary);
-  color: var(--foreground);
-  box-shadow:
-    inset 0 0 0 1px var(--border-soft),
-    var(--shadow-small);
 }
 
 .interval-fields {
@@ -14507,19 +14185,6 @@ tr.diff-hunk td {
   }
 }
 
-@keyframes fade-in {
-  from {
-    opacity: 0;
-  }
-}
-
-@keyframes dialog-in {
-  from {
-    opacity: 0;
-    transform: translate(-50%, -47%) scale(0.98);
-  }
-}
-
 @keyframes drawer-in {
   from {
     transform: translateX(-100%);
@@ -14901,39 +14566,6 @@ tr.diff-hunk td {
     align-items: stretch;
   }
 
-  .automation-editor {
-    padding: 18px 14px calc(30px + env(safe-area-inset-bottom));
-  }
-
-  .automation-dialog {
-    --editor-pad: 14px;
-    inset: 52px 0 0;
-    width: 100%;
-    border-left: 0;
-  }
-
-  /* Stacked header: the actions are their own full-width row below the
-     title, so the close control cannot reach them and the desktop gutter
-     would only narrow the buttons. */
-  .automation-dialog .automation-editor-header {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 14px;
-    padding-right: 0;
-  }
-
-  .automation-editor-header > div:first-child {
-    padding-right: 40px;
-  }
-
-  .automation-editor-actions {
-    justify-content: stretch;
-  }
-
-  .automation-editor-actions [data-slot="button"] {
-    flex: 1 1 auto;
-  }
-
   .automation-editor-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -15095,21 +14727,6 @@ tr.diff-hunk td {
 
   .archive-row-title small {
     margin-left: 0;
-  }
-
-  .automation-editor-actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-  }
-
-  /* Phase 1: Save is a ui/ Button default-variant now. */
-  .automation-editor-actions [data-slot="button"][data-variant="default"] {
-    grid-column: 1 / -1;
-  }
-
-  .segmented-control {
-    grid-auto-flow: row;
-    grid-auto-columns: unset;
   }
 
   .interval-fields {
@@ -15879,7 +15496,7 @@ tr.diff-hunk td {
 .recorded-usage-note, .recorded-usage-model { color: var(--muted-foreground); font-size: 11px; }
 .recorded-usage-model { overflow-wrap: anywhere; }
 .recorded-usage-legacy { display: grid; gap: 7px; border-top: 1px solid var(--border); padding-top: 9px; }
-.session-recorded-usage { padding-block: 12px; }
+.session-recorded-usage { padding-block: var(--space-3); }
 .recorded-usage-breakdown { min-width: 0; overflow-x: auto; }
 .recorded-usage-breakdown table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .recorded-usage-breakdown th, .recorded-usage-breakdown td { padding: 5px 6px; text-align: end; }

@@ -534,7 +534,9 @@ test.describe.serial("normalized target and mobile navigation", () => {
       exact: true,
     });
     await expect(checkingArchive).toBeVisible();
-    await expect(page.locator(".operation-overlay-backdrop")).toHaveCSS("z-index", "110");
+    await expect(
+      page.locator('[data-testid="dialog-overlay"][data-layer="blocking"]'),
+    ).toHaveCSS("z-index", "110");
     await expect(
       checkingArchive.getByText("Checking thread activity…", { exact: true }),
     ).toBeVisible();

@@ -67,24 +67,6 @@
   opacity: 0.4;
 }
 
-.thread-stack-blockers {
-  display: grid;
-  gap: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--destructive-border);
-  border-radius: var(--radius-ctl);
-  background: var(--destructive-soft);
-  font-size: 13px;
-}
-
-.thread-stack-blockers ul {
-  display: grid;
-  gap: 3px;
-  margin: 0;
-  padding-left: 18px;
-  color: var(--muted-foreground);
-}
-
 .thread-group-roster-list {
   min-height: 0;
   overflow-x: hidden;

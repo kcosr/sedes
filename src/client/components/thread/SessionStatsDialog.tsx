@@ -1,14 +1,23 @@
 import { useSyncExternalStore } from "react";
 import { RecordedUsage } from "./RecordedUsage.js";
 import type { UsageQueryCache } from "../../stores/UsageQueryCache.js";
-import * as Dialog from "@radix-ui/react-dialog";
 import type {
   NormalizedThreadExecutionWorkspace,
   NormalizedThreadSavedAgentOrigin,
   UsageSnapshot,
 } from "../../../shared/index.js";
-import { Copy, X } from "lucide-react";
+import { Copy } from "lucide-react";
 import { Button } from "@client/components/ui/button";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogSection,
+  DialogTitle,
+} from "@client/components/ui/dialog";
+import { Tag } from "@client/components/ui/tag";
 
 export function SessionStatsDialog({
   open,
@@ -33,104 +42,97 @@ export function SessionStatsDialog({
   usage: UsageSnapshot;
   usageCache: UsageQueryCache;
   liveAvailable?: boolean;
-  /**
-   * Radix returns dialog focus to `Dialog.Trigger`; this dialog is controlled
-   * (opened from a menu row that unmounts with its menu), so without an
-   * explicit target closing drops focus to `<body>`.
-   */
+  /** Focus target on close; the opening menu row unmounts with its menu. */
   returnFocusRef?: React.RefObject<HTMLElement | null>;
 }): React.JSX.Element {
   const usageEnabled = useSyncExternalStore(usageCache.subscribeEnabled, usageCache.getEnabled);
+  const hostKind =
+    environmentKind === "local"
+      ? "Local"
+      : environmentKind === "ssh"
+        ? "SSH"
+        : "Outbound";
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay
-          className="dialog-overlay"
-          data-testid="dialog-overlay"
-        />
-        <Dialog.Content
-          className="dialog-card session-stats-dialog"
-          aria-describedby="session-stats-description"
-          onCloseAutoFocus={(event) => {
-            const target = returnFocusRef?.current;
-            if (!target?.isConnected) return;
-            event.preventDefault();
-            target.focus();
-          }}
-        >
-          <Dialog.Title>Session stats</Dialog.Title>
-          <Dialog.Description id="session-stats-description">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        size="lg"
+        layer="over-dialog"
+        returnFocusRef={returnFocusRef}
+      >
+        <DialogHeader>
+          <DialogTitle>Session stats</DialogTitle>
+          <DialogDescription>
             Session identifiers, recorded usage, and live context.
-          </Dialog.Description>
-          <Dialog.Close asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="dialog-close"
-              aria-label="Close"
-            >
-              <X size={18} strokeWidth={1.8} />
-            </Button>
-          </Dialog.Close>
-          <section
-            className="session-identifiers"
-            aria-labelledby="session-identifiers-title"
-          >
-            <h3 id="session-identifiers-title">Identifiers</h3>
-            <IdentifierRow label="Sedes thread ID" value={sedesThreadId} />
-            {backendSessionId && (
-              <IdentifierRow
-                label="Backend session ID"
-                value={backendSessionId}
-              />
-            )}
-          </section>
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody>
+          <DialogSection title="Identifiers">
+            <div className="session-stats-card">
+              <IdentifierRow label="Sedes thread ID" value={sedesThreadId} />
+              {backendSessionId && (
+                <IdentifierRow
+                  label="Backend session ID"
+                  value={backendSessionId}
+                />
+              )}
+            </div>
+          </DialogSection>
           {createdWithAgent && (
-            <section
-              className="session-identifiers"
-              aria-labelledby="session-origin-title"
-            >
-              <h3 id="session-origin-title">Origin</h3>
-              <div className="session-identifier-row">
-                <span className="session-identifier-label">Created with</span>
-                <span className="session-origin-value">
-                  {createdWithAgent.name.text} · revision{" "}
-                  {createdWithAgent.revision}
-                  {createdWithAgent.available ? "" : " (deleted)"}
-                </span>
+            <DialogSection title="Origin">
+              <div className="session-stats-card">
+                <div className="session-identifier-row">
+                  <span className="session-identifier-label">
+                    Created with
+                  </span>
+                  <span className="session-origin-value">
+                    {createdWithAgent.name.text} · revision{" "}
+                    {createdWithAgent.revision}
+                    {createdWithAgent.available ? "" : " (deleted)"}
+                  </span>
+                </div>
               </div>
-            </section>
+            </DialogSection>
           )}
           {executionWorkspace.kind === "isolated" && (
-            <section
-              className="session-identifiers"
-              aria-labelledby="session-workspace-paths-title"
-            >
-              <h3 id="session-workspace-paths-title">Isolated workspace</h3>
-              <IdentifierRow
-                label={`${environmentKind === "local" ? "Local" : environmentKind === "ssh" ? "SSH" : "Outbound"} host home path`}
-                value={executionWorkspace.hostPaths.home}
-              />
-              <IdentifierRow
-                label={`${environmentKind === "local" ? "Local" : environmentKind === "ssh" ? "SSH" : "Outbound"} host workspace path`}
-                value={executionWorkspace.hostPaths.workspace}
-              />
-            </section>
+            <DialogSection title="Isolated workspace">
+              <div className="session-stats-card">
+                <IdentifierRow
+                  label={`${hostKind} host home path`}
+                  value={executionWorkspace.hostPaths.home}
+                />
+                <IdentifierRow
+                  label={`${hostKind} host workspace path`}
+                  value={executionWorkspace.hostPaths.workspace}
+                />
+              </div>
+            </DialogSection>
           )}
-          {usageEnabled && <section className="session-recorded-usage"><h3>Recorded session usage (Experimental)</h3>
-            {open && <RecordedUsage cache={usageCache} turnId={null} />}
-          </section>}
-          <section><h3>Live context and transcript</h3>
-            {liveAvailable ? <StatsGrid usage={usage} /> : <p>Live context and transcript counters are unavailable while disconnected.</p>}
-          </section>
-          <div className="dialog-actions">
-            <Dialog.Close asChild>
-              <Button variant="secondary">Close</Button>
-            </Dialog.Close>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+          {usageEnabled && (
+            <DialogSection
+              title={
+                <>
+                  Recorded session usage <Tag>Experimental</Tag>
+                </>
+              }
+            >
+              <div className="session-stats-card session-recorded-usage">
+                {open && <RecordedUsage cache={usageCache} turnId={null} />}
+              </div>
+            </DialogSection>
+          )}
+          <DialogSection title="Live context and transcript">
+            {liveAvailable ? (
+              <StatsGrid usage={usage} />
+            ) : (
+              <p className="session-stats-empty">
+                Live context and transcript counters are unavailable while
+                disconnected.
+              </p>
+            )}
+          </DialogSection>
+        </DialogBody>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -148,14 +150,13 @@ function IdentifierRow({
       <Button
         type="button"
         variant="ghost"
-        size="sm"
-        className="session-identifier-copy"
+        size="xs"
         aria-label={`Copy ${label}`}
         onClick={() => {
           void copyIdentifier(value);
         }}
       >
-        <Copy size={13} aria-hidden="true" />
+        <Copy aria-hidden="true" />
         Copy
       </Button>
     </div>
@@ -257,7 +258,7 @@ function StatGroup({
 }): React.JSX.Element {
   return (
     <section className="session-stat-group" data-testid="session-stat-group">
-      <h3>{title}</h3>
+      <h4>{title}</h4>
       <dl>{children}</dl>
     </section>
   );

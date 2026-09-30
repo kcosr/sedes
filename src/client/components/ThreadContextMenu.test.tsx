@@ -1525,6 +1525,9 @@ describe("ThreadContextMenu actions", () => {
       expect(screen.getByRole("radio", { name: "Complete all" })).toBeChecked();
       if (surface === "submenu") {
         // Dismiss only the submenu; its owning context menu stays mounted.
+        // The segmented control keeps arrow keys for its own radios, so
+        // leave from a menu row.
+        screen.getByRole("menuitem", { name: "Archive only this thread" }).focus();
         await userEvent.keyboard("{ArrowLeft}");
         expect(screen.getByTestId("thread-context-menu")).toBeVisible();
         expect(

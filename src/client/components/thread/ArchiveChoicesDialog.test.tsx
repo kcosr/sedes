@@ -233,11 +233,13 @@ describe("ArchiveChoicesDialog", () => {
     const archiveOnly = await screen.findByRole("button", {
       name: "Archive",
     });
-    const actions = archiveOnly.closest(".dialog-actions");
+    const actions = archiveOnly.closest('[data-slot="dialog-footer"]');
     expect(actions).not.toBeNull();
-    expect(actions).toContainElement(
-      screen.getByRole("button", { name: "Cancel" }),
-    );
+    expect(
+      [...actions!.querySelectorAll("button")].map((button) => button.textContent),
+    ).toEqual(["Cancel", "Archive"]);
+    // Archiving is reversible: a neutral primary, not the destructive style.
+    expect(archiveOnly).toHaveAttribute("data-variant", "default");
     expect(archiveOnly.querySelector("svg")).toBeNull();
     expect(
       screen.queryByRole("button", { name: /Archive thread and/ }),

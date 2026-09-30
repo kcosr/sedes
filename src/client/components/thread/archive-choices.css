@@ -1,0 +1,101 @@
+/* Choices shared by the archive, settle and stack-action dialogs: the
+   open-task preview and handling, isolated-workspace handling, and their
+   notes. A label, one hairline list and a segmented control; no card around
+   the group. */
+.archive-task-disposition,
+.archive-workspace-disposition {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.archive-task-disposition-label {
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+}
+
+.archive-choice-note,
+.archive-task-completion-note {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+.archive-task-summary-scroll {
+  display: grid;
+  gap: var(--space-2);
+  max-height: 164px;
+  padding: var(--space-2) var(--space-3);
+  overflow-y: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-ctl);
+  background: var(--card);
+  outline: none;
+  scrollbar-gutter: stable;
+}
+
+.archive-task-summary-scroll:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.archive-task-summary-group {
+  min-width: 0;
+}
+
+.archive-task-summary-group h4 {
+  margin: 0 0 var(--space-1);
+  color: var(--muted-foreground-2);
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.archive-task-summary-group ul {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.archive-task-summary-group li {
+  display: grid;
+  min-width: 0;
+}
+
+.archive-task-summary-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--foreground);
+  font-size: var(--text-ui);
+  line-height: var(--leading-snug);
+}
+
+.archive-task-summary-owner {
+  overflow: hidden;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-snug);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archive-task-summary-omitted {
+  margin: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+}
+
+.execution-workspace-git-warnings,
+.thread-stack-blockers {
+  display: grid;
+  gap: var(--space-0-5);
+  margin: 0;
+  padding-left: var(--space-4);
+  list-style: disc;
+}

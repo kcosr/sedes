@@ -1,9 +1,12 @@
 import { createPortal } from "react-dom";
 import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
-import { useKeyboardInset } from "../../app/use-keyboard-inset.js";
-import * as Dialog from "@radix-ui/react-dialog";
 import { DismissableLayer } from "@radix-ui/react-dismissable-layer";
 import * as Popover from "@radix-ui/react-popover";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from "@client/components/ui/dialog";
 import {
   useCallback,
   useEffect,
@@ -1445,7 +1448,6 @@ export function TasksPanel({
     target.style.display = "contents";
     return target;
   });
-  const keyboardInset = useKeyboardInset(active && mobile && preferences.open);
   const currentRoute = useRoute();
   const route = retainedRoute ?? currentRoute;
   const rightOffset = usePrimaryRightAnchor(
@@ -1469,49 +1471,43 @@ export function TasksPanel({
   if (!preferences.open) return null;
 
   const surface = mobile ? (
-      <Dialog.Root
+      <Dialog
         open
         onOpenChange={(open) => {
           if (!open) close();
         }}
       >
-        <Dialog.Portal>
-          <Dialog.Overlay className="dialog-overlay" />
-          <Dialog.Content
-            className="tasks-sheet"
-            onCloseAutoFocus={(event) => {
-              if (!activeRef.current) event.preventDefault();
-            }}
-            onInteractOutside={(event) => {
-              // The retained body is portaled into this surface. Its React
-              // event ancestry differs from its physical DOM ancestry.
-              if (bodyTarget.contains(event.detail.originalEvent.target as Node)) event.preventDefault();
-            }}
-            aria-describedby={undefined}
-            onEscapeKeyDown={(event) => {
-              if (
-                document.querySelector(
-                  '.tasks-sheet [data-task-detail-open="true"]',
-                ) !== null
-              ) {
-                // Android hardware Back dispatches this synthetic Escape.
-                // Keep the sheet mounted while its open detail closes; the
-                // next Back follows Radix's normal sheet dismissal path.
-                event.preventDefault();
-                window.dispatchEvent(new Event(CLOSE_TASK_DETAIL_EVENT));
-              }
-            }}
-            style={
-              {
-                "--tasks-keyboard-inset": `${keyboardInset}px`,
-              } as CSSProperties
+        <DialogContent
+          layout="sheet"
+          showClose={false}
+          className="tasks-sheet"
+          onCloseAutoFocus={(event) => {
+            if (!activeRef.current) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            // The retained body is portaled into this surface. Its React
+            // event ancestry differs from its physical DOM ancestry.
+            if (bodyTarget.contains(event.detail.originalEvent.target as Node)) event.preventDefault();
+          }}
+          aria-describedby={undefined}
+          onEscapeKeyDown={(event) => {
+            if (
+              document.querySelector(
+                '.tasks-sheet [data-task-detail-open="true"]',
+              ) !== null
+            ) {
+              // Android hardware Back dispatches this synthetic Escape.
+              // Keep the sheet mounted while its open detail closes; the
+              // next Back follows Radix's normal sheet dismissal path.
+              event.preventDefault();
+              window.dispatchEvent(new Event(CLOSE_TASK_DETAIL_EVENT));
             }
-          >
-            <Dialog.Title className="sr-only">Tasks</Dialog.Title>
-            <StablePaneSlot target={bodyTarget} style={{ display: "contents" }} />
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+          }}
+        >
+          <DialogTitle className="sr-only">Tasks</DialogTitle>
+          <StablePaneSlot target={bodyTarget} style={{ display: "contents" }} />
+        </DialogContent>
+      </Dialog>
     ) : (
     <DismissableLayer
       asChild

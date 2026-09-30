@@ -7,8 +7,12 @@ import type {
 } from "../../../shared/index.js";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import { messageFrom } from "../../stores/ApplicationClientStore.js";
-import { SegmentedControl } from "../tasks/SegmentedControl.js";
 import { Archive } from "lucide-react";
+import { Callout } from "@client/components/ui/callout";
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from "@client/components/ui/segmented-control";
 import { ThreadTaskDisposition } from "./ThreadTaskDisposition.js";
 import { ExecutionWorkspaceGitWarnings } from "./ExecutionWorkspaceActions.js";
 import {
@@ -231,47 +235,52 @@ export function ArchiveExecutionWorkspaceDisposition({
       className="archive-workspace-disposition"
       data-testid="archive-workspace-disposition"
     >
-      <span className="archive-task-disposition-label">Isolated workspace</span>
+      <p className="archive-task-disposition-label">Isolated workspace</p>
       <SegmentedControl
-        ariaLabel="Isolated workspace handling"
-        size="small"
+        aria-label="Isolated workspace handling"
+        size="sm"
+        className="w-full"
         value={choices.executionWorkspaceDisposition}
-        onChange={(value) =>
+        onValueChange={(value) =>
           choices.setExecutionWorkspaceDisposition(value as "keep" | "delete")
         }
-        options={[
-          {
-            value: "keep",
-            label: "Keep",
-            title: "Retain the isolated workspace after archiving",
-            disabled: Boolean(choices.pending),
-          },
-          {
-            value: "delete",
-            label: "Delete",
-            title: includeDescendants
+      >
+        <SegmentedControlItem
+          value="keep"
+          title="Retain the isolated workspace after archiving"
+          disabled={Boolean(choices.pending)}
+        >
+          Keep
+        </SegmentedControlItem>
+        <SegmentedControlItem
+          value="delete"
+          title={
+            includeDescendants
               ? "Delete is available when archiving only this thread"
               : !deleteEligible
                 ? "Delete is unavailable while the isolated workspace is provisioning"
-                : "Permanently delete the isolated workspace",
-            disabled:
-              includeDescendants || !deleteEligible || Boolean(choices.pending),
-          },
-        ]}
-      />
+                : "Permanently delete the isolated workspace"
+          }
+          disabled={
+            includeDescendants || !deleteEligible || Boolean(choices.pending)
+          }
+        >
+          Delete
+        </SegmentedControlItem>
+      </SegmentedControl>
       {workspace.state === "deletion_failed" && (
-        <p className="menu-error" role="alert">
+        <Callout tone="danger" role="alert">
           The previous deletion failed. You can keep the workspace or retry
           deletion while archiving only this thread.
-        </p>
+        </Callout>
       )}
       {workspace.state === "provisioning_failed" && (
-        <p className="menu-error" role="alert">
+        <Callout tone="danger" role="alert">
           Provisioning failed. You can keep or delete the incomplete workspace.
-        </p>
+        </Callout>
       )}
       {includeDescendants && (
-        <p role="status">
+        <p className="archive-choice-note" role="status">
           Archive only this thread to delete its isolated workspace.
         </p>
       )}
@@ -295,18 +304,17 @@ export function ArchiveQuestionWarning({
   const count = questions.root + (scope === "only" ? 0 : questions.descendants);
   if (count === 0) return null;
   return (
-    <div className="archive-stashed-prompt-warning" role="note">
-      <strong>
-        {count} unanswered {count === 1 ? "question" : "questions"}
-      </strong>
-      <span>
-        {scope === "choice-neutral" && questions.descendants > 0
-          ? `${questions.root} on this thread; ${questions.descendants} on descendants. `
-          : ""}
-        Questions remain attached to archived threads and will be available when
-        you unarchive them.
-      </span>
-    </div>
+    <Callout
+      tone="warning"
+      role="note"
+      title={`${count} unanswered ${count === 1 ? "question" : "questions"}`}
+    >
+      {scope === "choice-neutral" && questions.descendants > 0
+        ? `${questions.root} on this thread; ${questions.descendants} on descendants. `
+        : ""}
+      Questions remain attached to archived threads and will be available when
+      you unarchive them.
+    </Callout>
   );
 }
 
@@ -334,20 +342,15 @@ export function ArchiveStashedPromptWarning({
         : undefined,
     ].filter((location): location is string => location !== undefined);
     return (
-      <div
-        className="archive-stashed-prompt-warning"
-        data-testid="archive-stashed-prompt-warning"
+      <Callout
+        tone="warning"
         role="note"
+        data-testid="archive-stashed-prompt-warning"
+        title={`${count} stashed ${count === 1 ? "prompt" : "prompts"} in this thread family`}
       >
-        <strong>
-          {count} stashed {count === 1 ? "prompt" : "prompts"} in this thread
-          family
-        </strong>
-        <span>
-          {locations.join("; ")}. {count === 1 ? "It" : "They"} will remain
-          attached to whichever threads you archive.
-        </span>
-      </div>
+        {locations.join("; ")}. {count === 1 ? "It" : "They"} will remain
+        attached to whichever threads you archive.
+      </Callout>
     );
   }
   const descendantNote =
@@ -355,20 +358,15 @@ export function ArchiveStashedPromptWarning({
       ? `, including ${impact.stashedPrompts.descendants} on descendants`
       : "";
   return (
-    <div
-      className="archive-stashed-prompt-warning"
-      data-testid="archive-stashed-prompt-warning"
+    <Callout
+      tone="warning"
       role="note"
+      data-testid="archive-stashed-prompt-warning"
+      title={`${count} stashed ${count === 1 ? "prompt" : "prompts"}${descendantNote}`}
     >
-      <strong>
-        {count} stashed {count === 1 ? "prompt" : "prompts"}
-        {descendantNote}
-      </strong>
-      <span>
-        {count === 1 ? "It" : "They"} will remain attached to the archived
-        {includeDescendants ? " threads" : " thread"}.
-      </span>
-    </div>
+      {count === 1 ? "It" : "They"} will remain attached to the archived
+      {includeDescendants ? " threads" : " thread"}.
+    </Callout>
   );
 }
 
