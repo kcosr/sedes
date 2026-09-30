@@ -1,9 +1,9 @@
 // Style guardrails for the client design system.
 //
 // Rule 1 (every var() without a fallback resolves) is zero-tolerance. The
-// other rules are a ratchet: styles.guardrails.baseline.json records today's
-// offender count per rule and file, a rise fails, and a drop asks for the
-// baseline to be lowered with:
+// other rules are a ratchet: styles.guardrails.baseline.json records the
+// offender count per rule and file, and any difference fails. A rise has to be
+// fixed; a drop has to be locked in by lowering the baseline with:
 //
 //   UPDATE_STYLE_GUARDRAILS=1 npx vitest run src/client/styles.guardrails.test.ts
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -415,20 +415,8 @@ describe("client style guardrails", () => {
     ).toEqual([]);
   });
 
-  it.each(METRICS)("does not exceed the %s baseline", (metric) => {
+  it.each(METRICS)("matches the %s baseline", (metric) => {
     const { rises, drops } = comparison(metric);
-    if (drops.length > 0 && rises.length === 0 && !UPDATE_BASELINE) {
-      // stderr, not console: the default reporter hides console output of
-      // passing tests.
-      process.stderr.write(
-        [
-          `Style guardrail "${metric}" dropped below its baseline:`,
-          ...drops.map((drop) => `  ${drop}`),
-          `Lower the baseline so it stays strict: ${UPDATE_COMMAND}`,
-          "",
-        ].join("\n"),
-      );
-    }
     const details = rises.flatMap((file) => {
       const offenders = result.metrics[metric].filter((offender) => offender.file === file);
       const shown = offenders.slice(0, 60).map(format);
@@ -491,3 +479,13 @@ describe("style guardrail detectors", () => {
     expect(styleExpressions(source).flatMap((expression) => [...expression.text.matchAll(HEX_COLOR)].map((match) => match[0]))).toEqual(["#fff"]);
   });
 });
+    // Update mode has just written the lower counts.
+    if (UPDATE_BASELINE) return;
+    expect(
+      drops,
+      [
+        `Style guardrail "${metric}" is below its baseline, so the spare allowance would let new offenders in:`,
+        ...drops.map((drop) => `  ${drop}`),
+        `Lock in the improvement (this only ever lowers counts): ${UPDATE_COMMAND}`,
+      ].join("\n"),
+    ).toEqual([]);
