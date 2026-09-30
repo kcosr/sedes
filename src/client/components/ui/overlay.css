@@ -388,6 +388,30 @@
   right: max(var(--space-2), env(safe-area-inset-right));
 }
 
+/* ── Floating menus: scroll cue ──
+   A menu taller than the room it has scrolls; a soft shade at an edge
+   shows more rows lie beyond it. The shades stay with the panel (scroll)
+   while popover-coloured covers ride with the rows (local) and hide each
+   shade once its end is reached, so a menu that fits shows none. */
+[data-slot="dropdown-menu-content"],
+[data-slot="dropdown-menu-sub-content"],
+[data-slot="context-menu-content"],
+[data-slot="context-menu-sub-content"] {
+  background-image:
+    linear-gradient(var(--popover) 40%, transparent),
+    linear-gradient(transparent, var(--popover) 60%),
+    radial-gradient(farthest-side at 50% 0, var(--scroll-shade), transparent),
+    radial-gradient(farthest-side at 50% 100%, var(--scroll-shade), transparent);
+  background-position: top, bottom, top, bottom;
+  background-repeat: no-repeat;
+  background-size:
+    100% var(--space-6),
+    100% var(--space-6),
+    100% var(--space-3),
+    100% var(--space-3);
+  background-attachment: local, local, scroll, scroll;
+}
+
 /* ── Motion ──
    Hand-rolled on the motion tokens (no tw-animate); Radix emits data-state
    and data-side on these data-slot nodes. The global reduced-motion rule

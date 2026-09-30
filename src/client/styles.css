@@ -87,6 +87,8 @@
   --scrim: oklch(0.2 0.01 260 / 0.42);
   --shadow: 0 2px 6px oklch(0 0 0 / 0.08), 0 12px 36px oklch(0 0 0 / 0.14);
   --shadow-small: 0 1px 2px oklch(0 0 0 / 0.05), 0 8px 28px oklch(0 0 0 / 0.07);
+  /* The edge shade a scrolling menu shows where more rows lie beyond it. */
+  --scroll-shade: oklch(0 0 0 / 0.1);
 
   /* shape — one ramp. `--radius-inline` is the nested step (it mirrors the
      Tailwind `--radius-sm` pinned in @theme inline below): it is only ever
@@ -291,6 +293,7 @@
   --scrim: oklch(0 0 0 / 0.6);
   --shadow: 0 2px 6px oklch(0 0 0 / 0.4), 0 16px 44px oklch(0 0 0 / 0.5);
   --shadow-small: 0 1px 2px oklch(0 0 0 / 0.3), 0 8px 28px oklch(0 0 0 / 0.35);
+  --scroll-shade: oklch(0 0 0 / 0.4);
   --elevation-1: 0 1px 2px oklch(0 0 0 / 0.3);
   --terminal-background: #111318;
   --terminal-panel: #171a20;
