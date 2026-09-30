@@ -1,0 +1,493 @@
+// Style guardrails for the client design system.
+//
+// Rule 1 (every var() without a fallback resolves) is zero-tolerance. The
+// other rules are a ratchet: styles.guardrails.baseline.json records today's
+// offender count per rule and file, a rise fails, and a drop asks for the
+// baseline to be lowered with:
+//
+//   UPDATE_STYLE_GUARDRAILS=1 npx vitest run src/client/styles.guardrails.test.ts
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import postcss, { type ChildNode, type Declaration, type Root } from "postcss";
+import { describe, expect, it } from "vitest";
+
+const CLIENT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
+const BASELINE_FILE = path.join(CLIENT_DIRECTORY, "styles.guardrails.baseline.json");
+const UPDATE_BASELINE = process.env.UPDATE_STYLE_GUARDRAILS === "1";
+const UPDATE_COMMAND =
+  "UPDATE_STYLE_GUARDRAILS=1 npx vitest run src/client/styles.guardrails.test.ts";
+
+/**
+ * Custom properties that client code sets at runtime (style.setProperty or a
+ * React style object) and CSS reads without a fallback. Each entry must still
+ * be both set and read; the allowlist test fails on stale entries.
+ */
+const RUNTIME_SET_PROPERTIES: readonly string[] = [
+  // app/environment-palette.ts: the environment tint of a row or chip
+  "--environment-chroma",
+  "--environment-hue",
+];
+
+/** Custom properties that a library sets on its own elements at runtime. */
+const LIBRARY_SET_PREFIXES = ["--radix-"] as const;
+
+/** Media features that belong to the layout system (819/820px is the app breakpoint). */
+const ALLOWED_MEDIA_FEATURES = new Set([
+  "(max-width:819px)",
+  "(min-width:820px)",
+  "(pointer:coarse)",
+  "(pointer:fine)",
+  "(hover:none)",
+  "(hover:hover)",
+  "(prefers-reduced-motion:reduce)",
+  "(prefers-reduced-motion:no-preference)",
+]);
+
+const NAMED_COLORS = new Set(
+  (
+    "aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue " +
+    "blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk " +
+    "crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki " +
+    "darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen " +
+    "darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue " +
+    "dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite " +
+    "gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki " +
+    "lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan " +
+    "lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen " +
+    "lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen " +
+    "magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen " +
+    "mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream " +
+    "mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid " +
+    "palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum " +
+    "powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown " +
+    "seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen " +
+    "steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen"
+  ).split(" "),
+);
+
+const COLOR_PROPERTIES =
+  /^(?:color|background(?:-color)?|border(?:-(?:top|right|bottom|left|block|inline)(?:-(?:start|end))?)?(?:-color)?|outline(?:-color)?|box-shadow|text-shadow|text-decoration(?:-color)?|caret-color|accent-color|fill|stroke|column-rule(?:-color)?|scrollbar-color)$/u;
+
+const TAILWIND_PALETTE =
+  /(?<![\w-])(?:[\w-]+:)*(?:bg|text|border(?:-[trblxyse])?|ring(?:-offset)?|outline|fill|stroke|from|via|to|decoration|divide|placeholder|caret|accent|shadow|inset-shadow|drop-shadow)-(?:(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}|black|white)(?:\/\d+)?(?![\w-])/gu;
+const TAILWIND_ARBITRARY_TEXT_SIZE = /(?<![\w-])(?:[\w-]+:)*text-\[\d+(?:\.\d+)?px\]/gu;
+const HEX_COLOR = /#[0-9a-f]{3,8}(?![\w-])/giu;
+const COLOR_FUNCTION = /(?<![\w-])(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/giu;
+const VAR_WITHOUT_FALLBACK = /var\(\s*(--[\w-]+)\s*\)/gu;
+const TAILWIND_VAR_SHORTHAND = /-\((--[\w-]+)\)/gu;
+
+interface Offender {
+  readonly file: string;
+  readonly line: number;
+  readonly text: string;
+}
+
+const METRICS = [
+  "colorLiterals",
+  "fontSizeLiterals",
+  "fontWeightLiterals",
+  "borderRadiusLiterals",
+  "zIndexLiterals",
+  "important",
+  "mediaQueries",
+  "tsxPaletteColors",
+  "tsxArbitraryTextSizes",
+  "tsxStyleHex",
+] as const;
+type Metric = (typeof METRICS)[number];
+type Baseline = Record<Metric, Record<string, number>>;
+
+const METRIC_RULES: Record<Metric, string> = {
+  colorLiterals: "color literal outside the § TOKENS block (use a color token)",
+  fontSizeLiterals: "font-size literal (use var(--text-*))",
+  fontWeightLiterals: "font-weight literal (use var(--weight-*))",
+  borderRadiusLiterals: "border-radius literal (use a radius token; 0, 50% and 999px are fine)",
+  zIndexLiterals: "z-index literal (use a --z-* layer; 0 and negative stack-local values are fine)",
+  important: "!important",
+  mediaQueries: "media query outside the layout system (use 819/820px, the density switch, pointer, hover or reduced motion)",
+  tsxPaletteColors: "Tailwind palette color in TSX outside components/ui (use a semantic color)",
+  tsxArbitraryTextSizes: "text-[Npx] in TSX outside components/ui (use the type ramp)",
+  tsxStyleHex: "hex color in a style= prop outside components/ui (use a color token)",
+};
+
+function listFiles(directory: string, accept: (file: string) => boolean): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...listFiles(target, accept));
+    else if (accept(target)) files.push(target);
+  }
+  return files.sort();
+}
+
+const relative = (file: string) => path.relative(CLIENT_DIRECTORY, file).split(path.sep).join("/");
+const lineAt = (source: string, index: number) => source.slice(0, index).split("\n").length;
+const clip = (text: string) => text.replace(/\s+/gu, " ").trim().slice(0, 140);
+const isTest = (file: string) => /\.test\.tsx?$/u.test(file);
+
+/** Top-level nodes of the `§ TOKENS AND THEME CONTRACT` section of styles.css. */
+function tokenSectionNodes(root: Root): Set<ChildNode> {
+  const nodes = new Set<ChildNode>();
+  let inside = false;
+  for (const node of root.nodes) {
+    if (node.type === "comment" && node.text.includes("§ ")) {
+      inside = node.text.includes("§ TOKENS");
+      continue;
+    }
+    if (inside) nodes.add(node);
+  }
+  return nodes;
+}
+
+function topLevel(node: ChildNode): ChildNode {
+  let current: ChildNode = node;
+  while (current.parent && current.parent.type !== "root") current = current.parent as ChildNode;
+  return current;
+}
+
+function withoutStringsAndUrls(value: string): string {
+  return value.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|url\([^)]*\)/gu, "");
+}
+
+/** The text between the parenthesis at `open` and its match. */
+function balancedArguments(value: string, open: number): string {
+  let depth = 0;
+  for (let index = open; index < value.length; index += 1) {
+    if (value[index] === "(") depth += 1;
+    else if (value[index] === ")" && --depth === 0) return value.slice(open + 1, index);
+  }
+  return value.slice(open + 1);
+}
+
+function withoutVarGroups(value: string): string {
+  let result = value;
+  for (let start = result.indexOf("var("); start >= 0; start = result.indexOf("var(")) {
+    const inner = balancedArguments(result, start + 3);
+    result = result.slice(0, start) + result.slice(start + 4 + inner.length + 1);
+  }
+  return result;
+}
+
+/**
+ * A color function is a literal when a channel is a number; one computed
+ * from tokens (for example `oklch(var(--l) var(--c) var(--h) / 0.1)`) is not.
+ */
+function hasColorFunctionLiteral(value: string): boolean {
+  for (const match of value.matchAll(COLOR_FUNCTION)) {
+    const channels = balancedArguments(value, match.index + match[0].length - 1).split("/")[0]!;
+    if (/\d/u.test(withoutVarGroups(channels))) return true;
+  }
+  return false;
+}
+
+function hasColorLiteral(declaration: Declaration): boolean {
+  // Mask images use black and transparent as coverage, not as colors.
+  if (/^(?:-webkit-)?mask(?:-|$)/u.test(declaration.prop)) return false;
+  const value = withoutStringsAndUrls(declaration.value);
+  HEX_COLOR.lastIndex = 0;
+  if (HEX_COLOR.test(value) || hasColorFunctionLiteral(value)) return true;
+  if (!COLOR_PROPERTIES.test(declaration.prop) && !declaration.prop.startsWith("--")) return false;
+  return value
+    .toLowerCase()
+    .split(/[^a-z]+/u)
+    .some((word) => NAMED_COLORS.has(word));
+}
+
+const GLOBAL_KEYWORDS = new Set(["inherit", "initial", "unset", "revert", "revert-layer"]);
+
+function isFontSizeLiteral(declaration: Declaration): boolean {
+  const value = declaration.value.trim().toLowerCase();
+  if (value.includes("var(") || GLOBAL_KEYWORDS.has(value)) return false;
+  if (declaration.prop === "font") return /(?:^|\s)[\d.]+(?:px|rem|em|%)(?:\/|\s)/u.test(value);
+  const selector = declaration.parent?.type === "rule" ? declaration.parent.selector : "";
+  // Markdown scales with its container on purpose.
+  return !(/\.markdown\b/u.test(selector) && /^[\d.]+(?:em|%)$/u.test(value));
+}
+
+function isBorderRadiusLiteral(declaration: Declaration): boolean {
+  const value = declaration.value.trim().toLowerCase();
+  if (value.includes("var(") || GLOBAL_KEYWORDS.has(value)) return false;
+  return !value
+    .split(/[\s/]+/u)
+    .every((part) => ["0", "0px", "50%", "999px", "9999px"].includes(part));
+}
+
+function isZIndexLiteral(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (normalized.includes("var(--z-") || normalized === "auto" || GLOBAL_KEYWORDS.has(normalized)) return false;
+  return !/^-?\d+$/u.test(normalized) || Number(normalized) > 0;
+}
+
+function isAllowedMediaQuery(params: string): boolean {
+  return params.split(",").every((alternative) =>
+    alternative
+      .trim()
+      .toLowerCase()
+      .split(/\s+and\s+/u)
+      .every((feature) => ALLOWED_MEDIA_FEATURES.has(feature.replace(/\s+/gu, ""))),
+  );
+}
+
+/** The `{…}` expression after each `style=` in a TSX source. */
+function styleExpressions(source: string): Array<{ readonly index: number; readonly text: string }> {
+  const expressions: Array<{ index: number; text: string }> = [];
+  for (const match of source.matchAll(/\bstyle=\{/gu)) {
+    const start = match.index + match[0].length - 1;
+    let depth = 0;
+    for (let index = start; index < source.length; index += 1) {
+      const character = source[index];
+      if (character === "{") depth += 1;
+      else if (character === "}" && --depth === 0) {
+        expressions.push({ index: start, text: source.slice(start, index + 1) });
+        break;
+      }
+    }
+  }
+  return expressions;
+}
+
+interface Scan {
+  readonly unresolved: Offender[];
+  readonly staleAllowlist: string[];
+  readonly metrics: Record<Metric, Offender[]>;
+}
+
+function scan(): Scan {
+  const cssFiles = listFiles(CLIENT_DIRECTORY, (file) => file.endsWith(".css"));
+  const sourceFiles = listFiles(CLIENT_DIRECTORY, (file) => /\.tsx?$/u.test(file) && !isTest(file));
+  const metrics = Object.fromEntries(METRICS.map((metric) => [metric, []])) as unknown as Record<Metric, Offender[]>;
+  const defined = new Set<string>();
+  const references: Array<Offender & { readonly name: string }> = [];
+
+  for (const file of cssFiles) {
+    const name = relative(file);
+    const root = postcss.parse(readFileSync(file, "utf8"), { from: file });
+    const tokenNodes = name === "styles.css" ? tokenSectionNodes(root) : new Set<ChildNode>();
+    root.walkAtRules("media", (rule) => {
+      if (!isAllowedMediaQuery(rule.params)) {
+        metrics.mediaQueries.push({ file: name, line: rule.source?.start?.line ?? 0, text: `@media ${rule.params}` });
+      }
+    });
+    root.walkDecls((declaration) => {
+      const offender = {
+        file: name,
+        line: declaration.source?.start?.line ?? 0,
+        text: clip(`${declaration.prop}: ${declaration.value}${declaration.important ? " !important" : ""}`),
+      };
+      if (declaration.prop.startsWith("--")) defined.add(declaration.prop);
+      for (const match of declaration.value.matchAll(VAR_WITHOUT_FALLBACK)) {
+        references.push({ ...offender, name: match[1]! });
+      }
+      if (declaration.important) metrics.important.push(offender);
+      if (!tokenNodes.has(topLevel(declaration)) && hasColorLiteral(declaration)) {
+        metrics.colorLiterals.push(offender);
+      }
+      const property = declaration.prop.toLowerCase();
+      if ((property === "font-size" || property === "font") && isFontSizeLiteral(declaration)) {
+        metrics.fontSizeLiterals.push(offender);
+      }
+      if (property === "font-weight") {
+        const value = declaration.value.trim().toLowerCase();
+        if (!value.includes("var(") && !GLOBAL_KEYWORDS.has(value)) metrics.fontWeightLiterals.push(offender);
+      }
+      if (/^border(?:-(?:top|bottom|start|end)-(?:left|right|start|end))?-radius$/u.test(property) && isBorderRadiusLiteral(declaration)) {
+        metrics.borderRadiusLiterals.push(offender);
+      }
+      if (property === "z-index" && isZIndexLiteral(declaration.value)) metrics.zIndexLiterals.push(offender);
+    });
+  }
+
+  let runtimeSource = "";
+  for (const file of sourceFiles) {
+    const source = readFileSync(file, "utf8");
+    const name = relative(file);
+    runtimeSource += source;
+    for (const pattern of [VAR_WITHOUT_FALLBACK, TAILWIND_VAR_SHORTHAND]) {
+      for (const match of source.matchAll(pattern)) {
+        references.push({ file: name, line: lineAt(source, match.index), text: clip(match[0]), name: match[1]! });
+      }
+    }
+    if (!file.endsWith(".tsx") || name.startsWith("components/ui/")) continue;
+    for (const [metric, pattern] of [
+      ["tsxPaletteColors", TAILWIND_PALETTE],
+      ["tsxArbitraryTextSizes", TAILWIND_ARBITRARY_TEXT_SIZE],
+    ] as const) {
+      for (const match of source.matchAll(pattern)) {
+        metrics[metric].push({ file: name, line: lineAt(source, match.index), text: match[0] });
+      }
+    }
+    for (const expression of styleExpressions(source)) {
+      for (const match of expression.text.matchAll(HEX_COLOR)) {
+        metrics.tsxStyleHex.push({
+          file: name,
+          line: lineAt(source, expression.index + match.index),
+          text: clip(`style=${expression.text}`),
+        });
+      }
+    }
+  }
+
+  const runtimeSet = (property: string) =>
+    RUNTIME_SET_PROPERTIES.includes(property) ||
+    LIBRARY_SET_PREFIXES.some((prefix) => property.startsWith(prefix));
+  const unresolved = references
+    .filter((reference) => !defined.has(reference.name) && !runtimeSet(reference.name))
+    .map(({ file, line, text }) => ({ file, line, text }));
+  const staleAllowlist = RUNTIME_SET_PROPERTIES.filter(
+    (property) =>
+      defined.has(property) ||
+      !references.some((reference) => reference.name === property) ||
+      !new RegExp(`["'\`]${property}["'\`]`, "u").test(runtimeSource),
+  );
+  return { unresolved, staleAllowlist, metrics };
+}
+
+function countByFile(offenders: readonly Offender[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const offender of offenders) counts[offender.file] = (counts[offender.file] ?? 0) + 1;
+  return Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+function readBaseline(): Baseline {
+  const parsed = existsSync(BASELINE_FILE)
+    ? (JSON.parse(readFileSync(BASELINE_FILE, "utf8")) as Partial<Baseline>)
+    : {};
+  return Object.fromEntries(METRICS.map((metric) => [metric, parsed[metric] ?? {}])) as Baseline;
+}
+
+const format = (offender: Offender) => `  ${offender.file}:${offender.line}  ${offender.text}`;
+
+const result = scan();
+const baseline = readBaseline();
+const current = Object.fromEntries(
+  METRICS.map((metric) => [metric, countByFile(result.metrics[metric])]),
+) as Baseline;
+
+function comparison(metric: Metric) {
+  const files = new Set([...Object.keys(current[metric]), ...Object.keys(baseline[metric])]);
+  const rises: string[] = [];
+  const drops: string[] = [];
+  for (const file of [...files].sort()) {
+    const now = current[metric][file] ?? 0;
+    const allowed = baseline[metric][file] ?? 0;
+    if (now > allowed) rises.push(file);
+    else if (now < allowed) drops.push(`${file} ${allowed} -> ${now}`);
+  }
+  return { rises, drops };
+}
+
+// Update mode only ever lowers an existing baseline: with any rise it writes
+// nothing and the rising rule still fails below.
+if (UPDATE_BASELINE) {
+  if (!existsSync(BASELINE_FILE) || METRICS.every((metric) => comparison(metric).rises.length === 0)) {
+    writeFileSync(
+      BASELINE_FILE,
+      `${JSON.stringify(
+        {
+          $comment: `Ratchet for src/client/styles.guardrails.test.ts: offender counts per rule and file may only go down. After removing offenders run ${UPDATE_COMMAND}`,
+          ...current,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  }
+}
+
+describe("client style guardrails", () => {
+  it("resolves every var() without a fallback", () => {
+    expect(
+      result.unresolved,
+      [
+        "These var() references have no fallback and no definition in client CSS.",
+        "Define the property, add a fallback, or (for a property set at runtime)",
+        "add it to RUNTIME_SET_PROPERTIES in src/client/styles.guardrails.test.ts:",
+        ...result.unresolved.map(format),
+      ].join("\n"),
+    ).toEqual([]);
+  });
+
+  it("keeps the runtime-set allowlist current", () => {
+    expect(
+      result.staleAllowlist,
+      "Remove these RUNTIME_SET_PROPERTIES entries: they are defined in CSS, no longer read without a fallback, or no longer set by client code.",
+    ).toEqual([]);
+  });
+
+  it.each(METRICS)("does not exceed the %s baseline", (metric) => {
+    const { rises, drops } = comparison(metric);
+    if (drops.length > 0 && rises.length === 0 && !UPDATE_BASELINE) {
+      // stderr, not console: the default reporter hides console output of
+      // passing tests.
+      process.stderr.write(
+        [
+          `Style guardrail "${metric}" dropped below its baseline:`,
+          ...drops.map((drop) => `  ${drop}`),
+          `Lower the baseline so it stays strict: ${UPDATE_COMMAND}`,
+          "",
+        ].join("\n"),
+      );
+    }
+    const details = rises.flatMap((file) => {
+      const offenders = result.metrics[metric].filter((offender) => offender.file === file);
+      const shown = offenders.slice(0, 60).map(format);
+      if (offenders.length > shown.length) shown.push(`  … and ${offenders.length - shown.length} more`);
+      return [
+        `${file}: ${offenders.length} (baseline ${baseline[metric][file] ?? 0}). Offenders in this file:`,
+        ...shown,
+      ];
+    });
+    expect(
+      rises,
+      [
+        `New ${METRIC_RULES[metric]}.`,
+        ...details,
+        "Fix the new offender. The baseline only goes down; do not raise it to pass.",
+      ].join("\n"),
+    ).toEqual([]);
+  });
+});
+
+describe("style guardrail detectors", () => {
+  const declaration = (text: string) => {
+    let found: Declaration | undefined;
+    postcss.parse(`.markdown-free { ${text} }`).walkDecls((node) => {
+      found = node;
+    });
+    return found!;
+  };
+
+  it("recognizes color literals but not token-derived colors or masks", () => {
+    for (const literal of ["color: #fff", "box-shadow: 0 1px 2px rgb(0 0 0 / 20%)", "background: oklch(0.5 0.1 250)", "border-color: white", "--series: #123456"]) {
+      expect(hasColorLiteral(declaration(literal)), literal).toBe(true);
+    }
+    for (const token of ["color: var(--foreground)", "background: oklch(var(--l) var(--c) var(--h) / 0.1)", "mask: radial-gradient(#000, transparent)", "background: color-mix(in oklch, var(--success) 12%, transparent)", "border: 1px solid currentColor", "font-family: Inter"]) {
+      expect(hasColorLiteral(declaration(token)), token).toBe(false);
+    }
+  });
+
+  it("allows the layer, radius and media vocabulary and flags literals", () => {
+    expect(isZIndexLiteral("calc(var(--z-dialog) + 1)")).toBe(false);
+    expect(isZIndexLiteral("0")).toBe(false);
+    expect(isZIndexLiteral("-2")).toBe(false);
+    expect(isZIndexLiteral("5")).toBe(true);
+    expect(isBorderRadiusLiteral(declaration("border-radius: var(--radius-lg) var(--radius-lg) 0 0"))).toBe(false);
+    expect(isBorderRadiusLiteral(declaration("border-radius: 999px"))).toBe(false);
+    expect(isBorderRadiusLiteral(declaration("border-radius: 6px"))).toBe(true);
+    expect(isAllowedMediaQuery("(max-width: 819px), (pointer: coarse)")).toBe(true);
+    expect(isAllowedMediaQuery("(min-width:820px) and (hover: hover)")).toBe(true);
+    expect(isAllowedMediaQuery("(max-width: 760px)")).toBe(false);
+  });
+
+  it("finds palette colors, pixel text sizes and style hexes in TSX", () => {
+    const source = [
+      '<div className="hover:bg-red-500 text-white/80 text-[13px] md:text-[11.5px]" />',
+      '<span className="bg-background text-muted-foreground border-border-soft" />',
+      '<i style={{ color: "#fff", "--x": `${1}px` }} />',
+    ].join("\n");
+    expect([...source.matchAll(TAILWIND_PALETTE)].map((match) => match[0])).toEqual(["hover:bg-red-500", "text-white/80"]);
+    expect([...source.matchAll(TAILWIND_ARBITRARY_TEXT_SIZE)].map((match) => match[0])).toEqual(["text-[13px]", "md:text-[11.5px]"]);
+    expect(styleExpressions(source).flatMap((expression) => [...expression.text.matchAll(HEX_COLOR)].map((match) => match[0]))).toEqual(["#fff"]);
+  });
+});
