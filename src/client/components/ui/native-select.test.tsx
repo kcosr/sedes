@@ -21,6 +21,17 @@ describe("NativeSelect", () => {
     expect(container.querySelector("[data-slot=native-select-wrapper] > svg")).toHaveAttribute("aria-hidden", "true");
   });
 
+  it("keeps its wrapper as tall as the select, so a stretching parent cannot move the chevron", () => {
+    const { container } = render(
+      <NativeSelect aria-label="Kind">
+        <option value="local">Local</option>
+      </NativeSelect>,
+    );
+    const wrapper = container.querySelector("[data-slot=native-select-wrapper]")!;
+    expect(wrapper).toHaveClass("h-fit", "relative");
+    expect(wrapper.querySelector("svg")).toHaveClass("top-1/2", "-translate-y-1/2");
+  });
+
   it("forwards change events and puts className on the box", () => {
     const onChange = vi.fn();
     const { container } = render(

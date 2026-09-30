@@ -191,8 +191,11 @@
   --success-border: color-mix(in oklab, var(--success) 35%, var(--border));
   --info-soft: color-mix(in oklab, var(--info) 12%, transparent);
   --info-border: color-mix(in oklab, var(--info) 35%, var(--border));
-  --warning-soft: color-mix(in oklab, var(--warning) 12%, transparent);
-  --warning-border: color-mix(in oklab, var(--warning) 35%, var(--border));
+  /* Light --warning is a deep amber-brown for text; a 12% mix of it reads
+     greige, so the light pair mixes a clear, calm amber instead (text on it
+     is --foreground, far past AA). The dark theme mixes --warning itself. */
+  --warning-soft: color-mix(in oklab, oklch(0.85 0.16 82) 22%, transparent);
+  --warning-border: color-mix(in oklab, oklch(0.78 0.14 78) 60%, var(--border));
   --destructive-soft: color-mix(in oklab, var(--destructive) 12%, transparent);
   --destructive-border: color-mix(in oklab, var(--destructive) 35%, var(--border));
 
@@ -286,6 +289,8 @@
   --success: oklch(0.74 0.15 150);
   --info: oklch(0.7 0.12 250);
   --warning: oklch(0.75 0.12 75);
+  --warning-soft: color-mix(in oklab, var(--warning) 12%, transparent);
+  --warning-border: color-mix(in oklab, var(--warning) 35%, var(--border));
   --thread-find-match: oklch(0.56 0.1 79 / 0.72);
   --thread-find-current: oklch(0.68 0.15 67 / 0.92);
   --sidebar: oklch(0.19 0.006 260);

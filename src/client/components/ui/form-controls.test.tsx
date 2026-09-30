@@ -100,6 +100,18 @@ describe("Button", () => {
     expect(button).not.toHaveClass("bg-destructive/10", "text-destructive");
   });
 
+  it("draws the destructive outline in the destructive colour with a soft hover", () => {
+    render(<Button variant="destructive-outline">Delete…</Button>);
+    const button = screen.getByRole("button", { name: "Delete…" });
+    expect(button).toHaveAttribute("data-variant", "destructive-outline");
+    expect(button).toHaveClass(
+      "border-destructive-border",
+      "text-destructive",
+      "hover:bg-destructive-soft",
+    );
+    expect(button).not.toHaveClass("bg-(--destructive-solid)", "text-white");
+  });
+
   it.each([
     ["xs", "h-(--control-xs)"],
     ["sm", "h-(--control-sm)"],

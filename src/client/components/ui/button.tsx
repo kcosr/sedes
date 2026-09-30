@@ -25,6 +25,10 @@ const buttonVariants = cva(
         // reset). Reversible ones such as Archive use a neutral variant.
         destructive:
           "bg-(--destructive-solid) text-white hover:bg-(--destructive-solid-hover) focus-visible:ring-destructive/30 dark:focus-visible:ring-destructive/40",
+        // The outline in the destructive colour: a trigger (a danger zone's
+        // Delete…) whose ConfirmDialog carries the solid red.
+        "destructive-outline":
+          "border-destructive-border bg-background text-destructive hover:bg-destructive-soft hover:text-destructive aria-expanded:bg-destructive-soft focus-visible:border-destructive focus-visible:ring-destructive/30 dark:bg-input/30 dark:hover:bg-destructive-soft dark:focus-visible:ring-destructive/40",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
