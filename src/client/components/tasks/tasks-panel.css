@@ -573,9 +573,9 @@ button.tasks-file-row:hover {
   gap: 2px;
   padding: 8px;
   margin: 2px 0;
-  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+  border: 1px solid var(--warning-border);
   border-radius: var(--radius-ctl);
-  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  background: var(--warning-soft);
   color: var(--muted-foreground);
   font-size: 12px;
   line-height: 1.4;

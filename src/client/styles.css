@@ -3987,7 +3987,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   padding: 7px 12px;
   border: 0;
   border-bottom: 1px solid var(--border-soft);
-  background: color-mix(in srgb, var(--destructive) 10%, var(--card));
+  background: var(--destructive-soft);
   color: var(--destructive);
   font-size: 12px;
   text-align: left;

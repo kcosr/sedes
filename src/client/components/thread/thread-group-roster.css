@@ -71,9 +71,9 @@
   display: grid;
   gap: 6px;
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--destructive) 28%, var(--border));
+  border: 1px solid var(--destructive-border);
   border-radius: var(--radius-ctl);
-  background: color-mix(in srgb, var(--destructive) 7%, transparent);
+  background: var(--destructive-soft);
   font-size: 13px;
 }
 
