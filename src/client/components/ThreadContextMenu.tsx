@@ -1,6 +1,5 @@
 import { usePickerFocus } from "../lib/use-picker-focus.js";
 import { runThreadCreation, runThreadFork } from "../operations/thread-creation.js";
-import { runThreadArchiveCheck } from "../operations/thread-archive.js";
 import { useEffect, useRef, useState } from "react";
 import type {
   NormalizedApplicationThreadSummary,
@@ -51,7 +50,7 @@ import {
   THREAD_CONFIGURATION_COPY_PENDING_ACCESSIBLE_LABEL,
   THREAD_CONFIGURATION_COPY_TITLE,
 } from "./thread/thread-configuration-copy-labels.js";
-import { ArchiveChoicesDialog } from "./thread/ArchiveChoicesDialog.js";
+import { useArchiveThreadAction } from "./thread/ArchiveChoicesDialog.js";
 import { ForceResetDialog } from "./thread/ForceResetDialog.js";
 import {
   ExecutionWorkspaceDeleteDialog,
@@ -185,9 +184,6 @@ export function ThreadContextMenu({
     ({ id }) => id === thread.workspaceId,
   )?.label.text;
   const [snoozeOpen, setSnoozeOpen] = useState(false);
-  const [archiveChoicesOpen, setArchiveChoicesOpen] = useState(false);
-  const [archiveInitialImpact, setArchiveInitialImpact] =
-    useState<ThreadArchiveImpact>();
   const [forceResetOpen, setForceResetOpen] = useState(false);
   const [settleChoicesOpen, setSettleChoicesOpen] = useState(false);
   const [settleImpact, setSettleImpact] = useState<ThreadArchiveImpact>();
@@ -198,6 +194,21 @@ export function ThreadContextMenu({
   const [workspaceDeleteError, setWorkspaceDeleteError] = useState("");
   const [pendingAction, setPendingAction] = useState<InventoryContextAction>();
   const [actionError, setActionError] = useState("");
+  // Archive directly when the authoritative impact leaves nothing to decide;
+  // otherwise the choices dialog opens with that impact.
+  const archiveAction = useArchiveThreadAction({
+    thread,
+    store,
+    descendantCount: familyDescendantCount,
+    disabled: pendingAction !== undefined,
+    onPendingChange: (pending) =>
+      setPendingAction(pending ? "archive" : undefined),
+    onArchived: (choice, archivedThreadIds) => {
+      onAction?.("archive");
+      if (choice === "all") onArchiveFamily?.(archivedThreadIds);
+    },
+    returnFocusRef,
+  });
   const [pinPending, setPinPending] = useState(false);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const groupSearchRef = useRef<HTMLInputElement>(null);
@@ -207,7 +218,7 @@ export function ThreadContextMenu({
     menuOpen ||
     groupDialogOpen ||
     snoozeOpen ||
-    archiveChoicesOpen ||
+    archiveAction.open ||
     forceResetOpen ||
     settleChoicesOpen ||
     workspaceDeleteTarget !== undefined;
@@ -303,21 +314,10 @@ export function ThreadContextMenu({
       )
       .finally(() => setPendingAction(undefined));
   };
-  // Archive directly when the authoritative impact leaves nothing to decide;
-  // otherwise hand that impact to the choices dialog.
   const archiveThread = () => {
     if (pendingAction) return;
-    setPendingAction("archive");
     setActionError("");
-    void runThreadArchiveCheck({
-      thread,
-      store,
-      onChoices: (impact) => {
-        setArchiveInitialImpact(impact);
-        setArchiveChoicesOpen(true);
-      },
-      onArchived: () => onAction?.("archive"),
-    }).finally(() => setPendingAction(undefined));
+    archiveAction.start();
   };
   const archived = thread.inventoryState === "archived";
   const latestFork = latestTurnForkDecision(forkState);
@@ -938,26 +938,7 @@ export function ThreadContextMenu({
           {latestFork.unavailableReason}
         </span>
       )}
-      <ArchiveChoicesDialog
-        open={archiveChoicesOpen}
-        initialImpact={archiveInitialImpact}
-        onOpenChange={(open) => {
-          setArchiveChoicesOpen(open);
-          if (!open) setArchiveInitialImpact(undefined);
-        }}
-        thread={thread}
-        store={store}
-        descendantCount={familyDescendantCount}
-        disabled={pendingAction !== undefined}
-        onPendingChange={(pending) =>
-          setPendingAction(pending ? "archive" : undefined)
-        }
-        onArchived={(choice, archivedThreadIds) => {
-          onAction?.("archive");
-          if (choice === "all") onArchiveFamily?.(archivedThreadIds);
-        }}
-        returnFocusRef={returnFocusRef}
-      />
+      {archiveAction.dialog}
       <ForceResetDialog
         open={forceResetOpen}
         onOpenChange={setForceResetOpen}

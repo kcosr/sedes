@@ -1,5 +1,4 @@
 import { ThreadEnvironmentVariables } from "../environment-variables/ThreadEnvironmentVariables.js";
-import { runThreadArchiveCheck } from "../../operations/thread-archive.js";
 import { runThreadCreation, runThreadFork } from "../../operations/thread-creation.js";
 import {
   memo,
@@ -78,7 +77,7 @@ import {
   agentToolPolicySummary,
 } from "./AgentToolSettingsDialog.js";
 import { latestTurnForkDecision } from "../../lineage/latest-turn-fork.js";
-import { ArchiveChoicesDialog } from "./ArchiveChoicesDialog.js";
+import { useArchiveThreadAction } from "./ArchiveChoicesDialog.js";
 import {
   ExecutionWorkspaceDeleteDialog,
   type IsolatedWorkspace,
@@ -190,8 +189,6 @@ export const ThreadHeader = memo(function ThreadHeader({
   const [modelSearchFirst, setModelSearchFirst] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [forceResetOpen, setForceResetOpen] = useState(false);
-  const [archiveChoicesOpen, setArchiveChoicesOpen] = useState(false);
-  const [archiveInitialImpact, setArchiveInitialImpact] = useState<ThreadArchiveImpact>();
   const [settleImpact, setSettleImpact] = useState<ThreadArchiveImpact>();
   const [settleChoicesOpen, setSettleChoicesOpen] = useState(false);
   const [sessionStatsOpen, setSessionStatsOpen] = useState(false);
@@ -344,6 +341,21 @@ export const ThreadHeader = memo(function ThreadHeader({
       queueFailure: Boolean(snapshot.attention.queueFailure),
     },
   };
+  // Archive directly when the authoritative impact leaves nothing to decide;
+  // otherwise the choices dialog opens with that impact.
+  const archiveAction = useArchiveThreadAction({
+    thread: applicationThreadSummary,
+    store: applicationStore,
+    descendantCount: familyDescendantCount,
+    disabled: disabled || archive?.available !== true,
+    onPendingChange: setInventoryPending,
+    onArchived: () => {
+      setActionsOpen(false);
+      navigate("/");
+      if (mobileLayout) navigationControls?.openDrawer();
+    },
+    returnFocusRef: actionsTrigger,
+  });
   const latestFork = latestTurnForkDecision({
     status: "ready",
     connection,
@@ -478,23 +490,6 @@ export const ThreadHeader = memo(function ThreadHeader({
     } finally {
       setInventoryPending(false);
     }
-  };
-
-  // Archive directly when the authoritative impact leaves nothing to decide;
-  // otherwise hand that impact to the choices dialog.
-  const archiveThread = () => {
-    void runThreadArchiveCheck({
-      thread: applicationThreadSummary,
-      store: applicationStore,
-      onChoices: (impact) => {
-        setArchiveInitialImpact(impact);
-        setArchiveChoicesOpen(true);
-      },
-      onArchived: () => {
-        navigate("/");
-        if (mobileLayout) navigationControls?.openDrawer();
-      },
-    });
   };
 
   const createFromSettings = (presentation: PanelPresentation) => {
@@ -997,7 +992,7 @@ export const ThreadHeader = memo(function ThreadHeader({
                     <DropdownMenuItem
                       disabled={disabled || archive?.available !== true}
                       title={archive?.unavailableReason?.text}
-                      onSelect={() => closeActionsBefore(archiveThread)}
+                      onSelect={() => closeActionsBefore(archiveAction.start)}
                     >
                       <Archive aria-hidden="true" />
                       Archive
@@ -1105,25 +1100,7 @@ export const ThreadHeader = memo(function ThreadHeader({
             .finally(() => setWorkspaceDeletePending(false));
         }}
       />
-      <ArchiveChoicesDialog
-        open={active && archiveChoicesOpen}
-        initialImpact={archiveInitialImpact}
-        onOpenChange={(next) => {
-          setArchiveChoicesOpen(next);
-          if (!next) setArchiveInitialImpact(undefined);
-        }}
-        thread={applicationThreadSummary}
-        store={applicationStore}
-        descendantCount={familyDescendantCount}
-        disabled={disabled || archive?.available !== true}
-        onPendingChange={setInventoryPending}
-        onArchived={() => {
-          setActionsOpen(false);
-          navigate("/");
-          if (mobileLayout) navigationControls?.openDrawer();
-        }}
-        returnFocusRef={actionsTrigger}
-      />
+      {active && archiveAction.dialog}
       <ThreadModelPickerSheet
         store={store}
         snapshot={snapshot}

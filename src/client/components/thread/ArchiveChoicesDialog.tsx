@@ -1,9 +1,5 @@
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import type { ThreadArchiveImpact } from "../../../shared/index.js";
-import {
-  OperationLoading,
-  useOperationContentFocus,
-} from "../../operations/OperationOverlay.js";
 import { runThreadArchiveCheck } from "../../operations/thread-archive.js";
 import { Button } from "@client/components/ui/button";
 import { Checkbox } from "@client/components/ui/checkbox";
@@ -31,24 +27,24 @@ import {
 /**
  * The archive choices: descendants, unfinished work and isolated-workspace
  * handling, with the wording, availability gating and error retry of every
- * archive entry point. Opened with an `initialImpact` after a blocking check
- * (`runThreadArchiveCheck`), or without one, in which case it runs the check
- * itself behind the blocking progress first. Focus returns to
+ * archive entry point. It opens with the impact that
+ * `useArchiveThreadAction`'s blocking check (`runThreadArchiveCheck`) found,
+ * and refreshes it after a failed archive or on Retry. Focus returns to
  * `returnFocusRef` because the opening menu row unmounts with its menu.
  */
 type ArchiveChoicesDialogProps = ArchiveChoiceProps & {
-  readonly initialImpact?: ThreadArchiveImpact;
-  readonly open: boolean;
+  readonly initialImpact: ThreadArchiveImpact;
   readonly onOpenChange: (open: boolean) => void;
   readonly returnFocusRef?: React.RefObject<HTMLElement | null>;
 };
 
 /**
- * "Archive…" for a menu item or button: `start()` checks the thread behind
- * the blocking progress, archives at once when nothing needs choosing
- * (`archiveNeedsChoices`), and otherwise opens ArchiveChoicesDialog with the
- * checked impact. Render `dialog` once, outside the menu that calls `start`,
- * so it survives the menu closing.
+ * The one archive flow, for every "Archive" menu item and button: `start()`
+ * checks the thread behind the blocking progress, archives at once when
+ * nothing needs choosing (`archiveNeedsChoices`), and otherwise opens
+ * ArchiveChoicesDialog with the checked impact. Render `dialog` once, outside
+ * the menu that calls `start`, so it survives the menu closing; `open`
+ * reports the choices dialog to surfaces that track their open overlays.
  */
 export function useArchiveThreadAction({
   returnFocusRef,
@@ -57,10 +53,11 @@ export function useArchiveThreadAction({
   readonly returnFocusRef?: React.RefObject<HTMLElement | null>;
 }): {
   readonly start: () => void;
+  readonly open: boolean;
   readonly dialog: React.ReactNode;
 } {
-  const [open, setOpen] = useState(false);
-  const [initialImpact, setInitialImpact] = useState<ThreadArchiveImpact>();
+  // The checked impact; the choices dialog is open while one is held.
+  const [impact, setImpact] = useState<ThreadArchiveImpact>();
   const { thread, store, disabled, onArchived, onPendingChange } = choiceProps;
   const start = () => {
     if (disabled) return;
@@ -68,23 +65,19 @@ export function useArchiveThreadAction({
     void runThreadArchiveCheck({
       thread,
       store,
-      onChoices: (impact) => {
-        setInitialImpact(impact);
-        setOpen(true);
-      },
+      onChoices: setImpact,
       onArchived: () => onArchived?.("only", [thread.id]),
     }).finally(() => onPendingChange?.(false));
   };
   return {
     start,
-    dialog: (
+    open: impact !== undefined,
+    dialog: impact && (
       <ArchiveChoicesDialog
         {...choiceProps}
-        open={open}
-        initialImpact={initialImpact}
+        initialImpact={impact}
         onOpenChange={(next) => {
-          setOpen(next);
-          if (!next) setInitialImpact(undefined);
+          if (!next) setImpact(undefined);
         }}
         returnFocusRef={returnFocusRef}
       />
@@ -92,15 +85,8 @@ export function useArchiveThreadAction({
   };
 }
 
-export function ArchiveChoicesDialog(
-  props: ArchiveChoicesDialogProps,
-): React.JSX.Element | null {
-  // Each opening owns a fresh impact check, including after a canceled request.
-  return props.open ? <OpenArchiveChoicesDialog {...props} /> : null;
-}
-
-function OpenArchiveChoicesDialog({
-  open,
+/** Mounted per opening, so each starts from its impact and default choices. */
+export function ArchiveChoicesDialog({
   onOpenChange,
   returnFocusRef,
   initialImpact,
@@ -126,21 +112,8 @@ function OpenArchiveChoicesDialog({
   const [archiveDescendants, setArchiveDescendants] = useState(false);
   const descendantsId = useId();
 
-  useEffect(() => {
-    if (open) {
-      setArchiveDescendants(false);
-      choices.setExecutionWorkspaceDisposition("keep");
-      if (!initialImpact) void choices.load();
-    }
-    // load reads the latest hook state each render; only (re)load on open.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
   const choice = hasDescendants && archiveDescendants ? "all" : "only";
   const selectedReason = choice === "all" ? allReason : onlyReason;
-
-  const checking = !choices.impact && !choices.error;
-  const contentRef = useOperationContentFocus(checking, !checking);
   const pending = Boolean(choices.pending);
 
   const archive = () => {
@@ -152,122 +125,93 @@ function OpenArchiveChoicesDialog({
 
   return (
     <Dialog
-      open={open}
+      open
       onOpenChange={(next) => {
         if (!pending) onOpenChange(next);
       }}
     >
       <DialogContent
-        ref={contentRef}
         size="md"
-        mobile={checking ? "card" : undefined}
+        // Above the sidebar drawer and the sheets it can be opened from.
         layer="blocking"
-        showClose={!checking}
-        dismissible={!checking && !pending}
-        className={checking ? "operation-progress-surface" : undefined}
-        // The impact check is a blocking operation (only its Cancel leaves
-        // it); the choices are an ordinary form dialog.
-        {...(checking
-          ? {
-              "data-blocking-operation": "true",
-              onKeyDown: (event: React.KeyboardEvent) => event.stopPropagation(),
-            }
-          : {})}
+        dismissible={!pending}
         returnFocusRef={returnFocusRef}
       >
-        {checking ? (
-          <>
-            <DialogTitle className="sr-only">
-              Checking thread activity
-            </DialogTitle>
-            <DialogDescription className="sr-only">
-              Checking the thread before showing archive choices.
-            </DialogDescription>
-            <OperationLoading
-              deferred
-              message="Checking thread activity…"
-              onCancel={() => onOpenChange(false)}
-            />
-          </>
-        ) : (
-          <>
-            <DialogHeader>
-              <DialogTitle>Archive this thread</DialogTitle>
-              <DialogDescription>
-                {hasDescendants
-                  ? "Choose whether this thread's forked descendants should be archived too."
-                  : "Archived threads leave the inventory until restored."}
-              </DialogDescription>
-            </DialogHeader>
-            <DialogBody>
-              {hasDescendants && (
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    id={descendantsId}
-                    checked={archiveDescendants}
-                    disabled={choices.loading || pending}
-                    onCheckedChange={(checked) =>
-                      setArchiveDescendants(checked === true)
-                    }
-                  />
-                  <Label htmlFor={descendantsId}>
-                    Archive child and descendant forks
-                  </Label>
-                </div>
-              )}
-              <ArchiveQuestionWarning choices={choices} scope={choice} />
-              <ArchiveStashedPromptWarning choices={choices} scope={choice} />
-              <ArchiveTaskDisposition
-                choices={choices}
-                includeDescendants={choice === "all"}
+        <DialogHeader>
+          <DialogTitle>Archive this thread</DialogTitle>
+          <DialogDescription>
+            {hasDescendants
+              ? "Choose whether this thread's forked descendants should be archived too."
+              : "Archived threads leave the inventory until restored."}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody>
+          {hasDescendants && (
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id={descendantsId}
+                checked={archiveDescendants}
+                disabled={choices.loading || pending}
+                onCheckedChange={(checked) =>
+                  setArchiveDescendants(checked === true)
+                }
               />
-              <ArchiveExecutionWorkspaceDisposition
-                choices={choices}
-                includeDescendants={choice === "all"}
-              />
-              {choices.error ? (
-                <DialogAlert
-                  id={reasonId}
-                  tone="danger"
-                  action={
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void choices.load()}
-                    >
-                      Retry
-                    </Button>
-                  }
+              <Label htmlFor={descendantsId}>
+                Archive child and descendant forks
+              </Label>
+            </div>
+          )}
+          <ArchiveQuestionWarning choices={choices} scope={choice} />
+          <ArchiveStashedPromptWarning choices={choices} scope={choice} />
+          <ArchiveTaskDisposition
+            choices={choices}
+            includeDescendants={choice === "all"}
+          />
+          <ArchiveExecutionWorkspaceDisposition
+            choices={choices}
+            includeDescendants={choice === "all"}
+          />
+          {choices.error ? (
+            <DialogAlert
+              id={reasonId}
+              tone="danger"
+              action={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void choices.load()}
                 >
-                  {choices.error}
-                </DialogAlert>
-              ) : selectedReason ? (
-                <p className="archive-choice-note" id={reasonId} role="status">
-                  {selectedReason}
-                </p>
-              ) : null}
-            </DialogBody>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={pending}
-                onClick={() => onOpenChange(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                disabled={Boolean(selectedReason) || pending}
-                aria-describedby={selectedReason ? reasonId : undefined}
-                onClick={archive}
-              >
-                {pending ? "Archiving…" : "Archive"}
-              </Button>
-            </DialogFooter>
-          </>
-        )}
+                  Retry
+                </Button>
+              }
+            >
+              {choices.error}
+            </DialogAlert>
+          ) : selectedReason ? (
+            <p className="archive-choice-note" id={reasonId} role="status">
+              {selectedReason}
+            </p>
+          ) : null}
+        </DialogBody>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={Boolean(selectedReason) || pending}
+            aria-describedby={selectedReason ? reasonId : undefined}
+            onClick={archive}
+          >
+            {pending ? "Archiving…" : "Archive"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

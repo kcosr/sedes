@@ -1,4 +1,3 @@
-import { runThreadArchiveCheck } from "../operations/thread-archive.js";
 import { SearchableSelect } from "./ui/searchable-select.js";
 import { useSidebarDisclosure, useSidebarDisclosures } from "../app/sidebar-disclosures.js";
 import * as Collapsible from "@radix-ui/react-collapsible";
@@ -174,7 +173,7 @@ import {
 } from "../lineage/sidebar-group-projections.js";
 import { createThreadSearchMatcher } from "../lineage/sidebar-search.js";
 import { ForkProvenanceButton } from "./lineage/ForkProvenanceButton.js";
-import { ArchiveChoicesDialog } from "./thread/ArchiveChoicesDialog.js";
+import { useArchiveThreadAction } from "./thread/ArchiveChoicesDialog.js";
 import {
   SettleImpactDialog,
   settleNeedsConfirmation,
@@ -3469,8 +3468,6 @@ function FlatRowItemContent(
   const [pendingAction, setPendingAction] = useState<"quick" | "archive">();
   const [pinPending, setPinPending] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [archiveChoicesOpen, setArchiveChoicesOpen] = useState(false);
-  const [archiveInitialImpact, setArchiveInitialImpact] = useState<ThreadArchiveImpact>();
   const [settleChoicesOpen, setSettleChoicesOpen] = useState(false);
   const [settleImpact, setSettleImpact] = useState<ThreadArchiveImpact>();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
@@ -3537,35 +3534,35 @@ function FlatRowItemContent(
         : ("settle" as const);
   const renameGlyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
   const renameGlyphVisible = renameGlyphKind !== "idle";
-  const openArchiveChoices = (impact: ThreadArchiveImpact) => {
-    setArchiveInitialImpact(impact);
-    actionPending.current = false;
-    setPendingAction(undefined);
-    setArchiveChoicesOpen(true);
-  };
-  const runInventoryAction = (
-    kind: "quick" | "archive",
-    action: "wake" | "settle" | "unsettle" | "archive",
-  ) => {
+  // Archive directly when there is nothing to choose; otherwise the choices
+  // dialog opens with the checked impact.
+  const archiveAction = useArchiveThreadAction({
+    thread,
+    store,
+    descendantCount: archiveDescendantCount,
+    disabled: pendingAction !== undefined,
+    onPendingChange: (pending) => {
+      actionPending.current = pending;
+      setPendingAction(pending ? "archive" : undefined);
+    },
+    onArchived: () => {
+      if (selected) {
+        navigate("/");
+        onNavigate({ keepDrawerOpen: true });
+      }
+    },
+    returnFocusRef: rowLink,
+  });
+  const archiveThread = () => {
     if (actionPending.current) return;
-    actionPending.current = true;
-    setPendingAction(kind);
     setActionError("");
-    if (action === "archive") {
-      void runThreadArchiveCheck({
-        thread, store, onChoices: openArchiveChoices,
-        onArchived: () => {
-          if (selected) {
-            navigate("/");
-            onNavigate({ keepDrawerOpen: true });
-          }
-        },
-      }).finally(() => {
-        actionPending.current = false;
-        setPendingAction(undefined);
-      });
-      return;
-    }
+    archiveAction.start();
+  };
+  const runQuickAction = (action: "wake" | "settle" | "unsettle") => {
+    if (actionPending.current) return;
+    setActionError("");
+    actionPending.current = true;
+    setPendingAction("quick");
     const mutation =
       action === "settle"
         ? store.getThreadArchiveImpact(thread.id).then((impact) => {
@@ -3595,7 +3592,7 @@ function FlatRowItemContent(
           aria-label={`${capitalize(quickAction)} ${thread.title.text}`}
           title={capitalize(quickAction)}
           disabled={pendingAction !== undefined}
-          onClick={() => runInventoryAction("quick", quickAction)}
+          onClick={() => runQuickAction(quickAction)}
         >
           {quickAction === "wake" ? (
             "Wake"
@@ -3648,7 +3645,7 @@ function FlatRowItemContent(
         aria-label={`Archive ${thread.title.text || "Untitled thread"}`}
         title="Archive"
         disabled={pendingAction !== undefined}
-        onClick={() => runInventoryAction("archive", "archive")}
+        onClick={archiveThread}
       >
         <Archive size={14} strokeWidth={1.8} />
       </button>
@@ -3800,26 +3797,7 @@ function FlatRowItemContent(
             wrapper out of layout so FlatThreadRow's CSS applies unchanged. */}
         <div style={{ display: "contents" }}>{row}</div>
       </ThreadContextMenu>
-      <ArchiveChoicesDialog
-        open={archiveChoicesOpen}
-        initialImpact={archiveInitialImpact}
-        onOpenChange={setArchiveChoicesOpen}
-        thread={thread}
-        store={store}
-        descendantCount={archiveDescendantCount}
-        disabled={pendingAction !== undefined}
-        onPendingChange={(pending) => {
-          actionPending.current = pending;
-          setPendingAction(pending ? "archive" : undefined);
-        }}
-        onArchived={() => {
-          if (selected) {
-            navigate("/");
-            onNavigate({ keepDrawerOpen: true });
-          }
-        }}
-        returnFocusRef={rowLink}
-      />
+      {archiveAction.dialog}
       <SettleImpactDialog
         open={settleChoicesOpen}
         onOpenChange={setSettleChoicesOpen}
@@ -4306,16 +4284,30 @@ function ThreadRow({
   const [settleChoicesOpen, setSettleChoicesOpen] = useState(false);
   const [settleImpact, setSettleImpact] = useState<ThreadArchiveImpact>();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
-  const [archiveChoicesOpen, setArchiveChoicesOpen] = useState(false);
-  const [archiveInitialImpact, setArchiveInitialImpact] = useState<ThreadArchiveImpact>();
   const [placementPending, setPlacementPending] = useState(false);
   const [placementError, setPlacementError] = useState("");
-  const openArchiveChoices = (impact: ThreadArchiveImpact) => {
-    setArchiveInitialImpact(impact);
-    inventoryActionPending.current = false;
-    setPendingInventoryAction(undefined);
-    setArchiveChoicesOpen(true);
-  };
+  // Archive directly when there is nothing to choose; otherwise the choices
+  // dialog opens with the checked impact.
+  const archiveAction = useArchiveThreadAction({
+    thread,
+    store,
+    descendantCount: archiveDescendantCount,
+    disabled: pendingInventoryAction !== undefined,
+    onPendingChange: (pending) => {
+      inventoryActionPending.current = pending;
+      setPendingInventoryAction(pending ? "archive" : undefined);
+    },
+    onArchived: (_choice, archivedThreadIds) => {
+      if (
+        selected ||
+        (selectedThreadId && archivedThreadIds.includes(selectedThreadId))
+      ) {
+        navigate("/");
+        onNavigate({ keepDrawerOpen: true });
+      }
+    },
+    returnFocusRef: rowLink,
+  });
   /**
    * The rename input replaces the row link, so keyboard commit/cancel would
    * otherwise leave focus on a removed node and drop the caret to <body>.
@@ -4790,10 +4782,8 @@ function ThreadRow({
                 )}
               </button>
             )}
-            // Archive directly when there is nothing to choose; otherwise the
-            // choices dialog opens with the checked impact. Touch devices
-            // never see this button (row actions are CSS-hidden for coarse
-            // pointers).
+            {/* Touch devices never see this button (row actions are
+                CSS-hidden for coarse pointers). */}
             <button
               type="button"
               className="thread-row-archive"
@@ -4803,21 +4793,7 @@ function ThreadRow({
               disabled={pendingInventoryAction !== undefined}
               onClick={() => {
                 if (inventoryActionPending.current) return;
-                inventoryActionPending.current = true;
-                setPendingInventoryAction("archive");
-                void runThreadArchiveCheck({
-                  thread, store, onChoices: openArchiveChoices,
-                  onArchived: () => {
-                    if (selected) {
-                      navigate("/");
-                      onNavigate({ keepDrawerOpen: true });
-                    }
-                  },
-                })
-                  .finally(() => {
-                    inventoryActionPending.current = false;
-                    setPendingInventoryAction(undefined);
-                  });
+                archiveAction.start();
               }}
             >
               <Archive size={14} strokeWidth={1.8} />
@@ -4863,30 +4839,7 @@ function ThreadRow({
       >
         {row}
       </ThreadContextMenu>
-      <ArchiveChoicesDialog
-        open={archiveChoicesOpen}
-        initialImpact={archiveInitialImpact}
-        onOpenChange={setArchiveChoicesOpen}
-        thread={thread}
-        store={store}
-        descendantCount={archiveDescendantCount}
-        disabled={pendingInventoryAction !== undefined}
-        onPendingChange={(pending) => {
-          inventoryActionPending.current = pending;
-          setPendingInventoryAction(pending ? "archive" : undefined);
-        }}
-        onArchived={(_choice, archivedThreadIds) => {
-          if (
-            selected ||
-            (selectedThreadId &&
-              archivedThreadIds.includes(selectedThreadId))
-          ) {
-            navigate("/");
-            onNavigate({ keepDrawerOpen: true });
-          }
-        }}
-        returnFocusRef={rowLink}
-      />
+      {archiveAction.dialog}
       <SettleImpactDialog
         open={settleChoicesOpen}
         onOpenChange={setSettleChoicesOpen}
