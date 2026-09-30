@@ -64,6 +64,7 @@ import {
   settleNeedsConfirmation,
 } from "./thread/SettleImpactDialog.js";
 import { Button } from "@client/components/ui/button";
+import { Field } from "@client/components/ui/field";
 import { Input } from "@client/components/ui/input";
 import { SearchableSelectList } from "@client/components/ui/searchable-select";
 import {
@@ -72,6 +73,7 @@ import {
 } from "../workspace-panels/thread-panel-navigation.js";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -880,20 +882,24 @@ export function ThreadContextMenu({
               }
             />
           </div>
-          <label className="thread-group-create-field">
-            <span>Create group</span>
+          <Field label="Create group">
             <Input
               maxLength={120}
               value={groupName}
               onChange={(event) => setGroupName(event.target.value)}
             />
-          </label>
+          </Field>
           {actionError && (
             <p className="thread-row-error" role="alert">
               {actionError}
             </p>
           )}
           <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline" disabled={groupPending}>
+                Cancel
+              </Button>
+            </DialogClose>
             {thread.groupId !== null && (
               <Button
                 type="button"

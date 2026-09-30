@@ -1622,14 +1622,6 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   gap: 6px;
 }
 
-.thread-group-create-field {
-  display: grid;
-  gap: 6px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 600;
-}
-
 /* Inline rename (context menu → Rename): the row link swaps to a form so
    layout (glyph gutter, height) stays put while the title becomes an input.
    The field is pinned to the row's own rhythm — 22px box inside the 34px

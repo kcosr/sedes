@@ -1322,6 +1322,18 @@ describe("searchable Move to group", () => {
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
   });
 
+  it("cancels without changing the group", async () => {
+    const { thread, store, assignThreadGroup, createThreadGroup, removeThreadGroup } = groupFixture();
+    const dialog = await openGroups(renderMenu(thread, store));
+    // The name field is a regular form field: a label over normal-weight text.
+    expect(within(dialog).getByText("Create group")).toHaveAttribute("data-slot", "field-label");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(assignThreadGroup).not.toHaveBeenCalled();
+    expect(createThreadGroup).not.toHaveBeenCalled();
+    expect(removeThreadGroup).not.toHaveBeenCalled();
+  });
+
   it("creates from the independent name field when no existing group matches", async () => {
     const { thread, store, assignThreadGroup, createThreadGroup } = groupFixture(null);
     const dialog = await openGroups(renderMenu(thread, store));
