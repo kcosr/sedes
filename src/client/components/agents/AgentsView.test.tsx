@@ -421,14 +421,21 @@ describe("AgentsView", () => {
     expect(within(unavailable).getByRole("alert")).toHaveTextContent("The server did not respond.");
     fireEvent.click(within(unavailable).getByRole("button", { name: "Retry" }));
     expect(await within(unavailable).findByRole("alert")).toHaveTextContent("Still unreachable.");
-    fireEvent.click(within(unavailable).getByRole("button", { name: "Retry" }));
+    // A keyboard user retries from the focused Retry button.
+    const retry = within(unavailable).getByRole("button", { name: "Retry" });
+    retry.focus();
+    fireEvent.click(retry);
     // While the retry runs, the failure stays in place.
     expect(within(screen.getByRole("region", { name: "Agent unavailable" })).getByRole("button", { name: "Retrying…" })).toBeDisabled();
     expect(screen.queryByText("Loading Agent…")).toBeNull();
     act(() => finishRetry(detail));
-    expect(await screen.findByRole("region", { name: "Agent editor" })).toBeVisible();
+    const editor = await screen.findByRole("region", { name: "Agent editor" });
+    expect(editor).toBeVisible();
     expect(screen.queryByRole("region", { name: "Agent unavailable" })).toBeNull();
     expect(getSavedAgent).toHaveBeenCalledTimes(3);
+    // The removed Retry button hands focus to the loaded Agent's heading.
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("data-detail-heading"));
+    expect(editor).toContainElement(document.activeElement as HTMLElement);
   });
 
   it("drops an unavailable Agent's failure when the route opens another Agent", async () => {

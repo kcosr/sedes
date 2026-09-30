@@ -242,7 +242,19 @@ function AgentDetail({
   readonly store: AgentClientStore;
   readonly workspaces: readonly NormalizedWorkspaceSummary[];
 }): React.JSX.Element {
-  if (detail.status === "ready" && detail.agentId === agentId) {
+  const ready = detail.status === "ready" && detail.agentId === agentId;
+  // A successful retry replaces the focused Retry button with the editor;
+  // hand focus to the editor's heading unless the user has moved it.
+  const retryFocusPane = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const pane = retryFocusPane.current;
+    if (!ready || !pane) return;
+    retryFocusPane.current = null;
+    const active = pane.ownerDocument.activeElement;
+    if (active && active !== pane.ownerDocument.body) return;
+    pane.querySelector<HTMLElement>("[data-detail-heading]")?.focus();
+  }, [ready]);
+  if (ready) {
     return (
       <AgentEditor
         key={detail.agent.id}
@@ -269,7 +281,13 @@ function AgentDetail({
               variant="outline"
               size="sm"
               disabled={detail.retrying}
-              onClick={() => void store.loadAgent(agentId)}
+              onClick={(event) => {
+                const button = event.currentTarget;
+                retryFocusPane.current = button.ownerDocument.activeElement === button
+                  ? button.closest("section")?.parentElement ?? null
+                  : null;
+                void store.loadAgent(agentId);
+              }}
             >
               {detail.retrying ? "Retrying…" : "Retry"}
             </Button>
