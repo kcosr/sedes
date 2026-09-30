@@ -10,7 +10,7 @@ import { StatusPill } from "../ui/status-pill.js";
 import type { Tone } from "../ui/tone.js";
 import { useFocusReturn } from "./detail-parts.js";
 import { errorMessage } from "./fields.js";
-import { actionLabels, applyLabels, atLeast, preferenceLabels, presentRuntime, upgradeLabels, type RuntimeAction, type RuntimePresentation } from "./runtime-presentation.js";
+import { actionLabels, applyLabels, atLeast, preferenceLabels, presentRuntime, upgradeLabels, type RuntimeAction, type RuntimeActionPresentation, type RuntimePresentation } from "./runtime-presentation.js";
 import type { ConfigurationControls } from "./useConfiguration.js";
 
 const confirmationNotes: Partial<Record<RuntimeAction, string>> = {
@@ -243,11 +243,21 @@ export function RuntimePrimaryAction({ controller, size = "default" }: { readonl
 
 const menuOrder: readonly RuntimeAction[] = ["connect", "start", "restart", "upgrade", "disconnect", "stop"];
 
-/** The rarer lifecycle commands, as items of the detail's actions menu. */
-export function RuntimeMenuItems({ controller }: { readonly controller: RuntimeController }): React.JSX.Element {
-  const actions = [...controller.presentation.secondary].sort((a, b) => menuOrder.indexOf(a.action) - menuOrder.indexOf(b.action));
+/**
+ * The rarer lifecycle commands, as items of the detail's actions menu: the
+ * regular ones, or the destructive ones that the menu puts last, after a
+ * separator.
+ */
+export function RuntimeMenuItems({ controller, emphasis }: { readonly controller: RuntimeController; readonly emphasis: RuntimeActionPresentation["emphasis"] }): React.JSX.Element {
+  const actions = controller.presentation.secondary.filter(entry => entry.emphasis === emphasis)
+    .sort((a, b) => menuOrder.indexOf(a.action) - menuOrder.indexOf(b.action));
   return <>{actions.map((entry) => <DropdownMenuItem key={entry.action} variant={entry.emphasis}
     disabled={controller.paused || controller.unsettled} onSelect={() => controller.requestAction(entry.action)}>{entry.label}</DropdownMenuItem>)}</>;
+}
+
+/** Whether the detail's actions menu offers a destructive lifecycle command. */
+export function hasDestructiveRuntimeMenuItems(controller: RuntimeController): boolean {
+  return controller.presentation.secondary.some(entry => entry.emphasis === "destructive");
 }
 
 /** Whether the detail's actions menu has any lifecycle command to offer. */

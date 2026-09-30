@@ -178,6 +178,9 @@ describe("runtime administration controls", () => {
     expect(screen.getByText(/Stop only records that the sidecar should not start automatically/)).toBeVisible();
     await user.click(moreActions());
     expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["Disconnect", "Stop"]);
+    // The destructive command comes last, after a separator.
+    expect(Array.from(screen.getByRole("menu").querySelectorAll('[role="menuitem"], [role="separator"]'))
+      .map((row) => row.getAttribute("role") === "separator" ? "—" : row.textContent)).toEqual(["Disconnect", "—", "Stop"]);
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     view.rerender(<RuntimeControls controls={api} revision={7} resourceKind="backend" resourceId={runtime.resourceId} label="Build host"

@@ -18,7 +18,7 @@ import { BackLink, CopyableValue, DetailHeader } from "./detail-parts.js";
 import { capabilityLabels, environmentKindNames } from "./EnvironmentEditor.js";
 import { environmentBackends, EnvironmentIcon, environmentKindLabels, hostPlatform, hostPresence, runtimeFor } from "./ExecutionInventory.js";
 import { RecoveredOperations } from "./RecoveredOperations.js";
-import { hasRuntimeMenuItems, runtimeDiagnostics, RuntimeFeedback, RuntimeHealth, RuntimeImpactDialog, RuntimeMenuItems, RuntimePrimaryAction, useRuntimeController, type RuntimeController } from "./RuntimeControls.js";
+import { hasDestructiveRuntimeMenuItems, hasRuntimeMenuItems, runtimeDiagnostics, RuntimeFeedback, RuntimeHealth, RuntimeImpactDialog, RuntimeMenuItems, RuntimePrimaryAction, useRuntimeController, type RuntimeController } from "./RuntimeControls.js";
 import { worstStatus } from "./runtime-presentation.js";
 import type { ConfigurationSnapshot, EnvironmentDefinition } from "./types.js";
 import type { ConfigurationControls } from "./useConfiguration.js";
@@ -57,17 +57,23 @@ export function useHiddenDetailReset(selected: boolean, controller: RuntimeContr
   }, [selected, pendingImpact]);
 }
 
-/** The detail's actions menu; it renders nothing when it would be empty. */
+/**
+ * The detail's actions menu; it renders nothing when it would be empty. A
+ * destructive lifecycle command comes last, after a separator.
+ */
 export function DetailMenu({ label, controller, extra }: { readonly label: string; readonly controller: RuntimeController; readonly extra?: ReactNode }): React.JSX.Element | null {
   const runtime = hasRuntimeMenuItems(controller);
   if (!runtime && !extra) return null;
+  const destructive = hasDestructiveRuntimeMenuItems(controller);
+  const regular = Boolean(extra) || controller.presentation.secondary.some(entry => entry.emphasis !== "destructive");
   return <DropdownMenu>
     <DropdownMenuTrigger asChild><Button type="button" variant="outline" size="icon" aria-label={`Runtime actions for ${label}`}
       disabled={!extra && (controller.paused || controller.unsettled)} aria-describedby={controller.describedBy}><Ellipsis /></Button></DropdownMenuTrigger>
     <DropdownMenuContent align="end" aria-label={`Runtime actions for ${label}`}>
-      <RuntimeMenuItems controller={controller} />
-      {runtime && extra ? <DropdownMenuSeparator /> : null}
+      <RuntimeMenuItems controller={controller} emphasis="default" />
       {extra}
+      {regular && destructive ? <DropdownMenuSeparator /> : null}
+      <RuntimeMenuItems controller={controller} emphasis="destructive" />
     </DropdownMenuContent>
   </DropdownMenu>;
 }
