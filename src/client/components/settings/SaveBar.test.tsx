@@ -80,6 +80,13 @@ describe("SaveBar", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
   });
 
+  it("sits in flow at the end of a pane when placed there", () => {
+    const { container, rerender } = render(<SaveBar dirty onSave={vi.fn()} />);
+    expect(container.querySelector("[data-slot=save-bar]")).toHaveAttribute("data-placement", "page");
+    rerender(<SaveBar dirty placement="pane" onSave={vi.fn()} />);
+    expect(container.querySelector("[data-slot=save-bar]")).toHaveAttribute("data-placement", "pane");
+  });
+
   it("blocks Save while the form is invalid", () => {
     render(<SaveBar dirty saveDisabled onSave={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();

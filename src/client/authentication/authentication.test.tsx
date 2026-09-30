@@ -172,7 +172,7 @@ describe("authentication lifecycle fencing", () => {
     }));
     const view = render(<AuthenticationGate key="old" endpoint={endpoint} profileId="old-profile"><AuthenticationSettings /></AuthenticationGate>);
     fireEvent.click(await screen.findByRole("button", { name: "Unpair" }));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm unpair" }));
+    fireEvent.click(screen.getByRole("button", { name: "Unpair this browser" }));
     await waitFor(() => expect(finishLogout).toBeDefined());
     view.rerender(<AuthenticationGate key="new" endpoint={endpoint} profileId="new-profile"><div>New private data</div></AuthenticationGate>);
     await screen.findByText("New private data");

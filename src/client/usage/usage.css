@@ -76,15 +76,15 @@
 
 .usage-header h1 {
   margin: 3px 0 4px;
-  font-size: 24px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
+  font-size: var(--text-page);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
 }
 
 .usage-header p:not(.eyebrow) {
   margin: 0;
   color: var(--muted-foreground-2);
-  font-size: 13px;
+  font-size: var(--text-ui);
 }
 
 .usage-header-status {
@@ -93,7 +93,7 @@
   align-items: center;
   gap: 4px;
   color: var(--muted-foreground-2);
-  font-size: 12px;
+  font-size: var(--text-meta);
 }
 
 .usage-spin {
@@ -130,7 +130,7 @@
 
 .usage-select-prefix {
   color: var(--muted-foreground-2);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .usage-select[data-active="true"] {
@@ -155,9 +155,9 @@
   height: 24px;
   place-items: center;
   padding: 0 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-inline);
   color: var(--muted-foreground-2);
-  font-size: 12px;
+  font-size: var(--text-meta);
   font-weight: 550;
   transition: background var(--motion-fast), color var(--motion-fast);
 }
@@ -181,7 +181,7 @@
   border-radius: 999px;
   background: var(--foreground);
   color: var(--background);
-  font-size: 11px;
+  font-size: var(--text-label);
   font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
@@ -204,7 +204,7 @@
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--card);
-  font-size: 12px;
+  font-size: var(--text-meta);
 }
 
 .usage-chip-dimension {
@@ -214,7 +214,7 @@
 .usage-chip-values {
   max-width: 220px;
   overflow: hidden;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -322,7 +322,7 @@
   justify-content: space-between;
   gap: 8px;
   padding: 0 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-inline);
   color: var(--muted-foreground);
   font-size: 12.5px;
   text-align: left;
@@ -336,7 +336,7 @@
 .usage-filter-dimensions button[aria-current="true"] {
   background: var(--accent);
   color: var(--foreground);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .usage-filter-values {
@@ -366,7 +366,7 @@
   grid-template-columns: auto auto minmax(0, 1fr) auto;
   gap: 8px;
   padding: 4px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-inline);
   cursor: pointer;
   font-size: 12.5px;
 }
@@ -405,7 +405,7 @@
 .usage-filter-option-text small,
 .usage-filter-option-value {
   color: var(--muted-foreground-2);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .usage-filter-option-value {
@@ -427,7 +427,7 @@
   border: 1px solid color-mix(in oklch, var(--warning) 45%, transparent);
   border-radius: var(--radius-card);
   background: color-mix(in oklch, var(--warning) 10%, var(--card));
-  font-size: 13px;
+  font-size: var(--text-ui);
 }
 
 .usage-banner > span {
@@ -479,7 +479,7 @@
 .usage-stat-label {
   margin: 0;
   color: var(--muted-foreground-2);
-  font-size: 12px;
+  font-size: var(--text-meta);
   font-weight: 550;
 }
 
@@ -504,7 +504,7 @@
   align-items: center;
   gap: 4px 10px;
   color: var(--muted-foreground-2);
-  font-size: 12px;
+  font-size: var(--text-meta);
 }
 
 .usage-stat-change {
@@ -512,13 +512,13 @@
   align-items: center;
   gap: 2px;
   color: var(--foreground);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
 }
 
 .usage-stat-change[data-direction="flat"] {
   color: var(--muted-foreground-2);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .usage-stat-change-label {
@@ -565,7 +565,7 @@
   flex: none;
   padding: 9px 12px 10px;
   color: var(--muted-foreground-2);
-  font-size: 13px;
+  font-size: var(--text-ui);
   font-weight: 550;
   transition: color var(--motion-fast), box-shadow var(--motion-fast);
 }
@@ -623,7 +623,7 @@
 .usage-card-heading p {
   margin: 3px 0 0;
   color: var(--muted-foreground-2);
-  font-size: 12px;
+  font-size: var(--text-meta);
 }
 
 .usage-card-actions {
@@ -646,7 +646,7 @@
 .usage-footnote {
   margin: 0;
   color: var(--muted-foreground-2);
-  font-size: 12px;
+  font-size: var(--text-meta);
   line-height: 1.5;
 }
 
@@ -693,7 +693,7 @@
   position: relative;
   width: 100%;
   min-width: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-inline);
   outline: none;
   touch-action: pan-y;
 }
@@ -709,7 +709,7 @@
 
 .usage-chart-axis {
   fill: var(--muted-foreground-2);
-  font-size: 11px;
+  font-size: var(--text-label);
   font-variant-numeric: tabular-nums;
 }
 
@@ -756,7 +756,7 @@
   background: var(--popover);
   box-shadow: var(--shadow-small);
   color: var(--popover-foreground);
-  font-size: 12px;
+  font-size: var(--text-meta);
   pointer-events: none;
 }
 
@@ -764,7 +764,7 @@
   margin: 0 0 7px;
   color: var(--muted-foreground-2);
   font-size: 11.5px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .usage-chart-tooltip ul {
@@ -839,8 +839,8 @@
   align-items: center;
   gap: 6px;
   padding: 3px 7px;
-  border-radius: 6px;
-  font-size: 12px;
+  border-radius: var(--radius-inline);
+  font-size: var(--text-meta);
   transition: opacity var(--motion-fast), background var(--motion-fast);
 }
 
@@ -893,7 +893,7 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 5px 12px;
   padding: 7px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   text-align: left;
 }
 
@@ -930,7 +930,7 @@ button.usage-bar-row[aria-pressed="true"] {
 .usage-bar-label {
   overflow: hidden;
   max-width: 100%;
-  font-size: 13px;
+  font-size: var(--text-ui);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -939,7 +939,7 @@ button.usage-bar-row[aria-pressed="true"] {
   overflow: hidden;
   max-width: 100%;
   color: var(--muted-foreground-2);
-  font-size: 11px;
+  font-size: var(--text-label);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -950,8 +950,8 @@ button.usage-bar-row[aria-pressed="true"] {
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--muted-foreground-2);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: var(--text-micro);
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.02em;
   line-height: 15px;
 }
@@ -964,15 +964,15 @@ button.usage-bar-row[aria-pressed="true"] {
 }
 
 .usage-bar-figures strong {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
 }
 
 .usage-bar-figures small {
   min-width: 38px;
   color: var(--muted-foreground-2);
-  font-size: 11px;
+  font-size: var(--text-label);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -1026,7 +1026,7 @@ button.usage-bar-row[aria-pressed="true"] {
 
 .usage-heatmap-day {
   align-self: center;
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .usage-heatmap-cell {
@@ -1059,7 +1059,7 @@ button.usage-bar-row[aria-pressed="true"] {
   justify-content: space-between;
   gap: 8px 16px;
   color: var(--muted-foreground-2);
-  font-size: 12px;
+  font-size: var(--text-meta);
 }
 
 .usage-heatmap-readout {
@@ -1139,7 +1139,7 @@ button.usage-bar-row[aria-pressed="true"] {
 }
 
 .usage-share-legend strong {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1204,7 +1204,7 @@ button.usage-bar-row[aria-pressed="true"] {
   background: var(--card);
   color: var(--muted-foreground-2);
   font-size: 11.5px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   white-space: nowrap;
 }
 
@@ -1251,7 +1251,7 @@ button.usage-bar-row[aria-pressed="true"] {
 }
 
 .usage-strong {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .usage-muted {
@@ -1302,7 +1302,7 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
 
 .usage-explore-name-text small {
   color: var(--muted-foreground-2);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .usage-share-cell {
@@ -1345,7 +1345,7 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 18px;
   padding: 6px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
 }
 
 .usage-thread-row:hover {
@@ -1422,12 +1422,12 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
 
 .usage-thread-figures dt {
   color: var(--muted-foreground-2);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .usage-thread-figures dd {
   margin: 1px 0 0;
-  font-size: 13px;
+  font-size: var(--text-ui);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -1435,7 +1435,7 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
 .usage-thread-figures dd small {
   margin-left: 5px;
   color: var(--muted-foreground-2);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .usage-thread-filter {
@@ -1443,7 +1443,7 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
   width: 30px;
   height: 30px;
   place-items: center;
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   color: var(--muted-foreground-2);
 }
 
@@ -1471,7 +1471,7 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
 .usage-meter-heading {
   display: flex;
   justify-content: space-between;
-  font-size: 13px;
+  font-size: var(--text-ui);
 }
 
 .usage-meter-heading strong {
@@ -1497,7 +1497,7 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
 .usage-quality p {
   margin: 0;
   color: var(--muted-foreground-2);
-  font-size: 12px;
+  font-size: var(--text-meta);
   line-height: 1.45;
 }
 
@@ -1514,12 +1514,12 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
 }
 
 .usage-quality dt {
-  font-size: 13px;
+  font-size: var(--text-ui);
 }
 
 .usage-quality dd {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--text-title);
   font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
@@ -1534,13 +1534,13 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
   margin: 0;
   padding-left: 18px;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--text-ui);
   line-height: 1.5;
 }
 
 .usage-notes strong {
   color: var(--foreground);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 /* Empty and loading. */
@@ -1565,7 +1565,7 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
 .usage-empty p {
   max-width: 480px;
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-ui);
   line-height: 1.5;
 }
 
@@ -1618,10 +1618,6 @@ button.usage-explore-name:hover .usage-explore-name-text > span {
 
   .usage-header {
     align-items: flex-start;
-  }
-
-  .usage-header h1 {
-    font-size: 21px;
   }
 
   .usage-stats {

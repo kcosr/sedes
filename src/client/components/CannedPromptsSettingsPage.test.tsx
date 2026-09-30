@@ -88,7 +88,7 @@ describe("Canned prompts settings", () => {
     expect(await screen.findByText("Review")).toBeVisible();
     expect(listCannedPrompts).toHaveBeenCalledTimes(2);
 
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh prompts" }));
     await waitFor(() => expect(listCannedPrompts).toHaveBeenCalledTimes(3));
   });
 
@@ -110,9 +110,13 @@ describe("Canned prompts settings", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Add prompt" }));
     fireEvent.click(screen.getAllByRole("button", { name: "Add prompt" })[1]!);
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Enter a prompt title.",
-    );
+    // Each problem is reported on its own field, and focus goes to the first.
+    const title = screen.getByLabelText("Title");
+    expect(title).toHaveAttribute("aria-invalid", "true");
+    expect(title).toHaveAccessibleDescription("Enter a prompt title.");
+    expect(title).toHaveFocus();
+    expect(screen.getByLabelText("Prompt")).toHaveAccessibleDescription("Enter prompt text.");
+    expect(screen.queryByRole("alert")).toBeNull();
     fireEvent.change(screen.getByLabelText("Title"), {
       target: { value: " Review " },
     });
@@ -186,9 +190,9 @@ describe("Canned prompts settings", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Delete Test" }));
-    const confirmation = screen.getByRole("group", { name: "Delete Test?" });
+    const confirmation = screen.getByRole("dialog", { name: "Delete Test?" });
     fireEvent.click(
-      within(confirmation).getByRole("button", { name: "Delete" }),
+      within(confirmation).getByRole("button", { name: "Delete prompt" }),
     );
     await waitFor(() => expect(deleteCannedPrompt).toHaveBeenCalled());
     expect(await screen.findByText("Prompt deleted.")).toBeVisible();

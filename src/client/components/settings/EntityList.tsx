@@ -1,4 +1,5 @@
 import "./settings.css";
+import { ChevronRight } from "lucide-react";
 import { useId } from "react";
 
 /** A list of entities (environments, backends, clients); each row opens its detail. */
@@ -19,6 +20,8 @@ export type EntityRowProps = Omit<React.ComponentProps<"li">, "title" | "onSelec
   readonly actions?: React.ReactNode;
   readonly selected?: boolean;
   readonly disabled?: boolean;
+  /** A trailing chevron: the row drills into a page of its own. */
+  readonly chevron?: boolean;
   /** Makes the row a link (routes); `onSelect` can still intercept the click. */
   readonly href?: string;
   readonly onSelect?: (event: React.MouseEvent<HTMLElement>) => void;
@@ -39,6 +42,7 @@ export function EntityRow({
   actions,
   selected = false,
   disabled = false,
+  chevron = false,
   href,
   onSelect,
   ...props
@@ -63,6 +67,7 @@ export function EntityRow({
         ) : null}
       </span>
       {metaId ? <span id={metaId} data-slot="entity-row-meta">{tags}{status}</span> : null}
+      {chevron ? <ChevronRight data-slot="entity-row-chevron" aria-hidden="true" /> : null}
     </>
   );
   return (

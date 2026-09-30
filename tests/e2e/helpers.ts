@@ -5,28 +5,48 @@ import type { SettingsPage } from "../../src/client/app/settings-route.js";
 import { expect } from "./fixtures";
 import { loadE2ERunContext } from "./run-context.js";
 
+/**
+ * Opens a settings page the way a user would: from the settings nav in the
+ * desktop sidebar, or, without it, from the grouped list (going back to the
+ * list first when a page is open).
+ */
 export async function selectSettingsCategory(page: Page, category: SettingsPage): Promise<void> {
   const settings = page.getByTestId("settings-view");
-  const picker = settings.getByRole("combobox", { name: "Settings category", exact: true });
-  if (await picker.isVisible()) await picker.selectOption(category);
-  else await settings.getByTestId("settings-page").and(settings.locator(`[data-page="${category}"]`)).click();
+  const link = page.getByTestId("settings-page").and(page.locator(`[data-page="${category}"]`)).filter({ visible: true });
+  const listLink = settings.getByTestId("settings-list-link");
+  await expect(link.or(listLink).first()).toBeVisible();
+  if (!await link.isVisible()) {
+    await listLink.click();
+    await expect(settings).toHaveAttribute("data-page", "home");
+  }
+  await link.click();
 }
 
 export async function openSettingsPage(page: Page, category: SettingsPage): Promise<Locator> {
-  const trigger = page.getByTestId("settings-trigger").filter({ visible: true });
-  const mobileNavigation = page.getByRole("button", { name: "Open thread navigation", exact: true });
-  await expect(trigger.or(mobileNavigation).first()).toBeVisible();
-  if (await trigger.count() === 0) await mobileNavigation.click();
-  await trigger.click();
   const settings = page.getByTestId("settings-view");
-  await expect(settings).toBeVisible();
+  // Under Settings the sidebar keeps its (inert) inventory mounted; its gear
+  // is not a way in. From an open Settings, go straight to the category.
+  if (!await settings.isVisible()) {
+    const trigger = page.locator('[data-testid="settings-trigger"]:not([inert] *)').filter({ visible: true });
+    const mobileNavigation = page.getByRole("button", { name: "Open thread navigation", exact: true });
+    await expect(trigger.or(mobileNavigation).first()).toBeVisible();
+    if (await trigger.count() === 0) await mobileNavigation.click();
+    await trigger.click();
+    await expect(settings).toBeVisible();
+  }
   await selectSettingsCategory(page, category);
   return settings;
 }
 
+/** Leaves Settings; without the sidebar nav, a page goes back through the list. */
 export async function returnFromSettings(page: Page): Promise<void> {
-  await page.getByTestId("settings-return").click();
-  await expect(page.getByTestId("settings-view")).toBeHidden();
+  const settings = page.getByTestId("settings-view");
+  const back = page.getByTestId("settings-return");
+  const listLink = settings.getByTestId("settings-list-link");
+  await expect(back.or(listLink).first()).toBeVisible();
+  if (!await back.isVisible()) await listLink.click();
+  await back.click();
+  await expect(settings).toBeHidden();
 }
 
 export async function selectRadixOption(

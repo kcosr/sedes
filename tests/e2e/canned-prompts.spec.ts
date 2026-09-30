@@ -112,29 +112,29 @@ test("saved prompts flow from principal settings through desktop and mobile deli
   );
 
   const savedPrompts = settings.getByRole("region", { name: "Saved prompts" });
-  // A short desktop window must keep the whole scroll viewport on screen.
+  const settingsContent = settings.locator(".settings-content");
+  // A short desktop window scrolls the one page scroller, never a nested
+  // list, so every prompt stays reachable under the composer preferences.
   await page.setViewportSize({ width: 1440, height: 480 });
   const listBounds = await savedPrompts.boundingBox();
   expect(listBounds).not.toBeNull();
-  expect(listBounds!.y + listBounds!.height).toBeLessThanOrEqual(480);
-  const placementBounds = await settings.getByRole("radiogroup", { name: "Prompts placement" }).boundingBox();
+  const placementBounds = await settings.getByRole("radiogroup", { name: "Placement" }).boundingBox();
   expect(placementBounds).not.toBeNull();
   expect(listBounds!.y).toBeGreaterThanOrEqual(placementBounds!.y + placementBounds!.height);
-  expect(await savedPrompts.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  expect(await savedPrompts.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(true);
   await savedPrompts.hover();
   await page.mouse.wheel(0, 1000);
-  await expect.poll(() => savedPrompts.evaluate((element) =>
+  await expect.poll(() => settingsContent.evaluate((element) =>
     Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop),
   )).toBeLessThanOrEqual(1);
   await expect(savedPrompts.getByRole("button", { name: "Delete Explain design", exact: true })).toBeInViewport();
   await capture(page, testInfo, "canned-prompts-short-window.png");
   await page.setViewportSize({ width: 1440, height: 320 });
-  const settingsContent = settings.locator(".settings-content");
   await settingsContent.evaluate((element) => { element.scrollTop = element.scrollHeight; });
   await expect(savedPrompts.getByRole("button", { name: "Delete Explain design", exact: true })).toBeInViewport();
   await page.setViewportSize({ width: 1440, height: 900 });
   const designPrompt = savedPrompts
-    .getByRole("article")
+    .getByRole("listitem")
     .filter({ hasText: "Explain design" });
   const reordered = page.waitForResponse(
     (response) =>
@@ -147,7 +147,7 @@ test("saved prompts flow from principal settings through desktop and mobile deli
     .click();
   await reordered;
 
-  await designPrompt.locator(".canned-prompt-select").click();
+  await designPrompt.getByRole("button", { name: "Explain design", exact: true }).click();
   const editor = settings.getByRole("region", { name: "Prompt editor" });
   await editor.getByRole("textbox", { name: "Title" }).fill("Explain system");
   const updated = page.waitForResponse(
@@ -162,12 +162,12 @@ test("saved prompts flow from principal settings through desktop and mobile deli
   await expect(settings.getByRole("status")).toContainText("Prompt saved.");
 
   const testsPrompt = savedPrompts
-    .getByRole("article")
+    .getByRole("listitem")
     .filter({ hasText: "Run focused tests" });
   await testsPrompt
     .getByRole("button", { name: "Delete Run focused tests" })
     .click();
-  const confirmation = testsPrompt.getByRole("group", {
+  const confirmation = page.getByRole("dialog", {
     name: "Delete Run focused tests?",
   });
   const deleted = page.waitForResponse(
@@ -176,7 +176,7 @@ test("saved prompts flow from principal settings through desktop and mobile deli
       response.url().includes("/api/application/canned-prompts/") &&
       response.ok(),
   );
-  await confirmation.getByRole("button", { name: "Delete" }).click();
+  await confirmation.getByRole("button", { name: "Delete prompt" }).click();
   await deleted;
   await expect(testsPrompt).toHaveCount(0);
   await capture(page, testInfo, "canned-prompts-settings-desktop.png");
@@ -193,7 +193,7 @@ test("saved prompts flow from principal settings through desktop and mobile deli
     ],
   );
 
-  const showTab = settings.getByRole("checkbox", {
+  const showTab = settings.getByRole("switch", {
     name: "Show Prompts",
   });
   await expect(showTab).toBeChecked();
@@ -208,7 +208,7 @@ test("saved prompts flow from principal settings through desktop and mobile deli
   const promptTab = page.getByRole("button", { name: "Open saved prompts" });
   await expect(promptTab).toHaveCount(0);
   const reopenedSettings = await openPromptsSettings(page);
-  const reopenedShowTab = reopenedSettings.getByRole("checkbox", {
+  const reopenedShowTab = reopenedSettings.getByRole("switch", {
     name: "Show Prompts",
   });
   await expect(reopenedShowTab).not.toBeChecked();

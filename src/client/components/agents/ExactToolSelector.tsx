@@ -1,4 +1,5 @@
 import { useId } from "react";
+import "./agents.css";
 import { Checkbox } from "@client/components/ui/checkbox";
 
 export interface ExactToolEffects {
@@ -79,10 +80,15 @@ export function ExactToolSelector({
   };
 
   return (
-    <div className="agent-tool-policy-editor">
+    <div className="exact-tool-selector">
       {groups.map((group) => (
-        <fieldset className="agent-tool-policy-group" key={group.id}>
-          <legend>
+        <div
+          className="exact-tool-group"
+          role="group"
+          aria-labelledby={`${descriptionPrefix}-group-${group.id}-title`}
+          key={group.id}
+        >
+          <label className="exact-tool-row" data-kind="group">
             <Checkbox
               aria-label={`Select all ${group.label} tools`}
               aria-describedby={`${descriptionPrefix}-group-${group.id}`}
@@ -93,73 +99,103 @@ export function ExactToolSelector({
               }
               onCheckedChange={() => toggleGroup(group)}
             />
-            <span>
-              <strong>{group.label}</strong>
+            <span className="exact-tool-text">
+              <strong id={`${descriptionPrefix}-group-${group.id}-title`}>
+                {group.label}
+              </strong>
               <small id={`${descriptionPrefix}-group-${group.id}`}>
                 {group.description}
               </small>
             </span>
-          </legend>
-          {group.tools.map((tool) => {
-            const descriptionId = `${descriptionPrefix}-${tool.id}-description`;
-            const effectId = `${descriptionPrefix}-${tool.id}-effect`;
-            return (
-              <label key={tool.id} className="agent-tool-policy-tool">
-                <Checkbox
-                  aria-label={tool.label}
-                  aria-describedby={`${descriptionId}${showEffects && tool.effects ? ` ${effectId}` : ""}`}
-                  checked={selected.has(tool.id)}
-                  disabled={disabled || tool.available === false}
-                  onCheckedChange={(checked) =>
-                    toggleTool(tool.id, checked === true)
-                  }
-                />
-                <span>
-                  <strong>{tool.label}</strong>
-                  <small id={descriptionId}>{tool.description}</small>
-                  {tool.available === false ? (
-                    <small className="agent-tool-unavailable-reason">
-                      {tool.unavailableReason ?? "Currently unavailable."}
-                    </small>
-                  ) : null}
-                  {showEffects && tool.effects ? (
-                    <small id={effectId} className="agent-tool-effect">
-                      {effectSummary(tool.effects)}
-                    </small>
-                  ) : null}
-                </span>
-              </label>
-            );
-          })}
-        </fieldset>
+          </label>
+          <div className="exact-tool-list">
+            {group.tools.map((tool) => {
+              const descriptionId = `${descriptionPrefix}-${tool.id}-description`;
+              const effectId = `${descriptionPrefix}-${tool.id}-effect`;
+              return (
+                <label
+                  key={tool.id}
+                  className="exact-tool-row"
+                  data-unavailable={tool.available === false || undefined}
+                >
+                  <Checkbox
+                    aria-label={tool.label}
+                    aria-describedby={`${descriptionId}${showEffects && tool.effects ? ` ${effectId}` : ""}`}
+                    checked={selected.has(tool.id)}
+                    disabled={disabled || tool.available === false}
+                    onCheckedChange={(checked) =>
+                      toggleTool(tool.id, checked === true)
+                    }
+                  />
+                  <span className="exact-tool-text">
+                    <strong>{tool.label}</strong>
+                    <small id={descriptionId}>{tool.description}</small>
+                    {tool.available === false ? (
+                      <small className="exact-tool-unavailable">
+                        {tool.unavailableReason ?? "Currently unavailable."}
+                      </small>
+                    ) : null}
+                    {showEffects && tool.effects ? (
+                      <small
+                        id={effectId}
+                        className="exact-tool-effect"
+                        data-risk={toolRisk(tool.effects) || undefined}
+                      >
+                        {effectSummary(tool.effects)}
+                      </small>
+                    ) : null}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
       ))}
       {unavailableToolIds.length > 0 ? (
-        <fieldset className="agent-tool-policy-group agent-tool-policy-unavailable">
-          <legend>
-            <span>
-              <strong>Unavailable selections</strong>
+        <div
+          className="exact-tool-group"
+          data-kind="unavailable"
+          role="group"
+          aria-labelledby={`${descriptionPrefix}-unavailable-title`}
+        >
+          <div className="exact-tool-row" data-kind="group">
+            <span className="exact-tool-text">
+              <strong id={`${descriptionPrefix}-unavailable-title`}>
+                Unavailable selections
+              </strong>
               <small>Remove tools that are no longer offered.</small>
             </span>
-          </legend>
-          {unavailableToolIds.map((toolId) => (
-            <label key={toolId} className="agent-tool-policy-tool">
-              <Checkbox
-                aria-label={`Remove unavailable tool ${toolId}`}
-                checked={selected.has(toolId)}
-                disabled={disabled}
-                onCheckedChange={(checked) =>
-                  toggleTool(toolId, checked === true)
-                }
-              />
-              <span>
-                <strong>{toolId}</strong>
-                <small>This tool is unavailable in the current catalog.</small>
-              </span>
-            </label>
-          ))}
-        </fieldset>
+          </div>
+          <div className="exact-tool-list">
+            {unavailableToolIds.map((toolId) => (
+              <label key={toolId} className="exact-tool-row">
+                <Checkbox
+                  aria-label={`Remove unavailable tool ${toolId}`}
+                  checked={selected.has(toolId)}
+                  disabled={disabled}
+                  onCheckedChange={(checked) =>
+                    toggleTool(toolId, checked === true)
+                  }
+                />
+                <span className="exact-tool-text">
+                  <strong>{toolId}</strong>
+                  <small>This tool is unavailable in the current catalog.</small>
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
       ) : null}
     </div>
+  );
+}
+
+/** Effects that deserve a second look before granting the tool. */
+function toolRisk(effects: ExactToolEffects): boolean {
+  return (
+    effects.modelUsage === "agent_execution" ||
+    effects.external === "durable_side_effect" ||
+    effects.application === "destructive"
   );
 }
 

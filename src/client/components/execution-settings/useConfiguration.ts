@@ -3,8 +3,19 @@ import { configurationDocumentSchema, type ConfigurationRuntimeState } from "../
 import { ApiError, type ApiClient } from "../../api/ApiClient.js";
 import { errorMessage } from "./fields.js";
 import type { Configuration, ConfigurationSnapshot } from "./types.js";
+import { validationIssues, type ValidationIssue } from "./validation.js";
 
 export type ConfigurationControls = Pick<ApiClient, "readConfiguration" | "saveConfiguration" | "configurationLifecycleImpact" | "configurationLifecycle" | "getLifecycleReceipt" | "listConfigurationOperations" | "inspectConfigurationOperation" | "acknowledgeConfigurationOperation">;
+
+export type SaveResult = { readonly ok: true } | { readonly ok: false; readonly failure?: SaveFailure };
+
+/** Why the last save failed: the server's reason, or the submitted document's validation issues. */
+export interface SaveFailure {
+  readonly message?: string;
+  readonly issues: readonly ValidationIssue[];
+  /** The document that was submitted; issue paths index into it. */
+  readonly document: Configuration;
+}
 
 export function useConfiguration(controls: ConfigurationControls, isEditing = false, visible = true) {
   const [snapshot, setSnapshot] = useState<ConfigurationSnapshot>();
@@ -12,7 +23,8 @@ export function useConfiguration(controls: ConfigurationControls, isEditing = fa
   const [saving, setSaving] = useState(false);
   const [lastSaveSucceeded, setLastSaveSucceeded] = useState<boolean>();
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [saveFailure, setSaveFailure] = useState<SaveFailure>();
+  const [savedAt, setSavedAt] = useState<number>();
   const [needsRefresh, setNeedsRefresh] = useState(false);
   const [refreshError, setRefreshError] = useState("");
   const [connectionStale, setConnectionStale] = useState(false);
@@ -78,12 +90,14 @@ export function useConfiguration(controls: ConfigurationControls, isEditing = fa
     }, 5_000);
     return () => { window.clearInterval(interval); };
   }, [refresh, load, visible]);
-  const save = async (configuration: Configuration): Promise<boolean> => {
-    if (!snapshot || saving || needsRefresh || connectionStale) return false;
+  const save = async (configuration: Configuration): Promise<SaveResult> => {
+    if (!snapshot || saving || needsRefresh || connectionStale) return { ok: false };
     const parsed = configurationDocumentSchema.safeParse(configuration);
     if (!parsed.success) {
-      setError(parsed.error.issues.map((issue) => `${issue.path.join(" · ")}: ${issue.message}`).join("\n"));
-      return false;
+      const failure = { issues: validationIssues(parsed.error), document: configuration };
+      setSaveFailure(failure);
+      setLastSaveSucceeded(false);
+      return { ok: false, failure };
     }
     readController.current?.abort();
     readInFlight.current = false;
@@ -91,23 +105,23 @@ export function useConfiguration(controls: ConfigurationControls, isEditing = fa
     setSaving(true);
     setLastSaveSucceeded(undefined);
     savingRef.current = true;
-    setError("");
-    setNotice("");
+    setSaveFailure(undefined);
     try {
       const next = await controls.saveConfiguration({ mutationId: crypto.randomUUID(), expectedRevision: snapshot.revision, configuration: parsed.data });
       setSnapshot(next);
-      setNotice("Configuration saved. Runtime status shows whether the changes have been applied.");
+      setError("");
+      setSavedAt(Date.now());
       setLastSaveSucceeded(true);
-      return true;
+      return { ok: true };
     } catch (cause) {
       setLastSaveSucceeded(false);
-      if (cause instanceof ApiError && cause.status === 400) {
-        setError(`${errorMessage(cause, "The configuration was rejected.")} Correct the configuration and save again. Your open editor has been preserved.`);
-      } else {
-        setError(`${errorMessage(cause, "The save result could not be confirmed.")} Refresh configuration before making another change. Your open editor has been preserved.`);
-        setNeedsRefresh(true);
-      }
-      return false;
+      const rejected = cause instanceof ApiError && cause.status === 400;
+      const failure: SaveFailure = { issues: [], document: configuration, message: rejected
+        ? errorMessage(cause, "The configuration was rejected.")
+        : `${errorMessage(cause, "The save result could not be confirmed.")} Refresh the configuration before making another change.` };
+      setSaveFailure(failure);
+      if (!rejected) setNeedsRefresh(true);
+      return { ok: false, failure };
     } finally {
       setSaving(false);
       savingRef.current = false;
@@ -123,5 +137,7 @@ export function useConfiguration(controls: ConfigurationControls, isEditing = fa
       runtimes: [...current.runtimes.filter((entry) => entry.resourceKind !== runtime.resourceKind || entry.resourceId !== runtime.resourceId), runtime],
     } : current);
   };
-  return { snapshot, loading, saving, lastSaveSucceeded, error: error || refreshError, notice, needsRefresh: needsRefresh || connectionStale, refresh, refreshRuntime, save, updateRuntime };
+  /** Save feedback belongs to the editor that caused it; navigation clears it. */
+  const clearFeedback = useCallback(() => { setSaveFailure(undefined); setSavedAt(undefined); }, []);
+  return { snapshot, loading, saving, lastSaveSucceeded, error: error || refreshError, saveFailure, savedAt, needsRefresh: needsRefresh || connectionStale, refresh, refreshRuntime, save, updateRuntime, clearFeedback };
 }

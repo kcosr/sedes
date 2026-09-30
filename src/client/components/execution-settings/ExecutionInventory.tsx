@@ -1,12 +1,21 @@
-import { useEffect, useId, useRef, useState } from "react";
-import { Search, MoreHorizontal, SlidersHorizontal } from "lucide-react";
-import { Button } from "../ui/button.js";
-import { Input } from "../ui/input.js";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Cable, Ellipsis, Link2, Monitor, Search, Server, SlidersHorizontal } from "lucide-react";
 import type { ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
-import type { HostPairingList } from "../../../shared/protocol/host-pairing.js";
+import type { HostPairingList, HostRegistration } from "../../../shared/protocol/host-pairing.js";
+import { settingsPath } from "../../app/router.js";
+import { BackendBrandIcon } from "../brand-icons.js";
+import { EntityList, EntityRow } from "../settings/EntityList.js";
+import { Button } from "../ui/button.js";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
+import { EmptyState } from "../ui/empty-state.js";
+import { Input } from "../ui/input.js";
+import { NativeSelect } from "../ui/native-select.js";
+import { StatusPill } from "../ui/status-pill.js";
+import { Tag } from "../ui/tag.js";
+import { useTouchDensity } from "../../app/use-touch-density.js";
 import { backendEditors } from "./backend-editors.js";
-import { presentRuntime, type RuntimePresentationOptions } from "./runtime-presentation.js";
+import { followLink } from "./detail-parts.js";
+import { presentRuntime, worstStatus, type StatusPresentation } from "./runtime-presentation.js";
 import type { BackendDefinition, Configuration, ConfigurationSnapshot, EnvironmentDefinition } from "./types.js";
 
 export interface InventoryFilters {
@@ -24,82 +33,64 @@ export function needsAttention(runtime?: ConfigurationRuntimeState, enabled = tr
     || runtime.applyState !== "applied" || ["pending", "required"].includes(runtime.upgradeState)));
 }
 
+export const environmentKindLabels: Record<EnvironmentDefinition["kind"], string> = { local: "Local", ssh: "SSH", outbound: "Paired" };
+
+export function EnvironmentIcon({ kind }: { readonly kind: EnvironmentDefinition["kind"] }): React.JSX.Element {
+  return kind === "local" ? <Monitor /> : kind === "ssh" ? <Server /> : <Cable />;
+}
+
+export function backendBrand(kind: BackendDefinition["kind"]) {
+  return ({ pi: "pi", codex_app_server: "codex", claude_agent_sdk: "claude", grok_build: "grok" } as const)[kind];
+}
+
+export function hostPlatform(platform: string): string {
+  return platform === "darwin" ? "macOS" : platform === "win32" ? "Windows" : "Linux";
+}
+
+/** Where an environment runs, in words: "This machine", "SSH · build", "Paired · macOS". */
 export function environmentDescription(environment: EnvironmentDefinition): string {
   return environment.kind === "ssh" ? `SSH · ${environment.hostAlias}`
-    : environment.kind === "outbound" ? "Paired outbound host" : "Local execution";
+    : environment.kind === "outbound" ? `Paired · ${hostPlatform(environment.platform)}` : "This machine";
 }
 
-export function hostPresence(environment: EnvironmentDefinition, hosts?: HostPairingList, stale = false): string {
-  if (environment.kind !== "outbound") return environment.kind === "local" ? "This machine" : "Via SSH";
+/** A paired host's connection to Sedes; other kinds have no separate presence. */
+export function hostPresence(environment: EnvironmentDefinition, hosts?: HostPairingList, stale = false): StatusPresentation | undefined {
+  if (environment.kind !== "outbound") return undefined;
   const pairing = hosts?.pairings.find(entry => entry.id === environment.pairingId);
-  return stale || !pairing ? "Presence unknown" : pairing.state === "revoked" ? "Pairing revoked" : pairing.connected ? "Host online" : "Host offline";
+  if (stale || !pairing) return { label: "Presence unknown", tone: "neutral" };
+  if (pairing.state === "revoked") return { label: "Pairing revoked", tone: "danger" };
+  return pairing.connected ? { label: "Host online", tone: "success" } : { label: "Host offline", tone: "warning" };
 }
 
-export function RuntimeSummary({ runtime, options }: { readonly runtime?: ConfigurationRuntimeState; readonly options: RuntimePresentationOptions }): React.JSX.Element {
-  const presentation = presentRuntime(runtime, options);
-  // Backend inventories have a separate configuration column. Keep runtime-only
-  // qualifiers here, including disabled backends and unconfirmed operations.
-  const configurationQualifier = presentation.qualifier === "Pending restart" || presentation.qualifier === "Changes pending" || presentation.qualifier === "Configuration not applied";
-  const qualifier = runtime?.lifecycleOperation?.state === "unknown" ? "Outcome unknown"
-    : options.resourceKind === "backend" && configurationQualifier ? undefined : presentation.qualifier;
-  return <div className="execution-inventory-status">
-    <span className="execution-settings-connection" data-tone={presentation.tone}>{presentation.headline}</span>
-    {qualifier ? <span className="execution-inventory-qualifier">{qualifier}</span> : null}
-  </div>;
+export function runtimeFor(snapshot: ConfigurationSnapshot, kind: "environment" | "backend", id: string): ConfigurationRuntimeState | undefined {
+  return snapshot.runtimes.find(entry => entry.resourceKind === kind && entry.resourceId === id);
 }
 
-export function InventoryToolbar({ kind, filters, onChange, environments, scoped = false }: {
-  readonly kind: "backends" | "environments";
-  readonly filters: InventoryFilters;
-  readonly onChange: (filters: InventoryFilters) => void;
-  readonly environments: readonly EnvironmentDefinition[];
-  readonly scoped?: boolean;
-}): React.JSX.Element {
-  const searchInput = useRef<HTMLInputElement>(null);
-  const filterToggle = useRef<HTMLButtonElement>(null);
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const filterPanelId = useId();
-  const environmentFilter = existingEnvironmentFilter(filters, environments);
-  const activeFilters = [!scoped && environmentFilter, kind === "backends" && filters.provider, filters.status].filter(Boolean).length;
-  useEffect(() => {
-    if (filters.environment !== environmentFilter) onChange({ ...filters, environment: environmentFilter });
-  }, [filters, environmentFilter, onChange]);
-  return <div className="execution-inventory-toolbar">
-    <div className="execution-inventory-search"><Search size={15} aria-hidden="true" />
-      <Input ref={searchInput} aria-label={`Search ${kind}`} placeholder={`Search ${kind}…`} value={filters.search}
-        onChange={event => onChange({ ...filters, search: event.currentTarget.value })} />
-    </div>
-    <Button ref={filterToggle} className="execution-inventory-filter-toggle" size="sm" variant="outline"
-      aria-expanded={filtersOpen} aria-controls={filterPanelId} onClick={() => setFiltersOpen(open => !open)}>
-      <SlidersHorizontal size={15} aria-hidden="true" />Filters{activeFilters ? ` (${activeFilters})` : ""}
-    </Button>
-    <div id={filterPanelId} className="execution-inventory-filters" data-expanded={filtersOpen}>
-      {kind === "backends" && !scoped ? <label className="execution-inventory-filter"><span>Environment</span><select className="settings-native-select" aria-label="Filter by environment" value={environmentFilter}
-        onChange={event => onChange({ ...filters, environment: event.currentTarget.value })}>
-        <option value="">All environments</option>{sorted(environments).map(entry => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
-      </select></label> : null}
-      {kind === "backends" ? <label className="execution-inventory-filter"><span>Provider</span><select className="settings-native-select" aria-label="Filter by provider" value={filters.provider}
-        onChange={event => onChange({ ...filters, provider: event.currentTarget.value })}>
-        <option value="">All providers</option>{Object.entries(backendEditors).map(([value, editor]) => <option key={value} value={value}>{editor.label}</option>)}
-      </select></label> : null}
-      <label className="execution-inventory-filter"><span>Status</span><select className="settings-native-select" aria-label="Filter by status" value={filters.status}
-        onChange={event => onChange({ ...filters, status: event.currentTarget.value })}>
-        <option value="">All statuses</option><option value="attention">Needs attention</option><option value="connected">Connected</option>
-        <option value="stopped">Stopped</option>{kind === "backends" ? <option value="disabled">Disabled</option> : null}
-      </select></label>
-      <Button className="execution-inventory-filter-done" size="sm" onClick={() => { setFiltersOpen(false); filterToggle.current?.focus(); }}>Show results</Button>
-    </div>
-    {[filters.search, environmentFilter, filters.provider, filters.status].some(Boolean) ? <Button size="sm" variant="ghost" className="execution-inventory-clear" onClick={() => {
-      onChange(emptyFilters); searchInput.current?.focus();
-    }}>Clear filters</Button> : null}
-  </div>;
+/** One pill for an environment: its host presence or runtime, whichever needs more attention. */
+export function environmentStatus(environment: EnvironmentDefinition, snapshot: ConfigurationSnapshot, hosts?: HostPairingList, stale = false): StatusPresentation {
+  const runtime = presentRuntime(runtimeFor(snapshot, "environment", environment.id), { resourceKind: "environment", sidecar: environment.kind !== "local" });
+  return worstStatus(hostPresence(environment, hosts, stale), runtime.pill);
 }
 
-function existingEnvironmentFilter(filters: InventoryFilters, environments: readonly EnvironmentDefinition[]): string {
-  return environments.some(environment => environment.id === filters.environment) ? filters.environment : "";
+export function backendStatus(backend: BackendDefinition, snapshot: ConfigurationSnapshot): StatusPresentation {
+  return presentRuntime(runtimeFor(snapshot, "backend", backend.id), { resourceKind: "backend", sidecar: false, enabled: backend.enabled }).pill;
 }
 
-function sorted<T extends { readonly label: string; readonly id: string }>(entries: readonly T[]): T[] {
+export function backendEnvironment(configuration: Configuration, backend: BackendDefinition): EnvironmentDefinition | undefined {
+  const target = configuration.targets.find(entry => entry.backendInstanceId === backend.id);
+  return configuration.executionEnvironments.find(entry => entry.id === target?.executionEnvironmentId);
+}
+
+export function environmentBackends(configuration: Configuration, environmentId: string): BackendDefinition[] {
+  const ids = new Set(configuration.targets.filter(target => target.executionEnvironmentId === environmentId).map(target => target.backendInstanceId));
+  return sorted(configuration.backends.filter(backend => ids.has(backend.id)));
+}
+
+export function countLabel(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+export function sorted<T extends { readonly label: string; readonly id: string }>(entries: readonly T[]): T[] {
   return [...entries].sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
 }
 
@@ -113,104 +104,202 @@ function matchesStatus(runtime: ConfigurationRuntimeState | undefined, filter: s
   }
 }
 
-function ResourceActions({ label, disabled, onOpen, onEdit }: {
-  readonly label: string; readonly disabled: boolean; readonly onOpen: () => void; readonly onEdit: () => void;
+function existingEnvironmentFilter(filters: InventoryFilters, environments: readonly EnvironmentDefinition[]): string {
+  return environments.some(environment => environment.id === filters.environment) ? filters.environment : "";
+}
+
+export interface RowAction {
+  readonly label: string;
+  readonly onSelect: () => void;
+  readonly destructive?: boolean;
+  readonly disabled?: boolean;
+}
+
+/** A row's kebab: its menu opens below the trigger and never covers it. */
+export function RowActions({ label, actions }: { readonly label: string; readonly actions: readonly RowAction[] }): React.JSX.Element {
+  const touch = useTouchDensity();
+  const regular = actions.filter(action => !action.destructive);
+  const destructive = actions.filter(action => action.destructive);
+  return <DropdownMenu presentation={touch && actions.length > 6 ? "sheet" : "menu"}>
+    <DropdownMenuTrigger asChild><Button type="button" size="icon-sm" variant="ghost" aria-label={`Actions for ${label}`}><Ellipsis /></Button></DropdownMenuTrigger>
+    <DropdownMenuContent align="end" side="bottom" avoidCollisions sheetTitle={label} aria-label={`Actions for ${label}`}>
+      {regular.map(action => <DropdownMenuItem key={action.label} disabled={action.disabled} onSelect={action.onSelect}>{action.label}</DropdownMenuItem>)}
+      {regular.length && destructive.length ? <DropdownMenuSeparator /> : null}
+      {destructive.map(action => <DropdownMenuItem key={action.label} variant="destructive" disabled={action.disabled} onSelect={action.onSelect}>{action.label}</DropdownMenuItem>)}
+    </DropdownMenuContent>
+  </DropdownMenu>;
+}
+
+function SearchInput({ label, value, onChange, inputRef }: {
+  readonly label: string; readonly value: string; readonly onChange: (value: string) => void; readonly inputRef?: React.Ref<HTMLInputElement>;
 }): React.JSX.Element {
-  return <div className="execution-inventory-actions">
-    <Button type="button" size="sm" variant="ghost" disabled={disabled} aria-label={`Edit ${label}`} onClick={onEdit}>Edit</Button>
-    <DropdownMenu><DropdownMenuTrigger asChild><Button size="icon-sm" variant="ghost" aria-label={`Actions for ${label}`}><MoreHorizontal size={16} /></Button></DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="execution-settings-menu z-(--z-over-dialog)">
-        <DropdownMenuItem onSelect={onOpen}>Runtime and actions</DropdownMenuItem>
-        <DropdownMenuItem disabled={disabled} onSelect={onEdit}>Edit configuration</DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+  return <div className="execution-search"><Search aria-hidden="true" />
+    <Input ref={inputRef} type="search" aria-label={label} placeholder="Search…" value={value} onChange={event => onChange(event.currentTarget.value)} />
   </div>;
 }
 
-interface InventoryProps {
+function StatusFilter({ kind, value, onChange }: { readonly kind: "environments" | "backends"; readonly value: string; readonly onChange: (value: string) => void }): React.JSX.Element {
+  return <NativeSelect aria-label="Filter by status" value={value} onChange={event => onChange(event.currentTarget.value)}>
+    <option value="">All statuses</option><option value="attention">Needs attention</option><option value="connected">Connected</option>
+    <option value="stopped">Stopped</option>{kind === "backends" ? <option value="disabled">Disabled</option> : null}
+  </NativeSelect>;
+}
+
+/** A group of rows under a light header with a labeled count. */
+export function InventoryGroup({ label, title, count, children }: { readonly label: string; readonly title: ReactNode; readonly count: string; readonly children: ReactNode }): React.JSX.Element {
+  const id = useId();
+  return <section aria-label={label} className="execution-group">
+    <div className="execution-group-header"><h3 id={id}>{title}</h3><span>{count}</span></div>
+    {children}
+  </section>;
+}
+
+function ResultCount({ shown, total, noun, onClear }: { readonly shown: number; readonly total: number; readonly noun: string; readonly onClear?: () => void }): React.JSX.Element {
+  return <div className="execution-list-count">
+    <p role="status">{shown === total ? countLabel(total, noun) : `${shown} of ${countLabel(total, noun)}`}</p>
+    {onClear ? <Button type="button" variant="link" size="xs" onClick={onClear}>Clear filters</Button> : null}
+  </div>;
+}
+
+export function EnvironmentList({ snapshot, filters, onFilters, hosts, stale, selectedId, selectedRegistrationId, actions }: {
   readonly snapshot: ConfigurationSnapshot;
   readonly filters: InventoryFilters;
-  readonly disabled: boolean;
-}
-
-export function BackendInventory({ snapshot, filters, disabled, environmentId, onOpen, onEdit, onEnvironment }: InventoryProps & {
-  readonly environmentId?: string;
-  readonly onOpen: (backend: BackendDefinition) => void;
-  readonly onEdit: (backend: BackendDefinition) => void;
-  readonly onEnvironment: (environment: EnvironmentDefinition) => void;
-}): React.JSX.Element {
-  const configuration = snapshot.configuration;
-  const term = filters.search.trim().toLocaleLowerCase();
-  const scope = environmentId ?? existingEnvironmentFilter(filters, configuration.executionEnvironments);
-  const hasFilters = Boolean(term || filters.provider || filters.status);
-  const backends = sorted(configuration.backends).filter(backend => {
-    const targets = configuration.targets.filter(entry => entry.backendInstanceId === backend.id);
-    const environment = configuration.executionEnvironments.find(entry => entry.id === targets[0]?.executionEnvironmentId);
-    const runtime = snapshot.runtimes.find(entry => entry.resourceKind === "backend" && entry.resourceId === backend.id);
-    const search = [backend.label, backendEditors[backend.kind].label, environment?.label, environment ? environmentDescription(environment) : "", ...targets.map(entry => entry.label)].join(" ").toLocaleLowerCase();
-    return (!scope || environment?.id === scope) && (!filters.provider || backend.kind === filters.provider)
-      && search.includes(term) && matchesStatus(runtime, filters.status, backend.enabled);
-  });
-  return <section className="execution-inventory" aria-label="Configured backends">
-    <p className="execution-settings-muted" role="status">{backends.length} backend{backends.length === 1 ? "" : "s"}{environmentId ? " in this environment" : " across environments"}</p>
-    {!backends.length ? <p className="execution-inventory-empty">{configuration.executionEnvironments.length === 0
-      ? "No backends configured. Add an execution environment first."
-      : hasFilters ? "No backends match these filters."
-      : scope ? "No backends in this environment. Add a backend to make a provider available."
-      : "No backends configured. Add a backend to make a provider available."}</p> : null}
-    {sorted(configuration.executionEnvironments).map(environment => {
-      const group = backends.filter(backend => configuration.targets.some(target => target.backendInstanceId === backend.id && target.executionEnvironmentId === environment.id));
-      if (!group.length) return null;
-      return <section key={environment.id} aria-label={`${environment.label} backends`}>
-        {!environmentId ? <div className="execution-inventory-group"><Button variant="link" onClick={() => onEnvironment(environment)}>{environment.label}</Button><span className="execution-inventory-group-description">{environmentDescription(environment)} · {group.length}</span><span className="execution-inventory-group-compact">{environment.kind === "ssh" ? "SSH" : environment.kind === "local" ? "Local" : "Paired"} · {group.length}</span></div> : null}
-        <table role="table" className="execution-inventory-table" data-kind="backends"><thead role="rowgroup"><tr role="row"><th role="columnheader" scope="col">Backend</th><th role="columnheader" scope="col">Provider</th><th role="columnheader" scope="col">Runtime</th><th role="columnheader" scope="col">Configuration</th><th role="columnheader" scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody role="rowgroup">
-          {group.map(backend => {
-            const targets = configuration.targets.filter(entry => entry.backendInstanceId === backend.id);
-            const runtime = snapshot.runtimes.find(entry => entry.resourceKind === "backend" && entry.resourceId === backend.id);
-            return <tr role="row" key={backend.id}>
-              <td role="cell" className="execution-inventory-identity"><button type="button" className="execution-inventory-name" data-resource-id={backend.id} aria-label={`${backend.label} details`} onClick={() => onOpen(backend)}>{backend.label}</button>
-                {targets.some(target => target.id === configuration.defaultTargetId) ? <span className="execution-inventory-default">Default</span> : null}
-                <span className="execution-inventory-description">{targets.length} connection{targets.length === 1 ? "" : "s"}{backend.enabled ? "" : " · Disabled"}{runtime?.applyState === "applied" ? <span className="execution-inventory-applied-compact" aria-hidden="true"> · Config applied</span> : null}</span></td>
-              <td role="cell" data-label="Provider">{backendEditors[backend.kind].label}</td>
-              <td role="cell" data-label="Runtime"><RuntimeSummary runtime={runtime} options={{ resourceKind: "backend", sidecar: false, enabled: backend.enabled }} /></td>
-              <td role="cell" data-label="Configuration" data-applied={runtime?.applyState === "applied"}><span className="execution-inventory-apply" data-attention={runtime && runtime.applyState !== "applied"}><span className="execution-inventory-config-label">Configuration: </span>{runtime ? { applied: "Applied", pending: runtime.startupEnvironmentPending ? "Pending restart" : "Changes pending", rejected: "Rejected", unavailable: "Not applied" }[runtime.applyState] : "Not reported"}</span></td>
-              <td role="cell"><ResourceActions label={backend.label} disabled={disabled} onOpen={() => onOpen(backend)} onEdit={() => onEdit(backend)} /></td>
-            </tr>;
-          })}
-        </tbody></table>
-      </section>;
-    })}
-  </section>;
-}
-
-export function EnvironmentInventory({ snapshot, filters, disabled, hosts, stale, onOpen, onEdit, onRuntime }: InventoryProps & {
+  readonly onFilters: (filters: InventoryFilters) => void;
   readonly hosts?: HostPairingList;
   readonly stale: boolean;
-  readonly onOpen: (environment: EnvironmentDefinition) => void;
-  readonly onEdit: (environment: EnvironmentDefinition) => void;
-  readonly onRuntime: (environment: EnvironmentDefinition) => void;
+  readonly selectedId?: string;
+  readonly selectedRegistrationId?: string;
+  readonly actions: (environment: EnvironmentDefinition) => readonly RowAction[];
 }): React.JSX.Element {
-  const configuration: Configuration = snapshot.configuration;
+  const configuration = snapshot.configuration;
+  const search = useRef<HTMLInputElement>(null);
   const term = filters.search.trim().toLocaleLowerCase();
+  const filtered = Boolean(term || filters.status);
   const entries = sorted(configuration.executionEnvironments).filter(environment => {
-    const backendIds = new Set(configuration.targets.filter(target => target.executionEnvironmentId === environment.id).map(target => target.backendInstanceId));
-    const search = [environment.label, environmentDescription(environment), ...configuration.backends.filter(backend => backendIds.has(backend.id)).map(backend => `${backend.label} ${backendEditors[backend.kind].label}`)].join(" ").toLocaleLowerCase();
-    const runtime = snapshot.runtimes.find(entry => entry.resourceKind === "environment" && entry.resourceId === environment.id);
-    return search.includes(term) && matchesStatus(runtime, filters.status);
+    const text = [environment.label, environmentDescription(environment), ...environmentBackends(configuration, environment.id).map(backend => `${backend.label} ${backendEditors[backend.kind].label}`)].join(" ").toLocaleLowerCase();
+    return text.includes(term) && matchesStatus(runtimeFor(snapshot, "environment", environment.id), filters.status);
   });
-  return <section className="execution-inventory" aria-label="Configured environments">
-    <p className="execution-settings-muted" role="status">{entries.length} of {configuration.executionEnvironments.length} environments</p>
-    {!entries.length ? <p className="execution-inventory-empty">{configuration.executionEnvironments.length ? "No environments match these filters." : "No execution environments configured. Add a local environment, an SSH host, or pair an outbound host to begin."}</p> : <table role="table" className="execution-inventory-table" data-kind="environments"><thead role="rowgroup"><tr role="row"><th role="columnheader" scope="col">Environment</th><th role="columnheader" scope="col">Host connection</th><th role="columnheader" scope="col">Runtime</th><th role="columnheader" scope="col">Backends</th><th role="columnheader" scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody role="rowgroup">
-      {entries.map(environment => {
-        const count = new Set(configuration.targets.filter(target => target.executionEnvironmentId === environment.id).map(target => target.backendInstanceId)).size;
-        return <tr role="row" key={environment.id}>
-          <td role="cell" className="execution-inventory-identity"><button type="button" className="execution-inventory-name" data-resource-id={environment.id} aria-label={`${environment.label} details`} onClick={() => onOpen(environment)}>{environment.label}</button><span className="execution-inventory-description">{environmentDescription(environment)}</span></td>
-          <td role="cell" data-label="Host connection">{hostPresence(environment, hosts, stale)}</td>
-          <td role="cell" data-label="Runtime"><RuntimeSummary runtime={snapshot.runtimes.find(entry => entry.resourceKind === "environment" && entry.resourceId === environment.id)} options={{ resourceKind: "environment", sidecar: environment.kind !== "local" }} /></td>
-          <td role="cell" data-label="Backends"><Button variant="link" size="sm" onClick={() => onOpen(environment)}>{count} backend{count === 1 ? "" : "s"}</Button></td>
-          <td role="cell"><ResourceActions label={environment.label} disabled={disabled} onOpen={() => onRuntime(environment)} onEdit={() => onEdit(environment)} /></td>
-        </tr>;
-      })}
-    </tbody></table>}
-  </section>;
+  const pending = (hosts?.registrations ?? []).filter(registration => registration.state === "pending");
+  const clear = () => { onFilters(emptyFilters); search.current?.focus(); };
+  const rows = <EntityList>{entries.map(environment => {
+    const backends = environmentBackends(configuration, environment.id).length;
+    const status = environmentStatus(environment, snapshot, hosts, stale);
+    const path = settingsPath("environments", { mode: "view", resourceId: environment.id });
+    return <EntityRow key={environment.id} data-resource-id={environment.id} icon={<EnvironmentIcon kind={environment.kind} />}
+      title={environment.label} subtitle={`${environmentDescription(environment)} · ${countLabel(backends, "backend")}`}
+      status={<StatusPill tone={status.tone}>{status.label}</StatusPill>} selected={environment.id === selectedId}
+      href={path} onSelect={event => followLink(event, path)}
+      actions={<RowActions label={environment.label} actions={actions(environment)} />} />;
+  })}</EntityList>;
+  return <>
+    {configuration.executionEnvironments.length ? <div className="execution-toolbar">
+      <SearchInput inputRef={search} label="Search environments" value={filters.search} onChange={value => onFilters({ ...filters, search: value })} />
+      <StatusFilter kind="environments" value={filters.status} onChange={status => onFilters({ ...filters, status })} />
+    </div> : null}
+    {pending.length ? <InventoryGroup label="Awaiting approval" title="Awaiting approval" count={countLabel(pending.length, "host")}>
+      <EntityList>{pending.map(registration => <PendingHostRow key={registration.id} registration={registration} selected={registration.id === selectedRegistrationId} />)}</EntityList>
+    </InventoryGroup> : null}
+    {!configuration.executionEnvironments.length ? <EmptyState icon={<Server />} title="No execution environments"
+      description="Add this machine, an SSH host, or pair a host to choose where agents run." />
+      : pending.length ? <InventoryGroup label="Environments" title="Environments" count={entries.length === configuration.executionEnvironments.length ? countLabel(entries.length, "environment") : `${entries.length} of ${configuration.executionEnvironments.length}`}>
+        {filtered ? <ResultCount shown={entries.length} total={configuration.executionEnvironments.length} noun="environment" onClear={clear} /> : null}
+        {rows}
+      </InventoryGroup>
+      : <><ResultCount shown={entries.length} total={configuration.executionEnvironments.length} noun="environment" onClear={filtered ? clear : undefined} />{rows}</>}
+    {configuration.executionEnvironments.length && !entries.length ? <EmptyState variant="inline" title="No environments match these filters." /> : null}
+  </>;
+}
+
+function PendingHostRow({ registration, selected }: { readonly registration: HostRegistration & { readonly connected?: boolean }; readonly selected: boolean }): React.JSX.Element {
+  const path = settingsPath("environments", { mode: "pending", resourceId: registration.id });
+  return <EntityRow data-resource-id={registration.id} icon={<Link2 />} title={registration.metadata.hostname}
+    subtitle={`Code ${registration.correlationCode} · ${hostPlatform(registration.metadata.platform)} ${registration.metadata.architecture}`}
+    status={registration.connected ? <StatusPill tone="success">Host online</StatusPill> : <StatusPill tone="warning">Host offline</StatusPill>}
+    selected={selected} href={path} onSelect={event => followLink(event, path)} />;
+}
+
+/** Pending registrations as rows, for places other than the environment list. */
+export function PendingHostList({ registrations }: { readonly registrations: HostPairingList["registrations"] }): React.JSX.Element {
+  const pending = registrations.filter(registration => registration.state === "pending");
+  return pending.length ? <EntityList>{pending.map(registration => <PendingHostRow key={registration.id} registration={registration} selected={false} />)}</EntityList>
+    : <EmptyState variant="inline" title="No hosts are waiting for approval." description="Run the connector on the host; its request appears here." />;
+}
+
+export function BackendRow({ backend, snapshot, selected, actions }: {
+  readonly backend: BackendDefinition; readonly snapshot: ConfigurationSnapshot; readonly selected?: boolean; readonly actions?: readonly RowAction[];
+}): React.JSX.Element {
+  const configuration = snapshot.configuration;
+  const targets = configuration.targets.filter(entry => entry.backendInstanceId === backend.id);
+  const status = backendStatus(backend, snapshot);
+  const path = settingsPath("backends", { mode: "view", resourceId: backend.id });
+  const isDefault = targets.some(target => target.id === configuration.defaultTargetId);
+  return <EntityRow data-resource-id={backend.id} icon={<BackendBrandIcon brand={backendBrand(backend.kind)} />}
+    title={backend.label} subtitle={`${backendEditors[backend.kind].label} · ${countLabel(targets.length, "connection")}`}
+    tags={<>{isDefault ? <Tag>Default</Tag> : null}{backend.enabled ? null : <Tag>Disabled</Tag>}</>}
+    status={<StatusPill tone={status.tone}>{status.label}</StatusPill>} selected={selected}
+    href={path} onSelect={event => followLink(event, path)}
+    actions={actions ? <RowActions label={backend.label} actions={actions} /> : undefined} />;
+}
+
+export function BackendList({ snapshot, filters, onFilters, selectedId, actions }: {
+  readonly snapshot: ConfigurationSnapshot;
+  readonly filters: InventoryFilters;
+  readonly onFilters: (filters: InventoryFilters) => void;
+  readonly selectedId?: string;
+  readonly actions: (backend: BackendDefinition) => readonly RowAction[];
+}): React.JSX.Element {
+  const configuration = snapshot.configuration;
+  const search = useRef<HTMLInputElement>(null);
+  const filterToggle = useRef<HTMLButtonElement>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const panelId = useId();
+  const environmentFilter = existingEnvironmentFilter(filters, configuration.executionEnvironments);
+  useEffect(() => {
+    // A removed environment no longer filters the list.
+    if (filters.environment !== environmentFilter) onFilters({ ...filters, environment: environmentFilter });
+  }, [filters, environmentFilter, onFilters]);
+  const term = filters.search.trim().toLocaleLowerCase();
+  const activeFilters = [environmentFilter, filters.provider, filters.status].filter(Boolean).length;
+  const filtered = Boolean(term || activeFilters);
+  const backends = sorted(configuration.backends).filter(backend => {
+    const targets = configuration.targets.filter(entry => entry.backendInstanceId === backend.id);
+    const environment = backendEnvironment(configuration, backend);
+    const text = [backend.label, backendEditors[backend.kind].label, environment?.label, environment ? environmentDescription(environment) : "", ...targets.map(entry => entry.label)].join(" ").toLocaleLowerCase();
+    return (!environmentFilter || environment?.id === environmentFilter) && (!filters.provider || backend.kind === filters.provider)
+      && text.includes(term) && matchesStatus(runtimeFor(snapshot, "backend", backend.id), filters.status, backend.enabled);
+  });
+  const clear = () => { onFilters(emptyFilters); search.current?.focus(); };
+  if (!configuration.backends.length) {
+    return <EmptyState icon={<Server />} title="No backends"
+      description={configuration.executionEnvironments.length === 0 ? "Add an execution environment first, then add a backend to make a provider available." : "Add a backend to make a provider available to new threads."} />;
+  }
+  return <>
+    <div className="execution-toolbar" data-filters={filtersOpen ? "open" : "closed"}>
+      <SearchInput inputRef={search} label="Search backends" value={filters.search} onChange={value => onFilters({ ...filters, search: value })} />
+      <Button ref={filterToggle} type="button" variant="outline" className="execution-filter-toggle" aria-expanded={filtersOpen} aria-controls={panelId}
+        onClick={() => setFiltersOpen(open => !open)}><SlidersHorizontal />Filters{activeFilters ? ` (${activeFilters})` : ""}</Button>
+      <div id={panelId} className="execution-filters">
+        <label className="execution-filter"><span className="execution-filter-label">Environment</span>
+          <NativeSelect aria-label="Filter by environment" value={environmentFilter} onChange={event => onFilters({ ...filters, environment: event.currentTarget.value })}>
+            <option value="">All environments</option>{sorted(configuration.executionEnvironments).map(entry => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
+          </NativeSelect></label>
+        <label className="execution-filter"><span className="execution-filter-label">Provider</span>
+          <NativeSelect aria-label="Filter by provider" value={filters.provider} onChange={event => onFilters({ ...filters, provider: event.currentTarget.value })}>
+            <option value="">All providers</option>{Object.entries(backendEditors).map(([value, editor]) => <option key={value} value={value}>{editor.label}</option>)}
+          </NativeSelect></label>
+        <label className="execution-filter"><span className="execution-filter-label">Status</span>
+          <StatusFilter kind="backends" value={filters.status} onChange={status => onFilters({ ...filters, status })} /></label>
+        <Button type="button" className="execution-filter-done" onClick={() => { setFiltersOpen(false); filterToggle.current?.focus(); }}>Show results</Button>
+      </div>
+    </div>
+    {filtered ? <ResultCount shown={backends.length} total={configuration.backends.length} noun="backend" onClear={clear} /> : null}
+    {!backends.length ? <EmptyState variant="inline" title="No backends match these filters." /> : null}
+    {sorted(configuration.executionEnvironments).map(environment => {
+      const group = backends.filter(backend => backendEnvironment(configuration, backend)?.id === environment.id);
+      if (!group.length) return null;
+      return <InventoryGroup key={environment.id} label={`${environment.label} backends`} title={environment.label} count={countLabel(group.length, "backend")}>
+        <EntityList>{group.map(backend => <BackendRow key={backend.id} backend={backend} snapshot={snapshot} selected={backend.id === selectedId} actions={actions(backend)} />)}</EntityList>
+      </InventoryGroup>;
+    })}
+  </>;
 }

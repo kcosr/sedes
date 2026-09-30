@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, ArrowUp, ChevronLeft, MessageSquareText, Plus, RefreshCw, Trash2 } from "lucide-react";
 import {
   CANNED_PROMPT_MAX_ITEMS,
   CANNED_PROMPT_TEXT_MAX_BYTES,
@@ -21,17 +22,33 @@ import {
   useCannedPromptStore,
 } from "../stores/CannedPromptClientStore.js";
 import { Button } from "@client/components/ui/button";
-import { Checkbox } from "@client/components/ui/checkbox";
+import { Callout } from "@client/components/ui/callout";
+import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
+import { EmptyState } from "@client/components/ui/empty-state";
+import { Field } from "@client/components/ui/field";
 import { Input } from "@client/components/ui/input";
-import { Label } from "@client/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@client/components/ui/radio-group";
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from "@client/components/ui/segmented-control";
 import { Textarea } from "@client/components/ui/textarea";
+import { EntityList, EntityRow } from "./settings/EntityList.js";
+import { SaveBar } from "./settings/SaveBar.js";
+import { SettingsField, SwitchField } from "./settings/SettingsField.js";
+import { SettingsPage } from "./settings/SettingsPage.js";
+import { SettingsSection } from "./settings/SettingsSection.js";
+import { useTransientNotice } from "./settings/use-transient-notice.js";
 
 interface PromptDraft {
   readonly mode: "create" | "edit";
   readonly promptId?: string;
   readonly title: string;
   readonly text: string;
+}
+
+interface DraftErrors {
+  readonly title?: string;
+  readonly text?: string;
 }
 
 export function CannedPromptsSettingsPage({
@@ -41,11 +58,14 @@ export function CannedPromptsSettingsPage({
 }): React.JSX.Element {
   const state = useCannedPromptStore(store);
   const [draft, setDraft] = useState<PromptDraft>();
+  const [draftErrors, setDraftErrors] = useState<DraftErrors>({});
   const [deleting, setDeleting] = useState<CannedPrompt>();
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [notice, showNotice, clearNotice] = useTransientNotice();
   const [showTab, setShowTabState] = useState(getShowPromptsTab);
   const [placement, setPlacementState] = useState(getPromptsPlacement);
+  const titleInput = useRef<HTMLInputElement>(null);
+  const textInput = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     void store.load().catch(() => undefined);
@@ -62,6 +82,25 @@ export function CannedPromptsSettingsPage({
     [state.library.items],
   );
   const pending = state.pendingMutation;
+  const savedPrompt =
+    draft?.mode === "edit"
+      ? prompts.find(({ id }) => id === draft.promptId)
+      : undefined;
+  const dirty = draft
+    ? draft.mode === "create"
+      ? Boolean(draft.title || draft.text)
+      : draft.title !== savedPrompt?.title || draft.text !== savedPrompt?.text
+    : false;
+
+  const clearMessages = (): void => {
+    setError("");
+    clearNotice();
+  };
+  const openDraft = (next: PromptDraft | undefined): void => {
+    setDraft(next);
+    setDraftErrors({});
+    clearMessages();
+  };
 
   const handleMutationError = (cause: unknown, fallback: string): void => {
     if (cause instanceof ApiError && cause.code === "conflict") {
@@ -79,13 +118,13 @@ export function CannedPromptsSettingsPage({
 
   const submit = async (): Promise<void> => {
     if (!draft || state.status !== "ready" || pending) return;
-    const validation = validateDraft(draft);
-    if (validation) {
-      setError(validation);
+    const errors = validateDraft(draft);
+    setDraftErrors(errors);
+    if (errors.title || errors.text) {
+      (errors.title ? titleInput : textInput).current?.focus();
       return;
     }
-    setError("");
-    setNotice("");
+    clearMessages();
     const input = {
       title: draft.title.normalize("NFKC").trim(),
       text: draft.text,
@@ -94,24 +133,26 @@ export function CannedPromptsSettingsPage({
       if (draft.mode === "create") await store.create(input);
       else await store.update(required(draft.promptId), input);
       setDraft(undefined);
-      setNotice(draft.mode === "create" ? "Prompt added." : "Prompt saved.");
+      showNotice(draft.mode === "create" ? "Prompt added." : "Prompt saved.");
     } catch (cause) {
       handleMutationError(cause, "Could not save this prompt.");
     }
   };
 
-  const confirmDelete = async (): Promise<void> => {
-    if (!deleting || state.status !== "ready" || pending) return;
-    setError("");
-    setNotice("");
+  const confirmDelete = async (prompt: CannedPrompt): Promise<void> => {
+    if (state.status !== "ready") return;
+    clearMessages();
     try {
-      await store.delete(deleting.id);
-      if (draft?.promptId === deleting.id) setDraft(undefined);
-      setDeleting(undefined);
-      setNotice("Prompt deleted.");
+      await store.delete(prompt.id);
     } catch (cause) {
-      handleMutationError(cause, "Could not delete this prompt.");
+      if (cause instanceof ApiError && cause.code === "conflict") {
+        handleMutationError(cause, "Could not delete this prompt.");
+        return;
+      }
+      throw new Error(messageFrom(cause, "Could not delete this prompt."));
     }
+    if (draft?.promptId === prompt.id) setDraft(undefined);
+    showNotice("Prompt deleted.");
   };
 
   const move = async (promptId: string, offset: -1 | 1): Promise<void> => {
@@ -124,330 +165,322 @@ export function CannedPromptsSettingsPage({
       required(promptIds[target]),
       required(promptIds[index]),
     ];
-    setError("");
-    setNotice("");
+    clearMessages();
     try {
       await store.reorder(promptIds);
-      setNotice("Prompt order saved.");
+      showNotice("Prompt order saved.");
     } catch (cause) {
       handleMutationError(cause, "Could not reorder saved prompts.");
     }
   };
 
+  const atLimit = prompts.length >= CANNED_PROMPT_MAX_ITEMS;
+  const startCreate = (): void =>
+    openDraft({ mode: "create", title: "", text: "" });
+
   return (
-    <div className="canned-prompts-settings-page">
-      <header className="canned-prompts-page-header">
-        <div>
-          <h3 className="settings-page-title">Prompts</h3>
-          <p>
-            Save and order reusable prompts for your account. The same library
-            is available on desktop and mobile.
-          </p>
-        </div>
-        <div className="canned-prompts-page-actions">
+    <SettingsPage
+      title="Prompts"
+      description="Save and order reusable prompts for your account. The same library is available on desktop and mobile."
+      width="wide"
+      actions={
+        <>
           <Button
             type="button"
-            size="sm"
             variant="outline"
+            size="icon"
+            aria-label="Refresh prompts"
+            title="Refresh prompts"
             disabled={state.status === "loading" || pending || Boolean(draft)}
             onClick={() => {
               setDeleting(undefined);
-              setError("");
-              setNotice("");
+              clearMessages();
               void store.refresh().catch(() => undefined);
             }}
           >
-            Refresh
+            <RefreshCw aria-hidden="true" />
           </Button>
           <Button
             type="button"
-            size="sm"
-            disabled={
-              state.status !== "ready" ||
-              pending ||
-              prompts.length >= CANNED_PROMPT_MAX_ITEMS
-            }
-            onClick={() => {
-              setDraft({ mode: "create", title: "", text: "" });
-              setDeleting(undefined);
-              setError("");
-              setNotice("");
-            }}
+            disabled={state.status !== "ready" || pending || atLimit}
+            title={atLimit ? `A library holds at most ${CANNED_PROMPT_MAX_ITEMS} prompts.` : undefined}
+            onClick={startCreate}
           >
+            <Plus aria-hidden="true" />
             Add prompt
           </Button>
-        </div>
-      </header>
-
-      <div className="settings-row">
-        <div className="settings-row-text">
-          <Label
-            htmlFor="setting-show-prompts-tab"
-            className="settings-row-label"
-          >
-            Show Prompts
-          </Label>
-          <p
-            id="setting-show-prompts-tab-description"
-            className="settings-row-description"
-          >
-            Show prompt-library access in the composer in this client.
-          </p>
-        </div>
-        <Checkbox
+        </>
+      }
+    >
+      <SettingsSection
+        title="In the composer"
+        description="How this client offers the library."
+        card
+      >
+        <SwitchField
           id="setting-show-prompts-tab"
-          data-testid="show-prompts-tab-toggle"
-          aria-describedby="setting-show-prompts-tab-description"
+          label="Show Prompts"
+          description="Show prompt-library access in the composer in this client."
           checked={showTab}
-          onCheckedChange={(checked) => setShowPromptsTab(checked === true)}
+          onCheckedChange={setShowPromptsTab}
+          switchProps={{ "data-testid": "show-prompts-tab-toggle" }}
         />
-      </div>
-
-      <div className="settings-row">
-        <div className="settings-row-text">
-          <span className="settings-row-label">Placement</span>
-          <p
-            id="setting-prompts-placement-description"
-            className="settings-row-description"
+        <SettingsField
+          label="Placement"
+          description="Above the composer, or as an icon in its toolbar."
+        >
+          <SegmentedControl
+            className="w-full"
+            value={placement}
+            onValueChange={(next) => setPromptsPlacement(next as PromptsPlacement)}
           >
-            Choose whether Prompts appears above the composer or as an icon in
-            its toolbar on this client.
+            <SegmentedControlItem value="above_composer">
+              Above composer
+            </SegmentedControlItem>
+            <SegmentedControlItem value="toolbar">
+              Composer toolbar
+            </SegmentedControlItem>
+          </SegmentedControl>
+        </SettingsField>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Library"
+        description={
+          state.status === "ready"
+            ? `${prompts.length} of ${CANNED_PROMPT_MAX_ITEMS} prompts.`
+            : undefined
+        }
+        actions={
+          notice ? (
+            <span className="settings-inline-status" role="status">
+              {notice}
+            </span>
+          ) : null
+        }
+      >
+        {error || state.error ? (
+          <Callout
+            tone="danger"
+            role="alert"
+            action={
+              state.status === "error" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void store.refresh().catch(() => undefined)}
+                >
+                  Retry
+                </Button>
+              ) : undefined
+            }
+          >
+            {error || state.error}
+          </Callout>
+        ) : null}
+        {state.status === "loading" ? (
+          <p className="settings-loading" role="status">
+            Loading saved prompts…
           </p>
-        </div>
-        <RadioGroup
-          className="settings-radio-group"
-          value={placement}
-          aria-label="Prompts placement"
-          aria-describedby="setting-prompts-placement-description"
-          onValueChange={(next) =>
-            setPromptsPlacement(next as PromptsPlacement)
-          }
-        >
-          {(
-            [
-              ["above_composer", "Above composer"],
-              ["toolbar", "Composer toolbar"],
-            ] as const
-          ).map(([value, label]) => (
-            <div className="settings-radio-option" key={value}>
-              <RadioGroupItem
-                value={value}
-                id={`setting-prompts-placement-${value}`}
-              />
-              <Label htmlFor={`setting-prompts-placement-${value}`}>
-                {label}
-              </Label>
-            </div>
-          ))}
-        </RadioGroup>
-      </div>
+        ) : null}
+        {state.status === "ready" && prompts.length === 0 && !draft ? (
+          <EmptyState
+            icon={<MessageSquareText />}
+            title="No saved prompts yet"
+            description="Add one to offer it from the composer on every client."
+          />
+        ) : null}
+        {state.status === "ready" && (prompts.length > 0 || draft) ? (
+          <div
+            className="settings-master-detail"
+            data-detail-open={Boolean(draft)}
+            data-list-empty={prompts.length === 0 || undefined}
+          >
+            <section
+              aria-label="Saved prompts"
+              className="settings-master-detail-list"
+            >
+              {prompts.length === 0 ? null : (
+                <EntityList>
+                  {prompts.map((prompt, index) => (
+                    <EntityRow
+                      key={prompt.id}
+                      title={prompt.title}
+                      subtitle={promptPreview(prompt.text)}
+                      selected={draft?.promptId === prompt.id}
+                      onSelect={() =>
+                        openDraft({
+                          mode: "edit",
+                          promptId: prompt.id,
+                          title: prompt.title,
+                          text: prompt.text,
+                        })
+                      }
+                      actions={
+                        <>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Move ${prompt.title} up`}
+                            title="Move up"
+                            disabled={pending || index === 0}
+                            onClick={() => void move(prompt.id, -1)}
+                          >
+                            <ArrowUp aria-hidden="true" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Move ${prompt.title} down`}
+                            title="Move down"
+                            disabled={pending || index === prompts.length - 1}
+                            onClick={() => void move(prompt.id, 1)}
+                          >
+                            <ArrowDown aria-hidden="true" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Delete ${prompt.title}`}
+                            title="Delete"
+                            disabled={pending}
+                            onClick={() => {
+                              setDeleting(prompt);
+                              clearMessages();
+                            }}
+                          >
+                            <Trash2 aria-hidden="true" />
+                          </Button>
+                        </>
+                      }
+                    />
+                  ))}
+                </EntityList>
+              )}
+            </section>
 
-      {state.status === "loading" ? (
-        <p role="status">Loading saved prompts…</p>
-      ) : null}
-      {state.status === "error" ? (
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => void store.refresh().catch(() => undefined)}
-        >
-          Retry
-        </Button>
-      ) : null}
-
-      {state.status === "ready" ? (
-        <div
-          className="canned-prompts-layout"
-          data-editor-open={Boolean(draft)}
-        >
-          <section aria-label="Saved prompts" className="canned-prompts-list">
-            {prompts.length === 0 ? (
-              <p className="canned-prompts-empty">
-                No saved prompts yet. Add one to make it available from the
-                composer.
-              </p>
-            ) : (
-              prompts.map((prompt, index) => (
-                <article className="canned-prompt-list-item" key={prompt.id}>
-                  <button
-                    type="button"
-                    className="canned-prompt-select"
-                    aria-current={
-                      draft?.promptId === prompt.id ? "page" : undefined
-                    }
-                    onClick={() => {
-                      setDraft({
-                        mode: "edit",
-                        promptId: prompt.id,
-                        title: prompt.title,
-                        text: prompt.text,
-                      });
-                      setDeleting(undefined);
-                      setError("");
-                      setNotice("");
-                    }}
+            <section
+              className="settings-master-detail-pane"
+              data-card="true"
+              data-sticky="true"
+              aria-label="Prompt editor"
+            >
+              {draft ? (
+                <form
+                  className="settings-pane-form"
+                  noValidate
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void submit();
+                  }}
+                >
+                  <header className="settings-pane-header">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="settings-master-detail-back"
+                      onClick={() => openDraft(undefined)}
+                    >
+                      <ChevronLeft aria-hidden="true" />
+                      Prompts
+                    </Button>
+                    <h3 className="settings-pane-title">
+                      {draft.mode === "create" ? "New prompt" : "Edit prompt"}
+                    </h3>
+                  </header>
+                  <Field
+                    id="canned-prompt-title"
+                    label="Title"
+                    error={draftErrors.title}
                   >
-                    <strong>{prompt.title}</strong>
-                    <span>{promptPreview(prompt.text)}</span>
-                  </button>
-                  <div className="canned-prompt-order-controls">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      aria-label={`Move ${prompt.title} up`}
-                      disabled={pending || index === 0}
-                      onClick={() => void move(prompt.id, -1)}
-                    >
-                      Move up
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      aria-label={`Move ${prompt.title} down`}
-                      disabled={pending || index === prompts.length - 1}
-                      onClick={() => void move(prompt.id, 1)}
-                    >
-                      Move down
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      aria-label={`Delete ${prompt.title}`}
+                    <Input
+                      ref={titleInput}
+                      value={draft.title}
                       disabled={pending}
-                      onClick={() => {
-                        setDeleting(prompt);
-                        setError("");
-                        setNotice("");
+                      onChange={(event) => {
+                        const title = event.currentTarget.value;
+                        setDraftErrors((errors) => ({ ...errors, title: undefined }));
+                        setDraft({ ...draft, title });
                       }}
-                    >
-                      Delete
-                    </Button>
-                  </div>
-                  {deleting?.id === prompt.id ? (
-                    <div
-                      className="canned-prompt-delete-confirmation"
-                      role="group"
-                      aria-label={`Delete ${prompt.title}?`}
-                    >
-                      <span>Delete this prompt?</span>
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        size="xs"
-                        disabled={pending}
-                        onClick={() => void confirmDelete()}
-                      >
-                        Delete
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="xs"
-                        disabled={pending}
-                        onClick={() => setDeleting(undefined)}
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                  ) : null}
-                </article>
-              ))
-            )}
-          </section>
-
-          <section className="canned-prompt-editor" aria-label="Prompt editor">
-            {draft ? (
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void submit();
-                }}
-              >
-                <h4>
-                  {draft.mode === "create" ? "New prompt" : "Edit prompt"}
-                </h4>
-                <Label htmlFor="canned-prompt-title">Title</Label>
-                <Input
-                  id="canned-prompt-title"
-                  value={draft.title}
-                  disabled={pending}
-                  onChange={(event) =>
-                    setDraft({ ...draft, title: event.currentTarget.value })
-                  }
-                />
-                <Label htmlFor="canned-prompt-text">Prompt</Label>
-                <Textarea
-                  id="canned-prompt-text"
-                  value={draft.text}
-                  disabled={pending}
-                  rows={8}
-                  onChange={(event) =>
-                    setDraft({ ...draft, text: event.currentTarget.value })
-                  }
-                />
-                <div className="canned-prompt-editor-actions">
-                  <Button type="submit" size="sm" disabled={pending}>
-                    {draft.mode === "create" ? "Add prompt" : "Save"}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={pending}
-                    onClick={() => {
-                      setDraft(undefined);
-                      setError("");
-                    }}
+                    />
+                  </Field>
+                  <Field
+                    id="canned-prompt-text"
+                    label="Prompt"
+                    error={draftErrors.text}
                   >
-                    Cancel
-                  </Button>
-                </div>
-              </form>
-            ) : (
-              <p className="canned-prompt-editor-empty">
-                Select a prompt to edit it, or add a new prompt.
-              </p>
-            )}
-          </section>
-        </div>
-      ) : null}
-
-      {error || state.error ? (
-        <p className="canned-prompts-message" role="alert">
-          {error || state.error}
-        </p>
-      ) : null}
-      {notice ? (
-        <p className="canned-prompts-message" role="status">
-          {notice}
-        </p>
-      ) : null}
-    </div>
+                    <Textarea
+                      ref={textInput}
+                      className="settings-prompt-text"
+                      value={draft.text}
+                      disabled={pending}
+                      rows={8}
+                      onChange={(event) => {
+                        const text = event.currentTarget.value;
+                        setDraftErrors((errors) => ({ ...errors, text: undefined }));
+                        setDraft({ ...draft, text });
+                      }}
+                    />
+                  </Field>
+                  <SaveBar
+                    placement="pane"
+                    dirty={draft.mode === "create" || dirty}
+                    saving={pending}
+                    saveLabel={draft.mode === "create" ? "Add prompt" : "Save"}
+                    savingLabel={draft.mode === "create" ? "Adding…" : "Saving…"}
+                    onCancel={() => openDraft(undefined)}
+                  />
+                </form>
+              ) : (
+                <EmptyState
+                  variant="inline"
+                  title="Select a prompt to edit it, or add a new prompt."
+                />
+              )}
+            </section>
+          </div>
+        ) : null}
+      </SettingsSection>
+      <ConfirmDialog
+        open={Boolean(deleting)}
+        onOpenChange={(open) => {
+          if (!open) setDeleting(undefined);
+        }}
+        tone="danger"
+        title={`Delete ${deleting?.title ?? "prompt"}?`}
+        description="It disappears from the composer on every client. This can't be undone."
+        confirmLabel="Delete prompt"
+        pendingLabel="Deleting…"
+        onConfirm={() => (deleting ? confirmDelete(deleting) : undefined)}
+      />
+    </SettingsPage>
   );
 }
 
-function validateDraft(draft: PromptDraft): string | undefined {
+function validateDraft(draft: PromptDraft): DraftErrors {
   const title = draft.title.normalize("NFKC").trim();
-  if (!title) return "Enter a prompt title.";
-  if ([...title].length > CANNED_PROMPT_TITLE_MAX_CHARACTERS) {
-    return `Prompt titles cannot exceed ${CANNED_PROMPT_TITLE_MAX_CHARACTERS} characters.`;
-  }
-  if (
+  const errors: { title?: string; text?: string } = {};
+  if (!title) errors.title = "Enter a prompt title.";
+  else if ([...title].length > CANNED_PROMPT_TITLE_MAX_CHARACTERS) {
+    errors.title = `Prompt titles cannot exceed ${CANNED_PROMPT_TITLE_MAX_CHARACTERS} characters.`;
+  } else if (
     new TextEncoder().encode(title).byteLength > CANNED_PROMPT_TITLE_MAX_BYTES
   ) {
-    return `Prompt titles cannot exceed ${CANNED_PROMPT_TITLE_MAX_BYTES} UTF-8 bytes.`;
+    errors.title = `Prompt titles cannot exceed ${CANNED_PROMPT_TITLE_MAX_BYTES} UTF-8 bytes.`;
   }
-  if (!draft.text.trim()) return "Enter prompt text.";
-  if (
+  if (!draft.text.trim()) errors.text = "Enter prompt text.";
+  else if (
     new TextEncoder().encode(draft.text).byteLength >
     CANNED_PROMPT_TEXT_MAX_BYTES
   ) {
-    return `Prompt text cannot exceed ${CANNED_PROMPT_TEXT_MAX_BYTES.toLocaleString("en-US")} UTF-8 bytes.`;
+    errors.text = `Prompt text cannot exceed ${CANNED_PROMPT_TEXT_MAX_BYTES.toLocaleString("en-US")} UTF-8 bytes.`;
   }
-  return undefined;
+  return errors;
 }
 
 function promptPreview(text: string): string {

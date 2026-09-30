@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   agentPath,
   agentsPath,
+  historyStepsBackTo,
   installNavigationBlocker,
   navigate,
+  navigateUp,
   newAgentPath,
   parseRoute,
   routePath,
@@ -199,6 +201,65 @@ describe("settings routes", () => {
 
   it.each(["/settings/", "/settings/unknown", "/settings/tool_clients", "/settings/paired_clients", "/settings/General", "/settings/%67eneral", "/settings/general/", "/settings/general/extra"])("rejects noncanonical category URL %s", pathname => {
     expect(parseRoute(pathname)).toEqual({ name: "home" });
+  });
+});
+
+describe("up navigation", () => {
+  it("walks back over the entries below the target without adding history", async () => {
+    navigate("/threads/thread-1", { replace: true });
+    navigate("/settings");
+    navigate("/settings/environments");
+    navigate("/settings/environments/local");
+    navigate("/settings/environments/local/edit");
+    expect(historyStepsBackTo("/settings/environments/local")).toBe(-1);
+    expect(historyStepsBackTo("/settings/environments")).toBe(-2);
+    expect(historyStepsBackTo("/settings")).toBe(-3);
+    // The workspace is not above the settings entries in between.
+    expect(historyStepsBackTo("/threads/thread-1")).toBeUndefined();
+    const length = window.history.length;
+    navigateUp("/settings");
+    await vi.waitFor(() => expect(window.location.pathname).toBe("/settings"));
+    expect(window.history.length).toBe(length);
+    window.history.forward();
+    await vi.waitFor(() => expect(window.location.pathname).toBe("/settings/environments"));
+  });
+
+  it("replaces the entry when history did not come down from the target", () => {
+    navigate("/settings/general", { replace: true });
+    navigate("/settings/backends/codex/edit");
+    expect(historyStepsBackTo("/settings/backends/codex")).toBeUndefined();
+    const length = window.history.length;
+    navigateUp("/settings/backends/codex");
+    expect(window.location.pathname).toBe("/settings/backends/codex");
+    expect(window.history.length).toBe(length);
+    // The entry before is still the page the editor was opened over.
+    expect(historyStepsBackTo("/settings/general")).toBe(-1);
+  });
+
+  it("forgets forward entries a push discards", async () => {
+    navigate("/settings", { replace: true });
+    navigate("/settings/environments");
+    navigate("/settings/environments/local");
+    window.history.go(-2);
+    await vi.waitFor(() => expect(window.location.pathname).toBe("/settings"));
+    navigate("/settings/backends");
+    navigate("/settings/backends/codex");
+    expect(historyStepsBackTo("/settings/environments")).toBeUndefined();
+    expect(historyStepsBackTo("/settings/backends")).toBe(-1);
+    expect(historyStepsBackTo("/settings")).toBe(-2);
+  });
+
+  it("runs guards on the way up and stays put when one declines", async () => {
+    navigate("/settings", { replace: true });
+    navigate("/settings/environments");
+    navigate("/settings/environments/local/edit");
+    const block = vi.fn<NavigationBlocker>(() => false);
+    const remove = installNavigationBlocker(block);
+    try {
+      navigateUp("/settings/environments");
+      await vi.waitFor(() => expect(block).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(window.location.pathname).toBe("/settings/environments/local/edit"));
+    } finally { remove(); }
   });
 });
 

@@ -68,6 +68,19 @@ describe("EntityList and EntityRow", () => {
     expect(onSelect).toHaveBeenCalledTimes(2);
   });
 
+  it("adds a decorative chevron to drill-down rows", () => {
+    const { container } = render(
+      <EntityList>
+        <EntityRow title="General" subtitle="Sidebar and panels." href="/settings/general" chevron />
+        <EntityRow title="Local" />
+      </EntityList>,
+    );
+    const [drill, plain] = container.querySelectorAll("[data-slot=entity-row-main]");
+    expect(drill!.querySelector("[data-slot=entity-row-chevron]")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByRole("link", { name: "General" })).toHaveAccessibleDescription("Sidebar and panels.");
+    expect(plain!.querySelector("[data-slot=entity-row-chevron]")).toBeNull();
+  });
+
   it("renders rows as links for routes and disables rows", () => {
     render(
       <EntityList>

@@ -9,38 +9,33 @@
     "workspace-files/workspace-compare.css": 1
   },
   "fontSizeLiterals": {
-    "components/environment-variables/environment-variables.css": 14,
-    "components/execution-settings/execution-settings.css": 45,
     "components/tasks/tasks-panel.css": 15,
     "components/thread/flat-thread-row.css": 12,
     "components/thread/question-inbox.css": 9,
     "components/thread/thread-group-roster.css": 1,
-    "styles.css": 288,
-    "usage/usage.css": 57,
+    "styles.css": 250,
+    "usage/usage.css": 23,
     "workpads/WorkpadDocument.css": 2,
     "workpads/workpads-panel.css": 7,
     "workspace-files/workspace-compare.css": 21,
     "workspace-files/workspace-review-inspector.css": 1
   },
   "fontWeightLiterals": {
-    "components/environment-variables/environment-variables.css": 2,
-    "components/execution-settings/execution-settings.css": 5,
     "components/tasks/tasks-panel.css": 3,
     "components/thread/flat-thread-row.css": 5,
     "components/thread/question-inbox.css": 2,
     "components/thread/thread-group-roster.css": 1,
-    "styles.css": 100,
-    "usage/usage.css": 29,
+    "styles.css": 86,
+    "usage/usage.css": 16,
     "workpads/workpads-panel.css": 2,
     "workspace-files/workspace-compare.css": 2
   },
   "borderRadiusLiterals": {
-    "components/execution-settings/execution-settings.css": 2,
     "components/tasks/tasks-panel.css": 1,
     "components/thread/flat-thread-row.css": 3,
     "components/thread/question-inbox.css": 3,
-    "styles.css": 22,
-    "usage/usage.css": 25,
+    "styles.css": 21,
+    "usage/usage.css": 17,
     "workpads/WorkpadDocument.css": 3
   },
   "zIndexLiterals": {},
@@ -49,9 +44,7 @@
     "usage/usage.css": 2
   },
   "mediaQueries": {
-    "components/environment-variables/environment-variables.css": 1,
-    "components/execution-settings/execution-settings.css": 3,
-    "styles.css": 11,
+    "styles.css": 9,
     "usage/usage.css": 2
   },
   "tsxPaletteColors": {},

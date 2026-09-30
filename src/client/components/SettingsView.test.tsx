@@ -37,20 +37,45 @@ import {
 } from "../app/settings.js";
 import { clearDiagnostics, recordSeekDiagnostic } from "../app/diagnostics.js";
 import { SEDES_VERSION } from "../../shared/version.js";
-import { SettingsView } from "./SettingsView.js";
+import { createRef } from "react";
+import { SettingsView, useSettingsPages } from "./SettingsView.js";
+import { SettingsNav } from "./settings/SettingsNav.js";
+import { NavigationControlsContext } from "../app/navigation-controls.js";
 import { navigate, settingsPath, useRoute } from "../app/router.js";
 import { CannedPromptClientStore } from "../stores/CannedPromptClientStore.js";
 import type { ApplicationClientState, ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 
-function RoutedSettings(props: Omit<ComponentProps<typeof SettingsView>, "page">) {
+type SettingsProps = Omit<ComponentProps<typeof SettingsView>, "page">;
+
+/**
+ * The shell's arrangement: the settings nav in the desktop sidebar slot next
+ * to the view, or (compact: phones, a collapsed sidebar) the view alone.
+ */
+function RoutedSettings({ compact = false, ...props }: SettingsProps & { readonly compact?: boolean }) {
   const route = useRoute();
+  const pages = useSettingsPages(props);
   if (route.name !== "settings") return <p>Workspace</p>;
-  return <SettingsView {...props} page={route.page} />;
+  return (
+    <NavigationControlsContext.Provider value={{
+      openDrawer: vi.fn(), toggleDrawer: vi.fn(), toggleSidebar: vi.fn(),
+      sidebarCollapsed: compact, drawerOpen: false, connection: "connected", triggerRef: createRef(),
+    }}>
+      {compact ? null : (
+        <SettingsNav pages={pages} page={route.page} returnLabel="Back to workspace" onReturn={props.onReturn} />
+      )}
+      <SettingsView {...props} page={route.page} />
+    </NavigationControlsContext.Provider>
+  );
 }
 
-function renderSettings({ page = "general", ...props }: Partial<ComponentProps<typeof SettingsView>> = {}) {
+function renderSettings({ page = "general", compact, ...props }: Partial<ComponentProps<typeof SettingsView>> & { compact?: boolean } = {}) {
   navigate(settingsPath(page), { replace: true });
-  return render(<RoutedSettings onReturn={() => navigate("/")} {...props} />);
+  return render(<RoutedSettings onReturn={() => navigate("/")} compact={compact} {...props} />);
+}
+
+/** A page link in the settings nav. */
+function navLink(name: string): HTMLElement {
+  return within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("link", { name });
 }
 
 function executionControls() {
@@ -76,6 +101,7 @@ beforeEach(() => {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
     matches: false, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn(),
   })));
+  vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
 });
 
 afterEach(() => {
@@ -117,19 +143,18 @@ describe("SettingsView", () => {
     const applicationStore = { api: { listProjects }, getSnapshot: () => state, subscribe: () => () => {} } as unknown as ApplicationClientStore;
     renderSettings({ configuration: controls, applicationStore, page: "projects" });
 
-    expect(await screen.findByText("No projects yet. Add a directory to start a thread.")).toBeVisible();
+    expect(await screen.findByText("No projects yet")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Projects" })).toBeVisible();
     expect(screen.getByRole("region", { name: "Projects" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("combobox", { name: "Settings category" })).toHaveValue("projects");
+    expect(navLink("Projects")).toHaveAttribute("aria-current", "page");
 
-    fireEvent.click(screen.getByRole("button", { name: "Environments" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Local details" }));
-    const sections = screen.getByRole("navigation", { name: "Environment sections" });
-    expect(within(sections).queryByRole("button", { name: "Projects" })).not.toBeInTheDocument();
+    fireEvent.click(navLink("Environments"));
+    fireEvent.click(await screen.findByRole("link", { name: "Local" }));
+    const sections = screen.getByRole("tablist", { name: "Environment sections" });
+    expect(within(sections).queryByRole("tab", { name: "Projects" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Projects" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Projects" }));
+    fireEvent.click(navLink("Projects"));
     expect(window.location.pathname).toBe("/settings/projects");
     expect(await screen.findByRole("heading", { name: "Projects" })).toBeVisible();
     expect(listProjects).toHaveBeenCalledTimes(2);
@@ -147,8 +172,8 @@ describe("SettingsView", () => {
     renderSettings({ configuration: configuration, page: "backends" });
     expect(screen.getByRole("heading", { name: "Backends" })).toBeVisible();
     expect(await screen.findByText(/Add an execution environment first/)).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Environments" }));
-    expect(await screen.findByRole("heading", { name: "Execution environments" })).toBeVisible();
+    fireEvent.click(navLink("Environments"));
+    expect(await screen.findByRole("heading", { name: "Environments", level: 1 })).toBeVisible();
     expect(screen.queryByLabelText(/principal/i)).toBeNull();
   });
 
@@ -164,31 +189,31 @@ describe("SettingsView", () => {
     renderSettings({ configuration, page: "environments" });
     await waitFor(() => expect(screen.getByRole("button", { name: "Add environment" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Add environment" }));
-    fireEvent.click(screen.getByRole("button", { name: /^Local machine/ }));
+    fireEvent.click(screen.getByRole("link", { name: "Local machine" }));
     fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "Unsaved local" } });
     fireEvent.click(screen.getByTestId("settings-return"));
     expect(screen.getByRole("heading", { name: "Discard unsaved changes?" })).toBeVisible();
-    expect(window.location.pathname).toBe("/settings/environments");
+    expect(window.location.pathname).toBe("/settings/environments/new/local");
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(screen.getByLabelText("Environment name")).toHaveValue("Unsaved local");
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Backends" }));
+    await user.click(navLink("Backends"));
     await user.click(screen.getByRole("button", { name: "Discard changes" }));
-    expect(screen.getByRole("heading", { name: "Backends" })).toHaveFocus();
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Backends", level: 1 })).toHaveFocus());
     act(() => navigate(settingsPath("environments")));
-    expect(screen.getByRole("heading", { name: "Execution environments" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Environments", level: 1 })).toBeVisible();
   });
 
   it("keeps a dirty execution draft on browser Back and resumes the original traversal after discard", async () => {
-    const { controls } = executionControls();
+    const { controls, snapshot } = executionControls();
+    const editPath = settingsPath("environments", { mode: "edit", resourceId: snapshot.configuration.executionEnvironments[0]!.id });
     navigate("/threads/retained-thread", { replace: true });
-    navigate(settingsPath("environments"));
+    navigate(editPath);
     render(<RoutedSettings configuration={controls} onReturn={() => navigate("/threads/retained-thread")} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Local" }));
-    fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "Browser draft" } });
+    fireEvent.change(await screen.findByLabelText("Environment name"), { target: { value: "Browser draft" } });
     act(() => window.history.back());
     expect(await screen.findByRole("heading", { name: "Discard unsaved changes?" })).toBeVisible();
-    await waitFor(() => expect(window.location.pathname).toBe("/settings/environments"));
+    await waitFor(() => expect(window.location.pathname).toBe(editPath));
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(screen.getByLabelText("Environment name")).toHaveValue("Browser draft");
     act(() => window.history.back());
@@ -196,15 +221,36 @@ describe("SettingsView", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/threads/retained-thread"));
     expect(await screen.findByText("Workspace")).toBeVisible();
     act(() => window.history.forward());
-    expect(await screen.findByRole("heading", { name: "Execution environments" })).toBeVisible();
-    expect(window.location.pathname).toBe("/settings/environments");
+    expect(await screen.findByRole("heading", { name: "Edit Local" })).toBeVisible();
+    expect(window.location.pathname).toBe(editPath);
+    expect(screen.getByLabelText("Environment name")).toHaveValue("Local");
   });
 
-  it("normalizes unavailable categories to Settings home", async () => {
-    renderSettings({ page: "server" });
+  it("moves focus into an execution page reached with browser Back from another page", async () => {
+    const { controls, snapshot } = executionControls();
+    const local = snapshot.configuration.executionEnvironments[0]!;
+    renderSettings({ configuration: controls, page: "environments" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("link", { name: "Local" }));
+    await user.click(navLink("Appearance"));
+    expect(screen.getByRole("heading", { name: "Appearance", level: 1 })).toHaveFocus();
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.pathname).toBe(settingsPath("environments", { mode: "view", resourceId: local.id })));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Local", level: 2 })).toHaveFocus());
+  });
+
+  it("normalizes unavailable categories to the grouped list without the sidebar nav", async () => {
+    renderSettings({ page: "server", compact: true });
     await waitFor(() => expect(window.location.pathname).toBe("/settings"));
     expect(screen.getByTestId("settings-view")).toHaveAttribute("data-page", "home");
-    expect(screen.getByRole("heading", { name: "Settings" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Server" })).toBeNull();
+  });
+
+  it("opens General instead of an unavailable category when the sidebar nav is visible", async () => {
+    renderSettings({ page: "server" });
+    await waitFor(() => expect(window.location.pathname).toBe("/settings/general"));
+    expect(screen.getByRole("heading", { name: "General", level: 1 })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Server" })).toBeNull();
   });
 
@@ -216,9 +262,9 @@ describe("SettingsView", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
     expect(controls.readConfiguration).not.toHaveBeenCalled();
     expect(controls.listHostRegistrations).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Environments" }));
+    fireEvent.click(navLink("Environments"));
     await act(async () => {});
-    expect(screen.getByRole("button", { name: "Local details" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Local" })).toBeVisible();
     const initialReads = controls.readConfiguration.mock.calls.length;
     const initialHostReads = controls.listHostRegistrations.mock.calls.length;
     expect(initialReads).toBeGreaterThan(0);
@@ -226,14 +272,14 @@ describe("SettingsView", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     expect(controls.readConfiguration.mock.calls.length).toBeGreaterThan(initialReads);
     expect(controls.listHostRegistrations.mock.calls.length).toBeGreaterThan(initialHostReads);
-    fireEvent.click(screen.getByRole("button", { name: "Appearance" }));
+    fireEvent.click(navLink("Appearance"));
     const reads = controls.readConfiguration.mock.calls.length;
     const hostReads = controls.listHostRegistrations.mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
     expect(screen.getByRole("heading", { name: "Appearance" })).toBeVisible();
     expect(controls.readConfiguration).toHaveBeenCalledTimes(reads);
     expect(controls.listHostRegistrations).toHaveBeenCalledTimes(hostReads);
-    fireEvent.click(screen.getByRole("button", { name: "Backends" }));
+    fireEvent.click(navLink("Backends"));
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     expect(controls.readConfiguration.mock.calls.length).toBeGreaterThan(reads);
     expect(controls.listHostRegistrations.mock.calls.length).toBeGreaterThan(hostReads);
@@ -251,7 +297,7 @@ describe("SettingsView", () => {
     snapshot.runtimes = [{ ...runtime, lifecycleOperation: { mutationId, action: "connect", state: "pending" } }];
     renderSettings({ configuration: controls, page: "environments" });
     await act(async () => {});
-    fireEvent.click(screen.getByRole("button", { name: "Appearance" }));
+    fireEvent.click(navLink("Appearance"));
     controls.getLifecycleReceipt.mockResolvedValue({ mutationId, state: "applied", runtime });
     snapshot.runtimes = [runtime];
     const hostReads = controls.listHostRegistrations.mock.calls.length;
@@ -268,11 +314,12 @@ describe("SettingsView", () => {
     let finishSave!: (value: ConfigurationSnapshot) => void;
     controls.saveConfiguration.mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve; }));
     renderSettings({ configuration: controls, page: "environments" });
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Local" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Local" }));
     fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "Saved local name" } });
     fireEvent.click(screen.getByRole("button", { name: "Save environment" }));
     expect(controls.saveConfiguration).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole("button", { name: "Appearance" }));
+    fireEvent.click(navLink("Appearance"));
     expect(screen.getByText(/Waiting .* finish/i)).toBeVisible();
     expect(screen.getByLabelText("Environment name")).toHaveValue("Saved local name");
     expect(screen.queryByRole("heading", { name: "Appearance" })).toBeNull();
@@ -290,10 +337,11 @@ describe("SettingsView", () => {
     let rejectSave!: (reason: Error) => void;
     controls.saveConfiguration.mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject; }));
     renderSettings({ configuration: controls, page: "environments" });
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Local" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Local" }));
     fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "Retained draft" } });
     fireEvent.click(screen.getByRole("button", { name: "Save environment" }));
-    fireEvent.click(screen.getByRole("button", { name: "Appearance" }));
+    fireEvent.click(navLink("Appearance"));
     expect(screen.getByText(/Waiting .* finish/i)).toBeVisible();
     await act(async () => { rejectSave(new ApiError(400, "invalid_configuration", "Workspace access is no longer available.", false)); });
     expect(screen.getByRole("alert")).toHaveTextContent("Workspace access is no longer available.");
@@ -308,7 +356,8 @@ describe("SettingsView", () => {
     controls.saveConfiguration.mockResolvedValueOnce(saved);
     fireEvent.click(screen.getByRole("button", { name: "Save environment" }));
     await waitFor(() => expect(controls.saveConfiguration).toHaveBeenCalledTimes(2));
-    expect(await screen.findByRole("heading", { name: "Retained draft" })).toBeVisible();
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByTestId("settings-view")).toHaveAttribute("data-page", "environments");
   });
 
@@ -317,19 +366,21 @@ describe("SettingsView", () => {
     let finishSave!: (value: ConfigurationSnapshot) => void;
     controls.saveConfiguration.mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve; }));
     renderSettings({ configuration: controls, page: "environments" });
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Local" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Local" }));
     fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "Saved local name" } });
     fireEvent.click(screen.getByRole("button", { name: "Save environment" }));
-    fireEvent.click(screen.getByRole("button", { name: "Appearance" }));
+    fireEvent.click(navLink("Appearance"));
     await userEvent.setup().click(screen.getByRole("button", { name: "Stay here" }));
-    expect(screen.getByRole("heading", { name: "Edit Saved local name", level: 3 })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "Edit Saved local name", level: 2 })).toHaveFocus();
     expect(screen.queryByRole("button", { name: "Stay here" })).toBeNull();
     expect(screen.queryByText(/Waiting .* finish/i)).toBeNull();
     const saved = structuredClone(snapshot);
     saved.revision = 1;
     saved.configuration.executionEnvironments[0]!.label = "Saved local name";
     await act(async () => { finishSave(saved); });
-    expect(await screen.findByRole("heading", { name: "Saved local name" })).toBeVisible();
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(screen.getByLabelText("Environment name")).toHaveValue("Saved local name");
     expect(screen.getByTestId("settings-view")).toHaveAttribute("data-page", "environments");
     expect(controls.saveConfiguration).toHaveBeenCalledOnce();
   });
@@ -342,7 +393,7 @@ describe("SettingsView", () => {
 
     expect(
       screen.getAllByTestId("settings-page").map((page) => page.dataset.page),
-    ).toEqual(["general", "appearance", "prompts", "mobile", "terminal", "diagnostics"]);
+    ).toEqual(["general", "appearance", "mobile", "terminal", "prompts", "diagnostics"]);
 
     act(() => navigate(settingsPath("prompts")));
 
@@ -355,22 +406,97 @@ describe("SettingsView", () => {
     store.dispose();
   });
 
-  it("offers category navigation from Settings home and the persistent picker", async () => {
+  it("lists every page by group with descriptions when the sidebar nav is hidden", async () => {
     navigate(settingsPath(), { replace: true });
-    render(<RoutedSettings onReturn={() => navigate("/")} />);
-    expect(screen.getByRole("heading", { name: "Settings" })).toBeVisible();
-    expect(screen.queryByRole("heading", { name: "General" })).toBeNull();
-    const home = screen.getByTestId("settings-view");
-    expect(home).toHaveAttribute("data-page", "home");
-    fireEvent.change(screen.getByLabelText("Settings category"), { target: { value: "terminal" } });
+    render(<RoutedSettings compact onReturn={() => navigate("/")} />);
+    const view = screen.getByTestId("settings-view");
+    expect(view).toHaveAttribute("data-page", "home");
+    expect(view).toHaveAttribute("data-nav", "compact");
+    expect(window.location.pathname).toBe("/settings");
+    expect(screen.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+    expect(screen.queryByRole("navigation", { name: "Settings pages" })).toBeNull();
+    expect(
+      screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent),
+    ).toEqual(["Preferences", "Execution", "Support"]);
+    const general = screen.getByRole("link", { name: "General" });
+    expect(general).toHaveAttribute("href", "/settings/general");
+    expect(general).toHaveAccessibleDescription("Sidebar, panels, history and the composer.");
+    expect(screen.getByRole("link", { name: "Agents" })).toHaveAttribute("href", "/agents");
+    expect(screen.getByTestId("settings-return")).toHaveTextContent("Back to workspace");
+
+    // A page opened from the list returns to it through history.
+    await userEvent.setup().click(screen.getByRole("link", { name: "Terminal" }));
     expect(window.location.pathname).toBe("/settings/terminal");
-    expect(screen.getByRole("heading", { name: "Terminal" })).toBeVisible();
-    fireEvent.change(screen.getByLabelText("Settings category"), { target: { value: "appearance" } });
-    expect(window.location.pathname).toBe("/settings/appearance");
-    expect(screen.getByRole("heading", { name: "Appearance" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Terminal", level: 1 })).toBeVisible();
+    expect(screen.queryByTestId("settings-return")).toBeNull();
+    fireEvent.click(screen.getByTestId("settings-list-link"));
+    await waitFor(() => expect(window.location.pathname).toBe("/settings"));
+    expect(await screen.findByRole("link", { name: "Terminal" })).toBeVisible();
+    act(() => window.history.forward());
+    await waitFor(() => expect(window.location.pathname).toBe("/settings/terminal"));
+
+    // A page not opened from the list replaces itself with it instead of stacking one.
+    act(() => navigate("/threads/retained-thread"));
+    act(() => navigate(settingsPath("appearance")));
+    fireEvent.click(screen.getByTestId("settings-list-link"));
+    expect(window.location.pathname).toBe("/settings");
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.pathname).toBe("/threads/retained-thread"));
   });
 
-  it("navigates category pages from the left nav", () => {
+  it("returns from an environment to the list through history without the sidebar nav", async () => {
+    const { controls, snapshot } = executionControls();
+    const local = snapshot.configuration.executionEnvironments[0]!;
+    navigate("/threads/retained-thread", { replace: true });
+    navigate(settingsPath());
+    render(<RoutedSettings compact configuration={controls} onReturn={() => navigate("/threads/retained-thread")} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("link", { name: "Environments" }));
+    await user.click(await screen.findByRole("link", { name: "Local" }));
+    await user.click(screen.getByRole("button", { name: "Edit Local" }));
+    expect(window.location.pathname).toBe(settingsPath("environments", { mode: "edit", resourceId: local.id }));
+    const length = window.history.length;
+    // Each "‹" link goes up one level through the entries it came down.
+    await user.click(within(screen.getByRole("region", { name: "Environment editor" })).getByRole("link", { name: "Local" }));
+    await waitFor(() => expect(window.location.pathname).toBe(settingsPath("environments", { mode: "view", resourceId: local.id })));
+    await user.click(screen.getByTestId("settings-list-link"));
+    await waitFor(() => expect(window.location.pathname).toBe("/settings"));
+    expect(await screen.findByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+    expect(window.history.length).toBe(length);
+    // Back from the list leaves Settings instead of reopening the entity.
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.pathname).toBe("/threads/retained-thread"));
+  });
+
+  it("redirects /settings to the last page shown when the sidebar nav is visible", async () => {
+    renderSettings({ page: "terminal" });
+    expect(sessionStorage.getItem("sedes-settings-last-page")).toBe("terminal");
+    act(() => navigate("/threads/retained-thread"));
+    act(() => navigate(settingsPath()));
+    expect(window.location.pathname).toBe("/settings/terminal");
+    expect(screen.getByRole("heading", { name: "Terminal", level: 1 })).toBeVisible();
+    expect(screen.getByTestId("settings-view")).toHaveAttribute("data-nav", "sidebar");
+    // The redirect replaces the landing entry, so Back leaves Settings.
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.pathname).toBe("/threads/retained-thread"));
+  });
+
+  it("lands on the list of the last entity's page, not on the entity or its editor", async () => {
+    const { controls, snapshot } = executionControls();
+    const local = snapshot.configuration.executionEnvironments[0]!;
+    navigate(settingsPath("environments", { mode: "edit", resourceId: local.id }), { replace: true });
+    render(<RoutedSettings configuration={controls} onReturn={() => navigate("/")} />);
+    expect(await screen.findByLabelText("Environment name")).toHaveValue("Local");
+    expect(sessionStorage.getItem("sedes-settings-last-page")).toBe("environments");
+    fireEvent.click(screen.getByTestId("settings-return"));
+    expect(window.location.pathname).toBe("/");
+    act(() => navigate(settingsPath()));
+    expect(window.location.pathname).toBe("/settings/environments");
+    expect(await screen.findByRole("heading", { name: "Environments", level: 1 })).toBeVisible();
+    expect(screen.queryByLabelText("Environment name")).toBeNull();
+  });
+
+  it("navigates category pages from the sidebar nav", () => {
     renderSettings();
 
     expect(screen.getByTestId("settings-view")).toBeInTheDocument();
@@ -382,17 +508,24 @@ describe("SettingsView", () => {
       "terminal",
       "diagnostics",
     ]);
-    expect(pages[0]).toHaveAttribute("data-active", "true");
+    expect(pages[0]).toHaveAttribute("aria-current", "page");
+    expect(screen.getByTestId("settings-return")).toHaveTextContent("Back to workspace");
     expect(
-      screen.getByRole("heading", { name: "General" }),
+      screen.getByRole("heading", { name: "General", level: 1 }),
     ).toBeInTheDocument();
 
     fireEvent.click(pages[1]!);
-    expect(pages[1]).toHaveAttribute("data-active", "true");
-    expect(pages[0]).toHaveAttribute("data-active", "false");
+    expect(window.location.pathname).toBe("/settings/appearance");
+    expect(pages[1]).toHaveAttribute("aria-current", "page");
+    expect(pages[0]).not.toHaveAttribute("aria-current");
     expect(
-      screen.getByRole("heading", { name: "Appearance" }),
+      screen.getByRole("heading", { name: "Appearance", level: 1 }),
     ).toBeInTheDocument();
+    // Selecting the current page returns it to its start, without a new history entry.
+    const length = window.history.length;
+    fireEvent.click(pages[1]!);
+    expect(window.history.length).toBe(length);
+    expect(screen.getByRole("heading", { name: "Appearance", level: 1 })).toHaveFocus();
   });
 
   it("adds the server page only when packaged-client controls are present", () => {
@@ -543,7 +676,7 @@ describe("SettingsView", () => {
     fireEvent.change(screen.getByLabelText("Connection name"), { target: { value: "Home" } });
     fireEvent.change(input, { target: { value: "192.168.1.20:4783" } });
     fireEvent.submit(input.closest("form")!);
-    expect(await screen.findByRole("status")).toHaveTextContent(
+    expect(await screen.findByRole("alert")).toHaveTextContent(
       "must begin with http:// or https://",
     );
     expect(session).not.toHaveBeenCalled();
@@ -635,10 +768,8 @@ describe("SettingsView", () => {
 
     const toggle = screen.getByTestId("right-option-focuses-composer-toggle");
     expect(toggle).toHaveAttribute("data-state", "unchecked");
-    expect(toggle).toHaveAttribute(
-      "aria-describedby",
-      "setting-right-option-focuses-composer-description",
-    );
+    expect(toggle).toHaveAccessibleName("Right Option focuses composer");
+    expect(toggle).toHaveAccessibleDescription(/right Alt types AltGr characters/);
     expect(getRightOptionFocusesComposer()).toBe(false);
 
     fireEvent.click(toggle);
@@ -652,16 +783,13 @@ describe("SettingsView", () => {
   it("configures post-send composer refocus on the Mobile page", () => {
     renderSettings();
 
-    fireEvent.click(screen.getByRole("button", { name: "Mobile" }));
+    fireEvent.click(navLink("Mobile"));
     const toggle = screen.getByTestId(
       "mobile-composer-refocus-after-send-toggle",
     );
     expect(screen.getByRole("heading", { name: "Mobile" })).toBeInTheDocument();
     expect(toggle).toHaveAttribute("data-state", "checked");
-    expect(toggle).toHaveAttribute(
-      "aria-describedby",
-      "setting-mobile-composer-refocus-after-send-description",
-    );
+    expect(toggle).toHaveAccessibleDescription(/return focus to the\s+message field/);
     expect(getMobileComposerRefocusAfterSend()).toBe(true);
 
     fireEvent.click(toggle);
@@ -675,12 +803,11 @@ describe("SettingsView", () => {
   it("configures the mobile history seek control for this browser", () => {
     renderSettings();
 
-    fireEvent.click(screen.getByRole("button", { name: "Mobile" }));
+    fireEvent.click(navLink("Mobile"));
     const toggle = screen.getByTestId("mobile-history-seek-control-toggle");
     expect(toggle).toHaveAttribute("data-state", "checked");
-    expect(toggle).toHaveAttribute(
-      "aria-describedby",
-      "setting-mobile-history-seek-control-description",
+    expect(toggle).toHaveAccessibleDescription(
+      "Show the draggable history control beside the conversation on mobile layouts.",
     );
     expect(getMobileHistorySeekControl()).toBe(true);
 
@@ -718,7 +845,7 @@ describe("SettingsView", () => {
     expect(screen.getByTestId("seek-on-submit-toggle")).toBeVisible();
     expect(screen.queryByTestId("seek-diagnostics-toggle")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Copy log/u })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
+    fireEvent.click(navLink("Diagnostics"));
     expect(window.location.pathname).toBe("/settings/diagnostics");
     expect(screen.getByRole("heading", { name: "Diagnostics" })).toBeVisible();
     expect(screen.queryByTestId("seek-on-submit-toggle")).toBeNull();
@@ -761,15 +888,16 @@ describe("SettingsView", () => {
     expect(screen.getByTestId("sedes-version")).toHaveTextContent(
       `Sedes ${SEDES_VERSION}`,
     );
-    expect(screen.getByTestId("sedes-version").textContent).not.toContain(
-      "server",
+    expect(screen.getByTestId("sedes-version").textContent).not.toMatch(
+      /server/iu,
     );
     matching.unmount();
 
     renderSettings({ page: "diagnostics", applicationStore: store("9.9.9") });
-    expect(screen.getByTestId("sedes-version")).toHaveTextContent(
-      `Sedes ${SEDES_VERSION} · server Sedes 9.9.9`,
-    );
+    const versions = screen.getByTestId("sedes-version");
+    expect(within(versions).getByText(`Sedes ${SEDES_VERSION}`)).toBeVisible();
+    expect(within(versions).getByText("Server")).toBeVisible();
+    expect(within(versions).getByText("Sedes 9.9.9")).toBeVisible();
   });
 
   it("drives the same appearance mechanism as the actions menu", () => {
@@ -882,10 +1010,7 @@ describe("SettingsView", () => {
 
     const toggle = screen.getByTestId("smooth-streaming-toggle");
     expect(toggle).toHaveAttribute("data-state", "checked");
-    expect(toggle).toHaveAttribute(
-      "aria-describedby",
-      "setting-smooth-streaming-description",
-    );
+    expect(toggle).toHaveAccessibleDescription(/system's Reduce Motion preference/);
     expect(screen.getByText(/system's Reduce Motion preference/)).toBeVisible();
     expect(getSmoothStreamingEnabled()).toBe(true);
 
@@ -900,7 +1025,7 @@ describe("SettingsView", () => {
 
   it("keeps the animated chat background opt-in", () => {
     renderSettings();
-    fireEvent.click(screen.getByRole("button", { name: "Appearance" }));
+    fireEvent.click(navLink("Appearance"));
 
     const toggle = screen.getByTestId("chat-atmosphere-toggle");
     expect(toggle).toHaveAttribute("data-state", "unchecked");
@@ -920,7 +1045,7 @@ describe("SettingsView", () => {
 
   it("defaults to terminal termination confirmation and persists toggling it", () => {
     const view = renderSettings({ page: "terminal" });
-    const toggle = screen.getByRole("checkbox", {
+    const toggle = screen.getByRole("switch", {
       name: "Confirm before ending active terminals",
     });
     expect(toggle).toBeChecked();
@@ -929,20 +1054,20 @@ describe("SettingsView", () => {
     expect(getConfirmTerminalTermination()).toBe(false);
     view.unmount();
     renderSettings({ page: "terminal" });
-    expect(screen.getByRole("checkbox", {
+    expect(screen.getByRole("switch", {
       name: "Confirm before ending active terminals",
     })).not.toBeChecked();
   });
 
   it("persists the client-local cursor blink setting", () => {
     const view = renderSettings({ page: "terminal" });
-    const toggle = screen.getByRole("checkbox", { name: "Cursor blink" });
+    const toggle = screen.getByRole("switch", { name: "Cursor blink" });
     expect(toggle).toBeChecked();
     fireEvent.click(toggle);
     expect(getTerminalPreferences().cursorBlink).toBe(false);
     view.unmount();
     renderSettings({ page: "terminal" });
-    expect(screen.getByRole("checkbox", { name: "Cursor blink" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Cursor blink" })).not.toBeChecked();
   });
 
   it("owns browser-local terminal renderer preferences", () => {
@@ -972,7 +1097,7 @@ describe("SettingsView", () => {
   it("focuses the selected category heading and returns through the page control", async () => {
     renderSettings();
     expect(screen.queryByRole("dialog")).toBeNull();
-    await userEvent.setup().click(screen.getByRole("button", { name: "Appearance" }));
+    await userEvent.setup().click(navLink("Appearance"));
     expect(window.location.pathname).toBe("/settings/appearance");
     await waitFor(() => expect(screen.getByRole("heading", { name: "Appearance" })).toHaveFocus());
     fireEvent.click(screen.getByTestId("settings-return"));

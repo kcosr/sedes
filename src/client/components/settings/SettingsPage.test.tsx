@@ -6,8 +6,9 @@ import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Button } from "@client/components/ui/button";
 import { Input } from "@client/components/ui/input";
+import { navigate } from "../../app/router.js";
 import { DangerZone, DangerZoneItem } from "./DangerZone.js";
-import { SettingsField, SwitchField } from "./SettingsField.js";
+import { SettingsActionRow, SettingsField, SwitchField } from "./SettingsField.js";
 import { SettingsPage } from "./SettingsPage.js";
 import { SettingsSection, SettingsSubgroup } from "./SettingsSection.js";
 
@@ -51,6 +52,18 @@ describe("SettingsPage", () => {
     rerender(<SettingsPage title="General" back={{ label: "Environments", onNavigate }} />);
     await user.click(screen.getByRole("button", { name: "Environments" }));
     expect(onNavigate).toHaveBeenCalledTimes(2);
+  });
+
+  it("goes up through history when the page was opened from the link's target", async () => {
+    const user = userEvent.setup();
+    navigate("/settings", { replace: true });
+    navigate("/settings/environments");
+    navigate("/settings/environments/local");
+    const length = window.history.length;
+    render(<SettingsPage title="Local" back={{ label: "Settings", href: "/settings" }} />);
+    await user.click(screen.getByRole("link", { name: "Settings" }));
+    await vi.waitFor(() => expect(window.location.pathname).toBe("/settings"));
+    expect(window.history.length).toBe(length);
   });
 });
 
@@ -114,6 +127,37 @@ describe("SettingsField and SwitchField", () => {
     await user.click(screen.getByText("Play a sound"));
     expect(onCheckedChange).toHaveBeenCalledWith(true);
     expect(control).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("passes props to the switch and shows dependent options under the row", () => {
+    const { container } = render(
+      <SwitchField
+        label="Turn completed"
+        checked
+        switchProps={{ "data-testid": "turn-toggle", "aria-label": "Notify on Turn completed" }}
+      >
+        <p>Response text options</p>
+      </SwitchField>,
+    );
+    const control = screen.getByTestId("turn-toggle");
+    expect(control).toHaveAccessibleName("Notify on Turn completed");
+    expect(control).toHaveAttribute("aria-checked", "true");
+    const group = container.querySelector("[data-slot=switch-field-group]")!;
+    expect(group.querySelector("[data-slot=switch-field]")).toContainElement(control);
+    expect(group.querySelector("[data-slot=switch-field-options]")).toHaveTextContent("Response text options");
+  });
+
+  it("renders an action row with its title, description and actions", () => {
+    const { container } = render(
+      <SettingsActionRow
+        title="Diagnostics buffer"
+        description="Holds at most 1,200 entries."
+        actions={<Button>Copy log</Button>}
+      />,
+    );
+    expect(container.querySelector("[data-slot=settings-action-row-title]")).toHaveTextContent("Diagnostics buffer");
+    expect(container.querySelector("[data-slot=settings-action-row-description]")).toHaveTextContent("1,200 entries");
+    expect(within(container.querySelector<HTMLElement>("[data-slot=settings-action-row-actions]")!).getByRole("button", { name: "Copy log" })).toBeVisible();
   });
 
   it("disables the switch with the row", () => {

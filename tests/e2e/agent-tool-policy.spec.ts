@@ -498,7 +498,7 @@ test.describe.serial("agent tool policy", () => {
       .click();
     await expect(credentialDialog).toHaveCount(0);
 
-    const enabled = settings.getByRole("checkbox", {
+    const enabled = settings.getByRole("switch", {
       name: "Enable tool client",
     });
     await expect(enabled).toBeChecked();
@@ -509,13 +509,13 @@ test.describe.serial("agent tool policy", () => {
         /\/api\/tool-clients\/[0-9a-f-]+$/u.test(response.url()) &&
         response.ok(),
     );
-    await settings.getByRole("button", { name: "Save" }).click();
+    await settings.getByRole("button", { name: "Save", exact: true }).click();
     await disabledResponse;
     await expect(
-      settings.getByRole("button", { name: /E2E external CLI Disabled/u }),
-    ).toBeVisible();
+      settings.getByRole("button", { name: "E2E external CLI", exact: true }),
+    ).toHaveAccessibleDescription(/Disabled/u);
 
-    await settings.getByRole("button", { name: "Rotate credential" }).click();
+    await settings.getByRole("button", { name: "Rotate credential…", exact: true }).click();
     const rotateConfirmation = page.getByRole("dialog", {
       name: "Rotate credential?",
     });
@@ -545,7 +545,7 @@ test.describe.serial("agent tool policy", () => {
       .getByRole("button", { name: "I saved it — close" })
       .click();
 
-    await settings.getByRole("button", { name: "Revoke" }).click();
+    await settings.getByRole("button", { name: "Revoke…", exact: true }).click();
     const revokeConfirmation = page.getByRole("dialog", {
       name: "Revoke tool client?",
     });
@@ -560,7 +560,8 @@ test.describe.serial("agent tool policy", () => {
       .click();
     await revokedResponse;
     await expect(
-      settings.getByRole("button", { name: /E2E external CLI Revoked/u }),
-    ).toBeVisible();
+      settings.getByRole("button", { name: "E2E external CLI", exact: true }),
+    ).toHaveAccessibleDescription(/Revoked/u);
+    await expect(settings.getByText("Tool client revoked. Its credentials can no longer be used.")).toBeVisible();
   });
 });

@@ -27,6 +27,11 @@ export type SaveBarProps = Omit<React.ComponentProps<"div">, "children"> & {
   readonly cancelLabel?: string;
   /** Blocks Save while the form is invalid. */
   readonly saveDisabled?: boolean;
+  /**
+   * `page` (default) is the sticky, full-bleed footer of the page scroller;
+   * `pane` sits at the end of a short editor pane, in flow.
+   */
+  readonly placement?: "page" | "pane";
 };
 
 /**
@@ -46,6 +51,7 @@ export function SaveBar({
   savingLabel = "Saving…",
   cancelLabel = "Cancel",
   saveDisabled = false,
+  placement = "page",
   ...props
 }: SaveBarProps): React.JSX.Element {
   const [savedNotice, setSavedNotice] = useState(false);
@@ -61,7 +67,7 @@ export function SaveBar({
 
   const state = error ? "error" : saving ? "saving" : dirty ? "dirty" : savedNotice ? "saved" : "clean";
   return (
-    <div data-slot="save-bar" data-state={state} {...props}>
+    <div data-slot="save-bar" data-state={state} data-placement={placement} {...props}>
       {state === "error" ? (
         <div data-slot="save-bar-status" data-state="error" role="alert">
           <CircleAlert aria-hidden="true" />

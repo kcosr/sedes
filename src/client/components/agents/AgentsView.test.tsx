@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, type ApiClient } from "../../api/ApiClient.js";
@@ -80,10 +82,10 @@ describe("AgentsView", () => {
     );
 
     expect(
-      await screen.findByText(
-        "3 enabled · Allow without asking · Native · Progressive",
-      ),
-    ).toBeVisible();
+      await screen.findByRole("link", { name: "Careful reviewer" }),
+    ).toHaveAccessibleDescription(
+      /3 enabled · Allow without asking · Native · Progressive$/u,
+    );
   });
 
   it("bounds Agent list searches to the server contract", () => {
@@ -118,7 +120,9 @@ describe("AgentsView", () => {
 
     expect(await screen.findByText("Careful reviewer")).toBeVisible();
     expect(listSavedAgents).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: /Careful reviewer/ }));
+    const row = screen.getByRole("link", { name: "Careful reviewer" });
+    expect(row).toHaveAttribute("href", agentPath(agentId));
+    fireEvent.click(row);
     expect(window.location.pathname).toBe(agentPath(agentId));
   });
 
@@ -155,13 +159,18 @@ describe("AgentsView", () => {
       ),
     );
     fireEvent.change(name, { target: { value: "Changed locally" } });
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    act(() => navigate(agentsPath()));
     expect(
       screen.getByRole("dialog", { name: "Discard unsaved Agent changes?" }),
     ).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(name).toHaveValue("Changed locally");
     expect(window.location.pathname).toBe(agentPath(agentId));
+    // Cancel in the save bar discards the local edits in place.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(name).toHaveValue(detail.name);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("surfaces a focused validation error for an unnamed new Agent", async () => {
@@ -180,13 +189,13 @@ describe("AgentsView", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create Agent" }));
-    await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Enter an Agent name.",
-      ),
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Agent editor" })).getByRole("button", { name: "Create Agent" }),
     );
-    expect(screen.getByRole("textbox", { name: "Name" })).toHaveFocus();
+    const name = screen.getByRole("textbox", { name: "Name" });
+    await waitFor(() => expect(name).toHaveAttribute("aria-invalid", "true"));
+    expect(name).toHaveAccessibleDescription("Enter an Agent name.");
+    expect(name).toHaveFocus();
   });
 
   it("deletes only after revision-checked confirmation", async () => {
@@ -214,7 +223,7 @@ describe("AgentsView", () => {
     );
 
     await screen.findByRole("textbox", { name: "Name" });
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete…" }));
     expect(screen.getByText(/Existing threads are unchanged\./)).toBeVisible();
     expect(screen.getByText(/templates that use this Agent/i)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Delete Agent" }));
@@ -324,7 +333,7 @@ describe("AgentsView", () => {
 
     const name = await screen.findByRole("textbox", { name: "Name" });
     fireEvent.change(name, { target: { value: "Local draft" } });
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete…" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Agent" }));
 
     expect(
@@ -335,7 +344,7 @@ describe("AgentsView", () => {
       expectedRevision: 0,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete…" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Agent" }));
     await waitFor(() =>
       expect(deleteSavedAgent).toHaveBeenNthCalledWith(2, agentId, {
