@@ -255,18 +255,18 @@ test("dirty settings guard browser Back and return without saving discarded envi
   });
   await settings.getByRole("button", { name: "Add environment", exact: true }).click();
   await settings.getByRole("link", { name: "SSH host", exact: true }).click();
-  await expect(page).toHaveURL("/settings/environments/new/ssh");
+  await expect(page).toHaveURL("/settings/environments/~new/ssh");
   await settings.getByLabel("Environment name", { exact: true }).fill("Discard this draft");
   await page.goBack();
   const discard = page.getByRole("dialog", { name: "Discard unsaved changes?", exact: true });
   await expect(discard).toBeVisible();
   await discard.getByRole("button", { name: "Keep editing", exact: true }).click();
-  await expect(page).toHaveURL("/settings/environments/new/ssh");
+  await expect(page).toHaveURL("/settings/environments/~new/ssh");
   await expect(settings.getByLabel("Environment name", { exact: true })).toHaveValue("Discard this draft");
   await page.goBack();
   await discard.getByRole("button", { name: "Discard changes", exact: true }).click();
   // Back walks the add flow's own steps: the kind chooser, then the list.
-  await expect(page).toHaveURL("/settings/environments/new");
+  await expect(page).toHaveURL("/settings/environments/~new");
   await page.goBack();
   await expect(page).toHaveURL("/settings/environments");
   await page.goBack();
@@ -281,7 +281,7 @@ test("dirty settings guard browser Back and return without saving discarded envi
   await page.getByTestId("desktop-sidebar").getByRole("link", { name: "Backends", exact: true }).click();
   await expect(discard).toBeVisible();
   await discard.getByRole("button", { name: "Keep editing", exact: true }).click();
-  await expect(page).toHaveURL("/settings/environments/new/ssh");
+  await expect(page).toHaveURL("/settings/environments/~new/ssh");
   await page.getByTestId("settings-return").click();
   await expect(discard).toBeVisible();
   await discard.getByRole("button", { name: "Keep editing", exact: true }).click();
@@ -353,18 +353,63 @@ test("environment and backend routes live inside the settings shell: nav, histor
   await list.getByRole("link", { name: local.label, exact: true }).click();
   await expect(page).toHaveURL(localPath);
   await expect(list).toBeHidden();
+  // The compact header's one back link goes up a level, as Escape does.
+  const headerBack = settings.locator(".settings-view-header").getByRole("link");
+  await expect(headerBack).toHaveText(["Environments"]);
   await detail.getByRole("button", { name: `Edit ${local.label}`, exact: true }).click();
   await expect(page).toHaveURL(`${localPath}/edit`);
-  await editorBack.click();
+  await expect(headerBack).toHaveText([local.label]);
+  await headerBack.click();
   await expect(page).toHaveURL(localPath);
-  await detail.getByRole("link", { name: "Environments", exact: true }).click();
+  await headerBack.click();
   await expect(page).toHaveURL("/settings/environments");
+  await expect(headerBack).toHaveText(["Settings"]);
   await expect(list).toBeVisible();
   await settings.getByTestId("settings-list-link").click();
   await expect(page).toHaveURL("/settings");
   // Each step went back through history, so Back now leaves Settings.
   await page.goBack();
   await expect(page).toHaveURL("/");
+});
+
+test("a resource's confirmation closes when Back or the settings nav leaves it", async ({ page }) => {
+  const { configuration } = configurationSnapshotSchema.parse(await (await page.request.get("/api/configuration")).json());
+  const local = configuration.executionEnvironments[0]!;
+  const localPath = `/settings/environments/${local.id}`;
+  const settings = page.getByTestId("settings-view");
+  const list = settings.getByRole("region", { name: "Configured environments", exact: true });
+  const detail = settings.getByRole("region", { name: `${local.label} details`, exact: true });
+  const confirmation = page.getByRole("dialog", { name: `Remove ${local.label}?`, exact: true });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/settings/environments");
+  await list.getByRole("link", { name: local.label, exact: true }).click();
+  await expect(page).toHaveURL(localPath);
+  await detail.getByRole("button", { name: `Remove ${local.label}`, exact: true }).click();
+  await expect(confirmation).toBeVisible();
+  // Browser Back leaves the resource: its confirmation closes and stays closed.
+  await page.goBack();
+  await expect(page).toHaveURL("/settings/environments");
+  await expect(confirmation).toBeHidden();
+  await page.goForward();
+  await expect(page).toHaveURL(localPath);
+  await expect(detail).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // A modal blocks pointer input and hides the rest of the page from the
+  // accessibility tree, so dispatch the nav link's click as a programmatic
+  // navigation would; General then owns the page and focus.
+  await list.getByRole("button", { name: `Actions for ${local.label}`, exact: true }).click();
+  await page.getByRole("menuitem", { name: "Remove…", exact: true }).click();
+  await expect(confirmation).toBeVisible();
+  await page.getByTestId("desktop-sidebar").locator('a[href="/settings/general"]').dispatchEvent("click");
+  await expect(page).toHaveURL("/settings/general");
+  await expect(confirmation).toBeHidden();
+  await expect(settings.getByRole("heading", { name: "General", level: 1 })).toBeFocused();
+  await page.goBack();
+  await expect(page).toHaveURL(localPath);
+  await expect(detail).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 
 test("Escape goes up one Settings level after open layers and focused fields, through the discard guard", async ({ page }) => {

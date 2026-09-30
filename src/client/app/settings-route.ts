@@ -44,6 +44,14 @@ export type SettingsResourcePage = "environments" | "backends" | "agents";
  * Agent is a small preset whose view is its editor, so Agents have no `edit`. */
 export type SettingsResourceMode = "view" | "edit" | "new" | "pending";
 
+/**
+ * Action segments start with `~`, which no entity id can: backend ids start
+ * with a letter or digit (`configurationIdSchema`), and environment, Agent
+ * and registration ids are UUIDs. So every id the configuration contract
+ * accepts, "new", "pending" and "edit" included, has a URL of its own.
+ */
+const actionSegments = { new: "~new", pending: "~pending" } as const;
+
 export interface SettingsResourceRoute {
   readonly resourceId?: string;
   readonly mode?: SettingsResourceMode;
@@ -51,7 +59,7 @@ export interface SettingsResourceRoute {
 
 export const settingsResourcePages: readonly SettingsResourcePage[] = ["environments", "backends", "agents"];
 
-/** Creation starts for environments: `/new` is the chooser, `/new/:kind` the form or pairing setup. */
+/** Creation starts for environments: `/~new` is the chooser, `/~new/:kind` the form or pairing setup. */
 export const environmentCreationKinds = ["local", "ssh", "pair"] as const;
 export type EnvironmentCreationKind = typeof environmentCreationKinds[number];
 
@@ -71,23 +79,22 @@ function decodeSegment(segment: string): string | undefined {
 /**
  * Parses the segments after `/settings/<page>/`. Returns undefined for a
  * shape the page does not have; the caller then treats the URL as unknown.
- * `new` and `pending` are reserved words, never entity ids.
  */
 export function parseSettingsResource(page: SettingsResourcePage, segments: readonly string[]): SettingsResourceRoute | undefined {
   const [first, second, ...rest] = segments;
   if (first === undefined || rest.length > 0) return undefined;
-  if (first === "new") {
+  if (first === actionSegments.new) {
     if (second === undefined) return { mode: "new" };
     return page === "environments" && (environmentCreationKinds as readonly string[]).includes(second)
       ? { mode: "new", resourceId: second } : undefined;
   }
-  if (first === "pending") {
+  if (first === actionSegments.pending) {
     if (page !== "environments" || second === undefined) return undefined;
     const registrationId = decodeSegment(second);
     return registrationId ? { mode: "pending", resourceId: registrationId } : undefined;
   }
   const resourceId = decodeSegment(first);
-  if (!resourceId || resourceId === "new" || resourceId === "pending") return undefined;
+  if (!resourceId || resourceId.startsWith("~")) return undefined;
   if (second === undefined) return { mode: "view", resourceId };
   return second === "edit" && page !== "agents" ? { mode: "edit", resourceId } : undefined;
 }
@@ -107,9 +114,9 @@ export function settingsResourceParent(resource: SettingsResourceRoute): Setting
 export function settingsResourceSuffix(resource: SettingsResourceRoute): string {
   const { mode, resourceId } = resource;
   if (!mode) return "";
-  if (mode === "new") return resourceId ? `/new/${encodeURIComponent(resourceId)}` : "/new";
+  if (mode === "new") return resourceId ? `/${actionSegments.new}/${encodeURIComponent(resourceId)}` : `/${actionSegments.new}`;
   if (!resourceId) return "";
   const id = encodeURIComponent(resourceId);
-  if (mode === "pending") return `/pending/${id}`;
+  if (mode === "pending") return `/${actionSegments.pending}/${id}`;
   return mode === "edit" ? `/${id}/edit` : `/${id}`;
 }

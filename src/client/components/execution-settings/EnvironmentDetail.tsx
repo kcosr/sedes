@@ -16,11 +16,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.js";
 import { Tag } from "../ui/tag.js";
 import { SettingsBackLink } from "../settings/SettingsPage.js";
 import { SettingsDetailHeader } from "../settings/SettingsSplit.js";
-import { CopyableValue } from "./detail-parts.js";
+import { CopyableValue, PathText } from "./detail-parts.js";
 import { capabilityLabels, environmentKindNames } from "./EnvironmentEditor.js";
 import { environmentBackends, EnvironmentIcon, environmentKindLabels, hostPlatform, hostPresence, runtimeFor } from "./ExecutionInventory.js";
 import { RecoveredOperations } from "./RecoveredOperations.js";
-import { hasDestructiveRuntimeMenuItems, hasRuntimeMenuItems, runtimeDiagnostics, RuntimeFeedback, RuntimeHealth, RuntimeImpactDialog, RuntimeMenuItems, RuntimePrimaryAction, useRuntimeController, type RuntimeController } from "./RuntimeControls.js";
+import { hasAvailableRuntimeMenuItems, hasDestructiveRuntimeMenuItems, hasRuntimeMenuItems, runtimeDiagnostics, RuntimeFeedback, RuntimeHealth, RuntimeImpactDialog, RuntimeMenuItems, RuntimePrimaryAction, useRuntimeController, type RuntimeController } from "./RuntimeControls.js";
 import { worstStatus } from "./runtime-presentation.js";
 import type { ConfigurationSnapshot, EnvironmentDefinition } from "./types.js";
 import type { ConfigurationControls } from "./useConfiguration.js";
@@ -70,7 +70,7 @@ export function DetailMenu({ label, controller, extra }: { readonly label: strin
   const regular = Boolean(extra) || controller.presentation.secondary.some(entry => entry.emphasis !== "destructive");
   return <DropdownMenu>
     <DropdownMenuTrigger asChild><Button type="button" variant="outline" size="icon" aria-label={`Runtime actions for ${label}`}
-      disabled={!extra && (controller.paused || controller.unsettled)} aria-describedby={controller.describedBy}><Ellipsis /></Button></DropdownMenuTrigger>
+      disabled={!extra && !hasAvailableRuntimeMenuItems(controller)} aria-describedby={controller.describedBy}><Ellipsis /></Button></DropdownMenuTrigger>
     <DropdownMenuContent align="end" aria-label={`Runtime actions for ${label}`}>
       <RuntimeMenuItems controller={controller} emphasis="default" />
       {extra}
@@ -123,7 +123,7 @@ export function EnvironmentDetail({ environment, selected, tab, onTab, hosts, st
   ];
   const capabilities = environment.kind === "local" ? [] : environment.operations.kind === "sidecar" ? environment.operations.enabledCapabilities.filter(entry => entry !== "workspace_context") : [];
   const accessFacts: KeyValueItem[] = [
-    { label: "Roots", value: environment.workspaceRoots.length ? <ul className="execution-plain-list">{environment.workspaceRoots.map(root => <li key={root}>{root}</li>)}</ul> : "None", mono: true },
+    { label: "Roots", value: environment.workspaceRoots.length ? <ul className="execution-plain-list">{environment.workspaceRoots.map(root => <li key={root}><PathText value={root} /></li>)}</ul> : "None" },
     ...(environment.kind === "local" ? [] : [{ label: "Operations", value: environment.operations.kind === "sidecar"
       ? `${capabilities.map(entry => capabilityLabels[entry]).join(", ")} (${capabilities.length} of 7)` : "Sidecar operations off" }]),
   ];
@@ -140,7 +140,7 @@ export function EnvironmentDetail({ environment, selected, tab, onTab, hosts, st
   return <section aria-label={`${environment.label} details`} className="execution-detail">
     <SettingsDetailHeader back={<SettingsBackLink stackOnly href={settingsPath("environments")} label="Environments" />}
       icon={<EnvironmentIcon kind={environment.kind} />} title={environment.label} headingRef={headingRef}
-      tags={<Tag>{environmentKindLabels[environment.kind]}</Tag>} status={<StatusPill tone={status.tone}>{status.label}</StatusPill>}
+      tags={environmentKindLabels[environment.kind] === environment.label ? undefined : <Tag>{environmentKindLabels[environment.kind]}</Tag>} status={<StatusPill tone={status.tone}>{status.label}</StatusPill>}
       actions={<>
         <RuntimePrimaryAction controller={controller} />
         <Button type="button" variant="outline" aria-label={`Edit ${environment.label}`} onClick={() => navigate(editPath)}>Edit</Button>
@@ -155,7 +155,7 @@ export function EnvironmentDetail({ environment, selected, tab, onTab, hosts, st
         <TabsTrigger value="activity">Activity</TabsTrigger>
       </TabsList>
       <TabsContent value="overview" className="execution-tab">
-        <RuntimeHealth controller={controller}>
+        <RuntimeHealth controller={controller} status={status}>
           {remote && controller.presentation.recoveryEmphasis ? <Callout tone="warning"
             action={<Button type="button" size="sm" variant="outline" onClick={() => setRecoveryOpen(true)}>Review</Button>}>
             Retained results may need recovery before lifecycle actions can succeed.</Callout> : null}
@@ -164,15 +164,15 @@ export function EnvironmentDetail({ environment, selected, tab, onTab, hosts, st
         <SettingsSection title="Workspace access" card><KeyValueList className="execution-facts" items={accessFacts} /></SettingsSection>
         <SettingsSection title="Environment variables" card><KeyValueList className="execution-facts" items={variableFacts(environment.environmentVariables)} /></SettingsSection>
         <DangerZone>
-          {binding ? <DangerZoneItem title={revoked ? "Reapprove pairing" : "Revoke pairing"}
+          {binding ? <DangerZoneItem tone={revoked ? "neutral" : "danger"} title={revoked ? "Reapprove pairing" : "Revoke pairing"}
             description={revoked ? "Let the same connector installation reconnect with this environment's saved access." : "Disconnect this installation. The environment and its history are kept."}
-            action={<Button key="pairing" type="button" variant={revoked ? "outline" : "destructive"} aria-label={`${revoked ? "Reapprove" : "Revoke"} ${environment.label}`}
+            action={<Button key="pairing" type="button" variant="outline" aria-label={`${revoked ? "Reapprove" : "Revoke"} ${environment.label}`}
               onClick={() => onPairing(environment, binding)}>{revoked ? "Reapprove…" : "Revoke…"}</Button>} /> : null}
           <DangerZoneItem title="Remove environment"
             description={backends.length ? `Referenced by ${backends.length === 1 ? "1 backend" : `${backends.length} backends`}; remove ${backends.length === 1 ? "it" : "them"} first.`
               : environment.kind === "outbound" && !revoked ? "Revoke the pairing first. Existing sessions and history are retained."
               : "Existing sessions and history are retained."}
-            action={<Button type="button" variant="destructive" aria-label={`Remove ${environment.label}`} onClick={() => onRemove(environment)}>Remove…</Button>} />
+            action={<Button type="button" variant="outline" aria-label={`Remove ${environment.label}`} onClick={() => onRemove(environment)}>Remove…</Button>} />
         </DangerZone>
       </TabsContent>
       <TabsContent value="related" className="execution-tab">{renderBackends(environment)}</TabsContent>

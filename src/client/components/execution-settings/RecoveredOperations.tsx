@@ -122,7 +122,7 @@ export function RecoveredOperations({ controls, environmentId, label, open, onOp
         {loading ? <p role="status" className="execution-muted">Loading retained operation state…</p> : null}
         <div className="execution-recovery-layout">
           <section aria-label="Retained operations" className="execution-recovery-list">
-            <Button type="button" variant="outline" size="sm" className="execution-recovery-refresh" disabled={loading} onClick={() => void refresh()}><RefreshCw />Refresh operations</Button>
+            <Button type="button" variant="ghost" size="sm" className="execution-recovery-refresh" disabled={loading} onClick={() => void refresh()}><RefreshCw />Refresh operations</Button>
             {loaded && receipts.length === 0 ? <EmptyState variant="inline" title="No retained operations." /> : null}
             {receipts.slice(currentPage * pageSize, (currentPage + 1) * pageSize).map((receipt) => {
               const selected = inspected?.kind === receipt.kind && inspected.receiptId === receipt.receiptId;

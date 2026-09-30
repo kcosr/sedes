@@ -1,4 +1,6 @@
 import "./settings.css";
+import { createContext, useContext } from "react";
+import { createPortal } from "react-dom";
 import { ChevronLeft } from "lucide-react";
 import { navigateUp } from "../../app/router.js";
 import { isPlainClick } from "./SettingsNav.js";
@@ -64,11 +66,25 @@ export type SettingsBackLinkProps = SettingsBack &
   };
 
 /**
- * "‹ Settings" style link above a page or pane title. A link goes up
- * through `navigateUp`, so it and browser or Android Back walk the same
- * history; without `href` it is a button for `onNavigate`.
+ * Where "‹" links render instead of above their title: the compact settings
+ * header (no sidebar nav), whose one back link then goes up a level, as
+ * Escape does, in place of its "‹ Settings". Null renders them in place.
  */
-export function SettingsBackLink({ label, href, onNavigate, stackOnly = false, ...props }: SettingsBackLinkProps): React.JSX.Element {
+export const SettingsBackSlotContext = createContext<HTMLElement | null>(null);
+
+/**
+ * "‹ Settings" style link above a page or pane title, or in the compact
+ * settings header (SettingsBackSlotContext). A link goes up through
+ * `navigateUp`, so it and browser or Android Back walk the same history;
+ * without `href` it is a button for `onNavigate`.
+ */
+export function SettingsBackLink(props: SettingsBackLinkProps): React.JSX.Element {
+  const slot = useContext(SettingsBackSlotContext);
+  const link = <BackLink {...props} />;
+  return slot ? createPortal(link, slot) : link;
+}
+
+function BackLink({ label, href, onNavigate, stackOnly = false, ...props }: SettingsBackLinkProps): React.JSX.Element {
   const content = <><ChevronLeft aria-hidden="true" />{label}</>;
   return href === undefined ? (
     <button type="button" data-slot="settings-page-back" data-stack-only={stackOnly || undefined} {...props} onClick={onNavigate}>

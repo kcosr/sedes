@@ -157,6 +157,7 @@ describe("Tool clients settings", () => {
     fireEvent.change(screen.getByLabelText("Tool client name"), {
       target: { value: "External CLI" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Threads" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Thread status" }));
     fireEvent.change(screen.getByLabelText("Default workspace"), {
       target: { value: "workspace-1" },
@@ -234,6 +235,7 @@ describe("Tool clients settings", () => {
     fireEvent.change(screen.getByLabelText("Tool client name"), {
       target: { value: "External CLI" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Threads" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Thread status" }));
     fireEvent.click(screen.getByRole("button", { name: "Create client" }));
 
@@ -263,6 +265,7 @@ describe("Tool clients settings", () => {
     fireEvent.change(screen.getByLabelText("Tool client name"), {
       target: { value: "External CLI" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Threads" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Thread status" }));
     fireEvent.change(screen.getByLabelText("Default environment"), {
       target: { value: "env-remote" },
@@ -283,6 +286,62 @@ describe("Tool clients settings", () => {
           allowedEnvironmentIds: ["env-remote"],
         }),
       ),
+    );
+  });
+
+  it("offers New client from the empty state and keeps a pristine create form clean", async () => {
+    render(<ToolClientsSettingsPage controls={controls()} />);
+
+    expect(await screen.findByText("No tool clients yet")).toBeVisible();
+    // The empty state carries the page's one New client action.
+    const [emptyAction, ...others] = screen.getAllByRole("button", { name: "New client" });
+    expect(others).toHaveLength(0);
+    expect(emptyAction).toHaveAttribute("data-variant", "default");
+    fireEvent.click(emptyAction!);
+
+    const editor = screen.getByRole("region", { name: "Tool client editor" });
+    expect(screen.getByRole("button", { name: "New client" })).toHaveAttribute("data-variant", "outline");
+    expect(within(editor).queryByText("Unsaved changes")).toBeNull();
+    expect(within(editor).getByRole("button", { name: "Create client" })).toBeEnabled();
+    expect(within(editor).getByRole("button", { name: "Cancel" })).toBeEnabled();
+
+    fireEvent.change(within(editor).getByLabelText("Tool client name"), {
+      target: { value: "External CLI" },
+    });
+    expect(within(editor).getByText("Unsaved changes")).toBeVisible();
+    fireEvent.change(within(editor).getByLabelText("Tool client name"), {
+      target: { value: "" },
+    });
+    expect(within(editor).queryByText("Unsaved changes")).toBeNull();
+
+    fireEvent.click(within(editor).getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("No tool clients yet")).toBeVisible();
+  });
+
+  it("summarizes collapsed tool groups and warns about risky grants", async () => {
+    render(<ToolClientsSettingsPage controls={controls()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "New client" }));
+    const threads = screen.getByRole("button", { name: "Threads" });
+    expect(threads).toHaveAttribute("aria-expanded", "false");
+    expect(threads).toHaveAccessibleDescription("0 of 2 tools Inspect and control threads.");
+    expect(screen.queryByText(/marked High risk/u)).toBeNull();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all Threads tools" }));
+    expect(threads).toHaveAccessibleDescription(
+      "2 of 2 tools High risk Inspect and control threads.",
+    );
+    expect(
+      screen
+        .getByText(/Selected tools marked High risk can start model work/u)
+        .closest('[data-slot="callout"]'),
+    ).toHaveAttribute("role", "status");
+
+    fireEvent.click(threads);
+    expect(
+      screen.getByRole("checkbox", { name: "Send message" }),
+    ).toHaveAccessibleDescription(
+      "Send a message and start model work. Starts model execution",
     );
   });
 
@@ -331,6 +390,10 @@ describe("Tool clients settings", () => {
     render(<ToolClientsSettingsPage controls={value} />);
 
     fireEvent.click(await screen.findByRole("button", { name: /External CLI/u }));
+    expect(screen.getByRole("button", { name: "New client" })).toHaveAttribute("data-variant", "outline");
+    // Danger-zone triggers are outline; only the confirmation is solid red.
+    expect(screen.getByRole("button", { name: "Revoke…" })).toHaveAttribute("data-variant", "outline");
+    expect(screen.getByRole("button", { name: "Rotate credential…" })).toHaveAttribute("data-variant", "outline");
     fireEvent.click(screen.getByRole("switch", { name: "Enable tool client" }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
@@ -399,6 +462,7 @@ describe("Tool clients settings", () => {
     fireEvent.change(screen.getByLabelText("Tool client name"), {
       target: { value: "External CLI" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Threads" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Thread status" }));
     fireEvent.click(screen.getByRole("button", { name: "Create client" }));
 

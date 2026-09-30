@@ -20,14 +20,18 @@
   .execution-filters, .execution-toolbar[data-filters="open"] .execution-filters { display: contents; }
   .execution-filters { padding: 0; border: 0; }
 }
-.execution-list-count { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: var(--control-xs); padding-inline: var(--space-1); }
+.execution-list-count { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: var(--control-xs); padding-inline: var(--space-3); }
 .execution-list-count p { margin: 0; color: var(--muted-foreground-2); font-size: var(--text-meta); }
 .execution-group { display: grid; gap: var(--space-0-5); min-width: 0; }
 .execution-group + .execution-group, .execution-group + [data-slot="empty-state"] { margin-top: var(--space-2); }
 .execution-group-header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-3) var(--space-1); }
 .execution-group-header h3 { min-width: 0; margin: 0; color: var(--muted-foreground); font-size: var(--text-meta); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
 .execution-group-header span { flex: none; color: var(--muted-foreground-2); font-size: var(--text-meta); }
-/* A narrow row puts the status beside the title and gives the subtitle the full width. */
+/* A row without a kebab keeps its place, so statuses share one right edge. */
+.execution-row-actions-spacer { display: block; width: var(--control-sm); }
+/* A narrow row puts the status beside the title and gives the subtitle the
+   full width; the status shrinks to its dot (RowStatus), so the name keeps
+   the width. */
 @container entity-list (width < 480px) {
   .execution-settings [data-slot="entity-row-main"] {
     grid-template-areas: "icon title meta" "icon subtitle subtitle";
@@ -39,6 +43,8 @@
   .execution-settings [data-slot="entity-row-subtitle"] { grid-area: subtitle; }
   .execution-settings [data-slot="entity-row-meta"] { grid-area: meta; justify-content: flex-end; flex-wrap: nowrap; }
   .execution-settings [data-slot="entity-row-icon"] { align-self: start; }
+  .execution-row-status { width: var(--space-5); padding-inline: 0; }
+  .execution-row-status-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
 
 /* ── Detail ── */
@@ -48,16 +54,26 @@
 
 .execution-health { display: grid; gap: var(--space-2-5); padding: var(--space-4); border: 1px solid var(--border-soft); border-radius: var(--radius-card); background: var(--card); }
 .execution-health-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5); }
+.execution-health-label { color: var(--muted-foreground-2); font-size: var(--text-meta); font-weight: var(--weight-medium); }
 .execution-health-detail { margin: 0; color: var(--muted-foreground); font-size: var(--text-ui); line-height: var(--leading-normal); }
-.execution-health-unsettled { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .execution-runtime-summary { display: grid; gap: var(--space-2); padding-block: var(--space-3); }
 
-.execution-facts { padding-block: var(--space-3); }
+/* Facts share one label column, so values line up across the cards of a tab;
+   a narrow page stacks each label over its value. */
+.execution-facts { grid-template-columns: 11rem minmax(0, 1fr); padding-block: var(--space-3); }
+@container settings-page (width < 640px) {
+  .execution-facts { grid-template-columns: minmax(0, 1fr); row-gap: 0; }
+  .execution-facts > div + div > dt { padding-top: var(--space-2-5); }
+}
 .execution-plain-list { display: grid; gap: var(--space-0-5); margin: 0; padding: 0; list-style: none; }
 .execution-inline-icon { display: inline-flex; align-items: center; gap: var(--space-1-5); }
 .execution-inline-icon svg { width: var(--icon-sm); height: var(--icon-sm); }
 .execution-copyable { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; max-width: 100%; }
 .execution-copyable code { min-width: 0; font-size: var(--text-meta); overflow-wrap: anywhere; }
+/* Paths wrap after a separator (PathText): a segment is one unit on a line,
+   and breaks inside only when it alone is wider than the line. */
+.execution-path { font-family: var(--font-mono); font-size: var(--text-meta); }
+.execution-path-segment { display: inline-block; max-width: 100%; }
 .execution-related { display: grid; gap: var(--space-2); }
 .execution-related-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .execution-connection-list { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--border-soft); border-radius: var(--radius-card); background: var(--card); }
@@ -154,7 +170,8 @@
 .execution-rules > .execution-item:last-of-type { border-bottom: 1px solid var(--border-soft); }
 
 /* ── Backend defaults, pairing and recovery ── */
-.execution-defaults-grid { display: grid; min-width: 0; column-gap: var(--space-6); padding-block: var(--space-1); }
+/* Start-aligned: a stretched vertical Field grows its rows, which drops the select's chevron below centre. */
+.execution-defaults-grid { display: grid; min-width: 0; align-items: start; column-gap: var(--space-6); padding-block: var(--space-1); }
 .execution-defaults-grid > [data-slot="settings-field"], .execution-defaults-research > [data-slot="switch-field"] { padding-block: var(--space-3); }
 .execution-defaults-research { display: grid; min-width: 0; align-content: start; }
 .execution-defaults-research .execution-advanced { border-top: 1px solid var(--border-soft); }
@@ -198,7 +215,7 @@
 .execution-recovery-refresh { justify-self: start; }
 .execution-recovery-item { display: grid; gap: var(--space-1); width: 100%; padding: var(--space-2-5) var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-ctl); background: var(--card); color: var(--foreground); font: inherit; text-align: start; cursor: pointer; }
 .execution-recovery-item:hover { background: var(--hover); }
-.execution-recovery-item[aria-current="true"] { background: var(--selected); }
+.execution-recovery-item[aria-current="true"] { border-color: var(--muted-foreground-2); background: var(--selected); }
 .execution-recovery-item:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .execution-recovery-item-title, .execution-recovery-heading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; font-size: var(--text-ui); font-weight: var(--weight-medium); }
 .execution-recovery-item-summary { color: var(--muted-foreground-2); font-size: var(--text-meta); overflow-wrap: anywhere; }
@@ -218,7 +235,7 @@
   .execution-settings :is([data-slot="button"], [data-slot="dropdown-menu-trigger"]):not([data-size="icon-xs"]) { min-height: var(--control-default); }
   .execution-settings :is([data-slot="button"], [data-slot="dropdown-menu-trigger"])[data-size^="icon"]:not([data-size="icon-xs"]) { min-width: var(--control-default); }
   .execution-advanced-trigger, .execution-item-trigger, .execution-token button { min-height: var(--control-default); }
-  .execution-token button { min-width: var(--control-default); }
+  .execution-token button, .execution-row-actions-spacer { min-width: var(--control-default); }
 }
 
 /* ── Projects ── */

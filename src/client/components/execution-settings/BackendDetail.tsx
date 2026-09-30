@@ -82,7 +82,7 @@ export function BackendDetail({ backend, selected, tab, onTab, headingRef, onRem
         <TabsTrigger value="activity">Activity</TabsTrigger>
       </TabsList>
       <TabsContent value="overview" className="execution-tab">
-        <RuntimeHealth controller={controller}>
+        <RuntimeHealth controller={controller} status={status}>
           {unsupported ? <Callout tone="warning" role="status">Remote execution is unsupported. This retained configuration cannot run here.</Callout> : null}
         </RuntimeHealth>
         <SettingsSection title="Provider and connection" card><KeyValueList className="execution-facts" items={connectionFacts} /></SettingsSection>
@@ -96,7 +96,7 @@ export function BackendDetail({ backend, selected, tab, onTab, headingRef, onRem
         <SettingsSection title="Environment variables" card><KeyValueList className="execution-facts" items={variableFacts(backend.environmentVariables)} /></SettingsSection>
         <DangerZone>
           <DangerZoneItem title="Remove backend" description="Its connections are removed too. Existing threads and history are retained. Running work may prevent removal."
-            action={<Button type="button" variant="destructive" aria-label={`Remove ${backend.label}`} onClick={() => onRemove(backend)}>Remove…</Button>} />
+            action={<Button type="button" variant="outline" aria-label={`Remove ${backend.label}`} onClick={() => onRemove(backend)}>Remove…</Button>} />
         </DangerZone>
       </TabsContent>
       <TabsContent value="related" className="execution-tab">

@@ -194,7 +194,10 @@ describe("SettingsView", () => {
     };
     renderSettings({ configuration: configuration, page: "backends" });
     expect(screen.getByRole("heading", { name: "Backends" })).toBeVisible();
-    expect(await screen.findByText(/Add an execution environment first/)).toBeVisible();
+    // With nothing to list, one empty state holds the action that comes first.
+    expect(await screen.findByText(/A backend runs in an execution environment/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Add environment" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Add backend" })).toBeNull();
     fireEvent.click(navLink("Environments"));
     expect(await screen.findByRole("heading", { name: "Environments", level: 1 })).toBeVisible();
     expect(screen.queryByLabelText(/principal/i)).toBeNull();
@@ -216,7 +219,7 @@ describe("SettingsView", () => {
     fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "Unsaved local" } });
     fireEvent.click(screen.getByTestId("settings-return"));
     expect(screen.getByRole("heading", { name: "Discard unsaved changes?" })).toBeVisible();
-    expect(window.location.pathname).toBe("/settings/environments/new/local");
+    expect(window.location.pathname).toBe("/settings/environments/~new/local");
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(screen.getByLabelText("Environment name")).toHaveValue("Unsaved local");
     const user = userEvent.setup();
@@ -482,9 +485,15 @@ describe("SettingsView", () => {
     await user.click(screen.getByRole("button", { name: "Edit Local" }));
     expect(window.location.pathname).toBe(settingsPath("environments", { mode: "edit", resourceId: local.id }));
     const length = window.history.length;
-    // Each "‹" link goes up one level through the entries it came down.
-    await user.click(within(screen.getByRole("region", { name: "Environment editor" })).getByRole("link", { name: "Local" }));
+    // The compact header holds the one "‹" link: the page's own, in place of
+    // "‹ Settings". Each goes up one level through the entries it came down.
+    const header = () => document.querySelector<HTMLElement>(".settings-view-header")!;
+    expect(within(screen.getByRole("region", { name: "Environment editor" })).queryByRole("link", { name: "Local" })).toBeNull();
+    await user.click(within(header()).getByRole("link", { name: "Local" }));
     await waitFor(() => expect(window.location.pathname).toBe(settingsPath("environments", { mode: "view", resourceId: local.id })));
+    await user.click(within(header()).getByRole("link", { name: "Environments" }));
+    await waitFor(() => expect(window.location.pathname).toBe(settingsPath("environments")));
+    expect(header().querySelector(".settings-view-back-slot")).toBeEmptyDOMElement();
     await user.click(screen.getByTestId("settings-list-link"));
     await waitFor(() => expect(window.location.pathname).toBe("/settings"));
     expect(await screen.findByRole("heading", { name: "Settings", level: 1 })).toBeVisible();

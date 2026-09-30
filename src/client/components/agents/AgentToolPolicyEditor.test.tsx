@@ -79,6 +79,13 @@ describe("AgentToolPolicyEditor", () => {
     expect(
       screen.getByRole("checkbox", { name: "Select all Threads tools" }),
     ).toHaveAccessibleDescription("Thread operations");
+    // Tool groups start collapsed behind a summary of their selection.
+    const threads = screen.getByRole("button", { name: "Threads" });
+    expect(threads).toHaveAttribute("aria-expanded", "false");
+    expect(threads).toHaveAccessibleDescription("0 of 1 tool Thread operations");
+    expect(
+      screen.queryByRole("checkbox", { name: "Thread status" }),
+    ).not.toBeInTheDocument();
   });
 
   it("switches between inherited and explicit complete policy", () => {

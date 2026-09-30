@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Callout } from "../ui/callout.js";
 import type { KeyValueItem } from "../ui/key-value-list.js";
+import { PathText } from "./detail-parts.js";
 import { AdvancedGroup, CheckboxGroup, SelectField, TextField, type ChoiceOption } from "./fields.js";
 import type { BackendDefinition, EnvironmentDefinition, TargetDefinition } from "./types.js";
 import { FieldErrors } from "./validation.js";
@@ -108,14 +109,14 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
       return [
         { label: "Transport", value: transportLabels[channel.type] },
         ...(channel.type === "process_stdio" ? [
-          { label: "Working directory", value: channel.workingDirectory, mono: true },
-          ...(channel.executablePath ? [{ label: "Executable", value: channel.executablePath, mono: true }] : []),
-          ...(channel.codexHome ? [{ label: "Codex home", value: channel.codexHome, mono: true }] : []),
-        ] : channel.type === "unix_websocket" ? [{ label: "Socket", value: channel.socketPath, mono: true }] : [
-          { label: "Endpoint", value: channel.url, mono: true },
+          { label: "Working directory", value: <PathText value={channel.workingDirectory} /> },
+          ...(channel.executablePath ? [{ label: "Executable", value: <PathText value={channel.executablePath} /> }] : []),
+          ...(channel.codexHome ? [{ label: "Codex home", value: <PathText value={channel.codexHome} /> }] : []),
+        ] : channel.type === "unix_websocket" ? [{ label: "Socket", value: <PathText value={channel.socketPath} /> }] : [
+          { label: "Endpoint", value: <PathText value={channel.url} /> },
           { label: "Token", value: channel.authentication.secret.source === "environment" ? `Environment variable ${channel.authentication.secret.variable}` : `File ${channel.authentication.secret.path}` },
         ]),
-        ...(configuration.tuiExecutablePath ? [{ label: "TUI executable", value: configuration.tuiExecutablePath, mono: true }] : []),
+        ...(configuration.tuiExecutablePath ? [{ label: "TUI executable", value: <PathText value={configuration.tuiExecutablePath} /> }] : []),
       ];
     },
     describePolicy: (value) => {
@@ -148,8 +149,8 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
       if (value.kind !== "claude_agent_sdk") return [];
       const configuration = value.moduleConfiguration;
       return [
-        { label: "Configuration", value: configuration.configDirectory ?? "The account's CLAUDE_CONFIG_DIR or ~/.claude", mono: Boolean(configuration.configDirectory) },
-        { label: "Executable", value: configuration.executablePath ?? "Installed Claude Code", mono: Boolean(configuration.executablePath) },
+        { label: "Configuration", value: configuration.configDirectory ? <PathText value={configuration.configDirectory} /> : "The account's CLAUDE_CONFIG_DIR or ~/.claude" },
+        { label: "Executable", value: configuration.executablePath ? <PathText value={configuration.executablePath} /> : "Installed Claude Code" },
         { label: "Start timeout", value: `${configuration.initializationTimeoutMs / 1000} s` },
       ];
     },
@@ -174,7 +175,7 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
     },
     describeConnection: (value) => value.kind === "grok_build" ? [
       { label: "Process", value: "Local ACP process in the workspace" },
-      { label: "Executable", value: value.moduleConfiguration.connection.channel.executablePath ?? "Installed Grok", mono: Boolean(value.moduleConfiguration.connection.channel.executablePath) },
+      { label: "Executable", value: value.moduleConfiguration.connection.channel.executablePath ? <PathText value={value.moduleConfiguration.connection.channel.executablePath} /> : "Installed Grok" },
     ] : [],
     describePolicy: () => [{ label: "Access", value: "Full access · networking enabled · no sandbox" }],
   },
@@ -196,7 +197,7 @@ function CodexConnectionEditor({ value, onChange, errors, disabled }: EditorProp
   const channel = connection.channel;
   const error = (field: string) => errors.under(`moduleConfiguration.connection.channel.${field}`);
   const tuiError = errors.under("moduleConfiguration.tuiExecutablePath");
-  const tui = <TextField label="Codex TUI executable path" mono disabled={disabled} value={configuration.tuiExecutablePath ?? ""} error={tuiError}
+  const tui = <TextField label="Codex TUI executable path" path disabled={disabled} value={configuration.tuiExecutablePath ?? ""} error={tuiError}
     description="Optional absolute path for the separately admitted Codex TUI."
     onChange={(tuiExecutablePath) => update({ ...configuration, tuiExecutablePath: tuiExecutablePath || undefined })} />;
   return <>
@@ -209,26 +210,26 @@ function CodexConnectionEditor({ value, onChange, errors, disabled }: EditorProp
       update({ ...configuration, connection: next });
     }} />
     {channel.type === "process_stdio" ? <>
-      <TextField label="Working directory" mono required disabled={disabled} value={channel.workingDirectory} error={error("workingDirectory")}
+      <TextField label="Working directory" path required disabled={disabled} value={channel.workingDirectory} error={error("workingDirectory")}
         description="Absolute directory on the execution host where Sedes starts Codex."
         onChange={(workingDirectory) => update({ ...configuration, connection: { ownership: "owned", channel: { ...channel, workingDirectory } } })} />
       <AdvancedGroup summary="Executable, Codex home, TUI" defaultOpen={Boolean(channel.executablePath || channel.codexHome || configuration.tuiExecutablePath)}
         forceOpen={Boolean(error("executablePath") || error("codexHome") || tuiError)}>
-        <TextField label="Codex executable path" mono disabled={disabled} value={channel.executablePath ?? ""} error={error("executablePath")}
+        <TextField label="Codex executable path" path disabled={disabled} value={channel.executablePath ?? ""} error={error("executablePath")}
           description="Optional absolute path on the execution host. Leave blank to use its installed executable."
           onChange={(executablePath) => update({ ...configuration, connection: { ownership: "owned", channel: { ...channel, executablePath: executablePath || undefined } } })} />
-        <TextField label="Codex home directory" mono disabled={disabled} value={channel.codexHome ?? ""} error={error("codexHome")}
+        <TextField label="Codex home directory" path disabled={disabled} value={channel.codexHome ?? ""} error={error("codexHome")}
           description="Optional native configuration and authentication directory on the execution host."
           onChange={(codexHome) => update({ ...configuration, connection: { ownership: "owned", channel: { ...channel, codexHome: codexHome || undefined } } })} />
         {tui}
       </AdvancedGroup>
     </> : channel.type === "unix_websocket" ? <>
-      <TextField label="Unix socket path" mono required disabled={disabled} value={channel.socketPath} error={error("socketPath")}
+      <TextField label="Unix socket path" path required disabled={disabled} value={channel.socketPath} error={error("socketPath")}
         description="Absolute socket path on the selected execution host. Sedes does not own the external app-server process."
         onChange={(socketPath) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, socketPath } } })} />
       <AdvancedGroup summary="TUI" defaultOpen={Boolean(configuration.tuiExecutablePath)} forceOpen={Boolean(tuiError)}>{tui}</AdvancedGroup>
     </> : <>
-      <TextField label="WebSocket endpoint" mono required disabled={disabled} value={channel.url} error={error("url")}
+      <TextField label="WebSocket endpoint" path required disabled={disabled} value={channel.url} error={error("url")}
         description="Use an explicit port. Plain ws:// is limited to literal loopback; other hosts require wss://."
         onChange={(url) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, url } } })} />
       <SelectField label="Capability token source" disabled={disabled} value={channel.authentication.secret.source}
@@ -236,7 +237,7 @@ function CodexConnectionEditor({ value, onChange, errors, disabled }: EditorProp
         onChange={(source) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: {
           type: "capability_token", secret: source === "environment" ? { source, variable: "" } : { source, path: "" },
         } } } })} />
-      {channel.authentication.secret.source === "protected_file" ? <TextField label="Token file reference" mono required disabled={disabled}
+      {channel.authentication.secret.source === "protected_file" ? <TextField label="Token file reference" path required disabled={disabled}
         value={channel.authentication.secret.path} error={error("authentication.secret.path")}
         description="An approved protected file on the execution host; enter its path, never the token."
         onChange={(path) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: { type: "capability_token", secret: { source: "protected_file", path } } } } })} />
@@ -288,13 +289,13 @@ function ClaudeConnectionEditor({ value, onChange, errors, disabled }: EditorPro
     <AdvancedGroup summary="Configuration directory, executable, start timeout"
       defaultOpen={Boolean(configuration.configDirectory || configuration.executablePath || configuration.initializationTimeoutMs !== 20_000)}
       forceOpen={Boolean(error("configDirectory") || error("executablePath") || error("initializationTimeoutMs"))}>
-      <TextField label="Claude configuration directory" mono disabled={disabled} value={configuration.configDirectory ?? ""} error={error("configDirectory")}
+      <TextField label="Claude configuration directory" path disabled={disabled} value={configuration.configDirectory ?? ""} error={error("configDirectory")}
         description="Optional absolute directory on the execution host. Leave blank to use that account's CLAUDE_CONFIG_DIR or ~/.claude, locally, over SSH, or through an outbound connection."
         onChange={(configDirectory) => {
           const { configDirectory: _previous, ...remaining } = configuration;
           update(configDirectory ? { ...remaining, configDirectory } : remaining);
         }} />
-      <TextField label="Claude executable path" mono disabled={disabled} value={configuration.executablePath ?? ""} error={error("executablePath")}
+      <TextField label="Claude executable path" path disabled={disabled} value={configuration.executablePath ?? ""} error={error("executablePath")}
         description="Optional absolute path on the execution host. Leave blank to use its installed executable."
         onChange={(executablePath) => update({ ...configuration, executablePath: executablePath || undefined })} />
       <TextField label="Initialization timeout" type="number" suffix="ms" disabled={disabled} value={String(configuration.initializationTimeoutMs)} error={error("initializationTimeoutMs")}
@@ -317,7 +318,7 @@ function GrokConnectionEditor({ value, onChange, errors, disabled }: EditorProps
   return <>
     <p className="execution-muted">Sedes starts a local Grok ACP process in each workspace.</p>
     <AdvancedGroup summary="Executable" defaultOpen={Boolean(configuration.connection.channel.executablePath)} forceOpen={Boolean(error)}>
-      <TextField label="Grok executable path" mono disabled={disabled} value={configuration.connection.channel.executablePath ?? ""} error={error}
+      <TextField label="Grok executable path" path disabled={disabled} value={configuration.connection.channel.executablePath ?? ""} error={error}
         description="Optional absolute path on the Sedes host."
         onChange={(executablePath) => onChange({ ...value, moduleConfiguration: { ...configuration, connection: { ownership: "owned", channel: { ...configuration.connection.channel, executablePath: executablePath || undefined } } } })} />
     </AdvancedGroup>

@@ -84,9 +84,11 @@ function changed<T>(draft: Draft<T> | undefined): boolean {
   return Boolean(draft && JSON.stringify(draft.value) !== draft.initial);
 }
 
-type Confirmation =
+type ConfirmationRequest =
   | { readonly kind: "remove-environment" | "remove-backend"; readonly id: string; readonly label: string; readonly revision: number }
   | { readonly kind: "revoke" | "reapprove"; readonly environmentId: string; readonly label: string; readonly pairingId: string; readonly pairingRevision: number; readonly revision: number };
+/** A confirmation belongs to the location it was opened at, and closes when navigation leaves it. */
+type Confirmation = ConfirmationRequest & { readonly owner: string };
 
 /** Configuration is principal-owned. Inventory filters, tabs and selection are client-local.
  * There is exactly one configuration snapshot and one mounted lifecycle controller
@@ -102,6 +104,7 @@ export function ExecutionSettings({ controls }: {
   const visible = Boolean(current);
   const { page, resourceId, mode } = location;
   const key = editorKey(current);
+  const currentPath = current ? pathOf(current) : undefined;
 
   const [environmentDraft, setEnvironmentDraft] = useState<Draft<EnvironmentDefinition>>();
   const [backendDraft, setBackendDraft] = useState<Draft<BackendDraft>>();
@@ -119,6 +122,8 @@ export function ExecutionSettings({ controls }: {
   const traversalBypass = useRef(false);
   const afterExit = useRef<(() => void) | undefined>(undefined);
   const backendSeed = useRef<string | undefined>(undefined);
+  /** The entity whose row asked for its Activity tab ("View activity"). */
+  const activityRequest = useRef<string | undefined>(undefined);
 
   const routeEditorOpen = Boolean(key);
   const defaultsDirty = Boolean(defaultsDraft);
@@ -229,7 +234,14 @@ export function ExecutionSettings({ controls }: {
   const splitFocus = useSettingsSplitFocus({
     root,
     location: current ? { path: pathOf(current), ...(current.resourceId ? { resourceId: current.resourceId } : {}), ...(current.mode ? { mode: current.mode } : {}) } : undefined,
-    onArrive: () => {
+    onArrive: (previous, next) => {
+      // A new visit to an entity opens on Overview, health first, unless its
+      // row asked for Activity; back from its own editor keeps the tab.
+      if (next.mode === "view" && next.resourceId && previous?.resourceId !== next.resourceId) {
+        const tabKey = `${page}:${next.resourceId}`;
+        if (activityRequest.current !== tabKey) setTabs(existing => ({ ...existing, [tabKey]: "overview" }));
+      }
+      activityRequest.current = undefined;
       state.clearFeedback();
       setSaveOwner(undefined);
       setAcceptIssues(undefined);
@@ -240,11 +252,23 @@ export function ExecutionSettings({ controls }: {
   });
   const confirmationFocus = useFocusReturn();
   const leaveFocus = useFocusReturn();
+  const requestConfirmation = (request: ConfirmationRequest) => { if (currentPath) setConfirmation({ ...request, owner: currentPath }); };
+  // SettingsView keeps this page mounted but hidden, while a confirmation is
+  // portalled: it shows only at its own location, and closes on leaving it.
+  const confirmationShown = Boolean(confirmation && confirmation.owner === currentPath);
+  useEffect(() => {
+    if (confirmation && !confirmationShown) setConfirmation(undefined);
+  }, [confirmation, confirmationShown]);
 
   const currentFilters = filters[page] ?? emptyFilters;
   const setCurrentFilters = useCallback((next: InventoryFilters) => setFilters(existing => ({ ...existing, [page]: next })), [page]);
   const tabOf = (kind: ExecutionPage, id: string): DetailTab => tabs[`${kind}:${id}`] ?? "overview";
   const setTab = (kind: ExecutionPage, id: string, tab: DetailTab) => setTabs(existing => ({ ...existing, [`${kind}:${id}`]: tab }));
+  const viewActivity = (kind: ExecutionPage, id: string) => {
+    setTab(kind, id, "activity");
+    activityRequest.current = `${kind}:${id}`;
+    navigate(settingsPath(kind, { mode: "view", resourceId: id }));
+  };
   const pausedReason = state.needsRefresh ? "Refresh the configuration before issuing runtime commands."
     : routeEditorOpen ? "Runtime controls are paused while configuration is being edited."
     : state.loading || state.saving ? "Runtime controls are paused while configuration is loading or saving." : undefined;
@@ -361,13 +385,13 @@ export function ExecutionSettings({ controls }: {
   const editPath = (kind: ExecutionPage, id: string) => settingsPath(kind, { mode: "edit", resourceId: id });
   const environmentActions = (environment: EnvironmentDefinition): RowAction[] => [
     { label: "Edit", onSelect: () => navigate(editPath("environments", environment.id)) },
-    { label: "View activity", onSelect: () => { setTab("environments", environment.id, "activity"); navigate(settingsPath("environments", { mode: "view", resourceId: environment.id })); } },
-    { label: "Remove…", destructive: true, disabled: !snapshot, onSelect: () => snapshot && setConfirmation({ kind: "remove-environment", id: environment.id, label: environment.label, revision: snapshot.revision }) },
+    { label: "View activity", onSelect: () => viewActivity("environments", environment.id) },
+    { label: "Remove…", destructive: true, disabled: !snapshot, onSelect: () => snapshot && requestConfirmation({ kind: "remove-environment", id: environment.id, label: environment.label, revision: snapshot.revision }) },
   ];
   const backendActions = (backend: BackendDefinition): RowAction[] => [
     { label: "Edit", onSelect: () => navigate(editPath("backends", backend.id)) },
-    { label: "View activity", onSelect: () => { setTab("backends", backend.id, "activity"); navigate(settingsPath("backends", { mode: "view", resourceId: backend.id })); } },
-    { label: "Remove…", destructive: true, disabled: !snapshot, onSelect: () => snapshot && setConfirmation({ kind: "remove-backend", id: backend.id, label: backend.label, revision: snapshot.revision }) },
+    { label: "View activity", onSelect: () => viewActivity("backends", backend.id) },
+    { label: "Remove…", destructive: true, disabled: !snapshot, onSelect: () => snapshot && requestConfirmation({ kind: "remove-backend", id: backend.id, label: backend.label, revision: snapshot.revision }) },
   ];
   const canAddBackend = Boolean(configuration && configuration.backends.length < 32 && configuration.executionEnvironments.length > 0);
   const addBackend = (environmentId?: string) => { backendSeed.current = environmentId; navigate(settingsPath("backends", { mode: "new" })); };
@@ -392,8 +416,14 @@ export function ExecutionSettings({ controls }: {
   const exitPath = () => settingsPath(page, settingsResourceParent(location));
 
   const selection = !mode ? "none" : mode === "view" ? "detail" : "editor";
-  const selectedEnvironment = page === "environments" && mode === "view" ? configuration?.executionEnvironments.find(entry => entry.id === resourceId) : undefined;
-  const selectedBackend = page === "backends" && mode === "view" ? configuration?.backends.find(entry => entry.id === resourceId) : undefined;
+  // Nothing to list yet: one empty state, with the action that fills the page.
+  const inventoryEmpty = Boolean(configuration && !mode && (page === "environments"
+    ? !configuration.executionEnvironments.length && !registrations.some(entry => entry.state === "pending")
+    : !configuration.backends.length));
+  const addEnvironment = () => navigate(settingsPath("environments", { mode: "new" }));
+  // Hidden, a detail shows nothing, so its menus and dialogs close with the page.
+  const selectedEnvironment = visible && page === "environments" && mode === "view" ? configuration?.executionEnvironments.find(entry => entry.id === resourceId) : undefined;
+  const selectedBackend = visible && page === "backends" && mode === "view" ? configuration?.backends.find(entry => entry.id === resourceId) : undefined;
   const listLabel = page === "environments" ? "Environments" : "Backends";
   const listBack = <SettingsBackLink href={settingsPath(page)} label={listLabel} />;
   const selectionMissing = Boolean(configuration && (mode === "view" || mode === "edit")
@@ -403,7 +433,14 @@ export function ExecutionSettings({ controls }: {
   const runtimeProps = snapshot ? { controls, snapshot, runtimeDisabled: pending || routeEditorOpen, pausedReason,
     onRuntime: state.updateRuntime, onRefresh: state.refreshRuntime } : undefined;
   const detailPane = (): ReactNode => {
-    if (!configuration || !snapshot) return null;
+    if (!configuration || !snapshot || !visible) return null;
+    if (inventoryEmpty) return page === "environments" || !configuration.executionEnvironments.length
+      ? <EmptyState icon={<Server />} title={page === "environments" ? "No environments yet" : "No backends yet"}
+        description={page === "environments" ? "Add this machine, an SSH host, or pair a host to choose where agents run."
+          : "A backend runs in an execution environment. Add one first, then add a backend to make a provider available."}
+        action={<Button type="button" disabled={pending} onClick={addEnvironment}><Plus />Add environment</Button>} />
+      : <EmptyState icon={<Server />} title="No backends yet" description="Add a backend to make a provider available to new threads."
+        action={<Button type="button" disabled={pending || !canAddBackend} onClick={() => addBackend()}><Plus />Add backend</Button>} />;
     if (!mode) return <EmptyState icon={<Server />} title={page === "environments" ? "Select an environment" : "Select a backend"}
       description={page === "environments" ? "Its status, backends and activity appear here." : "Its status, connections and activity appear here."} />;
     if (selectionMissing) return <div className="execution-detail"><SettingsDetailHeader back={listBack}
@@ -437,7 +474,7 @@ export function ExecutionSettings({ controls }: {
     if (mode === "pending" && registration && acceptDraft && acceptDraft.key === key) {
       const draft = acceptDraft;
       return <PendingHostDetail registration={registration} draft={draft.value} setDraft={value => setAcceptDraft({ ...draft, value })}
-        errors={acceptIssues ? mapRequestIssues(acceptIssues, acceptFields) : noErrors} disabled={pending || pairing.stale}
+        errors={acceptIssues ? mapRequestIssues(acceptIssues, acceptFields) : noErrors} disabled={pending || pairing.stale} dirty={changed(acceptDraft)}
         saving={pairing.busy && saveOwner === draft.key} saveError={acceptIssues?.length ? "Fix the highlighted fields to accept this host." : undefined}
         back={<SettingsBackLink stackOnly href={settingsPath("environments")} label="Environments" />}
         onAccept={() => void acceptHost()} onCancel={() => returnTo(settingsPath("environments"))} onDeny={denyHost} />;
@@ -459,11 +496,14 @@ export function ExecutionSettings({ controls }: {
       description={page === "environments" ? "Where agents run and which folders they can reach." : "Model providers available in each environment."}
       actions={<>
         <Button type="button" variant="ghost" size="icon" aria-label="Refresh" title="Refresh" disabled={state.loading || state.saving || pairing.busy} onClick={refresh}><RefreshCw /></Button>
-        {page === "environments"
-          ? <Button type="button" aria-label="Add environment" disabled={!configuration || pending || configuration.executionEnvironments.length >= 16}
-            onClick={() => navigate(settingsPath("environments", { mode: "new" }))}><Plus />Add environment</Button>
-          : <Button type="button" aria-label="Add backend" disabled={!configuration || pending || !canAddBackend}
-            title={configuration && !configuration.executionEnvironments.length ? "Add an execution environment first" : undefined}
+        {/* An empty inventory's empty state carries the one Add. */}
+        {inventoryEmpty ? null : page === "environments"
+          ? <Button type="button" variant="outline" aria-label="Add environment" disabled={!configuration || pending || configuration.executionEnvironments.length >= 16}
+            title={configuration && configuration.executionEnvironments.length >= 16 ? "An account holds at most 16 environments." : undefined}
+            onClick={addEnvironment}><Plus />Add environment</Button>
+          : <Button type="button" variant="outline" aria-label="Add backend" disabled={!configuration || pending || !canAddBackend}
+            title={configuration && !configuration.executionEnvironments.length ? "Add an execution environment first."
+              : configuration && configuration.backends.length >= 32 ? "An account holds at most 32 backends." : undefined}
             onClick={() => addBackend(currentFilters.environment || undefined)}><Plus />Add backend</Button>}
       </>}>
       {state.loading && !snapshot ? <div className="execution-loading" role="status" aria-label="Loading execution configuration">
@@ -478,9 +518,9 @@ export function ExecutionSettings({ controls }: {
         dirty={dirtyKeys.has("defaults")} saving={state.saving && saveOwner === "defaults"} savedAt={savedAtFor("defaults")}
         errors={mappedFailure("defaults", { kind: "document" }, defaultsFields)} error={failureFor("defaults")?.message} disabled={pending}
         onSave={() => void saveDefaults()} onCancel={() => { setDefaultsDraft(undefined); state.clearFeedback(); }} /> : null}
-      {snapshot && configuration ? <SettingsSplit wide={page === "backends" && selection === "editor"}
+      {snapshot && configuration ? <SettingsSplit wide={page === "backends" && selection === "editor"} empty={inventoryEmpty}
         listLabel={page === "environments" ? "Configured environments" : "Configured backends"}
-        list={page === "environments"
+        list={!visible ? null : page === "environments"
           ? <EnvironmentList snapshot={snapshot} filters={currentFilters} onFilters={setCurrentFilters} hosts={pairing.hosts} stale={pairing.stale}
             selectedId={mode === "view" || mode === "edit" ? resourceId : undefined} selectedRegistrationId={mode === "pending" ? resourceId : undefined} actions={environmentActions} />
           : <BackendList snapshot={snapshot} filters={currentFilters} onFilters={setCurrentFilters}
@@ -491,16 +531,16 @@ export function ExecutionSettings({ controls }: {
             {configuration.executionEnvironments.map(environment => <EnvironmentDetail key={environment.id} environment={environment} {...runtimeProps}
               selected={environment.id === selectedEnvironment?.id} tab={tabOf("environments", environment.id)} onTab={tab => setTab("environments", environment.id, tab)}
               hosts={pairing.hosts} stale={pairing.stale} renderBackends={renderEnvironmentBackends}
-              onRemove={entry => setConfirmation({ kind: "remove-environment", id: entry.id, label: entry.label, revision: snapshot.revision })}
-              onPairing={(entry, binding) => setConfirmation({ kind: binding.state === "revoked" ? "reapprove" : "revoke", environmentId: entry.id, label: entry.label,
+              onRemove={entry => requestConfirmation({ kind: "remove-environment", id: entry.id, label: entry.label, revision: snapshot.revision })}
+              onPairing={(entry, binding) => requestConfirmation({ kind: binding.state === "revoked" ? "reapprove" : "revoke", environmentId: entry.id, label: entry.label,
                 pairingId: binding.id, pairingRevision: binding.revision, revision: snapshot.revision })} />)}
             {configuration.backends.map(backend => <BackendDetail key={backend.id} backend={backend} {...runtimeProps}
               selected={backend.id === selectedBackend?.id} tab={tabOf("backends", backend.id)} onTab={tab => setTab("backends", backend.id, tab)}
-              onRemove={entry => setConfirmation({ kind: "remove-backend", id: entry.id, label: entry.label, revision: snapshot.revision })} />)}
+              onRemove={entry => requestConfirmation({ kind: "remove-backend", id: entry.id, label: entry.label, revision: snapshot.revision })} />)}
           </> : null}
       </SettingsSplit> : null}
     </SettingsPage>
-    {confirmationCopy ? <ConfirmDialog open={Boolean(confirmation)} onOpenChange={open => { if (!open) setConfirmation(undefined); }}
+    {confirmationCopy ? <ConfirmDialog open={confirmationShown} onOpenChange={open => { if (!open) setConfirmation(undefined); }}
       title={confirmationCopy.title} description={confirmationCopy.description} confirmLabel={confirmationCopy.confirmLabel} pendingLabel={confirmationCopy.pendingLabel}
       tone={confirmationCopy.tone} blockers={blockers} onConfirm={confirm} {...confirmationFocus} /> : null}
     <DiscardChangesDialog open={Boolean(leave)} onOpenChange={open => { if (!open) setLeave(undefined); }}

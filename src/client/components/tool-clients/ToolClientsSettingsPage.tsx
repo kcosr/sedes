@@ -1,5 +1,6 @@
+import "./tool-clients.css";
 import { useEffect, useState } from "react";
-import { ChevronLeft, KeyRound, Plus } from "lucide-react";
+import { KeyRound, Plus } from "lucide-react";
 import type {
   CreateToolClientRequest,
   ReplaceToolClientRequest,
@@ -35,7 +36,7 @@ import { DangerZone, DangerZoneItem } from "../settings/DangerZone.js";
 import { EntityList, EntityRow } from "../settings/EntityList.js";
 import { SaveBar } from "../settings/SaveBar.js";
 import { SettingsField, SwitchField } from "../settings/SettingsField.js";
-import { SettingsPage } from "../settings/SettingsPage.js";
+import { SettingsBackLink, SettingsPage } from "../settings/SettingsPage.js";
 import { SettingsSection } from "../settings/SettingsSection.js";
 import { useSettingsEscapeLevel } from "../settings/settings-escape.js";
 
@@ -288,12 +289,18 @@ export function ToolClientsSettingsPage({
     draft?.mode === "edit"
       ? clients.find(({ id }) => id === draft.clientId)
       : undefined;
+  // Compared with what the editor opened with: the create origin, or the saved client.
+  const draftOrigin =
+    draft?.mode === "create"
+      ? createOrigin
+      : selectedClient && draftFromClient(selectedClient);
   const draftEdited =
-    draft !== undefined &&
-    JSON.stringify(draft) !==
-      JSON.stringify(draft.mode === "create" ? createOrigin : selectedClient && draftFromClient(selectedClient));
-  // Escape closes an open editor (its "‹ Tool clients"), asking first when it has edits.
-  useSettingsEscapeLevel(draft ? () => (draftEdited ? setDiscarding(true) : openDraft(undefined)) : undefined);
+    draft !== undefined && JSON.stringify(draft) !== JSON.stringify(draftOrigin);
+  // Its "‹ Tool clients" and Escape close an open editor, asking first when it has edits.
+  const closeEditor = (): void => (draftEdited ? setDiscarding(true) : openDraft(undefined));
+  useSettingsEscapeLevel(draft ? closeEditor : undefined);
+  // With nothing to list, the empty state carries the one "New client" action.
+  const empty = options !== undefined && clients.length === 0 && !draft;
 
   return (
     <SettingsPage
@@ -301,10 +308,12 @@ export function ToolClientsSettingsPage({
       description="Issue revocable principal-scoped credentials for external Sedes CLI clients."
       width="wide"
       actions={
-        <Button disabled={!options || pending} onClick={startCreate}>
-          <Plus aria-hidden="true" />
-          New client
-        </Button>
+        options && !empty ? (
+          <Button variant="outline" disabled={pending} onClick={startCreate}>
+            <Plus aria-hidden="true" />
+            New client
+          </Button>
+        ) : undefined
       }
     >
       {loading ? (
@@ -325,11 +334,17 @@ export function ToolClientsSettingsPage({
           {error || "Tool clients could not be loaded."}
         </Callout>
       ) : null}
-      {options && clients.length === 0 && !draft ? (
+      {empty ? (
         <EmptyState
           icon={<KeyRound />}
           title="No tool clients yet"
           description="Create one to give an external Sedes CLI its own revocable credential."
+          action={
+            <Button disabled={pending} onClick={startCreate}>
+              <Plus aria-hidden="true" />
+              New client
+            </Button>
+          }
         />
       ) : null}
       {options && (clients.length > 0 || draft) ? (
@@ -374,6 +389,7 @@ export function ToolClientsSettingsPage({
                 resources={controls.resources}
                 endpoint={controls.endpoint}
                 disabled={pending || selectedClient?.state === "revoked"}
+                dirty={draftEdited}
                 pending={pending}
                 error={error}
                 fieldError={fieldError}
@@ -386,7 +402,7 @@ export function ToolClientsSettingsPage({
                 onCancel={() =>
                   openDraft(selectedClient ? draftFromClient(selectedClient) : undefined)
                 }
-                onClose={() => openDraft(undefined)}
+                onClose={closeEditor}
                 onRotate={
                   selectedClient && selectedClient.state !== "revoked"
                     ? () => setConfirmation({ kind: "rotate", client: selectedClient })
@@ -400,8 +416,9 @@ export function ToolClientsSettingsPage({
               />
             ) : (
               <EmptyState
-                variant="inline"
-                title="Select a client to inspect it, or create a new one."
+                icon={<KeyRound />}
+                title="Select a client"
+                description="Inspect or edit it here, or create a new one."
               />
             )}
           </section>
@@ -456,6 +473,7 @@ function ToolClientEditor({
   resources,
   endpoint,
   disabled,
+  dirty,
   pending,
   error,
   fieldError,
@@ -473,6 +491,8 @@ function ToolClientEditor({
   readonly resources: ToolClientSettingsResources;
   readonly endpoint: string;
   readonly disabled: boolean;
+  /** The draft differs from what the editor opened with. */
+  readonly dirty: boolean;
   readonly pending: boolean;
   readonly error: string;
   readonly fieldError?: DraftError;
@@ -507,32 +527,23 @@ function ToolClientEditor({
     );
   const httpWarning = new URL(endpoint).protocol === "http:";
   const revoked = client?.state === "revoked";
-  const dirty =
-    draft.mode === "create" ||
-    (client !== undefined &&
-      JSON.stringify(draft) !== JSON.stringify(draftFromClient(client)));
   const errorFor = (field: DraftField) =>
     fieldError?.field === field ? fieldError.message : undefined;
 
   return (
-    <div className="settings-pane-form">
+    <div className="settings-pane-form tool-client-editor">
       <header className="settings-pane-header">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
+        <SettingsBackLink
+          label="Tool clients"
           className="settings-master-detail-back"
-          onClick={onClose}
-        >
-          <ChevronLeft aria-hidden="true" />
-          Tool clients
-        </Button>
+          onNavigate={onClose}
+        />
         <h2 className="settings-pane-title">
           {draft.mode === "create" ? "New tool client" : client?.name}
         </h2>
         <p className="settings-pane-meta">
           {client
-            ? `Created ${formatTime(client.createdAt)} · Updated ${formatTime(client.updatedAt)} · ${client.lastUsedAt ? `Last used ${formatTime(client.lastUsedAt)}` : "Never used"}`
+            ? clientTimeline(client)
             : "The credential will be shown once after creation."}
         </p>
       </header>
@@ -542,19 +553,20 @@ function ToolClientEditor({
         </Callout>
       ) : null}
       {revoked ? (
-        <Callout title="Revoked">
+        <Callout>
           Tool client revoked. Its credentials can no longer be used.
         </Callout>
       ) : null}
-      {httpWarning && !revoked ? (
-        <Callout tone="warning" title="This server uses HTTP">
-          Tool client credentials cross the network in cleartext; prefer HTTPS
-          through Tailscale Serve.
+      {client?.availability === "needs_attention" && !revoked ? (
+        <Callout tone="warning" role="status">
+          Needs attention: a selected tool or configured default is no longer
+          available.
         </Callout>
       ) : null}
-      {client?.availability === "needs_attention" && !revoked ? (
-        <Callout tone="warning" role="status" title="Needs attention">
-          A selected tool or configured default is no longer available.
+      {httpWarning && !revoked ? (
+        <Callout tone="warning">
+          This server uses HTTP, so tool client credentials cross the network
+          in cleartext. Prefer HTTPS through Tailscale Serve.
         </Callout>
       ) : null}
       <SettingsSection title="Client" card>
@@ -593,12 +605,14 @@ function ToolClientEditor({
         ) : null}
         {riskyTools.length > 0 ? (
           <Callout tone="warning" role="status">
-            Selected tools can start model work, create durable side effects,
-            or make destructive application changes. Grant only what this
-            client needs.
+            Selected tools marked High risk can start model work or make
+            durable or destructive changes. Grant only what this client needs.
           </Callout>
         ) : null}
         <ExactToolSelector
+          // Each client opens with its groups collapsed (a create keeps its
+          // request id, so its groups stay as they were once it is saved).
+          key={draft.requestId}
           groups={options.groups}
           selectedToolIds={draft.toolIds}
           unavailableToolIds={unavailableToolIds}
@@ -642,8 +656,9 @@ function ToolClientEditor({
         <SettingsField
           label="Allowed environments"
           description="The default environment is always allowed."
+          layout="stacked"
         >
-          <div className="settings-choice-group-options" data-layout="column">
+          <div className="tool-client-environments">
             {options.environments.map((environment) => (
               <div className="settings-choice" key={environment.id}>
                 <Checkbox
@@ -729,7 +744,7 @@ function ToolClientEditor({
               title="Revoke client"
               description="Permanently stop every credential for this client. This can't be undone."
               action={
-                <Button variant="destructive" disabled={disabled} onClick={onRevoke}>
+                <Button variant="outline" disabled={disabled} onClick={onRevoke}>
                   Revoke…
                 </Button>
               }
@@ -740,6 +755,7 @@ function ToolClientEditor({
       {revoked ? null : (
         <SaveBar
           dirty={dirty}
+          creating={draft.mode === "create"}
           saving={pending}
           savedAt={savedAt}
           saveLabel={draft.mode === "create" ? "Create client" : "Save"}
@@ -939,6 +955,17 @@ function environmentSummary(
   return additional > 0
     ? `${defaultLabel} + ${additional} allowed`
     : `${defaultLabel} only`;
+}
+
+/** "Created … · Updated … · Last used …", leaving out an update that is the creation. */
+function clientTimeline(client: ToolClient): string {
+  return [
+    `Created ${formatTime(client.createdAt)}`,
+    client.updatedAt === client.createdAt ? undefined : `Updated ${formatTime(client.updatedAt)}`,
+    client.lastUsedAt ? `Last used ${formatTime(client.lastUsedAt)}` : "Never used",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function formatTime(value: string): string {

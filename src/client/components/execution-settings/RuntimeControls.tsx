@@ -10,7 +10,7 @@ import { StatusPill } from "../ui/status-pill.js";
 import type { Tone } from "../ui/tone.js";
 import { useFocusReturn } from "../settings/use-focus-return.js";
 import { errorMessage } from "./fields.js";
-import { actionLabels, applyLabels, atLeast, preferenceLabels, presentRuntime, upgradeLabels, type RuntimeAction, type RuntimeActionPresentation, type RuntimePresentation } from "./runtime-presentation.js";
+import { actionLabels, applyLabels, atLeast, preferenceLabels, presentRuntime, upgradeLabels, type RuntimeAction, type RuntimeActionPresentation, type RuntimePresentation, type StatusPresentation } from "./runtime-presentation.js";
 import type { ConfigurationControls } from "./useConfiguration.js";
 
 const confirmationNotes: Partial<Record<RuntimeAction, string>> = {
@@ -232,12 +232,12 @@ export function useRuntimeController({ controls, revision, resourceKind, resourc
 }
 
 /** The contextual command: the state's primary action, or Refresh status while a command is unsettled. */
-export function RuntimePrimaryAction({ controller, size = "default" }: { readonly controller: RuntimeController; readonly size?: "default" | "sm" }): React.JSX.Element | null {
+export function RuntimePrimaryAction({ controller }: { readonly controller: RuntimeController }): React.JSX.Element | null {
   const { presentation, unsettled, busy, paused, describedBy } = controller;
-  if (unsettled) return <Button type="button" size={size} disabled={busy} onClick={controller.refreshStatus}>Refresh status</Button>;
+  if (unsettled) return <Button type="button" disabled={busy} onClick={controller.refreshStatus}>Refresh status</Button>;
   const primary = presentation.primary;
   if (!primary) return null;
-  return <Button type="button" size={size} variant={primary.emphasis} disabled={paused} aria-describedby={describedBy}
+  return <Button type="button" variant={primary.emphasis} disabled={paused} aria-describedby={describedBy}
     onClick={() => controller.requestAction(primary.action)}>{primary.label}</Button>;
 }
 
@@ -252,7 +252,19 @@ export function RuntimeMenuItems({ controller, emphasis }: { readonly controller
   const actions = controller.presentation.secondary.filter(entry => entry.emphasis === emphasis)
     .sort((a, b) => menuOrder.indexOf(a.action) - menuOrder.indexOf(b.action));
   return <>{actions.map((entry) => <DropdownMenuItem key={entry.action} variant={entry.emphasis}
-    disabled={controller.paused || controller.unsettled} onSelect={() => controller.requestAction(entry.action)}>{entry.label}</DropdownMenuItem>)}</>;
+    disabled={controller.paused || (controller.unsettled && !stopsUnknown(controller, entry.action))}
+    onSelect={() => controller.requestAction(entry.action)}>{entry.label}</DropdownMenuItem>)}</>;
+}
+
+/** While a command's outcome is unknown, Stop alone stays available: it checks that command first. */
+function stopsUnknown(controller: RuntimeController, action: RuntimeAction): boolean {
+  return action === "stop" && controller.canStopUnknown;
+}
+
+/** Whether the menu has a command available now; otherwise its trigger is disabled. */
+export function hasAvailableRuntimeMenuItems(controller: RuntimeController): boolean {
+  if (controller.paused) return false;
+  return !controller.unsettled || controller.presentation.secondary.some(entry => stopsUnknown(controller, entry.action));
 }
 
 /** Whether the detail's actions menu offers a destructive lifecycle command. */
@@ -267,43 +279,51 @@ export function hasRuntimeMenuItems(controller: RuntimeController): boolean {
 
 /**
  * Command feedback under the detail header, visible on every tab: why
- * commands are paused, the last command's error, and its notice.
+ * commands are paused, one Callout for what went wrong (the last command's
+ * error over the runtime's own last error), and a command's notice.
  */
 export function RuntimeFeedback({ controller }: { readonly controller: RuntimeController }): React.JSX.Element | null {
-  const { disabled, disabledReason, error, notice, reasonId, runtime } = controller;
+  const { disabled, disabledReason, error, notice, reasonId, runtime, presentation } = controller;
   const reason = disabled && disabledReason;
-  // The runtime's own error is part of the health summary; do not repeat it.
-  const commandError = error && error.message !== runtime?.lastError ? error : undefined;
-  if (!reason && !commandError && !notice) return null;
+  const lastError = runtime?.lastError ?? undefined;
+  const commandError = error && error.message !== lastError ? error : undefined;
+  const lastErrorTone: Tone = presentation.tone === "danger" ? "danger" : "warning";
+  const problemTone: Tone = commandError && (!lastError || atLeast(commandError.tone, lastErrorTone)) ? commandError.tone : lastErrorTone;
+  if (!reason && !commandError && !lastError && !notice) return null;
   return <div className="execution-runtime-feedback">
     {reason ? <p role="status" id={reasonId} className="execution-muted">{disabledReason}</p> : null}
-    {commandError ? <Callout tone={commandError.tone} role="alert">{commandError.message}</Callout> : null}
+    {commandError || lastError ? <Callout tone={problemTone} role="alert" title={commandError && lastError ? commandError.message : undefined}>
+      {lastError ?? commandError?.message}</Callout> : null}
     {notice ? <Callout tone="info" role="status">{notice}</Callout> : null}
   </div>;
 }
 
 /**
- * The top of Overview: the runtime's state, its last error, and what to do
- * about it. An unreachable host is obvious here without opening Activity.
+ * The top of Overview: what the runtime is doing, in words. The detail
+ * header carries the one status pill and the primary action, and the
+ * feedback under it any error, so this names a runtime state only where it
+ * differs from the header's (a paired host can be online while its runtime
+ * is unknown).
  */
-export function RuntimeHealth({ controller, children }: { readonly controller: RuntimeController; readonly children?: React.ReactNode }): React.JSX.Element {
-  const { presentation, runtime, unsettled, awaitingOutcome, canStopUnknown, paused, label } = controller;
-  const lastError = runtime?.lastError;
-  const lastErrorTone: Tone = presentation.tone === "danger" ? "danger" : "warning";
-  const actionNeeded = atLeast(presentation.tone, "warning") && !unsettled;
-  const primary = actionNeeded ? <RuntimePrimaryAction controller={controller} size="sm" /> : null;
+export function RuntimeHealth({ controller, status, children }: {
+  readonly controller: RuntimeController;
+  /** The state the detail header's pill shows. */
+  readonly status: StatusPresentation;
+  readonly children?: React.ReactNode;
+}): React.JSX.Element {
+  const { presentation, unsettled, awaitingOutcome, canStopUnknown, label } = controller;
+  const pills = [
+    { label: presentation.headline, tone: presentation.headlineTone },
+    ...(presentation.qualifier ? [{ label: presentation.qualifier, tone: presentation.qualifierTone ?? "neutral" }] : []),
+  ].filter(pill => pill.label !== status.label);
   return <section aria-label={`${label} status`} className="execution-health">
-    <div className="execution-health-status">
-      <StatusPill tone={presentation.headlineTone}>{presentation.headline}</StatusPill>
-      {presentation.qualifier ? <StatusPill tone={presentation.qualifierTone}>{presentation.qualifier}</StatusPill> : null}
-    </div>
-    <p className="execution-health-detail">{presentation.detail}</p>
-    {lastError ? <Callout tone={lastErrorTone} role="alert" action={primary}>{lastError}</Callout>
-      : primary ? <div className="execution-actions">{primary}</div> : null}
-    {unsettled ? <div className="execution-health-unsettled">
-      <p className="execution-muted">{awaitingOutcome ? "Checking the outcome automatically. " : ""}{canStopUnknown ? "Stop checks the earlier command before ending this runtime." : "Other actions wait until this operation settles."}</p>
-      {canStopUnknown ? <Button type="button" size="sm" variant="destructive" disabled={paused} onClick={() => controller.requestAction("stop")}>Stop</Button> : null}
+    {pills.length ? <div className="execution-health-status">
+      <span className="execution-health-label">Runtime</span>
+      {pills.map(pill => <StatusPill key={pill.label} tone={pill.tone}>{pill.label}</StatusPill>)}
     </div> : null}
+    <p className="execution-health-detail">{presentation.detail}</p>
+    {unsettled ? <p className="execution-muted">{awaitingOutcome ? "Checking the outcome automatically. " : ""}
+      {canStopUnknown ? "Other actions wait until it settles; Stop is in the actions menu." : "Other actions wait until this operation settles."}</p> : null}
     {children}
   </section>;
 }

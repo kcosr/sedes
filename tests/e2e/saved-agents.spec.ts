@@ -35,9 +35,9 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     const settingsNavigation = page.getByTestId("desktop-sidebar").getByRole("navigation", { name: "Settings pages", exact: true });
     await expect(settingsNavigation.getByRole("link", { name: "Agents", exact: true })).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("heading", { name: "Agents", level: 1 })).toBeVisible();
-    await expect(page.getByText("No Agents yet.")).toBeVisible();
+    await expect(page.getByText("No Agents yet", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Create Agent" }).click();
-    await expect(page).toHaveURL("/settings/agents/new");
+    await expect(page).toHaveURL("/settings/agents/~new");
 
     await page.getByRole("textbox", { name: "Name" }).fill("Careful reviewer");
     await page
@@ -91,6 +91,8 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     });
     await expect(enableTools).toBeEnabled();
     await enableTools.click();
+    // Tool groups are collapsed: open Context to reach its tools.
+    await page.getByRole("button", { name: "Context", exact: true }).click();
     const agentContext = page.getByRole("checkbox", { name: "Agent context" });
     await expect(agentContext).toBeEnabled();
     await agentContext.click();
@@ -188,7 +190,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await expectNoPageOverflow(page);
     // A phone stacks: the editor alone, with the way back to the list.
     await expect(savedAgents).toBeHidden();
-    await expect(agentEditor.getByRole("link", { name: "Agents", exact: true })).toBeVisible();
+    await expect(page.getByTestId("settings-view").locator(".settings-view-header").getByRole("link")).toHaveText(["Agents"]);
     await capture(page, testInfo, "saved-agent-editor-mobile.png");
     await page.setViewportSize({ width: 390, height: 430 });
     await expectNoPageOverflow(page);
@@ -396,7 +398,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await expect(page).toHaveURL("/settings/agents");
     await agentsListed;
     browserDiagnostics.allowNetworkFailures = false;
-    await expect(page.getByText("No Agents yet.")).toBeVisible();
+    await expect(page.getByText("No Agents yet", { exact: true })).toBeVisible();
 
     const retainedResponse = await page.request.get(
       `/api${threadPath}?activityDetail=full`,
@@ -600,7 +602,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await expect(page.getByRole("main").getByTestId("new-thread-trigger")).toBeVisible();
     await expect(page.getByTestId("settings-view")).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Saved Agents" })).toHaveCount(0);
-    await page.goto("/settings/agents/new");
+    await page.goto("/settings/agents/~new");
     await page.getByRole("textbox", { name: "Name" }).fill("Health probe");
     await selectProjectIfNeeded(page, repositoryLabel);
     await selectRadixOption(

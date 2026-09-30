@@ -173,14 +173,17 @@ describe("DangerZone", () => {
         <DangerZoneItem
           title="Remove environment"
           description="Its backends are removed too. This can't be undone."
-          action={<Button variant="destructive">Remove…</Button>}
+          action={<Button variant="outline">Remove…</Button>}
         />
+        <DangerZoneItem tone="neutral" title="Reapprove pairing" action={<Button variant="outline">Reapprove…</Button>} />
       </DangerZone>,
     );
     const section = screen.getByRole("region", { name: "Danger zone" });
     expect(section).toHaveAttribute("data-variant", "danger");
     expect(container.querySelector("[data-slot=settings-section-body]")).toHaveAttribute("data-card", "true");
     expect(within(section).getByText("Remove environment")).toHaveAttribute("data-slot", "danger-zone-title");
-    expect(within(section).getByRole("button", { name: "Remove…" })).toHaveAttribute("data-variant", "destructive");
+    // Items are destructive unless marked neutral; the kit styles their outline triggers red.
+    const items = container.querySelectorAll("[data-slot=danger-zone-item]");
+    expect([...items].map((item) => item.getAttribute("data-tone"))).toEqual(["danger", "neutral"]);
   });
 });

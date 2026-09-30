@@ -89,7 +89,9 @@ describe("execution configuration administration", () => {
     expect(detailHeading("Build host")).toHaveFocus();
     expect(rowOf("Build host").querySelector("a")).toHaveAttribute("aria-current", "page");
     const view = detail("Build host");
-    expect(within(view).getByRole("region", { name: "Build host status" })).toHaveTextContent("Connected");
+    // One status pill, in the header; the health summary says it in words.
+    expect(within(view).getAllByText("Connected")).toHaveLength(1);
+    expect(within(view).getByRole("region", { name: "Build host status" })).toHaveTextContent("Sidecar 1 is up to date.");
     expect(within(view).getByText("build-host")).toBeVisible();
     await user.click(within(view).getByRole("tab", { name: /^Backends/u }));
     expect(within(view).getByRole("link", { name: "Build Pi" })).toHaveAttribute("href", "/settings/backends/pi-remote");
@@ -126,9 +128,12 @@ describe("execution configuration administration", () => {
     const status = await screen.findByRole("region", { name: "Build host status" });
     expect(rowOf("Build host")).toHaveTextContent("Recovery required");
     expect(rowOf("Build host")).not.toHaveTextContent("Unreachable");
-    expect(within(status).getByText("Recovery required")).toBeVisible();
-    expect(within(status).getByRole("alert")).toHaveTextContent("Confirm the previous sidecar and its children have stopped.");
-    expect(within(status).getByRole("button", { name: "Retry connection" })).toBeEnabled();
+    // The header carries the one pill and the primary action; one Callout the error.
+    const view = detail("Build host");
+    expect(within(view).getAllByText("Recovery required")).toHaveLength(1);
+    expect(within(view).getAllByRole("alert").map(alert => alert.textContent)).toEqual(["Confirm the previous sidecar and its children have stopped."]);
+    expect(within(view).getAllByRole("button", { name: "Retry connection" })).toHaveLength(1);
+    expect(within(within(view).getByRole("group", { name: "Actions" })).getByRole("button", { name: "Retry connection" })).toBeEnabled();
     expect(within(status).getByRole("button", { name: "Review" })).toBeVisible();
     const user = userEvent.setup();
     await user.click(within(detail("Build host")).getByRole("tab", { name: "Activity" }));
@@ -256,7 +261,9 @@ describe("execution configuration administration", () => {
     fireEvent.change(screen.getByLabelText("Filter by status"), { target: { value: "attention" } });
     const row = rowOf("Disabled but running");
     expect(within(row).getByText("Backend disabled")).toBeVisible();
-    expect(within(row).getByText("Disabled")).toBeVisible();
+    // Fixed attributes read in the subtitle; the status is the row's one pill.
+    expect(within(row).getByText("Pi SDK · 1 connection · Disabled")).toBeVisible();
+    expect(within(row).getByTitle("Backend disabled")).toHaveAttribute("data-slot", "status-pill");
   });
 
   it("prefills scoped backend creation and opens the new backend after saving every connection in its environment", async () => {
@@ -266,7 +273,7 @@ describe("execution configuration administration", () => {
     await user.click(await screen.findByRole("tab", { name: /^Backends/u }));
     expect(screen.getByText("No backends in this environment.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Add backend" }));
-    expect(window.location.pathname).toBe("/settings/backends/new");
+    expect(window.location.pathname).toBe("/settings/backends/~new");
     expect(screen.getByLabelText("Execution environment")).toHaveValue(remoteId);
     expect(within(screen.getByLabelText("Backend type")).getByRole("option", { name: "Grok" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "Remote builder" } });
@@ -418,6 +425,45 @@ describe("execution configuration administration", () => {
     expect(screen.queryByRole("link", { name: "Build host" })).toBeNull();
   });
 
+  it("closes a removal confirmation when navigation leaves its resource, and keeps it closed on return", async () => {
+    const api = renderAt(environmentPath(remoteId), controls());
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Remove Build host" }));
+    expect(screen.getByRole("dialog", { name: "Remove Build host?" })).toBeVisible();
+    // Another settings page: this page stays mounted but hidden.
+    act(() => navigate("/settings/general"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove Build host?" })).toBeNull());
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.pathname).toBe(environmentPath(remoteId)));
+    expect(await screen.findByRole("button", { name: "Remove Build host" })).toBeVisible();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    // Another location of the same page, from a row menu's confirmation.
+    await user.click(screen.getByRole("button", { name: "Actions for Local" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Remove…" }));
+    expect(screen.getByRole("dialog", { name: "Remove Local?" })).toBeVisible();
+    act(() => navigate("/settings/environments"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove Local?" })).toBeNull());
+    expect(api.saveConfiguration).not.toHaveBeenCalled();
+  });
+
+  it("opens an entity on Overview each visit unless its row asked for Activity, and keeps the tab back from its editor", async () => {
+    renderAt(environmentPath(remoteId));
+    const user = userEvent.setup();
+    const selected = () => within(detail("Build host")).getByRole("tab", { selected: true });
+    await user.click(within(await screen.findByRole("region", { name: "Build host details" })).getByRole("tab", { name: "Activity" }));
+    await user.click(within(detail("Build host")).getByRole("button", { name: "Edit Build host" }));
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.pathname).toBe(environmentPath(remoteId)));
+    expect(selected()).toHaveAccessibleName("Activity");
+    await user.click(screen.getByRole("link", { name: "Local" }));
+    await user.click(screen.getByRole("link", { name: "Build host" }));
+    expect(selected()).toHaveAccessibleName("Overview");
+    await user.click(screen.getByRole("button", { name: "Actions for Local" }));
+    await user.click(await screen.findByRole("menuitem", { name: "View activity" }));
+    expect(within(detail("Local")).getByRole("tab", { selected: true })).toHaveAccessibleName("Activity");
+  });
+
   it("offers removal from a row menu and lists what blocks it", async () => {
     const document = configuration();
     document.backends.push(backendEditors.pi.createBackend("pi-local"));
@@ -536,10 +582,10 @@ describe("execution configuration administration", () => {
     const api = renderAt("/settings/environments");
     await waitFor(() => expect(screen.getByRole("button", { name: "Add environment" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Add environment" }));
-    expect(window.location.pathname).toBe("/settings/environments/new");
+    expect(window.location.pathname).toBe("/settings/environments/~new");
     expect(screen.getByRole("button", { name: "Local machine" })).toBeDisabled();
     fireEvent.click(screen.getByRole("link", { name: "SSH host" }));
-    expect(window.location.pathname).toBe("/settings/environments/new/ssh");
+    expect(window.location.pathname).toBe("/settings/environments/~new/ssh");
     expect(screen.getByRole("heading", { name: "New SSH environment" })).toHaveFocus();
     fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "New host" } });
     fireEvent.change(screen.getByLabelText("SSH host alias"), { target: { value: "new-host" } });
@@ -565,7 +611,7 @@ describe("execution configuration administration", () => {
   });
 
   it("maps schema paths to the edited environment's fields and never carries them to another entity", async () => {
-    const api = renderAt("/settings/environments/new/ssh");
+    const api = renderAt("/settings/environments/~new/ssh");
     fireEvent.change(await screen.findByLabelText("Environment name"), { target: { value: "Broken host" } });
     fireEvent.change(screen.getByLabelText("SSH host alias"), { target: { value: "broken" } });
     fireEvent.change(screen.getByLabelText("Workspace root 1"), { target: { value: "relative/path" } });
@@ -664,7 +710,7 @@ describe("execution configuration administration", () => {
   });
 
   it("explains a token variable name the schema rejects on its own field", async () => {
-    const api = renderAt("/settings/backends/new");
+    const api = renderAt("/settings/backends/~new");
     fireEvent.change(await screen.findByLabelText("Execution environment"), { target: { value: localId } });
     fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "Remote Codex" } });
     fireEvent.change(screen.getByLabelText("Connection transport"), { target: { value: "tcp_websocket" } });
@@ -706,7 +752,7 @@ describe("execution configuration administration", () => {
   });
 
   it.each([localId, remoteId, outboundId])("saves Claude on %s with the execution account's native configuration default", async (environmentId) => {
-    const api = renderAt("/settings/backends/new", controls(configurationWithOutbound()));
+    const api = renderAt("/settings/backends/~new", controls(configurationWithOutbound()));
     fireEvent.change(await screen.findByLabelText("Execution environment"), { target: { value: environmentId } });
     fireEvent.change(screen.getByLabelText("Backend type"), { target: { value: "claude_agent_sdk" } });
     fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "Claude" } });
@@ -774,7 +820,7 @@ describe("execution configuration administration", () => {
   });
 
   it("builds model policy rules from identifier chips and preserves identifier dimensions", async () => {
-    const api = renderAt("/settings/backends/new");
+    const api = renderAt("/settings/backends/~new");
     fireEvent.change(await screen.findByLabelText("Execution environment"), { target: { value: localId } });
     fireEvent.change(screen.getByLabelText("Backend type"), { target: { value: "pi" } });
     fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "Pi SDK" } });

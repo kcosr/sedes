@@ -2,14 +2,17 @@
    layouts (components/settings/*). Tokens only. Components carry a
    data-slot per part; these rules are the kit's only styling. */
 
-/* ── Page ── */
+/* ── Page ──
+   Every page starts at the left edge of one centred frame as wide as the
+   wide pages, so moving between a narrow and a wide page keeps the title in
+   place: a narrow page stops short on the right instead. */
 [data-slot="settings-page"] {
   container: settings-page / inline-size;
   display: grid;
   width: 100%;
   max-width: var(--settings-page-width);
   min-width: 0;
-  margin-inline: auto;
+  margin-inline: max(0px, (100% - var(--settings-page-width-wide)) / 2) auto;
   align-content: start;
   gap: var(--space-6);
 }
@@ -92,6 +95,18 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* Page and detail header actions take the touch size on every settings page
+   (menu triggers carry the trigger's data-slot, so match both). */
+@media (max-width: 819px), (pointer: coarse) {
+  [data-slot="settings-page-actions"] :is([data-slot="button"], [data-slot="dropdown-menu-trigger"]):not([data-size="icon-xs"]) {
+    min-height: var(--control-default);
+  }
+
+  [data-slot="settings-page-actions"] :is([data-slot="button"], [data-slot="dropdown-menu-trigger"])[data-size^="icon"]:not([data-size="icon-xs"]) {
+    min-width: var(--control-default);
+  }
 }
 
 [data-slot="settings-page-body"] {
@@ -337,11 +352,12 @@
   background: var(--background);
   /* Full bleed across the scroller's gutters and its bottom padding (a
      sticky box stops at the scroller's padding edge), with a hairline on
-     top. Nothing follows the bar, so the bleed below covers only padding. */
+     top. The background bleed starts at the bar's top edge, so the 1px of
+     the border bleed above it shows. Nothing follows the bar, so the bleed
+     below covers only padding. */
   box-shadow:
-    0 0 0 100vmax var(--background),
-    0 -1px 0 100vmax var(--border-soft),
-    0 -1px 0 100vmax var(--background);
+    0 100vmax 0 100vmax var(--background),
+    0 -1px 0 100vmax var(--border-soft);
   clip-path: inset(-1px -100vmax -100vmax);
 }
 
@@ -628,6 +644,19 @@
   gap: var(--space-2);
 }
 
+/* A trigger is a destructive outline; the solid red is its ConfirmDialog's. */
+[data-slot="danger-zone-item"][data-tone="danger"] [data-slot="button"][data-variant="outline"] {
+  border-color: var(--destructive-border);
+  color: var(--destructive);
+}
+
+@media (hover: hover) {
+  [data-slot="danger-zone-item"][data-tone="danger"] [data-slot="button"][data-variant="outline"]:hover {
+    background: var(--destructive-soft);
+    color: var(--destructive);
+  }
+}
+
 /* ── Search above an inventory list ── */
 [data-slot="settings-search"] {
   position: relative;
@@ -691,6 +720,20 @@
   min-height: 16rem;
 }
 
+/* Nothing to list yet: the detail pane's empty state (with its call to
+   action) takes the list's place, split or stacked. */
+[data-slot="settings-split"][data-empty] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+[data-slot="settings-split"][data-empty] > [data-slot="settings-split-list"] {
+  display: none;
+}
+
+[data-slot="settings-page"] [data-slot="settings-split"][data-empty] > [data-slot="settings-split-detail"] {
+  display: grid;
+}
+
 @container settings-content (width < 960px) {
   [data-slot="settings-page"][data-selection="none"] [data-slot="settings-split-detail"] {
     display: none;
@@ -724,6 +767,12 @@
   /* Beside its list, the list is the way back. */
   [data-slot="settings-page-back"][data-stack-only] {
     display: none;
+  }
+
+  /* Under the page title, a selection's title is a panel title (stacked, it
+     stands in for the page title and keeps the page size). */
+  [data-slot="settings-split-detail"] [data-slot="settings-detail-title-row"] > [data-slot="settings-page-title"] {
+    font-size: var(--text-title);
   }
 
   /* A long editor takes the width; its list gives way. */
@@ -1165,8 +1214,9 @@
   padding: var(--space-4);
 }
 
-.settings-master-detail-pane[data-card="true"] > [data-slot="empty-state"] {
-  padding-block: 0;
+/* "Select …" in an empty editor pane, as in the split inventories. */
+.settings-master-detail-pane > [data-slot="empty-state"] {
+  min-height: 16rem;
 }
 
 .settings-master-detail > [data-sticky="true"] {
@@ -1177,8 +1227,6 @@
 
 .settings-master-detail-back {
   display: none;
-  justify-self: start;
-  margin-inline-start: calc(-1 * var(--space-2));
 }
 
 @container settings-page (max-width: 899px) {
@@ -1270,12 +1318,6 @@
   min-width: 0;
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-5);
-}
-
-.settings-choice-group-options[data-layout="column"] {
-  display: grid;
-  gap: var(--space-2);
-  padding-top: var(--space-1-5);
 }
 
 .settings-choice {

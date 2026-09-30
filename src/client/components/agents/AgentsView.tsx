@@ -79,7 +79,7 @@ const noWorkspaces: readonly NormalizedWorkspaceSummary[] = [];
 /**
  * Saved Agents on the settings kit's split inventory: the list beside the
  * selected Agent, or one at a time in the stack. An Agent is a small preset,
- * so its detail is its editor (`/settings/agents/:id`); `/new` creates one.
+ * so its detail is its editor (`/settings/agents/:id`); `/~new` creates one.
  */
 export function AgentsView({
   store,
@@ -114,6 +114,9 @@ export function AgentsView({
     else store.clearSelection();
   }, [agentId, creating, store]);
 
+  // No Agents at all: one empty state, with the action that creates the first.
+  const empty = !creating && !agentId && !search && !state.error && state.items.length === 0
+    && state.status !== "idle" && state.status !== "loading";
   const list = (
     <>
       <SettingsSearch
@@ -152,7 +155,7 @@ export function AgentsView({
         )}
       {state.status !== "idle" &&
         state.status !== "loading" &&
-        state.items.length === 0 && (
+        state.items.length === 0 && !empty && (
           <EmptyState
             variant="inline"
             icon={<Bot />}
@@ -180,15 +183,26 @@ export function AgentsView({
         width="wide"
         selection={creating || agentId ? "editor" : "none"}
         actions={
-          !creating ? (
-            <Button onClick={() => navigate(newPath)}>
+          !creating && !empty ? (
+            <Button variant="outline" onClick={() => navigate(newPath)}>
               <Plus aria-hidden="true" /> Create Agent
             </Button>
           ) : undefined
         }
       >
-        <SettingsSplit listLabel="Saved Agents" list={list}>
-          {creating ? (
+        <SettingsSplit listLabel="Saved Agents" list={list} empty={empty}>
+          {empty ? (
+            <EmptyState
+              icon={<Bot />}
+              title="No Agents yet"
+              description="An Agent saves model, execution, and Sedes tool choices to start new threads from."
+              action={
+                <Button onClick={() => navigate(newPath)}>
+                  <Plus aria-hidden="true" /> Create Agent
+                </Button>
+              }
+            />
+          ) : creating ? (
             <AgentEditor store={store} workspaces={workspaces} />
           ) : agentId ? (
             // Until its load starts or ends, the Agent is loading, not unavailable.
@@ -480,7 +494,8 @@ function AgentEditor({
         onSubmit={() => void save()}
         saveBar={
           <SaveBar
-            dirty={agent ? dirty : true}
+            creating={!agent}
+            dirty={dirty}
             saving={pending}
             saveLabel={agent ? "Save" : "Create Agent"}
             // Cancel resets an Agent's edits in place, or leaves the create flow.
@@ -653,7 +668,7 @@ function AgentEditor({
                 <Button
                   ref={deleteTrigger}
                   type="button"
-                  variant="destructive"
+                  variant="outline"
                   disabled={pending}
                   onClick={() => setDeleteOpen(true)}
                 >

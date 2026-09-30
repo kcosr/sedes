@@ -16,6 +16,11 @@ export type SettingsSplitProps = Omit<React.ComponentProps<"div">, "children"> &
   readonly children: ReactNode;
   /** The selection takes the full width in the split layout (a long editor). */
   readonly wide?: boolean;
+  /**
+   * Nothing to list yet: the detail pane, holding the empty state and its
+   * call to action, takes the list's place at every width.
+   */
+  readonly empty?: boolean;
 };
 
 /**
@@ -25,9 +30,9 @@ export type SettingsSplitProps = Omit<React.ComponentProps<"div">, "children"> &
  * above the panes that belongs with the list (filters, defaults) carries
  * `data-stack="list"` and gives way to a selection in the stack too.
  */
-export function SettingsSplit({ listLabel, list, children, wide = false, ...props }: SettingsSplitProps): React.JSX.Element {
+export function SettingsSplit({ listLabel, list, children, wide = false, empty = false, ...props }: SettingsSplitProps): React.JSX.Element {
   return (
-    <div data-slot="settings-split" data-wide={wide || undefined} {...props}>
+    <div data-slot="settings-split" data-wide={wide || undefined} data-empty={empty || undefined} {...props}>
       <section data-slot="settings-split-list" aria-label={listLabel}>{list}</section>
       <div data-slot="settings-split-detail">{children}</div>
     </div>

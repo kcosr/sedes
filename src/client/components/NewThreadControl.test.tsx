@@ -1268,7 +1268,7 @@ describe("NewThreadControl", () => {
     control({ agents: [] });
     await openPicker(user);
     await user.click(await screen.findByRole("button", { name: "Create an Agent" }));
-    expect(window.location.pathname).toBe("/settings/agents/new");
+    expect(window.location.pathname).toBe("/settings/agents/~new");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     navigate("/", { replace: true });
   });

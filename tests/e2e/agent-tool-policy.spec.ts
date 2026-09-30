@@ -456,7 +456,12 @@ test.describe.serial("agent tool policy", () => {
     ).toBeVisible();
     await settings.getByRole("button", { name: "New client" }).click();
     await settings.getByLabel("Tool client name").fill("E2E external CLI");
+    // Tool groups start collapsed behind their selection summary.
+    const threadsGroup = settings.getByRole("button", { name: "Threads", exact: true });
+    await expect(threadsGroup).toHaveAttribute("aria-expanded", "false");
+    await threadsGroup.click();
     await settings.getByRole("checkbox", { name: "Thread status" }).click();
+    await expect(threadsGroup).toHaveAccessibleDescription(/^1 of \d+ tools /u);
 
     const createdResponse = page.waitForResponse(
       (response) =>

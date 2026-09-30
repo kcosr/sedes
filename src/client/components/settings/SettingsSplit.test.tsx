@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EntityList, EntityRow } from "./EntityList.js";
 import { SettingsSearch } from "./SettingsSearch.js";
-import { SettingsBackLink, SettingsPage } from "./SettingsPage.js";
+import { SettingsBackLink, SettingsBackSlotContext, SettingsPage } from "./SettingsPage.js";
 import { SettingsSection } from "./SettingsSection.js";
 import { SettingsDetailHeader, SettingsEditor, SettingsSplit } from "./SettingsSplit.js";
 import { useSettingsSplitFocus, type SettingsSplitLocation } from "./use-settings-split-focus.js";
@@ -47,6 +47,29 @@ describe("SettingsSplit", () => {
     );
     expect(screen.getByRole("heading", { name: "General" }).closest('[data-slot="settings-page"]')).not.toHaveAttribute("data-selection");
     expect(screen.getByRole("link", { name: "Settings" })).not.toHaveAttribute("data-stack-only");
+  });
+
+  it("marks an empty inventory, whose detail pane holds the empty state", () => {
+    const { rerender } = render(<SettingsSplit listLabel="Saved Agents" list={null} empty><p>No Agents yet</p></SettingsSplit>);
+    const split = screen.getByRole("region", { name: "Saved Agents" }).parentElement!;
+    expect(split).toHaveAttribute("data-empty", "true");
+    expect(screen.getByText("No Agents yet").closest('[data-slot="settings-split-detail"]')).not.toBeNull();
+    rerender(<SettingsSplit listLabel="Saved Agents" list={<p>Rows</p>}><p>Select an Agent</p></SettingsSplit>);
+    expect(split).not.toHaveAttribute("data-empty");
+  });
+
+  it("renders a back link in the compact header's slot when one is provided", () => {
+    const slot = document.createElement("div");
+    document.body.append(slot);
+    render(
+      <SettingsBackSlotContext.Provider value={slot}>
+        <SettingsPage title="Environments"><SettingsBackLink stackOnly href="/settings/environments" label="Environments" /></SettingsPage>
+      </SettingsBackSlotContext.Provider>,
+    );
+    const link = screen.getByRole("link", { name: "Environments" });
+    expect(slot).toContainElement(link);
+    expect(link.closest('[data-slot="settings-page"]')).toBeNull();
+    slot.remove();
   });
 });
 

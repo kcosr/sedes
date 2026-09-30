@@ -134,7 +134,7 @@ describe("settingsUpTarget", () => {
 
   it("walks the add flow back through its chooser", () => {
     expect(settingsUpTarget({ page: "environments", mode: "new", resourceId: "ssh" }, true))
-      .toEqual({ kind: "path", path: "/settings/environments/new" });
+      .toEqual({ kind: "path", path: "/settings/environments/~new" });
     expect(settingsUpTarget({ page: "environments", mode: "new" }, true))
       .toEqual({ kind: "path", path: "/settings/environments" });
   });

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronLeft, MessageSquareText, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, MessageSquareText, Plus, RefreshCw, Trash2 } from "lucide-react";
 import {
   CANNED_PROMPT_MAX_ITEMS,
   CANNED_PROMPT_TEXT_MAX_BYTES,
@@ -36,7 +36,7 @@ import { Textarea } from "@client/components/ui/textarea";
 import { EntityList, EntityRow } from "./settings/EntityList.js";
 import { SaveBar } from "./settings/SaveBar.js";
 import { SettingsField, SwitchField } from "./settings/SettingsField.js";
-import { SettingsPage } from "./settings/SettingsPage.js";
+import { SettingsBackLink, SettingsPage } from "./settings/SettingsPage.js";
 import { SettingsSection } from "./settings/SettingsSection.js";
 import { useTransientNotice } from "./settings/use-transient-notice.js";
 import { useSettingsEscapeLevel } from "./settings/settings-escape.js";
@@ -105,7 +105,9 @@ export function CannedPromptsSettingsPage({
     clearMessages();
   };
   // Escape closes an open editor (its "‹ Prompts"), asking first when it has edits.
-  useSettingsEscapeLevel(draft ? () => (dirty ? setDiscarding(true) : openDraft(undefined)) : undefined);
+  // Its "‹ Prompts" and Escape close the editor, asking first when it has edits.
+  const closeEditor = (): void => (dirty ? setDiscarding(true) : openDraft(undefined));
+  useSettingsEscapeLevel(draft ? closeEditor : undefined);
 
   const handleMutationError = (cause: unknown, fallback: string): void => {
     if (cause instanceof ApiError && cause.code === "conflict") {
@@ -182,6 +184,8 @@ export function CannedPromptsSettingsPage({
   const atLimit = prompts.length >= CANNED_PROMPT_MAX_ITEMS;
   const startCreate = (): void =>
     openDraft({ mode: "create", title: "", text: "" });
+  // With nothing saved, the empty state carries the one "Add prompt".
+  const empty = state.status === "ready" && prompts.length === 0 && !draft;
 
   return (
     <SettingsPage
@@ -192,7 +196,7 @@ export function CannedPromptsSettingsPage({
         <>
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="icon"
             aria-label="Refresh prompts"
             title="Refresh prompts"
@@ -205,15 +209,18 @@ export function CannedPromptsSettingsPage({
           >
             <RefreshCw aria-hidden="true" />
           </Button>
-          <Button
-            type="button"
-            disabled={state.status !== "ready" || pending || atLimit}
-            title={atLimit ? `A library holds at most ${CANNED_PROMPT_MAX_ITEMS} prompts.` : undefined}
-            onClick={startCreate}
-          >
-            <Plus aria-hidden="true" />
-            Add prompt
-          </Button>
+          {empty ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={state.status !== "ready" || pending || atLimit}
+              title={atLimit ? `A library holds at most ${CANNED_PROMPT_MAX_ITEMS} prompts.` : undefined}
+              onClick={startCreate}
+            >
+              <Plus aria-hidden="true" />
+              Add prompt
+            </Button>
+          )}
         </>
       }
     >
@@ -289,11 +296,17 @@ export function CannedPromptsSettingsPage({
             Loading saved prompts…
           </p>
         ) : null}
-        {state.status === "ready" && prompts.length === 0 && !draft ? (
+        {empty ? (
           <EmptyState
             icon={<MessageSquareText />}
             title="No saved prompts yet"
             description="Add one to offer it from the composer on every client."
+            action={
+              <Button type="button" disabled={pending} onClick={startCreate}>
+                <Plus aria-hidden="true" />
+                Add prompt
+              </Button>
+            }
           />
         ) : null}
         {state.status === "ready" && (prompts.length > 0 || draft) ? (
@@ -370,7 +383,7 @@ export function CannedPromptsSettingsPage({
 
             <section
               className="settings-master-detail-pane"
-              data-card="true"
+              data-card={draft ? "true" : undefined}
               data-sticky="true"
               aria-label="Prompt editor"
             >
@@ -384,16 +397,11 @@ export function CannedPromptsSettingsPage({
                   }}
                 >
                   <header className="settings-pane-header">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
+                    <SettingsBackLink
+                      label="Prompts"
                       className="settings-master-detail-back"
-                      onClick={() => openDraft(undefined)}
-                    >
-                      <ChevronLeft aria-hidden="true" />
-                      Prompts
-                    </Button>
+                      onNavigate={closeEditor}
+                    />
                     <h3 className="settings-pane-title">
                       {draft.mode === "create" ? "New prompt" : "Edit prompt"}
                     </h3>
@@ -434,7 +442,8 @@ export function CannedPromptsSettingsPage({
                   </Field>
                   <SaveBar
                     placement="pane"
-                    dirty={draft.mode === "create" || dirty}
+                    creating={draft.mode === "create"}
+                    dirty={dirty}
                     saving={pending}
                     saveLabel={draft.mode === "create" ? "Add prompt" : "Save"}
                     savingLabel={draft.mode === "create" ? "Adding…" : "Saving…"}
@@ -443,8 +452,9 @@ export function CannedPromptsSettingsPage({
                 </form>
               ) : (
                 <EmptyState
-                  variant="inline"
-                  title="Select a prompt to edit it, or add a new prompt."
+                  icon={<MessageSquareText />}
+                  title="Select a prompt"
+                  description="Edit it here, or add a new prompt."
                 />
               )}
             </section>
