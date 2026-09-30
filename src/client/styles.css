@@ -502,10 +502,10 @@ textarea:disabled {
   text-transform: uppercase;
 }
 
-/* The hand-rolled `.button` / `.icon-button` primitives are gone: their four
-   remaining call sites (composer Stash current / Queue / delete-stash,
-   transcript Load earlier) now render `ui/button.tsx`, so there is exactly
-   one button system and one type step for it. */
+/* The hand-rolled `.button` / `.icon-button` primitives are gone: their
+   remaining call sites (composer Stash current / Queue, transcript Load
+   earlier) now render `ui/button.tsx`, so there is exactly one button system
+   and one type step for it. */
 
 /* ───────────────────────────────────────────────────────────────────────
    § SHELL, SIDEBAR, AND PAGES
@@ -8987,365 +8987,6 @@ tr.diff-hunk td {
   opacity: 0.5;
 }
 
-.composer-prompt-popover {
-  z-index: calc(var(--z-floating) + 5);
-  display: grid;
-  width: min(500px, calc(100vw - 24px));
-  max-height: min(520px, var(--radix-popover-content-available-height, 70dvh));
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-  overflow: hidden;
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--popover);
-  color: var(--popover-foreground);
-  box-shadow: var(--shadow);
-  transform-origin: var(--radix-popover-content-transform-origin);
-  animation: composer-prompt-popover-in 140ms var(--ease-emphasis);
-}
-
-@keyframes composer-prompt-popover-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px) scale(0.985);
-  }
-}
-
-.composer-prompt-header {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 7px 8px 8px;
-}
-
-.composer-prompt-heading {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.composer-prompt-header-action {
-  width: 76px;
-  flex: 0 0 76px;
-}
-
-.composer-prompt-header strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.composer-prompt-header small {
-  color: var(--muted-foreground-2);
-  font-size: 11.5px;
-}
-
-.composer-prompt-manage,
-.composer-prompt-refresh,
-.composer-prompt-status button,
-.composer-prompt-inline-error button {
-  min-height: 28px;
-  flex: 0 0 auto;
-  padding: 0 9px;
-  border-radius: var(--radius-ctl);
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.composer-prompt-manage,
-.composer-prompt-refresh {
-  width: 100%;
-}
-
-.composer-prompt-refresh {
-  display: grid;
-  place-items: center;
-}
-
-.composer-prompt-manage:hover,
-.composer-prompt-refresh:hover,
-.composer-prompt-status button:hover,
-.composer-prompt-inline-error button:hover {
-  background: var(--accent);
-  color: var(--foreground);
-}
-
-.composer-prompt-manage:focus-visible,
-.composer-prompt-refresh:focus-visible,
-.composer-prompt-status button:focus-visible,
-.composer-prompt-inline-error button:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-
-.composer-prompt-search {
-  display: flex;
-  height: 36px;
-  align-items: center;
-  margin: 0 2px 5px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  background: var(--background);
-}
-
-.composer-prompt-search:focus-within {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 1px var(--ring);
-}
-
-.composer-prompt-search input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--foreground);
-  font: inherit;
-  font-size: 13px;
-}
-
-.composer-prompt-search input::placeholder {
-  color: var(--muted-foreground-2);
-}
-
-.composer-prompt-list {
-  min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
-
-.composer-prompt-row {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  min-height: 48px;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 7px 6px 10px;
-  border-top: 1px solid var(--border-soft);
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  color: var(--foreground);
-  transition: background var(--motion-fast);
-}
-
-.composer-prompt-row:hover,
-.composer-prompt-row:has(.composer-prompt-action:focus-visible) {
-  background: var(--accent);
-}
-
-.composer-prompt-preview {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-  text-align: left;
-}
-
-.composer-prompt-send-target {
-  width: 100%;
-  min-height: 36px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-ctl);
-  outline: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.composer-prompt-send-target:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-
-.composer-prompt-send-target:disabled {
-  cursor: default;
-  opacity: 0.42;
-}
-
-.composer-prompt-preview > span,
-.composer-prompt-preview > small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-prompt-preview > span {
-  font-size: 13px;
-  font-weight: 550;
-}
-
-.composer-prompt-preview > small {
-  color: var(--muted-foreground-2);
-  font-size: 11.5px;
-  line-height: 1.35;
-}
-
-.composer-prompt-actions {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 3px;
-}
-
-.composer-prompt-action {
-  display: inline-grid;
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
-  place-items: center;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  color: var(--muted-foreground);
-  transition:
-    background var(--motion-fast),
-    color var(--motion-fast),
-    opacity var(--motion-fast);
-}
-
-.composer-prompt-action:hover:not(:disabled) {
-  background: color-mix(in oklch, var(--foreground) 9%, transparent);
-  color: var(--foreground);
-}
-
-.composer-prompt-action:last-child {
-  color: var(--primary);
-}
-
-.composer-prompt-action:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-
-.composer-prompt-action:disabled {
-  cursor: default;
-  opacity: 0.42;
-}
-
-.composer-prompt-action svg {
-  width: 16px;
-  height: 16px;
-  pointer-events: none;
-}
-
-.composer-prompt-status {
-  margin: 0;
-  padding: 18px 12px;
-  color: var(--muted-foreground-2);
-  font-size: 12.5px;
-  line-height: 1.45;
-  text-align: center;
-}
-
-.composer-prompt-status p {
-  margin: 0 0 8px;
-}
-
-.composer-prompt-status button {
-  border: 1px solid var(--border);
-}
-
-.composer-prompt-inline-error {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-  margin: 5px 2px 1px;
-  padding: 7px 8px;
-  border: 1px solid color-mix(in oklch, var(--destructive) 35%, var(--border));
-  border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--destructive) 8%, transparent);
-  color: var(--destructive);
-  font-size: 11.5px;
-}
-
-.composer-prompt-inline-error span {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow-wrap: anywhere;
-}
-
-.composer-prompt-inline-error button {
-  color: currentColor;
-}
-
-.composer-prompt-swipe-handle {
-  display: none;
-}
-
-@media (max-width: 819px), (pointer: coarse) {
-  .composer-prompt-popover[data-layout="mobile"] {
-    width: min(520px, calc(100vw - 16px));
-    max-height: min(
-      62dvh,
-      var(--radix-popover-content-available-height, 62dvh)
-    );
-    padding: 5px 6px max(6px, env(safe-area-inset-bottom));
-    border-radius: var(--radius-lg) var(--radius-lg) var(--radius-card)
-      var(--radius-card);
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
-    overscroll-behavior: contain;
-  }
-
-  .composer-prompt-swipe-handle {
-    display: block;
-    width: 42px;
-    height: 5px;
-    margin: 2px auto 4px;
-    border-radius: 999px;
-    background: color-mix(in oklch, var(--muted-foreground) 38%, transparent);
-    touch-action: none;
-  }
-
-  .composer-prompt-header {
-    padding-block: 6px 9px;
-  }
-
-  .composer-prompt-manage,
-  .composer-prompt-refresh {
-    min-height: 44px;
-    padding-inline: 12px;
-  }
-
-  .composer-prompt-row {
-    min-height: 58px;
-    gap: 5px;
-    padding: 6px 6px 6px 10px;
-  }
-
-  .composer-prompt-preview > span {
-    font-size: 13.5px;
-  }
-
-  .composer-prompt-send-target {
-    min-height: 44px;
-    touch-action: manipulation;
-  }
-
-  .composer-prompt-actions {
-    gap: 2px;
-  }
-
-  .composer-prompt-action {
-    width: 44px;
-    height: 44px;
-    flex-basis: 44px;
-    touch-action: manipulation;
-  }
-
-  .composer-prompt-status button,
-  .composer-prompt-inline-error button {
-    min-height: 44px;
-  }
-}
-
 .composer:focus-within {
   border-color: var(--ring);
 }
@@ -9414,10 +9055,10 @@ tr.diff-hunk td {
   position: absolute;
   inset: 52px 8px 8px;
   z-index: calc(var(--z-sticky) + 19);
-  display: grid;
+  display: flex;
   place-items: center;
   border: 2px dashed var(--primary);
-  border-radius: var(--radius-card);
+  border-radius: var(--menu-panel-radius);
   background: color-mix(in oklch, var(--background) 86%, transparent);
   color: var(--foreground);
   font-size: 14px;
@@ -9735,80 +9376,19 @@ tr.diff-hunk td {
 }
 
 /* Slash-command listbox. It is drawn inside the composer card rather than
-   floating, so it keeps the inset --muted well, but its rows, radii, padding
-   and type are the same menu language as .menu-popover / ContextMenu. */
+   floating, so it keeps an inset --muted well; its rows are the menu row
+   anatomy (ui/floating.ts). */
 .command-menu {
   display: grid;
   max-height: min(280px, 38dvh);
-  gap: 1px;
-  margin: 0 9px 7px;
-  padding: 5px;
+  flex-direction: column;
+  margin: 0 var(--space-2) var(--space-2);
+  padding: var(--menu-panel-padding);
   overflow-y: auto;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-card);
   background: var(--muted);
-  box-shadow: var(--shadow-small);
-}
-
-.command-menu [role="option"] {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 2px 10px;
-  padding: 7px 10px;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  color: var(--foreground);
-  text-align: left;
-}
-
-.command-menu [role="option"].active,
-.command-menu [role="option"]:hover {
-  background: var(--accent);
-  color: var(--foreground);
-}
-
-.command-menu [role="option"] > span {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  gap: 7px;
-}
-
-/* Menu-row voice, same ramp as every other popover: 13px invocation,
-   12px hint/description, 11px uppercase source tag. */
-.command-menu strong {
-  color: var(--primary);
-  font-family: var(--font-mono);
-  font-size: 13px;
-}
-
-.command-menu em,
-.command-menu small {
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  font-style: normal;
-  line-height: 1.4;
-}
-
-.command-menu b {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-}
-
-.command-menu small {
-  overflow: hidden;
-  grid-column: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.command-menu b {
-  grid-column: 2;
-  grid-row: 1;
-  text-transform: uppercase;
+  box-shadow: var(--elevation-2);
 }
 
 .composer-footer {
@@ -10227,28 +9807,10 @@ tr.diff-hunk td {
   overflow-wrap: anywhere;
 }
 
-/* One floating-popover surface: --popover, hairline, radius-card, --shadow.
-   The stash popover used to sit a step darker (--secondary) than the actions
-   menu it floats beside; both now read as the same elevation. */
-.stash-popover,
-.skill-popover,
-.menu-popover {
-  z-index: var(--z-floating);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--popover);
-  color: var(--foreground);
-  box-shadow: var(--shadow);
-  max-height: min(var(--radix-popover-content-available-height, 70dvh), 70dvh);
-  overflow-y: auto;
-}
-
+/* The skill picker (ui/popover) reads as a near-full-width companion to
+   the input: the trigger sits 9px inside the composer card, and the far
+   edge keeps the same inset. */
 .skill-popover {
-  display: flex;
-  flex-direction: column;
-  /* The trigger sits 9px inside the composer card. Match that inset on the
-     far edge so the picker reads as a near-full-width companion to the input
-     while its arrow remains anchored to the skill button. */
   width: min(
     calc(var(--measure) - 18px),
     calc(100vw - clamp(14px, 4vw, 48px) - clamp(14px, 4vw, 48px) - 18px)
@@ -10666,11 +10228,6 @@ tr.diff-hunk td {
 .archive-menu-retry {
   color: var(--foreground);
   font-weight: 600;
-}
-
-/* Every floating popover sits on --popover, so one arrow fill serves all. */
-.popover-arrow {
-  fill: var(--popover);
 }
 
 /* ── Interaction (approval) card: docked between transcript and composer.
@@ -14191,8 +13748,6 @@ tr.diff-hunk td {
   .back-button,
   .archive-row-title,
   .preset-row button,
-  .stash-restore,
-  .delete-stash,
   .queue-button {
     min-height: 44px;
   }
