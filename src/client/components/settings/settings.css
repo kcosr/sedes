@@ -2,14 +2,17 @@
    layouts (components/settings/*). Tokens only. Components carry a
    data-slot per part; these rules are the kit's only styling. */
 
-/* ── Page ── */
+/* ── Page ──
+   Every page starts at the left edge of one centred frame as wide as the
+   wide pages, so moving between a narrow and a wide page keeps the title in
+   place: a narrow page stops short on the right instead. */
 [data-slot="settings-page"] {
   container: settings-page / inline-size;
   display: grid;
   width: 100%;
   max-width: var(--settings-page-width);
   min-width: 0;
-  margin-inline: auto;
+  margin-inline: max(0px, (100% - var(--settings-page-width-wide)) / 2) auto;
   align-content: start;
   gap: var(--space-6);
 }
