@@ -138,11 +138,24 @@ describe("ghostty live theme with the pinned WASM terminal", () => {
     terminal.free();
   });
 
-  it("does not let programs repaint the palette (OSC 4, 10, 11)", () => {
-    // If an upgrade adds these, sentinels could appear on explicit output:
-    // re-audit the live theme and the guard.
-    const cell = firstCell(bytes("\x1b]4;1;rgb:12/34/56\x07\x1b]10;rgb:12/34/56\x07\x1b[31mx"));
-    expect(packCell(cell.fg_r, cell.fg_g, cell.fg_b)).toBe(Number.parseInt(GHOSTTY_WASM_THEME.red!.slice(1), 16));
+  // If an upgrade makes Ghostty honor any of these, sentinels could appear on
+  // explicit output: re-audit the live theme and the guard.
+  const sentinelOf = (role: keyof typeof GHOSTTY_WASM_THEME) =>
+    Number.parseInt(GHOSTTY_WASM_THEME[role]!.slice(1), 16);
+
+  it("does not let programs repaint a palette entry (OSC 4)", () => {
+    const cell = firstCell(bytes("\x1b]4;1;rgb:12/34/56\x07\x1b[31mx"));
+    expect(packCell(cell.fg_r, cell.fg_g, cell.fg_b)).toBe(sentinelOf("red"));
+  });
+
+  it("does not let programs repaint the default foreground (OSC 10)", () => {
+    const cell = firstCell(bytes("\x1b]10;rgb:12/34/56\x07x"));
+    expect(packCell(cell.fg_r, cell.fg_g, cell.fg_b)).toBe(sentinelOf("foreground"));
+  });
+
+  it("does not let programs repaint the default background (OSC 11)", () => {
+    const cell = firstCell(bytes("\x1b]11;rgb:12/34/56\x07x"));
+    expect(packCell(cell.bg_r, cell.bg_g, cell.bg_b)).toBe(sentinelOf("background"));
   });
 
   it("matches the WASM parser on fuzzed output (differential)", { timeout: 30_000 }, () => {
