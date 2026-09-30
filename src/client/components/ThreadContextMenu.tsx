@@ -88,7 +88,7 @@ import {
   ContextMenuRadioGroup,
   ContextMenuRadioItem,
   ContextMenuSeparator,
-  ContextMenuShortcut,
+  ContextMenuValue,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
@@ -645,7 +645,7 @@ export function ThreadContextMenu({
           ? "Creating thread…"
           : THREAD_CONFIGURATION_COPY_LABEL}
         {!thread.available && (
-          <ContextMenuShortcut aria-hidden="true">Unavailable</ContextMenuShortcut>
+          <ContextMenuValue aria-hidden="true">Unavailable</ContextMenuValue>
         )}
       </ContextMenuItem>
       {threadRegistry && (
@@ -662,9 +662,9 @@ export function ThreadContextMenu({
           <Split className="fork-split-icon" aria-hidden="true" />
           {latestFork.label}
           {!latestFork.available && (
-            <ContextMenuShortcut aria-hidden="true">
+            <ContextMenuValue aria-hidden="true">
               {forkShortReason}
-            </ContextMenuShortcut>
+            </ContextMenuValue>
           )}
         </ContextMenuItem>
       )}
@@ -716,9 +716,9 @@ export function ThreadContextMenu({
           >
             <Hash aria-hidden="true" />
             Thread ID
-            <ContextMenuShortcut aria-hidden="true">
+            <ContextMenuValue aria-hidden="true">
               {thread.id.slice(0, 8)}
-            </ContextMenuShortcut>
+            </ContextMenuValue>
           </ContextMenuItem>
           <ContextMenuItem
             disabled={!backendSessionId}
@@ -733,9 +733,9 @@ export function ThreadContextMenu({
           >
             <Server aria-hidden="true" />
             Backend ID
-            <ContextMenuShortcut aria-hidden="true">
+            <ContextMenuValue aria-hidden="true">
               {backendSessionId ? backendSessionId.slice(0, 8) : "Unavailable"}
-            </ContextMenuShortcut>
+            </ContextMenuValue>
           </ContextMenuItem>
         </ContextMenuSubContent>
       </ContextMenuSub>

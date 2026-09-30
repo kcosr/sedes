@@ -22,6 +22,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
+  DropdownMenuValue,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -76,7 +77,7 @@ function ThreadMenu({
           </span>
         </DropdownMenuItem>
         <DropdownMenuItem disabled>
-          Fork<DropdownMenuShortcut>Running</DropdownMenuShortcut>
+          Fork<DropdownMenuValue>Running</DropdownMenuValue>
         </DropdownMenuItem>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>Copy ID</DropdownMenuSubTrigger>
@@ -111,7 +112,7 @@ describe("floating menu rows", () => {
     expect(screen.getByText("Off")).toHaveAttribute("data-slot", "dropdown-menu-item-description");
     expect(screen.getByRole("menuitemradio", { name: "Recent" })).toHaveAttribute("data-state", "checked");
     expect(screen.getByRole("menuitem", { name: /Fork/ })).toHaveAttribute("data-disabled");
-    expect(screen.getByText("Running")).toHaveAttribute("data-slot", "dropdown-menu-shortcut");
+    expect(screen.getByText("Running")).toHaveAttribute("data-slot", "dropdown-menu-item-value");
     expect(screen.getByRole("menuitem", { name: "Force reset…" })).toHaveAttribute("data-variant", "destructive");
     expect(screen.getByText("Sort")).toHaveAttribute("data-variant", "label");
   });
@@ -557,6 +558,60 @@ describe("menu sheets return focus when they close", () => {
   });
 });
 
+describe("trailing values", () => {
+  function ValueMenu({ presentation }: { presentation: "menu" | "sheet" }) {
+    return (
+      <DropdownMenu presentation={presentation}>
+        <DropdownMenuTrigger>Thread settings</DropdownMenuTrigger>
+        <DropdownMenuContent sheetTitle="Thread settings" aria-label="Thread settings">
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              Reasoning effort<DropdownMenuValue>GPT-6.1-Sol extra high</DropdownMenuValue>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuItem>High</DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuItem>
+            Command palette<DropdownMenuShortcut>⌘K</DropdownMenuShortcut>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
+
+  it.each(["menu", "sheet"] as const)(
+    "keeps the %s row's label on one line and truncates the value at the row's size and tracking",
+    async (presentation) => {
+      const user = userEvent.setup();
+      render(<ValueMenu presentation={presentation} />);
+      await user.click(screen.getByRole("button", { name: "Thread settings" }));
+      const value = await screen.findByText("GPT-6.1-Sol extra high");
+      expect(value).toHaveAttribute("data-slot", "dropdown-menu-item-value");
+      // Normal tracking and the row's own size: no wide shortcut tracking,
+      // no smaller shortcut text.
+      expect(value.className).not.toMatch(/tracking-wide/u);
+      expect(value.className).toMatch(/\btracking-normal\b/u);
+      expect(value.className).not.toMatch(/text-\(length:/u);
+      // Its text truncates within 45% of the row, before the label gives way.
+      expect(value).toHaveClass("truncate", "min-w-0", "pl-4", "max-w-[calc(45%+1rem)]");
+      const row = value.closest<HTMLElement>("[role=\"menuitem\"]")!;
+      expect(row).toHaveClass("whitespace-nowrap");
+      // The chevron stays beside the value.
+      expect(value.nextElementSibling?.tagName.toLowerCase()).toBe("svg");
+    },
+  );
+
+  it("keeps the shortcut slot for keyboard hints", async () => {
+    const user = userEvent.setup();
+    render(<ValueMenu presentation="menu" />);
+    await user.click(screen.getByRole("button", { name: "Thread settings" }));
+    const hint = await screen.findByText("⌘K");
+    expect(hint).toHaveAttribute("data-slot", "dropdown-menu-shortcut");
+    expect(hint.className).not.toMatch(/tracking-wide/u);
+  });
+});
+
 describe("sheet drill-in labels", () => {
   function SettingsSheet() {
     const [thinking, setThinking] = useState("low");
@@ -566,7 +621,7 @@ describe("sheet drill-in labels", () => {
         <DropdownMenuContent sheetTitle="Thread settings">
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
-              Thinking<DropdownMenuShortcut>Low</DropdownMenuShortcut>
+              Thinking<DropdownMenuValue>Low</DropdownMenuValue>
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent>
               <DropdownMenuRadioGroup value={thinking} onValueChange={setThinking}>

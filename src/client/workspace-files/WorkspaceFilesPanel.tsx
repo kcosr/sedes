@@ -53,7 +53,7 @@ import {
   DropdownMenuItemDescription,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
+  DropdownMenuValue,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.js";
 import { ApiError, type ApiClient } from "../api/ApiClient.js";
@@ -2985,7 +2985,7 @@ export function WorkspaceFilesPanel({
             <DropdownMenuItem onSelect={() => showReviewInspector("current")}>
               <MessageSquareText aria-hidden="true" />
               Comments
-              <DropdownMenuShortcut>{compareCommentCount}</DropdownMenuShortcut>
+              <DropdownMenuValue>{compareCommentCount}</DropdownMenuValue>
             </DropdownMenuItem>
           </>
         ) : (
@@ -3001,7 +3001,7 @@ export function WorkspaceFilesPanel({
               </DropdownMenuItemDescription>
             </span>
             {startReviewBlocked && (
-              <DropdownMenuShortcut>{startReviewBlocked}</DropdownMenuShortcut>
+              <DropdownMenuValue>{startReviewBlocked}</DropdownMenuValue>
             )}
           </DropdownMenuItem>
         )}
@@ -3012,7 +3012,7 @@ export function WorkspaceFilesPanel({
           <HistoryIcon aria-hidden="true" />
           History
           {compareRepositoryHistoryCount === 0 && (
-            <DropdownMenuShortcut>None yet</DropdownMenuShortcut>
+            <DropdownMenuValue>None yet</DropdownMenuValue>
           )}
         </DropdownMenuItem>
       </DropdownMenuContent>

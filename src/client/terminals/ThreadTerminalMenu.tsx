@@ -31,7 +31,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
+  DropdownMenuValue,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.js";
 import { isTerminalProcessLive, terminalStatusLabel, terminalTerminationLabel, terminalTerminationDescription, terminalTerminationPendingLabel } from "./domain.js";
@@ -468,10 +468,10 @@ export function ThreadTerminalMenu({
                   >
                     <TerminalIcon aria-hidden="true" />
                     <span className="min-w-0 flex-1 truncate">{terminal.displayName}</span>
-                    <DropdownMenuShortcut>
+                    <DropdownMenuValue>
                       {terminalStatusLabel(terminal)}
                       {alreadyDisplayed ? " · Open" : ""}
-                    </DropdownMenuShortcut>
+                    </DropdownMenuValue>
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     className={TERMINAL_ROW_ACTION_CLASS}

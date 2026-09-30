@@ -377,7 +377,7 @@ function rowLabels(menu: HTMLElement): string[] {
         .filter(
           (node) =>
             !(node instanceof Element) ||
-            node.getAttribute("data-slot")?.endsWith("-shortcut") !== true,
+            node.getAttribute("data-slot")?.endsWith("-item-value") !== true,
         )
         .map((node) => node.textContent ?? "")
         .join("")
@@ -763,7 +763,12 @@ describe("ThreadHeader project context row", () => {
       environmentKind: "local",
     });
     await openThreadActions();
-    await user.click(screen.getByRole("menuitem", { name: /Draft workspace/ }));
+    // A workspace label is long by nature: the row shows no inline value,
+    // and the current workspace is the checked row inside.
+    const draftWorkspace = screen.getByRole("menuitem", { name: "Draft workspace" });
+    expect(draftWorkspace).toHaveTextContent(/^Draft workspace$/u);
+    expect(draftWorkspace.querySelector('[data-slot$="item-value"]')).toBeNull();
+    await user.click(draftWorkspace);
 
     const localChoices = await screen.findAllByRole("menuitemradio");
     expect(localChoices.map(({ textContent }) => textContent)).toEqual([

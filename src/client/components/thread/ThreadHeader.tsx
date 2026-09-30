@@ -57,7 +57,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
+  DropdownMenuValue,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -114,7 +114,7 @@ const SHEET_DIALOG_HANDOFF_DELAY_MS = 260;
 /** A disabled row's short reason; the row's title carries the full one. */
 function ReasonShortcut({ reason }: { readonly reason: string }) {
   return (
-    <DropdownMenuShortcut aria-hidden="true">{reason}</DropdownMenuShortcut>
+    <DropdownMenuValue aria-hidden="true">{reason}</DropdownMenuValue>
   );
 }
 
@@ -745,20 +745,13 @@ export const ThreadHeader = memo(function ThreadHeader({
                   {snapshot.thread.backingState === "unbound" &&
                     workspaces.length > 1 && (
                       <DropdownMenuSub>
+                        {/* A workspace label is long by nature: the
+                            current one is the checked row inside. */}
                         <DropdownMenuSubTrigger
                           disabled={disabled || moveDraft?.available !== true}
-                          aria-describedby={`draft-workspace-${snapshot.thread.id}`}
                         >
                           <FolderInput aria-hidden="true" />
-                          {/* The label takes the free space so the value
-                              sits by the chevron. */}
-                          <span className="min-w-0 flex-1">Draft workspace</span>
-                          <DropdownMenuShortcut
-                            id={`draft-workspace-${snapshot.thread.id}`}
-                            aria-hidden="true"
-                          >
-                            {draftWorkspaceLabel(snapshot.workspace.id)}
-                          </DropdownMenuShortcut>
+                          Draft workspace
                         </DropdownMenuSubTrigger>
                         <DropdownMenuSubContent>
                           <DropdownMenuRadioGroup
@@ -777,11 +770,13 @@ export const ThreadHeader = memo(function ThreadHeader({
                                 value={workspace.id}
                                 disabled={!workspace.available}
                               >
-                                {draftWorkspaceLabel(workspace.id)}
+                                <span className="min-w-0 truncate">
+                                  {draftWorkspaceLabel(workspace.id)}
+                                </span>
                                 {!workspace.available && (
-                                  <DropdownMenuShortcut aria-hidden="true">
+                                  <DropdownMenuValue aria-hidden="true">
                                     Unavailable
-                                  </DropdownMenuShortcut>
+                                  </DropdownMenuValue>
                                 )}
                               </DropdownMenuRadioItem>
                             ))}

@@ -54,7 +54,7 @@ import {
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuShortcut,
+  DropdownMenuValue,
 } from "@client/components/ui/dropdown-menu";
 import { EmptyState } from "@client/components/ui/empty-state";
 import {
@@ -3636,9 +3636,9 @@ export function Composer({
                                       )}
                                       {mode.id === "steer" ? "Steer" : "Queue"}
                                       {!mode.available && (
-                                        <DropdownMenuShortcut>
+                                        <DropdownMenuValue>
                                           Unavailable
-                                        </DropdownMenuShortcut>
+                                        </DropdownMenuValue>
                                       )}
                                     </DropdownMenuRadioItem>
                                   ))}

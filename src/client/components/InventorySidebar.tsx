@@ -145,7 +145,7 @@ import {
   ContextMenuItem,
   ContextMenuLabel,
   ContextMenuSeparator,
-  ContextMenuShortcut,
+  ContextMenuValue,
   ContextMenuTrigger,
 } from "@client/components/ui/context-menu";
 import {
@@ -2924,9 +2924,9 @@ function ThreadStackItem({
               {actionIcon(action, 16)}
               {capitalize(action)} stack
               {!actionAvailable(action) && (
-                <ContextMenuShortcut aria-hidden="true">
+                <ContextMenuValue aria-hidden="true">
                   {action === "unsettle" ? "None settled" : "None active"}
-                </ContextMenuShortcut>
+                </ContextMenuValue>
               )}
             </ContextMenuItem>
           ))}

@@ -731,13 +731,23 @@ test.describe.serial("normalized composer state", () => {
         response.ok() &&
         response.request().postDataJSON().kind === "move_draft",
     );
-    // Draft workspace is a submenu of workspace radio rows.
+    // Draft workspace is a submenu of workspace radio rows. The row shows
+    // no inline value; the current workspace is the checked row inside.
     const threadActions = page.getByRole("menu", { name: "Thread actions" });
-    await threadActions
-      .getByRole("menuitem", { name: "Draft workspace" })
-      .click();
-    await page
-      .getByRole("menu", { name: "Draft workspace" })
+    const draftWorkspace = threadActions.getByRole("menuitem", {
+      name: "Draft workspace",
+      exact: true,
+    });
+    await expect(draftWorkspace).toHaveText("Draft workspace");
+    await draftWorkspace.click();
+    const workspaces = page.getByRole("menu", { name: "Draft workspace" });
+    await expect(
+      workspaces.getByRole("menuitemradio", {
+        name: repositoryDisplayName,
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-checked", "true");
+    await workspaces
       .getByRole("menuitemradio", { name: "src", exact: true })
       .click();
     await moved;

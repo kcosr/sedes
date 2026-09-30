@@ -1177,7 +1177,7 @@ describe("Composer delivery guards", () => {
     expect(steer).toHaveAttribute("title", "The turn is still starting.");
     expect(within(steer!).getByText("Unavailable")).toHaveAttribute(
       "data-slot",
-      "dropdown-menu-shortcut",
+      "dropdown-menu-item-value",
     );
     expect(steer!.querySelector(".lucide-merge")).not.toBeNull();
     expect(queue).toHaveAttribute("aria-checked", "false");

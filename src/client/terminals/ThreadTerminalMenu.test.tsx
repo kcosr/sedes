@@ -455,10 +455,10 @@ describe("ThreadTerminalMenu", () => {
       "title",
       "Already open in this terminal panel",
     );
-    // The status, and the reason the row is disabled, sit in its shortcut slot.
+    // The status, and the reason the row is disabled, sit in its value slot.
     expect(within(displayed).getByText("Running · Open")).toHaveAttribute(
       "data-slot",
-      "dropdown-menu-shortcut",
+      "dropdown-menu-item-value",
     );
     fireEvent.click(displayed);
     expect(onOpen).not.toHaveBeenCalled();
@@ -528,7 +528,7 @@ describe("ThreadTerminalMenu", () => {
     expect(entry!.querySelector(".lucide-terminal")).not.toBeNull();
     expect(within(entry!).getByText("Running")).toHaveAttribute(
       "data-slot",
-      "dropdown-menu-shortcut",
+      "dropdown-menu-item-value",
     );
     expect(rename).toHaveAccessibleName("Rename Build shell");
     expect(rename).toHaveAttribute("title", "Rename Build shell");

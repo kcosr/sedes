@@ -1324,7 +1324,7 @@ describe("WorkspaceFilesPanel", () => {
     expect(within(menu).queryByRole("menuitem", { name: /^Start review/ })).toBeNull();
     const comments = within(menu).getByRole("menuitem", { name: /^Comments/ });
     expect(comments).toHaveTextContent(/^Comments\d+$/u);
-    expect(comments.querySelector('[data-slot="dropdown-menu-shortcut"]')?.textContent).toMatch(/^\d+$/u);
+    expect(comments.querySelector('[data-slot="dropdown-menu-item-value"]')?.textContent).toMatch(/^\d+$/u);
     expect(within(menu).getByRole("menuitem", { name: "History" })).not.toHaveAttribute("aria-disabled");
     fireEvent.click(comments);
     const inspector = await screen.findByRole("dialog", { name: "Review" });

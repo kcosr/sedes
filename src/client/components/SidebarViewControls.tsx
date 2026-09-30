@@ -21,7 +21,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
+  DropdownMenuValue,
   DropdownMenuTrigger,
 } from "@client/components/ui/dropdown-menu";
 import { useTouchDensity } from "../app/use-touch-density.js";
@@ -296,9 +296,9 @@ export function SidebarViewControls({
                 >
                   {label}
                   {active && (
-                    <DropdownMenuShortcut aria-hidden="true">
+                    <DropdownMenuValue aria-hidden="true">
                       <Direction className="size-3.5" />
-                    </DropdownMenuShortcut>
+                    </DropdownMenuValue>
                   )}
                 </DropdownMenuRadioItem>
               );

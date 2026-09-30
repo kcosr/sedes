@@ -21,7 +21,9 @@ import {
 import {
   menuDescriptionClass,
   menuEmptyClass,
+  menuRowNoWrapClass,
   menuShortcutClass,
+  menuValueClass,
 } from "@client/components/ui/floating"
 import { useFloatingLayer } from "@client/components/ui/floating-opening"
 import { cn } from "@client/lib/utils"
@@ -298,7 +300,7 @@ function rowLabel(row: HTMLElement): string {
   const copy = row.cloneNode(true) as HTMLElement
   copy
     .querySelectorAll(
-      '[data-slot$="-shortcut"], [data-slot$="-item-description"], [aria-hidden="true"]'
+      '[data-slot$="-shortcut"], [data-slot$="-item-value"], [data-slot$="-item-description"], [aria-hidden="true"]'
     )
     .forEach((node) => node.remove())
   return copy.textContent?.replace(/\s+/g, " ").trim() ?? ""
@@ -422,7 +424,8 @@ export const menuSheetRowClass =
   "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-[18px] [&_svg:not([class*='text-'])]:text-muted-foreground " +
   "data-[variant=destructive]:text-destructive data-[variant=destructive]:*:[svg]:text-destructive! " +
   "has-[[data-slot$=item-description]]:items-start has-[[data-slot$=item-description]]:font-medium has-[[data-slot$=item-description]]:[&>svg]:mt-px " +
-  "[&_[data-slot$=item-description]]:text-(length:--text-ui) [&_[data-slot$=item-description]]:leading-[18px]"
+  "[&_[data-slot$=item-description]]:text-(length:--text-ui) [&_[data-slot$=item-description]]:leading-[18px] " +
+  menuRowNoWrapClass
 
 /** Rows with no leading icon line up with the text of rows that have one. */
 const SHEET_INSET_CLASS = "pl-[42px]"
@@ -657,6 +660,15 @@ export function MenuSheetShortcut({
       {...props}
     />
   )
+}
+
+/** A row's value or short reason, at the sheet row's 15px. */
+export function MenuSheetValue({
+  className,
+  dataSlot,
+  ...props
+}: React.ComponentProps<"span"> & { dataSlot: string }) {
+  return <span data-slot={dataSlot} className={cn(menuValueClass, className)} {...props} />
 }
 
 export function MenuSheetEmpty({

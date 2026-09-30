@@ -22,7 +22,7 @@ import {
   DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuShortcut,
+  DropdownMenuValue,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -219,9 +219,9 @@ export function ThreadSettingsMenuItems({
           // The row is named by the setting; its current value describes it.
           const valueId = `${idPrefix}-${setting.id}`;
           const current = (
-            <DropdownMenuShortcut id={valueId} aria-hidden="true">
+            <DropdownMenuValue id={valueId} aria-hidden="true">
               {selectedLabel ?? placeholder}
-            </DropdownMenuShortcut>
+            </DropdownMenuValue>
           );
           if (setting.id === MODEL_SETTING_ID) {
             return (
@@ -241,7 +241,7 @@ export function ThreadSettingsMenuItems({
                 onSelect={() => onChooseModel(keyboardChoice.current)}
               >
                 <SettingIcon id={setting.id} />
-                <span className="min-w-0 flex-1">{setting.label.text}</span>
+                {setting.label.text}
                 {current}
                 {/* Leads on to the model sheet, like the drill-in rows. */}
                 <ChevronRight aria-hidden="true" />
@@ -256,8 +256,7 @@ export function ThreadSettingsMenuItems({
                 title={setting.unavailableReason?.text}
               >
                 <SettingIcon id={setting.id} />
-                {/* The label takes the free space so the value sits by the chevron. */}
-                <span className="min-w-0 flex-1">{setting.label.text}</span>
+                {setting.label.text}
                 {current}
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>

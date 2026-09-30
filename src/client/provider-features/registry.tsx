@@ -11,7 +11,7 @@ import { Puzzle } from "lucide-react";
 import type { ThreadClientStore } from "../stores/ThreadClientStore.js";
 import {
   DropdownMenuItem,
-  DropdownMenuShortcut,
+  DropdownMenuValue,
 } from "@client/components/ui/dropdown-menu";
 import { codexExecutionClientFeature } from "./codex-execution.js";
 import { codexFastModeClientFeature } from "./codex-fast-mode.js";
@@ -175,7 +175,7 @@ export function ProviderFeatureThreadDetails({
               <DropdownMenuItem key={key} disabled>
                 <Puzzle aria-hidden="true" />
                 {capability.label.text}
-                <DropdownMenuShortcut>Needs a client update</DropdownMenuShortcut>
+                <DropdownMenuValue>Needs a client update</DropdownMenuValue>
               </DropdownMenuItem>
             );
           }

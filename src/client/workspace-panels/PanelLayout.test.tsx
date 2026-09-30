@@ -1393,7 +1393,7 @@ describe("PanelLayout singleton surfaces", () => {
     for (const name of ["Transcript", "Clear selection"]) {
       const item = screen.getByRole("menuitem", { name: new RegExp(`^${name}`) });
       expect(item).toHaveAttribute("aria-disabled", "true");
-      expect(within(item).getByText("No terminal")).toHaveAttribute("data-slot", "dropdown-menu-shortcut");
+      expect(within(item).getByText("No terminal")).toHaveAttribute("data-slot", "dropdown-menu-item-value");
     }
   });
 

@@ -9,7 +9,7 @@ import { cn } from "@client/lib/utils";
 import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuShortcut,
+  DropdownMenuValue,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -94,11 +94,10 @@ function ClaudePermissionControls({
       {/* Openable even when the mode cannot change, so it stays visible. */}
       <DropdownMenuSubTrigger aria-describedby={valueId}>
         <ShieldCheck aria-hidden="true" />
-        {/* The label takes the free space so the value sits by the chevron. */}
-        <span className="min-w-0 flex-1">Permission mode</span>
-        <DropdownMenuShortcut id={valueId} aria-hidden="true">
+        Permission mode
+        <DropdownMenuValue id={valueId} aria-hidden="true">
           {state.desired ? labels[state.desired] : "Choose…"}
-        </DropdownMenuShortcut>
+        </DropdownMenuValue>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent>
         {unavailable && (
@@ -130,9 +129,9 @@ function ClaudePermissionControls({
               >
                 {labels[mode]}
                 {!unavailable && !available && state.desired === mode && (
-                  <DropdownMenuShortcut aria-hidden="true">
+                  <DropdownMenuValue aria-hidden="true">
                     Not allowed
-                  </DropdownMenuShortcut>
+                  </DropdownMenuValue>
                 )}
               </DropdownMenuRadioItem>
             );

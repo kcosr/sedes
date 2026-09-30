@@ -71,9 +71,27 @@ export const menuHeaderClass =
 export const menuSeparatorClass =
   "-mx-(--menu-panel-padding) my-1 h-px bg-border"
 
-/** A trailing shortcut or short reason ("Running"). */
+/**
+ * Menu rows keep their label on one line and give it priority: a trailing
+ * value truncates first (see `menuValueClass`), and a submenu chevron that
+ * follows a value stays beside it. Two-line descriptions still wrap.
+ */
+export const menuRowNoWrapClass =
+  "whitespace-nowrap [&_[data-slot$=item-description]]:whitespace-normal [&>[data-slot$=item-value]+svg]:ml-0"
+
+/** A trailing keyboard hint ("⌘K"): 12px muted, normal tracking. */
 export const menuShortcutClass =
-  "ml-auto shrink-0 pl-4 text-(length:--text-meta) leading-4 font-normal text-muted-foreground-2 tabular-nums"
+  "ml-auto shrink-0 pl-4 text-(length:--text-meta) leading-4 font-normal tracking-normal text-muted-foreground-2"
+
+/**
+ * A row's current value or a disabled row's short reason ("High",
+ * "Unavailable", "Running"): muted, at the row's own size and tracking, at
+ * the row's end past a 16px inset. Its text truncates with an ellipsis
+ * within 45% of the row, and before the label gives way. Values long by
+ * nature (workspaces, paths) stay out of the row; the submenu shows them.
+ */
+export const menuValueClass =
+  "ml-auto min-w-0 max-w-[calc(45%+1rem)] shrink truncate pl-4 text-right font-normal tracking-normal text-muted-foreground-2"
 
 /** The second line of a two-line row. */
 export const menuDescriptionClass =

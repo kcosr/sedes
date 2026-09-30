@@ -90,7 +90,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
+  DropdownMenuValue,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.js";
 import { Field } from "../components/ui/field.js";
@@ -1940,7 +1940,7 @@ export function WorkspaceCompareView({
                 <Columns2 aria-hidden="true" />
                 Split
                 {!splitFeasible && (
-                  <DropdownMenuShortcut>Too narrow</DropdownMenuShortcut>
+                  <DropdownMenuValue>Too narrow</DropdownMenuValue>
                 )}
               </DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>

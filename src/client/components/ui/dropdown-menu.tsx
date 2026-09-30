@@ -20,8 +20,10 @@ import {
   menuPanelClass,
   menuRowClass,
   menuRowDestructiveClass,
+  menuRowNoWrapClass,
   menuSeparatorClass,
   menuShortcutClass,
+  menuValueClass,
 } from "@client/components/ui/floating"
 import {
   FloatingOpeningProvider,
@@ -46,6 +48,7 @@ import {
   MenuSheetSubContent,
   MenuSheetSubTrigger,
   MenuSheetTrigger,
+  MenuSheetValue,
   useMenuSheet,
   type MenuPresentation,
 } from "@client/components/ui/menu-sheet"
@@ -216,7 +219,7 @@ function DropdownMenuItem({
       data-slot="dropdown-menu-item"
       data-inset={inset}
       data-variant={variant}
-      className={cn(menuRowClass, menuRowDestructiveClass, "data-[inset]:pl-8", className)}
+      className={cn(menuRowClass, menuRowNoWrapClass, menuRowDestructiveClass, "data-[inset]:pl-8", className)}
       {...props}
     />
   )
@@ -258,7 +261,7 @@ function DropdownMenuCheckboxItem({
   return (
     <DropdownMenuPrimitive.CheckboxItem
       data-slot="dropdown-menu-checkbox-item"
-      className={cn(menuRowClass, menuCheckRowClass, className)}
+      className={cn(menuRowClass, menuRowNoWrapClass, menuCheckRowClass, className)}
       checked={checked}
       {...props}
     >
@@ -312,7 +315,7 @@ function DropdownMenuRadioItem({
   return (
     <DropdownMenuPrimitive.RadioItem
       data-slot="dropdown-menu-radio-item"
-      className={cn(menuRowClass, menuCheckRowClass, className)}
+      className={cn(menuRowClass, menuRowNoWrapClass, menuCheckRowClass, className)}
       {...props}
     >
       {children}
@@ -400,7 +403,7 @@ function DropdownMenuSeparator({
   )
 }
 
-/** A trailing shortcut, or a short reason on a disabled row ("Running"). */
+/** A trailing keyboard hint ("⌘K"); values and reasons use DropdownMenuValue. */
 function DropdownMenuShortcut({
   className,
   ...props
@@ -413,6 +416,27 @@ function DropdownMenuShortcut({
     <span
       data-slot="dropdown-menu-shortcut"
       className={cn(menuShortcutClass, className)}
+      {...props}
+    />
+  )
+}
+
+/**
+ * A row's current value or a disabled row's short reason ("High",
+ * "Unavailable"): muted, at the row's size, truncating before the label.
+ */
+function DropdownMenuValue({
+  className,
+  ...props
+}: React.ComponentProps<"span">) {
+  const sheet = useMenuSheet()
+  if (sheet) {
+    return <MenuSheetValue dataSlot="dropdown-menu-item-value" className={className} {...props} />
+  }
+  return (
+    <span
+      data-slot="dropdown-menu-item-value"
+      className={cn(menuValueClass, className)}
       {...props}
     />
   )
@@ -485,6 +509,7 @@ function DropdownMenuSubTrigger({
       data-variant={variant}
       className={cn(
         menuRowClass,
+        menuRowNoWrapClass,
         menuRowDestructiveClass,
         "data-[inset]:pl-8 data-[state=open]:bg-(--hover)",
         className
@@ -545,6 +570,7 @@ export {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
+  DropdownMenuValue,
   DropdownMenuEmpty,
   DropdownMenuSub,
   DropdownMenuSubTrigger,

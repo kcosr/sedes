@@ -40,7 +40,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
+  DropdownMenuValue,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.js";
 import {
@@ -1196,14 +1196,14 @@ function PanelLayoutReady({
                   onSelect={() => terminalPanelRef.current?.openTranscript()}
                 >
                   Transcript
-                  {!terminal ? <DropdownMenuShortcut>No terminal</DropdownMenuShortcut> : null}
+                  {!terminal ? <DropdownMenuValue>No terminal</DropdownMenuValue> : null}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   disabled={!terminal}
                   onSelect={() => terminalPanelRef.current?.clearSelection()}
                 >
                   Clear selection
-                  {!terminal ? <DropdownMenuShortcut>No terminal</DropdownMenuShortcut> : null}
+                  {!terminal ? <DropdownMenuValue>No terminal</DropdownMenuValue> : null}
                 </DropdownMenuItem>
                 {terminalSessionState?.retryInputAvailable ? (
                   <DropdownMenuItem
@@ -1223,7 +1223,7 @@ function PanelLayoutReady({
                   >
                     Discard unconfirmed input
                     {discardInputBlocker !== undefined ? (
-                      <DropdownMenuShortcut>{discardInputBlocker}</DropdownMenuShortcut>
+                      <DropdownMenuValue>{discardInputBlocker}</DropdownMenuValue>
                     ) : null}
                   </DropdownMenuItem>
                 ) : null}

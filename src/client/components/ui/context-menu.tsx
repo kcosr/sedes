@@ -17,8 +17,10 @@ import {
   menuPanelClass,
   menuRowClass,
   menuRowDestructiveClass,
+  menuRowNoWrapClass,
   menuSeparatorClass,
   menuShortcutClass,
+  menuValueClass,
 } from "@client/components/ui/floating"
 import {
   FloatingOpeningProvider,
@@ -43,6 +45,7 @@ import {
   MenuSheetSub,
   MenuSheetSubContent,
   MenuSheetSubTrigger,
+  MenuSheetValue,
   useMenuSheet,
   type MenuPresentation,
 } from "@client/components/ui/menu-sheet"
@@ -187,6 +190,7 @@ function ContextMenuSubTrigger({
       data-variant={variant}
       className={cn(
         menuRowClass,
+        menuRowNoWrapClass,
         menuRowDestructiveClass,
         "data-[inset]:pl-8 data-[state=open]:bg-(--hover)",
         className
@@ -315,7 +319,7 @@ function ContextMenuItem({
       data-slot="context-menu-item"
       data-inset={inset}
       data-variant={variant}
-      className={cn(menuRowClass, menuRowDestructiveClass, "data-[inset]:pl-8", className)}
+      className={cn(menuRowClass, menuRowNoWrapClass, menuRowDestructiveClass, "data-[inset]:pl-8", className)}
       {...props}
     />
   )
@@ -357,7 +361,7 @@ function ContextMenuCheckboxItem({
   return (
     <ContextMenuPrimitive.CheckboxItem
       data-slot="context-menu-checkbox-item"
-      className={cn(menuRowClass, menuCheckRowClass, className)}
+      className={cn(menuRowClass, menuRowNoWrapClass, menuCheckRowClass, className)}
       checked={checked}
       {...props}
     >
@@ -391,7 +395,7 @@ function ContextMenuRadioItem({
   return (
     <ContextMenuPrimitive.RadioItem
       data-slot="context-menu-radio-item"
-      className={cn(menuRowClass, menuCheckRowClass, className)}
+      className={cn(menuRowClass, menuRowNoWrapClass, menuCheckRowClass, className)}
       {...props}
     >
       {children}
@@ -479,7 +483,7 @@ function ContextMenuSeparator({
   )
 }
 
-/** A trailing shortcut, or a short reason on a disabled row ("Running"). */
+/** A trailing keyboard hint ("⌘K"); values and reasons use ContextMenuValue. */
 function ContextMenuShortcut({
   className,
   ...props
@@ -492,6 +496,27 @@ function ContextMenuShortcut({
     <span
       data-slot="context-menu-shortcut"
       className={cn(menuShortcutClass, className)}
+      {...props}
+    />
+  )
+}
+
+/**
+ * A row's current value or a disabled row's short reason ("Running",
+ * "Unavailable"): muted, at the row's size, truncating before the label.
+ */
+function ContextMenuValue({
+  className,
+  ...props
+}: React.ComponentProps<"span">) {
+  const sheet = useMenuSheet()
+  if (sheet) {
+    return <MenuSheetValue dataSlot="context-menu-item-value" className={className} {...props} />
+  }
+  return (
+    <span
+      data-slot="context-menu-item-value"
+      className={cn(menuValueClass, className)}
       {...props}
     />
   )
@@ -536,6 +561,7 @@ export {
   ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuShortcut,
+  ContextMenuValue,
   ContextMenuEmpty,
   ContextMenuGroup,
   ContextMenuPortal,
