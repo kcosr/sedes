@@ -226,6 +226,19 @@ describe("SettingsView", () => {
     expect(screen.getByLabelText("Environment name")).toHaveValue("Local");
   });
 
+  it("moves focus into an execution page reached with browser Back from another page", async () => {
+    const { controls, snapshot } = executionControls();
+    const local = snapshot.configuration.executionEnvironments[0]!;
+    renderSettings({ configuration: controls, page: "environments" });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("link", { name: "Local" }));
+    await user.click(navLink("Appearance"));
+    expect(screen.getByRole("heading", { name: "Appearance", level: 1 })).toHaveFocus();
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.pathname).toBe(settingsPath("environments", { mode: "view", resourceId: local.id })));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Local", level: 2 })).toHaveFocus());
+  });
+
   it("normalizes unavailable categories to the grouped list without the sidebar nav", async () => {
     renderSettings({ page: "server", compact: true });
     await waitFor(() => expect(window.location.pathname).toBe("/settings"));

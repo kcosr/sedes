@@ -236,7 +236,8 @@ export function ExecutionSettings({ controls }: {
   const locationKey = current ? pathOf(current) : "";
   useLayoutEffect(() => {
     const previous = previousLocation.current;
-    if (!current) return;
+    // Another settings page is shown: coming back is a new arrival.
+    if (!current) { previousLocation.current = undefined; return; }
     previousLocation.current = current;
     previousPath.current = previous ? pathOf(previous) : undefined;
     if (previous && pathOf(previous) === pathOf(current)) return;
