@@ -69,6 +69,77 @@ describe("UsageView", () => {
     expect(screen.getAllByText("Unknown model").length).toBeGreaterThan(0);
   });
 
+  it("picks a date range preset from radio rows that mark the choice with a trailing check", async () => {
+    const user = userEvent.setup();
+    const api = mount();
+    await screen.findByText("2.5M");
+    const trigger = screen.getByRole("button", { name: "Date range: Last 30 days" });
+    await user.click(trigger);
+    const menu = await screen.findByRole("menu", { name: "Date range: Last 30 days" });
+    expect(within(menu).getByText("Date range")).toBeVisible();
+    const rows = within(menu).getAllByRole("menuitemradio");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Today", "Last 24 hours", "Last 7 days", "Last 30 days", "Last 90 days", "This month", "Last month", "This year", "All time", "Custom range…",
+    ]);
+    const current = within(menu).getByRole("menuitemradio", { name: "Last 30 days" });
+    expect(current).toHaveAttribute("aria-checked", "true");
+    expect(current).toHaveClass("data-[state=checked]:font-medium");
+    expect(current.lastElementChild?.querySelector("svg")).not.toBeNull();
+    expect(rows.filter((row) => row.getAttribute("aria-checked") === "true")).toHaveLength(1);
+    await user.click(within(menu).getByRole("menuitemradio", { name: "Last 7 days" }));
+    expect(await screen.findByRole("button", { name: "Date range: Last 7 days" })).toBeVisible();
+    const request = api.mock.lastCall![0];
+    expect(Date.parse(request.to) - Date.parse(request.from!)).toBeLessThan(8 * 86_400_000);
+    expect(JSON.parse(localStorage.getItem("sedes-usage-view-v1")!).preset).toBe("7d");
+  });
+
+  it("sets a custom range in a dialog that validates the dates and returns focus to the trigger", async () => {
+    const user = userEvent.setup();
+    const api = mount();
+    await screen.findByText("2.5M");
+    await user.click(screen.getByRole("button", { name: "Date range: Last 30 days" }));
+    await user.click(await screen.findByRole("menuitemradio", { name: "Custom range…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Custom range" });
+    const from = within(dialog).getByLabelText("From");
+    const to = within(dialog).getByLabelText("To");
+    await waitFor(() => expect(from).toHaveFocus());
+    const apply = within(dialog).getByRole("button", { name: "Apply range" });
+    fireEvent.change(from, { target: { value: "2026-09-10" } });
+    fireEvent.change(to, { target: { value: "2026-09-05" } });
+    expect(to).toHaveAttribute("aria-invalid", "true");
+    expect(within(dialog).getByText("The end date is before the start date.")).toBeVisible();
+    expect(apply).toBeDisabled();
+    fireEvent.change(to, { target: { value: "2026-09-12" } });
+    expect(to).not.toHaveAttribute("aria-invalid");
+    await user.click(apply);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Custom range" })).toBeNull());
+    const trigger = await screen.findByRole("button", { name: /^Date range: Sep 10 – Sep 12/ });
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(JSON.parse(localStorage.getItem("sedes-usage-view-v1")!)).toMatchObject({ preset: "custom", customFrom: "2026-09-10", customTo: "2026-09-12" });
+    expect(Date.parse(api.mock.lastCall![0].to) - Date.parse(api.mock.lastCall![0].from!)).toBe(3 * 86_400_000);
+    // Reopening marks Custom range as the choice; Cancel keeps the range.
+    await user.click(trigger);
+    await user.click(await screen.findByRole("menuitemradio", { name: "Custom range…" }));
+    const reopened = await screen.findByRole("dialog", { name: "Custom range" });
+    expect(within(reopened).getByLabelText("From")).toHaveValue("2026-09-10");
+    await user.click(within(reopened).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Date range: Sep 10 – Sep 12/ })).toHaveFocus());
+  });
+
+  it("presents the long range and group-by lists as sheets under the touch density", async () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    const user = userEvent.setup();
+    mount();
+    await screen.findByText("2.5M");
+    await user.click(screen.getByRole("button", { name: "Date range: Last 30 days" }));
+    const sheet = await screen.findByRole("dialog", { name: "Date range" });
+    expect(within(sheet).getByRole("menuitemradio", { name: "Last 30 days" })).toHaveAttribute("aria-checked", "true");
+    await user.click(within(sheet).getByRole("menuitemradio", { name: "This month" }));
+    expect(await screen.findByRole("button", { name: "Date range: This month" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Group by: Model" }));
+    expect(await screen.findByRole("dialog", { name: "Group by" })).toBeVisible();
+  });
+
   it("filters every view from a breakdown row and removes the filter from its chip", async () => {
     const api = mount();
     const row = await screen.findByTitle("Filter to opus");

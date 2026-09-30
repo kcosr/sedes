@@ -19,11 +19,14 @@ import {
   AlertCircle,
   Check,
   ChevronDown,
+  ClipboardCheck,
   Download,
   FilePenLine,
   FolderPlus,
   FolderTree,
+  History as HistoryIcon,
   LoaderCircle,
+  MessageSquareText,
   RefreshCw,
   Save,
   Trash2,
@@ -44,10 +47,15 @@ import {
 } from "../../shared/index.js";
 import { Button } from "../components/ui/button.js";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "../components/ui/popover.js";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuItemDescription,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu.js";
 import { ApiError, type ApiClient } from "../api/ApiClient.js";
 import { useApplicationStore } from "../stores/ApplicationClientStore.js";
 import {
@@ -2930,9 +2938,14 @@ export function WorkspaceFilesPanel({
       (compareHistoryReviews.find((review) => review.id === activeCompareReviewId && review.id !== currentCompareReview?.id)?.id ?? compareHistoryReviews.find((review) => review.id !== currentCompareReview?.id)?.id));
     setCompareDetailsOpen(true);
   };
+  const startReviewBlocked = compareReviewLoading
+    ? "Loading…"
+    : compareReviewMutating || compareCommentSaving
+      ? "Saving…"
+      : undefined;
   const compareReviewControls = (
-    <Popover open={reviewMenuOpen} onOpenChange={setReviewMenuOpen}>
-      <PopoverTrigger asChild>
+    <DropdownMenu open={reviewMenuOpen} onOpenChange={setReviewMenuOpen}>
+      <DropdownMenuTrigger asChild>
         <button
           type="button"
           className="workspace-compare-toolbar-button"
@@ -2950,55 +2963,49 @@ export function WorkspaceFilesPanel({
           )}
           <ChevronDown aria-hidden="true" size={13} />
         </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        className="workspace-files-review-menu"
-        aria-label="Review options"
-      >
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-56">
         {currentCompareReview ? (
-          <p>{compareReviewedCount} of {compareFiles.length} reviewed</p>
+          <>
+            <DropdownMenuLabel variant="header">
+              {compareReviewedCount} of {compareFiles.length} files reviewed
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => showReviewInspector("current")}>
+              <MessageSquareText aria-hidden="true" />
+              Comments
+              <DropdownMenuShortcut>{compareCommentCount}</DropdownMenuShortcut>
+            </DropdownMenuItem>
+          </>
         ) : (
-          <p>Start a review to save comments and reviewed files.</p>
-        )}
-        {!currentCompareReview && (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!activeComparison || compareReviewLoading || compareReviewMutating || compareCommentSaving}
-            onClick={() => {
-              setReviewMenuOpen(false);
-              void startCompareReview();
-            }}
+          <DropdownMenuItem
+            disabled={!activeComparison || startReviewBlocked !== undefined}
+            onSelect={() => void startCompareReview()}
           >
-            Start review
-          </Button>
+            <ClipboardCheck aria-hidden="true" />
+            <span className="min-w-0 flex-1">
+              Start review
+              <DropdownMenuItemDescription>
+                Save comments and reviewed files.
+              </DropdownMenuItemDescription>
+            </span>
+            {startReviewBlocked && (
+              <DropdownMenuShortcut>{startReviewBlocked}</DropdownMenuShortcut>
+            )}
+          </DropdownMenuItem>
         )}
-        {currentCompareReview && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setReviewMenuOpen(false);
-              showReviewInspector("current");
-            }}
-          >
-            Comments ({compareCommentCount})
-          </Button>
-        )}
-        <Button
-          variant="ghost"
-          size="sm"
+        <DropdownMenuItem
           disabled={compareRepositoryHistoryCount === 0}
-          onClick={() => {
-            setReviewMenuOpen(false);
-            showReviewInspector("history");
-          }}
+          onSelect={() => showReviewInspector("history")}
         >
+          <HistoryIcon aria-hidden="true" />
           History
-        </Button>
-      </PopoverContent>
-    </Popover>
+          {compareRepositoryHistoryCount === 0 && (
+            <DropdownMenuShortcut>None yet</DropdownMenuShortcut>
+          )}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
   const activeCompareRefresh = compareRefreshControl?.scope === compareRefreshScope
     ? compareRefreshControl : undefined;

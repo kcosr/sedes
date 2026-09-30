@@ -3210,7 +3210,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   align-items: center;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: calc(var(--radius-ctl) + 2px);
+  border-radius: var(--radius-ctl);
   background: color-mix(in oklch, var(--background) 88%, var(--sidebar));
 }
 
@@ -3252,29 +3252,6 @@ body:has(.thread-settings-sheet[data-state="open"])
 .workspace-panel-open-icon[data-visible="true"] {
   color: var(--foreground);
   background: color-mix(in oklch, var(--accent) 72%, transparent);
-}
-
-.workspace-panel-open-menu-content {
-  min-width: min(300px, calc(100vw - 16px));
-}
-
-.workspace-panel-open-item {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-}
-
-.workspace-panel-open-item[data-collapsed="true"] {
-  color: var(--muted-foreground);
-}
-
-.workspace-panel-open-item-label {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .workspace-panel-empty {
@@ -5471,43 +5448,6 @@ body:has(.thread-settings-sheet[data-state="open"])
   display: inline-flex;
   min-width: 0;
   align-items: center;
-}
-
-.thread-terminal-menu {
-  min-width: 230px;
-  max-width: min(360px, calc(100vw - 18px));
-}
-
-.thread-terminal-menu-row {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) 32px 32px;
-  gap: 2px;
-  align-items: stretch;
-}
-
-.thread-terminal-menu-entry {
-  min-width: 0;
-}
-
-.thread-terminal-menu-rename,
-.thread-terminal-menu-teardown {
-  justify-content: center;
-  padding-inline: 0;
-}
-
-.thread-terminal-menu-name {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thread-terminal-menu-status {
-  flex: 0 0 auto;
-  color: var(--muted-foreground);
-  font-size: 11px;
 }
 
 /* ── In-thread find: an editor-style strip owned by the Chat panel. The
@@ -11180,41 +11120,6 @@ tr.diff-hunk td {
   border-bottom-left-radius: 0;
 }
 
-.interaction-action-menu {
-  width: max-content;
-  max-width: min(
-    var(--measure),
-    calc(100vw - clamp(14px, 4vw, 48px) - clamp(14px, 4vw, 48px))
-  );
-}
-
-.interaction-action-menu [data-slot="dropdown-menu-item"],
-.interaction-action-menu-copy {
-  min-width: 0;
-  max-width: 100%;
-}
-
-.interaction-action-menu-copy {
-  display: grid;
-  gap: 2px;
-}
-
-.interaction-action-menu-copy > span,
-.interaction-action-menu-copy small {
-  display: -webkit-box;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  white-space: normal;
-}
-
-.interaction-action-menu-copy small {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-}
-
 .interaction-questionnaire {
   position: relative;
   margin-top: 12px;
@@ -14116,10 +14021,6 @@ tr.diff-hunk td {
   .interaction-split-button > button:last-child {
     width: 44px;
     min-width: 44px;
-  }
-
-  .interaction-action-menu {
-    max-width: calc(100vw - 18px);
   }
 
   .interaction-question-options {
