@@ -391,7 +391,6 @@ export function AgentToolSettingsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         size="lg"
-        className="agent-tool-dialog"
         aria-describedby={dialogDescriptionId}
         returnFocusRef={returnFocusRef}
         onEscapeKeyDown={(event) => {

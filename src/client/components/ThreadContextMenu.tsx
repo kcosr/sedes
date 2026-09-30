@@ -846,16 +846,11 @@ export function ThreadContextMenu({
       <Dialog open={groupDialogOpen} onOpenChange={setGroupDialogOpen}>
         <DialogContent
           ref={groupDialogRef}
-          className="thread-group-dialog z-[calc(var(--z-over-dialog)+1)]"
-          overlayClassName="z-(--z-over-dialog)"
+          className="thread-group-dialog"
+          layer="over-dialog"
           data-testid="thread-group-dialog"
           onOpenAutoFocus={groupPickerFocus.onOpenAutoFocus}
-          onCloseAutoFocus={(event) => {
-            const target = returnFocusRef?.current;
-            if (!target?.isConnected) return;
-            event.preventDefault();
-            target.focus();
-          }}
+          returnFocusRef={returnFocusRef}
         >
           <DialogHeader>
             <DialogTitle>Move to group</DialogTitle>

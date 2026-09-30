@@ -86,8 +86,8 @@ export function SidebarUsageSheet({
       <DialogContent
         layout="sheet"
         size="md"
-        className="sidebar-usage-sheet z-[calc(var(--z-over-dialog)+1)]"
-        overlayClassName="z-(--z-over-dialog)"
+        className="sidebar-usage-sheet"
+        layer="over-dialog"
       >
         <DialogHeader>
           <DialogTitle>Accounts</DialogTitle>

@@ -141,7 +141,6 @@ function initialFocusTarget(content: HTMLElement): HTMLElement {
 
 function DialogContent({
   className,
-  overlayClassName,
   children,
   size = "sm",
   layout = "modal",
@@ -171,7 +170,6 @@ function DialogContent({
   // Non-modal surfaces leave chrome outside the dialog usable, so they opt
   // out of the scrim that would otherwise cover it.
   showOverlay?: boolean
-  overlayClassName?: string
   /** The stacking band; raise it for dialogs opened from the drawer, a sheet or a blocking operation. */
   layer?: DialogLayer
   /**
@@ -194,7 +192,7 @@ function DialogContent({
   }, [ref])
   return (
     <DialogPortal>
-      {showOverlay && <DialogOverlay layer={layer} className={overlayClassName} />}
+      {showOverlay && <DialogOverlay layer={layer} />}
       <DialogPrimitive.Content
         ref={contentRef}
         data-slot="dialog-content"

@@ -529,7 +529,6 @@ export function ThreadAutomationDialog({
         layout="side"
         size="lg"
         layer="over-dialog"
-        className="automation-dialog"
       >
         <DialogHeader>
           <div className="automation-dialog-title">

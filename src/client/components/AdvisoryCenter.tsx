@@ -99,7 +99,6 @@ export function AdvisoryCenter({
         />
       ) : null}
       <DialogContent
-        className="advisory-center-sheet"
         layout="side"
         size="sm"
         layer="over-dialog"

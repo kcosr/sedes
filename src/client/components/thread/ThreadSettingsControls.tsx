@@ -326,12 +326,7 @@ export function ThreadModelPickerSheet({
           if (searchFirst) pickerFocus.requestSearchFocus();
           pickerFocus.onOpenAutoFocus(event);
         }}
-        onCloseAutoFocus={(event) => {
-          const target = returnFocusRef.current;
-          if (!target?.isConnected) return;
-          event.preventDefault();
-          target.focus();
-        }}
+        returnFocusRef={returnFocusRef}
       >
         <DialogHeader>
           <DialogTitle>Choose {setting.label.text.toLocaleLowerCase()}</DialogTitle>

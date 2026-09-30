@@ -283,7 +283,6 @@ export function DirectoryPickerDialog({
         size="md"
         layer="blocking"
         dismissible={!submitting}
-        className="directory-picker-dialog"
       >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>

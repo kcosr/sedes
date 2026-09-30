@@ -184,7 +184,9 @@ describe("SidebarFooterActions", () => {
     await user.click(trigger);
 
     const sheet = screen.getByRole("dialog", { name: "Warnings" });
-    expect(sheet).toHaveClass("advisory-center-sheet");
+    // A side panel over the drawer (the sidebar that opened it).
+    expect(sheet).toHaveAttribute("data-layout", "side");
+    expect(sheet).toHaveAttribute("data-layer", "over-dialog");
     expect(sheet).toHaveAttribute("aria-modal", "true");
     expect(sheet).toHaveAccessibleDescription(
       "Active application and backend warnings.",

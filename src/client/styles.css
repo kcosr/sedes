@@ -9034,13 +9034,6 @@ tr.diff-hunk td {
   );
 }
 
-.menu-error {
-  margin: 5px 10px;
-  color: var(--destructive);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
 /* ── Interaction (approval) card: docked between transcript and composer.
    Anatomy — status dot, eyebrow title, meta rail (queue and status); the
    request itself owns the headline; detail in a --code inset
@@ -12056,7 +12049,6 @@ tr.diff-hunk td {
   .sidebar-create-action,
   .back-button,
   .archive-row-title,
-  .preset-row button,
   .queue-button {
     min-height: 44px;
   }
