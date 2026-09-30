@@ -22,7 +22,6 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -69,7 +68,7 @@ type ExecutionState = {
 };
 
 const sandboxLabels: Readonly<Record<SandboxMode, string>> = Object.freeze({
-  "read-only": "Read only",
+  "read-only": "Read-only",
   "workspace-write": "Workspace",
   "danger-full-access": "Unrestricted",
 });
@@ -183,22 +182,32 @@ function CodexExecutionControls({
     : (desired?.networkAccess ?? "");
   const reviewerNotApplicable = desired?.approvalPolicy === "never";
   const unavailable = disabled || capability.availability !== "available";
+  // The submenu stays openable while the settings cannot change, so their
+  // current values stay visible beside the reason.
+  const unavailableReason = unavailable
+    ? capability.availability !== "available"
+      ? (capability.unavailableReason?.text ?? "Can't be changed right now")
+      : "Can't be changed right now"
+    : undefined;
   return (
     <DropdownMenuSub>
-      <DropdownMenuSubTrigger disabled={unavailable}>
+      <DropdownMenuSubTrigger>
         <Shield aria-hidden="true" />
         Codex execution
-        {unavailable && (
-          <DropdownMenuShortcut aria-hidden="true">Unavailable</DropdownMenuShortcut>
-        )}
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent>
+        {unavailableReason && (
+          <p role="status" className={cn(menuDescriptionClass, "m-0 px-2 py-1.5")}>
+            {unavailableReason}
+          </p>
+        )}
         <ExecutionChoices
           label="Sandbox"
           value={desired?.sandboxMode ?? ""}
           values={sandboxModes}
           labels={sandboxLabels}
           icons={sandboxIcons}
+          disabled={unavailable}
           operationAvailable={(value) =>
             Boolean(operation(sandboxActions[value]))
           }
@@ -216,7 +225,7 @@ function CodexExecutionControls({
           values={networkAccessValues}
           labels={networkLabels}
           icons={networkIcons}
-          disabled={forceNetworkEnabled}
+          disabled={unavailable || forceNetworkEnabled}
           operationAvailable={(value) =>
             Boolean(operation(networkActions[value]))
           }
@@ -229,6 +238,7 @@ function CodexExecutionControls({
           values={approvalPolicies}
           labels={approvalLabels}
           icons={approvalIcons}
+          disabled={unavailable}
           operationAvailable={(value) =>
             Boolean(operation(approvalActions[value]))
           }
@@ -246,7 +256,7 @@ function CodexExecutionControls({
           values={approvalReviewers}
           labels={reviewerLabels}
           icons={reviewerIcons}
-          disabled={reviewerNotApplicable}
+          disabled={unavailable || reviewerNotApplicable}
           operationAvailable={(value) =>
             Boolean(operation(reviewerActions[value]))
           }

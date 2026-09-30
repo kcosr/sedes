@@ -230,7 +230,9 @@ export function SidebarViewControls({
           aria-label="View options"
           sheetTitle="View options"
           align="end"
-          className="min-w-56"
+          // The sidebar's width: long hints wrap instead of spilling over
+          // the chat.
+          className="w-60"
         >
           <DropdownMenuLabel>Group by</DropdownMenuLabel>
           <DropdownMenuRadioGroup

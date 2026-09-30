@@ -1,4 +1,11 @@
-import { Brain, Box, ChevronDown, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import {
+  Brain,
+  Box,
+  ChevronDown,
+  ChevronRight,
+  ShieldCheck,
+  SlidersHorizontal,
+} from "lucide-react";
 import type {
   NormalizedThreadSnapshot,
   SettingDescriptor,
@@ -33,7 +40,7 @@ import {
   SelectValue,
 } from "@client/components/ui/select";
 import { usePickerFocus } from "../../lib/use-picker-focus.js";
-import { useRef } from "react";
+import { useId, useRef } from "react";
 
 const MODEL_SETTING_ID = "model";
 
@@ -203,13 +210,18 @@ export function ThreadSettingsMenuItems({
   readonly onChooseModel: (viaKeyboard: boolean) => void;
 }): React.JSX.Element {
   const keyboardChoice = useRef(false);
+  const idPrefix = useId();
   return (
     <>
       {settingStates(snapshot).map(
         ({ setting, value, selectedLabel, placeholder }) => {
           const settingDisabled = disabled || !setting.available;
+          // The row is named by the setting; its current value describes it.
+          const valueId = `${idPrefix}-${setting.id}`;
           const current = (
-            <DropdownMenuShortcut>{selectedLabel ?? placeholder}</DropdownMenuShortcut>
+            <DropdownMenuShortcut id={valueId} aria-hidden="true">
+              {selectedLabel ?? placeholder}
+            </DropdownMenuShortcut>
           );
           if (setting.id === MODEL_SETTING_ID) {
             return (
@@ -217,6 +229,7 @@ export function ThreadSettingsMenuItems({
                 key={setting.id}
                 disabled={settingDisabled}
                 aria-haspopup="dialog"
+                aria-describedby={valueId}
                 title={setting.unavailableReason?.text}
                 onPointerDown={() => {
                   keyboardChoice.current = false;
@@ -230,6 +243,8 @@ export function ThreadSettingsMenuItems({
                 <SettingIcon id={setting.id} />
                 {setting.label.text}
                 {current}
+                {/* Leads on to the model sheet, like the drill-in rows. */}
+                <ChevronRight aria-hidden="true" />
               </DropdownMenuItem>
             );
           }
@@ -237,6 +252,7 @@ export function ThreadSettingsMenuItems({
             <DropdownMenuSub key={setting.id}>
               <DropdownMenuSubTrigger
                 disabled={settingDisabled}
+                aria-describedby={valueId}
                 title={setting.unavailableReason?.text}
               >
                 <SettingIcon id={setting.id} />

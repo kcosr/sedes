@@ -752,10 +752,14 @@ export const ThreadHeader = memo(function ThreadHeader({
                       <DropdownMenuSub>
                         <DropdownMenuSubTrigger
                           disabled={disabled || moveDraft?.available !== true}
+                          aria-describedby={`draft-workspace-${snapshot.thread.id}`}
                         >
                           <FolderInput aria-hidden="true" />
                           Draft workspace
-                          <DropdownMenuShortcut>
+                          <DropdownMenuShortcut
+                            id={`draft-workspace-${snapshot.thread.id}`}
+                            aria-hidden="true"
+                          >
                             {draftWorkspaceLabel(snapshot.workspace.id)}
                           </DropdownMenuShortcut>
                         </DropdownMenuSubTrigger>

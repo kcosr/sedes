@@ -260,11 +260,18 @@ describe("codex.execution@1 client feature", () => {
     }
   });
 
-  it("preserves true capability and pending-operation disabling", () => {
+  it("keeps the values visible but unchangeable while pending or unavailable", async () => {
     const { rerender } = renderFeature(snapshot(), vi.fn(), true);
     const trigger = screen.getByRole("menuitem", { name: "Codex execution" });
-    expect(trigger).toHaveAttribute("data-disabled");
-    expect(trigger).toHaveTextContent("Unavailable");
+    expect(trigger).not.toHaveAttribute("data-disabled");
+    let menu = await openExecution();
+    expect(within(menu).getByRole("status")).toHaveTextContent(
+      "Can't be changed right now",
+    );
+    expect(checkedIn(menu, "Sandbox")).toBe("Workspace");
+    for (const row of within(menu).getAllByRole("menuitemradio")) {
+      expect(row).toHaveAttribute("data-disabled");
+    }
 
     rerender(
       featureElement(
@@ -277,12 +284,13 @@ describe("codex.execution@1 client feature", () => {
         }),
       ),
     );
-    expect(
-      screen.getByRole("menuitem", { name: "Codex execution" }),
-    ).toHaveAttribute("data-disabled");
-    expect(
-      screen.queryByText("Connection unavailable"),
-    ).not.toBeInTheDocument();
+    menu = screen.getByRole("menu", { name: "Codex execution" });
+    expect(within(menu).getByRole("status")).toHaveTextContent(
+      "Connection unavailable",
+    );
+    for (const row of within(menu).getAllByRole("menuitemradio")) {
+      expect(row).toHaveAttribute("data-disabled");
+    }
   });
 
   it("drills into the same choices on the touch sheet", async () => {
@@ -297,7 +305,7 @@ describe("codex.execution@1 client feature", () => {
       within(pane).getByRole("menuitemradio", { name: "Workspace" }),
     ).toHaveAttribute("aria-checked", "true");
     await userEvent.click(
-      within(pane).getByRole("menuitemradio", { name: "Read only" }),
+      within(pane).getByRole("menuitemradio", { name: "Read-only" }),
     );
     expect(perform).toHaveBeenCalledWith(
       expect.objectContaining({ actionId: "set_sandbox_read_only" }),

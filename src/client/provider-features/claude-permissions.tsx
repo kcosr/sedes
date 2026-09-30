@@ -4,6 +4,8 @@ import type {
 } from "../../shared/index.js";
 import type { ClientProviderFeatureModule } from "./registry.js";
 import { ShieldCheck } from "lucide-react";
+import { menuDescriptionClass } from "@client/components/ui/floating";
+import { cn } from "@client/lib/utils";
 import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -86,20 +88,25 @@ function ClaudePermissionControls({
     });
   };
 
+  const valueId = `claude-permission-mode-${featureState.revision}`;
   return (
     <DropdownMenuSub>
-      <DropdownMenuSubTrigger disabled={unavailable}>
+      {/* Openable even when the mode cannot change, so it stays visible. */}
+      <DropdownMenuSubTrigger aria-describedby={valueId}>
         <ShieldCheck aria-hidden="true" />
         Permission mode
-        <DropdownMenuShortcut aria-hidden="true">
-          {unavailable
-            ? "Unavailable"
-            : state.desired
-              ? labels[state.desired]
-              : "Choose…"}
+        <DropdownMenuShortcut id={valueId} aria-hidden="true">
+          {state.desired ? labels[state.desired] : "Choose…"}
         </DropdownMenuShortcut>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent>
+        {unavailable && (
+          <p role="status" className={cn(menuDescriptionClass, "m-0 px-2 py-1.5")}>
+            {capability.availability !== "available"
+              ? (capability.unavailableReason?.text ?? "Can't be changed right now")
+              : "Can't be changed right now"}
+          </p>
+        )}
         <DropdownMenuRadioGroup
           aria-label="Permission mode"
           value={state.desired ?? ""}
@@ -118,11 +125,13 @@ function ClaudePermissionControls({
               <DropdownMenuRadioItem
                 key={mode}
                 value={mode}
-                disabled={!available}
+                disabled={unavailable || !available}
               >
                 {labels[mode]}
-                {!available && state.desired === mode && (
-                  <DropdownMenuShortcut>Unavailable</DropdownMenuShortcut>
+                {!unavailable && !available && state.desired === mode && (
+                  <DropdownMenuShortcut aria-hidden="true">
+                    Not allowed
+                  </DropdownMenuShortcut>
                 )}
               </DropdownMenuRadioItem>
             );

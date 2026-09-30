@@ -163,22 +163,34 @@ describe("claude.permissions@1 client feature", () => {
     });
     expect(retained).toHaveAttribute("data-disabled");
     expect(retained).toHaveAttribute("aria-checked", "true");
-    expect(retained).toHaveTextContent("Unavailable");
+    expect(retained).toHaveTextContent("Not allowed");
     expect(
       within(menu).getByRole("menuitemradio", { name: "Default" }),
     ).not.toHaveAttribute("data-disabled");
   });
 
-  it("disables selection when the capability or host is unavailable", () => {
+  it("keeps the mode visible but unchangeable when the capability or host is unavailable", async () => {
     const { rerender } = renderFeature(snapshot(), vi.fn(), true);
     const trigger = screen.getByRole("menuitem", { name: "Permission mode" });
-    expect(trigger).toHaveAttribute("data-disabled");
-    expect(trigger).toHaveTextContent("Unavailable");
+    expect(trigger).not.toHaveAttribute("data-disabled");
+    expect(trigger).toHaveAccessibleDescription("Default");
+    let menu = await openModes();
+    expect(within(menu).getByRole("status")).toHaveTextContent(
+      "Can't be changed right now",
+    );
+    for (const row of within(menu).getAllByRole("menuitemradio")) {
+      expect(row).toHaveAttribute("data-disabled");
+    }
+    expect(
+      within(menu).getByRole("menuitemradio", { name: "Default" }),
+    ).toHaveAttribute("aria-checked", "true");
 
     rerender(featureElement(snapshot({ availability: "unavailable" })));
-    expect(
-      screen.getByRole("menuitem", { name: "Permission mode" }),
-    ).toHaveAttribute("data-disabled");
+    menu = screen.getByRole("menu", { name: /Permission mode/ });
+    expect(within(menu).getByRole("status")).toHaveTextContent("Unavailable");
+    for (const row of within(menu).getAllByRole("menuitemradio")) {
+      expect(row).toHaveAttribute("data-disabled");
+    }
   });
 
   it("fails closed on unknown state values or extra provider fields", () => {
