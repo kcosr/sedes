@@ -51,6 +51,39 @@ describe("Pi request throughput boundary", () => {
     expect(collector.take(response)).toBeUndefined();
   });
 
+  it.each<AssistantMessage["content"][number]>([
+    { type: "text", text: "Response without reported usage" },
+    { type: "thinking", thinking: "Reasoning without reported usage" },
+    { type: "toolCall", id: "call-read", name: "read", arguments: { path: "README.md" } },
+  ])("rejects zero-output usage for a nonempty $type response", async (content) => {
+    let now = 0;
+    const collector = new PiRequestThroughput(() => now);
+    const source = new AssistantMessageEventStream();
+    const stream = await collector.wrap(() => source)(model, context);
+    const response = message(content.type === "toolCall" ? "toolUse" : "stop");
+    response.content = [content];
+    response.usage.output = 0;
+    now = 1000;
+    source.end(response);
+    await stream.result();
+    expect(collector.take(response)).toBeUndefined();
+  });
+
+  it("retains request time for a genuinely empty zero-output response", async () => {
+    let now = 0;
+    const collector = new PiRequestThroughput(() => now);
+    const source = new AssistantMessageEventStream();
+    const stream = await collector.wrap(() => source)(model, context);
+    const response = message();
+    response.content = [{ type: "text", text: "" }];
+    response.usage.output = 0;
+    response.usage.reasoning = 0;
+    now = 1000;
+    source.end(response);
+    await stream.result();
+    expect(collector.take(response)).toEqual({ outputTokens: 0, requestDurationMs: 1000 });
+  });
+
   it("observes the exact cancellation-normalized object without admitting cancelled output", async () => {
     let now = 0;
     const collector = new PiRequestThroughput(() => now);

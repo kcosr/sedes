@@ -1254,7 +1254,9 @@ denominator to exactly the same observed main-agent model requests; output
 already includes reasoning. Request duration includes provider startup, network
 latency, and retries within a stream, but excludes tools, approval waits,
 compaction, auxiliary work, and gaps between requests. Missing, invalid, failed,
-or interrupted request evidence suppresses the whole turn's rate.
+or interrupted request evidence suppresses the whole turn's rate. An emitted
+error response still invalidates the turn when SDK retry or context-overflow
+recovery later succeeds.
 
 The required backend capability `turnThroughput` has these dispositions:
 

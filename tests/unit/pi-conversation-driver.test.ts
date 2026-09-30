@@ -1870,6 +1870,71 @@ describe("Pi conversation backend driver", () => {
     } finally { unsubscribe(); await handle.close(); }
   });
 
+  it.each(["duplicate response", "follow-up"] as const)("attributes throughput across %s events in one agent run", async (scenario) => {
+    const fixture = await workspace();
+    const base = fakeSessionFactory(1, true, undefined, 0, undefined, 0, undefined, undefined,
+      undefined, undefined, undefined, false, false, async (manager, emit) => {
+        if (scenario !== "follow-up") return;
+        const user = { role: "user" as const, content: "Follow up in the same run", timestamp: Date.now() };
+        // Match the SDK: notify first, persist before the driver's correlation microtask.
+        emit({ type: "message_end", message: user } as never);
+        manager.appendMessage(user);
+        await Promise.resolve();
+      });
+    const taken = new WeakSet<object>();
+    const takeRequestThroughput = vi.fn<PiSdkSession["takeRequestThroughput"]>((message) => {
+      if (taken.has(message)) return undefined;
+      taken.add(message);
+      return message.stopReason === "toolUse"
+        ? { outputTokens: 10, requestDurationMs: 1000 }
+        : { outputTokens: 100, requestDurationMs: 3000 };
+    });
+    const driver = new PiConversationBackendDriver({
+      instance, connection, usage: NO_USAGE_SINK, nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
+      toolProvenanceKey, agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy, sessionDirectory: fixture.sessions,
+      sessionFactory: { async create(input) {
+        const session = await base.create(input);
+        const subscribe = session.subscribe.bind(session);
+        session.subscribe = listener => subscribe(event => {
+          listener(event);
+          if (scenario === "duplicate response" && event.type === "message_end" && event.message.role === "assistant") {
+            listener(event);
+          }
+        });
+        session.takeRequestThroughput = takeRequestThroughput;
+        return session;
+      } },
+    });
+    const created = await driver.create({ scope, workspace: fixture.workspace, applicationThreadId: "throughput-boundary",
+      applicationOperationId: "throughput-boundary-create", source: { kind: "user" } });
+    const handle = await driver.attach({ scope, workspace: fixture.workspace, binding: binding(created.backendConversationId),
+      opaqueBindingDetail: created.opaqueBindingDetail });
+    const completed: BackendTurn[] = [];
+    const events: BackendConversationEvent[] = [];
+    handle.subscribe(event => {
+      events.push(event);
+      if (event.type === "turn_completed") completed.push(event.turn);
+    });
+    try {
+      await handle.submit({ applicationOperationId: "throughput-boundary", mutationId: "throughput-boundary", reconciliationToken: "throughput-boundary",
+        source: { kind: "user" }, contextExcerpts: [], attachments: [], taskContexts: [], text: "Measured tool loop" });
+      await vi.waitFor(() => expect(completed).toHaveLength(scenario === "follow-up" ? 2 : 1));
+      expect(takeRequestThroughput).toHaveBeenCalledTimes(2);
+      expect(events.some(event => event.type === "resnapshot_required")).toBe(false);
+      if (scenario === "follow-up") {
+        expect(completed[0]).toMatchObject({ status: "completed", endedBy: "steer", throughput: { outputTokens: 10, requestDurationMs: 1000 } });
+        expect(completed[1]).toMatchObject({ status: "completed", throughput: { outputTokens: 100, requestDurationMs: 3000 } });
+        expect(completed[0]!.backendTurnId).not.toBe(completed[1]!.backendTurnId);
+      } else {
+        expect(completed[0]?.throughput).toEqual({ outputTokens: 110, requestDurationMs: 4000 });
+      }
+      const history = await handle.history({ limit: 10 });
+      for (const turn of completed) {
+        expect(history.turnsById[turn.backendTurnId]?.throughput).toEqual(turn.throughput);
+      }
+    } finally { await handle.close(); }
+  });
+
   it.each(["missing", "failed"] as const)("omits turn throughput when a response is %s", async (scenario) => {
     const fixture = await workspace();
     const base = fakeSessionFactory(1, true, undefined, 0, undefined, 0, scenario === "failed" ? ["error"] : undefined);

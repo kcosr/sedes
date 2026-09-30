@@ -94,7 +94,10 @@ test("completed turn throughput stays left aligned and survives browser reload",
     await expect(turn).toHaveAttribute("data-turn-status", "completed");
     const rate = turn.locator(".turn-throughput");
     await expect(rate).toHaveText("42.3 tok/s");
-    await expect(rate).toHaveAttribute("aria-label", "42.3 tokens per second");
+    await expect(turn.getByText("42.3 tokens per second", { exact: true })).toHaveClass("sr-only");
+    const accessibleFooter = await turn.locator("footer").ariaSnapshot();
+    expect(accessibleFooter.match(/42\.3 tokens per second/g)).toHaveLength(1);
+    expect(accessibleFooter).not.toContain("42.3 tok/s");
     await expect(turn.locator("footer")).not.toContainText(/elapsed|10(?:\.0)?\s*(?:s\b|seconds)/i);
 
     for (const viewport of [

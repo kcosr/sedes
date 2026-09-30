@@ -192,10 +192,14 @@ for request timing.
 The numerator is main-agent output, already inclusive of reasoning. The
 denominator sums those same requests' durations, including provider startup,
 network latency, and retries internal to the provider stream. Tools, approval
-waits, SDK retry backoff between requests, compaction, summaries, cache warming,
-and subagents are excluded. A failed, interrupted, missing, or invalid response
-measurement suppresses the entire turn's rate. Only completed turns with a
-positive valid aggregate carry normalized `{ outputTokens, requestDurationMs }`.
+waits, compaction, summaries, cache warming, subagents, and gaps between requests
+are excluded. Any emitted error response suppresses the entire turn's rate,
+even if SDK retry or context-overflow recovery later succeeds. Interrupted,
+missing, or invalid response measurements also suppress the rate. Zero output
+with nonempty response content is invalid; a genuinely empty zero-output response
+can contribute request time to an otherwise positive aggregate. Only completed
+turns with a positive valid aggregate carry normalized
+`{ outputTokens, requestDurationMs }`.
 
 The thread handle retains at most 100 completed measurements in memory and
 decorates live turns, replacement snapshots, history pages, and targeted turn

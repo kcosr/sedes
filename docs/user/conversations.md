@@ -19,12 +19,14 @@ requests do not. This measures response throughput across the turn, so a long
 tool call does not make the model appear slower.
 
 The value appears only when every response was measured successfully. Failed,
-stopped, and older unmeasured turns have no value. It works without enabling
-experimental usage accounting. Sedes keeps the most recent 100 measured turns
-in memory while that Pi session remains loaded; stopping or unloading the
-runtime, or restarting the server, discards them. Refreshing the browser can
-retain them while the same session is loaded. Codex, Claude, and Grok do not
-currently provide this measurement.
+stopped, and older unmeasured turns have no value. A response error also hides
+the value when Pi retries or recovers from a context overflow successfully.
+
+It works without enabling experimental usage accounting. Sedes keeps the most
+recent 100 measured turns in memory while that Pi session remains loaded;
+stopping or unloading the runtime, or restarting the server, discards them.
+Refreshing the browser can retain them while the same session is loaded.
+Codex, Claude, and Grok do not currently provide this measurement.
 
 ## View recorded usage
 

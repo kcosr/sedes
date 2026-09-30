@@ -40,6 +40,13 @@ export class PiRequestThroughput {
         const outputTokens = message.usage?.output;
         if (!Number.isSafeInteger(outputTokens) || outputTokens < 0 ||
           !Number.isFinite(requestDurationMs) || requestDurationMs <= 0 || requestDurationMs > Number.MAX_SAFE_INTEGER) return;
+        // Pi initializes usage to zero even when a provider omits its usage
+        // chunk. Content proves this was not a genuinely empty response.
+        if (outputTokens === 0 && message.content.some((block) =>
+          block.type === "toolCall" ||
+          (block.type === "text" && block.text.length > 0) ||
+          (block.type === "thinking" && block.thinking.length > 0)
+        )) return;
         // Snapshot before an SDK extension can mutate this message in place.
         this.#results.set(message, { outputTokens, requestDurationMs });
       });

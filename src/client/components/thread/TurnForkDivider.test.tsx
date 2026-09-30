@@ -9,6 +9,7 @@ import { getBlockingOperation } from "../../operations/blocking-operation.js";
 import {
   cleanup,
   fireEvent,
+  isInaccessible,
   render,
   screen,
   waitFor,
@@ -62,10 +63,15 @@ describe("TurnForkDivider", () => {
     expect(rate).toHaveClass("turn-throughput");
     expect(rate.closest(".turn-fork-controls")).toBeNull();
     expect(rate.parentElement?.firstElementChild).toBe(rate);
-    expect(rate).toHaveAttribute("aria-label", "42.3 tokens per second");
+    expect(isInaccessible(rate)).toBe(true);
+    const accessibleRate = screen.getByText("42.3 tokens per second");
+    expect(accessibleRate).toHaveClass("sr-only");
+    expect(isInaccessible(accessibleRate)).toBe(false);
+    expect(rate.nextElementSibling).toBe(accessibleRate);
     expect(screen.queryByText(/elapsed/i)).not.toBeInTheDocument();
     view.rerender(<TurnForkDivider {...props} />);
     expect(screen.queryByText(/tok\/s/)).not.toBeInTheDocument();
+    expect(screen.queryByText("42.3 tokens per second")).not.toBeInTheDocument();
     view.rerender(<TurnForkDivider {...props} turn={{ ...turn, status: "in_progress" }} />);
     expect(view.container.querySelector("footer")).toBeNull();
   });
