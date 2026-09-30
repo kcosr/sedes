@@ -516,7 +516,7 @@ export function ElectronConnectionLanding({
           }
         }}
       >
-        <DialogContent showCloseButton={false}>
+        <DialogContent showClose={false}>
           <DialogHeader>
             <DialogTitle>Switch away from Local?</DialogTitle>
             <DialogDescription>
@@ -567,7 +567,7 @@ export function ElectronConnectionLanding({
           }
         }}
       >
-        <DialogContent showCloseButton={false}>
+        <DialogContent showClose={false}>
           <DialogHeader>
             <DialogTitle>Delete connection?</DialogTitle>
             <DialogDescription>

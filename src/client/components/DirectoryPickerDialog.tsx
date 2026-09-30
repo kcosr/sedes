@@ -282,9 +282,9 @@ export function DirectoryPickerDialog({
       <DialogContent
         data-mobile-sheet={mobileSheet || undefined}
         style={mobileSheet ? { "--directory-keyboard-inset": `${keyboardInset}px` } as CSSProperties : undefined}
-        showCloseButton={false}
+        showClose={false}
         overlayClassName="z-(--z-blocking)"
-        className="directory-picker-dialog z-[calc(var(--z-blocking)+1)] max-h-[min(90dvh,44rem)] grid-rows-[auto_auto_minmax(8rem,1fr)_auto] sm:max-w-xl"
+        className="directory-picker-dialog z-[calc(var(--z-blocking)+1)] grid max-h-[min(90dvh,44rem)] grid-rows-[auto_auto_minmax(8rem,1fr)_auto] sm:max-w-xl"
       >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>

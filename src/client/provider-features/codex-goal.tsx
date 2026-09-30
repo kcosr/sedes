@@ -302,7 +302,7 @@ function CodexGoalComposerControl({
           <DialogContent
             className="codex-goal-mobile-card"
             aria-describedby={undefined}
-            showCloseButton={pendingAction === null}
+            showClose={pendingAction === null}
             style={
               {
                 "--codex-goal-keyboard-inset": `${keyboardInset}px`,

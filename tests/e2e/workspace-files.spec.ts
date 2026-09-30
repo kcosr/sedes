@@ -6,6 +6,7 @@ import { expect, test } from "./fixtures";
 import {
   capture,
   expectNoPageOverflow,
+  overlaySettled,
   selectCustomNewThreadTarget,
 } from "./helpers";
 import {
@@ -349,6 +350,7 @@ test.describe.serial("workspace file browser and editor", () => {
       name: "Mermaid diagram preview",
     });
     await expect(diagramDialog).toBeVisible();
+    await overlaySettled(diagramDialog);
     const diagramPreviewImage = diagramDialog.locator(
       ".zoomable-preview-content > img",
     );

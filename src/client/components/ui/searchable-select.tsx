@@ -185,7 +185,7 @@ export function SearchableSelect({
         <DialogTrigger asChild>{trigger}</DialogTrigger>
         <DialogContent
           id={dialogId}
-          placement="side"
+          layout="sheet"
           className={cn("searchable-select-dialog", contentClassName)}
           overlayClassName="searchable-select-dialog-overlay"
           aria-describedby={undefined}

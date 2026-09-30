@@ -168,6 +168,16 @@ export async function sendCurrentDraft(page: Page): Promise<void> {
   await accepted;
 }
 
+/**
+ * Waits for an overlay's enter motion (a dialog rising, a sheet sliding up)
+ * to finish, so bounding boxes read its resting geometry.
+ */
+export async function overlaySettled(overlay: Locator): Promise<void> {
+  await overlay.evaluate((element) =>
+    Promise.allSettled(element.getAnimations().map((animation) => animation.finished)).then(() => undefined),
+  );
+}
+
 export async function capture(
   page: Page,
   testInfo: TestInfo,

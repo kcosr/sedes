@@ -1006,7 +1006,7 @@ export function NewThreadControl({
           style={{ "--new-thread-keyboard-inset": `${keyboardInset}px` } as CSSProperties}
           overlayClassName="new-thread-sheet-overlay"
           id={pickerId}
-          placement="side"
+          layout="side"
           showOverlay={mobileShell}
           aria-describedby={`${pickerId}-description`}
           onOpenAutoFocus={(event) => {

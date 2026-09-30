@@ -99,7 +99,7 @@ export function AdvisoryCenter({
       <DialogContent
         className="advisory-center-sheet"
         overlayClassName="advisory-center-sheet-overlay"
-        placement="side"
+        layout="side"
         aria-modal="true"
         onCloseAutoFocus={(event) => {
           if (!restoreFallbackFocus.current) return;

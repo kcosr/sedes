@@ -4,7 +4,7 @@ import { mkdir } from "node:fs/promises";
 import { loadE2ERunContext } from "./run-context.js";
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
-import { capture, createDraftThread } from "./helpers";
+import { capture, createDraftThread, overlaySettled } from "./helpers";
 import {
   normalizedApplicationSnapshotSchema,
   taskMutationResultSchema,
@@ -580,6 +580,7 @@ test("mobile task destinations remain usable with long lists and short viewports
   await expect(chooser.getByRole("option")).toHaveCount(12);
   const options = chooser.getByRole("listbox");
   expect(await options.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  await overlaySettled(chooser);
   const bounds = await chooser.boundingBox();
   expect(bounds!.y).toBeGreaterThanOrEqual(0);
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(915);
@@ -598,6 +599,7 @@ test("mobile task destinations remain usable with long lists and short viewports
   await page.setViewportSize({ width: 412, height: 480 });
   await assignment.getByRole("combobox", { name: "Search projects" }).fill("Chooser project");
   await expect(assignment.getByRole("option")).toHaveCount(12);
+  await overlaySettled(assignment);
   const compactBounds = await assignment.boundingBox();
   expect(compactBounds!.y).toBeGreaterThanOrEqual(0);
   expect(compactBounds!.y + compactBounds!.height).toBeLessThanOrEqual(480);

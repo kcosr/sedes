@@ -27,15 +27,21 @@ const RUNTIME_SET_PROPERTIES: readonly string[] = [
   // app/environment-palette.ts: the environment tint of a row or chip
   "--environment-chroma",
   "--environment-hue",
+  // components/ui/dialog.tsx: the soft keyboard's height over the layout viewport
+  "--keyboard-inset",
 ];
 
 /** Custom properties that a library sets on its own elements at runtime. */
 const LIBRARY_SET_PREFIXES = ["--radix-"] as const;
 
-/** Media features that belong to the layout system (819/820px is the app breakpoint). */
+/**
+ * Media features that belong to the layout system: 819/820px is the app
+ * breakpoint, and dialog footers stack below 520px.
+ */
 const ALLOWED_MEDIA_FEATURES = new Set([
   "(max-width:819px)",
   "(min-width:820px)",
+  "(max-width:519px)",
   "(pointer:coarse)",
   "(pointer:fine)",
   "(hover:none)",
@@ -477,6 +483,7 @@ describe("style guardrail detectors", () => {
     expect(isBorderRadiusLiteral(declaration("border-radius: 6px"))).toBe(true);
     expect(isAllowedMediaQuery("(max-width: 819px), (pointer: coarse)")).toBe(true);
     expect(isAllowedMediaQuery("(min-width:820px) and (hover: hover)")).toBe(true);
+    expect(isAllowedMediaQuery("(max-width: 519px)")).toBe(true);
     expect(isAllowedMediaQuery("(max-width: 760px)")).toBe(false);
   });
 
