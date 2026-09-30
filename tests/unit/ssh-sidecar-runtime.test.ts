@@ -168,11 +168,25 @@ describe("SidecarRuntimeOwner", () => {
     const original = await value.owner.acquireOperation(scope, environmentId, signal);
     value.setEnvironmentRevision(4);
     const retained = await value.owner.acquireExisting(scope, environmentId, signal);
-    expect(retained.session).not.toBe(original.session);
-    expect(original.session.close).toHaveBeenCalledWith("sidecar_revision_changed");
+    // Existing invocation authority remains on its original carrier while a
+    // configuration replacement is pending; borrowing must not cancel it.
+    expect(retained.session).toBe(original.session);
+    expect(retained.carrierGeneration).toBe(original.carrierGeneration);
+    expect(original.session.close).not.toHaveBeenCalled();
+    expect(value.provisioner.attachExisting).not.toHaveBeenCalled();
     expect(value.launch).toHaveBeenCalledOnce();
+
+    // New operations still require current configuration and retire the stale
+    // carrier. Subsequent recovery attaches existing work without a launch.
+    await expect(value.owner.acquireOperation(scope, environmentId, signal))
+      .rejects.toMatchObject({ cause: { message: "sidecar_revision_changed" } });
+    expect(original.session.close).toHaveBeenCalledWith("sidecar_revision_changed");
+    const recovered = await value.owner.acquireExisting(scope, environmentId, signal);
+    expect(recovered.session).not.toBe(original.session);
+    expect(recovered.carrierGeneration).toBeGreaterThan(original.carrierGeneration);
     expect(value.provisioner.attachExisting).toHaveBeenCalledOnce();
-    retained.release(); original.release(); await value.owner.close();
+    expect(value.launch).toHaveBeenCalledOnce();
+    recovered.release(); retained.release(); original.release(); await value.owner.close();
   });
 
   it("denies existing carrier borrowing across scope, abort, and explicit disconnect", async () => {
