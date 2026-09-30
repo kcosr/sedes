@@ -62,7 +62,6 @@ function picker(
   api: DirectoryPickerApi,
   options: {
     readonly environmentId?: string;
-    readonly mobileSheet?: boolean;
     readonly path?: string;
     readonly onPathChange?: (path: string) => void;
     readonly onSubmit?: () => void;
@@ -76,7 +75,6 @@ function picker(
       description="Pick one."
       environments={environments}
       environmentId={options.environmentId ?? "local"}
-      mobileSheet={options.mobileSheet}
       onEnvironmentChange={vi.fn()}
       path={options.path ?? ""}
       onPathChange={options.onPathChange ?? vi.fn()}
@@ -164,26 +162,41 @@ describe("DirectoryPickerDialog", () => {
       }),
     );
 
-    expect(screen.getByRole("dialog")).toHaveClass("z-[calc(var(--z-blocking)+1)]");
-    expect(document.querySelector('[data-slot="dialog-overlay"]')).toHaveClass(
-      "z-(--z-blocking)",
-    );
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-layer", "blocking");
+    expect(screen.getByTestId("dialog-overlay")).toHaveAttribute("data-layer", "blocking");
   });
 
-  it("lifts the mobile sheet when the keyboard shrinks the visual viewport", async () => {
+  it("becomes a bottom sheet on touch and lifts itself above the keyboard", async () => {
+    vi.stubGlobal("matchMedia", vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })));
     const viewport = Object.assign(new EventTarget(), { height: window.innerHeight - 280, offsetTop: 0 });
     vi.stubGlobal("visualViewport", viewport);
     render(picker({ browseExecutionEnvironmentDirectories: vi.fn(async () => ({
       location: { kind: "roots" as const }, entries: [], truncated: false,
-    })) }, { mobileSheet: true }));
+    })) }));
     const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveAttribute("data-mobile-sheet", "true");
-    expect(dialog.style.getPropertyValue("--directory-keyboard-inset")).toBe("280px");
+    expect(dialog).toHaveAttribute("data-layout", "sheet");
+    expect(dialog.style.getPropertyValue("--keyboard-inset")).toBe("280px");
     act(() => {
       viewport.height = window.innerHeight;
       viewport.dispatchEvent(new Event("resize"));
     });
-    expect(dialog.style.getPropertyValue("--directory-keyboard-inset")).toBe("0px");
+    expect(dialog.style.getPropertyValue("--keyboard-inset")).toBe("0px");
+  });
+
+  it("opens with focus in the path field and the X available", async () => {
+    render(picker({ browseExecutionEnvironmentDirectories: vi.fn(async () => ({
+      location: { kind: "roots" as const }, entries: [], truncated: false,
+    })) }));
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Absolute directory path" })).toHaveFocus(),
+    );
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-size", "md");
+    expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
   });
 
   it("bounds narrow breadcrumbs while keeping toolbar actions outside their scroll area", async () => {
@@ -538,7 +551,9 @@ describe("DirectoryPickerDialog", () => {
     await waitFor(() => expect(search).toHaveFocus());
     fireEvent.change(search, { target: { value: "SSH" } });
     expect(screen.getAllByRole("option")).toHaveLength(2);
-    expect(screen.getByRole("option", { name: "Offline carrier — Unavailable" })).toBeVisible();
+    const offline = screen.getByRole("option", { name: "Offline carrier Unavailable" });
+    expect(offline).toBeVisible();
+    expect(offline).toHaveAttribute("data-unavailable");
     expect(screen.queryByRole("option", { name: "Local" })).not.toBeInTheDocument();
     fireEvent.change(search, { target: { value: "REMOTE" } });
     expect(screen.getAllByRole("option")).toHaveLength(1);

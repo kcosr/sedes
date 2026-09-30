@@ -170,6 +170,9 @@ describe("ThreadGroupRoster", () => {
     const sheet = await screen.findByRole("dialog", { name: "Mobile group" });
     expect(sheet).toHaveClass("thread-group-roster-sheet");
     expect(sheet).toHaveAttribute("aria-modal", "true");
+    // The shared bottom sheet, dismissed by its drag handle rather than an X.
+    expect(sheet).toHaveAttribute("data-layout", "sheet");
+    expect(within(sheet).queryByRole("button", { name: "Close" })).toBeNull();
     await waitFor(() =>
       expect(
         within(sheet).getByRole("button", { name: "Third thread" }),

@@ -2,7 +2,11 @@ import type {
   OpenTaskDisposition,
   ThreadArchiveImpact,
 } from "../../../shared/index.js";
-import { SegmentedControl } from "../tasks/SegmentedControl.js";
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from "@client/components/ui/segmented-control";
+import "./archive-choices.css";
 
 type TaskCollection = ThreadArchiveImpact["openTasks"]["root"];
 
@@ -36,9 +40,9 @@ export function ThreadTaskDisposition({
       className="archive-task-disposition"
       data-testid="archive-task-disposition"
     >
-      <span className="archive-task-disposition-label">
+      <p className="archive-task-disposition-label">
         {description ?? `${total} open ${total === 1 ? "task" : "tasks"}`}
-      </span>
+      </p>
       <div
         className="archive-task-summary-scroll"
         role="region"
@@ -81,38 +85,41 @@ export function ThreadTaskDisposition({
         )}
       </div>
       <SegmentedControl
-        ariaLabel="Open task handling"
-        size="small"
+        aria-label="Open task handling"
+        size="sm"
+        className="w-full"
         value={value}
-        onChange={(next) => onChange(next as OpenTaskDisposition)}
-        options={[
-          {
-            value: "move_to_workspace",
-            label: "To project",
-            title: "Move each task to its thread's project",
-            disabled,
-          },
-          {
-            value: "move_to_global",
-            label: "To global",
-            title: "Move open tasks to the global list",
-            disabled,
-          },
-          {
-            value: "keep",
-            label: "Keep",
-            title: "Leave open tasks with their threads",
-            disabled,
-          },
-          {
-            value: "complete",
-            label: "Complete all",
-            title:
-              "Complete all affected open tasks and keep them attached to their threads",
-            disabled,
-          },
-        ]}
-      />
+        onValueChange={(next) => onChange(next as OpenTaskDisposition)}
+      >
+        <SegmentedControlItem
+          value="move_to_workspace"
+          title="Move each task to its thread's project"
+          disabled={disabled}
+        >
+          To project
+        </SegmentedControlItem>
+        <SegmentedControlItem
+          value="move_to_global"
+          title="Move open tasks to the global list"
+          disabled={disabled}
+        >
+          To global
+        </SegmentedControlItem>
+        <SegmentedControlItem
+          value="keep"
+          title="Leave open tasks with their threads"
+          disabled={disabled}
+        >
+          Keep
+        </SegmentedControlItem>
+        <SegmentedControlItem
+          value="complete"
+          title="Complete all affected open tasks and keep them attached to their threads"
+          disabled={disabled}
+        >
+          Complete all
+        </SegmentedControlItem>
+      </SegmentedControl>
       {value === "complete" && (
         <p className="archive-task-completion-note" role="note">
           All open tasks on the threads you {action}

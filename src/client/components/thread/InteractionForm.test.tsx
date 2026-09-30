@@ -7,7 +7,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackendInteraction } from "../../../shared/index.js";
 import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
 import { InteractionPrompt } from "./InteractionPrompt.js";
@@ -104,7 +104,19 @@ function mount(
   };
 }
 
-afterEach(cleanup);
+beforeEach(() => {
+  // The Checkbox primitive measures itself.
+  vi.stubGlobal("ResizeObserver", class {
+    observe(): void {}
+    disconnect(): void {}
+    unobserve(): void {}
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("InteractionForm", () => {
   it("names optional controls using their visible label and describes required choice errors", () => {

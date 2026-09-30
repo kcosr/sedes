@@ -16,6 +16,13 @@ type DialogSize = "sm" | "md" | "lg" | "xl" | "viewer"
 type DialogLayout = "modal" | "side" | "sheet"
 type DialogMobile = "card" | "sheet" | "fullscreen"
 type DialogPresentation = "modal" | "side" | "sheet" | "fullscreen"
+/**
+ * The stacking band: `dialog` (default); `over-dialog` for dialogs opened
+ * from the mobile drawer or from a sheet, which sit above the dialog band;
+ * `blocking` for dialogs that belong to a blocking operation or open over
+ * one.
+ */
+type DialogLayer = "dialog" | "over-dialog" | "blocking"
 
 function Dialog({
   ...props
@@ -42,13 +49,15 @@ function DialogClose({
 }
 
 function DialogOverlay({
+  layer = "dialog",
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Overlay>) {
+}: React.ComponentProps<typeof DialogPrimitive.Overlay> & { layer?: DialogLayer }) {
   // Surface, layer and motion: components/ui/overlay.css.
   return (
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       data-testid="dialog-overlay"
+      data-layer={layer}
       {...props}
     />
   )
@@ -100,7 +109,8 @@ const isTabbable = (element: HTMLElement, boundary: HTMLElement): boolean =>
  * `data-autofocus`, else the first field, else the primary action (the last
  * footer button) unless it is destructive, in which case the safe choice
  * (the first non-destructive footer button). Never the X; with nothing to
- * focus, the dialog itself.
+ * focus, the dialog itself. Content that swaps phases while open (progress,
+ * then choices) applies it again after the swap.
  */
 function initialFocusTarget(content: HTMLElement): HTMLElement {
   const find = (selector: string, accept: typeof isShown) =>
@@ -139,9 +149,12 @@ function DialogContent({
   dismissible = true,
   showClose = true,
   showOverlay = true,
+  layer = "dialog",
+  returnFocusRef,
   style,
   ref,
   onOpenAutoFocus,
+  onCloseAutoFocus,
   onEscapeKeyDown,
   onInteractOutside,
   ...props
@@ -159,6 +172,14 @@ function DialogContent({
   // out of the scrim that would otherwise cover it.
   showOverlay?: boolean
   overlayClassName?: string
+  /** The stacking band; raise it for dialogs opened from the drawer, a sheet or a blocking operation. */
+  layer?: DialogLayer
+  /**
+   * Where focus returns on close. Radix returns it to a DialogTrigger; a
+   * controlled dialog opened from a menu row (which unmounts with its menu)
+   * names its target here, or focus drops to the body.
+   */
+  returnFocusRef?: React.RefObject<HTMLElement | null>
 }) {
   const touch = useTouchDensity()
   const keyboardInset = useKeyboardInset(touch)
@@ -173,12 +194,13 @@ function DialogContent({
   }, [ref])
   return (
     <DialogPortal>
-      {showOverlay && <DialogOverlay className={overlayClassName} />}
+      {showOverlay && <DialogOverlay layer={layer} className={overlayClassName} />}
       <DialogPrimitive.Content
         ref={contentRef}
         data-slot="dialog-content"
         data-size={size}
         data-layout={presentation}
+        data-layer={layer}
         data-close={showClose ? "" : undefined}
         className={className}
         style={{ "--keyboard-inset": `${keyboardInset}px`, ...style } as React.CSSProperties}
@@ -191,6 +213,13 @@ function DialogContent({
           // Floating content that opened with the dialog focuses itself.
           if (content.querySelector("[data-radix-popper-content-wrapper]")) return
           initialFocusTarget(content).focus({ preventScroll: true })
+        }}
+        onCloseAutoFocus={(event) => {
+          onCloseAutoFocus?.(event)
+          const target = returnFocusRef?.current
+          if (event.defaultPrevented || !target?.isConnected) return
+          event.preventDefault()
+          target.focus()
         }}
         onEscapeKeyDown={(event) => {
           onEscapeKeyDown?.(event)
@@ -233,6 +262,33 @@ function DialogHeader({ ...props }: React.ComponentProps<"div">) {
 /** The dialog's only scroll region, between the pinned header and footer. */
 function DialogBody({ ...props }: React.ComponentProps<"div">) {
   return <div data-slot="dialog-body" {...props} />
+}
+
+/**
+ * A titled group inside DialogBody: the uppercase section label, an optional
+ * description, then the content (rows, a hairline card, a list).
+ */
+function DialogSection({
+  title,
+  description,
+  children,
+  ...props
+}: Omit<React.ComponentProps<"section">, "title"> & {
+  title: React.ReactNode
+  description?: React.ReactNode
+}) {
+  const id = React.useId()
+  return (
+    <section data-slot="dialog-section" aria-labelledby={id} {...props}>
+      <h3 id={id} data-slot="dialog-section-title">
+        {title}
+      </h3>
+      {description ? (
+        <p data-slot="dialog-section-description">{description}</p>
+      ) : null}
+      {children}
+    </section>
+  )
 }
 
 /**
@@ -297,7 +353,9 @@ export {
   DialogHeader,
   DialogOverlay,
   DialogPortal,
+  DialogSection,
   DialogTitle,
   DialogTrigger,
+  initialFocusTarget,
 }
-export type { DialogLayout, DialogMobile, DialogSize }
+export type { DialogLayer, DialogLayout, DialogMobile, DialogSize }

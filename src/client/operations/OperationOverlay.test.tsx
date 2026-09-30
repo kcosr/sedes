@@ -62,9 +62,7 @@ describe("operation overlay", () => {
     screen.getByRole("dialog").dispatchEvent(copy);
     expect(copy.defaultPrevented).toBe(false);
     expect(shortcut).not.toHaveBeenCalled();
-    fireEvent.pointerDown(
-      document.querySelector(".operation-overlay-backdrop")!,
-    );
+    fireEvent.pointerDown(screen.getByTestId("dialog-overlay"));
     expect(screen.getByRole("dialog")).toBeTruthy();
     await user.tab();
     expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(
@@ -104,8 +102,12 @@ describe("operation overlay", () => {
       "textContent",
       "Try again",
     );
+    const failure = screen.getByRole("dialog", {
+      name: "Creating thread failed",
+    });
+    expect(failure).toHaveAccessibleDescription("Try again");
     expect(document.activeElement).toBe(
-      screen.getByRole("button", { name: "Close" }),
+      screen.getByRole("button", { name: "Retry" }),
     );
     expect(finished).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -139,7 +141,7 @@ describe("operation overlay", () => {
     });
     expect(screen.queryByRole("button")).toBeNull();
     await user.keyboard("{Escape}");
-    fireEvent.pointerDown(document.querySelector(".operation-overlay-backdrop")!);
+    fireEvent.pointerDown(screen.getByTestId("dialog-overlay"));
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole("dialog"));
     expect(navigate).not.toHaveBeenCalled();

@@ -33,6 +33,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog.js";
+import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1795,37 +1796,17 @@ function PanelLayoutReady({
         {announcement}
       </p>
 
-      <Dialog
+      <DiscardChangesDialog
         open={active && Boolean(dirtyConfirmation)}
         onOpenChange={(open) => !open && setDirtyConfirmation(undefined)}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Discard unsaved changes?</DialogTitle>
-            <DialogDescription>
-              {dirtyConfirmation?.description}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDirtyConfirmation(undefined)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                const confirmation = dirtyConfirmation;
-                setDirtyConfirmation(undefined);
-                confirmation?.run();
-              }}
-            >
-              {dirtyConfirmation?.actionLabel}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        description={dirtyConfirmation?.description}
+        discardLabel={dirtyConfirmation?.actionLabel}
+        onDiscard={() => {
+          const confirmation = dirtyConfirmation;
+          setDirtyConfirmation(undefined);
+          confirmation?.run();
+        }}
+      />
 
       <Dialog
         open={active && Boolean(terminalLifecycleConfirmation)}
@@ -1845,26 +1826,10 @@ function PanelLayoutReady({
                 : `Close ${terminalLifecycleConfirmation?.label ?? "Terminal"} tab without ending the terminal.`}
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setTerminalLifecycleConfirmation(undefined)}
-            >
-              Cancel
-            </Button>
-            <Button
-              autoFocus
-              onClick={() => {
-                const confirmation = terminalLifecycleConfirmation;
-                setTerminalLifecycleConfirmation(undefined);
-                if (confirmation)
-                  closeTerminalView(confirmation.terminalId, confirmation.label);
-              }}
-            >
-              Close tab
-            </Button>
-            {terminalLifecycleConfirmation?.terminal &&
-              terminalLifecycleConfirmation.terminal.lifecycle !== "stopping" && (
+          <DialogFooter
+            start={
+              terminalLifecycleConfirmation?.terminal &&
+              terminalLifecycleConfirmation.terminal.lifecycle !== "stopping" ? (
                 <Button
                   variant="destructive"
                   onClick={() => {
@@ -1878,7 +1843,25 @@ function PanelLayoutReady({
                 >
                   {terminalTerminationLabel(terminalLifecycleConfirmation.terminal)}
                 </Button>
-              )}
+              ) : undefined
+            }
+          >
+            <Button
+              variant="outline"
+              onClick={() => setTerminalLifecycleConfirmation(undefined)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                const confirmation = terminalLifecycleConfirmation;
+                setTerminalLifecycleConfirmation(undefined);
+                if (confirmation)
+                  closeTerminalView(confirmation.terminalId, confirmation.label);
+              }}
+            >
+              Close tab
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

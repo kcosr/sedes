@@ -280,7 +280,9 @@ test.describe.serial("normalized target and mobile navigation", () => {
     await drawer.getByTestId("new-thread-trigger").click();
     const creation = page.getByRole("dialog", { name: "New thread" });
     await expect(creation).toBeVisible();
-    await expect(page.locator(".new-thread-sheet-overlay")).toBeVisible();
+    await expect(
+      page.locator('[data-testid="dialog-overlay"][data-layer="over-dialog"]'),
+    ).toBeVisible();
     await expect
       .poll(async () => {
         const currentBox = await creation.boundingBox();
@@ -534,7 +536,9 @@ test.describe.serial("normalized target and mobile navigation", () => {
       exact: true,
     });
     await expect(checkingArchive).toBeVisible();
-    await expect(page.locator(".operation-overlay-backdrop")).toHaveCSS("z-index", "110");
+    await expect(
+      page.locator('[data-testid="dialog-overlay"][data-layer="blocking"]'),
+    ).toHaveCSS("z-index", "110");
     await expect(
       checkingArchive.getByText("Checking thread activity…", { exact: true }),
     ).toBeVisible();

@@ -662,10 +662,9 @@ describe("AgentToolSettingsDialog", () => {
     await act(async () => mutation.reject(new Error("Policy conflict")));
 
     expect(screen.getByText(/changed in another client/i)).toBeVisible();
-    expect(screen.getByText("Policy conflict")).toHaveAttribute(
-      "role",
-      "alert",
-    );
+    expect(
+      screen.getByText("Policy conflict").closest('[role="alert"]'),
+    ).toHaveAttribute("data-tone", "danger");
     expect(onOpenChange).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: /^Save$/ })).toBeDisabled();
   });
@@ -698,7 +697,9 @@ describe("AgentToolSettingsDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     expect(screen.getByText(NATIVE_TOOL_CACHE_WARNING)).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    // The confirmation step offers Keep editing and Save changes; the X
+    // still dismisses the whole dialog.
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
     const trigger = screen.getByRole("button", { name: "Open agent tools" });
     await waitFor(() => expect(trigger).toHaveFocus());
     fireEvent.click(trigger);
@@ -888,10 +889,9 @@ describe("AgentToolSettingsDialog", () => {
     );
     fireEvent.click(screen.getByRole("checkbox", { name: "List workspaces" }));
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
-    expect(await screen.findByText("Policy conflict")).toHaveAttribute(
-      "role",
-      "alert",
-    );
+    expect(
+      (await screen.findByText("Policy conflict")).closest('[role="alert"]'),
+    ).toHaveAttribute("data-tone", "danger");
     expect(screen.getByRole("button", { name: /^Save$/ })).toBeEnabled();
   });
 });

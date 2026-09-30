@@ -1,6 +1,13 @@
 import type { AutomationPrecheckTestResult } from "../../types";
+import { useId } from "react";
 import { Button } from "@client/components/ui/button";
 import { Checkbox } from "@client/components/ui/checkbox";
+import { DialogSection } from "@client/components/ui/dialog";
+import { Field } from "@client/components/ui/field";
+import { Input } from "@client/components/ui/input";
+import { Label } from "@client/components/ui/label";
+import { Textarea } from "@client/components/ui/textarea";
+import { AutomationFieldError } from "./AutomationFieldError";
 
 const maximumPrecheckCommandBytes = 4_096;
 
@@ -36,9 +43,12 @@ export function AutomationPrecheckSection({
   result: AutomationPrecheckTestResult | undefined;
   onTest: () => void;
 }): React.JSX.Element {
+  const commandId = useId();
+  const commandHelpId = useId();
+  const commandErrorId = useId();
+  const commandTooLong = commandBytes > maximumPrecheckCommandBytes;
   return (
-    <section className="automation-section">
-      <h2 className="automation-section-label">Precheck</h2>
+    <DialogSection title="Precheck">
       <div className="automation-section-card">
         <label className="automation-option-row">
           <Checkbox
@@ -54,34 +64,36 @@ export function AutomationPrecheckSection({
         </label>
         {enabled && (
           <div className="precheck-fields">
-            <label className="field">
-              <span>Shell command</span>
-              <textarea
+            <div className="grid gap-1.5">
+              <Label htmlFor={commandId}>Shell command</Label>
+              <Textarea
+                id={commandId}
                 className="precheck-command"
                 aria-label="Precheck shell command"
+                aria-describedby={`${commandHelpId}${commandTooLong ? ` ${commandErrorId}` : ""}`}
+                aria-invalid={commandTooLong || undefined}
                 spellCheck={false}
                 maxLength={4_096}
                 value={command}
                 placeholder="test -f .ready"
                 onChange={(event) => onCommandChange(event.target.value)}
               />
-              <small>
+              <p id={commandHelpId} className="automation-help">
                 Runs in this thread’s workspace through the configured
-                execution environment.
-              </small>
-              <small>
-                {commandBytes.toLocaleString()} / 4,096 UTF-8 bytes
-              </small>
-              {commandBytes > maximumPrecheckCommandBytes && (
-                <small className="notice error" role="alert">
+                execution environment.{" "}
+                <span className="tabular-nums">
+                  {commandBytes.toLocaleString()} / 4,096 UTF-8 bytes
+                </span>
+              </p>
+              {commandTooLong && (
+                <AutomationFieldError id={commandErrorId}>
                   Command must be at most 4,096 UTF-8 bytes.
-                </small>
+                </AutomationFieldError>
               )}
-            </label>
+            </div>
             <div className="precheck-options">
-              <label className="field">
-                <span>Timeout in seconds</span>
-                <input
+              <Field label="Timeout in seconds">
+                <Input
                   type="number"
                   min={1}
                   max={60}
@@ -91,7 +103,7 @@ export function AutomationPrecheckSection({
                     onTimeoutSecondsChange(event.target.valueAsNumber)
                   }
                 />
-              </label>
+              </Field>
               <label className="automation-suboption">
                 <Checkbox
                   checked={includeStdout}
@@ -109,7 +121,7 @@ export function AutomationPrecheckSection({
             </div>
             <Button
               variant="outline"
-              className="precheck-test-button"
+              className="justify-self-start"
               disabled={!canTest || testing}
               onClick={onTest}
             >
@@ -119,7 +131,7 @@ export function AutomationPrecheckSection({
           </div>
         )}
       </div>
-    </section>
+    </DialogSection>
   );
 }
 

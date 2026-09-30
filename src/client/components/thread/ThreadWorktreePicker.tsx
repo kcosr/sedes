@@ -25,13 +25,12 @@ import {
 } from "../../../shared/index.js";
 import type { ApiClient } from "../../api/ApiClient.js";
 import { Button } from "../ui/button.js";
+import { ConfirmDialog } from "../ui/confirm-dialog.js";
 import {
   Dialog,
   DialogPortalContainerContext,
   DialogContent,
   DialogDescription,
-  DialogFooter,
-  DialogHeader,
   DialogTitle,
   DialogTrigger,
 } from "../ui/dialog.js";
@@ -80,7 +79,6 @@ export function ThreadWorktreePicker({
     useState<PendingPreference>();
   const [deleteTarget, setDeleteTarget] = useState<LinkedWorktree>();
   const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState("");
   const requestSequence = useRef(0);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -206,7 +204,6 @@ export function ThreadWorktreePicker({
     )
       return;
     setDeleting(true);
-    setDeleteError("");
     try {
       const result = await api.deleteLinkedWorktree(
         workspaceId,
@@ -226,7 +223,7 @@ export function ThreadWorktreePicker({
       setDeleteTarget(undefined);
       await loadRoots(true);
     } catch (cause) {
-      setDeleteError(messageFor(cause));
+      throw new Error(messageFor(cause));
     } finally {
       setDeleting(false);
     }
@@ -300,7 +297,6 @@ export function ThreadWorktreePicker({
               root.removal.status === "allowed" ||
               root.removal.status === "forget"
                 ? () => {
-                    setDeleteError("");
                     setOpen(false);
                     setDeleteTarget(root);
                   }
@@ -374,75 +370,56 @@ export function ThreadWorktreePicker({
         </Popover.Root>
       )}
 
-      <Dialog
+      <ConfirmDialog
         open={deleteTarget !== undefined}
         onOpenChange={(next) => {
           if (!next && !deleting) setDeleteTarget(undefined);
         }}
-      >
-        <DialogContent
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            triggerRef.current?.focus({ preventScroll: true });
-          }}
-        >
-          <DialogHeader>
-            <DialogTitle>
-              {deleteTarget?.removal.status === "allowed"
-                ? "Remove linked worktree?"
-                : "Forget missing worktree?"}
-            </DialogTitle>
-            <DialogDescription>
-              {deleteTarget?.removal.status === "allowed" ? (
-                <>
-                  Remove{" "}
-                  <strong>{deleteTarget && worktreeName(deleteTarget)}</strong>{" "}
-                  at <code>{removalDisplayPath(deleteTarget)}</code> from disk
-                  and from this project’s worktree list? This worktree is{" "}
-                  {deleteTarget &&
-                    worktreeStatus(deleteTarget, false).toLocaleLowerCase()}
-                  {deleteTarget ? ` (${worktreeCounts(deleteTarget)})` : ""}.
-                  The Git branch and commits are kept. Only a clean worktree can
-                  be removed. Ignored files and build output inside the checkout
-                  may still be deleted.
-                </>
-              ) : (
-                <>
-                  Forget{" "}
-                  <strong>{deleteTarget && worktreeName(deleteTarget)}</strong>{" "}
-                  at <code>{deleteTarget?.displayPath.text}</code> from this
-                  project’s worktree list? Its directory is already missing.
-                </>
-              )}
-            </DialogDescription>
-          </DialogHeader>
-          {deleteError && (
-            <p className="thread-worktree-error" role="alert">
-              {deleteError}
-            </p>
-          )}
-          <DialogFooter>
-            <Button
-              variant="outline"
-              disabled={deleting}
-              onClick={() => setDeleteTarget(undefined)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={deleting}
-              onClick={() => void deleteWorktree()}
-            >
-              {deleting
-                ? "Working…"
-                : deleteTarget?.removal.status === "allowed"
-                  ? "Remove worktree"
-                  : "Forget worktree"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          triggerRef.current?.focus({ preventScroll: true });
+        }}
+        title={
+          deleteTarget?.removal.status === "allowed"
+            ? "Remove linked worktree?"
+            : "Forget missing worktree?"
+        }
+        description={
+          deleteTarget?.removal.status === "allowed" ? (
+            <>
+              Remove{" "}
+              <strong>{deleteTarget && worktreeName(deleteTarget)}</strong>{" "}
+              at <code>{removalDisplayPath(deleteTarget)}</code> from disk
+              and from this project’s worktree list? This worktree is{" "}
+              {deleteTarget &&
+                worktreeStatus(deleteTarget, false).toLocaleLowerCase()}
+              {deleteTarget ? ` (${worktreeCounts(deleteTarget)})` : ""}.
+              The Git branch and commits are kept. Only a clean worktree can
+              be removed. Ignored files and build output inside the checkout
+              may still be deleted.
+            </>
+          ) : (
+            <>
+              Forget{" "}
+              <strong>{deleteTarget && worktreeName(deleteTarget)}</strong>{" "}
+              at <code>{deleteTarget?.displayPath.text}</code> from this
+              project’s worktree list? Its directory is already missing.
+            </>
+          )
+        }
+        confirmLabel={
+          deleteTarget?.removal.status === "allowed"
+            ? "Remove worktree"
+            : "Forget worktree"
+        }
+        pendingLabel={
+          deleteTarget?.removal.status === "allowed"
+            ? "Removing…"
+            : "Forgetting…"
+        }
+        tone="danger"
+        onConfirm={deleteWorktree}
+      />
     </>
   );
 }

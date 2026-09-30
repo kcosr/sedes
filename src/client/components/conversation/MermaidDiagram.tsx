@@ -99,7 +99,7 @@ export function MermaidDiagram({
               </span>
             </button>
           </DialogTrigger>
-          <DialogContent className="mermaid-diagram-dialog">
+          <DialogContent size="viewer" aria-describedby={undefined}>
             <DialogTitle className="sr-only">
               Mermaid diagram preview
             </DialogTitle>

@@ -124,6 +124,50 @@ describe("ThreadAutomationDialog", () => {
     expect(createThreadAutomation).not.toHaveBeenCalled();
   });
 
+  it("opens a new automation with focus on the prompt, never the close button", async () => {
+    renderDialog({});
+    const prompt = await screen.findByRole("textbox", { name: "Canned prompt" });
+    await waitFor(() => expect(prompt).toHaveFocus());
+    expect(
+      screen.getByRole("dialog", { name: "Automation settings for Current work" }),
+    ).toHaveAttribute("data-layout", "side");
+  });
+
+  it("deletes through the confirmation dialog, not a native prompt", async () => {
+    const user = userEvent.setup();
+    const nativeConfirm = vi.spyOn(window, "confirm");
+    const deleteThreadAutomation = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Automation is busy"))
+      .mockResolvedValueOnce(undefined);
+    const onClose = vi.fn();
+    renderDialog(
+      { getThreadAutomation: vi.fn().mockResolvedValue(paused), deleteThreadAutomation },
+      onClose,
+      paused,
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Delete automation…" }),
+    );
+    const confirm = screen.getByRole("dialog", { name: "Delete this automation?" });
+    const remove = screen.getByRole("button", { name: "Delete automation" });
+    expect(remove).toHaveAttribute("data-variant", "destructive");
+    await user.click(remove);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Automation is busy");
+    expect(confirm).toBeVisible();
+    expect(onClose).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Delete automation" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(deleteThreadAutomation).toHaveBeenCalledTimes(2);
+    expect(deleteThreadAutomation).toHaveBeenLastCalledWith(
+      threadId,
+      paused.revision,
+      expect.any(String),
+    );
+    expect(nativeConfirm).not.toHaveBeenCalled();
+    nativeConfirm.mockRestore();
+  });
+
   it("loads an existing automation through StrictMode effect replay", async () => {
     const getThreadAutomation = vi.fn().mockResolvedValue(paused);
     renderDialog({ getThreadAutomation }, vi.fn(), paused, true);

@@ -1,0 +1,13 @@
+/* The directory browser inside DirectoryPickerDialog: a bounded, bordered
+   list below the fields. Its list scrolls; the dialog body scrolls only when
+   the viewport is shorter than the dialog. */
+.directory-picker-browser {
+  display: flex;
+  min-height: 10rem;
+  height: 18rem;
+  flex: 0 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}

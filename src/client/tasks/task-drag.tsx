@@ -16,15 +16,7 @@ import type {
 } from "../../shared/index.js";
 import { ApiError } from "../api/ApiClient.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
-import { Button } from "../components/ui/button.js";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../components/ui/dialog.js";
+import { ConfirmDialog } from "../components/ui/confirm-dialog.js";
 
 export const TASK_DRAG_MIME = "application/x-sedes-task+json";
 
@@ -128,8 +120,6 @@ export function TaskDragProvider({
 }): React.JSX.Element {
   const [activePayload, setActivePayload] = useState<TaskDragPayload>();
   const [pendingMove, setPendingMove] = useState<PendingMove>();
-  const [pendingMoveError, setPendingMoveError] = useState<string>();
-  const [moving, setMoving] = useState(false);
   const [announcement, setAnnouncement] = useState("");
   const [announcementError, setAnnouncementError] = useState(false);
   const activePayloadRef = useRef<TaskDragPayload | undefined>(undefined);
@@ -179,22 +169,21 @@ export function TaskDragProvider({
   );
 
   const performMove = useCallback(
+    /** Resolves with the failure message when the move did not happen. */
     async (
       task: AssociatedTask,
       target: TaskScopeDropTarget,
-      reportInDialog = false,
-    ) => {
+    ): Promise<string | undefined> => {
       const current = store.getTasks().find(({ id }) => id === task.id);
       if (!current || current.revision !== task.revision) {
         const message =
           "That task changed before it could be moved. Review it and try again.";
         announce(message, true);
-        if (reportInDialog) setPendingMoveError(message);
-        return;
+        return message;
       }
       if (scopesEqual(current.scope, target.scope)) {
         announce(`“${current.title}” is already assigned to ${target.label}.`);
-        return;
+        return undefined;
       }
 
       const targetIdentity =
@@ -207,7 +196,6 @@ export function TaskDragProvider({
       const mutationId =
         moveMutationIds.current.get(fingerprint) ?? crypto.randomUUID();
       moveMutationIds.current.set(fingerprint, mutationId);
-      setMoving(true);
       try {
         await store.moveTask(
           current,
@@ -216,8 +204,8 @@ export function TaskDragProvider({
         );
         moveMutationIds.current.delete(fingerprint);
         setPendingMove(undefined);
-        setPendingMoveError(undefined);
         announce(`Moved “${current.title}” to ${target.label}.`);
+        return undefined;
       } catch (error) {
         // An HTTP response is definitive. A transport failure can be
         // ambiguous, so retain the mutation identifier for a safe retry.
@@ -226,9 +214,7 @@ export function TaskDragProvider({
         }
         const message = moveErrorMessage(error);
         announce(message, true);
-        if (reportInDialog) setPendingMoveError(message);
-      } finally {
-        setMoving(false);
+        return message;
       }
     },
     [announce, store],
@@ -240,7 +226,6 @@ export function TaskDragProvider({
         task.associatedWorkspaceId !== null &&
         task.associatedWorkspaceId !== target.workspaceId;
       if (crossesProjects && task.files.length > 0) {
-        setPendingMoveError(undefined);
         setPendingMove({ task, target });
         return;
       }
@@ -397,63 +382,21 @@ export function TaskDragProvider({
       >
         {announcement}
       </div>
-      <Dialog
+      <ConfirmDialog
         open={pendingMove !== undefined}
         onOpenChange={(open) => {
-          if (!open && !moving) {
-            setPendingMove(undefined);
-            setPendingMoveError(undefined);
-          }
+          if (!open) setPendingMove(undefined);
         }}
-      >
-        <DialogContent
-          onEscapeKeyDown={(event) => {
-            if (moving) event.preventDefault();
-          }}
-          onPointerDownOutside={(event) => {
-            if (moving) event.preventDefault();
-          }}
-        >
-          <DialogHeader>
-            <DialogTitle>Move task with project files?</DialogTitle>
-            <DialogDescription>
-              This task links to project files. Moving it to {pendingMove?.target.label} keeps those absolute file paths unchanged.
-            </DialogDescription>
-          </DialogHeader>
-          {pendingMoveError && (
-            <p className="text-sm text-destructive" role="alert">
-              {pendingMoveError}
-            </p>
-          )}
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              disabled={moving}
-              onClick={() => {
-                setPendingMove(undefined);
-                setPendingMoveError(undefined);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              disabled={moving || !pendingMove}
-              onClick={() => {
-                if (pendingMove) {
-                  setPendingMoveError(undefined);
-                  void performMove(
-                    pendingMove.task,
-                    pendingMove.target,
-                    true,
-                  );
-                }
-              }}
-            >
-              {moving ? "Moving…" : "Move task"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        title="Move task with project files?"
+        description={`This task links to project files. Moving it to ${pendingMove?.target.label ?? "another scope"} keeps those absolute file paths unchanged.`}
+        confirmLabel="Move task"
+        pendingLabel="Moving…"
+        onConfirm={async () => {
+          if (!pendingMove) return;
+          const failure = await performMove(pendingMove.task, pendingMove.target);
+          if (failure) throw new Error(failure);
+        }}
+      />
     </TaskDragContext.Provider>
   );
 }

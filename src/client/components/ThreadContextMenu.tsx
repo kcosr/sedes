@@ -61,6 +61,7 @@ import {
 } from "../workspace-panels/thread-panel-navigation.js";
 import {
   Dialog,
+  DialogAlert,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -1044,9 +1045,7 @@ export function ThreadContextMenu({
             />
           </label>
           {actionError && (
-            <p className="thread-row-error" role="alert">
-              {actionError}
-            </p>
+            <DialogAlert tone="danger">{actionError}</DialogAlert>
           )}
           <DialogFooter>
             {thread.groupId !== null && (

@@ -90,7 +90,7 @@ describe("ForceResetDialog", () => {
     expect(dialog).toHaveTextContent(
       "without waiting for provider reconciliation",
     );
-    expect(dialog).toHaveTextContent("provider work may already have happened");
+    expect(dialog).toHaveTextContent("Provider work may already have happened");
     expect(dialog).toHaveTextContent("A native fork orphan may remain.");
     expect(within(dialog).getByTestId("force-reset-background")).toHaveTextContent(
       "Running in the affected conversations: 1 background agent, 1 background command. Replacing their runtimes may stop this work.",
