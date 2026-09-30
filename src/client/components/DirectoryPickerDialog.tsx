@@ -397,14 +397,17 @@ export function DirectoryPickerDialog({
                         size="sm"
                         className={
                           index === history.length - 1
-                            ? "max-w-[min(8rem,35vw)] justify-start truncate sm:max-w-48"
-                            : "max-w-14 justify-start truncate sm:max-w-32"
+                            ? "max-w-[min(8rem,35vw)] justify-start sm:max-w-48"
+                            : "max-w-14 justify-start sm:max-w-32"
                         }
                         title={item.label}
+                        aria-label={item.label}
                         disabled={loading || index === history.length - 1}
                         onClick={() => navigateHistory(index)}
                       >
-                        {item.label}
+                        <span className="min-w-0 truncate">
+                          {breadcrumbLabel(item.label)}
+                        </span>
                       </Button>
                     </span>
                   ))}
@@ -560,4 +563,15 @@ export function DirectoryPickerDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * A breadcrumb shows a typed or root path by its last segment ("…/ui-polish",
+ * the full path in its title), so a long path is cut at a separator rather
+ * than mid-word; a name that is still too long ends in an ellipsis.
+ */
+function breadcrumbLabel(label: string): string {
+  const separator = label.includes("\\") && !label.includes("/") ? "\\" : "/";
+  const segments = label.split(separator).filter(Boolean);
+  return segments.length > 1 ? `…${separator}${segments.at(-1)}` : label;
 }

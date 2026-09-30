@@ -235,16 +235,15 @@ describe("DirectoryPickerDialog", () => {
     expect(breadcrumbs).toHaveClass("min-w-0", "flex-1", "overflow-x-auto");
     expect(refresh).toHaveClass("shrink-0");
     expect(breadcrumbs).not.toContainElement(refresh);
-    expect(
-      within(breadcrumbs).getByRole("button", {
-        name: "sedes-directory-browser",
-      }),
-    ).toHaveClass(
+    const current = within(breadcrumbs).getByRole("button", {
+      name: "sedes-directory-browser",
+    });
+    expect(current).toHaveClass(
       "max-w-[min(8rem,35vw)]",
       "justify-start",
-      "truncate",
       "sm:max-w-48",
     );
+    expect(current.firstElementChild).toHaveClass("min-w-0", "truncate");
   });
 
   it("caps intermediate breadcrumbs so the current leaf fits at mobile width", async () => {
@@ -295,19 +294,16 @@ describe("DirectoryPickerDialog", () => {
       name: "sedes-directory-browser",
     });
     const leaf = within(breadcrumbs).getByRole("button", { name: "docs" });
-    expect(repo).toHaveClass(
-      "max-w-14",
-      "justify-start",
-      "sm:max-w-32",
-      "truncate",
-    );
+    expect(repo).toHaveClass("max-w-14", "justify-start", "sm:max-w-32");
+    // The label truncates inside the button, so it can end in an ellipsis.
+    expect(repo.firstElementChild).toHaveClass("min-w-0", "truncate");
     expect(repo).toHaveAttribute("title", "sedes-directory-browser");
     expect(leaf).toHaveClass(
       "max-w-[min(8rem,35vw)]",
       "justify-start",
       "sm:max-w-48",
-      "truncate",
     );
+    expect(leaf.firstElementChild).toHaveClass("min-w-0", "truncate");
     expect(leaf).toHaveAttribute("title", "docs");
     expect(leaf).toBeDisabled();
   });
@@ -451,6 +447,13 @@ describe("DirectoryPickerDialog", () => {
     await waitFor(() =>
       expect(browseExecutionEnvironmentDirectories).toHaveBeenCalledTimes(2),
     );
+    // A typed path shows by its last segment, not cut mid-word; the title
+    // and the accessible name keep the whole path.
+    const typed = within(
+      screen.getByRole("navigation", { name: "Directory breadcrumbs" }),
+    ).getByRole("button", { name: "/home/me/projects/sedes" });
+    expect(typed).toHaveTextContent(/^…\/sedes$/u);
+    expect(typed).toHaveAttribute("title", "/home/me/projects/sedes");
     fireEvent.click(screen.getByRole("button", { name: "Back one directory" }));
 
     await waitFor(() =>
