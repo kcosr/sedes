@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { Button } from "../ui/button.js";
 import { Callout } from "../ui/callout.js";
@@ -19,6 +19,15 @@ export function CopyableValue({ value, label }: { readonly value: string; readon
       {copied ? <Check /> : <Copy />}
     </Button>
   </span>;
+}
+
+/**
+ * A path in the mono face that wraps only after a separator, never inside a
+ * segment unless one alone is wider than the line.
+ */
+export function PathText({ value }: { readonly value: string }): React.JSX.Element {
+  const segments = value.split(/(?<=[/\\])/u);
+  return <span className="execution-path">{segments.map((segment, index) => <Fragment key={index}>{index > 0 ? <wbr /> : null}{segment}</Fragment>)}</span>;
 }
 
 /** Errors that belong to no single field, described in words. */

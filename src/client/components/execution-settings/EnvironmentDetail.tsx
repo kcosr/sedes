@@ -16,7 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.js";
 import { Tag } from "../ui/tag.js";
 import { SettingsBackLink } from "../settings/SettingsPage.js";
 import { SettingsDetailHeader } from "../settings/SettingsSplit.js";
-import { CopyableValue } from "./detail-parts.js";
+import { CopyableValue, PathText } from "./detail-parts.js";
 import { capabilityLabels, environmentKindNames } from "./EnvironmentEditor.js";
 import { environmentBackends, EnvironmentIcon, environmentKindLabels, hostPlatform, hostPresence, runtimeFor } from "./ExecutionInventory.js";
 import { RecoveredOperations } from "./RecoveredOperations.js";
@@ -123,7 +123,7 @@ export function EnvironmentDetail({ environment, selected, tab, onTab, hosts, st
   ];
   const capabilities = environment.kind === "local" ? [] : environment.operations.kind === "sidecar" ? environment.operations.enabledCapabilities.filter(entry => entry !== "workspace_context") : [];
   const accessFacts: KeyValueItem[] = [
-    { label: "Roots", value: environment.workspaceRoots.length ? <ul className="execution-plain-list">{environment.workspaceRoots.map(root => <li key={root}>{root}</li>)}</ul> : "None", mono: true },
+    { label: "Roots", value: environment.workspaceRoots.length ? <ul className="execution-plain-list">{environment.workspaceRoots.map(root => <li key={root}><PathText value={root} /></li>)}</ul> : "None" },
     ...(environment.kind === "local" ? [] : [{ label: "Operations", value: environment.operations.kind === "sidecar"
       ? `${capabilities.map(entry => capabilityLabels[entry]).join(", ")} (${capabilities.length} of 7)` : "Sidecar operations off" }]),
   ];

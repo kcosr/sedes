@@ -14,7 +14,7 @@ import { cn } from "../../lib/utils.js";
 type RowProps = Pick<SettingsFieldProps, "label" | "description" | "error" | "disabled" | "layout">;
 
 /** A text setting in the settings row layout. Optional values are left blank, never filled with a default. */
-export function TextField({ value, onChange, required = false, type = "text", placeholder, suffix, mono = false, ...row }: RowProps & {
+export function TextField({ value, onChange, required = false, type = "text", placeholder, suffix, mono = false, path = false, ...row }: RowProps & {
   readonly value: string;
   readonly onChange: (value: string) => void;
   readonly required?: boolean;
@@ -22,13 +22,15 @@ export function TextField({ value, onChange, required = false, type = "text", pl
   readonly placeholder?: string;
   /** A unit shown after the value, such as "ms". */
   readonly suffix?: string;
-  /** Paths and identifiers. */
+  /** Identifiers. */
   readonly mono?: boolean;
+  /** A path or URL: mono, and the control takes the full width under its label. */
+  readonly path?: boolean;
 }): React.JSX.Element {
   const input = <Input type={type} value={value} required={required} disabled={row.disabled} placeholder={placeholder}
-    autoComplete="off" spellCheck={false} className={cn(mono && "font-mono", suffix && "pr-9")}
+    autoComplete="off" spellCheck={false} className={cn((mono || path) && "font-mono", suffix && "pr-9")}
     onChange={(event) => onChange(event.currentTarget.value)} />;
-  return <SettingsField {...row}>
+  return <SettingsField layout={path ? "stacked" : undefined} {...row}>
     {suffix ? <span className="execution-field-affix">{input}<span aria-hidden="true">{suffix}</span></span> : input}
   </SettingsField>;
 }
