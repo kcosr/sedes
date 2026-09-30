@@ -24,6 +24,7 @@ import {
   MenuScope,
   MenuSheetCheckboxItem,
   MenuSheetContent,
+  menuSheetContentProps,
   MenuSheetContextTrigger,
   MenuSheetEmpty,
   MenuSheetGroup,
@@ -232,12 +233,11 @@ function ContextMenuContent({
   if (sheet) {
     return (
       <MenuSheetContent
+        {...menuSheetContentProps(props)}
+        className={className}
         title={sheetTitle}
         description={sheetDescription}
         label={props["aria-label"]}
-        data-testid={(props as { "data-testid"?: string })["data-testid"]}
-        onCloseAutoFocus={props.onCloseAutoFocus}
-        onEscapeKeyDown={props.onEscapeKeyDown}
       >
         {children}
       </MenuSheetContent>

@@ -45,6 +45,10 @@ interface MenuSheetLevel {
 
 interface MenuSheetState {
   readonly setOpen: (open: boolean) => void
+  /** Opens the sheet, returning focus to `opener` when it closes. */
+  readonly openFrom: (opener: HTMLElement | null) => void
+  /** Where focus returns when the sheet closes and nothing else took it. */
+  readonly returnFocus: React.RefObject<HTMLElement | null>
   readonly stack: readonly MenuSheetLevel[]
   readonly drillIn: (level: MenuSheetLevel) => void
   readonly back: () => void
@@ -53,6 +57,26 @@ interface MenuSheetState {
 }
 
 const MenuSheetContext = React.createContext<MenuSheetState | null>(null)
+
+/**
+ * Runs the consumer's handler first and the part's own behavior only when
+ * the consumer did not prevent the default, as Radix composes menu handlers.
+ */
+function composeHandlers<E extends React.SyntheticEvent>(
+  external: ((event: E) => void) | undefined,
+  internal: (event: E) => void
+): (event: E) => void {
+  return (event) => {
+    external?.(event)
+    if (!event.defaultPrevented) internal(event)
+  }
+}
+
+/** The element that has focus, if any: what a closing sheet returns focus to. */
+function focusedElement(): HTMLElement | null {
+  const active = document.activeElement
+  return active instanceof HTMLElement && active !== document.body ? active : null
+}
 
 /** The sheet-mode state, or null when the menu renders as a floating menu. */
 export function useMenuSheet(): MenuSheetState | null {
@@ -87,12 +111,18 @@ export function MenuSheetRoot({
   )
   const [stack, setStack] = React.useState<readonly MenuSheetLevel[]>([])
   const [pane, setPane] = React.useState<HTMLElement | null>(null)
+  const returnFocus = React.useRef<HTMLElement | null>(null)
   React.useEffect(() => {
     if (!open) setStack([])
   }, [open])
   const state = React.useMemo<MenuSheetState>(
     () => ({
       setOpen,
+      openFrom: (opener) => {
+        returnFocus.current = opener
+        setOpen(true)
+      },
+      returnFocus,
       stack,
       drillIn: (level) => setStack((current) => [...current, level]),
       back: () => setStack((current) => current.slice(0, -1)),
@@ -111,8 +141,19 @@ export function MenuSheetRoot({
 }
 
 /** The sheet-mode dropdown trigger: a click opens the sheet. */
-export function MenuSheetTrigger(props: React.ComponentProps<typeof DialogTrigger>) {
-  return <DialogTrigger {...props} />
+export function MenuSheetTrigger({
+  onClick,
+  ...props
+}: React.ComponentProps<typeof DialogTrigger>) {
+  const state = useMenuSheet()
+  return (
+    <DialogTrigger
+      {...props}
+      onClick={composeHandlers(onClick, (event) => {
+        if (state) state.returnFocus.current = event.currentTarget
+      })}
+    />
+  )
 }
 
 const LONG_PRESS_MS = 700
@@ -120,7 +161,8 @@ const LONG_PRESS_SLOP_PX = 10
 
 /**
  * The sheet-mode context-menu trigger: a secondary click or a touch long
- * press opens the sheet, as Radix's ContextMenu trigger opens its menu.
+ * press opens the sheet, as Radix's ContextMenu trigger opens its menu. The
+ * element focused when it opens gets focus back when it closes.
  */
 export function MenuSheetContextTrigger({
   asChild = false,
@@ -145,6 +187,7 @@ export function MenuSheetContextTrigger({
   const Comp = asChild ? Slot.Root : "span"
   return (
     <Comp
+      {...props}
       data-slot="context-menu-trigger"
       data-disabled={disabled ? "" : undefined}
       style={{ WebkitTouchCallout: "none", ...style }}
@@ -153,14 +196,14 @@ export function MenuSheetContextTrigger({
         if (event.defaultPrevented || disabled) return
         clear()
         event.preventDefault()
-        state?.setOpen(true)
+        state?.openFrom(focusedElement())
       }}
       onPointerDown={(event: React.PointerEvent<HTMLSpanElement>) => {
         onPointerDown?.(event)
         if (event.defaultPrevented || disabled || event.pointerType === "mouse") return
         clear()
         origin.current = { x: event.clientX, y: event.clientY }
-        timer.current = setTimeout(() => state?.setOpen(true), LONG_PRESS_MS)
+        timer.current = setTimeout(() => state?.openFrom(focusedElement()), LONG_PRESS_MS)
       }}
       onPointerMove={(event: React.PointerEvent<HTMLSpanElement>) => {
         onPointerMove?.(event)
@@ -180,9 +223,54 @@ export function MenuSheetContextTrigger({
         onPointerCancel?.(event)
         clear()
       }}
-      {...props}
     />
   )
+}
+
+/**
+ * Menu content props that only place or scope a floating menu. A sheet
+ * drops them and takes every other prop (class, data attributes, handlers);
+ * the menu's aria-label names the sheet's list.
+ */
+const FLOATING_ONLY_PROPS = [
+  "side",
+  "sideOffset",
+  "align",
+  "alignOffset",
+  "avoidCollisions",
+  "collisionBoundary",
+  "collisionPadding",
+  "arrowPadding",
+  "sticky",
+  "hideWhenDetached",
+  "updatePositionStrategy",
+  "loop",
+  "onEntryFocus",
+  "asChild",
+  "aria-label",
+] as const
+
+/** A menu content's props for its sheet presentation. */
+export function menuSheetContentProps(
+  props: object
+): Omit<React.ComponentProps<typeof MenuSheetContent>, "title" | "description" | "label"> {
+  const sheetProps: Record<string, unknown> = { ...props }
+  for (const key of FLOATING_ONLY_PROPS) delete sheetProps[key]
+  return sheetProps
+}
+
+/**
+ * A row's name for the drill-in back row and pane: its text without the
+ * trailing value, shortcut or description, or `textValue` when given.
+ */
+function rowLabel(row: HTMLElement): string {
+  const copy = row.cloneNode(true) as HTMLElement
+  copy
+    .querySelectorAll(
+      '[data-slot$="-shortcut"], [data-slot$="-item-description"], [aria-hidden="true"]'
+    )
+    .forEach((node) => node.remove())
+  return copy.textContent?.replace(/\s+/g, " ").trim() ?? ""
 }
 
 const ROW_SELECTOR = '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]'
@@ -219,13 +307,16 @@ const LIST_KEYS: Readonly<Record<string, "first" | "last" | 1 | -1>> = {
 
 /**
  * The sheet-mode content: the Sheet with the subject's name and meta line
- * as its header, then the rows. Arrow keys move between rows.
+ * as its header, then the rows. Arrow keys move between rows. On close,
+ * focus returns to the opener unless something else took it (for example a
+ * dialog that a selected item opened) or `onCloseAutoFocus` prevents it.
  */
 export function MenuSheetContent({
   title,
   description,
   label,
   children,
+  onCloseAutoFocus,
   ...props
 }: Omit<React.ComponentProps<typeof DialogContent>, "title" | "layout" | "children"> & {
   /** The subject's name, e.g. the thread title. */
@@ -248,6 +339,16 @@ export function MenuSheetContent({
       data-menu-sheet=""
       {...(description === undefined ? { "aria-describedby": undefined } : {})}
       {...props}
+      onCloseAutoFocus={(event) => {
+        onCloseAutoFocus?.(event)
+        if (event.defaultPrevented) return
+        event.preventDefault()
+        const content = event.currentTarget as HTMLElement
+        const active = document.activeElement
+        const focusLost = !active || active === document.body || content.contains(active)
+        const opener = state?.returnFocus.current
+        if (focusLost && opener?.isConnected) opener.focus()
+      }}
     >
       <DialogHeader className={title === undefined ? "sr-only" : undefined}>
         <DialogTitle>{title ?? label ?? "Actions"}</DialogTitle>
@@ -317,6 +418,7 @@ export function MenuSheetItem({
   const Comp = asChild ? Slot.Root : "button"
   return (
     <Comp
+      {...props}
       type={asChild ? undefined : "button"}
       role="menuitem"
       data-slot={dataSlot}
@@ -325,14 +427,12 @@ export function MenuSheetItem({
       aria-disabled={disabled || undefined}
       disabled={disabled}
       className={cn(menuSheetRowClass, inset && SHEET_INSET_CLASS, className)}
-      onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
-        onClick?.(event)
-        if (event.defaultPrevented || disabled) return
+      onClick={composeHandlers(onClick, () => {
+        if (disabled) return
         const select = selectEvent()
         onSelect?.(select)
         if (!select.defaultPrevented) state?.setOpen(false)
-      }}
-      {...props}
+      })}
     />
   )
 }
@@ -350,6 +450,7 @@ export function MenuSheetCheckboxItem({
   checked = false,
   onCheckedChange,
   onSelect,
+  onClick,
   textValue: _textValue,
   children,
   className,
@@ -367,6 +468,7 @@ export function MenuSheetCheckboxItem({
   const isChecked = checked === true
   return (
     <button
+      {...props}
       type="button"
       role="menuitemcheckbox"
       aria-checked={checked === "indeterminate" ? "mixed" : isChecked}
@@ -374,14 +476,13 @@ export function MenuSheetCheckboxItem({
       data-state={isChecked ? "checked" : "unchecked"}
       disabled={disabled}
       className={cn(menuSheetRowClass, "pr-11 data-[state=checked]:font-medium", className)}
-      onClick={() => {
+      onClick={composeHandlers(onClick, () => {
         if (disabled) return
         const select = selectEvent()
         onSelect?.(select)
         onCheckedChange?.(!isChecked)
         if (!select.defaultPrevented) state?.setOpen(false)
-      }}
-      {...props}
+      })}
     >
       {children}
       <MenuSheetCheck checked={isChecked} />
@@ -408,7 +509,7 @@ export function MenuSheetRadioGroup({
   const context = React.useMemo(() => ({ value, onValueChange }), [onValueChange, value])
   return (
     <MenuSheetRadioContext.Provider value={context}>
-      <div role="group" data-slot={dataSlot} className={cn("flex flex-col", className)} {...props} />
+      <div {...props} role="group" data-slot={dataSlot} className={cn("flex flex-col", className)} />
     </MenuSheetRadioContext.Provider>
   )
 }
@@ -417,6 +518,7 @@ export function MenuSheetRadioGroup({
 export function MenuSheetRadioItem({
   value,
   onSelect,
+  onClick,
   textValue: _textValue,
   children,
   className,
@@ -434,6 +536,7 @@ export function MenuSheetRadioItem({
   const checked = group?.value === value
   return (
     <button
+      {...props}
       type="button"
       role="menuitemradio"
       aria-checked={checked}
@@ -441,14 +544,13 @@ export function MenuSheetRadioItem({
       data-state={checked ? "checked" : "unchecked"}
       disabled={disabled}
       className={cn(menuSheetRowClass, "pr-11 data-[state=checked]:font-medium", className)}
-      onClick={() => {
+      onClick={composeHandlers(onClick, () => {
         if (disabled) return
         const select = selectEvent()
         onSelect?.(select)
         group?.onValueChange?.(value)
         if (!select.defaultPrevented) state?.setOpen(false)
-      }}
-      {...props}
+      })}
     >
       {children}
       <MenuSheetCheck checked={checked} />
@@ -472,6 +574,7 @@ export function MenuSheetLabel({
 }) {
   return (
     <div
+      {...props}
       data-slot={dataSlot}
       data-variant={variant}
       className={cn(
@@ -481,7 +584,6 @@ export function MenuSheetLabel({
         inset && SHEET_INSET_CLASS,
         className
       )}
-      {...props}
     >
       {children}
       {description !== undefined && (
@@ -560,10 +662,11 @@ export function MenuSheetSubTrigger({
   className,
   inset,
   variant = "default",
-  textValue: _textValue,
+  textValue,
   children,
   disabled,
   dataSlot,
+  onClick,
   ...props
 }: React.ComponentProps<"button"> & {
   inset?: boolean
@@ -576,6 +679,7 @@ export function MenuSheetSubTrigger({
   const open = id !== null && state?.stack.some((level) => level.id === id) === true
   return (
     <button
+      {...props}
       type="button"
       role="menuitem"
       aria-haspopup="menu"
@@ -586,11 +690,10 @@ export function MenuSheetSubTrigger({
       data-disabled={disabled ? "" : undefined}
       disabled={disabled}
       className={cn(menuSheetRowClass, inset && SHEET_INSET_CLASS, className)}
-      onClick={(event) => {
+      onClick={composeHandlers(onClick, (event) => {
         if (id === null || !state || disabled) return
-        state.drillIn({ id, label: event.currentTarget.textContent?.trim() ?? "" })
-      }}
-      {...props}
+        state.drillIn({ id, label: textValue ?? rowLabel(event.currentTarget) })
+      })}
     >
       {children}
       <ChevronRightIcon className="ml-auto" aria-hidden="true" />
