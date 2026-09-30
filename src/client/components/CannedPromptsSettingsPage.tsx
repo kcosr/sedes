@@ -434,7 +434,8 @@ export function CannedPromptsSettingsPage({
                   </Field>
                   <SaveBar
                     placement="pane"
-                    dirty={draft.mode === "create" || dirty}
+                    creating={draft.mode === "create"}
+                    dirty={dirty}
                     saving={pending}
                     saveLabel={draft.mode === "create" ? "Add prompt" : "Save"}
                     savingLabel={draft.mode === "create" ? "Adding…" : "Saving…"}

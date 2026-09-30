@@ -448,7 +448,7 @@ export function ExecutionSettings({ controls }: {
     if (mode === "pending" && registration && acceptDraft && acceptDraft.key === key) {
       const draft = acceptDraft;
       return <PendingHostDetail registration={registration} draft={draft.value} setDraft={value => setAcceptDraft({ ...draft, value })}
-        errors={acceptIssues ? mapRequestIssues(acceptIssues, acceptFields) : noErrors} disabled={pending || pairing.stale}
+        errors={acceptIssues ? mapRequestIssues(acceptIssues, acceptFields) : noErrors} disabled={pending || pairing.stale} dirty={changed(acceptDraft)}
         saving={pairing.busy && saveOwner === draft.key} saveError={acceptIssues?.length ? "Fix the highlighted fields to accept this host." : undefined}
         back={<SettingsBackLink stackOnly href={settingsPath("environments")} label="Environments" />}
         onAccept={() => void acceptHost()} onCancel={() => returnTo(settingsPath("environments"))} onDeny={denyHost} />;

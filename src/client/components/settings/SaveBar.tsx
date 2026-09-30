@@ -7,8 +7,13 @@ import { Button } from "@client/components/ui/button";
 export const SAVED_NOTICE_MS = 2500;
 
 export type SaveBarProps = Omit<React.ComponentProps<"div">, "children"> & {
-  /** The form has unsaved changes; Save and Cancel are enabled only then. */
+  /** The form has unsaved changes; Save and Cancel are enabled only then (or while `creating`). */
   readonly dirty: boolean;
+  /**
+   * A form for something not saved yet (create, accept): Save and Cancel
+   * work before any edit, and "Unsaved changes" appears only after one.
+   */
+  readonly creating?: boolean;
   readonly saving?: boolean;
   /**
    * Set after a successful save (a timestamp or counter); each new value
@@ -41,6 +46,7 @@ export type SaveBarProps = Omit<React.ComponentProps<"div">, "children"> & {
  */
 export function SaveBar({
   dirty,
+  creating = false,
   saving = false,
   savedAt,
   error,
@@ -66,6 +72,7 @@ export function SaveBar({
   }, [dirty]);
 
   const state = error ? "error" : saving ? "saving" : dirty ? "dirty" : savedNotice ? "saved" : "clean";
+  const actionable = dirty || creating;
   return (
     <div data-slot="save-bar" data-state={state} data-placement={placement} {...props}>
       {state === "error" ? (
@@ -82,14 +89,14 @@ export function SaveBar({
       )}
       <div data-slot="save-bar-actions">
         {onCancel ? (
-          <Button type="button" variant="outline" disabled={!dirty || saving} onClick={onCancel}>
+          <Button type="button" variant="outline" disabled={!actionable || saving} onClick={onCancel}>
             {cancelLabel}
           </Button>
         ) : null}
         <Button
           type={onSave ? "button" : "submit"}
           form={onSave ? undefined : form}
-          disabled={!dirty || saving || saveDisabled}
+          disabled={!actionable || saving || saveDisabled}
           onClick={onSave}
         >
           {saving ? savingLabel : saveLabel}

@@ -122,7 +122,7 @@ export function EnvironmentEditor({ draft, setDraft, creating, errors, disabled,
     title={creating ? newTitles[draft.kind] : `Edit ${draft.label || "environment"}`}
     description={creating ? undefined : "Disruptive changes stay pending until running work can retire or you restart it."}
     sections={sections} errors={<GeneralErrors errors={errors.general} />} onSubmit={onSave}
-    saveBar={<SaveBar dirty={creating || dirty} saving={saving} savedAt={savedAt} error={saveError} onCancel={onCancel}
+    saveBar={<SaveBar creating={creating} dirty={dirty} saving={saving} savedAt={savedAt} error={saveError} onCancel={onCancel}
       saveLabel="Save environment" saveDisabled={saveDisabled} />}>
     <SettingsSection id="environment-general" title="General" card>
       <TextField label="Environment name" required disabled={disabled} value={draft.label} error={fields.get("label")}

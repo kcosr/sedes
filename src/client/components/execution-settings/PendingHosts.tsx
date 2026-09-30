@@ -41,12 +41,14 @@ type PendingRegistration = HostPairingList["registrations"][number];
  * A host awaiting approval: what it reported, and the access that accepting
  * it grants. Accepting creates its environment; denying ends the request.
  */
-export function PendingHostDetail({ registration, draft, setDraft, errors, disabled, saving, saveError, back, headingRef, onAccept, onCancel, onDeny }: {
+export function PendingHostDetail({ registration, draft, setDraft, errors, disabled, dirty, saving, saveError, back, headingRef, onAccept, onCancel, onDeny }: {
   readonly registration: PendingRegistration;
   readonly draft: AcceptDraft;
   readonly setDraft: (draft: AcceptDraft) => void;
   readonly errors: MappedErrors;
   readonly disabled: boolean;
+  /** The review has edits (the accept form starts complete). */
+  readonly dirty: boolean;
   readonly saving: boolean;
   readonly saveError?: ReactNode;
   readonly back: ReactNode;
@@ -86,7 +88,7 @@ export function PendingHostDetail({ registration, draft, setDraft, errors, disab
           onChange={(workspaceRoots) => setDraft({ ...draft, workspaceRoots })} />
         <RemoteOperationsFields value={draft.operations} disabled={disabled} errors={fields} onChange={(operations) => setDraft({ ...draft, operations })} />
       </SettingsSection>
-      <SaveBar dirty saving={saving} error={saveError} onCancel={onCancel} saveLabel="Accept host" savingLabel="Accepting…" saveDisabled={disabled} />
+      <SaveBar creating dirty={dirty} saving={saving} error={saveError} onCancel={onCancel} saveLabel="Accept host" savingLabel="Accepting…" saveDisabled={disabled} />
     </form>
     <ConfirmDialog open={denying} onOpenChange={setDenying} tone="danger" title={`Deny ${metadata.hostname}?`}
       description="The connector's request is rejected and no environment is created. The host can register again later."

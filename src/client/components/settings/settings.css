@@ -337,11 +337,12 @@
   background: var(--background);
   /* Full bleed across the scroller's gutters and its bottom padding (a
      sticky box stops at the scroller's padding edge), with a hairline on
-     top. Nothing follows the bar, so the bleed below covers only padding. */
+     top. The background bleed starts at the bar's top edge, so the 1px of
+     the border bleed above it shows. Nothing follows the bar, so the bleed
+     below covers only padding. */
   box-shadow:
-    0 0 0 100vmax var(--background),
-    0 -1px 0 100vmax var(--border-soft),
-    0 -1px 0 100vmax var(--background);
+    0 100vmax 0 100vmax var(--background),
+    0 -1px 0 100vmax var(--border-soft);
   clip-path: inset(-1px -100vmax -100vmax);
 }
 

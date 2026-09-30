@@ -480,7 +480,8 @@ function AgentEditor({
         onSubmit={() => void save()}
         saveBar={
           <SaveBar
-            dirty={agent ? dirty : true}
+            creating={!agent}
+            dirty={dirty}
             saving={pending}
             saveLabel={agent ? "Save" : "Create Agent"}
             // Cancel resets an Agent's edits in place, or leaves the create flow.

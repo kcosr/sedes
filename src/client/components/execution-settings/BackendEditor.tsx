@@ -82,7 +82,7 @@ export function BackendEditor({ draft, setDraft, configuration, errors, disabled
     title={draft.creating ? "New backend" : `Edit ${draft.backend.label || "backend"}`}
     description="Saving does not start model work. Disruptive changes stay pending until they can apply safely or you restart the backend."
     sections={sections} errors={<GeneralErrors errors={errors.general} />} onSubmit={onSave}
-    saveBar={<SaveBar dirty={draft.creating || dirty} saving={saving} savedAt={savedAt} error={saveError} onCancel={onCancel}
+    saveBar={<SaveBar creating={draft.creating} dirty={dirty} saving={saving} savedAt={savedAt} error={saveError} onCancel={onCancel}
       saveLabel="Save backend" saveDisabled={saveDisabled || invalid} />}>
     <SettingsSection id="backend-general" title="General" card>
       <TextField label="Backend name" required disabled={disabled} value={draft.backend.label} error={fields.get("label")}

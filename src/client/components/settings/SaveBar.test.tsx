@@ -22,6 +22,19 @@ describe("SaveBar", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
   });
 
+  it("lets a creation form save before any edit, and says nothing until one", () => {
+    const { rerender } = render(<SaveBar creating dirty={false} onCancel={vi.fn()} onSave={vi.fn()} saveLabel="Create" />);
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Create" })).toBeEnabled();
+
+    rerender(<SaveBar creating dirty onCancel={vi.fn()} onSave={vi.fn()} saveLabel="Create" />);
+    expect(screen.getByRole("status")).toHaveTextContent("Unsaved changes");
+
+    rerender(<SaveBar creating dirty={false} saveDisabled onCancel={vi.fn()} onSave={vi.fn()} saveLabel="Create" />);
+    expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+  });
+
   it("puts Cancel before Save and calls the handlers", () => {
     const onCancel = vi.fn();
     const onSave = vi.fn();
