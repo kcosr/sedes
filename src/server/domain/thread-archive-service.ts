@@ -77,7 +77,9 @@ export class ThreadArchiveService {
       readonly publications: Pick<InventoryService, "publishCommitted">;
       readonly tasks: Pick<
         TaskRepository,
-        "listOpenThreadTaskSummaries" | "moveOpenThreadTasks"
+        | "listOpenThreadTaskFamilySummaries"
+        | "applyOpenThreadTaskDisposition"
+        | "assertOpenThreadTaskSnapshot"
       >;
       readonly taskPublications: TaskChangePublisher;
       readonly executionWorkspaces: {
@@ -123,14 +125,9 @@ export class ThreadArchiveService {
       .slice(1)
       .map((candidate) => blocked.get(candidate))
       .find((reason): reason is BlockReason => reason !== undefined);
-    const rootOpenTasks = this.input.tasks.listOpenThreadTaskSummaries(
+    const taskImpact = this.input.tasks.listOpenThreadTaskFamilySummaries(
       scope,
-      [threadId],
-      ARCHIVE_IMPACT_TASK_SUMMARY_LIMIT,
-    );
-    const descendantOpenTasks = this.input.tasks.listOpenThreadTaskSummaries(
-      scope,
-      threadIds.slice(1),
+      threadIds,
       ARCHIVE_IMPACT_TASK_SUMMARY_LIMIT,
     );
     return {
@@ -154,10 +151,11 @@ export class ThreadArchiveService {
           ),
       },
       openTasks: {
-        root: { ...rootOpenTasks, items: [...rootOpenTasks.items] },
+        familySnapshot: taskImpact.familySnapshot,
+        root: { ...taskImpact.root, items: [...taskImpact.root.items] },
         descendants: {
-          ...descendantOpenTasks,
-          items: [...descendantOpenTasks.items],
+          ...taskImpact.descendants,
+          items: [...taskImpact.descendants.items],
         },
       },
       executionWorkspace,
@@ -199,6 +197,7 @@ export class ThreadArchiveService {
       readonly expectedThreadIds?: readonly string[];
       readonly expectedStashedPromptCount?: number;
       readonly openTaskDisposition?: OpenTaskDisposition;
+      readonly expectedOpenTaskSnapshot?: string;
       readonly executionWorkspaceDisposition:
         | { readonly kind: "keep" }
         | {
@@ -267,11 +266,18 @@ export class ThreadArchiveService {
           expectedThreadIds: threadIds,
           blockedThreadIds: new Set(blocked.keys()),
           now,
-          moveOpenTasks:
+          assertOpenTasks: (ids) =>
+            this.input.tasks.assertOpenThreadTaskSnapshot(
+              scope,
+              ids,
+              disposition,
+              input.expectedOpenTaskSnapshot,
+            ),
+          applyOpenTasks:
             disposition === "keep"
               ? undefined
               : (archivedThreadIds) =>
-                  this.input.tasks.moveOpenThreadTasks(
+                  this.input.tasks.applyOpenThreadTaskDisposition(
                     scope,
                     archivedThreadIds,
                     disposition,
@@ -301,6 +307,7 @@ export class ThreadArchiveService {
       readonly mutationId: string;
       readonly expectedStashedPromptCount?: number;
       readonly openTaskDisposition?: OpenTaskDisposition;
+      readonly expectedOpenTaskSnapshot?: string;
     },
   ): Promise<void> {
     const now = this.input.now?.() ?? Date.now();
@@ -308,11 +315,18 @@ export class ThreadArchiveService {
     const result = this.input.inventory.settleThread(scope, threadId, {
       ...input,
       now,
-      moveOpenTasks:
+      assertOpenTasks: (ids) =>
+        this.input.tasks.assertOpenThreadTaskSnapshot(
+          scope,
+          ids,
+          disposition,
+          input.expectedOpenTaskSnapshot,
+        ),
+      applyOpenTasks:
         disposition === "keep"
           ? undefined
           : () =>
-              this.input.tasks.moveOpenThreadTasks(
+              this.input.tasks.applyOpenThreadTaskDisposition(
                 scope,
                 [threadId],
                 disposition,

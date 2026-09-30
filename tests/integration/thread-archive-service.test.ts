@@ -816,8 +816,9 @@ describe("thread family archive service", () => {
       pendingQuestions: { root: 0, descendants: 0 },
       stashedPrompts: { root: 0, descendants: 0 },
       openTasks: {
-        root: { items: [], total: 0, omitted: 0 },
-        descendants: { items: [], total: 0, omitted: 0 },
+        familySnapshot: expect.any(String),
+        root: { snapshot: expect.any(String), items: [], total: 0, omitted: 0 },
+        descendants: { snapshot: expect.any(String), items: [], total: 0, omitted: 0 },
       },
       executionWorkspace: { kind: "direct" },
       archiveOnly: { available: true },
@@ -857,8 +858,9 @@ describe("thread family archive service", () => {
         pendingQuestions: { root: 0, descendants: 0 },
         stashedPrompts: { root: 0, descendants: 0 },
         openTasks: {
-          root: { items: [], total: 0, omitted: 0 },
-          descendants: { items: [], total: 0, omitted: 0 },
+          familySnapshot: expect.any(String),
+          root: { snapshot: expect.any(String), items: [], total: 0, omitted: 0 },
+          descendants: { snapshot: expect.any(String), items: [], total: 0, omitted: 0 },
         },
         executionWorkspace: { kind: "direct" },
         archiveOnly: { available: true },
@@ -1016,6 +1018,7 @@ describe("thread family archive service", () => {
       expect(impact.openTasks.root).toMatchObject({ total: 101, omitted: 1 });
       expect(impact.openTasks.root.items).toHaveLength(100);
       expect(impact.openTasks.descendants).toEqual({
+        snapshot: expect.any(String),
         items: [],
         total: 0,
         omitted: 0,
@@ -1047,7 +1050,7 @@ describe("thread family archive service", () => {
       ).resolves.toMatchObject({
         descendantCount: 1,
         openTasks: {
-          descendants: { items: [], total: 0, omitted: 0 },
+          descendants: { snapshot: expect.any(String), items: [], total: 0, omitted: 0 },
         },
         archiveAll: { available: true },
       });
@@ -1073,8 +1076,9 @@ describe("thread family archive service", () => {
         pendingQuestions: { root: 0, descendants: 0 },
         stashedPrompts: { root: 0, descendants: 0 },
         openTasks: {
-          root: { items: [], total: 0, omitted: 0 },
-          descendants: { items: [], total: 0, omitted: 0 },
+          familySnapshot: expect.any(String),
+          root: { snapshot: expect.any(String), items: [], total: 0, omitted: 0 },
+          descendants: { snapshot: expect.any(String), items: [], total: 0, omitted: 0 },
         },
         executionWorkspace: { kind: "direct" },
         archiveOnly: { available: true },
@@ -1215,5 +1219,138 @@ describe("thread family archive service", () => {
     } finally {
       current.database.close();
     }
+  });
+});
+
+describe("reviewed lifecycle task completion", () => {
+  it.each(["settle", "archive", "archive_family"] as const)("%s completes only reviewed tasks in place and replays publication", async (action) => {
+    const current = fixture();
+    try {
+      const rootTask = current.tasks.create(current.scope, {
+        title: "Complete root", scope: { kind: "thread", threadId: current.rootId },
+        mutationId: "complete-root-create", now: 450,
+      });
+      const childTask = current.tasks.create(current.scope, {
+        title: "Complete child", scope: { kind: "thread", threadId: current.childId },
+        mutationId: "complete-child-create", now: 451,
+      });
+      const globalTask = current.tasks.create(current.scope, {
+        title: "Unrelated", scope: { kind: "global" }, mutationId: "global-create", now: 452,
+      });
+      const impact = await current.service.impact(current.scope, current.rootId);
+      const input = {
+        expectedRevision: 0, mutationId: "complete-lifecycle",
+        openTaskDisposition: "complete" as const,
+        expectedOpenTaskSnapshot: action === "archive_family" ? impact.openTasks.familySnapshot : impact.openTasks.root.snapshot,
+      };
+      const perform = () => action === "settle"
+        ? current.service.settle(current.scope, current.rootId, input)
+        : current.service.archive(current.scope, current.rootId, {
+          ...input, includeDescendants: action === "archive_family", executionWorkspaceDisposition: { kind: "keep" },
+        });
+      current.publishTaskChange.mockRejectedValueOnce(new Error("publication interrupted"));
+      await expect(perform()).rejects.toThrow("publication interrupted");
+      expect(current.tasks.get(current.scope, rootTask.id)).toMatchObject({
+        scopeKind: "thread", threadId: current.rootId, revision: 1, completedAt: 500, updatedAt: 500,
+      });
+      expect(current.tasks.get(current.scope, childTask.id)).toMatchObject({
+        scopeKind: "thread", threadId: current.childId,
+        revision: action === "archive_family" ? 1 : 0,
+        completedAt: action === "archive_family" ? 500 : null,
+      });
+      expect(current.tasks.get(current.scope, globalTask.id).completedAt).toBeNull();
+      await perform();
+      expect(current.tasks.get(current.scope, rootTask.id).revision).toBe(1);
+      expect(current.publishTaskChange).toHaveBeenCalledWith(current.scope, rootTask.id);
+      // A different reviewed set cannot borrow an existing successful mutation ID.
+      input.expectedOpenTaskSnapshot = "0".repeat(64);
+      await expect(perform()).rejects.toMatchObject({ code: "conflict" });
+    } finally { current.database.close(); }
+  });
+
+  it.each(["missing", "added", "replaced", "edited", "wrong-principal", "wrong-thread"] as const)("rejects %s review snapshots without inventory or task changes", async (kind) => {
+    const current = fixture();
+    try {
+      const task = current.tasks.create(current.scope, {
+        title: "Review this", scope: { kind: "thread", threadId: current.rootId }, mutationId: "review-task", now: 450,
+      });
+      const impact = await current.service.impact(current.scope, current.rootId);
+      let snapshot: string | undefined = impact.openTasks.root.snapshot;
+      if (kind === "missing") snapshot = undefined;
+      if (kind === "wrong-principal") snapshot = current.tasks.openThreadTaskSnapshot({ ...current.scope, principalId: "other-principal" }, [current.rootId]);
+      if (kind === "wrong-thread") snapshot = impact.openTasks.descendants.snapshot;
+      if (kind === "replaced") current.tasks.remove(current.scope, task.id);
+      if (kind === "added" || kind === "replaced") current.tasks.create(current.scope, {
+        title: "Unreviewed", scope: { kind: "thread", threadId: current.rootId }, mutationId: "new-task", now: 460,
+      });
+      if (kind === "edited") current.tasks.update(current.scope, task.id, {
+        title: "Changed meaning", expectedRevision: 0, mutationId: "edit-task", now: 460,
+      });
+      await expect(current.service.settle(current.scope, current.rootId, {
+        expectedRevision: 0, mutationId: "stale-complete", openTaskDisposition: "complete", expectedOpenTaskSnapshot: snapshot,
+      })).rejects.toMatchObject({ code: kind === "missing" ? "bad_request" : "conflict" });
+      expect(current.inventory.getInventory(current.scope, current.rootId)).toMatchObject({ inventoryState: "active", inventoryRevision: 0 });
+      expect(current.tasks.listOpenThreadTaskSummaries(current.scope, [current.rootId], 100).total).toBe(kind === "added" ? 2 : 1);
+      expect(current.publishTaskChange).not.toHaveBeenCalled();
+    } finally { current.database.close(); }
+  });
+
+  it("requires confirmation even for zero tasks and excludes archived descendants", async () => {
+    const current = fixture();
+    try {
+      await expect(current.service.settle(current.scope, current.rootId, {
+        expectedRevision: 0, mutationId: "empty-without-review", openTaskDisposition: "complete",
+      })).rejects.toMatchObject({ code: "bad_request" });
+      const retained = current.tasks.create(current.scope, {
+        title: "Retain archived task", scope: { kind: "thread", threadId: current.childId },
+        mutationId: "retained-task", now: 450,
+      });
+      await current.service.archive(current.scope, current.childId, {
+        includeDescendants: false, expectedRevision: 0, mutationId: "archive-child-before-review",
+        executionWorkspaceDisposition: { kind: "keep" },
+      });
+      const impact = await current.service.impact(current.scope, current.rootId);
+      expect(impact.openTasks.root.total + impact.openTasks.descendants.total).toBe(0);
+      await current.service.archive(current.scope, current.rootId, {
+        includeDescendants: true, expectedRevision: 0, mutationId: "complete-empty-family",
+        openTaskDisposition: "complete", expectedOpenTaskSnapshot: impact.openTasks.familySnapshot,
+        executionWorkspaceDisposition: { kind: "keep" },
+      });
+      expect(current.tasks.get(current.scope, retained.id)).toMatchObject({ completedAt: null, revision: 0 });
+      expect(current.inventory.getInventory(current.scope, current.rootId).inventoryState).toBe("archived");
+    } finally { current.database.close(); }
+  });
+
+  it("fences omitted tasks and retries after an atomic rollback", async () => {
+    const current = fixture();
+    try {
+      const tasks = Array.from({ length: 101 }, (_, index) => current.tasks.create(current.scope, {
+        title: `Task ${index}`, scope: { kind: "thread" as const, threadId: current.rootId }, mutationId: `many-${index}`, now: 350 + index,
+      }));
+      const impact = await current.service.impact(current.scope, current.rootId);
+      expect(impact.openTasks.root.omitted).toBe(1);
+      const omittedTask = tasks[100]!;
+      current.tasks.update(current.scope, omittedTask.id, {
+        details: "Unseen edit", expectedRevision: 0, mutationId: "edit-omitted", now: 490,
+      });
+      const input = {
+        expectedRevision: 0, mutationId: "complete-many", openTaskDisposition: "complete" as const,
+        expectedOpenTaskSnapshot: impact.openTasks.familySnapshot, includeDescendants: true,
+        executionWorkspaceDisposition: { kind: "keep" as const },
+      };
+      await expect(current.service.archive(current.scope, current.rootId, input)).rejects.toMatchObject({ code: "conflict" });
+      input.expectedOpenTaskSnapshot = (await current.service.impact(current.scope, current.rootId)).openTasks.familySnapshot;
+      const original = current.tasks.applyOpenThreadTaskDisposition.bind(current.tasks);
+      const apply = vi.spyOn(current.tasks, "applyOpenThreadTaskDisposition").mockImplementationOnce((...args) => {
+        original(...args); throw new Error("task write interrupted");
+      });
+      await expect(current.service.archive(current.scope, current.rootId, input)).rejects.toThrow("task write interrupted");
+      expect(current.tasks.get(current.scope, tasks[0]!.id).completedAt).toBeNull();
+      for (const id of [current.rootId, current.childId, current.grandchildId]) expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("active");
+      apply.mockRestore();
+      await current.service.archive(current.scope, current.rootId, input);
+      expect(current.tasks.listOpenThreadTaskSummaries(current.scope, [current.rootId], 100).total).toBe(0);
+      expect(current.tasks.get(current.scope, omittedTask.id)).toMatchObject({ completedAt: 500, revision: 2 });
+    } finally { current.database.close(); }
   });
 });

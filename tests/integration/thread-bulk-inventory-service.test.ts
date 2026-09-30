@@ -703,3 +703,49 @@ describe("thread bulk inventory service", () => {
     }
   });
 });
+
+describe("reviewed bulk task completion", () => {
+  it.each(["settle", "archive"] as const)("%s completes affected tasks and supports durable replay", async (action) => {
+    const current = fixture();
+    try {
+      const [first, second, third] = current.ids as [string, string, string];
+      if (action === "settle") current.inventory.transitionInventory(current.scope, second, {
+        expectedRevision: 0, mutationId: "settle-before-impact", change: { action: "settle" }, now: 440,
+      });
+      const tasks = [first, second, third].map((threadId, index) => current.tasks.create(current.scope, {
+        title: `Task ${index}`, scope: { kind: "thread", threadId }, mutationId: `bulk-complete-task-${index}`, now: 450,
+      }));
+      const impact = await current.service.impact(current.scope, { action, threadIds: [first, second] });
+      const input = {
+        action, targets: impact.targets, mutationId: "bulk-complete", expectedStashedPromptCount: 0,
+        expectedOpenTaskCount: impact.openTasks.total, expectedOpenTaskSnapshot: impact.openTasks.snapshot,
+        openTaskDisposition: "complete" as const,
+      };
+      current.publishTaskChange.mockRejectedValueOnce(new Error("interrupted publication"));
+      await expect(current.service.transition(current.scope, input)).rejects.toThrow("interrupted publication");
+      await current.service.transition(current.scope, input);
+      expect(current.tasks.get(current.scope, tasks[0]!.id)).toMatchObject({ scopeKind: "thread", threadId: first, completedAt: 500, revision: 1 });
+      expect(current.tasks.get(current.scope, tasks[1]!.id).completedAt).toBe(action === "settle" ? null : 500);
+      expect(current.tasks.get(current.scope, tasks[2]!.id).completedAt).toBeNull();
+      expect(current.publishTaskChange).toHaveBeenCalledWith(current.scope, tasks[0]!.id);
+    } finally { current.database.close(); }
+  });
+
+  it("rejects same-count replacements atomically across a stack", async () => {
+    const current = fixture();
+    try {
+      const [first, second] = current.ids as [string, string];
+      const task = current.tasks.create(current.scope, { title: "Reviewed", scope: { kind: "thread", threadId: first }, mutationId: "old-task", now: 450 });
+      const impact = await current.service.impact(current.scope, { action: "archive", threadIds: [first, second] });
+      current.tasks.remove(current.scope, task.id);
+      const replacement = current.tasks.create(current.scope, { title: "Unreviewed", scope: { kind: "thread", threadId: second }, mutationId: "replacement-task", now: 460 });
+      await expect(current.service.transition(current.scope, {
+        action: "archive", targets: impact.targets, mutationId: "stale-bulk-complete", expectedStashedPromptCount: 0,
+        expectedOpenTaskCount: 1, expectedOpenTaskSnapshot: impact.openTasks.snapshot, openTaskDisposition: "complete",
+      })).rejects.toMatchObject({ code: "conflict" });
+      for (const id of [first, second]) expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("active");
+      expect(current.tasks.get(current.scope, replacement.id).completedAt).toBeNull();
+      expect(current.publishTaskChange).not.toHaveBeenCalled();
+    } finally { current.database.close(); }
+  });
+});

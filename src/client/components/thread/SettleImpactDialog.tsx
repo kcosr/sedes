@@ -6,13 +6,11 @@ import type {
   ThreadArchiveImpact,
 } from "../../../shared/index.js";
 import { Button } from "@client/components/ui/button";
-import { SegmentedControl } from "../tasks/SegmentedControl.js";
+import { ThreadTaskDisposition } from "./ThreadTaskDisposition.js";
 import { messageFrom } from "../../stores/ApplicationClientStore.js";
 
 export function settleNeedsConfirmation(impact: ThreadArchiveImpact): boolean {
-  return (
-    impact.openTasks.root.total > 0 || impact.stashedPrompts.root > 0
-  );
+  return impact.openTasks.root.total > 0 || impact.stashedPrompts.root > 0;
 }
 
 export function SettleImpactDialog({
@@ -30,14 +28,15 @@ export function SettleImpactDialog({
   readonly onSettle: (options: {
     readonly expectedStashedPromptCount: number;
     readonly openTaskDisposition?: OpenTaskDisposition;
+    readonly expectedOpenTaskSnapshot?: string;
   }) => Promise<void>;
   readonly returnFocusRef?: React.RefObject<HTMLElement | null>;
 }): React.JSX.Element {
-  const [currentImpact, setCurrentImpact] =
-    useState<ThreadArchiveImpact | undefined>(impact);
-  const [disposition, setDisposition] = useState<OpenTaskDisposition>(
-    "move_to_workspace",
-  );
+  const [currentImpact, setCurrentImpact] = useState<
+    ThreadArchiveImpact | undefined
+  >(impact);
+  const [disposition, setDisposition] =
+    useState<OpenTaskDisposition>("move_to_workspace");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
@@ -58,6 +57,9 @@ export function SettleImpactDialog({
     void onSettle({
       expectedStashedPromptCount: currentImpact.stashedPrompts.root,
       ...(openTaskCount > 0 ? { openTaskDisposition: disposition } : {}),
+      ...(openTaskCount > 0 && disposition === "complete"
+        ? { expectedOpenTaskSnapshot: currentImpact.openTasks.root.snapshot }
+        : {}),
     })
       .then(() => onOpenChange(false))
       .catch(async (cause: unknown) => {
@@ -115,42 +117,17 @@ export function SettleImpactDialog({
               </span>
             </div>
           )}
-          {openTaskCount > 0 && (
-            <div className="archive-task-disposition">
-              <span className="archive-task-disposition-label">
-                This thread has {openTaskCount} open{" "}
-                {openTaskCount === 1 ? "task" : "tasks"}. Choose what should
-                happen before settling.
-              </span>
-              <SegmentedControl
-                ariaLabel="Open task handling"
-                size="small"
-                value={disposition}
-                onChange={(value) =>
-                  setDisposition(value as OpenTaskDisposition)
-                }
-                options={[
-                  {
-                    value: "move_to_workspace",
-                    label: "To project",
-                    title: "Move open tasks to the thread's project",
-                    disabled: pending,
-                  },
-                  {
-                    value: "move_to_global",
-                    label: "To global",
-                    title: "Move open tasks to the global list",
-                    disabled: pending,
-                  },
-                  {
-                    value: "keep",
-                    label: "Keep",
-                    title: "Leave open tasks with the settled thread",
-                    disabled: pending,
-                  },
-                ]}
-              />
-            </div>
+          {currentImpact && (
+            <ThreadTaskDisposition
+              action="settle"
+              description={`This thread has ${openTaskCount} open ${openTaskCount === 1 ? "task" : "tasks"}. Choose what should happen before settling.`}
+              groups={[
+                { label: "This thread", tasks: currentImpact.openTasks.root },
+              ]}
+              value={disposition}
+              onChange={setDisposition}
+              disabled={pending}
+            />
           )}
           {error && (
             <p className="menu-error" role="alert">

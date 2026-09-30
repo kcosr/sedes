@@ -1642,9 +1642,9 @@ describe("task repository", () => {
             [current.firstThreadId],
             100,
           ),
-        ).toEqual({ items: [], total: 0, omitted: 0 });
+        ).toEqual({ snapshot: expect.any(String), items: [], total: 0, omitted: 0 });
         expect(
-          current.tasks.moveOpenThreadTasks(
+          current.tasks.applyOpenThreadTaskDisposition(
             foreign,
             [current.firstThreadId],
             "move_to_global",
@@ -1721,6 +1721,7 @@ describe("task repository", () => {
         ],
         total: 3,
         omitted: 1,
+        snapshot: expect.any(String),
       });
       expect(
         current.tasks.listOpenThreadTaskSummaries(
@@ -1738,10 +1739,11 @@ describe("task repository", () => {
         ],
         total: 1,
         omitted: 0,
+        snapshot: expect.any(String),
       });
       expect(
         current.tasks.listOpenThreadTaskSummaries(current.scope, [], 100),
-      ).toEqual({ items: [], total: 0, omitted: 0 });
+      ).toEqual({ snapshot: expect.any(String), items: [], total: 0, omitted: 0 });
     } finally {
       current.database.close();
     }
@@ -1769,7 +1771,7 @@ describe("task repository", () => {
         now: 1_200,
       });
 
-      const moved = current.tasks.moveOpenThreadTasks(
+      const moved = current.tasks.applyOpenThreadTaskDisposition(
         current.scope,
         [current.firstThreadId],
         "move_to_global",
@@ -1823,7 +1825,7 @@ describe("task repository", () => {
         now: 1_300,
       });
 
-      const moved = current.tasks.moveOpenThreadTasks(
+      const moved = current.tasks.applyOpenThreadTaskDisposition(
         current.scope,
         [current.firstThreadId, current.secondThreadId],
         "move_to_workspace",
@@ -1991,7 +1993,7 @@ describe("task repository", () => {
           executionWorkspaceDisposition: { kind: "keep" },
           now: 2_000,
           openTaskDisposition: "move_to_workspace",
-          moveOpenTasks: () => {
+          applyOpenTasks: () => {
             throw new Error("disposition_failed");
           },
         }),
@@ -2005,8 +2007,8 @@ describe("task repository", () => {
         revision: 0,
       });
 
-      const moveOpenTasks = vi.fn((archivedThreadIds: readonly string[]) =>
-        current.tasks.moveOpenThreadTasks(
+      const applyOpenTasks = vi.fn((archivedThreadIds: readonly string[]) =>
+        current.tasks.applyOpenThreadTaskDisposition(
           current.scope,
           archivedThreadIds,
           "move_to_workspace",
@@ -2022,7 +2024,7 @@ describe("task repository", () => {
         executionWorkspaceDisposition: { kind: "keep" },
         now: 3_000,
         openTaskDisposition: "move_to_workspace",
-        moveOpenTasks,
+        applyOpenTasks,
       } as const;
       const result = current.inventory.archiveThreads(
         current.scope,
@@ -2031,7 +2033,7 @@ describe("task repository", () => {
       );
       expect(result.replayed).toBe(false);
       expect(result.movedTaskIds).toEqual([open.id]);
-      expect(moveOpenTasks).toHaveBeenCalledExactlyOnceWith([
+      expect(applyOpenTasks).toHaveBeenCalledExactlyOnceWith([
         current.firstThreadId,
       ]);
       expect(
@@ -2061,7 +2063,7 @@ describe("task repository", () => {
       // The receipt retains the moved ids so a retry can re-publish task
       // events the original request failed to emit after commit.
       expect(replay.movedTaskIds).toEqual([open.id]);
-      expect(moveOpenTasks).toHaveBeenCalledTimes(1);
+      expect(applyOpenTasks).toHaveBeenCalledTimes(1);
       expect(current.tasks.get(current.scope, open.id)).toEqual(movedOpen);
       expect(
         current.inventory.getInventory(current.scope, current.firstThreadId),

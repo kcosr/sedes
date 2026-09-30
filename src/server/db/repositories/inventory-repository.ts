@@ -395,8 +395,9 @@ function archiveThreadsFingerprint(
     readonly expectedRevision: number;
     readonly includeDescendants: boolean;
     readonly expectedStashedPromptCount?: number;
+    readonly expectedOpenTaskSnapshot?: string;
     readonly openTaskDisposition?:
-      "move_to_workspace" | "move_to_global" | "keep";
+      "move_to_workspace" | "move_to_global" | "complete" | "keep";
     readonly executionWorkspaceDisposition?:
       | { readonly kind: "keep" }
       | {
@@ -416,6 +417,9 @@ function archiveThreadsFingerprint(
       ? []
       : [input.expectedStashedPromptCount]),
     ...(disposition === "keep" ? [] : [disposition]),
+    ...(input.expectedOpenTaskSnapshot === undefined
+      ? []
+      : [input.expectedOpenTaskSnapshot]),
     ...(input.executionWorkspaceDisposition?.kind === "delete"
       ? [input.executionWorkspaceDisposition]
       : []),
@@ -427,8 +431,9 @@ function bulkInventoryFingerprint(input: {
   readonly targets: readonly BulkInventoryTarget[];
   readonly expectedStashedPromptCount?: number;
   readonly expectedOpenTaskCount?: number;
+  readonly expectedOpenTaskSnapshot?: string;
   readonly openTaskDisposition?:
-    "move_to_workspace" | "move_to_global" | "keep";
+    "move_to_workspace" | "move_to_global" | "complete" | "keep";
 }): string {
   const disposition = input.openTaskDisposition ?? "keep";
   const canonicalTargets = input.targets
@@ -447,6 +452,9 @@ function bulkInventoryFingerprint(input: {
       ? []
       : [input.expectedOpenTaskCount]),
     disposition,
+    ...(input.expectedOpenTaskSnapshot === undefined
+      ? []
+      : [input.expectedOpenTaskSnapshot]),
   ]);
 }
 
@@ -1551,6 +1559,8 @@ export class InventoryRepository {
     })();
   }
 
+  // Durable receipts retain movedTaskIds as the field for all task disposition
+  // changes (including completion), preserving committed replay identities.
   settleThread(
     scope: RequestScope,
     threadId: string,
@@ -1559,9 +1569,11 @@ export class InventoryRepository {
       readonly mutationId: string;
       readonly now: number;
       readonly expectedStashedPromptCount?: number;
+      readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "keep";
-      readonly moveOpenTasks?: () => readonly string[];
+        "move_to_workspace" | "move_to_global" | "complete" | "keep";
+      readonly assertOpenTasks?: (threadIds: readonly string[]) => void;
+      readonly applyOpenTasks?: () => readonly string[];
     },
   ): {
     readonly state: InventoryPrincipalStateRecord;
@@ -1574,6 +1586,9 @@ export class InventoryRepository {
       threadId,
       input.expectedRevision,
       disposition,
+      ...(input.expectedOpenTaskSnapshot === undefined
+        ? []
+        : [input.expectedOpenTaskSnapshot]),
       ...(input.expectedStashedPromptCount === undefined
         ? []
         : [input.expectedStashedPromptCount]),
@@ -1606,6 +1621,10 @@ export class InventoryRepository {
         [threadId],
         input.expectedStashedPromptCount,
       );
+      if (input.openTaskDisposition === "complete" && !input.assertOpenTasks) {
+        throw new Error("inventory_task_completion_confirmation_required");
+      }
+      input.assertOpenTasks?.([threadId]);
       const next = this.#nextInventory(
         current,
         { action: "settle" },
@@ -1618,8 +1637,8 @@ export class InventoryRepository {
       const state =
         next === current ? current : this.getInventory(scope, threadId);
       const movedTaskIds =
-        disposition !== "keep" && input.moveOpenTasks
-          ? input.moveOpenTasks()
+        disposition !== "keep" && input.applyOpenTasks
+          ? input.applyOpenTasks()
           : ([] as readonly string[]);
       this.#insertReceipt(
         scope,
@@ -1645,8 +1664,9 @@ export class InventoryRepository {
       readonly blockedThreadIds: ReadonlySet<string>;
       readonly now: number;
       readonly expectedStashedPromptCount?: number;
+      readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "keep";
+        "move_to_workspace" | "move_to_global" | "complete" | "keep";
       readonly executionWorkspaceDisposition?:
         | { readonly kind: "keep" }
         | {
@@ -1654,12 +1674,14 @@ export class InventoryRepository {
             readonly expectedRevision: number;
             readonly operationId: string;
           };
+      /** Confirms the reviewed set before any inventory or task writes. */
+      readonly assertOpenTasks?: (threadIds: readonly string[]) => void;
       /**
        * Task disposition executed inside this archive transaction (nested as
-       * a savepoint) so the up-scope move and the archive commit atomically.
-       * Invoked only for a non-"keep" disposition; returns moved task ids.
+       * a savepoint) so task changes and the archive commit atomically.
+       * Invoked only for a non-"keep" disposition; returns changed task ids.
        */
-      readonly moveOpenTasks?: (
+      readonly applyOpenTasks?: (
         archivedThreadIds: readonly string[],
       ) => readonly string[];
     },
@@ -1756,6 +1778,10 @@ export class InventoryRepository {
         );
       }
 
+      if (input.openTaskDisposition === "complete" && !input.assertOpenTasks) {
+        throw new Error("inventory_task_completion_confirmation_required");
+      }
+      input.assertOpenTasks?.(archivableThreadIds);
       const transitions = archivableThreadIds.map((candidate) => {
         const current = currentInventory.get(candidate)!;
         this.#assertTransitionNotBlocked(scope, candidate, {
@@ -1777,8 +1803,8 @@ export class InventoryRepository {
       if (changed) this.#bumpGeneration(scope);
       const disposition = input.openTaskDisposition ?? "keep";
       const movedTaskIds =
-        disposition !== "keep" && input.moveOpenTasks
-          ? input.moveOpenTasks(archivableThreadIds)
+        disposition !== "keep" && input.applyOpenTasks
+          ? input.applyOpenTasks(archivableThreadIds)
           : ([] as readonly string[]);
       const states = currentThreadIds.map((candidate) =>
         this.getInventory(scope, candidate),
@@ -1804,8 +1830,9 @@ export class InventoryRepository {
       readonly mutationId: string;
       readonly includeDescendants: boolean;
       readonly expectedStashedPromptCount?: number;
+      readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "keep";
+        "move_to_workspace" | "move_to_global" | "complete" | "keep";
       readonly executionWorkspaceDisposition?:
         | { readonly kind: "keep" }
         | {
@@ -1853,12 +1880,15 @@ export class InventoryRepository {
       readonly now: number;
       readonly expectedStashedPromptCount?: number;
       readonly expectedOpenTaskCount?: number;
+      readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "keep";
+        "move_to_workspace" | "move_to_global" | "complete" | "keep";
       /** Runs inside this transaction and must inspect the affected set. */
       readonly countOpenTasks?: (threadIds: readonly string[]) => number;
-      /** Runs inside this transaction and must move only the affected set. */
-      readonly moveOpenTasks?: (
+      /** Confirms the reviewed task set before any inventory or task writes. */
+      readonly assertOpenTasks?: (threadIds: readonly string[]) => void;
+      /** Runs inside this transaction and changes only the affected set. */
+      readonly applyOpenTasks?: (
         threadIds: readonly string[],
       ) => readonly string[];
     },
@@ -1968,6 +1998,10 @@ export class InventoryRepository {
         }
       }
 
+      if (input.openTaskDisposition === "complete" && !input.assertOpenTasks) {
+        throw new Error("inventory_task_completion_confirmation_required");
+      }
+      input.assertOpenTasks?.(affectedThreadIds);
       const transition: InventoryTransition = { action: input.action };
       const nextStates = affectedStates.map((current) => {
         this.#assertTransitionNotBlocked(scope, current.threadId, transition);
@@ -1978,8 +2012,8 @@ export class InventoryRepository {
 
       const disposition = input.openTaskDisposition ?? "keep";
       const movedTaskIds =
-        disposition !== "keep" && input.moveOpenTasks
-          ? input.moveOpenTasks(affectedThreadIds)
+        disposition !== "keep" && input.applyOpenTasks
+          ? input.applyOpenTasks(affectedThreadIds)
           : ([] as readonly string[]);
       const changedThreadIds = nextStates.map(({ threadId }) => threadId);
       const states = changedThreadIds.map((threadId) =>
@@ -2011,8 +2045,9 @@ export class InventoryRepository {
       readonly mutationId: string;
       readonly expectedStashedPromptCount?: number;
       readonly expectedOpenTaskCount?: number;
+      readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "keep";
+        "move_to_workspace" | "move_to_global" | "complete" | "keep";
     },
   ):
     | {

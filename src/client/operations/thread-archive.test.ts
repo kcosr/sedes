@@ -16,8 +16,9 @@ const impact: ThreadArchiveImpact = {
   pendingQuestions: { root: 0, descendants: 0 },
   stashedPrompts: { root: 0, descendants: 0 },
   openTasks: {
-    root: { items: [], total: 0, omitted: 0 },
-    descendants: { items: [], total: 0, omitted: 0 },
+    familySnapshot: "b".repeat(64),
+    root: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
+    descendants: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
   },
   executionWorkspace: { kind: "direct" },
   archiveOnly: { available: true },

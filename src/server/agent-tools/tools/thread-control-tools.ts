@@ -272,6 +272,7 @@ export interface ThreadForkToolInput {
 export interface ThreadArchiveToolInput {
   readonly threadId: string;
   readonly includeDescendants?: boolean;
+  // No reviewed impact snapshot is exposed by this tool; completion is unsupported.
   readonly openTaskDisposition?:
     "move_to_workspace" | "move_to_global" | "keep";
 }

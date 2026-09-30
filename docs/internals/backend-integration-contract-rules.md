@@ -349,6 +349,14 @@ provider-name branches, or a fabricated capability. Archived threads are not
 members of a visible working stack, so stack bulk restore is a separate product
 contract rather than an inferred inverse operation.
 
+When an inventory action also completes Tasks, bind confirmation to the full
+scoped open-Task set and its revisions, not only the displayed bounded list or
+its count. Recheck the reviewed snapshot inside the inventory transaction and
+reject changed Tasks before any writes. Completion keeps Task ownership and
+publishes every changed Task after commit and on receipt replay. A caller without
+a reviewed-impact contract must not synthesize a fresh snapshot to authorize
+completion. Pi, Codex, Claude, Grok, and OpenCode share this application-level rule.
+
 For a fresh archive, acquire the shared per-thread maintenance fences in a
 deterministic order and hold every affected fence through the all-or-nothing
 database mutation. Fence both coordinator acquisition and direct actor-manager
@@ -3337,6 +3345,12 @@ snapshots expose only current definitions; retained observations remain usable
 for receipt recovery. Settled configuration receipts may expire only behind
 the monotonically advanced expected revision; pending and unknown lifecycle
 receipts must retain their recovery evidence.
+Runtime construction and detached administration must select connection profiles
+by the target IDs in the current principal-owned configuration. Removed profiles
+remain stored for historical thread bindings but are not runtime inputs. Keep
+explicitly configured disabled targets in those inputs; filtering on `enabled`
+alone does not preserve the configuration contract. Verify connection removal
+followed by backend Start and main restart for Pi, Codex, Claude, Grok, and OpenCode.
 Do not add aliases,
 dual-shape parsers, or implicit migration paths unless a compatibility period
 is explicitly requested.

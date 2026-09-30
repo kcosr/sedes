@@ -27,6 +27,7 @@ import { InteractionPrompt } from "./thread/InteractionPrompt.js";
 import { BackgroundActivityStatus } from "./thread/BackgroundActivityStatus.js";
 import { ReasoningSummaryStatus } from "./thread/ReasoningSummaryStatus.js";
 import { ThreadFailureNotice } from "./thread/ThreadFailureNotice.js";
+import { ThreadNotices } from "./thread/ThreadNotices.js";
 import { ThreadHeader } from "./thread/ThreadHeader.js";
 import { ThreadFindBar } from "./thread/ThreadFindBar.js";
 import { ThreadRecoveryCallout } from "./thread/ThreadRecoveryCallout.js";
@@ -600,15 +601,7 @@ export function ThreadView({
           </aside>
         )}
         <ThreadFailureNotice snapshot={snapshot} />
-        {store.normalized.state.notices.map((notice) => (
-          <div
-            className={`thread-notice ${notice.tone}`}
-            key={notice.id}
-            role={notice.tone === "error" ? "alert" : "status"}
-          >
-            {notice.message.text}
-          </div>
-        ))}
+        <ThreadNotices notices={store.normalized.state.notices} />
         <CodexTuiThreadPresentation
           threadId={threadId}
           visible={visible}

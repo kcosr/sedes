@@ -59,6 +59,15 @@ update prompt must not intercept terminal input or replace the executable
 outside Sedes release admission; operators update the installed command
 separately.
 
+The history/item refiners additionally validate and discard three reviewed
+optional metadata fields from newer runtimes: `mcpAppUi` (0.156.1 and
+0.159.0) and item-entry `startedAtMs`/`completedAtMs` (0.159.0).
+This covers paginated and legacy history and live item/turn events without
+exposing MCP app UI or using item timestamps as usage evidence. Unknown fields
+and malformed values remain rejected. This bounded metadata fix does not
+qualify either release in full or raise the tested-through threshold.
+See the [metadata review](../../../protocol/codex-app-server/0.153.0/runtime-compatibility/item-metadata-review.md).
+
 Raising the tested-through threshold requires artifact review and focused
 conformance. Change the compatibility floor only when a required contract
 changes; do not add a second parser merely

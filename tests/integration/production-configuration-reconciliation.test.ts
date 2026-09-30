@@ -130,6 +130,67 @@ describe("production configuration reconciliation", () => {
     } finally { for (const release of releases) release(); }
   });
 
+  it.each(["pi", "claude", "codex", "opencode"])("restarts %s after removing a connection without reusing its historical profile", async kind => {
+    const { service, scope, environmentId, snapshot } = await fixture();
+    const configuration = structuredClone(snapshot.configuration);
+    const backendId = kind === "pi" ? "idle-pi" : kind === "claude" ? "busy-claude" : `removed-target-${kind}`;
+    if (kind === "codex") {
+      await mkdir(path.join(directory!, "removed-target-codex"));
+      configuration.backends.push({ id: backendId, kind: "codex_app_server", label: "Codex", enabled: true, modelPolicy: { type: "catalog" },
+        moduleConfiguration: {
+          connection: { ownership: "owned", channel: { type: "process_stdio", executablePath: process.execPath,
+            workingDirectory: directory!, codexHome: path.join(directory!, "removed-target-codex") } },
+          policy: { allowedSandboxModes: ["read-only"], allowedNetworkAccess: ["disabled"], allowedApprovalPolicies: ["on-request"], allowedApprovalReviewers: ["user"] },
+        } });
+      configuration.targets.push({ id: `${backendId}-target`, kind: "codex_app_server", label: "Codex", enabled: true, backendInstanceId: backendId, executionEnvironmentId: environmentId,
+        moduleConfiguration: { defaults: { sandboxMode: "read-only", networkAccess: "disabled", approvalPolicy: "on-request", approvalReviewer: "user", model: { type: "catalogDefault" } } } });
+    }
+    if (kind === "opencode") {
+      // Module construction and Start stay lazy; no native provider is launched.
+      configuration.backends.push({ id: backendId, kind: "opencode", label: "OpenCode", enabled: true, modelPolicy: { type: "catalog" },
+        moduleConfiguration: {
+          nativeStorePath: path.join(directory!, "removed-target-opencode.db"),
+          connection: { ownership: "owned", channel: { type: "process_stdio",
+            executablePath: path.join(directory!, "uninstalled-opencode"), workingDirectory: directory! } },
+        } });
+      configuration.targets.push({ id: `${backendId}-target`, kind: "opencode_http", label: "OpenCode", enabled: true,
+        backendInstanceId: backendId, executionEnvironmentId: environmentId,
+        moduleConfiguration: { defaults: { model: { type: "catalogDefault" }, variant: { type: "modelDefault" } } } });
+    }
+    const original = configuration.targets.find(target => target.backendInstanceId === backendId)!;
+    const removedId = `${backendId}-removed`;
+    const disabledId = `${backendId}-disabled`;
+    configuration.targets.push({ ...structuredClone(original), id: removedId });
+    configuration.targets.push({ ...structuredClone(original), id: disabledId, enabled: false });
+    await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    const lifecycle = async (action: "stop" | "start") => {
+      const current = await service.get(scope);
+      const impact = await service.impact(scope, { resourceKind: "backend", resourceId: backendId, action, expectedRevision: current.revision });
+      return service.lifecycle(scope, { mutationId: randomUUID(), resourceKind: "backend", resourceId: backendId, action,
+        expectedRevision: impact.configurationRevision, expectedIncarnation: impact.incarnation, impactToken: impact.token });
+    };
+    expect((await lifecycle("stop")).state).toBe("applied");
+    configuration.targets = configuration.targets.filter(target => target.id !== removedId);
+    await service.save(scope, { mutationId: randomUUID(), expectedRevision: (await service.get(scope)).revision, configuration });
+    const applied = vi.spyOn(PrincipalBackendRuntimeCollection.prototype, "apply");
+    expect((await lifecycle("start")).state).toBe("applied");
+    const assertConnections = () => {
+      const plan = applied.mock.calls.filter(([value]) => value.context.instance.id === backendId).at(-1)![0];
+      expect(plan.context.connections.map(connection => connection.templateId).sort()).toEqual([original.id, disabledId].sort());
+      expect(plan.context.connections.find(connection => connection.templateId === disabledId)?.enabled).toBe(false);
+    };
+    assertConnections();
+    expect(service.repository.database.prepare("SELECT enabled FROM agent_connection_profiles WHERE tenant_id = ? AND owner_principal_id = ? AND template_id = ?")
+      .get(scope.tenantId, scope.principalId, removedId)).toEqual({ enabled: 0 });
+    await application!.close(); application = undefined;
+    applied.mockClear();
+    const reopened = await openApplication();
+    expect((await reopened.service.get(reopened.scope)).runtimes.find(runtime => runtime.resourceId === backendId)?.applyState).toBe("applied");
+    assertConnections();
+    // Two full production boots plus configuration saves and runtime stop/start
+    // need headroom when this integration test shares the suite's workers.
+  }, 15_000);
+
   it.each([false, true])("recovers retained startup settings after main restarts (transient inspection failure: %s)", async failFirstInspection => {
     const { service, scope, snapshot } = await fixture();
     const environmentId = randomUUID();

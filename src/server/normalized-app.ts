@@ -3243,6 +3243,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
             includeDescendants: body.action === "archive_family",
             expectedStashedPromptCount: body.expectedStashedPromptCount,
             openTaskDisposition: body.openTaskDisposition,
+            expectedOpenTaskSnapshot: body.expectedOpenTaskSnapshot,
             executionWorkspaceDisposition: body.executionWorkspaceDisposition,
           },
         );
@@ -3258,6 +3259,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
           mutationId: body.mutationId,
           expectedStashedPromptCount: body.expectedStashedPromptCount,
           openTaskDisposition: body.openTaskDisposition,
+          expectedOpenTaskSnapshot: body.expectedOpenTaskSnapshot,
         });
       } else {
         await dependencies.inventory.transition(requestScope, threadId, {

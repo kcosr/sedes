@@ -329,6 +329,7 @@ export class ApplicationClientStore {
       readonly snoozedUntil?: string;
       readonly wakeReminder?: string;
       readonly openTaskDisposition?: OpenTaskDisposition;
+      readonly expectedOpenTaskSnapshot?: string;
       readonly expectedStashedPromptCount?: number;
       readonly executionWorkspaceDisposition?:
         | { readonly kind: "keep" }
@@ -370,6 +371,10 @@ export class ApplicationClientStore {
       ...((action === "archive" || action === "settle") &&
       options?.openTaskDisposition
         ? { openTaskDisposition: options.openTaskDisposition }
+        : {}),
+      ...((action === "archive" || action === "settle") &&
+      options?.expectedOpenTaskSnapshot !== undefined
+        ? { expectedOpenTaskSnapshot: options.expectedOpenTaskSnapshot }
         : {}),
       ...((action === "archive" || action === "settle") &&
       options?.expectedStashedPromptCount !== undefined
@@ -430,6 +435,9 @@ export class ApplicationClientStore {
       targets,
       expectedStashedPromptCount: impact.stashedPromptCount,
       expectedOpenTaskCount: impact.openTasks.total,
+      ...(impact.openTasks.total > 0 && options.openTaskDisposition === "complete"
+        ? { expectedOpenTaskSnapshot: impact.openTasks.snapshot }
+        : {}),
       ...(impact.openTasks.total > 0 && options.openTaskDisposition
         ? { openTaskDisposition: options.openTaskDisposition }
         : {}),
@@ -506,6 +514,7 @@ export class ApplicationClientStore {
     options: {
       readonly expectedStashedPromptCount: number;
       readonly openTaskDisposition?: OpenTaskDisposition;
+      readonly expectedOpenTaskSnapshot?: string;
       readonly executionWorkspaceDisposition: Extract<
         InventoryTransitionRequest,
         { action: "archive_family" }
@@ -518,6 +527,9 @@ export class ApplicationClientStore {
       expectedStashedPromptCount: options.expectedStashedPromptCount,
       executionWorkspaceDisposition: options.executionWorkspaceDisposition,
       mutationId: crypto.randomUUID(),
+      ...(options.expectedOpenTaskSnapshot !== undefined
+        ? { expectedOpenTaskSnapshot: options.expectedOpenTaskSnapshot }
+        : {}),
       ...(options?.openTaskDisposition
         ? { openTaskDisposition: options.openTaskDisposition }
         : {}),

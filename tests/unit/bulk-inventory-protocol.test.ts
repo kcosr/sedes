@@ -5,6 +5,7 @@ import {
   bulkInventoryImpactRequestSchema,
   bulkInventoryImpactSchema,
   bulkInventoryMutationRequestSchema,
+  inventoryTransitionSchema,
 } from "../../src/shared/index.js";
 
 const firstThreadId = "10000000-0000-4000-8000-000000000001";
@@ -12,7 +13,7 @@ const secondThreadId = "10000000-0000-4000-8000-000000000002";
 
 describe("bulk inventory protocol", () => {
   it("advances the browser protocol fence", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(128);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(129);
   });
 
   it("accepts only strict, unique, bounded impact target sets", () => {
@@ -87,6 +88,31 @@ describe("bulk inventory protocol", () => {
     ).toMatchObject({ action: "archive", targets });
   });
 
+  it("requires a bounded reviewed snapshot for single and bulk completion", () => {
+    const common = {
+      mutationId: "20000000-0000-4000-8000-000000000010",
+      expectedStashedPromptCount: 0,
+      openTaskDisposition: "complete",
+    };
+    for (const action of ["settle", "archive", "archive_family"]) {
+      const request = {
+        ...common, action, expectedRevision: 0,
+        ...(action === "settle" ? {} : { executionWorkspaceDisposition: { kind: "keep" } }),
+      };
+      expect(inventoryTransitionSchema.safeParse(request).success).toBe(false);
+      expect(inventoryTransitionSchema.safeParse({ ...request, expectedOpenTaskSnapshot: "a".repeat(64) }).success).toBe(true);
+      expect(inventoryTransitionSchema.safeParse({ ...request, expectedOpenTaskSnapshot: "not-a-snapshot" }).success).toBe(false);
+    }
+    for (const action of ["settle", "archive"]) {
+      const request = {
+        ...common, action, expectedOpenTaskCount: 0,
+        targets: [{ threadId: firstThreadId, expectedRevision: 0 }, { threadId: secondThreadId, expectedRevision: 0 }],
+      };
+      expect(bulkInventoryMutationRequestSchema.safeParse(request).success).toBe(false);
+      expect(bulkInventoryMutationRequestSchema.safeParse({ ...request, expectedOpenTaskSnapshot: "a".repeat(64) }).success).toBe(true);
+    }
+  });
+
   it("rejects inconsistent impact counts and availability", () => {
     const base = {
       action: "settle" as const,
@@ -99,7 +125,7 @@ describe("bulk inventory protocol", () => {
       affectedCount: 1,
       unchangedCount: 1,
       blockers: { items: [], total: 0, omitted: 0 },
-      openTasks: { items: [], total: 0, omitted: 0 },
+      openTasks: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
       stashedPromptCount: 0,
       available: true,
     };
@@ -121,7 +147,7 @@ describe("bulk inventory protocol", () => {
     expect(
       bulkInventoryImpactSchema.parse({
         ...base,
-        openTasks: { items: [], total: 10_001, omitted: 10_001 },
+        openTasks: { snapshot: "a".repeat(64), items: [], total: 10_001, omitted: 10_001 },
         available: false,
       }),
     ).toMatchObject({ available: false, openTasks: { total: 10_001 } });

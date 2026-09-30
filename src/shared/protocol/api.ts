@@ -28,7 +28,11 @@ import {
   providerFeatureArgumentsSchema,
   providerFeatureRefSchema,
 } from "./provider-feature.js";
-import { openTaskDispositionSchema, taskTitleSchema } from "./tasks.js";
+import {
+  openTaskDispositionSchema,
+  openTaskSnapshotSchema,
+  taskTitleSchema,
+} from "./tasks.js";
 import {
   agentToolAccessBoundarySchema,
   agentToolIdSchema,
@@ -368,6 +372,7 @@ export const inventoryTransitionSchema = z.discriminatedUnion("action", [
       .max(Number.MAX_SAFE_INTEGER),
     mutationId: mutationIdSchema,
     openTaskDisposition: openTaskDispositionSchema.optional(),
+    expectedOpenTaskSnapshot: openTaskSnapshotSchema.optional(),
   }),
   z.strictObject({
     action: z.literal("unsettle"),
@@ -402,6 +407,7 @@ export const inventoryTransitionSchema = z.discriminatedUnion("action", [
       .max(Number.MAX_SAFE_INTEGER),
     mutationId: mutationIdSchema,
     openTaskDisposition: openTaskDispositionSchema.optional(),
+    expectedOpenTaskSnapshot: openTaskSnapshotSchema.optional(),
     executionWorkspaceDisposition: executionWorkspaceArchiveDispositionSchema,
   }),
   z.strictObject({
@@ -414,6 +420,7 @@ export const inventoryTransitionSchema = z.discriminatedUnion("action", [
       .max(Number.MAX_SAFE_INTEGER),
     mutationId: mutationIdSchema,
     openTaskDisposition: openTaskDispositionSchema.optional(),
+    expectedOpenTaskSnapshot: openTaskSnapshotSchema.optional(),
     executionWorkspaceDisposition: executionWorkspaceArchiveDispositionSchema,
   }),
   z.strictObject({
@@ -421,7 +428,16 @@ export const inventoryTransitionSchema = z.discriminatedUnion("action", [
     expectedRevision: z.number().int().nonnegative(),
     mutationId: mutationIdSchema,
   }),
-]);
+]).refine(
+  (request) =>
+    !("openTaskDisposition" in request) ||
+    request.openTaskDisposition !== "complete" ||
+    request.expectedOpenTaskSnapshot !== undefined,
+  {
+    message: "Completing tasks requires a reviewed open-task snapshot.",
+    path: ["expectedOpenTaskSnapshot"],
+  },
+);
 export type InventoryTransitionRequest = z.infer<
   typeof inventoryTransitionSchema
 >;
@@ -453,6 +469,7 @@ const archiveImpactTaskSummarySchema = z.strictObject({
 
 const archiveImpactTaskCollectionSchema = z
   .strictObject({
+    snapshot: openTaskSnapshotSchema,
     items: z
       .array(archiveImpactTaskSummarySchema)
       .max(ARCHIVE_IMPACT_TASK_SUMMARY_LIMIT),
@@ -593,6 +610,7 @@ const confirmedBulkInventoryCountsSchema = {
     .nonnegative()
     .max(MAXIMUM_BULK_INVENTORY_OPEN_TASKS),
   openTaskDisposition: openTaskDispositionSchema.optional(),
+  expectedOpenTaskSnapshot: openTaskSnapshotSchema.optional(),
 };
 
 export const bulkInventoryMutationRequestSchema = z.discriminatedUnion(
@@ -616,6 +634,15 @@ export const bulkInventoryMutationRequestSchema = z.discriminatedUnion(
       ...confirmedBulkInventoryCountsSchema,
     }),
   ],
+).refine(
+  (request) =>
+    request.action === "unsettle" ||
+    request.openTaskDisposition !== "complete" ||
+    request.expectedOpenTaskSnapshot !== undefined,
+  {
+    message: "Completing tasks requires a reviewed open-task snapshot.",
+    path: ["expectedOpenTaskSnapshot"],
+  },
 );
 export type BulkInventoryMutationRequest = z.infer<
   typeof bulkInventoryMutationRequestSchema
@@ -694,6 +721,7 @@ export const threadArchiveImpactSchema = z.strictObject({
     descendants: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   }),
   openTasks: z.strictObject({
+    familySnapshot: openTaskSnapshotSchema,
     root: archiveImpactTaskCollectionSchema,
     descendants: archiveImpactTaskCollectionSchema,
   }),

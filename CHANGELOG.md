@@ -8,13 +8,16 @@
   runtime and tool capabilities. Upgrade existing execution sidecars before
   connecting this backend. (#17)
 
-- Browser and packaged clients now require client protocol 128 for the OpenCode
+- Browser and packaged clients now require client protocol 129 for the OpenCode
   v2 backend identity and terminal Stop diagnostics. (#17)
 
 - Claude worker and persistent runtime capabilities now require major 2 for
   bounded, recoverable conversation Stop. Rebuild local helpers and upgrade
   Claude sidecars with this server. Migration 119 closes old unconfirmed Stop
   receipts without sending a new cancellation. (#17)
+
+- Browser and packaged clients must use client protocol 128, which adds
+  reviewed Task snapshots to settle/archive previews and completion requests. (#19)
 
 - Browser and packaged clients must use client protocol 127, which adds
   confirmed live background-work counts to sidebar thread summaries. (#16)
@@ -25,7 +28,7 @@
   browser protocol change is required for this fix. (#15)
 
 - Codex viewed images use a new `viewed_image` transcript item, introduced
-  in client protocol 123. This build requires client protocol 128; see the
+  in client protocol 123. This build requires client protocol 129; see the
   client protocol entries below. (#11, #13, #14)
 
 - Claude backends require Claude Code 2.1.281 or newer and are tested through
@@ -84,6 +87,10 @@
   Native Progressive tools use a bundled per-call MCP bridge; owned roots can
   use CLI tools and scoped execution variables. Reconnect never automatically
   resends an uncertain input. (#17)
+
+- Settle, archive, and bulk stack confirmations list their affected open Tasks
+  and offer **Complete all**, keeping completed Tasks attached to their threads.
+  Completion requires a fresh preview if Tasks change before confirmation. (#19)
 
 - Sidebar thread rows and previews show a slow grey spinner for live subagents
   and a grey dot for remaining background commands. Active turns and unseen
@@ -244,6 +251,17 @@
 
 - OpenCode's bundled MCP helper now launches through both the generated Sedes
   CLI and the sidecar entry point. (#17)
+
+- Load Codex histories containing newer per-item timestamps or MCP display
+  metadata without reporting an invalid protocol response. The fix also covers
+  live MCP events; update the server and remote sidecars. (#18)
+
+
+- Allow backends to start after removing a connection, while preserving removed
+  connection records for historical threads. No database migration is required. (#18)
+
+- Show repeated runtime notices with identical text and severity only once in
+  the client, including notices restored after reconnecting. (#18)
 
 - Refresh Native agent tools and CLI presentation settings when an idle
   Codex or Claude thread already has a persistent SSH session, including
