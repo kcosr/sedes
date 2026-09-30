@@ -18,7 +18,7 @@
     "components/thread/thread-group-roster.css": 2,
     "operations/operation-overlay.css": 1,
     "styles.css": 356,
-    "usage/usage.css": 61,
+    "usage/usage.css": 25,
     "workpads/WorkpadDocument.css": 2,
     "workpads/workpads-panel.css": 7,
     "workspace-files/workspace-compare.css": 31,
@@ -34,7 +34,7 @@
     "components/thread/question-inbox.css": 2,
     "components/thread/thread-group-roster.css": 1,
     "styles.css": 131,
-    "usage/usage.css": 31,
+    "usage/usage.css": 16,
     "workpads/workpads-panel.css": 2,
     "workspace-files/workspace-compare.css": 4,
     "workspace-files/workspace-revision-picker.css": 3
@@ -46,7 +46,7 @@
     "components/thread/question-inbox.css": 3,
     "components/thread/thread-group-roster.css": 1,
     "styles.css": 27,
-    "usage/usage.css": 26,
+    "usage/usage.css": 17,
     "workpads/WorkpadDocument.css": 3,
     "workspace-files/workspace-revision-picker.css": 3
   },
