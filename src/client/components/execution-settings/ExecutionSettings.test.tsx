@@ -447,6 +447,23 @@ describe("execution configuration administration", () => {
     expect(api.saveConfiguration).not.toHaveBeenCalled();
   });
 
+  it("opens an entity on Overview each visit unless its row asked for Activity, and keeps the tab back from its editor", async () => {
+    renderAt(environmentPath(remoteId));
+    const user = userEvent.setup();
+    const selected = () => within(detail("Build host")).getByRole("tab", { selected: true });
+    await user.click(within(await screen.findByRole("region", { name: "Build host details" })).getByRole("tab", { name: "Activity" }));
+    await user.click(within(detail("Build host")).getByRole("button", { name: "Edit Build host" }));
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.pathname).toBe(environmentPath(remoteId)));
+    expect(selected()).toHaveAccessibleName("Activity");
+    await user.click(screen.getByRole("link", { name: "Local" }));
+    await user.click(screen.getByRole("link", { name: "Build host" }));
+    expect(selected()).toHaveAccessibleName("Overview");
+    await user.click(screen.getByRole("button", { name: "Actions for Local" }));
+    await user.click(await screen.findByRole("menuitem", { name: "View activity" }));
+    expect(within(detail("Local")).getByRole("tab", { selected: true })).toHaveAccessibleName("Activity");
+  });
+
   it("offers removal from a row menu and lists what blocks it", async () => {
     const document = configuration();
     document.backends.push(backendEditors.pi.createBackend("pi-local"));

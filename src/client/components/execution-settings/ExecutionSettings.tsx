@@ -122,6 +122,8 @@ export function ExecutionSettings({ controls }: {
   const traversalBypass = useRef(false);
   const afterExit = useRef<(() => void) | undefined>(undefined);
   const backendSeed = useRef<string | undefined>(undefined);
+  /** The entity whose row asked for its Activity tab ("View activity"). */
+  const activityRequest = useRef<string | undefined>(undefined);
 
   const routeEditorOpen = Boolean(key);
   const defaultsDirty = Boolean(defaultsDraft);
@@ -232,7 +234,14 @@ export function ExecutionSettings({ controls }: {
   const splitFocus = useSettingsSplitFocus({
     root,
     location: current ? { path: pathOf(current), ...(current.resourceId ? { resourceId: current.resourceId } : {}), ...(current.mode ? { mode: current.mode } : {}) } : undefined,
-    onArrive: () => {
+    onArrive: (previous, next) => {
+      // A new visit to an entity opens on Overview, health first, unless its
+      // row asked for Activity; back from its own editor keeps the tab.
+      if (next.mode === "view" && next.resourceId && previous?.resourceId !== next.resourceId) {
+        const tabKey = `${page}:${next.resourceId}`;
+        if (activityRequest.current !== tabKey) setTabs(existing => ({ ...existing, [tabKey]: "overview" }));
+      }
+      activityRequest.current = undefined;
       state.clearFeedback();
       setSaveOwner(undefined);
       setAcceptIssues(undefined);
@@ -255,6 +264,11 @@ export function ExecutionSettings({ controls }: {
   const setCurrentFilters = useCallback((next: InventoryFilters) => setFilters(existing => ({ ...existing, [page]: next })), [page]);
   const tabOf = (kind: ExecutionPage, id: string): DetailTab => tabs[`${kind}:${id}`] ?? "overview";
   const setTab = (kind: ExecutionPage, id: string, tab: DetailTab) => setTabs(existing => ({ ...existing, [`${kind}:${id}`]: tab }));
+  const viewActivity = (kind: ExecutionPage, id: string) => {
+    setTab(kind, id, "activity");
+    activityRequest.current = `${kind}:${id}`;
+    navigate(settingsPath(kind, { mode: "view", resourceId: id }));
+  };
   const pausedReason = state.needsRefresh ? "Refresh the configuration before issuing runtime commands."
     : routeEditorOpen ? "Runtime controls are paused while configuration is being edited."
     : state.loading || state.saving ? "Runtime controls are paused while configuration is loading or saving." : undefined;
@@ -371,12 +385,12 @@ export function ExecutionSettings({ controls }: {
   const editPath = (kind: ExecutionPage, id: string) => settingsPath(kind, { mode: "edit", resourceId: id });
   const environmentActions = (environment: EnvironmentDefinition): RowAction[] => [
     { label: "Edit", onSelect: () => navigate(editPath("environments", environment.id)) },
-    { label: "View activity", onSelect: () => { setTab("environments", environment.id, "activity"); navigate(settingsPath("environments", { mode: "view", resourceId: environment.id })); } },
+    { label: "View activity", onSelect: () => viewActivity("environments", environment.id) },
     { label: "Remove…", destructive: true, disabled: !snapshot, onSelect: () => snapshot && requestConfirmation({ kind: "remove-environment", id: environment.id, label: environment.label, revision: snapshot.revision }) },
   ];
   const backendActions = (backend: BackendDefinition): RowAction[] => [
     { label: "Edit", onSelect: () => navigate(editPath("backends", backend.id)) },
-    { label: "View activity", onSelect: () => { setTab("backends", backend.id, "activity"); navigate(settingsPath("backends", { mode: "view", resourceId: backend.id })); } },
+    { label: "View activity", onSelect: () => viewActivity("backends", backend.id) },
     { label: "Remove…", destructive: true, disabled: !snapshot, onSelect: () => snapshot && requestConfirmation({ kind: "remove-backend", id: backend.id, label: backend.label, revision: snapshot.revision }) },
   ];
   const canAddBackend = Boolean(configuration && configuration.backends.length < 32 && configuration.executionEnvironments.length > 0);
