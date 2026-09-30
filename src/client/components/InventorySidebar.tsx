@@ -3272,6 +3272,11 @@ function FlatGroupList({
                     {renderRow(entry.thread, {
                       selected: entry.thread.id === selectedThreadId,
                       peekBindings: peekBind(entry.thread.id),
+                      // The row's menu and the dialogs it opens cover the
+                      // peek; close it rather than leave it under them.
+                      onInteractionOpenChange: (open) => {
+                        if (open) onDismissPeek();
+                      },
                     })}
                   </Fragment>
                 ) : (

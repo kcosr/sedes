@@ -3909,6 +3909,55 @@ describe("InventorySidebar view modes", () => {
     }
   });
 
+  it("closes the peek when the row's context menu opens", async () => {
+    vi.useFakeTimers();
+    try {
+      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
+      renderSidebar([makeThread("thread-1", "Menu peek")]);
+      const item = document.querySelector<HTMLElement>(
+        '[data-thread-id="thread-1"]',
+      )!;
+
+      fireEvent.pointerEnter(item, { pointerType: "mouse" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(screen.getByTestId("thread-peek")).toBeInTheDocument();
+
+      fireEvent.contextMenu(item.querySelector(".flat-row-link")!);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByTestId("thread-context-menu")).toBeInTheDocument();
+      expect(screen.queryByTestId("thread-peek")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not peek at a row hidden under an open modal surface", async () => {
+    vi.useFakeTimers();
+    try {
+      seedViewPreferences({ groupBy: "none", lastAltGroupBy: "none" });
+      const { container } = renderSidebar([
+        makeThread("thread-1", "Hidden peek"),
+      ]);
+      const item = document.querySelector<HTMLElement>(
+        '[data-thread-id="thread-1"]',
+      )!;
+      // A modal menu or dialog hides the rest of the page this way.
+      container.setAttribute("aria-hidden", "true");
+
+      fireEvent.pointerEnter(item, { pointerType: "mouse" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(screen.queryByTestId("thread-peek")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("opens peek only for keyboard-visible focus and hides it on blur", async () => {
     vi.useFakeTimers();
     try {
