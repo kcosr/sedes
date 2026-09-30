@@ -241,7 +241,7 @@ export function ThreadSettingsMenuItems({
                 onSelect={() => onChooseModel(keyboardChoice.current)}
               >
                 <SettingIcon id={setting.id} />
-                {setting.label.text}
+                <span className="min-w-0 flex-1">{setting.label.text}</span>
                 {current}
                 {/* Leads on to the model sheet, like the drill-in rows. */}
                 <ChevronRight aria-hidden="true" />
@@ -256,7 +256,8 @@ export function ThreadSettingsMenuItems({
                 title={setting.unavailableReason?.text}
               >
                 <SettingIcon id={setting.id} />
-                {setting.label.text}
+                {/* The label takes the free space so the value sits by the chevron. */}
+                <span className="min-w-0 flex-1">{setting.label.text}</span>
                 {current}
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>

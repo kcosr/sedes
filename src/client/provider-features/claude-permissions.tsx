@@ -94,7 +94,8 @@ function ClaudePermissionControls({
       {/* Openable even when the mode cannot change, so it stays visible. */}
       <DropdownMenuSubTrigger aria-describedby={valueId}>
         <ShieldCheck aria-hidden="true" />
-        Permission mode
+        {/* The label takes the free space so the value sits by the chevron. */}
+        <span className="min-w-0 flex-1">Permission mode</span>
         <DropdownMenuShortcut id={valueId} aria-hidden="true">
           {state.desired ? labels[state.desired] : "Choose…"}
         </DropdownMenuShortcut>

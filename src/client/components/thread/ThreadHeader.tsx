@@ -755,7 +755,9 @@ export const ThreadHeader = memo(function ThreadHeader({
                           aria-describedby={`draft-workspace-${snapshot.thread.id}`}
                         >
                           <FolderInput aria-hidden="true" />
-                          Draft workspace
+                          {/* The label takes the free space so the value
+                              sits by the chevron. */}
+                          <span className="min-w-0 flex-1">Draft workspace</span>
                           <DropdownMenuShortcut
                             id={`draft-workspace-${snapshot.thread.id}`}
                             aria-hidden="true"
