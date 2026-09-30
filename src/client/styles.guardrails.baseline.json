@@ -43,7 +43,6 @@
     "components/tasks/tasks-panel.css": 1,
     "components/thread/flat-thread-row.css": 3,
     "components/thread/question-inbox.css": 3,
-    "components/thread/thread-group-roster.css": 1,
     "styles.css": 25,
     "usage/usage.css": 26,
     "workpads/WorkpadDocument.css": 3,
@@ -51,7 +50,6 @@
   },
   "zIndexLiterals": {},
   "important": {
-    "components/thread/thread-group-roster.css": 3,
     "styles.css": 23,
     "usage/usage.css": 2
   },
