@@ -310,10 +310,14 @@
     width: 100%;
   }
 
+  /* Tertiary actions share one row below the stacked Cancel and primary. */
   [data-slot="dialog-footer-start"] {
-    flex-direction: column;
     align-items: stretch;
     margin-inline-end: 0;
+  }
+
+  [data-slot="dialog-footer-start"] > * {
+    flex: 1 1 0;
   }
 }
 

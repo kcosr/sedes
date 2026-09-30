@@ -36,7 +36,8 @@ export function SnoozeDialog({
   );
   const [wakeReminder, setWakeReminder] = useState("");
   const [error, setError] = useState("");
-  const [pending, setPending] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"snooze" | "remind">();
+  const pending = pendingAction !== undefined;
 
   useEffect(() => {
     if (!open) return;
@@ -49,7 +50,7 @@ export function SnoozeDialog({
       setError("Choose a snooze time in the future.");
       return;
     }
-    setPending(true);
+    setPendingAction("snooze");
     setError("");
     try {
       await onSnooze({
@@ -65,14 +66,14 @@ export function SnoozeDialog({
           : "The thread could not be snoozed.",
       );
     } finally {
-      setPending(false);
+      setPendingAction(undefined);
     }
   };
 
   const remindNow = async () => {
     const reminder = wakeReminder.trim();
     if (!reminder) return;
-    setPending(true);
+    setPendingAction("remind");
     setError("");
     try {
       await onRemindNow(reminder);
@@ -85,7 +86,7 @@ export function SnoozeDialog({
           : "The reminder could not be added.",
       );
     } finally {
-      setPending(false);
+      setPendingAction(undefined);
     }
   };
 
@@ -190,7 +191,7 @@ export function SnoozeDialog({
               disabled={pending || !wakeReminder.trim()}
               onClick={() => void remindNow()}
             >
-              Remind now
+              {pendingAction === "remind" ? "Adding reminder…" : "Remind now"}
             </Button>
           }
         >
@@ -210,7 +211,7 @@ export function SnoozeDialog({
             disabled={pending}
             onClick={() => void snooze()}
           >
-            {pending ? "Snoozing…" : "Snooze"}
+            {pendingAction === "snooze" ? "Snoozing…" : "Snooze"}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -79,7 +79,12 @@ export function ThreadAutomationDialog({
   definitionRef.current = definition;
   const [history, setHistory] = useState<ThreadAutomationRun[]>([]);
   const [loading, setLoading] = useState(automationSummary !== null);
-  const [saving, setSaving] = useState(false);
+  // The action in flight: every action locks the others, and only the
+  // pending one shows its progress label.
+  const [busy, setBusy] = useState<
+    "save" | "state" | "run" | "resolve" | "delete"
+  >();
+  const saving = busy !== undefined;
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -351,7 +356,7 @@ export function ThreadAutomationDialog({
 
   const save = async () => {
     if (!schedule || !valid) return;
-    setSaving(true);
+    setBusy("save");
     setError("");
     try {
       const fields = {
@@ -391,7 +396,7 @@ export function ThreadAutomationDialog({
         setError(messageFrom(reason));
       }
     } finally {
-      setSaving(false);
+      setBusy(undefined);
     }
   };
 
@@ -435,7 +440,7 @@ export function ThreadAutomationDialog({
 
   const setState = async (action: "enable" | "pause") => {
     if (!definition) return;
-    setSaving(true);
+    setBusy("state");
     setError("");
     try {
       const updated = await store.api.setThreadAutomationState(
@@ -448,13 +453,13 @@ export function ThreadAutomationDialog({
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
-      setSaving(false);
+      setBusy(undefined);
     }
   };
 
   const runNow = async () => {
     if (!definition) return;
-    setSaving(true);
+    setBusy("run");
     setError("");
     try {
       const run = await store.api.runThreadAutomationNow(
@@ -465,13 +470,13 @@ export function ThreadAutomationDialog({
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
-      setSaving(false);
+      setBusy(undefined);
     }
   };
 
   const resolveRun = async (runId: string) => {
     if (!definition) return;
-    setSaving(true);
+    setBusy("resolve");
     setError("");
     try {
       const run = await store.api.resolveThreadAutomationRun(
@@ -488,13 +493,13 @@ export function ThreadAutomationDialog({
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
-      setSaving(false);
+      setBusy(undefined);
     }
   };
 
   const remove = async () => {
     if (!definition) return;
-    setSaving(true);
+    setBusy("delete");
     setError("");
     try {
       await store.api.deleteThreadAutomation(
@@ -503,7 +508,7 @@ export function ThreadAutomationDialog({
         mutationId(),
       );
     } catch (reason) {
-      setSaving(false);
+      setBusy(undefined);
       throw new Error(messageFrom(reason));
     }
     onClose();
@@ -759,7 +764,7 @@ export function ThreadAutomationDialog({
               }
               onClick={() => void runNow()}
             >
-              Run now
+              {busy === "run" ? "Running…" : "Run now"}
             </Button>
             <Button
               variant="outline"
@@ -770,7 +775,13 @@ export function ThreadAutomationDialog({
                 )
               }
             >
-              {definition.status === "paused" ? "Enable" : "Pause"}
+              {busy === "state"
+                ? definition.status === "paused"
+                  ? "Enabling…"
+                  : "Pausing…"
+                : definition.status === "paused"
+                  ? "Enable"
+                  : "Pause"}
             </Button>
           </>
         ) : undefined
@@ -783,7 +794,7 @@ export function ThreadAutomationDialog({
         disabled={!valid || saving || outcomeUncertain || Boolean(newerSummary)}
         onClick={() => void save()}
       >
-        {saving ? "Saving…" : "Save"}
+        {busy === "save" ? "Saving…" : "Save"}
       </Button>
     </DialogFooter>,
   );
