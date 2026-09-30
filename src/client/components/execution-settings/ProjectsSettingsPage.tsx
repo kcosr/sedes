@@ -1,19 +1,19 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Folder, Plus, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
+import { Folder, Plus, RefreshCw, SlidersHorizontal } from "lucide-react";
 import type { ProjectSummary } from "../../../shared/index.js";
 import { useApplicationStore, messageFrom, type ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import { AddProjectDialog } from "../AddProjectDialog.js";
 import { SettingsPage } from "../settings/SettingsPage.js";
+import { SettingsSearch } from "../settings/SettingsSearch.js";
 import { Button } from "../ui/button.js";
 import { Callout } from "../ui/callout.js";
 import { ConfirmDialog } from "../ui/confirm-dialog.js";
 import { EmptyState } from "../ui/empty-state.js";
-import { Input } from "../ui/input.js";
 import { SearchableSelect } from "../ui/searchable-select.js";
 import { Skeleton } from "../ui/skeleton.js";
 import { StatusPill } from "../ui/status-pill.js";
 import { Tag } from "../ui/tag.js";
-import { useFocusReturn } from "./detail-parts.js";
+import { useFocusReturn } from "../settings/use-focus-return.js";
 import { countLabel } from "./ExecutionInventory.js";
 import "./execution-settings.css";
 
@@ -114,9 +114,7 @@ export function ProjectsSettingsPage({ store }: {
     {mutationError ? <Callout tone="danger" role="alert">{mutationError}</Callout> : null}
     <section className="projects-list" aria-label="Remembered projects">
       <div className="execution-toolbar projects-toolbar" data-filters={filtersOpen ? "open" : "closed"}>
-        <div className="execution-search"><Search aria-hidden="true" />
-          <Input ref={searchInput} type="search" aria-label="Search projects" placeholder="Search projects…" value={search} onChange={event => setSearch(event.currentTarget.value)} />
-        </div>
+        <SettingsSearch ref={searchInput} label="Search projects" placeholder="Search projects…" value={search} onValueChange={setSearch} />
         <Button ref={filterToggle} type="button" variant="outline" className="execution-filter-toggle" aria-expanded={filtersOpen} aria-controls={filterPanelId}
           onClick={() => setFiltersOpen(open => !open)}><SlidersHorizontal />Filters{activeFilters ? ` (${activeFilters})` : ""}</Button>
         <div id={filterPanelId} className="execution-filters">

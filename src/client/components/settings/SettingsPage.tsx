@@ -2,6 +2,7 @@ import "./settings.css";
 import { ChevronLeft } from "lucide-react";
 import { navigateUp } from "../../app/router.js";
 import { isPlainClick } from "./SettingsNav.js";
+import type { SettingsSelection } from "./SettingsSplit.js";
 
 export interface SettingsBack {
   readonly label: string;
@@ -20,6 +21,8 @@ export type SettingsPageProps = Omit<React.ComponentProps<"div">, "title"> & {
   readonly back?: SettingsBack;
   /** `wide` is for inventory pages (lists beside details). */
   readonly width?: "default" | "wide";
+  /** An inventory page's selection beside its SettingsSplit list; the stacked layout shows one of them. */
+  readonly selection?: SettingsSelection;
   /** The page heading takes focus after navigation (it has tabIndex -1). */
   readonly headingRef?: React.Ref<HTMLHeadingElement>;
 };
@@ -31,13 +34,14 @@ export function SettingsPage({
   actions,
   back,
   width = "default",
+  selection,
   headingRef,
   className,
   children,
   ...props
 }: SettingsPageProps): React.JSX.Element {
   return (
-    <div data-slot="settings-page" data-width={width} className={className} {...props}>
+    <div data-slot="settings-page" data-width={width} data-selection={selection} className={className} {...props}>
       <header data-slot="settings-page-header">
         {back ? <SettingsBackLink {...back} /> : null}
         <div data-slot="settings-page-heading">
@@ -54,21 +58,24 @@ export function SettingsPage({
 }
 
 export type SettingsBackLinkProps = SettingsBack &
-  Omit<React.HTMLAttributes<HTMLElement>, "children" | "onClick">;
+  Omit<React.HTMLAttributes<HTMLElement>, "children" | "onClick"> & {
+    /** Only in the stacked layout: beside its list (split), the list is the way back. */
+    readonly stackOnly?: boolean;
+  };
 
 /**
  * "‹ Settings" style link above a page or pane title. A link goes up
  * through `navigateUp`, so it and browser or Android Back walk the same
  * history; without `href` it is a button for `onNavigate`.
  */
-export function SettingsBackLink({ label, href, onNavigate, ...props }: SettingsBackLinkProps): React.JSX.Element {
+export function SettingsBackLink({ label, href, onNavigate, stackOnly = false, ...props }: SettingsBackLinkProps): React.JSX.Element {
   const content = <><ChevronLeft aria-hidden="true" />{label}</>;
   return href === undefined ? (
-    <button type="button" data-slot="settings-page-back" {...props} onClick={onNavigate}>
+    <button type="button" data-slot="settings-page-back" data-stack-only={stackOnly || undefined} {...props} onClick={onNavigate}>
       {content}
     </button>
   ) : (
-    <a data-slot="settings-page-back" href={href} {...props} onClick={(event) => {
+    <a data-slot="settings-page-back" data-stack-only={stackOnly || undefined} href={href} {...props} onClick={(event) => {
       onNavigate?.(event);
       if (event.defaultPrevented || !isPlainClick(event)) return;
       event.preventDefault();

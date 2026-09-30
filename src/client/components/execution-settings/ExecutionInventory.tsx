@@ -1,20 +1,20 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Cable, Ellipsis, Link2, Monitor, Search, Server, SlidersHorizontal } from "lucide-react";
+import { Cable, Ellipsis, Link2, Monitor, Server, SlidersHorizontal } from "lucide-react";
 import type { ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
 import type { HostPairingList, HostRegistration } from "../../../shared/protocol/host-pairing.js";
 import { settingsPath } from "../../app/router.js";
 import { BackendBrandIcon } from "../brand-icons.js";
 import { EntityList, EntityRow } from "../settings/EntityList.js";
+import { SettingsSearch } from "../settings/SettingsSearch.js";
 import { Button } from "../ui/button.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
 import { EmptyState } from "../ui/empty-state.js";
-import { Input } from "../ui/input.js";
 import { NativeSelect } from "../ui/native-select.js";
 import { StatusPill } from "../ui/status-pill.js";
 import { Tag } from "../ui/tag.js";
 import { useTouchDensity } from "../../app/use-touch-density.js";
 import { backendEditors } from "./backend-editors.js";
-import { followLink } from "./detail-parts.js";
+import { followLink } from "../settings/SettingsNav.js";
 import { presentRuntime, worstStatus, type StatusPresentation } from "./runtime-presentation.js";
 import type { BackendDefinition, Configuration, ConfigurationSnapshot, EnvironmentDefinition } from "./types.js";
 
@@ -130,14 +130,6 @@ export function RowActions({ label, actions }: { readonly label: string; readonl
   </DropdownMenu>;
 }
 
-function SearchInput({ label, value, onChange, inputRef }: {
-  readonly label: string; readonly value: string; readonly onChange: (value: string) => void; readonly inputRef?: React.Ref<HTMLInputElement>;
-}): React.JSX.Element {
-  return <div className="execution-search"><Search aria-hidden="true" />
-    <Input ref={inputRef} type="search" aria-label={label} placeholder="Search…" value={value} onChange={event => onChange(event.currentTarget.value)} />
-  </div>;
-}
-
 function StatusFilter({ kind, value, onChange }: { readonly kind: "environments" | "backends"; readonly value: string; readonly onChange: (value: string) => void }): React.JSX.Element {
   return <NativeSelect aria-label="Filter by status" value={value} onChange={event => onChange(event.currentTarget.value)}>
     <option value="">All statuses</option><option value="attention">Needs attention</option><option value="connected">Connected</option>
@@ -193,7 +185,7 @@ export function EnvironmentList({ snapshot, filters, onFilters, hosts, stale, se
   })}</EntityList>;
   return <>
     {configuration.executionEnvironments.length ? <div className="execution-toolbar">
-      <SearchInput inputRef={search} label="Search environments" value={filters.search} onChange={value => onFilters({ ...filters, search: value })} />
+      <SettingsSearch ref={search} label="Search environments" value={filters.search} onValueChange={value => onFilters({ ...filters, search: value })} />
       <StatusFilter kind="environments" value={filters.status} onChange={status => onFilters({ ...filters, status })} />
     </div> : null}
     {pending.length ? <InventoryGroup label="Awaiting approval" title="Awaiting approval" count={countLabel(pending.length, "host")}>
@@ -275,7 +267,7 @@ export function BackendList({ snapshot, filters, onFilters, selectedId, actions 
   }
   return <>
     <div className="execution-toolbar" data-filters={filtersOpen ? "open" : "closed"}>
-      <SearchInput inputRef={search} label="Search backends" value={filters.search} onChange={value => onFilters({ ...filters, search: value })} />
+      <SettingsSearch ref={search} label="Search backends" value={filters.search} onValueChange={value => onFilters({ ...filters, search: value })} />
       <Button ref={filterToggle} type="button" variant="outline" className="execution-filter-toggle" aria-expanded={filtersOpen} aria-controls={panelId}
         onClick={() => setFiltersOpen(open => !open)}><SlidersHorizontal />Filters{activeFilters ? ` (${activeFilters})` : ""}</Button>
       <div id={panelId} className="execution-filters">

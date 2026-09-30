@@ -1,58 +1,20 @@
-/* Environments, Backends and Projects: list and detail panes over the
-   settings kit. Tokens only. The panes split beside each other when the
-   settings column (the shell's `settings-content` size container) is at
-   least 960px wide and stack below that. */
+/* Environments, Backends and Projects on the settings kit (its split
+   inventory, detail and editor panes live in settings.css). Tokens only. */
 
 .execution-settings { min-width: 0; }
-.execution-panes { display: grid; min-width: 0; align-items: start; gap: var(--space-6); }
-.execution-list-pane, .execution-detail-pane { display: grid; min-width: 0; align-content: start; gap: var(--space-3); }
-.execution-list-pane { container: execution-list / inline-size; }
-.execution-detail-pane { gap: var(--space-6); }
 .execution-loading { display: grid; gap: var(--space-2); }
 .execution-muted { margin: 0; color: var(--muted-foreground-2); font-size: var(--text-meta); line-height: var(--leading-normal); }
 .execution-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 
-/* Stack: the list, or the selection with a way back. */
-@container settings-content (width < 960px) {
-  .execution-settings[data-selection="none"] .execution-detail-pane { display: none; }
-  .execution-settings:not([data-selection="none"]) :is(.execution-list-pane, .execution-defaults),
-  .execution-settings:not([data-selection="none"]) > [data-slot="settings-page"] > [data-slot="settings-page-header"] { display: none; }
-}
-
-/* Split: a list pane beside the detail. A backend editor takes the width. */
-@container settings-content (width >= 960px) {
-  .execution-panes { grid-template-columns: minmax(300px, 340px) minmax(0, 1fr); }
-  .execution-list-pane {
-    position: sticky;
-    top: 0;
-    max-height: calc(100dvh - 7rem);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding: var(--space-2);
-    border: 1px solid var(--border-soft);
-    border-radius: var(--radius-card);
-    background: var(--card);
-  }
-  .execution-back[data-stack-only] { display: none; }
-  .execution-settings[data-wide-editor] .execution-panes { grid-template-columns: minmax(0, 1fr); }
-  .execution-settings[data-wide-editor] .execution-list-pane { display: none; }
-  /* The save bar bleeds into the gutter beside it, not across the list. */
-  .execution-detail-pane [data-slot="save-bar"] { clip-path: inset(-1px -100vmax -100vmax calc(-1 * var(--space-3))); }
-}
-
 /* ── List pane ── */
 .execution-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); }
 .execution-toolbar > [data-slot="native-select-wrapper"] { width: 9.5rem; }
-.execution-search { position: relative; min-width: 0; }
-.execution-search > svg { position: absolute; top: 50%; left: var(--space-2-5); width: var(--icon-sm); height: var(--icon-sm); color: var(--muted-foreground); transform: translateY(-50%); pointer-events: none; }
-.execution-search input { padding-left: calc(var(--space-2-5) + var(--icon-sm) + var(--space-2)); }
-.execution-search input::-webkit-search-cancel-button { display: none; }
 .execution-filters { display: none; grid-column: 1 / -1; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-ctl); background: var(--background); }
 .execution-toolbar[data-filters="open"] .execution-filters { display: grid; }
 .execution-filter { display: grid; gap: var(--space-1); min-width: 0; }
 .execution-filter-label { color: var(--muted-foreground-2); font-size: var(--text-meta); }
 .execution-filter-done { justify-self: end; }
-@container execution-list (width >= 560px) {
+@container settings-list (width >= 560px) {
   .execution-filter-toggle, .execution-filter-done, .execution-filter-label { display: none; }
   .execution-toolbar { grid-template-columns: minmax(0, 1fr) repeat(3, minmax(0, 11rem)); }
   .execution-filters, .execution-toolbar[data-filters="open"] .execution-filters { display: contents; }
@@ -65,7 +27,6 @@
 .execution-group-header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-3) var(--space-1); }
 .execution-group-header h3 { min-width: 0; margin: 0; color: var(--muted-foreground); font-size: var(--text-meta); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
 .execution-group-header span { flex: none; color: var(--muted-foreground-2); font-size: var(--text-meta); }
-.execution-list-pane [data-slot="empty-state"][data-variant="inline"] { padding-inline: var(--space-3); }
 /* A narrow row puts the status beside the title and gives the subtitle the full width. */
 @container entity-list (width < 480px) {
   .execution-settings [data-slot="entity-row-main"] {
@@ -81,17 +42,9 @@
 }
 
 /* ── Detail ── */
-.execution-detail, .execution-editor { display: grid; min-width: 0; align-content: start; gap: var(--space-5); }
-/* Detail and editor headers use the settings page header (DetailHeader);
-   these rules only add the entity's icon, tags and status to its title. */
-.execution-detail-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
-.execution-detail-title-row > [data-slot="settings-page-title"] { min-width: 0; overflow-wrap: anywhere; }
-.execution-detail-icon { display: grid; place-items: center; color: var(--muted-foreground); }
-.execution-detail-icon svg { width: var(--icon-lg); height: var(--icon-lg); }
-.execution-detail-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5); }
+.execution-detail { display: grid; min-width: 0; align-content: start; gap: var(--space-5); }
 .execution-tab { display: grid; gap: var(--space-6); padding-top: var(--space-1); }
 .execution-runtime-feedback { display: grid; gap: var(--space-2); }
-.execution-detail-empty { min-height: 16rem; }
 
 .execution-health { display: grid; gap: var(--space-2-5); padding: var(--space-4); border: 1px solid var(--border-soft); border-radius: var(--radius-card); background: var(--card); }
 .execution-health-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5); }
@@ -117,61 +70,7 @@
 .execution-impact ul { margin: 0; padding-inline-start: var(--space-4); }
 
 /* ── Editors ── */
-.execution-editor-body { display: grid; min-width: 0; gap: var(--space-5); }
 .execution-editor-wide { max-width: calc(50rem + 11rem + var(--space-6)); }
-.execution-editor-form { display: grid; min-width: 0; gap: var(--space-6); }
-.execution-anchors {
-  position: sticky;
-  z-index: var(--z-sticky);
-  top: 0;
-  display: flex;
-  gap: var(--space-1);
-  margin-block: calc(-1 * var(--space-2));
-  padding-block: var(--space-2);
-  overflow-x: auto;
-  background: var(--background);
-  box-shadow: 0 1px 0 var(--border-soft);
-  scrollbar-width: none;
-}
-/* A tall mask over the scroller's top padding strip while the bar is stuck. */
-.execution-anchors[data-stuck] { box-shadow: 0 1px 0 var(--border-soft), 0 -1.5rem 0 var(--background), 0 -3rem 0 var(--background); }
-/* A zero-height marker at the bar's resting place; it cancels its own row gap. */
-.execution-anchors-sentinel { display: block; height: 0; margin-bottom: calc(-1 * var(--space-5)); }
-.execution-anchors button {
-  flex: none;
-  min-height: var(--control-sm);
-  padding: 0 var(--space-2-5);
-  border: 0;
-  border-radius: var(--radius-ctl);
-  background: none;
-  color: var(--muted-foreground);
-  font: inherit;
-  font-size: var(--text-meta);
-  font-weight: var(--weight-medium);
-  cursor: pointer;
-}
-.execution-anchors button:hover { background: var(--hover); color: var(--foreground); }
-.execution-anchors button[aria-current="true"] { background: var(--selected); color: var(--foreground); }
-.execution-anchors button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.execution-editor [data-slot="settings-section"] { scroll-margin-top: calc(var(--control-sm) + var(--space-5)); }
-/* With room beside it, a long editor keeps its section index on the right. */
-@container settings-content (width >= 960px) {
-  .execution-settings[data-wide-editor] .execution-editor-body { grid-template-columns: minmax(0, 50rem) 11rem; align-items: start; column-gap: var(--space-6); }
-  .execution-settings[data-wide-editor] .execution-anchors {
-    grid-column: 2;
-    grid-row: 1;
-    flex-direction: column;
-    margin-block: 0;
-    padding-block: 0;
-    overflow: visible;
-    box-shadow: none;
-    background: none;
-  }
-  .execution-settings[data-wide-editor] .execution-anchors button { justify-content: flex-start; text-align: start; }
-  .execution-settings[data-wide-editor] .execution-anchors-sentinel { display: none; }
-  .execution-settings[data-wide-editor] .execution-editor-form { grid-column: 1; grid-row: 1; }
-  .execution-settings[data-wide-editor] .execution-editor [data-slot="settings-section"] { scroll-margin-top: var(--space-4); }
-}
 .execution-error-list { display: grid; gap: var(--space-1); margin: 0; padding-inline-start: var(--space-4); }
 .execution-error-location { font-weight: var(--weight-medium); }
 
@@ -318,14 +217,14 @@
 @media (max-width: 819px), (pointer: coarse) {
   .execution-settings :is([data-slot="button"], [data-slot="dropdown-menu-trigger"]):not([data-size="icon-xs"]) { min-height: var(--control-default); }
   .execution-settings :is([data-slot="button"], [data-slot="dropdown-menu-trigger"])[data-size^="icon"]:not([data-size="icon-xs"]) { min-width: var(--control-default); }
-  .execution-anchors button, .execution-advanced-trigger, .execution-item-trigger, .execution-token button { min-height: var(--control-default); }
+  .execution-advanced-trigger, .execution-item-trigger, .execution-token button { min-height: var(--control-default); }
   .execution-token button { min-width: var(--control-default); }
 }
 
 /* ── Projects ── */
-.projects-list { container: execution-list / inline-size; display: grid; min-width: 0; gap: var(--space-3); }
+.projects-list { container: settings-list / inline-size; display: grid; min-width: 0; gap: var(--space-3); }
 .projects-toolbar .execution-filters { grid-template-columns: minmax(0, 1fr); }
-@container execution-list (width >= 560px) {
+@container settings-list (width >= 560px) {
   .projects-toolbar { grid-template-columns: minmax(0, 1fr) repeat(2, minmax(0, 13rem)); }
 }
 .projects-rows { display: grid; margin: 0; padding: var(--space-1); list-style: none; border: 1px solid var(--border-soft); border-radius: var(--radius-card); background: var(--card); }
@@ -338,7 +237,7 @@
 .projects-row-title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5); font-size: var(--text-ui); font-weight: var(--weight-medium); overflow-wrap: anywhere; }
 .projects-row-path { overflow: hidden; color: var(--muted-foreground); font-family: var(--font-mono); font-size: var(--text-meta); text-overflow: ellipsis; white-space: nowrap; }
 .projects-row-meta { color: var(--muted-foreground-2); font-size: var(--text-meta); }
-@container execution-list (width < 560px) {
+@container settings-list (width < 560px) {
   .projects-row { grid-template-columns: auto minmax(0, 1fr) auto; }
   .projects-row-status { grid-column: 2; grid-row: 2; }
   .projects-row-actions { grid-column: 3; grid-row: 1 / span 2; }

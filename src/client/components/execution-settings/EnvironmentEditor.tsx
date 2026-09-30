@@ -7,7 +7,9 @@ import { EntityList, EntityRow } from "../settings/EntityList.js";
 import { SaveBar } from "../settings/SaveBar.js";
 import { SettingsSection } from "../settings/SettingsSection.js";
 import { SwitchField } from "../settings/SettingsField.js";
-import { DetailHeader, EditorFrame, followLink, GeneralErrors, type EditorSection } from "./detail-parts.js";
+import { followLink } from "../settings/SettingsNav.js";
+import { SettingsDetailHeader, SettingsEditor, type SettingsEditorSection } from "../settings/SettingsSplit.js";
+import { GeneralErrors } from "./detail-parts.js";
 import { hostPlatform } from "./ExecutionInventory.js";
 import { CheckboxGroup, ListField, ReadOnlyField, TextField } from "./fields.js";
 import type { Configuration, EnvironmentDefinition } from "./types.js";
@@ -78,8 +80,8 @@ export function EnvironmentChooser({ configuration, back, headingRef }: {
 }): React.JSX.Element {
   const hasLocal = configuration.executionEnvironments.some((entry) => entry.kind === "local");
   const choice = (kind: "local" | "ssh" | "pair") => settingsPath("environments", { mode: "new", resourceId: kind });
-  return <section aria-label="Add environment" className="execution-editor">
-    <DetailHeader back={back} title="Add environment" headingRef={headingRef} description="Choose where agents will run." />
+  return <section aria-label="Add environment" className="execution-detail">
+    <SettingsDetailHeader back={back} title="Add environment" headingRef={headingRef} description="Choose where agents will run." />
     <div data-slot="settings-section-body" data-card="true">
       <EntityList aria-label="Environment kinds">
         <EntityRow icon={<Monitor />} title="Local machine" disabled={hasLocal}
@@ -111,12 +113,12 @@ export function EnvironmentEditor({ draft, setDraft, creating, errors, disabled,
   readonly onCancel: () => void;
 }): React.JSX.Element {
   const fields = errors.fields;
-  const sections: EditorSection[] = [
+  const sections: SettingsEditorSection[] = [
     { id: "environment-general", label: "General" }, { id: "environment-access", label: "Access" },
     { id: "environment-operations", label: "Operations" }, { id: "environment-variables", label: "Variables" },
   ];
   const rootErrors = draft.workspaceRoots.map((_, index) => fields.get(`workspaceRoots.${index}`));
-  return <EditorFrame label="Environment editor" back={back} headingRef={headingRef}
+  return <SettingsEditor label="Environment editor" back={back} headingRef={headingRef}
     title={creating ? newTitles[draft.kind] : `Edit ${draft.label || "environment"}`}
     description={creating ? undefined : "Disruptive changes stay pending until running work can retire or you restart it."}
     sections={sections} errors={<GeneralErrors errors={errors.general} />} onSubmit={onSave}
@@ -153,5 +155,5 @@ export function EnvironmentEditor({ draft, setDraft, creating, errors, disabled,
       <ConfiguredEnvironmentVariableEditor scope="environment" value={draft.environmentVariables} disabled={disabled} error={fields.under("environmentVariables")}
         onChange={(environmentVariables) => setDraft({ ...draft, environmentVariables })} />
     </SettingsSection>
-  </EditorFrame>;
+  </SettingsEditor>;
 }

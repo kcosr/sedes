@@ -12,7 +12,10 @@ import { StatusPill } from "../ui/status-pill.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.js";
 import { Tag } from "../ui/tag.js";
 import { allowedEnvironments, backendEditors } from "./backend-editors.js";
-import { BackLink, CopyableValue, DetailHeader, followLink } from "./detail-parts.js";
+import { followLink } from "../settings/SettingsNav.js";
+import { SettingsBackLink } from "../settings/SettingsPage.js";
+import { SettingsDetailHeader } from "../settings/SettingsSplit.js";
+import { CopyableValue } from "./detail-parts.js";
 import { DetailMenu, useHiddenDetailReset, variableFacts, type DetailRuntimeProps, type DetailTab } from "./EnvironmentDetail.js";
 import { backendBrand, backendEnvironment, runtimeFor } from "./ExecutionInventory.js";
 import { modelPolicyLabels, modelRules, summarizeRule } from "./ModelPolicyEditor.js";
@@ -61,7 +64,7 @@ export function BackendDetail({ backend, selected, tab, onTab, headingRef, onRem
     { label: "Backend ID", value: <CopyableValue value={backend.id} label="backend ID" /> },
   ];
   return <section aria-label={`${backend.label} details`} className="execution-detail">
-    <DetailHeader back={<BackLink stackOnly href={settingsPath("backends")} label="Backends" />}
+    <SettingsDetailHeader back={<SettingsBackLink stackOnly href={settingsPath("backends")} label="Backends" />}
       icon={<BackendBrandIcon brand={backendBrand(backend.kind)} />} title={backend.label} headingRef={headingRef}
       tags={<><Tag>{editor.label}</Tag>{isDefault ? <Tag>Default</Tag> : null}{backend.enabled ? null : <Tag>Disabled</Tag>}</>}
       status={<StatusPill tone={status.tone}>{status.label}</StatusPill>}

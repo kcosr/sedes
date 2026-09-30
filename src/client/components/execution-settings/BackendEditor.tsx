@@ -8,7 +8,8 @@ import { Button } from "../ui/button.js";
 import { Callout } from "../ui/callout.js";
 import { Tag } from "../ui/tag.js";
 import { allowedEnvironments, backendEditors } from "./backend-editors.js";
-import { EditorFrame, GeneralErrors, type EditorSection } from "./detail-parts.js";
+import { SettingsEditor, type SettingsEditorSection } from "../settings/SettingsSplit.js";
+import { GeneralErrors } from "./detail-parts.js";
 import { CollapsibleItem, ReadOnlyField, SelectField, TextField } from "./fields.js";
 import { ModelPolicyEditor } from "./ModelPolicyEditor.js";
 import type { BackendDefinition, Configuration, TargetDefinition } from "./types.js";
@@ -71,13 +72,13 @@ export function BackendEditor({ draft, setDraft, configuration, errors, disabled
     setDraft({ ...draft, targets: draft.targets.map(entry => ({ ...entry, executionEnvironmentId })) });
   };
   const policy = selectedEditor.renderPolicy?.({ value: draft.backend, onChange: backend => setDraft({ ...draft, backend }), errors: fields, disabled });
-  const sections: EditorSection[] = [
+  const sections: SettingsEditorSection[] = [
     { id: "backend-general", label: "General" }, { id: "backend-connection", label: "Connection" },
     ...(policy ? [{ id: "backend-policy", label: "Policy" }] : []),
     { id: "backend-models", label: "Models" }, { id: "backend-connections", label: "Connections" }, { id: "backend-variables", label: "Variables" },
   ];
   const totalTargets = configuration.targets.length - configuration.targets.filter(entry => entry.backendInstanceId === draft.backend.id).length + draft.targets.length;
-  return <EditorFrame label="Backend editor" back={back} headingRef={headingRef} className="execution-editor-wide"
+  return <SettingsEditor label="Backend editor" back={back} headingRef={headingRef} className="execution-editor-wide"
     title={draft.creating ? "New backend" : `Edit ${draft.backend.label || "backend"}`}
     description="Saving does not start model work. Disruptive changes stay pending until they can apply safely or you restart the backend."
     sections={sections} errors={<GeneralErrors errors={errors.general} />} onSubmit={onSave}
@@ -153,5 +154,5 @@ export function BackendEditor({ draft, setDraft, configuration, errors, disabled
           : draft.backend.kind === "codex_app_server" && draft.backend.moduleConfiguration.connection.ownership === "external" ? "Sedes does not start the externally owned Codex process." : undefined}
         onChange={(environmentVariables) => setDraft({ ...draft, backend: { ...draft.backend, environmentVariables } })} />
     </SettingsSection>
-  </EditorFrame>;
+  </SettingsEditor>;
 }

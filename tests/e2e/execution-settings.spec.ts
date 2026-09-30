@@ -16,7 +16,7 @@ const row = (scope: Locator, name: string) => scope.getByRole("listitem").filter
 
 /** Returns from an entity to its list: the stacked layout's back link, or the category link. */
 async function showList(page: Page, section: Section): Promise<void> {
-  const back = page.getByTestId("settings-view").locator("a.execution-back[data-stack-only]").filter({ visible: true });
+  const back = page.getByTestId("settings-view").locator('a[data-slot="settings-page-back"][data-stack-only]').filter({ visible: true });
   if (await back.count()) await back.first().click();
   else await selectSettingsCategory(page, section);
   await expect(page).toHaveURL(`/settings/${section}`);
@@ -336,7 +336,7 @@ test("entity routes deep-link, walk back, and split or stack with the settings c
     expect(listBox.x + listBox.width).toBeLessThanOrEqual(detailBox.x);
     expect(listBox.width).toBeGreaterThanOrEqual(300);
     expect(listBox.width).toBeLessThanOrEqual(340);
-    await expect(detail.locator("a.execution-back")).toBeHidden();
+    await expect(detail.locator('a[data-slot="settings-page-back"]')).toBeHidden();
   }
   await capture(page, testInfo, "execution-settings-split-collapsed-1024.png");
   // Restoring the sidebar at 1024 leaves a 700px column: the panes stack.

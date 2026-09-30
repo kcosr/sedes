@@ -21,6 +21,16 @@ export function isPlainClick(event: React.MouseEvent<HTMLElement>): boolean {
   );
 }
 
+/**
+ * Follows an in-app link through the router, so guards run and history
+ * stays in one place. Modified clicks keep the browser's own behavior.
+ */
+export function followLink(event: React.MouseEvent<HTMLElement>, path: string): void {
+  if (event.defaultPrevented || !isPlainClick(event)) return;
+  event.preventDefault();
+  navigate(path);
+}
+
 export function settingsEntryHref(entry: SettingsEntry): string {
   return entry.kind === "page" ? settingsPath(entry.id) : entry.href;
 }
